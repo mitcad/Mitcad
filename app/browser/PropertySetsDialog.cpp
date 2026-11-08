@@ -9,6 +9,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QCursor>
 #include <QCompleter>
 #include <QDialogButtonBox>
@@ -301,6 +302,8 @@ GlyphPlaces glyphsOf(QTreeWidget* table, const QTreeWidgetItem* item, int column
 // Add Property: the level, set, key, type and value; stays open with the
 // model's reason when the model refuses them.
 class AddPropertyDialog : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::AddPropertyDialog)
+
 public:
   AddPropertyDialog(DocumentHost& host, const QJsonArray& levels, const QStringList& types, QWidget* parent)
       : QDialog(parent), m_host(host) {
@@ -367,6 +370,8 @@ private:
 
 // Property Types: the design's own types, defined and removed here.
 class PropertyTypesDialog : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::PropertyTypesDialog)
+
 public:
   PropertyTypesDialog(DocumentHost& host, QWidget* parent) : QDialog(parent), m_host(host) {
     setWindowTitle(tr("Property Types"));

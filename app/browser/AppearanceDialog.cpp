@@ -328,7 +328,7 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
     }
   });
   connect(m_textureChoose, &QPushButton::clicked, this, &AppearanceDialog::chooseTexture);
-  connect(m_textureRemove, &QPushButton::clicked, this, [this] { sendTexture(QJsonValue(), tr("removed")); });
+  connect(m_textureRemove, &QPushButton::clicked, this, [this] { sendTexture(QJsonValue(), QStringLiteral("removed")); });
   connect(m_textureWidth, &QDoubleSpinBox::valueChanged, this, [this](double value) {
     const Appearance* a = current();
     if (!m_building && a != nullptr) {

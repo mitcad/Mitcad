@@ -14,18 +14,20 @@
 #include <QtLogging>
 
 #include "CommandRegistry.hpp"
+#include "Language.hpp"
 #include "PanelTree.hpp"
 #include "../platform/MacCommandSearch.hpp"
 
 namespace mitcad {
 namespace {
 
-// Lower is a better match; -1 is none.
-int score(const CommandDef& def, const QString& text) {
+// Lower is a better match; -1 is none: `shown`, a name of the command (as
+// the interface shows it, or in English), against the text typed.
+int nameScore(const QString& shown, const CommandDef& def, const QString& text) {
   if (text.isEmpty()) {
     return 6;
   }
-  const QString name = def.name.toLower();
+  const QString name = shown.toLower();
   // The whole name first, so "export" finds Export... before Export Drawing...
   QString bare = name;
   if (bare.endsWith(QStringLiteral("..."))) {
@@ -61,6 +63,19 @@ int score(const CommandDef& def, const QString& text) {
     ++at;
   }
   return 5;
+}
+
+// The name the interface shows, and in another language its English name
+// as well (mitcad#1460, mitcad#1284): "extrude" finds Extrude whatever the
+// language.
+int score(const CommandDef& def, const QString& text) {
+  const int shown = nameScore(def.name, def, text);
+  const QString english = englishText(def.name);
+  if (english == def.name) {
+    return shown;
+  }
+  const int other = nameScore(english, def, text);
+  return shown < 0 ? other : (other < 0 ? shown : std::min(shown, other));
 }
 
 } // namespace
@@ -102,9 +117,13 @@ void CommandSearch::popup(const QPoint& globalCenter) {
   m_edit->clear();
   fill(QString());
   move(globalCenter - QPoint(width() / 2, height() / 3));
+  // Shown as Qt shows its own popups (menus, drop-down lists): without
+  // raising or activating it. An open popup is above its window and takes
+  // the keys while that window stays active. Asking for the activation made
+  // the search close as it opened where the system refuses it (Windows
+  // session 0, mitcad#1477): Qt then sees the application lose the focus
+  // and closes every popup.
   show();
-  raise();
-  activateWindow();
   m_edit->setFocus();
   qDebug() << "Command search opened";
 }

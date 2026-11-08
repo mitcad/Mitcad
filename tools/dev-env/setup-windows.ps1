@@ -94,6 +94,12 @@ if (-not (Test-Path $qtDir)) {
     Invoke-Checked { & (Join-Path $aqt 'Scripts\aqt.exe') install-qt windows desktop $QtVersion win64_msvc2022_64 -O (Join-Path $Root 'Qt') }
   } finally { Pop-Location }
 }
+# The interface languages (mitcad#1460) need Qt's Linguist tools (lrelease,
+# lupdate) and Qt's translations (qtbase_<code>.qm), which aqt's base
+# install has (qttools, qttranslations).
+foreach ($file in 'bin\lrelease.exe', 'bin\lupdate.exe', 'translations\qtbase_fi.qm') {
+  if (-not (Test-Path (Join-Path $qtDir $file))) { throw "Qt $QtVersion has no $file" }
+}
 
 # Every build has the render worker (docs/rendering.md "Building"): Cycles
 # and Open Image Denoise, built once outside the build folders, in the

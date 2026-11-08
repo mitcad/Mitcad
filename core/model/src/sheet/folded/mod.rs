@@ -340,7 +340,7 @@ pub(crate) fn partition(
     Ok(piece)
 }
 
-fn legacy_panels(
+pub(super) fn legacy_panels(
     charts: &[SheetPatch],
     rules: &SheetRulesDef<f64>,
 ) -> Result<Vec<SheetPlanarPatch>, String> {

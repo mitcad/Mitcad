@@ -7,13 +7,24 @@
 //! than an agent's context). Errors give the permitted names, and a
 //! refused command that misses fields gets the reference of its feature
 //! type or command.
+//!
+//! Agents see the reference without what they cannot use (mitcad#1509):
+//! the sections whose command and query tables name only names MCP does
+//! not permit, the sections marked [`INTERNAL_MARKER`] (how the code works
+//! inside) and the issue numbers of headings.
 
 use std::borrow::Cow;
-use std::sync::OnceLock;
+use std::ops::Range;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use serde_json::{Value, json};
 
 use crate::COMMANDS_REFERENCE;
+
+/// The line under a heading of the reference that hides its section from
+/// agents (mitcad#1509): it is about how the code works inside, not the
+/// API. A Markdown comment, so the developers' document reads as before.
+pub const INTERNAL_MARKER: &str = "<!-- mcp: internal -->";
 
 /// The most text one answer holds, in bytes.
 pub const LIMIT: usize = 64 * 1024;
@@ -25,11 +36,11 @@ const MAX_HITS: usize = 200;
 /// A search hit's excerpt, in characters.
 const EXCERPT: usize = 240;
 
-const USAGE: &str = "model_reference with section (a heading, or a name a heading lists), query, command, feature (a feature type) or search gives that part of the reference; offset continues a truncated answer from its next_offset (for search: the hits to skip).";
+const USAGE: &str = "model_reference with section (a heading, or a name a heading lists), query, command, feature (a feature type) or search gives that part of the reference; with guide, a guide on how to model well here (guides lists them, \"index\" says when to read each); offset continues a truncated answer from its next_offset (for search: the hits to skip).";
 
 /// The names MCP permits, which the backend supplies
 /// (`mitcad_model_api::classes`): the reference does not tell them.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Vocabulary {
     pub queries: Vec<String>,
     pub commands: Vec<String>,
@@ -39,6 +50,19 @@ pub struct Vocabulary {
 impl Vocabulary {
     fn is_empty(&self) -> bool {
         self.queries.is_empty() && self.commands.is_empty() && self.features.is_empty()
+    }
+
+    /// Whether a query or a command is permitted.
+    fn permits(&self, name: &str) -> bool {
+        self.queries
+            .iter()
+            .chain(&self.commands)
+            .any(|known| known == name)
+    }
+
+    /// Whether a feature type is permitted.
+    fn permits_feature(&self, name: &str) -> bool {
+        self.features.iter().any(|known| known == name)
     }
 }
 
@@ -76,14 +100,32 @@ pub fn echoed(text: &str) -> Cow<'_, str> {
 }
 
 fn unknown(kind: &str, plural: &str, name: &str, names: &[String]) -> String {
-    let name = echoed(name);
+    choices(
+        &format!("unknown {kind} {}", echoed(name)),
+        kind,
+        plural,
+        names,
+    )
+}
+
+/// The error for a query or a command that the reference describes but
+/// MCP does not permit, whose sections agents do not see (mitcad#1509).
+fn unavailable(kind: &str, plural: &str, name: &str, names: &[String]) -> String {
+    choices(
+        &format!("the {kind} {} is not available through MCP", echoed(name)),
+        kind,
+        plural,
+        names,
+    )
+}
+
+/// `found`, and the names to choose from instead.
+fn choices(found: &str, kind: &str, plural: &str, names: &[String]) -> String {
     if names.is_empty() {
-        return format!(
-            "unknown {kind} {name}; model_reference without arguments lists the {plural}"
-        );
+        return format!("{found}; model_reference without arguments lists the {plural}");
     }
     format!(
-        "unknown {kind} {name}; the {plural} MCP permits: {}. model_reference {{\"{}\": \"<name>\"}} gives one's fields",
+        "{found}; the {plural} MCP permits: {}. model_reference {{\"{}\": \"<name>\"}} gives one's fields",
         names.join(", "),
         kind.split(' ').next().unwrap_or(kind)
     )
@@ -137,7 +179,10 @@ pub fn missing_name(request: &Value, key: &str) -> String {
 
 struct Heading {
     level: usize,
+    /// As it is shown: in the agents' view without its issue numbers.
     title: String,
+    /// As the reference writes it, which finds it too.
+    full: String,
     /// Its line.
     line: usize,
     /// The line after its section, subsections included.
@@ -145,15 +190,170 @@ struct Heading {
 }
 
 struct Reference {
-    lines: Vec<&'static str>,
+    lines: Vec<String>,
     /// Whether each line is a code fence or inside a code block.
     code: Vec<bool>,
     headings: Vec<Heading>,
 }
 
+/// The whole reference, as the developers' document has it.
 fn reference() -> &'static Reference {
     static PARSED: OnceLock<Reference> = OnceLock::new();
     PARSED.get_or_init(|| Reference::parse(COMMANDS_REFERENCE))
+}
+
+/// The reference as the agents of a vocabulary see it (mitcad#1509),
+/// made once per vocabulary.
+fn view(vocabulary: &Vocabulary) -> Arc<Reference> {
+    static VIEWS: Mutex<Vec<(Vocabulary, Arc<Reference>)>> = Mutex::new(Vec::new());
+    let mut views = VIEWS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, view)) = views.iter().find(|(known, _)| known == vocabulary) {
+        return Arc::clone(view);
+    }
+    let view = Arc::new(reference().for_agents(vocabulary));
+    views.push((vocabulary.clone(), Arc::clone(&view)));
+    view
+}
+
+/// The reference as agents see it (mitcad#1509), the text of the resource
+/// `mitcad://reference/commands`: without the sections whose command and
+/// query tables name only names the vocabulary does not permit (an empty
+/// vocabulary, which does not say, keeps them), the sections marked
+/// [`INTERNAL_MARKER`], and the issue numbers of headings.
+pub fn reference_text(vocabulary: &Vocabulary) -> String {
+    let mut text = view(vocabulary).lines.join("\n");
+    text.push('\n');
+    text
+}
+
+/// The permitted names whose reference agents no longer find
+/// (mitcad#1509), each as `query <name>`, `command <name>` or
+/// `feature <name>`: where the whole reference has a query's or a
+/// command's table rows, the agents' view has them all; else the sections
+/// whose headings list it, or else the lines that name it; and a feature
+/// type's section. Empty when the agents' view keeps all they may use; a
+/// test with the names the backend permits checks it.
+pub fn reference_losses(vocabulary: &Vocabulary) -> Vec<String> {
+    let whole = reference();
+    let view = view(vocabulary);
+    let view: &Reference = &view;
+    let mut lost = Vec::new();
+    for (kind, names) in [
+        ("query", &vocabulary.queries),
+        ("command", &vocabulary.commands),
+    ] {
+        for name in names {
+            let rows = |reference: &Reference| -> usize {
+                reference
+                    .row_lines(kind, name)
+                    .iter()
+                    .map(|(_, rows)| rows.len())
+                    .sum()
+            };
+            let listed = |reference: &Reference| !reference.listing(name).is_empty();
+            let named =
+                |reference: &Reference| !reference.lines_with(&format!("`{name}`")).is_empty();
+            let kept = if rows(whole) > 0 {
+                rows(view) == rows(whole)
+            } else if listed(whole) {
+                listed(view)
+            } else {
+                !named(whole) || named(view)
+            };
+            if !kept {
+                lost.push(format!("{kind} {name}"));
+            }
+        }
+    }
+    for name in &vocabulary.features {
+        if whole.feature_section(name).is_some() && view.feature_section(name).is_none() {
+            lost.push(format!("feature {name}"));
+        }
+    }
+    lost
+}
+
+/// A heading as agents see it (mitcad#1509): without its issue numbers,
+/// `(mitcad#1416)` or `(#12, #14)`; the whole heading when nothing else
+/// is left.
+pub(crate) fn shown_title(title: &str) -> String {
+    let issues = |text: &str| {
+        text.split(',').all(|part| {
+            part.trim().split_once('#').is_some_and(|(repo, number)| {
+                repo.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                    && !number.is_empty()
+                    && number.chars().all(|c| c.is_ascii_digit())
+            })
+        })
+    };
+    let mut shown = String::new();
+    let mut rest = title;
+    while let Some(open) = rest.find('(') {
+        let Some(close) = rest[open..].find(')').map(|close| open + close) else {
+            break;
+        };
+        if issues(&rest[open + 1..close]) {
+            shown.push_str(rest[..open].trim_end());
+        } else {
+            shown.push_str(&rest[..=close]);
+        }
+        rest = &rest[close + 1..];
+    }
+    shown.push_str(rest);
+    let shown = shown.trim();
+    if shown.is_empty() {
+        title.to_owned()
+    } else {
+        shown.to_owned()
+    }
+}
+
+/// Whether a token of a table's first cell is a query's or a command's
+/// name: `bodies`, `sketch.add_line`.
+fn is_name(token: &str) -> bool {
+    token.starts_with(|c: char| c.is_ascii_lowercase())
+        && token
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '.')
+}
+
+/// A table row's first cell.
+fn first_cell(line: &str) -> &str {
+    line.split('|').nth(1).unwrap_or_default()
+}
+
+/// Whether a table's first header cell is that of the API's commands or
+/// queries: `Command`, `Query`, `Command / query`; not `Command (Rust,
+/// Document)`, whose rows are the code's.
+fn api_header(cell: &str) -> bool {
+    let cell = normal(cell);
+    let words: Vec<&str> = cell
+        .split(' ')
+        .filter(|word| !matches!(*word, "/" | "or" | "and"))
+        .collect();
+    !words.is_empty()
+        && words
+            .iter()
+            .all(|word| matches!(*word, "command" | "commands" | "query" | "queries"))
+}
+
+/// Gives each heading the line after its section: the next heading of its
+/// level or above.
+fn set_ends(headings: &mut [Heading], lines: usize) {
+    let ends: Vec<usize> = headings
+        .iter()
+        .enumerate()
+        .map(|(i, heading)| {
+            headings[i + 1..]
+                .iter()
+                .find(|next| next.level <= heading.level)
+                .map_or(lines, |next| next.line)
+        })
+        .collect();
+    for (heading, end) in headings.iter_mut().zip(ends) {
+        heading.end = end;
+    }
 }
 
 /// Lower case, without backticks, single spaces.
@@ -179,7 +379,11 @@ fn listed(title: &str) -> Vec<String> {
 
 /// `text` from `offset` on, at most `limit` bytes, cut after a line when
 /// one ends in the second half; the offset to continue from when cut.
-fn cut(text: &str, offset: usize, limit: usize) -> Result<(String, Option<usize>), String> {
+pub(crate) fn cut(
+    text: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<(String, Option<usize>), String> {
     if offset > text.len() || !text.is_char_boundary(offset) {
         return Err(format!(
             "offset {offset} is not a place in this text of {} bytes; pass the next_offset of the previous answer",
@@ -203,7 +407,7 @@ fn cut(text: &str, offset: usize, limit: usize) -> Result<(String, Option<usize>
 }
 
 /// Says in `answer` whether its text was cut, and where to continue.
-fn mark_cut(answer: &mut Value, next: Option<usize>) {
+pub(crate) fn mark_cut(answer: &mut Value, next: Option<usize>) {
     answer["truncated"] = json!(next.is_some());
     if let Some(next) = next {
         answer["next_offset"] = json!(next);
@@ -246,8 +450,8 @@ fn excerpt(line: &str, wanted: &str) -> String {
 }
 
 impl Reference {
-    fn parse(text: &'static str) -> Self {
-        let lines: Vec<&'static str> = text.lines().collect();
+    fn parse(text: &str) -> Self {
+        let lines: Vec<String> = text.lines().map(str::to_owned).collect();
         let mut code = Vec::with_capacity(lines.len());
         let mut headings = Vec::new();
         let mut fenced = false;
@@ -263,33 +467,176 @@ impl Reference {
             }
             let level = line.bytes().take_while(|byte| *byte == b'#').count();
             if (1..=6).contains(&level) && line[level..].starts_with(' ') {
+                let title = line[level..].trim().to_owned();
                 headings.push(Heading {
                     level,
-                    title: line[level..].trim().to_owned(),
+                    full: title.clone(),
+                    title,
                     line: i,
                     end: lines.len(),
                 });
             }
         }
-        // A section ends at the next heading of its level or above.
-        let ends: Vec<usize> = headings
-            .iter()
-            .enumerate()
-            .map(|(i, heading)| {
-                headings[i + 1..]
-                    .iter()
-                    .find(|next| next.level <= heading.level)
-                    .map_or(lines.len(), |next| next.line)
-            })
-            .collect();
-        for (heading, end) in headings.iter_mut().zip(ends) {
-            heading.end = end;
-        }
+        set_ends(&mut headings, lines.len());
         Self {
             lines,
             code,
             headings,
         }
+    }
+
+    /// The reference as the agents of a vocabulary see it (mitcad#1509).
+    ///
+    /// A section's own text (before its first subsection) is left out when
+    /// its first line is [`INTERNAL_MARKER`], when its command and query
+    /// tables name only names the vocabulary does not permit and it has no
+    /// permitted feature type, or when the section it is in is left out and
+    /// it has no permitted name of its own. Its heading stays while one of
+    /// its subsections does, so that the subsection keeps its place. The
+    /// headings lose their issue numbers.
+    fn for_agents(&self, vocabulary: &Vocabulary) -> Self {
+        let count = self.headings.len();
+        let mut cut = vec![false; count];
+        // The sections the heading is in, innermost last.
+        let mut outer: Vec<usize> = Vec::new();
+        for (i, heading) in self.headings.iter().enumerate() {
+            while outer
+                .last()
+                .is_some_and(|&j| self.headings[j].level >= heading.level)
+            {
+                outer.pop();
+            }
+            let own = heading.line + 1..self.own_end(i);
+            let names = self.table_names(own.clone());
+            let permitted = names.iter().any(|name| vocabulary.permits(name))
+                || self
+                    .feature_types(own.clone())
+                    .iter()
+                    .any(|name| vocabulary.permits_feature(name))
+                || listed(&heading.title)
+                    .iter()
+                    .any(|name| vocabulary.permits(name) || vocabulary.permits_feature(name));
+            let refused = !vocabulary.is_empty() && !names.is_empty() && !permitted;
+            let with_outer = outer.last().is_some_and(|&j| cut[j]) && !permitted;
+            // The document's title is never left out.
+            cut[i] = heading.level > 1 && (self.internal(own) || refused || with_outer);
+            outer.push(i);
+        }
+        // A heading stays while its own text or one of its subsections does.
+        let mut shown: Vec<bool> = cut.iter().map(|&left_out| !left_out).collect();
+        for i in (0..count).rev() {
+            if !shown[i] {
+                let end = self.headings[i].end;
+                shown[i] = (i + 1..count)
+                    .take_while(|&j| self.headings[j].line < end)
+                    .any(|j| shown[j]);
+            }
+        }
+        let mut lines = Vec::new();
+        let mut code = Vec::new();
+        let mut headings = Vec::new();
+        // The innermost heading of the line, and the next heading.
+        let mut current: Option<usize> = None;
+        let mut next = 0;
+        for (i, line) in self.lines.iter().enumerate() {
+            if let Some(heading) = self.headings.get(next).filter(|heading| heading.line == i) {
+                if shown[next] {
+                    let title = shown_title(&heading.title);
+                    headings.push(Heading {
+                        level: heading.level,
+                        title: title.clone(),
+                        full: heading.full.clone(),
+                        line: lines.len(),
+                        end: 0,
+                    });
+                    lines.push(format!("{} {title}", "#".repeat(heading.level)));
+                    code.push(false);
+                }
+                current = Some(next);
+                next += 1;
+                continue;
+            }
+            if current.is_some_and(|h| cut[h]) {
+                continue;
+            }
+            lines.push(line.clone());
+            code.push(self.code[i]);
+        }
+        set_ends(&mut headings, lines.len());
+        Self {
+            lines,
+            code,
+            headings,
+        }
+    }
+
+    /// The line after a heading's own text: its next heading's.
+    fn own_end(&self, heading: usize) -> usize {
+        self.headings
+            .get(heading + 1)
+            .map_or(self.lines.len(), |next| next.line)
+    }
+
+    /// Whether the first line of a section's own text (`own`) that is not
+    /// empty is [`INTERNAL_MARKER`].
+    fn internal(&self, mut own: Range<usize>) -> bool {
+        own.find(|&i| !self.lines[i].trim().is_empty())
+            .is_some_and(|i| !self.code[i] && self.lines[i].trim() == INTERNAL_MARKER)
+    }
+
+    /// The names in the first cells of the API's command and query tables
+    /// ([`api_header`]) of these lines.
+    fn table_names(&self, lines: Range<usize>) -> Vec<String> {
+        let mut names = Vec::new();
+        // The table's header line and whether it is of commands or queries.
+        let mut header: Option<(usize, bool)> = None;
+        for i in lines {
+            let line = self.lines[i].as_str();
+            if self.code[i] || !line.starts_with('|') {
+                header = None;
+                continue;
+            }
+            match header {
+                None => header = Some((i, api_header(first_cell(line)))),
+                Some((start, true)) if i >= start + 2 => names.extend(
+                    first_cell(line)
+                        .split('`')
+                        .skip(1)
+                        .step_by(2)
+                        .map(str::trim)
+                        .filter(|token| is_name(token))
+                        .map(str::to_owned),
+                ),
+                Some(_) => {}
+            }
+        }
+        names
+    }
+
+    /// The `"type"` values of the code in these lines, which name feature
+    /// types in example definitions.
+    fn feature_types(&self, lines: Range<usize>) -> Vec<String> {
+        let mut types = Vec::new();
+        for i in lines.filter(|&i| self.code[i]) {
+            let mut rest = self.lines[i].as_str();
+            while let Some(at) = rest.find("\"type\":") {
+                rest = rest[at + "\"type\":".len()..].trim_start();
+                if let Some(value) = rest.strip_prefix('"')
+                    && let Some(end) = value.find('"')
+                {
+                    types.push(value[..end].to_owned());
+                }
+            }
+        }
+        types
+    }
+
+    /// The sections whose headings list a name.
+    fn listing(&self, name: &str) -> Vec<&Heading> {
+        let wanted = normal(name);
+        self.sections()
+            .filter(|heading| listed(&heading.title).contains(&wanted))
+            .collect()
     }
 
     /// The headings of the sections (not the document's title).
@@ -319,13 +666,17 @@ impl Reference {
         self.lines[heading.line..heading.end].join("\n")
     }
 
-    /// The sections a name finds, best first: the heading itself, then
-    /// headings that list it, then headings that contain it.
+    /// The sections a name finds, best first: the heading itself (as shown
+    /// or in full, with its issue numbers), then headings that list it,
+    /// then headings that contain it.
     fn find_sections(&self, name: &str) -> Vec<&Heading> {
         let wanted = normal(name);
-        let exact = |heading: &Heading| normal(&heading.title) == wanted;
+        let exact =
+            |heading: &Heading| normal(&heading.title) == wanted || normal(&heading.full) == wanted;
         let lists = |heading: &Heading| listed(&heading.title).contains(&wanted);
-        let contains = |heading: &Heading| normal(&heading.title).contains(&wanted);
+        let contains = |heading: &Heading| {
+            normal(&heading.title).contains(&wanted) || normal(&heading.full).contains(&wanted)
+        };
         let tiers: [&dyn Fn(&Heading) -> bool; 3] = [&exact, &lists, &contains];
         for tier in tiers {
             let found: Vec<&Heading> = self.sections().filter(|heading| tier(heading)).collect();
@@ -352,7 +703,7 @@ impl Reference {
 
     /// Whether a line of code is a definition of the feature type.
     fn defines(&self, line: usize, name: &str) -> bool {
-        let text = self.lines[line];
+        let text = &self.lines[line];
         text.contains(&format!("\"type\": \"{name}\""))
             || text.contains(&format!("\"type\":\"{name}\""))
     }
@@ -375,7 +726,29 @@ impl Reference {
     /// The table rows of a query or a command (`kind` `query` or
     /// `command`), each table with its header and the sections it is in.
     fn rows(&self, kind: &str, name: &str) -> Vec<String> {
-        let first_cell = |line: &str| line.split('|').nth(1).unwrap_or_default().to_owned();
+        self.row_lines(kind, name)
+            .into_iter()
+            .map(|(header, rows)| {
+                format!(
+                    "{}\n\n{}\n{}\n{}",
+                    self.path(header),
+                    self.lines[header],
+                    self.lines
+                        .get(header + 1)
+                        .map(String::as_str)
+                        .unwrap_or_default(),
+                    rows.iter()
+                        .map(|&row| self.lines[row].as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            })
+            .collect()
+    }
+
+    /// The lines of [`Self::rows`]: each table's header line and its rows'
+    /// lines.
+    fn row_lines(&self, kind: &str, name: &str) -> Vec<(usize, Vec<usize>)> {
         let names = |cell: &str| {
             cell.split('`')
                 .skip(1)
@@ -397,19 +770,12 @@ impl Reference {
             while end < self.lines.len() && self.lines[end].starts_with('|') {
                 end += 1;
             }
-            if normal(&first_cell(self.lines[header])).contains(kind) {
-                let rows: Vec<&str> = (header + 2..end)
-                    .map(|row| self.lines[row])
-                    .filter(|row| names(&first_cell(row)))
+            if normal(first_cell(&self.lines[header])).contains(kind) {
+                let rows: Vec<usize> = (header + 2..end)
+                    .filter(|&row| names(first_cell(&self.lines[row])))
                     .collect();
                 if !rows.is_empty() {
-                    tables.push(format!(
-                        "{}\n\n{}\n{}\n{}",
-                        self.path(header),
-                        self.lines[header],
-                        self.lines.get(header + 1).copied().unwrap_or_default(),
-                        rows.join("\n")
-                    ));
+                    tables.push((header, rows));
                 }
             }
             i = end;
@@ -465,7 +831,7 @@ pub(crate) fn answer(arguments: &Value, vocabulary: &Vocabulary) -> Result<Value
         .get("offset")
         .and_then(Value::as_u64)
         .map_or(0, |offset| usize::try_from(offset).unwrap_or(usize::MAX));
-    let given: Vec<&str> = ["section", "query", "command", "feature", "search"]
+    let given: Vec<&str> = ["section", "query", "command", "feature", "search", "guide"]
         .into_iter()
         .filter(|key| arguments.get(*key).is_some())
         .collect();
@@ -476,10 +842,13 @@ pub(crate) fn answer(arguments: &Value, vocabulary: &Vocabulary) -> Result<Value
             .trim()
             .to_owned()
     };
+    let reference = view(vocabulary);
+    let reference: &Reference = &reference;
     match given.as_slice() {
-        [] => contents(vocabulary, offset),
-        ["section"] => section(&text("section"), offset),
+        [] => contents(reference, vocabulary, offset),
+        ["section"] => section(reference, &text("section"), offset),
         ["query"] => item(
+            reference,
             "query",
             &text("query"),
             &vocabulary.queries,
@@ -487,23 +856,29 @@ pub(crate) fn answer(arguments: &Value, vocabulary: &Vocabulary) -> Result<Value
             offset,
         ),
         ["command"] => item(
+            reference,
             "command",
             &text("command"),
             &vocabulary.commands,
             vocabulary,
             offset,
         ),
-        ["feature"] => feature(&text("feature"), vocabulary, offset),
-        ["search"] => search(&text("search"), offset),
+        ["feature"] => feature(reference, &text("feature"), vocabulary, offset),
+        ["search"] => search(reference, &text("search"), offset),
+        // How to model well rather than what exists (mitcad#1508).
+        ["guide"] => crate::guide::answer(&text("guide"), offset),
         _ => Err(format!(
-            "give one of section, query, command, feature and search, not {}",
+            "give one of section, query, command, feature, search and guide, not {}",
             given.join(" and ")
         )),
     }
 }
 
-fn contents(vocabulary: &Vocabulary, offset: usize) -> Result<Value, String> {
-    let reference = reference();
+fn contents(
+    reference: &Reference,
+    vocabulary: &Vocabulary,
+    offset: usize,
+) -> Result<Value, String> {
     let outline: String = reference
         .sections()
         .filter(|heading| heading.level <= 3)
@@ -512,7 +887,9 @@ fn contents(vocabulary: &Vocabulary, offset: usize) -> Result<Value, String> {
             format!("{indent}{}\n", heading.title)
         })
         .collect();
-    // The names count towards the limit too.
+    // The guides on how to model well (mitcad#1508).
+    let guides = crate::guide::guides();
+    // The names and the guides count towards the limit too.
     let names: usize = [
         &vocabulary.queries,
         &vocabulary.commands,
@@ -522,9 +899,11 @@ fn contents(vocabulary: &Vocabulary, offset: usize) -> Result<Value, String> {
     .flatten()
     .map(|name| name.len() + 3)
     .sum();
-    let (text, next) = cut(&outline, offset, LIMIT.saturating_sub(names).max(4096))?;
+    let others = names + guides.to_string().len();
+    let (text, next) = cut(&outline, offset, LIMIT.saturating_sub(others).max(4096))?;
     let mut answer = json!({
         "contents": text,
+        "guides": guides,
         "queries": vocabulary.queries,
         "commands": vocabulary.commands,
         "features": vocabulary.features,
@@ -534,8 +913,7 @@ fn contents(vocabulary: &Vocabulary, offset: usize) -> Result<Value, String> {
     Ok(answer)
 }
 
-fn section(name: &str, offset: usize) -> Result<Value, String> {
-    let reference = reference();
+fn section(reference: &Reference, name: &str, offset: usize) -> Result<Value, String> {
     let found = reference.find_sections(name);
     let Some(heading) = found.first() else {
         return Err(format!(
@@ -557,18 +935,17 @@ fn section(name: &str, offset: usize) -> Result<Value, String> {
 /// A query's or a command's reference rows (`kind`), with the sections
 /// whose headings list it; without rows, the lines that name it.
 fn item(
+    reference: &Reference,
     kind: &str,
     name: &str,
     names: &[String],
     vocabulary: &Vocabulary,
     offset: usize,
 ) -> Result<Value, String> {
-    let reference = reference();
     let permitted = names.iter().any(|known| known == name);
-    let wanted = normal(name);
     let sections: Vec<&str> = reference
-        .sections()
-        .filter(|heading| listed(&heading.title).contains(&wanted))
+        .listing(name)
+        .into_iter()
         .map(|heading| heading.title.as_str())
         .collect();
     let tables = reference.rows(kind, name);
@@ -580,7 +957,7 @@ fn item(
                 format!(
                     "{}: {}",
                     reference.path(line),
-                    excerpt(reference.lines[line], &format!("`{name}`").to_lowercase())
+                    excerpt(&reference.lines[line], &format!("`{name}`").to_lowercase())
                 )
             })
             .collect::<Vec<_>>()
@@ -594,6 +971,10 @@ fn item(
         } else {
             "commands"
         };
+        // One the agents' view leaves out (mitcad#1509).
+        if !permitted && !self::reference().row_lines(kind, name).is_empty() {
+            return Err(unavailable(kind, plural, name, names));
+        }
         return Err(unknown(kind, plural, name, names));
     }
     let (text, next) = cut(&text, offset, LIMIT)?;
@@ -608,8 +989,12 @@ fn item(
     Ok(answer)
 }
 
-fn feature(name: &str, vocabulary: &Vocabulary, offset: usize) -> Result<Value, String> {
-    let reference = reference();
+fn feature(
+    reference: &Reference,
+    name: &str,
+    vocabulary: &Vocabulary,
+    offset: usize,
+) -> Result<Value, String> {
     let Some(heading) = reference.feature_section(name) else {
         return Err(unknown(
             "feature type",
@@ -631,8 +1016,7 @@ fn feature(name: &str, vocabulary: &Vocabulary, offset: usize) -> Result<Value, 
 
 /// The sections whose headings contain a text, and the lines that do, with
 /// their sections; `skip` hits left out (a later page).
-fn search(text: &str, skip: usize) -> Result<Value, String> {
-    let reference = reference();
+fn search(reference: &Reference, text: &str, skip: usize) -> Result<Value, String> {
     let wanted = text.to_lowercase();
     let headings: Vec<&str> = reference
         .sections()
@@ -646,7 +1030,7 @@ fn search(text: &str, skip: usize) -> Result<Value, String> {
     for (n, &line) in lines.iter().enumerate().skip(skip) {
         let hit = json!({
             "section": reference.path(line),
-            "excerpt": excerpt(reference.lines[line], &wanted),
+            "excerpt": excerpt(&reference.lines[line], &wanted),
         });
         let length = hit.to_string().len();
         if hits.len() == MAX_HITS || size + length > LIMIT {
@@ -679,8 +1063,8 @@ fn search(text: &str, skip: usize) -> Result<Value, String> {
 /// definition names, with an example definition, or the rows of its
 /// command when the missing field is one of the command's own. The model's
 /// error names only the first missing field; the reference gives them all
-/// in one answer.
-pub(crate) fn explain_refusal(arguments: &Value, value: &mut Value) {
+/// in one answer. From the reference as the agents of `vocabulary` see it.
+pub(crate) fn explain_refusal(arguments: &Value, value: &mut Value, vocabulary: &Vocabulary) {
     let Some(error) = value
         .get("error")
         .and_then(Value::as_str)
@@ -706,7 +1090,7 @@ pub(crate) fn explain_refusal(arguments: &Value, value: &mut Value) {
     let Some(command) = command.filter(|command| command.is_object()) else {
         return;
     };
-    let reference = reference();
+    let reference = view(vocabulary);
     let name = command
         .get("cmd")
         .and_then(Value::as_str)

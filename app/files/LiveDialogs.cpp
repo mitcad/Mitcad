@@ -25,7 +25,11 @@
 namespace mitcad {
 namespace {
 
-QString tr(const char* text) { return QCoreApplication::translate("LiveDialogs", text); }
+// The file's texts in the context LiveDialogs, where lupdate records them
+// too (mitcad#1472).
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(LiveDialogs)
+};
 
 QLabel* plainLabel(const QString& text = QString()) {
   auto* label = new QLabel(text);
@@ -38,21 +42,21 @@ QLabel* plainLabel(const QString& text = QString()) {
 
 bool askTrustBroker(QWidget* parent, const QString& project, const QString& address) {
   const QString host = brokers::hostOf(address);
-  QMessageBox box(QMessageBox::Question, tr("Live Updates"),
-                  tr("%1 uses live updates through %2. Your name and the designs you open are sent there.")
+  QMessageBox box(QMessageBox::Question, Text::tr("Live Updates"),
+                  Text::tr("%1 uses live updates through %2. Your name and the designs you open are sent there.")
                       .arg(project, host),
                   QMessageBox::NoButton, parent);
   box.setTextFormat(Qt::PlainText);
-  QString details = tr("The broker %1 is named in the project's settings, which anyone who can send versions "
+  QString details = Text::tr("The broker %1 is named in the project's settings, which anyone who can send versions "
                        "to the project can change. Connect only to a broker you know.")
                         .arg(address);
   if (brokers::isPlain(address)) {
-    details += QLatin1Char('\n') + tr("Its connection is plain text: anyone on the network between this computer "
+    details += QLatin1Char('\n') + Text::tr("Its connection is plain text: anyone on the network between this computer "
                                       "and the broker can read the messages.");
   }
   box.setInformativeText(details);
-  QPushButton* connect = box.addButton(tr("&Connect"), QMessageBox::AcceptRole);
-  QPushButton* notNow = box.addButton(tr("&Not Now"), QMessageBox::RejectRole);
+  QPushButton* connect = box.addButton(Text::tr("&Connect"), QMessageBox::AcceptRole);
+  QPushButton* notNow = box.addButton(Text::tr("&Not Now"), QMessageBox::RejectRole);
   box.setDefaultButton(connect);
   box.setEscapeButton(notNow);
   prepareModal(&box);
@@ -68,29 +72,29 @@ std::optional<BrokerSignIn> askBrokerSignIn(QWidget* parent, const QString& addr
                                             bool keychain, const QString& reason,
                                             const std::function<QString(const BrokerSignIn&)>& check) {
   QDialog dialog(parent);
-  dialog.setWindowTitle(tr("Sign In to %1").arg(brokers::hostOf(address)));
+  dialog.setWindowTitle(Text::tr("Sign In to %1").arg(brokers::hostOf(address)));
   auto* layout = new QVBoxLayout(&dialog);
-  layout->addWidget(plainLabel(reason.isEmpty() ? tr("Live updates through %1 need a user name and a password.")
+  layout->addWidget(plainLabel(reason.isEmpty() ? Text::tr("Live updates through %1 need a user name and a password.")
                                                          .arg(address)
                                                 : reason));
   auto* form = new QFormLayout;
   auto* name = new QLineEdit(user);
   auto* password = new QLineEdit;
   password->setEchoMode(QLineEdit::Password);
-  auto* nameLabel = new QLabel(tr("&User:"));
+  auto* nameLabel = new QLabel(Text::tr("&User:"));
   nameLabel->setBuddy(name);
-  auto* passwordLabel = new QLabel(tr("&Password:"));
+  auto* passwordLabel = new QLabel(Text::tr("&Password:"));
   passwordLabel->setBuddy(password);
   form->addRow(nameLabel, name);
   form->addRow(passwordLabel, password);
   layout->addLayout(form);
-  auto* remember = new QCheckBox(tr("&Remember in the system's keychain"));
+  auto* remember = new QCheckBox(Text::tr("&Remember in the system's keychain"));
   remember->setChecked(keychain);
   remember->setEnabled(keychain);
   layout->addWidget(remember);
-  layout->addWidget(plainLabel(keychain ? tr("They go only to %1, and only over an encrypted connection.")
+  layout->addWidget(plainLabel(keychain ? Text::tr("They go only to %1, and only over an encrypted connection.")
                                               .arg(brokers::credentialKey(address))
-                                        : tr("This computer has no keychain MitCad can use: they are kept until "
+                                        : Text::tr("This computer has no keychain MitCad can use: they are kept until "
                                              "MitCad closes, and go only to %1.")
                                               .arg(brokers::credentialKey(address))));
   auto* problem = plainLabel();
@@ -98,7 +102,7 @@ std::optional<BrokerSignIn> askBrokerSignIn(QWidget* parent, const QString& addr
   problem->hide();
   layout->addWidget(problem);
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel);
-  QPushButton* signIn = buttons->addButton(tr("&Sign In"), QDialogButtonBox::AcceptRole);
+  QPushButton* signIn = buttons->addButton(Text::tr("&Sign In"), QDialogButtonBox::AcceptRole);
   layout->addWidget(buttons);
   // Enter signs in (once the button is the dialog's).
   buttons->button(QDialogButtonBox::Cancel)->setAutoDefault(false);
@@ -115,7 +119,7 @@ std::optional<BrokerSignIn> askBrokerSignIn(QWidget* parent, const QString& addr
     answer.remember = remember->isChecked();
     if (answer.credentials.user.isEmpty()) {
       qInfo().noquote() << QStringLiteral("Live sign-in: no user name");
-      problem->setText(tr("Give the user name the broker knows you by."));
+      problem->setText(Text::tr("Give the user name the broker knows you by."));
       problem->show();
       name->setFocus();
       return;
@@ -152,9 +156,9 @@ LiveNotice::LiveNotice(QWidget* parent) : QWidget(parent) {
   m_text = plainLabel();
   layout->addWidget(m_text, 1);
   // No mnemonics: the menus' Alt keys stay theirs.
-  signIn = new QPushButton(tr("Sign In…"));
+  signIn = new QPushButton(Text::tr("Sign In…"));
   signIn->setAutoDefault(false);
-  notNow = new QPushButton(tr("Not Now"));
+  notNow = new QPushButton(Text::tr("Not Now"));
   notNow->setAutoDefault(false);
   layout->addWidget(signIn);
   layout->addWidget(notNow);
@@ -179,31 +183,31 @@ QString LiveNotice::text() const { return m_text->text(); }
 
 QString describeLiveTest(const QJsonObject& answer) {
   QStringList lines;
-  QString heading = tr("Live updates through %1, prefix %2").arg(answer.value(QStringLiteral("broker")).toString(),
+  QString heading = Text::tr("Live updates through %1, prefix %2").arg(answer.value(QStringLiteral("broker")).toString(),
                                                                  answer.value(QStringLiteral("prefix")).toString());
   if (answer.value(QStringLiteral("user")).isString()) {
-    heading += tr(", as %1").arg(answer.value(QStringLiteral("user")).toString());
+    heading += Text::tr(", as %1").arg(answer.value(QStringLiteral("user")).toString());
   }
   lines << heading;
   for (const QJsonValue& value : answer.value(QStringLiteral("steps")).toArray()) {
     const QJsonObject step = value.toObject();
     const QString name = step.value(QStringLiteral("step")).toString();
-    const QString what = name == QLatin1String("connect")     ? tr("Connect")
-                         : name == QLatin1String("sign_in")   ? tr("Sign in")
-                         : name == QLatin1String("subscribe") ? tr("Subscribe")
-                         : name == QLatin1String("publish")   ? tr("Publish a test message")
-                         : name == QLatin1String("receive")   ? tr("Receive it back")
+    const QString what = name == QLatin1String("connect")     ? Text::tr("Connect")
+                         : name == QLatin1String("sign_in")   ? Text::tr("Sign in")
+                         : name == QLatin1String("subscribe") ? Text::tr("Subscribe")
+                         : name == QLatin1String("publish")   ? Text::tr("Publish a test message")
+                         : name == QLatin1String("receive")   ? Text::tr("Receive it back")
                                                               : name;
-    lines << (step.value(QStringLiteral("ok")).toBool() ? tr("%1: ok (%2 ms)") : tr("%1: failed (%2 ms)"))
+    lines << (step.value(QStringLiteral("ok")).toBool() ? Text::tr("%1: ok (%2 ms)") : Text::tr("%1: failed (%2 ms)"))
                  .arg(what)
                  .arg(step.value(QStringLiteral("ms")).toInt());
   }
   const QString warning = answer.value(QStringLiteral("warning")).toString();
   if (!warning.isEmpty()) {
-    lines << tr("Warning: %1.").arg(warning);
+    lines << Text::tr("Warning: %1.").arg(warning);
   }
   const QString error = answer.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString();
-  lines << (error.isEmpty() ? tr("Live updates work through this broker.") : tr("Failed: %1").arg(error));
+  lines << (error.isEmpty() ? Text::tr("Live updates work through this broker.") : Text::tr("Failed: %1").arg(error));
   return lines.join(QLatin1Char('\n'));
 }
 

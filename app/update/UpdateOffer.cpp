@@ -7,8 +7,11 @@
 namespace mitcad {
 namespace {
 
-// The texts keep the controller's translation context.
-QString tr(const char* text) { return QCoreApplication::translate("UpdateController", text); }
+// The file's texts in the context UpdateController, where lupdate records
+// them too (mitcad#1472).
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(UpdateController)
+};
 
 } // namespace
 
@@ -41,35 +44,35 @@ OfferNotice offerNotice(const UpdateOffer& offer, const QString& current, const 
     notice.skip = false;
     const QString name = platformName(platform);
     notice.html = name.isEmpty()
-                      ? tr("<b>MitCad %1</b> is out (this is %2), but there is no download for this computer yet.")
+                      ? Text::tr("<b>MitCad %1</b> is out (this is %2), but there is no download for this computer yet.")
                             .arg(version, running)
-                      : tr("<b>MitCad %1</b> is out (this is %2), but there is no download for %3 yet.")
+                      : Text::tr("<b>MitCad %1</b> is out (this is %2), but there is no download for %3 yet.")
                             .arg(version, running, name.toHtmlEscaped());
     if (offer.prerelease) {
-      notice.html += QLatin1Char(' ') + tr("It is a pre-release.");
+      notice.html += QLatin1Char(' ') + Text::tr("It is a pre-release.");
     }
   } else {
     notice.install = canInstall && !offer.expired;
-    notice.html = tr("<b>MitCad %1</b> is available (this is %2).").arg(version, running);
+    notice.html = Text::tr("<b>MitCad %1</b> is available (this is %2).").arg(version, running);
     if (offer.prerelease) {
-      notice.html += QLatin1Char(' ') + tr("It is a pre-release.");
+      notice.html += QLatin1Char(' ') + Text::tr("It is a pre-release.");
     }
     if (offer.expired) {
-      notice.html += QLatin1Char(' ') + tr("Its update information expired on %1, so MitCad does not install "
+      notice.html += QLatin1Char(' ') + Text::tr("Its update information expired on %1, so MitCad does not install "
                                            "it; if that date has not passed, check the date of this computer.")
                                             .arg(offer.expires.toHtmlEscaped());
     }
     if (!notice.install) {
       // An installation that announces only (mitcad#1390: the download
       // for this platform is there).
-      notice.html += QLatin1Char(' ') + tr("Download it from its release page.");
+      notice.html += QLatin1Char(' ') + Text::tr("Download it from its release page.");
     }
   }
   if (offer.status == QStringLiteral("skipped")) {
-    notice.html += QLatin1Char(' ') + tr("You skipped this version.");
+    notice.html += QLatin1Char(' ') + Text::tr("You skipped this version.");
   }
   if (hint) {
-    notice.html += QLatin1Char(' ') + tr("MitCad checks for updates once a day; Tools › Preferences turns that off.");
+    notice.html += QLatin1Char(' ') + Text::tr("MitCad checks for updates once a day; Tools › Preferences turns that off.");
   }
   return notice;
 }

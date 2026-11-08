@@ -1,0 +1,208 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: of two roundings overlapping on a face, the one whose contact
+lies nearer its edge rides (0016), and a ride of no width drops the rider
+(mitcad#1533).
+
+The roof slab's eaves rounded with 0.65 to 0.87: the tip's and the obtuse
+edge's roundings overlap on the eave. The stripes' order chose the rider:
+on the left eave the obtuse edge rode on the tip's line, on the right
+eave the tip on the obtuse edge's, a shape of its own, which jumped by
+2.4 in volume where the tip's rounding begins to roll (1650). Just below
+that (0.862 to 0.868) the left obtuse edge's ride, its section narrower
+than 0.012, failed in its walk, and 1640 took the ride the other way
+round: the volume jumped by 2.
+
+- Compute (the rides of overlapping stripes): the stripe whose contact on
+  the face lies nearer its own edge (r / tan(a / 2), a the angle of its
+  faces on the ball's side, contactReach) rides; as the radius grows the
+  other's contact reaches that edge and the other then rolls on it (1650).
+  Equal ones keep their order.
+- Where that ride fails and the other's contact line lies within a
+  fiftieth of the rider's radius of the rider's edge all along
+  (rideOfNoWidth), the rider takes (nearly) nothing and is dropped with
+  its corners (as 1650 drops it once the other rolls on its edge), not
+  ridden on the other way round.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 9717114e..2d41f105 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -1585,6 +1585,107 @@ bool ChFi3d_Builder::RideOf(const occ::handle<ChFiDS_Stripe>& S,
+   return false;
+ }
+ 
++// How far from its edge on face F a constant rounding's contact lies there,
++// r / tan(a / 2) with a the angle between F and the edge's other face on
++// the ball's side (at the edge's middle); -1 where it is not known.
++static double contactReach(const occ::handle<ChFiDS_Stripe>& S, const TopoDS_Face& F, const ChFiDS_Map& EFMap)
++{
++  const occ::handle<ChFiDS_FilSpine> aFs = occ::down_cast<ChFiDS_FilSpine>(S->Spine());
++  const TopoDS_Edge                  E   = spineEdgeOf(S->Spine(), F);
++  if (aFs.IsNull() || !aFs->IsConstant() || E.IsNull() || !EFMap.Contains(E) || EFMap(E).Extent() != 2)
++  {
++    return -1.;
++  }
++  BRepAdaptor_Curve aC(E);
++  const gp_Pnt      aP = aC.Value(0.5 * (aC.FirstParameter() + aC.LastParameter()));
++  gp_Dir            aN[2];
++  int               k = 0;
++  for (NCollection_List<TopoDS_Shape>::Iterator it(EFMap(E)); it.More() && k < 2; it.Next(), k++)
++  {
++    const TopoDS_Face aF = TopoDS::Face(it.Value());
++    BRepAdaptor_Surface aS(aF);
++    GeomAPI_ProjectPointOnSurf aProj(aP, BRep_Tool::Surface(aF));
++    if (aProj.NbPoints() == 0)
++    {
++      return -1.;
++    }
++    double u = 0., v = 0.;
++    aProj.LowerDistanceParameters(u, v);
++    BRepLProp_SLProps aProps(aS, u, v, 1, Precision::Confusion());
++    if (!aProps.IsNormalDefined())
++    {
++      return -1.;
++    }
++    aN[k] = aProps.Normal();
++    if (aF.Orientation() == TopAbs_REVERSED)
++    {
++      aN[k].Reverse();
++    }
++  }
++  const double a = M_PI - aN[0].Angle(aN[1]);
++  if (a <= Precision::Angular() || a >= M_PI - Precision::Angular())
++  {
++    return -1.;
++  }
++  return aFs->Radius() / std::tan(0.5 * a);
++}
++
++// Whether stripe B's ride on A's contact line on face F (RideOnOverlap) has
++// a section of (nearly) no width: A, of one SurfData on F, has its contact
++// there along B's edge on F within Tol all along (sampled), so that B's
++// ball, touching its other face and passing through that line, touches
++// that face on its own edge or within Tol of it.
++static bool rideOfNoWidth(const TopOpeBRepDS_DataStructure& DStr,
++                          const occ::handle<ChFiDS_Stripe>& A,
++                          const occ::handle<ChFiDS_Stripe>& B,
++                          const TopoDS_Face&                F,
++                          const double                      Tol)
++{
++  if (A->SetOfSurfData().IsNull() || A->SetOfSurfData()->Length() != 1 || B->Spine()->NbEdges() != 1)
++  {
++    return false;
++  }
++  TopoDS_Edge EB;
++  for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More() && EB.IsNull(); ex.Next())
++  {
++    if (ex.Current().IsSame(B->Spine()->Edges(1)))
++    {
++      EB = TopoDS::Edge(ex.Current());
++    }
++  }
++  if (EB.IsNull())
++  {
++    return false;
++  }
++  double                        e1 = 0., e2 = 0.;
++  const occ::handle<Geom_Curve> CE = BRep_Tool::Curve(EB, e1, e2);
++  const occ::handle<ChFiDS_SurfData>& D = A->SetOfSurfData()->Value(1);
++  for (int k = 1; k <= 2; k++)
++  {
++    if (CE.IsNull() || D->IsOnCurve(k) || D->Index(k) <= 0 || !DStr.Shape(D->Index(k)).IsSame(F))
++    {
++      continue;
++    }
++    const ChFiDS_FaceInterference& FI = D->Interference(k);
++    if (FI.LineIndex() <= 0 || DStr.Curve(FI.LineIndex()).Curve().IsNull())
++    {
++      return false;
++    }
++    const occ::handle<Geom_Curve>& CA = DStr.Curve(FI.LineIndex()).Curve();
++    for (int is = 0; is <= 10; is++)
++    {
++      const double w = FI.FirstParameter() + (FI.LastParameter() - FI.FirstParameter()) * is / 10.;
++      GeomAPI_ProjectPointOnCurve aProj(CA->Value(w), CE, e1, e2);
++      if (aProj.NbPoints() == 0 || aProj.LowerDistance() > Tol)
++      {
++        return false;
++      }
++    }
++    return true;
++  }
++  return false;
++}
++
+ bool ChFi3d_Builder::RideOnOverlap(const occ::handle<ChFiDS_Stripe>& A,
+                                    const occ::handle<ChFiDS_Stripe>& B,
+                                    const TopoDS_Face&                F)
+@@ -4084,15 +4185,41 @@ void ChFi3d_Builder::Compute()
+       }
+       NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itA(pairA), itB(pairB);
+       NCollection_List<TopoDS_Shape>::Iterator               itPF(pairF);
++      bool                                                   aRideDropped = false;
+       for (; itA.More(); itA.Next(), itB.Next(), itPF.Next())
+       {
+         // (The later stripe rides on the earlier one's line, or the other
+         // way round where that fails: a rider longer than the line, running
+         // on past its ends, fails in its walk.)
++        // (The one whose own contact on F lies nearer its edge rides: as
++        // the radius grows the other's contact reaches that edge, the ride
++        // narrowing to nothing, and the other then rolls on it, 1650; the
++        // other way round the ride is a shape of its own up to there.)
++        const double aReachA = contactReach(itA.Value(), TopoDS::Face(itPF.Value()), myEFMap);
++        const double aReachB = contactReach(itB.Value(), TopoDS::Face(itPF.Value()), myEFMap);
++        if (aReachA > 0. && aReachB > 0. && aReachA < aReachB - 10. * tolapp3d)
++        {
++          const occ::handle<ChFiDS_Stripe> aSwap = itA.Value();
++          itA.ChangeValue()                       = itB.Value();
++          itB.ChangeValue()                       = aSwap;
++        }
+         if (!RideOnOverlap(itA.Value(), itB.Value(), TopoDS::Face(itPF.Value())))
+         {
+           removeRideOf(itB.Value(), myRideStripes, myRideOn, myRideFaces, myRideEdges, myRideSupports);
+-          if (!RideOnOverlap(itB.Value(), itA.Value(), TopoDS::Face(itPF.Value())))
++          // (A ride whose section has (nearly) no width, A's line within a
++          // fiftieth of B's radius of B's edge all along, fails in its walk:
++          // B takes (almost) nothing away and is dropped with its corners,
++          // as where A rolls on B's edge (1650), not ridden on the other way
++          // round, a shape of its own.)
++          const occ::handle<ChFiDS_FilSpine> aFsB = occ::down_cast<ChFiDS_FilSpine>(itB.Value()->Spine());
++          if (!aFsB.IsNull() && aFsB->IsConstant() && itA.Value()->Spine()->ErrorStatus() == ChFiDS_Ok
++              && rideOfNoWidth(
++                DStr, itA.Value(), itB.Value(), TopoDS::Face(itPF.Value()), 0.02 * aFsB->Radius()))
++          {
++            myDroppedStripes.Append(itB.Value());
++            aRideDropped = true;
++          }
++          else if (!RideOnOverlap(itB.Value(), itA.Value(), TopoDS::Face(itPF.Value())))
+           {
+             removeRideOf(itA.Value(), myRideStripes, myRideOn, myRideFaces, myRideEdges, myRideSupports);
+             continue;
+@@ -4113,6 +4240,25 @@ void ChFi3d_Builder::Compute()
+         itB.Value()->Spine()->SetErrorStatus(ChFiDS_Ok);
+       }
+       done = badstripes.IsEmpty();
++      if (aRideDropped)
++      {
++        myVDataMap.Clear();
++        for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator it(myListStripe); it.More(); it.Next())
++        {
++          if (myDroppedStripes.Contains(it.Value()))
++          {
++            continue;
++          }
++          if (it.Value()->Spine()->FirstStatus() <= ChFiDS_BreakPoint)
++          {
++            myVDataMap.Add(it.Value()->Spine()->FirstVertex(), it.Value());
++          }
++          if (it.Value()->Spine()->LastStatus() <= ChFiDS_BreakPoint)
++          {
++            myVDataMap.Add(it.Value()->Spine()->LastVertex(), it.Value());
++          }
++        }
++      }
+     }
+     // Contacts that overlap only part of the way, crossing each other twice
+     // (the face between narrowing to less than the two roundings' width),

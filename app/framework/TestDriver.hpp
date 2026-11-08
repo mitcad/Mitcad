@@ -106,6 +106,26 @@
 //                           ribbon and palette retain the enabled action
 //   expect-ribbon-labels <label>...  actual workspace labels, including
 //                           accessibility, and no all-caps group captions
+//   expect-design-chrome    the design in front shows its ribbon (Docked:
+//                           its toolbar, the view's top below it; Floating:
+//                           its group cards), its Browser and its
+//                           navigation bar, each inside the window; logs
+//                           "Design chrome: docked, ribbon x,y wxh, view
+//                           x,y wxh, browser x,y wxh, navigation bar x,y
+//                           wxh" in the window's coordinates (mitcad#1451)
+//   expect-interface-size <ratio>  the window and the 3D view draw at that
+//                           device pixel ratio (Preferences' Interface
+//                           size, mitcad#1495), the window lies within the
+//                           screen, the ribbon's captions are complete and
+//                           its buttons as large as their icons, the
+//                           Browser's first row as high as its icon, and a
+//                           command panel shows with its OK whole and its
+//                           fields as high as their text needs; logs
+//                           "Interface size layout: docked, device pixel
+//                           ratio 1.5, window wxh within the screen; ribbon
+//                           x,y wxh (n captions, n buttons); browser x,y
+//                           wxh (rows h high); command panel x,y wxh (n
+//                           fields, OK whole)"
 //   collapse-card <object-name> true|false  use the card's chevron button
 //   expect-setting <key> <value>     the current saved QSettings value
 //   set-setting <key> <value>        saves a QSettings value (text)
@@ -247,6 +267,39 @@
 //                           for context-menu-logged's entry); Item is
 //                           looked for in the submenu Sub opened, not in
 //                           whichever popup Qt reports active
+//   expect-popup-entries <regex>  the open popup menu's shown entries,
+//                           joined with " | " ("Name (disabled)" for a
+//                           disabled one, no separators), match; logs
+//                           "TestDriver: popup entries: ..." (mitcad#1455)
+// The Docked layout's docks, by object name (commandDock, browserDock, ...;
+// mitcad#1455, TestDriverDocks.cpp):
+//   dock-title-context <dock>  a real context-menu event on the dock's
+//                           title row, which opens the window's menu of
+//                           its panels; follow with expect-popup-entries,
+//                           popup <entry> or key Escape
+//   dock-close <dock>       the pointer enters the dock's title row (its
+//                           buttons show), then a click on its close button
+//   expect-dock <dock> shown|hidden  wait until the dock is shown (visible,
+//                           not empty, inside the window) or hidden, and
+//                           the View menu's entry of its name (View ›
+//                           Command for the Command dock) is checked or
+//                           not; fails while the View menu has no entry
+//                           for it; logs "TestDriver: dock <dock> shown,
+//                           View/<name> checked"
+// The interface walked (mitcad#1473, TestDriverWalk.cpp; with
+// MITCAD_LOG_UNTRANSLATED=1 in another language, tools/ui-language-walk-test.sh):
+//   walk-commands <regex> [exclude]  each command whose id matches the
+//                           regex and not the exclusion, in the order of
+//                           their ids: started as its button would ("Walk:
+//                           command <id>", "(disabled)" when it cannot
+//                           start), then closed again: its popups, dialogs
+//                           and new windows closed, its panel cancelled
+//                           with Esc, after its computation
+//   walk-menus              every menu of the window (the menu bar's, the
+//                           ribbon's and the panels' drop-downs and their
+//                           submenus) filled as when it opens
+//   walk-context-menus      the context menu of each row of the window's
+//                           visible lists and trees, opened and closed
 //   button <regex> [objectName] click a visible button whose text (without
 //                           '&') matches; optional Qt objectName selects an
 //                           exact control in the target window
@@ -710,6 +763,8 @@ private:
   void testMacToolButtons();
   void testSketchFinishLayout();
   void testRibbonLabels(const QStringList& expected);
+  void testDesignChrome();
+  void testInterfaceSize(double ratio);
   void testNavigationRuntime();
   void testNavigationRelease();
   void testNavigationControls(const QString& mode);
@@ -726,6 +781,13 @@ private:
   // TestDriverWindowFit.cpp): runs the step if it is one of those.
   bool runWindowFitStep(const QString& name, const QStringList& a, int line);
   bool runDocumentFrameStep(const QString& name, const QStringList& args, int line);
+  // The Docked layout's docks hidden and shown again (mitcad#1455,
+  // TestDriverDocks.cpp): runs the step if it is one of those.
+  bool runDockStep(const QString& name, const QStringList& args, int line);
+  // The interface walked (mitcad#1473, TestDriverWalk.cpp): runs the step
+  // if it is one of those.
+  bool runWalkStep(const QString& name, const QStringList& args, int line);
+  void walkClose(qint64 notBefore, qint64 until);
 
   bool m_active = false;
   QTimer* m_timer = nullptr;
@@ -760,6 +822,8 @@ private:
   QPointer<QWidget> m_submenu;
   bool m_inSubmenu = false;
   QPointer<QObject> m_found;  // what a wait found
+  QList<QPointer<QWidget>> m_walkKeep; // the windows a walk leaves open
+  QString m_walkCommand;               // and the command it leaves open
   mutable QPointer<QWidget> m_viewer;
 
   std::deque<std::function<void()>> m_micro;

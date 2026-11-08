@@ -2192,7 +2192,9 @@ pub enum BooleanOp {
 /// part; an untouched target is unchanged and has no piece, and a touched
 /// target without a piece was removed. Join fuses the tool with every
 /// target it touches; a tool solid touching nothing is a piece without
-/// sources. Cut and Intersect may split a target into several pieces.
+/// sources. Cut and Intersect may split a target into several pieces. An
+/// Intersect touches a target lying wholly inside the tool: its one piece
+/// is the target, with its names (mitcad#1534).
 #[derive(Debug, Clone)]
 pub struct BooleanOutput<S> {
     pub pieces: Vec<BooleanPiece<S>>,

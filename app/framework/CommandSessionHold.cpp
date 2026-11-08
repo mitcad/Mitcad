@@ -159,6 +159,7 @@ void CommandSession::drawHiddenPreview() {
     m_loggedPreviewTool = QStringLiteral("none");
     qDebug().noquote() << QStringLiteral("Preview tool at none");
   }
+  logPreviewCurve(QStringLiteral("none")); // an Intersection Curve's (mitcad#1496)
 }
 
 void CommandSession::showPreviewHeld(const QString& why) {

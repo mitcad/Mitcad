@@ -1284,7 +1284,8 @@ void SketchController::editDimension(const QString& id) {
         QJsonObject cmd = op.command(QStringLiteral("sketch.set_dimension"));
         cmd.insert(QStringLiteral("dimension"), id);
         cmd.insert(QStringLiteral("value"), expression);
-        if (!op.run(cmd)) {
+        QJsonObject result;
+        if (!op.run(cmd, &result)) {
           const QString reason = op.error();
           op.rollback();
           error(reason);
@@ -1294,17 +1295,96 @@ void SketchController::editDimension(const QString& id) {
         const DimensionData* changed = m_model.dimension(id);
         qDebug().noquote() << QStringLiteral("Dimension %1 = %2 (%3)")
                                   .arg(id, expression, changed != nullptr ? changed->parameter : QString());
+        noteKeptParameters(result);
       },
       d->driven ? QString() : d->parameter,
       // Up and Down stop where the dimension's kind does (mitcad#1254).
       sketchDimensionStepLimit(d->type, d->signedOffset));
   m_editorDimension = id;
+  // Its own parameter is offered as kept as a user parameter, which a value
+  // that uses it does (mitcad#1535).
+  if (ParameterField* field = m_editor ? ParameterField::of(m_editor) : nullptr;
+      field != nullptr && !ownParameter(id).isEmpty()) {
+    field->setKeepOwn(true);
+  }
   // What the dimension is, as its tooltip says (mitcad#231).
   if (m_editor) {
     const QString about = m_overlay->dimensionTooltip(*d);
     m_editor->setToolTip(about + QLatin1Char('\n') + m_editor->toolTip());
     qDebug().noquote() << QStringLiteral("Sketch value editor tooltip: %1").arg(about);
   }
+}
+
+void SketchController::noteKeptParameters(const QJsonObject& result) {
+  const QJsonArray kept = result.value(QStringLiteral("user_parameters")).toArray();
+  if (kept.isEmpty()) {
+    return;
+  }
+  QStringList notes;
+  for (const QJsonValue& note : result.value(QStringLiteral("notes")).toArray()) {
+    notes << note.toString();
+  }
+  for (const QJsonValue& value : kept) {
+    const QJsonObject k = value.toObject();
+    // "Dimension k5: BuckleDiameter kept as a user parameter, now d3", for
+    // UI tests.
+    qDebug().noquote() << QStringLiteral("Dimension %1: %2 kept as a user parameter, now %3")
+                              .arg(k.value(QStringLiteral("dimension")).toString(),
+                                   k.value(QStringLiteral("name")).toString(),
+                                   k.value(QStringLiteral("parameter")).toString());
+  }
+  // The model's words: what moved and what the dimension is now.
+  notice(notes.join(QStringLiteral("; ")), NoticeLevel::Information);
+}
+
+QString SketchController::ownParameter(const QString& id) const {
+  const DimensionData* d = m_model.dimension(id);
+  if (d == nullptr || d->driven || d->parameter.isEmpty()) {
+    return QString();
+  }
+  // A parameter another dimension of the sketch uses too stays the sketch's.
+  for (const DimensionData& other : m_model.dimensions) {
+    if (other.id != id && other.parameter == d->parameter) {
+      return QString();
+    }
+  }
+  try {
+    for (const QJsonValue& value : m_host.queryArray(QStringLiteral("parameters"))) {
+      const QJsonObject p = value.toObject();
+      if (p.value(QStringLiteral("name")).toString() == d->parameter) {
+        const bool own = p.value(QStringLiteral("kind")).toString() == QStringLiteral("model") &&
+                         p.value(QStringLiteral("owner")).toString() == m_uid;
+        return own ? d->parameter : QString();
+      }
+    }
+  } catch (const std::exception& e) {
+    // A job computes the model: nothing to offer now.
+    qDebug().noquote() << QStringLiteral("Own parameter of %1 not read: %2").arg(id, errorText(e));
+  }
+  return QString();
+}
+
+void SketchController::keepAsUserParameter(const QString& id) {
+  const QString name = ownParameter(id);
+  if (name.isEmpty()) {
+    return;
+  }
+  // The bare own name: the parameter moves, the dimension uses it at the
+  // same value (commands.md, Values).
+  SketchOp op(*this);
+  QJsonObject cmd = op.command(QStringLiteral("sketch.set_dimension"));
+  cmd.insert(QStringLiteral("dimension"), id);
+  cmd.insert(QStringLiteral("value"), name);
+  QJsonObject result;
+  if (!op.run(cmd, &result)) {
+    const QString reason = op.error();
+    op.rollback();
+    error(reason);
+    return;
+  }
+  op.setLabel(tr("Move %1 to User Parameters").arg(name));
+  op.commit();
+  noteKeptParameters(result);
 }
 
 void SketchController::setDimensionSigned(const QString& id, bool on) {

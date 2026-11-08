@@ -11,6 +11,7 @@
 
 #include <QContextMenuEvent>
 #include <QAction>
+#include <QCoreApplication>
 #include <QCursor>
 #include <QApplication>
 #include <QDockWidget>
@@ -178,6 +179,8 @@ QIcon playbackIcon(const QStyle& style, QStyle::StandardPixmap which, const QPal
 
 // The painted row of features with the marker, inside a scroll area.
 class TimelineStrip : public QWidget {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::TimelineStrip)
+
 public:
   struct Item {
     DocumentSnapshot::Feature feature;

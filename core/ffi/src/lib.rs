@@ -99,6 +99,11 @@ use mcp::{mcp_command_document, mcp_entry_failed, mcp_recomputed, mcp_snapshot_q
 // The rolled-back features evaluated in the background (mitcad#1267).
 mod background;
 use background::BackgroundRun;
+// The memory guard of model commands (mitcad#1480).
+mod command_memory;
+use command_memory::guard_command_memory;
+// model_render's ray-traced picture on the headless server (mitcad#1489).
+use mcp::run_mcp_raytraced;
 
 #[cxx::bridge(namespace = "mitcad")]
 mod ffi {
@@ -117,8 +122,16 @@ mod ffi {
     extern "Rust" {
         type Document;
 
-        /// Serves local MCP tools on stdin/stdout within the workspace.
-        fn run_mcp(workspace: &str, read_only: bool) -> Result<()>;
+        /// Serves local MCP tools on stdin/stdout within the workspace,
+        /// its model commands under the memory guard (mitcad#1480) with a
+        /// limit of their own in MiB (0: the process's limits only).
+        fn run_mcp(workspace: &str, read_only: bool, memory_limit_mib: f64) -> Result<()>;
+        /// Model commands (not imports) of this process run under the
+        /// memory guard from now on (mitcad#1480): one that would run the
+        /// process out of memory stops with an error that says so and
+        /// changes nothing. `limit_mib`: a limit of their own beside the
+        /// process's limits (0 for none).
+        fn guard_command_memory(limit_mib: f64);
         /// Plan a preserving local assistant configuration edit; no filesystem IO.
         /// `leading`: a JSON array of the bridge's arguments before
         /// `mcp --connect` (`["cli"]` for an AppImage, mitcad#1170), or empty.
@@ -166,6 +179,14 @@ mod ffi {
             design_folder: &str,
         ) -> Result<String>;
         fn mcp_export_drawing(self: &Document, command: &str) -> Result<String>;
+        /// The live server's model_render (mitcad#1487): the headless
+        /// server's picture of the design; `path` empty for none.
+        fn mcp_render(
+            self: &Document,
+            arguments: &str,
+            document: &str,
+            path: &str,
+        ) -> Result<String>;
         /// Comments for agents (mitcad#1119): the live comments resource
         /// (the notification to send, or empty) and the resolve policy.
         fn set_mcp_comments(self: &mut LiveMcpSession, comments: &str) -> Result<String>;
@@ -362,6 +383,10 @@ mod ffi {
         /// nothing. A control stays cancelled.
         fn cancel(self: &JobControl);
         fn is_cancelled(self: &JobControl) -> bool;
+        /// Why the job was cancelled when not on the user's request (the
+        /// memory guard of model commands, mitcad#1480: what its command
+        /// failed with); empty otherwise.
+        fn cancel_reason(self: &JobControl) -> String;
         fn progress(self: &JobControl) -> JobProgress;
         /// For tests: every evaluation of the job takes `ms` longer.
         fn set_test_delay(self: &JobControl, ms: u32);
@@ -720,6 +745,28 @@ mod ffi {
         /// The revision of the document's state it was made from.
         fn base_revision(self: &BackgroundRun) -> u64;
     }
+
+    // model_render's ray-traced picture on the headless MCP server
+    // (mitcad#1489, mcp/raytrace.rs): mitcad-cli renders it through the
+    // Cycles render worker (tools/cli/mcp-raytrace.cpp).
+
+    unsafe extern "C++" {
+        include!("bridge/mcp_raytrace.hpp");
+        type McpRaytracer;
+        /// The picture for a JSON request; JSON: the image or an error.
+        fn render(self: &McpRaytracer, document: &Document, request: &str) -> String;
+    }
+
+    extern "Rust" {
+        /// run_mcp, with model_render's quality "raytrace" rendered by
+        /// `raytracer` (none: refused, as run_mcp does).
+        fn run_mcp_raytraced(
+            workspace: &str,
+            read_only: bool,
+            memory_limit_mib: f64,
+            raytracer: UniquePtr<McpRaytracer>,
+        ) -> Result<()>;
+    }
 }
 
 /// The document of the application and `mitcad-cli`.
@@ -881,6 +928,14 @@ impl Document {
                 )
             )
         };
+        // Undo and redo take back states whose results the cache mostly
+        // keeps, and they put back what a refused command array changed
+        // (mitcad#689): not stopped by the memory guard (mitcad#1480).
+        let step = value
+            .as_ref()
+            .and_then(|v| v.get("cmd"))
+            .and_then(|c| c.as_str())
+            .is_some_and(|c| matches!(c, "undo" | "redo"));
         match value {
             Some(v) if is_import(&v) => {
                 let mut result = self.import_command(v)?;
@@ -902,7 +957,10 @@ impl Document {
                 }
                 Ok(serde_json::Value::Array(results).to_string())
             }
-            _ => self.0.command(json),
+            _ if step => self.0.command(json),
+            // Under the memory guard where the process turned it on
+            // (mitcad#1480).
+            _ => self.guarded_command(json),
         }
     }
 

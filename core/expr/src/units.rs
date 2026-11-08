@@ -350,6 +350,13 @@ const UNIT_NAMES: [(&str, BaseUnit); 19] = [
 ];
 
 pub(crate) fn base_unit(name: &str) -> Option<BaseUnit> {
+    // The inch and foot marks after a number (mitcad#1531); the lexer gives
+    // them as names only there, so they are no unit names of their own.
+    match name {
+        "\"" | "''" => return Some(BaseUnit::Length(LengthUnit::Inch)),
+        "'" => return Some(BaseUnit::Length(LengthUnit::Foot)),
+        _ => {}
+    }
     UNIT_NAMES
         .iter()
         .find(|(n, _)| *n == name)

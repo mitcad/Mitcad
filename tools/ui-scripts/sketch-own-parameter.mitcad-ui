@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+# A sketch dimension's value that uses the dimension's own parameter keeps
+# that parameter as a user parameter (mitcad#1535), on
+# sketch-own-parameter.json (Sketch1: the width k5 is BuckleDiameter =
+# 5 mm, the height k6 Strap = 25 mm, both the sketch's own; Clearance =
+# BuckleDiameter + 1 mm):
+#   1. In k5's value editor `Buck` lists BuckleDiameter as this dimension's
+#      value, kept as a user parameter; Enter puts it in, ` * 2` and Enter
+#      make the dimension a new parameter BuckleDiameter * 2 (10 mm), and
+#      BuckleDiameter stays, 5 mm, a user parameter, as the status bar says.
+#   2. k6's context menu: Move Strap to User Parameters; Strap is a user
+#      parameter at 25 mm, which k6 uses.
+# Run by tools/ui-sketch-own-parameter-test.sh (Linux) and
+# tools/ui-windows-sketch-own-parameter-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+
+# 1. The own name typed into the dimension's own value editor.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+wait-log '^Dimension k5 text at '
+wait-log '^Dimension k6 text at '
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at '
+key ctrl+a
+type Buck
+wait-log '^Parameter suggestions for dimension BuckleDiameter "Buck": BuckleDiameter [(]this dimension.s value, 5[.0]* mm, kept as a user parameter[)]'
+key Return
+wait-log '^Parameter suggestion inserted BuckleDiameter into dimension BuckleDiameter: BuckleDiameter$'
+type ' * 2'
+key Return
+wait-log '^Dimension k5 = BuckleDiameter [*] 2 [(]d[0-9]+[)]$'
+wait-log '^Dimension k5: BuckleDiameter kept as a user parameter, now d[0-9]+$'
+wait-log '^Sketch notice: BuckleDiameter is now a user parameter [(]5 mm[)]; dimension k5 is d[0-9]+ = BuckleDiameter [*] 2[.]$'
+expect-model-parameter BuckleDiameter 5 user
+expect-model-parameter Clearance 6 user
+
+# 2. Move Strap to User Parameters from k6's context menu.
+mark
+click-logged '^Dimension k6 text at ' right
+wait-log '^Context menu: '
+expect-log '^Context menu: .*Move Strap to User Parameters'
+popup 'Move Strap to User Parameters'
+wait-log '^Dimension k6: Strap kept as a user parameter, now Strap$'
+wait-log '^Sketch notice: Strap is now a user parameter [(]25 mm[)]; dimension k6 uses it[.]$'
+expect-model-parameter Strap 25 user
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

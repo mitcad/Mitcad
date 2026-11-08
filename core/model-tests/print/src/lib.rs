@@ -30,3 +30,5 @@ mod print_plates_tests;
 mod process_printers_tests;
 // A library material whose file lacks its own colour (mitcad#1242).
 mod library_own_colour_tests;
+// model_render's overlay from Print Analysis' functions (mitcad#1488).
+mod render_overlay_tests;

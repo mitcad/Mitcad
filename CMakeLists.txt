@@ -27,7 +27,7 @@ else()
 endif()
 
 project(Mitcad
-  VERSION 0.52.0
+  VERSION 0.53.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 
@@ -292,6 +292,9 @@ if(APPLE)
 endif()
 add_subdirectory(tools/geomtool)
 add_subdirectory(tools/rounding-specs)
+# The interface languages' catalogues (mitcad#1460): the tool the build
+# prepares them with (cmake/Translations.cmake) and repo.translations.
+add_subdirectory(tools/translations)
 include(cmake/MesaRuntime.cmake)
 include(cmake/MacUiTests.cmake)
 include(cmake/SelectionUiTests.cmake)

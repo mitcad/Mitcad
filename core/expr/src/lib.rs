@@ -24,8 +24,11 @@
 //! multiplicative = unary { ( "*" | "/" | "%" ) unary } ;
 //! unary          = ( "-" | "+" ) unary | power ;
 //! power          = postfix [ "^" unary ] ;
-//! postfix        = primary [ unit_suffix ] ;
-//! unit_suffix    = unit [ "^" [ "+" | "-" ] digits ] ;
+//! postfix        = primary [ unit_suffix ]
+//!                | number "'" number inch_mark ;  (feet and inches)
+//! unit_suffix    = ( unit | mark ) [ "^" [ "+" | "-" ] digits ] ;
+//! mark           = inch_mark | "'" ;  (only right after a number, see below)
+//! inch_mark      = '"' | "''" ;
 //! primary        = number
 //!                | text
 //!                | constant [ "(" ")" ]
@@ -109,6 +112,15 @@
 //! separator and no thousands separators: `1,000` is `1.0`, and `1 000`
 //! is an error. [`with_decimal_points`] gives the text with points, which
 //! is how parameters keep their expressions.
+//!
+//! The inch and foot marks (mitcad#1531): a `"` (or two single quotes,
+//! `''`) right after a number, with or without spaces between, is the unit
+//! `in`, and a `'` there is `ft`: `.875"` is `0.875 in`, `2.5 "` is
+//! `2.5 in`, `3'` is `3 ft`. A foot value followed by an inch value adds
+//! up, `3' 6"` is `3 ft + 6 in` (42 inches) and binds as one value
+//! (`2 * 3' 6"` is 84 inches). Only a number takes a mark; anywhere else a
+//! quote starts a text, so `'Width'`, `"mm"` and `value(x; "in")` read as
+//! before. Printing writes the unit names (`0.875 in`).
 //!
 //! # Units and dimensions
 //!

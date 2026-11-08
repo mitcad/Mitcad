@@ -12,8 +12,11 @@
 namespace mitcad {
 namespace {
 
-// The panel's texts keep its translation context.
-QString tr(const char* text) { return QCoreApplication::translate("ProjectsPanel", text); }
+// The file's texts in the context ProjectsPanel, where lupdate records them
+// too (mitcad#1472).
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(ProjectsPanel)
+};
 
 QString dot() { return QStringLiteral(" ") + QChar(0x00B7) + QStringLiteral(" "); }
 
@@ -38,30 +41,30 @@ RowMarks designMarks(const ProjectDesignRow& design) {
   QStringList words;
   if (design.version > 0) {
     marks.text = QStringLiteral("v%1").arg(design.version);
-    full << tr("v%1").arg(design.version);
+    full << Text::tr("v%1").arg(design.version);
     words << QStringLiteral("v%1").arg(design.version);
   } else {
-    marks.text = tr("new");
-    full << tr("Not recorded");
+    marks.text = Text::tr("new");
+    full << Text::tr("Not recorded");
     words << QStringLiteral("not recorded");
   }
   if (design.recorded && design.changed) {
     marks.text += QLatin1Char('*');
-    full << tr("Changed");
+    full << Text::tr("Changed");
     words << QStringLiteral("changed");
   }
   if (design.locked) {
     if (design.lockMine) {
       marks.icon = QStringLiteral("edit");
-      full << tr("Editing");
+      full << Text::tr("Editing");
       words << QStringLiteral("editing");
     } else if (design.lockSameOwner) {
       marks.icon = QStringLiteral("lock");
-      full << tr("Editing elsewhere");
+      full << Text::tr("Editing elsewhere");
       words << QStringLiteral("editing elsewhere");
     } else {
       marks.icon = QStringLiteral("lock");
-      full << tr("Locked: %1").arg(design.lockOwner);
+      full << Text::tr("Locked: %1").arg(design.lockOwner);
       words << QStringLiteral("locked by %1").arg(design.lockOwner);
     }
   }
@@ -75,29 +78,29 @@ RowMarks projectMarks(const ProjectRow& row, int ahead, int behind, const QStrin
   switch (row.kind) {
   case ProjectRow::Kind::Missing:
     marks.icon = QStringLiteral("warning");
-    marks.full = tr("Missing");
+    marks.full = Text::tr("Missing");
     marks.words = QStringLiteral("missing");
     return marks;
   case ProjectRow::Kind::Unreadable:
     marks.icon = QStringLiteral("warning");
-    marks.full = tr("Cannot be read");
+    marks.full = Text::tr("Cannot be read");
     marks.words = QStringLiteral("unreadable");
     return marks;
   case ProjectRow::Kind::NoHistory:
     marks.text = QString(QChar(0x2013));
-    marks.full = tr("No versions");
+    marks.full = Text::tr("No versions");
     marks.words = QStringLiteral("no versions");
     return marks;
   case ProjectRow::Kind::Local:
     if (row.noRemoteChosen) {
       marks.icon = QStringLiteral("cloud");
       marks.text = QStringLiteral("?");
-      marks.full = tr("Cloud") + dot() + tr("No remote chosen");
+      marks.full = Text::tr("Cloud") + dot() + Text::tr("No remote chosen");
       marks.words = QStringLiteral("cloud, no remote chosen");
       return marks;
     }
     // The row's icon tells Local already.
-    marks.full = tr("Local");
+    marks.full = Text::tr("Local");
     marks.words = QStringLiteral("local");
     return marks;
   case ProjectRow::Kind::Cloud:
@@ -105,24 +108,24 @@ RowMarks projectMarks(const ProjectRow& row, int ahead, int behind, const QStrin
   }
   const QString up = QString(QChar(0x2191));
   const QString down = QString(QChar(0x2193));
-  QStringList full{tr("Cloud")};
+  QStringList full{Text::tr("Cloud")};
   QStringList words{QStringLiteral("cloud")};
   QStringList text;
   marks.icon = QStringLiteral("cloud");
   if (conflict) {
     marks.icon = QStringLiteral("warning");
-    full << tr("Conflict");
+    full << Text::tr("Conflict");
     words << QStringLiteral("conflict");
   } else if (problem == QLatin1String("network") || problem == QLatin1String("timed_out")) {
     marks.icon = QStringLiteral("cloud-offline");
-    full << (ahead > 0 ? tr("Offline, %1%2 waiting").arg(up).arg(ahead) : tr("Offline"));
+    full << (ahead > 0 ? Text::tr("Offline, %1%2 waiting").arg(up).arg(ahead) : Text::tr("Offline"));
     words << QStringLiteral("offline");
     if (ahead > 0) {
       text << up + QString::number(ahead);
     }
   } else if (problem == QLatin1String("auth_failed") || problem == QLatin1String("host_key_unknown")) {
     marks.icon = QStringLiteral("warning");
-    full << tr("Sign-in needed");
+    full << Text::tr("Sign-in needed");
     words << QStringLiteral("sign-in needed");
   } else {
     if (ahead > 0) {
@@ -140,7 +143,7 @@ RowMarks projectMarks(const ProjectRow& row, int ahead, int behind, const QStrin
       full << QString(QChar(0x2713));
       words << QStringLiteral("synced");
     } else if (ahead <= 0 && behind <= 0) {
-      full << tr("Not synced yet");
+      full << Text::tr("Not synced yet");
       words << QStringLiteral("not synced");
     }
   }

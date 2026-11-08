@@ -51,12 +51,16 @@ struct ActivateQuestion {
   // else its first ("Corner brace:1"; the root's component name).
   QString picked;
   QString active;
-  // What was picked, in words: "face", "plane", "edge", ...
+  // What was picked, as its English id: "face", "plane", "edge", ...
+  // (SelectionItem::kindName); `pickedKind` is its kind.
   QString kind;
-  // What the command makes, in words: "sketch" (Create Sketch), "plane",
-  // "axis" or "point" (Construct); set by the caller (madeBy).
+  SelectKind pickedKind = SelectKind::None;
+  // What the command makes, as its English id: "sketch" (Create Sketch),
+  // "plane", "axis" or "point" (Construct); set by the caller (madeBy).
   QString made = QStringLiteral("sketch");
 
+  // The question and its detail put the two in the interface language
+  // (mitcad#1471).
   // "The face belongs to M6 rod bracket:1, but Corner brace:1 is active."
   QString text() const;
   // "If you activate it, the sketch goes into M6 rod bracket:1; if you
@@ -67,7 +71,7 @@ struct ActivateQuestion {
 // What a command makes, for ActivateQuestion::made: a construction
 // feature type ("construction_plane", "construction_axis",
 // "construction_point") gives "plane", "axis" or "point"; anything else
-// "sketch".
+// "sketch". English ids: detail() shows them in the interface language.
 QString madeBy(const QString& featureType);
 
 // Where the question goes (mitcad#960): a box of `size` inside `within`

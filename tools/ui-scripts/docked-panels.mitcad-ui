@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: MIT
+# The Docked layout's panels hidden and shown again (mitcad#1455), in a
+# window of 1280 x 800, a new design:
+#   - The Command dock hidden from the window's menu of its panels (a
+#     right-click on its title row, Command unticked) and with its close
+#     button: each time View > Command shows it again (it had no View
+#     entry, and nothing brought it back).
+#   - The Projects dock likewise with View > Projects (hidden at the start
+#     of a fresh profile, so View > Projects first shows it).
+#   - The window's menu of its panels offers no Configuration: that dock
+#     shows while the design has options and has no View entry.
+# expect-dock checks the dock and its View menu entry's check mark together.
+# Run by tools/ui-docked-panels-test.sh (Linux) and
+# tools/ui-windows-docked-panels-test.ps1 (Windows), both Docked.
+expect-ever 'View area' 30
+wait-idle
+window-resize 1280 800
+wait-idle
+expect-dock browserDock shown
+expect-dock timelineDock shown
+expect-dock commandDock shown
+
+# The window's menu of its panels, from the Browser's title row: no
+# Configuration between Projects and Command.
+dock-title-context browserDock
+expect-popup-entries '^(?!.*\bConfiguration\b)Browser \| Timeline \| Projects \| Command( \| |$)'
+key Escape
+wait-idle
+expect-dock commandDock shown
+
+# Command: hidden from the window's menu, back with View > Command.
+dock-title-context commandDock
+popup Command
+expect-dock commandDock hidden
+menu View/Command
+expect-dock commandDock shown
+
+# Command: hidden with its close button, back with View > Command.
+dock-close commandDock
+expect-dock commandDock hidden
+menu View/Command
+expect-dock commandDock shown
+
+# Projects: shown with View > Projects, hidden from the window's menu and
+# with its close button, back with View > Projects each time.
+expect-dock projectsDock hidden
+menu View/Projects
+expect-dock projectsDock shown
+dock-title-context projectsDock
+popup Projects
+expect-dock projectsDock hidden
+menu View/Projects
+expect-dock projectsDock shown
+dock-close projectsDock
+expect-dock projectsDock hidden
+menu View/Projects
+expect-dock projectsDock shown
+
+# The other docks stayed.
+expect-dock browserDock shown
+expect-dock timelineDock shown
+expect-dock commandDock shown

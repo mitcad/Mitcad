@@ -10,6 +10,7 @@
 #include <QImage>
 #include <QMessageBox>
 #include <QPalette>
+#include <QScreen>
 #include <QSettings>
 #include <QString>
 #include <QStringList>
@@ -39,6 +40,8 @@
 #include "framework/DesktopEntry.hpp"
 #include "framework/Diagnostics.hpp"
 #include "framework/DisplayMeshes.hpp"
+#include "framework/InterfaceSize.hpp"
+#include "framework/Language.hpp"
 #include "framework/Numbers.hpp"
 #include "framework/ProcessEnd.hpp"
 #include "framework/Restart.hpp"
@@ -47,6 +50,7 @@
 #include "framework/Theme.hpp"
 #include "framework/TypedTextLog.hpp"
 #include "mitcad/geometry/guard.hpp"
+#include "mitcad_bridge/lib.h"
 #include "mcp/AgentFolders.hpp"
 #include "mcp/LiveServer.hpp"
 #include "mcp/LogRing.hpp"
@@ -142,6 +146,12 @@ int runApplication(int argc, char* argv[]) {
   // such an operation is its error (mitcad#392). Any other crash goes to
   // the crash report installed above.
   mitcad::geometry::catch_occt_crashes();
+  // A model command that would run the application out of memory (one
+  // boolean of many large spheres took gigabytes) stops with an error that
+  // says so, the document as it was, instead of the system ending the
+  // application with the unsaved work: the user's commands and the live
+  // MCP server's (mitcad#1480). The imports keep their own guard.
+  mitcad::guard_command_memory(0.0);
 
 #ifdef __linux__
   // OCCT's OpenGL driver uses GLX on Linux, so Qt must use the X11 (xcb)
@@ -172,6 +182,9 @@ int runApplication(int argc, char* argv[]) {
   QSurfaceFormat::setDefaultFormat(mitcad::viewportSurfaceFormat());
 
   useStoredSettings();
+  // Preferences › Display › Interface size (mitcad#1495): Qt's scale factor
+  // for the whole UI, before the application object reads it.
+  const mitcad::InterfaceScale interfaceScale = mitcad::applyInterfaceSize();
   // The frontend (mitcad#1056): Qt by default, also in a build with the
   // AppKit frontend; Settings › General's native macOS interface chooses
   // AppKit for the next starts, and --ui=native|qt for one run. --chrome
@@ -371,6 +384,14 @@ int runApplication(int argc, char* argv[]) {
                      "--debug-log=FILE, else to a new file in the log folder (Help > Open Log Folder). "
                      "MITCAD_DEBUG_LOG=1|<file> does the same."));
   parser.addOption(debugLogOption);
+  // The interface language for this run (mitcad#1460): over Preferences ›
+  // General › Language and MITCAD_LANGUAGE.
+  const QCommandLineOption languageOption(
+      QStringLiteral("language"),
+      QStringLiteral("Interface language for this run: en, or the code of a language MitCad has (fi); "
+                     "Preferences > General > Language chooses it for every start."),
+      QStringLiteral("code"));
+  parser.addOption(languageOption);
   parser.addPositionalArgument(
       QStringLiteral("file"),
       QStringLiteral("Open <file> at start-up, like --open (as a file association passes it)."),
@@ -398,6 +419,9 @@ int runApplication(int argc, char* argv[]) {
   // anything uses TLS, and after --version and --help, which print only
   // themselves.
   mitcad::checkOpenSslConfiguration();
+  // The interface language (mitcad#1460): its catalogues installed before
+  // any window or command definition takes its texts.
+  mitcad::startInterfaceLanguage(parser.value(languageOption));
 
   if (parser.isSet(uiOption)) {
     const QString ui = parser.value(uiOption);
@@ -424,6 +448,7 @@ int runApplication(int argc, char* argv[]) {
   }
   qInfo().noquote() << QStringLiteral("Frontend: %1 (%2)")
                            .arg(nativeUiRequested ? QStringLiteral("native") : QStringLiteral("qt"), frontendSource);
+  qInfo().noquote() << QStringLiteral("Interface size: %1").arg(mitcad::interfaceScaleDescription(interfaceScale));
 
   // The layout (mitcad#419): --chrome for this run, else Preferences' Layout,
   // else the platform's. The native macOS frontend has a layout of its own.
@@ -465,6 +490,9 @@ int runApplication(int argc, char* argv[]) {
     QStringList kept;
     if (parser.isSet(uiOption)) {
       kept << QStringLiteral("--ui=%1").arg(parser.value(uiOption));
+    }
+    if (parser.isSet(languageOption)) {
+      kept << QStringLiteral("--language=%1").arg(parser.value(languageOption));
     }
     for (const QCommandLineOption* flag : {&qtDialogsOption, &noRecoveryOption, &noGlassOption, &noMcpOption}) {
       if (parser.isSet(*flag)) {
@@ -572,7 +600,8 @@ int runApplication(int argc, char* argv[]) {
     return 0;
   }
   if (!nativeUiRequested) {
-    window.resize(1280, 800);
+    // Within the screen at a larger Interface size (mitcad#1495).
+    window.resize(mitcad::startWindowSize());
   }
   if (hasStartFile) {
     const QString& path = startFile;
@@ -612,6 +641,16 @@ int runApplication(int argc, char* argv[]) {
   if (!window.usesNativeUi()) {
     mitcad::TestSync::singleShot(0, &window, [&window] { window.logLayout(); });
   }
+  // The device pixel ratio the window and the 3D view draw at, with the
+  // Interface size and the system's scaling (mitcad#1495).
+  mitcad::TestSync::singleShot(0, &window, [&window] {
+    const QScreen* screen = window.screen();
+    const QSize logical = screen != nullptr ? screen->geometry().size() : QSize();
+    qInfo().noquote() << QStringLiteral("Device pixel ratio: %1, screen %2x%3 logical")
+                             .arg(window.devicePixelRatioF())
+                             .arg(logical.width())
+                             .arg(logical.height());
+  });
 
   mitcad::mcp::LiveServer mcpServer(&manager);
   if (!parser.isSet(noMcpOption)) {

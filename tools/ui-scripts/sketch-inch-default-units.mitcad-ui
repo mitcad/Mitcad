@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: MIT
+# The default units set to inches after the start, then drawn by typing
+# in the untitled design (mitcad#1452, GitHub mitcad/Mitcad#187: a bar
+# typed .875 by 12.25 and a .2 hole were stored as 0.875 x 12.25 mm and
+# 0.2 mm, at a 10 mm grid point, because the untitled design made at the
+# start stayed in mm when the preference changed). On a fresh profile with
+# the Start page shown (MITCAD_START_PAGE=1):
+#   1. Preferences: General, Default units for new designs in, OK: the
+#      empty untitled design starts again in inches, the Start page stays
+#      and its New Design card says in.
+#   2. Create Sketch leaves the page; a rectangle from (10, 0) typed .875
+#      by 12.25 is 22.225 x 311.15 mm (d1, d2), a circle typed .2 is
+#      5.08 mm (d3).
+# Run by tools/ui-sketch-inch-entry-test.sh (Linux) and
+# tools/ui-windows-sketch-inch-entry-test.ps1 (Windows).
+expect-ever 'Start page new design units: mm'
+wait-idle
+
+# 1. The preference, with the untitled design open under the Start page.
+mark
+command tools.preferences.general
+focus-dialog '^Preferences$'
+focus-widget newDesignUnits
+key Down Down Down
+key Return
+wait-log '^Preferences: default units for new designs in$'
+focus-main
+wait-log '^The untitled design starts again in in$'
+wait-log '^Start page new design units: in$'
+expect-no-log 'Start page hidden'
+
+# 2. Drawn by typing, as the report did.
+mark
+command sketch.create
+wait-log 'Start page hidden'
+expect-log 'Datum xy at '
+click-logged '^Datum xy at '
+expect-log 'Sketch started on xy'
+mark
+key r
+sketch-click 10 0
+type .875
+key Tab
+type 12.25
+key Return
+wait-log '^Added rectangle 22[.]22(5|49[0-9]*) x 311[.]1(5|49[0-9]*) mm at '
+expect-model-parameter d1 22.225 model
+expect-model-parameter d2 311.15 model
+key Escape
+mark
+command sketch.circle
+sketch-click 40 -20
+type .2
+key Return
+wait-log '^Added circle, diameter 5[.]0(8|79[0-9]*) mm at '
+expect-model-parameter d3 5.08 model
+key Escape
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

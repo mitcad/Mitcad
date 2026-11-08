@@ -104,6 +104,8 @@ namespace {
 
 // A file in an allowed folder (agentDesignPath, agentOutputPath): one of
 // `suffixes` (any when empty; `design` says it must be a MitCad design).
+// The reasons here and below go to the agent as tool errors, not to the
+// user: they stay English in every interface language (mitcad#1471).
 QString agentPath(const QString& given, const QStringList& suffixes, bool design, bool forWriting, bool overwrite,
                   QString& reason) {
   reason.clear();
@@ -112,31 +114,31 @@ QString agentPath(const QString& given, const QStringList& suffixes, bool design
     // The window as the platform names it (tools.preferences); the
     // command-line option is in docs/mcp.md only.
 #ifdef Q_OS_MACOS
-    reason = QObject::tr("No folder for designs is allowed: add one in Settings › AI Assistants.");
+    reason = QStringLiteral("No folder for designs is allowed: add one in Settings › AI Assistants.");
 #else
-    reason = QObject::tr("No folder for designs is allowed: add one in Preferences › AI Assistants.");
+    reason = QStringLiteral("No folder for designs is allowed: add one in Preferences › AI Assistants.");
 #endif
     return QString();
   }
   const QString text = QDir::fromNativeSeparators(given.trimmed());
   if (text.isEmpty() || text.split(QLatin1Char('/')).contains(QStringLiteral(".."))) {
-    reason = QObject::tr("Paths must be nonempty and cannot contain '..'.");
+    reason = QStringLiteral("Paths must be nonempty and cannot contain '..'.");
     return QString();
   }
   const QFileInfo info(QDir::cleanPath(QDir::isAbsolutePath(text) ? text : QDir(folders.first()).filePath(text)));
   if (!suffixes.isEmpty() && !suffixes.contains(info.suffix(), Qt::CaseInsensitive)) {
-    reason = design ? QObject::tr("%1 is not a MitCad design: the path must end in .mitcad.")
+    reason = design ? QStringLiteral("%1 is not a MitCad design: the path must end in .mitcad.")
                           .arg(QDir::toNativeSeparators(text))
-                    : QObject::tr("%1 must end in .%2.")
+                    : QStringLiteral("%1 must end in .%2.")
                           .arg(QDir::toNativeSeparators(text), suffixes.join(QStringLiteral(" or .")));
     return QString();
   }
   const QString folder = QFileInfo(info.absolutePath()).canonicalFilePath();
   if (folder.isEmpty() || !QFileInfo(folder).isDir()) {
-    reason = QObject::tr("The folder %1 does not exist.").arg(QDir::toNativeSeparators(info.absolutePath()));
+    reason = QStringLiteral("The folder %1 does not exist.").arg(QDir::toNativeSeparators(info.absolutePath()));
     return QString();
   }
-  const QString outside = QObject::tr("%1 is not in a folder for designs (%2).")
+  const QString outside = QStringLiteral("%1 is not in a folder for designs (%2).")
                               .arg(QDir::toNativeSeparators(info.absoluteFilePath()),
                                    QDir::toNativeSeparators(folders.join(QStringLiteral(", "))));
   if (!insideAny(folder, folders)) {
@@ -148,11 +150,11 @@ QString agentPath(const QString& given, const QStringList& suffixes, bool design
   if (forWriting) {
     if (target.exists() || target.isSymLink()) {
       if (target.isSymLink() || !target.isFile()) {
-        reason = QObject::tr("%1 is not a regular file.").arg(QDir::toNativeSeparators(path));
+        reason = QStringLiteral("%1 is not a regular file.").arg(QDir::toNativeSeparators(path));
         return QString();
       }
       if (!overwrite) {
-        reason = QObject::tr("%1 already exists: pass overwrite: true to replace it.").arg(QDir::toNativeSeparators(path));
+        reason = QStringLiteral("%1 already exists: pass overwrite: true to replace it.").arg(QDir::toNativeSeparators(path));
         return QString();
       }
     }
@@ -161,7 +163,7 @@ QString agentPath(const QString& given, const QStringList& suffixes, bool design
   // Reading: a link is followed, and where it leads must be allowed too.
   const QString resolved = target.canonicalFilePath();
   if (resolved.isEmpty() || !QFileInfo(resolved).isFile()) {
-    reason = QObject::tr("%1 does not exist.").arg(QDir::toNativeSeparators(path));
+    reason = QStringLiteral("%1 does not exist.").arg(QDir::toNativeSeparators(path));
     return QString();
   }
   if (!insideAny(QFileInfo(resolved).absolutePath(), folders)) {
@@ -187,25 +189,25 @@ QString agentDesignFolder(const QString& given, QString& reason) {
   const QStringList folders = agentFolders();
   if (folders.isEmpty()) {
 #ifdef Q_OS_MACOS
-    reason = QObject::tr("No folder for designs is allowed: add one in Settings › AI Assistants.");
+    reason = QStringLiteral("No folder for designs is allowed: add one in Settings › AI Assistants.");
 #else
-    reason = QObject::tr("No folder for designs is allowed: add one in Preferences › AI Assistants.");
+    reason = QStringLiteral("No folder for designs is allowed: add one in Preferences › AI Assistants.");
 #endif
     return QString();
   }
   const QString text = QDir::fromNativeSeparators(given.trimmed());
   if (text.isEmpty() || text.split(QLatin1Char('/')).contains(QStringLiteral(".."))) {
-    reason = QObject::tr("Paths must be nonempty and cannot contain '..'.");
+    reason = QStringLiteral("Paths must be nonempty and cannot contain '..'.");
     return QString();
   }
   const QString absolute = QDir::cleanPath(QDir::isAbsolutePath(text) ? text : QDir(folders.first()).filePath(text));
   const QString folder = QFileInfo(absolute).canonicalFilePath();
   if (folder.isEmpty() || !QFileInfo(folder).isDir()) {
-    reason = QObject::tr("The folder %1 does not exist.").arg(QDir::toNativeSeparators(absolute));
+    reason = QStringLiteral("The folder %1 does not exist.").arg(QDir::toNativeSeparators(absolute));
     return QString();
   }
   if (!insideAny(folder, folders)) {
-    reason = QObject::tr("%1 is not in a folder for designs (%2).")
+    reason = QStringLiteral("%1 is not in a folder for designs (%2).")
                  .arg(QDir::toNativeSeparators(absolute), QDir::toNativeSeparators(folders.join(QStringLiteral(", "))));
     return QString();
   }
@@ -239,13 +241,13 @@ QString agentNewDesignPath(const QString& folder, const QString& name, QString& 
     file += QStringLiteral(".mitcad");
   }
   if (!plain || QFileInfo(file).completeBaseName().trimmed().isEmpty()) {
-    reason = QObject::tr("%1 is not a design's name: give a file name without a folder (folder takes the folder).")
+    reason = QStringLiteral("%1 is not a design's name: give a file name without a folder (folder takes the folder).")
                  .arg(name.trimmed());
     return QString();
   }
   const QString path = dir.filePath(file);
   if (taken.contains(file.toCaseFolded()) || QFileInfo::exists(path) || QFileInfo(path).isSymLink()) {
-    reason = QObject::tr("%1 already exists in %2: choose another name, or open it with document_open.")
+    reason = QStringLiteral("%1 already exists in %2: choose another name, or open it with document_open.")
                  .arg(file, QDir::toNativeSeparators(folder));
     return QString();
   }

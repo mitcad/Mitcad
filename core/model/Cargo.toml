@@ -12,6 +12,9 @@ publish.workspace = true
 mitcad-solver = { path = "../solver" }
 # Vector helpers on [f64; 3], shared with the solver and the readers.
 mitcad-vec3 = { path = "../vec3" }
+# Preview images: the camera, the rasterizer and the PNG writer of
+# model_render (mitcad#1486).
+mitcad-preview = { path = "../preview" }
 serde.workspace = true
 serde_json.workspace = true
 # Imported bodies and sketch export (data exchange).

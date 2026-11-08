@@ -62,6 +62,8 @@ pub use document::{
     Added, BodyView, ComponentCopy, DocState, Document, FeatureError, ModelError, PreviewReport,
     ProfileView, RecomputeStats, ShapeAdded, TimelineItem,
 };
+// A slot's own parameter kept as a user parameter (mitcad#1536).
+pub use document::KeptSlotParameter;
 pub use exchange::{BaseInput, BodyKind, ImportBody, Imported};
 pub use features::{FeatureDef, FeatureEntry, ValueInput};
 pub use file::FileError;
@@ -111,6 +113,8 @@ pub use sweeps::{
 pub use sweeps::HelixSpec;
 // Sweeps' rail points (mitcad#469).
 pub use sweeps::RailPoint;
+// Pipes' corners (mitcad#1448).
+pub use sweeps::PipeCorners;
 // Components and occurrences (F6).
 pub use document::{InsertOptions, InstanceView};
 pub use ids::{ComponentUid, OccurrenceUid};
@@ -356,3 +360,6 @@ pub use document::{REPEATED_PARTS_TOLERANCE, RepeatedPart, RepeatedParts};
 pub mod supplier_shops;
 // Linked designs' files: which changed, and read again (mitcad#1416).
 pub use document::{LinkState, LinksUpdated};
+// Preview images of the design without a GPU or a display, the MCP tool
+// model_render (mitcad#1486).
+pub mod preview;

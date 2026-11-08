@@ -141,11 +141,18 @@ ShapePtr sweep(const SweepSpec& spec);
 
 enum class PipeSection { Circular, Square, Triangular };
 
+// The joints at a pipe's sharp corners (mitcad#1448): the sides run on to
+// the corner's bisecting plane (`Mitered`), or the section turns about the
+// corner (`Rounded`, OCCT's round corner).
+enum class PipeCorners { Mitered, Rounded };
+
 // The section at right angles to the path at its start (a circle of
 // diameter `size`, or a square or an equilateral triangle in a circle of
 // that diameter), swept `extent1` of the path's length, and on a closed
 // path `extent2` of it backwards. A positive `thickness` makes it hollow,
-// the wall inside the section. Faces side<i>, inner<i>, start and end.
+// the wall inside the section. `corners` joins it at the path's sharp
+// corners (see `detail::pipe_shell` for where that cannot be built).
+// Faces side<i>, inner<i>, start and end.
 struct PipeSpec {
   std::string feature;
   Path path;
@@ -154,6 +161,7 @@ struct PipeSpec {
   PipeSection section = PipeSection::Circular;
   double size = 0.0;
   double thickness = 0.0;
+  PipeCorners corners = PipeCorners::Mitered;
 };
 
 ShapePtr pipe(const PipeSpec& spec);

@@ -650,6 +650,10 @@ QString ChatPanel::cardText(const QJsonObject& entry) const {
   if (kind == QStringLiteral("screenshot_file")) {
     return tr("%1 wants to save a picture of the view as %2.").arg(agent, path);
   }
+  if (kind == QStringLiteral("render_file")) {
+    // model_render with a path (mitcad#1487).
+    return tr("%1 wants to save a picture of the design as %2.").arg(agent, path);
+  }
   if (kind == QStringLiteral("file_command")) {
     return tr("%1 wants to run a File command.").arg(agent);
   }

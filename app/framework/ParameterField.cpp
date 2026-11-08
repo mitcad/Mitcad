@@ -9,6 +9,7 @@
 
 #include <QAction>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QEvent>
@@ -131,6 +132,8 @@ bool selectable(const QTreeWidgetItem* item) {
 // unknown name, a unit mismatch). Nothing changes until the model takes
 // it; Cancel changes nothing.
 class CreateParameterDialog : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::CreateParameterDialog)
+
 public:
   struct Setup {
     const ParameterSource* source = nullptr;
@@ -377,6 +380,7 @@ SuggestContext ParameterField::context() const {
   result.kind = m_options.kind;
   result.anyKind = m_options.anyKind;
   result.own = m_options.own;
+  result.keepOwn = m_options.keepOwn;
   result.sketch = m_options.sketch;
   return result;
 }
@@ -689,6 +693,55 @@ bool ParameterField::fill() {
     }
     logged << (choice.problem.isEmpty() ? p.name : QStringLiteral("%1 (%2)").arg(p.name, choice.problem));
   }
+  // The field's own parameter where a value that uses it keeps it as a user
+  // parameter (mitcad#1535): offered after the others, so that it is chosen
+  // only on purpose, and saying what Enter will do.
+  bool ownOffered = false;
+  if (m_options.keepOwn && !m_options.own.isEmpty()) {
+    const QString wanted = m_filter.trimmed();
+    for (const SuggestedParameter& p : m_parameters) {
+      if (p.name != m_options.own) {
+        continue;
+      }
+      if (!wanted.isEmpty() && !p.name.contains(wanted, Qt::CaseInsensitive) &&
+          !(browsing && p.comment.contains(wanted, Qt::CaseInsensitive))) {
+        break;
+      }
+      // A sketch dimension's, or a command panel field's (a feature's value,
+      // mitcad#1536).
+      const bool dimension = !m_options.sketch.isEmpty();
+      auto* header = new QTreeWidgetItem(
+          m_list, {dimension ? tr("This Dimension's Parameter") : tr("This Field's Parameter")});
+      header->setFlags(Qt::ItemIsEnabled);
+      header->setFont(0, bold);
+      header->setData(0, kActionRole, kHeader);
+      header->setFirstColumnSpanned(true);
+      const QString value = p.text.isEmpty() ? p.expression : p.text;
+      auto* item = new QTreeWidgetItem(m_list, {p.name, value,
+                                                dimension ? tr("this dimension's value, kept as a user parameter")
+                                                          : tr("this field's value, kept as a user parameter")});
+      item->setData(0, kNameRole, p.name);
+      item->setData(0, kProblemRole, QString());
+      item->setData(0, kActionRole, kParameter);
+      const QString tip = dimension ? tr("%1 (%2) stays as a user parameter; the dimension gets a new one")
+                                          .arg(p.name, value)
+                                    : tr("%1 (%2) stays as a user parameter; the field gets a new one")
+                                          .arg(p.name, value);
+      for (int column = 0; column < 3; ++column) {
+        item->setToolTip(column, tip);
+      }
+      if (current == nullptr) {
+        current = item;
+      }
+      if (firstAny == nullptr) {
+        firstAny = item;
+      }
+      logged << QStringLiteral("%1 (this %2's value, %3, kept as a user parameter)")
+                    .arg(p.name, dimension ? QStringLiteral("dimension") : QStringLiteral("field"), value);
+      ownOffered = true;
+      break;
+    }
+  }
   // The design's tables (mitcad#667): a choice puts `Screws.` in, and the
   // list goes on with its columns.
   const std::vector<const SuggestedTable*> tables = matchTables(m_tables, m_filter, browsing);
@@ -717,7 +770,7 @@ bool ParameterField::fill() {
     }
     loggedTables << table->name;
   }
-  if (choices.empty() && tables.empty()) {
+  if (choices.empty() && tables.empty() && !ownOffered) {
     if (m_parameters.empty()) {
       note(tr("The design has no parameters yet"));
     } else if (m_filter.trimmed().isEmpty()) {
@@ -813,10 +866,16 @@ bool ParameterField::fill() {
     const QString word = at.text.mid(fragment.start, fragment.length);
     // Nothing to offer for a function's or a unit's name; nor for exactly
     // the one name typed already (Enter then confirms as without a list).
-    if (choices.empty() && tables.empty() && actions.isEmpty() && !hasFunctions && isReservedName(word)) {
+    if (choices.empty() && tables.empty() && actions.isEmpty() && !hasFunctions && !ownOffered &&
+        isReservedName(word)) {
       return false;
     }
-    if (choices.size() == 1 && choices.front().parameter->name == word && actions.isEmpty() && tables.empty()) {
+    if (choices.size() == 1 && choices.front().parameter->name == word && actions.isEmpty() && tables.empty() &&
+        !ownOffered) {
+      return false;
+    }
+    // Nor for exactly the own name typed (mitcad#1535): Enter then confirms.
+    if (ownOffered && choices.empty() && m_options.own == word && actions.isEmpty() && tables.empty()) {
       return false;
     }
   }

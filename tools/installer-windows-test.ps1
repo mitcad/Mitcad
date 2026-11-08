@@ -270,6 +270,16 @@ function Test-Programs([string]$Install) {
   }
   $licenseFiles = @(Get-ChildItem (Join-Path $Install 'licenses\vcpkg') -Recurse -Filter copyright -ErrorAction SilentlyContinue)
   if ($licenseFiles.Count -gt 0) { Pass "$($licenseFiles.Count) vcpkg licence texts" } else { Fail 'no vcpkg licence texts' }
+  # The interface languages (mitcad#1460): the catalogue of each language of
+  # app\translations\languages.txt in bin\translations, Qt's own for
+  # Finnish, and never the tests' pseudo-language.
+  $languages = @(Get-Content (Join-Path $PSScriptRoot '..\app\translations\languages.txt') |
+    ForEach-Object { ($_ -replace '#.*', '').Trim() } | Where-Object { $_ } | ForEach-Object { ($_ -split '\s+')[0] })
+  foreach ($file in @($languages | ForEach-Object { "translations\mitcad_$_.qm" }) + 'translations\qtbase_fi.qm') {
+    if (Test-Path (Join-Path $bin $file)) { Pass "bin\$file" } else { Fail "bin\$file is missing" }
+  }
+  if (Test-Path (Join-Path $bin 'translations\mitcad_xx.qm')) { Fail 'the tests'' pseudo-language is installed' }
+  else { Pass 'no pseudo-language' }
   foreach ($pattern in 'opengl32.dll', 'libgallium_wgl.dll', 'opengl32sw.dll', '*.pdb') {
     $found = @(Get-ChildItem $Install -Recurse -Filter $pattern -ErrorAction SilentlyContinue)
     if ($found.Count -eq 0) { Pass "no $pattern" } else { Fail "$pattern must not be installed: $($found[0].FullName)" }

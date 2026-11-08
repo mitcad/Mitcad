@@ -1,0 +1,72 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a face consumed between two roundings riding on one line (0016)
+that end in corners at both ends goes (mitcad#1499).
+
+A plate 1.3 thick, an end face's two rims and the vertical edges at both
+ends of that face rounded with 1: the end face F, a strip between the
+rims' edges, vanishes under the two blends meeting on one line (ApplyRides,
+1640). ApplyRides cut F's edge at a line's end at its vertices where the
+blends' points there lie on that edge, so that F went with its edges; with
+both its other edges rounded too, the lines end at the corners' points, no
+edge of F was cut, F had no curve left and was kept whole (the result
+invalid, its volume larger than the input's).
+
+- ApplyRides: where F is a strip between the two stripes' edges and the
+  ride is not a part ride, F's other edges not yet cut are cut at their
+  vertices as well.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 412bd3c6..d90f0284 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -3297,6 +3297,48 @@ void ChFi3d_Builder::ApplyRides()
+           }
+         }
+       }
++      // A strip F between A's edge and B's consumed whole: where a line's end
++      // is a corner's point, not on an arc (the edge of F at that end rounded
++      // too), F's edge there is cut at its vertices as well, so that F goes
++      // with its edges (else, with no curve on it left, F was kept whole).
++      if (!aPart)
++      {
++        const TopoDS_Edge EA = spineEdgeOf(A->Spine(), F), EB = spineEdgeOf(B->Spine(), F);
++        if (isStripBetween(F, EA, EB))
++        {
++          for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next())
++          {
++            TopoDS_Edge anArc = TopoDS::Edge(ex.Current());
++            if (anArc.IsSame(EA) || anArc.IsSame(EB) || BRep_Tool::Degenerated(anArc))
++            {
++              continue;
++            }
++            const int Iarc = DStr.AddShape(anArc);
++            bool      aCut = false;
++            for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator itI(
++                   DStr.ShapeInterferences(Iarc));
++                 itI.More() && !aCut;
++                 itI.Next())
++            {
++              aCut = itI.Value()->GeometryType() == TopOpeBRepDS_VERTEX;
++            }
++            if (aCut)
++            {
++              continue;
++            }
++            anArc.Orientation(TopAbs_FORWARD);
++            for (TopExp_Explorer exv(anArc, TopAbs_VERTEX); exv.More(); exv.Next())
++            {
++              const TopoDS_Vertex& vv = TopoDS::Vertex(exv.Current());
++              DStr.ChangeShapeInterferences(Iarc).Append(
++                ChFi3d_FilVertexInDS(TopAbs::Reverse(vv.Orientation()),
++                                     Iarc,
++                                     DStr.AddShape(vv),
++                                     BRep_Tool::Parameter(vv, anArc)));
++            }
++          }
++        }
++      }
+       if (aPart)
+       {
+         ChFi3d_PartRideLines().Append(FI.LineIndex());

@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT
+# A command panel value that uses the field's own parameter keeps that
+# parameter as a user parameter (mitcad#1536), as a sketch dimension's
+# does (sketch-own-parameter.mitcad-ui, mitcad#1535), on
+# feature-own-parameter.json (Extrude1: a 20 x 10 rectangle extruded by
+# its own distance parameter depth = 10 mm):
+#   Edit Extrude1; in Distance `dep` lists depth as this field's value,
+#   kept as a user parameter; Enter puts it in, ` * 2` makes the preview
+#   say that depth becomes a user parameter; OK gives the distance a new
+#   parameter depth * 2 (20 mm, 4000 mm3), and depth stays, 10 mm, a user
+#   parameter, as the status bar says.
+# Run by tools/ui-feature-own-parameter-test.sh (Linux) and
+# tools/ui-windows-feature-own-parameter-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+expect-model-parameter depth 10 model
+expect-model-bodies 1 2000
+
+mark
+dblclick-logged '^Timeline Extrude1 at '
+expect-log 'Editing F2 with Extrude'
+wait-idle
+mark
+focus-widget input_distance
+key ctrl+a
+type dep
+wait-log '^Parameter suggestions for Extrude Distance "dep": depth [(]this field.s value, 10[.0]* mm, kept as a user parameter[)]'
+key Return
+wait-log '^Parameter suggestion inserted depth into Extrude Distance: depth$'
+type ' * 2'
+wait-log '^Preview Extrude: ok, info: depth is now a user parameter [(]10 mm[)]; Extrude1 distance is d[0-9]+ = depth [*] 2'
+wait-idle
+button '^OK$'
+expect-log 'Edited F2' 30
+wait-log '^Slot extent[.]distance: depth kept as a user parameter, now d[0-9]+$'
+wait-log '^Feature notice: depth is now a user parameter [(]10 mm[)]; Extrude1 distance is d[0-9]+ = depth [*] 2[.]$'
+expect-model-parameter depth 10 user
+expect-model-bodies 1 4000
+expect-never 'TestDriver: FAIL'

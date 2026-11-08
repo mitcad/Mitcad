@@ -17,7 +17,11 @@
 namespace mitcad {
 namespace {
 
-QString tr(const char* text) { return QCoreApplication::translate("ParameterSuggest", text); }
+// The file's texts in the context ParameterSuggest, where lupdate records
+// them too (mitcad#1472).
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(ParameterSuggest)
+};
 
 bool isNameStart(QChar c) { return c.isLetter() || c == QLatin1Char('_'); }
 bool isNameChar(QChar c) { return c.isLetterOrNumber() || c == QLatin1Char('_'); }
@@ -98,15 +102,15 @@ int nextSolid(const QString& text, int at) {
 QString article(ParameterKind kind) {
   switch (kind) {
   case ParameterKind::Angle:
-    return tr("An angle");
+    return Text::tr("An angle");
   case ParameterKind::Unitless:
-    return tr("A number without a unit");
+    return Text::tr("A number without a unit");
   case ParameterKind::Text:
-    return tr("A text");
+    return Text::tr("A text");
   case ParameterKind::Length:
     break;
   }
-  return tr("A length");
+  return Text::tr("A length");
 }
 
 } // namespace
@@ -156,15 +160,15 @@ ParameterKind kindOfUnit(const QString& unit) {
 QString parameterKindName(ParameterKind kind) {
   switch (kind) {
   case ParameterKind::Angle:
-    return tr("angle");
+    return Text::tr("angle");
   case ParameterKind::Unitless:
-    return tr("number");
+    return Text::tr("number");
   case ParameterKind::Text:
-    return tr("text");
+    return Text::tr("text");
   case ParameterKind::Length:
     break;
   }
-  return tr("length");
+  return Text::tr("length");
 }
 
 bool isReservedName(const QString& name) {
@@ -271,7 +275,7 @@ QString kindProblem(ParameterKind field, ParameterKind parameter) {
   if (parameter == field || (parameter == ParameterKind::Unitless && !text)) {
     return QString();
   }
-  return tr("%1: this field takes a %2").arg(article(parameter), parameterKindName(field));
+  return Text::tr("%1: this field takes a %2").arg(article(parameter), parameterKindName(field));
 }
 
 QStringList dependentsOf(const std::vector<SuggestedParameter>& parameters, const QString& name) {
@@ -351,7 +355,9 @@ std::vector<ParameterChoice> matchParameters(const std::vector<SuggestedParamete
                                              const SuggestContext& context,
                                              const std::function<QString(const QString&)>& insertedText) {
   const QString wanted = filter.trimmed();
-  const QStringList cycle = context.own.isEmpty() ? QStringList() : dependentsOf(parameters, context.own);
+  // A kept own parameter (mitcad#1535) makes no cycle.
+  const QStringList cycle =
+      context.own.isEmpty() || context.keepOwn ? QStringList() : dependentsOf(parameters, context.own);
   struct Ranked {
     ParameterChoice choice;
     int rank = 0;
@@ -378,9 +384,9 @@ std::vector<ParameterChoice> matchParameters(const std::vector<SuggestedParamete
     ParameterChoice choice;
     choice.parameter = &p;
     if (cycle.contains(p.name)) {
-      choice.problem = tr("%1 uses %2, this field's own parameter: a cycle").arg(p.name, context.own);
+      choice.problem = Text::tr("%1 uses %2, this field's own parameter: a cycle").arg(p.name, context.own);
     } else if (p.reference && !context.sketch.isEmpty() && p.owner == context.sketch) {
-      choice.problem = tr("Measured by a driven dimension of this sketch: the sketch cannot use it");
+      choice.problem = Text::tr("Measured by a driven dimension of this sketch: the sketch cannot use it");
     } else if (!context.anyKind) {
       const QString after = insertedText ? insertedText(p.name) : p.name;
       if (expressionPart(after) == p.name) {
@@ -414,22 +420,22 @@ QString newNameProblem(const std::vector<SuggestedParameter>& parameters, const 
     *existing = nullptr;
   }
   if (name.isEmpty()) {
-    return tr("Give the parameter a name.");
+    return Text::tr("Give the parameter a name.");
   }
   for (const SuggestedParameter& p : parameters) {
     if (p.name == name) {
       if (existing != nullptr) {
         *existing = &p;
       }
-      return tr("%1 exists already (%2): use it, or give another name.")
+      return Text::tr("%1 exists already (%2): use it, or give another name.")
           .arg(name, p.text.isEmpty() ? p.expression : p.text);
     }
   }
   if (isReservedName(name)) {
-    return tr("%1 is a unit, a function or a constant of expressions: give another name.").arg(name);
+    return Text::tr("%1 is a unit, a function or a constant of expressions: give another name.").arg(name);
   }
   if (!isValidParameterName(name)) {
-    return tr("%1 is not a valid name: use letters, digits and _, starting with a letter.").arg(name);
+    return Text::tr("%1 is not a valid name: use letters, digits and _, starting with a letter.").arg(name);
   }
   return QString();
 }

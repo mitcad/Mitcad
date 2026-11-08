@@ -1,0 +1,138 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a rounding riding on another's contact line ends, at a vertex of
+its own edge, where the line ends on the arc of the face that runs from
+that vertex (mitcad#1499).
+
+A roof slab's end face F along a slope, its two edges rounded with 1, the
+underside's rounding B riding on the slope's contact line on F (1640). At
+the eave B's contact on the underside leaves it at the section through the
+eave's inner vertex V, the line running on to F's edge with the eave (the
+arc from V to the eave's tip). B's walk stopped at that section with its
+point on the line inside F, and the corner at V cut an extension of B's
+surface with the eave off the line (PerformIntersectionAtEnd), across the
+cut of the slope's rounding at the tip ("OneCorner : fillets have too big
+radiuses").
+
+- RideOnOverlap: B's end on the line at its spine's end vertex V, where
+  the end of A's line nearest to it lies on an arc of F from V (not a
+  vertex), is A's point on that arc; the corner at V cuts B with the face
+  at the end between two points on arcs.
+- ApplyRides: such a ride along a part of A's line from its end (the other
+  end of B inside F, where the line runs on: the slab's ceiling corner) is
+  a part ride (1340): partOfContact takes one end of the part that is an
+  end of A's contact on the same arc (theSharedEnd), and A's SurfData is
+  split once, at B's other end.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 60496947..412bd3c6 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -282,7 +282,8 @@ static bool sameContact(const TopOpeBRepDS_DataStructure&   DStr,
+ // SurfData L on its side onL (a closed contact, or a longer one) within Tol:
+ // the parameters of that part on L's line, in increasing order (U1 < U2),
+ // within L's range; with theWhole, the whole of it too. Not where the part
+-// runs over the start of a closed line.
++// runs over the start of a closed line. With theSharedEnd, one of P's ends
++// may be one of L's on an arc of the face (the part from L's end).
+ static bool partOfContact(const TopOpeBRepDS_DataStructure&   DStr,
+                           const occ::handle<ChFiDS_SurfData>& L,
+                           const int                           onL,
+@@ -291,7 +292,8 @@ static bool partOfContact(const TopOpeBRepDS_DataStructure&   DStr,
+                           const double                        Tol,
+                           double&                             U1,
+                           double&                             U2,
+-                          const bool                          theWhole = false)
++                          const bool                          theWhole     = false,
++                          const bool                          theSharedEnd = false)
+ {
+   const ChFiDS_FaceInterference& IL = L->Interference(onL);
+   const ChFiDS_FaceInterference& IP = P->Interference(onP);
+@@ -299,7 +301,8 @@ static bool partOfContact(const TopOpeBRepDS_DataStructure&   DStr,
+   {
+     return false;
+   }
+-  const TopoDS_Shape& aFace = DStr.Shape(P->Index(onP));
++  const TopoDS_Shape& aFace   = DStr.Shape(P->Index(onP));
++  int                 aShared = 0;
+   for (const bool f : {true, false})
+   {
+     const ChFiDS_CommonPoint& CP = P->Vertex(f, onP);
+@@ -307,7 +310,20 @@ static bool partOfContact(const TopOpeBRepDS_DataStructure&   DStr,
+         && (CP.IsVertex() || aFace.ShapeType() != TopAbs_FACE
+             || !BRep_Tool::IsClosed(CP.Arc(), TopoDS::Face(aFace))))
+     {
+-      return false;
++      // (With theSharedEnd, one end of P's contact may be an end of L's as
++      // well: on the same arc, at the same point.)
++      bool aSame = false;
++      for (const bool g : {true, false})
++      {
++        const ChFiDS_CommonPoint& CPL = L->Vertex(g, onL);
++        aSame = aSame
++                || (theSharedEnd && !CP.IsVertex() && CPL.IsOnArc() && !CPL.IsVertex()
++                    && CPL.Arc().IsSame(CP.Arc()) && CPL.Point().Distance(CP.Point()) <= Tol);
++      }
++      if (!aSame || ++aShared > 1)
++      {
++        return false;
++      }
+     }
+   }
+   const occ::handle<Geom_Curve>& CL = DStr.Curve(IL.LineIndex()).Curve();
+@@ -1696,6 +1712,43 @@ bool ChFi3d_Builder::RideOnOverlap(const occ::handle<ChFiDS_Stripe>& A,
+       }
+     }
+   }
++  // B's end at a vertex where the line runs on to an arc of F from that
++  // vertex (the line's end on the face at that end, A's point there): B
++  // stopped at the section through the vertex, where its other contact left
++  // its face, short of that arc. Its end on the line is A's point on that
++  // arc, so that its corner cuts it with the face at the end between its
++  // two points on arcs (not off the line, by an extension of its surface).
++  for (int f = 0; f < 2; f++)
++  {
++    ChFiDS_CommonPoint& CPB = SB->ChangeVertex(f == 0, onB);
++    if (CPB.IsOnArc() || !SB->Vertex(f == 0, 3 - onB).IsOnArc())
++    {
++      continue;
++    }
++    const ChFiDS_CommonPoint& CPA0 = SA->Vertex(true, onA);
++    const ChFiDS_CommonPoint& CPA1 = SA->Vertex(false, onA);
++    const ChFiDS_CommonPoint& CPA =
++      CPA0.Point().Distance(CPB.Point()) < CPA1.Point().Distance(CPB.Point()) ? CPA0 : CPA1;
++    if (!CPA.IsOnArc() || CPA.IsVertex())
++    {
++      continue;
++    }
++    const TopoDS_Vertex aVB     = f == 0 ? B->Spine()->FirstVertex() : B->Spine()->LastVertex();
++    bool                aFromVB = false;
++    for (TopExp_Explorer exv(CPA.Arc(), TopAbs_VERTEX); exv.More() && !aFromVB; exv.Next())
++    {
++      aFromVB = exv.Current().IsSame(aVB);
++    }
++    if (!aFromVB)
++    {
++      continue;
++    }
++    const double aPar = CPB.Parameter();
++    CPB.Reset();
++    CPB.SetPoint(CPA.Point());
++    CPB.SetParameter(aPar);
++    CPB.SetArc(CPA.Tolerance(), CPA.Arc(), CPA.ParameterOnArc(), TopAbs::Reverse(CPA.TransitionOnArc()));
++  }
+   // B's side on the line lies on F, with its curve there (not on the support,
+   // a face of no solid): the corners at B's ends find their faces through it
+   // (ChFi3d_cherche_edge), as for A. Its transition, taken on the support,
+@@ -3041,7 +3094,9 @@ void ChFi3d_Builder::ApplyRides()
+       double     U1 = 0., U2 = 0.;
+       if (aSBs.Length() == 1 && findRideSurfData(DStr, A, itF.Value(), SA, onA))
+       {
+-        if (partOfContact(DStr, SA, onA, SB, onB, 10. * tolapp3d, U1, U2))
++        // (A part from an end of A's line, where B's end there was put on
++        // A's point on the arc, RideOnOverlap.)
++        if (partOfContact(DStr, SA, onA, SB, onB, 10. * tolapp3d, U1, U2, false, true))
+         {
+           int iA = 0;
+           for (int j = 1; j <= A->SetOfSurfData()->Length() && iA == 0; j++)

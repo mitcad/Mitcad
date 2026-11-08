@@ -1,0 +1,431 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the corner of a blend rolling on an edge and a blend whose
+contact lies on the face the first one consumes (mitcad#1500).
+
+The roof slab's eave rounded with 0.9 or 1 (1650): the tip's blend rolls
+on the eave's obtuse edge and consumes the eave. The eave's end edge (90
+degrees, between the eave and the end face), rounded too, has its contact
+on the eave all along, inside the consumed face; at the tip's vertex the
+two stripes have no common face. The corner went to PerformMoreThreeCorner,
+which put the tip's blend's ends off the solid; the topology then failed
+(TopoDS_FrozenShape, or a crash in TopOpeBRepBuild).
+
+The two blends meet first where the end edge's contact on the eave reaches
+the obtuse edge, at its other end: from there their intersection runs up
+to the end face, the end edge's blend is cut down to a triangle at the
+obtuse edge's end (between that intersection, its contact on the end face
+and its cut by the underside), and the tip's blend runs on the obtuse edge
+from that point.
+
+- ChFi3d_IsInFront: where the two SurfData have no common face, a side of
+  one on curve E (rolling on E) and the other's contact on a face of E
+  whose end away from the vertex lies on E: that face is their common
+  face, the parameters those of that end's point on both (projected on the
+  rolling side's line).
+- PerformTwoCornerbyInter: the big stripe's point on the pivot is taken on
+  its contact by projection where its parameter there is off the point
+  (the rolling blend's SurfData runs on past the spine's end, 0011).
+- Compute, after the corners: a contact of a stripe of one SurfData that
+  the corner at one end cut down to its point on an arc at the other end
+  is one point: the corner's point index is replaced by the one on the arc
+  (in the stripes and the corner's curves), its parameter the other end's;
+  a rolling side that starts there gets that point on the arc, and its
+  obstacle edge goes whole (no point there, cut at its vertex beyond, as
+  at a rolling blend's end at a vertex).
+- ChFi3d_FilDS: such a side of a stripe of one SurfData gives a
+  degenerated edge of the blend's face, no curve on its face.
+- ChFi3d_CutConsumedFaces: an end of the rolling blend short of the
+  obstacle's vertex, where another stripe's contact on the consumed face
+  is reduced to that point, counts as an end at the nearer vertex, so that
+  the consumed face goes.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 64ecaeb8..dc9ef268 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -4480,6 +4480,12 @@ void ChFi3d_Builder::Compute()
+       myFailure = Failure_Corner;
+     }
+   }
++  // (Obstacle edges of rolling blends that start at a point of the edge
++  // where another blend's contact on the consumed face was cut down to it,
++  // with that point: the edge goes whole, its part up to that point taken
++  // away by the other blend, the rest replaced by the rolling blend's side.)
++  NCollection_List<TopoDS_Shape> aWholeObstacles;
++  NCollection_List<int>          aWholePoints;
+   // construct fillets on each vertex + feed the Ds
+   if (done)
+   {
+@@ -4518,6 +4524,82 @@ void ChFi3d_Builder::Compute()
+       }
+       done = true;
+     }
++    // A blend whose contact on a face the corner at one end cut down to its
++    // point at the other end on an edge (the face consumed by a blend
++    // rolling on that edge, ChFi3d_IsInFront): the corner's point is that
++    // point on the edge, for every stripe that ends there.
++    for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itP(myListStripe); itP.More(); itP.Next())
++    {
++      const occ::handle<ChFiDS_Stripe>& S = itP.Value();
++      if (myDroppedStripes.Contains(S) || S->SetOfSurfData().IsNull() || S->SetOfSurfData()->Length() != 1)
++      {
++        continue;
++      }
++      const occ::handle<ChFiDS_SurfData>& D = S->SetOfSurfData()->Value(1);
++      for (int k = 1; k <= 2; k++)
++      {
++        for (int f = 0; f < 2; f++)
++        {
++          const ChFiDS_CommonPoint& CPa = D->Vertex(f == 0, k);  // made by the corner
++          const ChFiDS_CommonPoint& CPb = D->Vertex(f != 0, k);  // on the edge
++          const int                 ia  = S->IndexPoint(f == 0, k);
++          const int                 ib  = S->IndexPoint(f != 0, k);
++          if (D->IsOnCurve(k) || CPa.IsOnArc() || !CPb.IsOnArc() || CPb.IsVertex() || ia <= 0 || ib <= 0
++              || ia == ib || CPa.Point().Distance(CPb.Point()) > 10. * tolapp3d)
++          {
++            continue;
++          }
++          const ChFiDS_CommonPoint aOn = CPb;
++          {
++            ChFiDS_FaceInterference& FiK = D->ChangeInterference(k);
++            FiK.SetParameter(FiK.Parameter(f != 0), f == 0);
++          }
++          // (The corner's curves end at the point on the edge.)
++          for (int ic = 1; ic <= DStr.NbCurves(); ic++)
++          {
++            NCollection_List<occ::handle<TopOpeBRepDS_Interference>>& LIc = DStr.ChangeCurveInterferences(ic);
++            for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator itI(LIc); itI.More();
++                 itI.Next())
++            {
++              const occ::handle<TopOpeBRepDS_Interference>& I = itI.Value();
++              if (I->GeometryType() == TopOpeBRepDS_POINT && I->Geometry() == ia)
++              {
++                I->Geometry(ib);
++              }
++            }
++          }
++          for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itQ(myListStripe); itQ.More();
++               itQ.Next())
++          {
++            const occ::handle<ChFiDS_Stripe>& Q = itQ.Value();
++            if (myDroppedStripes.Contains(Q) || Q->SetOfSurfData().IsNull())
++            {
++              continue;
++            }
++            for (int g = 0; g < 2; g++)
++            {
++              for (int kq = 1; kq <= 2; kq++)
++              {
++                if (Q->IndexPoint(g == 0, kq) != ia)
++                {
++                  continue;
++                }
++                Q->SetIndexPoint(ib, g == 0, kq);
++                const occ::handle<ChFiDS_SurfData>& DQ =
++                  Q->SetOfSurfData()->Value(g == 0 ? 1 : Q->SetOfSurfData()->Length());
++                if (DQ->IsOnCurve(kq) && DQ->IndexOfC(kq) > 0 && DStr.Shape(DQ->IndexOfC(kq)).IsSame(aOn.Arc()))
++                {
++                  aWholeObstacles.Append(aOn.Arc());
++                  aWholePoints.Append(ib);
++                }
++                ChFiDS_CommonPoint& CPq = DQ->ChangeVertex(g == 0, kq);
++                CPq                     = aOn;
++              }
++            }
++          }
++        }
++      }
++    }
+     if (!hasresult)
+     {
+       done = badvertices.IsEmpty();
+@@ -4705,7 +4787,7 @@ void ChFi3d_Builder::Compute()
+         // (The blend as it is.)
+       }
+       // Narrow faces consumed by blends on their edges (edge overflow).
+-      ChFi3d_CutConsumedFaces(DStr, st, myEFMap);
++      ChFi3d_CutConsumedFaces(DStr, st, myEFMap, &myListStripe);
+       if (!done)
+       {
+         break;
+@@ -4717,6 +4799,53 @@ void ChFi3d_Builder::Compute()
+     ChFi3d_InitChron(cl_reconstruction);
+ #endif
+ 
++    // (The obstacle edges that go whole: not cut at the point, cut at the
++    // vertex beyond it as at a rolling blend's end at a vertex.)
++    NCollection_List<int>::Iterator itWP(aWholePoints);
++    for (NCollection_List<TopoDS_Shape>::Iterator itWO(aWholeObstacles); done && itWO.More();
++         itWO.Next(), itWP.Next())
++    {
++      const int                                                 IC = DStr.AddShape(itWO.Value());
++      NCollection_List<occ::handle<TopOpeBRepDS_Interference>>& LI = DStr.ChangeShapeInterferences(IC);
++      for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator itI(LI); itI.More();)
++      {
++        if (itI.Value()->GeometryType() == TopOpeBRepDS_POINT && itI.Value()->Geometry() == itWP.Value())
++        {
++          LI.Remove(itI);
++        }
++        else
++        {
++          itI.Next();
++        }
++      }
++      const gp_Pnt aP = DStr.Point(itWP.Value()).Point();
++      TopoDS_Edge  E  = TopoDS::Edge(itWO.Value());
++      E.Orientation(TopAbs_FORWARD);
++      TopoDS_Vertex aNear;
++      for (TopExp_Explorer exv(E, TopAbs_VERTEX); exv.More(); exv.Next())
++      {
++        if (aNear.IsNull()
++            || BRep_Tool::Pnt(TopoDS::Vertex(exv.Current())).Distance(aP) < BRep_Tool::Pnt(aNear).Distance(aP))
++        {
++          aNear = TopoDS::Vertex(exv.Current());
++        }
++      }
++      if (aNear.IsNull())
++      {
++        continue;
++      }
++      const int IV = DStr.AddShape(aNear);
++      bool      aHas = false;
++      for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator itI(LI); itI.More(); itI.Next())
++      {
++        aHas = aHas || (itI.Value()->GeometryType() == TopOpeBRepDS_VERTEX && itI.Value()->Geometry() == IV);
++      }
++      if (!aHas)
++      {
++        LI.Append(
++          ChFi3d_FilVertexInDS(TopAbs::Reverse(aNear.Orientation()), IC, IV, BRep_Tool::Parameter(aNear, E)));
++      }
++    }
+     // (Stripes the corners at both their ends cut down to nothing go.)
+     if (done)
+     {
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+index 3a3470ff..3107f173 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+@@ -1398,6 +1398,72 @@ bool ChFi3d_IsInFront(TopOpeBRepDS_DataStructure&       DStr,
+       face     = ff;
+     }
+   }
++  // A stripe rolling on an edge E (a side on curve E, 0011) of the face F
++  // its blend consumes, and the other's contact on F, ending at E at its
++  // end away from the vertex: the two blends meet first at that end, on E.
++  // F is their common face there; the rolling one's trace is E itself.
++  if (!visavis)
++  {
++    for (int r = 0; r < 2 && !visavis; r++)
++    {
++      const occ::handle<ChFiDS_SurfData>& X   = r == 0 ? fd1 : fd2;
++      const occ::handle<ChFiDS_SurfData>& Y   = r == 0 ? fd2 : fd1;
++      const bool                          isY = r == 0 ? isf2 : isf1;
++      for (int jx = 1; jx <= 2 && !visavis; jx++)
++      {
++        if (!X->IsOnCurve(jx) || X->IndexOfC(jx) <= 0 || X->Index(jx) <= 0
++            || X->Interference(jx).LineIndex() <= 0)
++        {
++          continue;
++        }
++        const TopoDS_Shape&            E  = DStr.Shape(X->IndexOfC(jx));
++        const occ::handle<Geom_Curve>& CX = DStr.Curve(X->Interference(jx).LineIndex()).Curve();
++        if (E.ShapeType() != TopAbs_EDGE || CX.IsNull())
++        {
++          continue;
++        }
++        for (int jy = 1; jy <= 2 && !visavis; jy++)
++        {
++          if (Y->IsOnCurve(jy) || Y->Index(jy) <= 0 || Y->Index(jy) == X->Index(jx))
++          {
++            continue;
++          }
++          const ChFiDS_CommonPoint& CPY = Y->Vertex(!isY, jy);
++          if (!CPY.IsOnArc() || !CPY.Arc().IsSame(E))
++          {
++            continue;
++          }
++          const TopoDS_Face F    = TopoDS::Face(DStr.Shape(Y->Index(jy)));
++          bool              onF  = false;
++          for (TopExp_Explorer exE(F, TopAbs_EDGE); exE.More() && !onF; exE.Next())
++          {
++            onF = exE.Current().IsSame(E);
++          }
++          const ChFiDS_FaceInterference& FX = X->Interference(jx);
++          GeomAPI_ProjectPointOnCurve    aProj(CPY.Point(), CX, FX.FirstParameter(), FX.LastParameter());
++          if (!onF || aProj.NbPoints() == 0
++              || aProj.LowerDistance() > std::max(10. * CPY.Tolerance(), 1.e-4))
++          {
++            continue;
++          }
++          const double pX = aProj.LowerDistanceParameter();
++          const double pY = Y->Interference(jy).Parameter(!isY);
++          p1              = r == 0 ? pX : pY;
++          p2              = r == 0 ? pY : pX;
++          jf1             = r == 0 ? jx : jy;
++          jf2             = r == 0 ? jy : jx;
++          face            = F;
++          sameside        = ChFi3d::SameSide(F.Orientation(),
++                                      cd1->Orientation(jf1),
++                                      cd2->Orientation(jf2),
++                                      DStr.Shape(fd1->Index(jf1)).Orientation(),
++                                      DStr.Shape(fd2->Index(jf2)).Orientation());
++          visavis         = true;
++          ok              = true;
++        }
++      }
++    }
++  }
+   return ok;
+ }
+ 
+@@ -2926,9 +2992,10 @@ static void cutEdgesAt(TopOpeBRepDS_DataStructure& DStr,
+ //            the builder drops the face with them.
+ //=======================================================================
+ 
+-void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&       DStr,
+-                             const occ::handle<ChFiDS_Stripe>& CorDat,
+-                             const ChFiDS_Map&                 EFMap)
++void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&                         DStr,
++                             const occ::handle<ChFiDS_Stripe>&                   CorDat,
++                             const ChFiDS_Map&                                   EFMap,
++                             const NCollection_List<occ::handle<ChFiDS_Stripe>>* theOthers)
+ {
+   const occ::handle<ChFiDS_Spine>& aSpine = CorDat->Spine();
+   if (aSpine.IsNull())
+@@ -3045,6 +3112,50 @@ void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&       DStr,
+         if (CP.IsVertex())
+         {
+           anEnds.Append(CP.Vertex());
++          continue;
++        }
++        // (An end short of the obstacle's vertex where another blend's
++        // contact on the consumed face is reduced to the end's point: that
++        // blend takes away the rest of the face up to the vertex, the
++        // nearer one, at its corner with this one.)
++        if (theOthers == nullptr || !aStrips.First().IsSame(aLeft))
++        {
++          continue;
++        }
++        const int    iLeft  = DStr.AddShape(aLeft);
++        const double aTol   = 10. * std::max(CP.Tolerance(), Precision::Confusion());
++        bool         aPoint = false;
++        for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itO(*theOthers);
++             itO.More() && !aPoint;
++             itO.Next())
++        {
++          if (itO.Value() == CorDat || itO.Value()->SetOfSurfData().IsNull())
++          {
++            continue;
++          }
++          const NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& aSeqO =
++            itO.Value()->SetOfSurfData()->Sequence();
++          for (int jo = 1; jo <= aSeqO.Length() && !aPoint; jo++)
++          {
++            for (int so = 1; so <= 2 && !aPoint; so++)
++            {
++              aPoint = aSeqO(jo)->Index(so) == iLeft && !aSeqO(jo)->IsOnCurve(so)
++                       && aSeqO(jo)->Vertex(true, so).Point().Distance(CP.Point()) <= aTol
++                       && aSeqO(jo)->Vertex(false, so).Point().Distance(CP.Point()) <= aTol;
++            }
++          }
++        }
++        if (!aPoint)
++        {
++          continue;
++        }
++        TopoDS_Vertex aV1, aV2;
++        TopExp::Vertices(TopoDS::Edge(anObst), aV1, aV2);
++        if (!aV1.IsNull() && !aV2.IsNull())
++        {
++          const bool aFirstNearer =
++            BRep_Tool::Pnt(aV1).Distance(CP.Point()) < BRep_Tool::Pnt(aV2).Distance(CP.Point());
++          anEnds.Append(aFirstNearer ? aV1 : aV2);
+         }
+       }
+       // Each strip's other edges at the ends of the blend (on the strips
+@@ -4393,6 +4504,24 @@ void ChFi3d_FilDS(const int                         SolidIndex,
+ 
+   // Nullify degenerated ChFi/Faces interferences, eap occ293
+   int j;
++  // (A stripe of one SurfData whose contact on one side the corner at an
++  // end cut down to its point at the other end: a degenerated edge of the
++  // blend's face, no edge of that side's face.)
++  if (SeqFil.Length() == 1)
++  {
++    const occ::handle<ChFiDS_SurfData>& Fd = SeqFil(1);
++    for (int onS = 1; onS <= 2; onS++)
++    {
++      const ChFiDS_FaceInterference& Fi = Fd->Interference(onS);
++      if (Fi.LineIndex() > 0 && !Fd->IsOnCurve(onS) && !Fd->IsOnCurve(3 - onS)
++          && std::abs(Fi.FirstParameter() - Fi.LastParameter()) <= Precision::PConfusion()
++          && Fd->Vertex(true, onS).Point().Distance(Fd->Vertex(false, onS).Point()) <= tol3d
++          && Fd->Vertex(true, 3 - onS).Point().Distance(Fd->Vertex(false, 3 - onS).Point()) > 10. * tol3d)
++      {
++        DStr.ChangeCurve(Fi.LineIndex()).ChangeCurve().Nullify();
++      }
++    }
++  }
+   if (SeqFil.Length() > 1)
+   {
+     for (j = 1; j <= SeqFil.Length(); j++)
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+index 005bc80b..8d2d1088 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+@@ -546,9 +546,13 @@ bool ChFi3d_ArcEndsSpine(const ChFiDS_CommonPoint& CP,
+ //! The faces that blends rolling on their edges (obstacles) consume
+ //! entirely are dropped from the result: their other edges at the ends of
+ //! those blends are cut there.
+-void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&       DStr,
+-                             const occ::handle<ChFiDS_Stripe>& CorDat,
+-                             const ChFiDS_Map&                 EFMap);
++//! An end of such a blend on the obstacle edge short of its vertex, where
++//! a blend of another stripe of theOthers ends with its contact on the
++//! consumed face reduced to that point, counts as an end at that vertex.
++void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&                         DStr,
++                             const occ::handle<ChFiDS_Stripe>&                   CorDat,
++                             const ChFiDS_Map&                                   EFMap,
++                             const NCollection_List<occ::handle<ChFiDS_Stripe>>* theOthers = nullptr);
+ 
+ //! The faces of the edges of a closed spine that no surface data of the
+ //! stripe (nor Extra, when given) lies on: the blend's contacts left them
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx
+index 2caaeadf..300d1b5c 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx
+@@ -34,6 +34,7 @@
+ #include <Geom2dAdaptor_Curve.hxx>
+ #include <Geom_BoundedCurve.hxx>
+ #include <Geom_Curve.hxx>
++#include <GeomAPI_ProjectPointOnCurve.hxx>
+ #include <Geom_Surface.hxx>
+ #include <GeomAdaptor_Curve.hxx>
+ #include <GeomAdaptor_Surface.hxx>
+@@ -711,6 +712,24 @@ bool ChFi3d_Builder::PerformTwoCornerbyInter(const int Index)
+ 
+     // Parfin (parameters of the point cpend)
+     double ptg                = BigFD->Interference(IFaArcBig).Parameter(isfirstBig);
++    {
++      // (A blend rolling on an edge runs on past the spine's end, 0011,
++      // its point on the arc at the end short of its contact's end: that
++      // point's parameter on the contact.)
++      ChFiDS_FaceInterference&       FiBig = BigFD->ChangeInterference(IFaArcBig);
++      const occ::handle<Geom_Curve>& CBig =
++        FiBig.LineIndex() > 0 ? DStr.Curve(FiBig.LineIndex()).Curve() : occ::handle<Geom_Curve>();
++      const gp_Pnt aEnd = BigFD->Vertex(isfirstBig, IFaArcBig).Point();
++      if (!CBig.IsNull() && CBig->Value(ptg).Distance(aEnd) > 10. * tolapp3d)
++      {
++        GeomAPI_ProjectPointOnCurve aProj(aEnd, CBig, FiBig.FirstParameter(), FiBig.LastParameter());
++        if (aProj.NbPoints() > 0 && aProj.LowerDistance() <= 10. * tolapp3d)
++        {
++          ptg = aProj.LowerDistanceParameter();
++          FiBig.SetParameter(ptg, isfirstBig);
++        }
++      }
++    }
+     UVi                       = BigFD->Interference(IFaArcBig).PCurveOnSurf()->Value(ptg);
+     Parfin(3)                 = UVi.X();
+     Parfin(4)                 = UVi.Y();

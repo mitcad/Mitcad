@@ -337,6 +337,9 @@ impl<K: Kernel> Evaluate<K> for CombineDef {
                     }
                 }
                 if op == BooleanOp::Intersect {
+                    // A target lying wholly inside the tools is touched,
+                    // its one piece the target with its names (mitcad#1534);
+                    // one the tools only touch or miss leaves no piece.
                     if !result.touched[0] || pieces.is_empty() {
                         return Err("the target and the tool bodies do not intersect".to_owned());
                     }

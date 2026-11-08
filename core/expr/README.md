@@ -1,7 +1,8 @@
 # mitcad-expr
 
 MitCad's parameter expressions with units, without dependencies: the
-lexer and parser (`d1 * 2 + 5 mm`, `30 deg`, `if(a == b; 1; 2)`), the
+lexer and parser (`d1 * 2 + 5 mm`, `30 deg`, `if(a == b; 1; 2)`, the
+inch and foot marks `.875"` and `3' 6"` after a number), the
 evaluator with dimensions and units, formatting, parameter limits (`min`,
 `max`, `step`), text values, and the `ParameterTable` that keeps named
 parameters and evaluates them in dependency order. The language is a

@@ -7,7 +7,8 @@
 //! with the plate's spiral mode only on its plate, PrusaSlicer's beds
 //! where it lays them out, a Cura export of a file per plate (the tests
 //! read the files written), the copies of an item apart also without
-//! centring and a plate's layout beside the design; and the items of a
+//! centring, the pieces apart beyond their brims (mitcad#1491) and a
+//! plate's layout beside the design; and the items of a
 //! deleted last feature's body or a deleted last occurrence staying
 //! missing after a reload (mitcad#1320).
 
@@ -534,6 +535,88 @@ fn the_copies_of_an_item_lie_apart_also_without_centring() {
     }
     let middle = (row[0].0 + row[2].1) / 2.0;
     assert!((middle - 128.0).abs() < 1e-6, "{row:?}");
+}
+
+#[test]
+fn neighbours_lie_apart_beyond_their_brims() {
+    // mitcad#1491: the root's block twice on the first plate (with the
+    // arm's, on no plate); the plate's brim widens the gaps between the
+    // pieces, the copies' too, so that the slicer's brims do not meet.
+    let (mut doc, root_body, _, _) = plated();
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate1",
+               "items": [{"body": root_body.to_string(), "count": 2}]}),
+    );
+    let export = |doc: &mut Document<MockKernel>, name: &str, extra: Value| {
+        let path = folder(name).join("brims.3mf");
+        let mut export = json!({"cmd": "export", "path": path.to_str().unwrap(),
+                                "format": "3mf", "plates": "one_file"});
+        for (key, value) in extra.as_object().unwrap() {
+            export[key.as_str()] = value.clone();
+        }
+        let result = command(doc, export);
+        assert_eq!(result["plates"][0]["pieces"], 3, "{result}");
+        let read = mitcad_3mf::read(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(read.objects.len(), 3, "{result}");
+        read.objects
+            .iter()
+            .map(|object| object_x(&read, object))
+            .collect::<Vec<(f64, f64)>>()
+    };
+    // The gaps between neighbours along X, each `gap` mm.
+    let assert_gaps = |row: &[(f64, f64)], gap: f64| {
+        for pair in row.windows(2) {
+            assert!(
+                (pair[1].0 - (pair[0].1 + gap)).abs() < 1e-6,
+                "{gap}: {row:?}"
+            );
+        }
+    };
+
+    // No brim: 5 mm apart, as before.
+    assert_gaps(&export(&mut doc, "brims-none", json!({})), 5.0);
+
+    // An 8 mm brim, of the slicers' automatic type, on the plate: 8 + 5 + 8
+    // mm, the row still centred on the 256 mm plate.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_print_plate", "plate": "plate1",
+               "values": {"brim_width": 8, "brim_type": "auto_brim"}}),
+    );
+    let row = export(&mut doc, "brims-8", json!({}));
+    assert_gaps(&row, 21.0);
+    let middle = (row[0].0 + row[2].1) / 2.0;
+    assert!((middle - 128.0).abs() < 1e-6, "{row:?}");
+
+    // Not centred, the second copy of the item as far beyond the first.
+    let apart = export(&mut doc, "brims-copies", json!({"center": false}));
+    assert!((apart[1].0 - (apart[0].1 + 21.0)).abs() < 1e-6, "{apart:?}");
+
+    // No brim by its type: 5 mm again; a spacing of its own replaces the
+    // 5 mm.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_print_plate", "plate": "plate1",
+               "values": {"brim_type": "no_brim"}}),
+    );
+    assert_gaps(&export(&mut doc, "brims-off", json!({})), 5.0);
+    assert_gaps(
+        &export(&mut doc, "brims-spacing", json!({"spacing": 12})),
+        12.0,
+    );
+
+    // A spacing off the bed, or out of its range, is refused.
+    let path = folder("brims-refused").join("refused.3mf");
+    let path = path.to_str().unwrap();
+    for bad in [
+        json!({"cmd": "export", "path": path, "format": "3mf", "spacing": 5}),
+        json!({"cmd": "export", "path": path, "format": "3mf", "plates": "one_file",
+               "spacing": -1}),
+    ] {
+        assert!(doc.command(&bad.to_string()).is_err(), "{bad}");
+    }
 }
 
 #[test]

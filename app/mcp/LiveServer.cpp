@@ -208,7 +208,8 @@ struct LiveServer::State {
   }
 
   void failed(const QString& reason) {
-    unavailable = QObject::tr("The listener for assistants did not start: %1").arg(reason);
+    // Shown in the agent indicator's menu: main()'s text of the same failure.
+    unavailable = QCoreApplication::translate("main", "The listener for assistants did not start: %1").arg(reason);
     if (manager) for (MainWindow* target : manager->windows()) target->setMcpUnavailable(unavailable);
   }
 
@@ -410,7 +411,7 @@ struct LiveServer::State {
       runTool(*client, tool, arguments);
     } else {
       finishTool(*client,
-                 {{QStringLiteral("error"), reason.isEmpty() ? QObject::tr("The user did not allow this.") : reason},
+                 {{QStringLiteral("error"), reason.isEmpty() ? QStringLiteral("The user did not allow this.") : reason},
                   {QStringLiteral("denied"), true}},
                  true);
     }
@@ -509,7 +510,7 @@ struct LiveServer::State {
         // The chat's own connection (mitcad#947): its approvals first.
         ChatGate* gate = chatGate(client);
         if (gate == nullptr) {
-          finishTool(client, {{QStringLiteral("error"), QObject::tr("The chat that started this agent has closed.")}},
+          finishTool(client, {{QStringLiteral("error"), QStringLiteral("The chat that started this agent has closed.")}},
                      true);
           return;
         }

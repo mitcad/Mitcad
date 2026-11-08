@@ -3,6 +3,7 @@
 #include "MainWindow.hpp"
 #include "WindowManager.hpp"
 #include "framework/Dialogs.hpp"
+#include "framework/InterfaceSize.hpp"
 
 #include <QApplication>
 #include <QCloseEvent>
@@ -151,7 +152,8 @@ DocumentFrame::DocumentFrame(WindowManager& manager)
   layout->addWidget(m_tabs);
   layout->addWidget(m_stack, 1);
   setCentralWidget(root);
-  resize(1280, 800);
+  // Within the screen at a larger Interface size (mitcad#1495).
+  resize(startWindowSize());
   connect(m_tabs, &QTabBar::currentChanged, this, [this](int index) {
     m_stack->setCurrentIndex(index);
     updateActiveDocument();

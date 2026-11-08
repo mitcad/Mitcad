@@ -50,10 +50,11 @@
 namespace mitcad {
 namespace {
 
-QString tr(const char* text) { return QCoreApplication::translate("ProjectDialogs", text); }
-QString tr(const char* text, const char* disambiguation, int n) {
-  return QCoreApplication::translate("ProjectDialogs", text, disambiguation, n);
-}
+// The file's texts in the context ProjectDialogs, where lupdate records them
+// too (mitcad#1472).
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(ProjectDialogs)
+};
 
 // The pause after typing a folder before it is inspected.
 constexpr int kFolderDelayMs = 300;
@@ -226,49 +227,49 @@ private:
 // What a check of a remote for a new project found (New Project).
 QString describeForNewProject(const QJsonObject& answer, bool& ok) {
   if (answer.value(QStringLiteral("new_folder")).toBool()) {
-    return tr("✓ An empty repository is made in this folder: ready.");
+    return Text::tr("✓ An empty repository is made in this folder: ready.");
   }
   if (answer.value(QStringLiteral("has_project")).toBool()) {
     ok = false;
-    return tr("This repository holds a MitCad project: Open It Instead opens it into the folder.");
+    return Text::tr("This repository holds a MitCad project: Open It Instead opens it into the folder.");
   }
   if (!answer.value(QStringLiteral("reachable")).toBool(true)) {
     ok = false;
-    return tr("The repository cannot be reached.");
+    return Text::tr("The repository cannot be reached.");
   }
   if (answer.value(QStringLiteral("empty")).toBool()) {
-    return tr("✓ Reachable and empty: ready.");
+    return Text::tr("✓ Reachable and empty: ready.");
   }
-  return tr("✓ MitCad adds the project beside the repository's files (%1).")
+  return Text::tr("✓ MitCad adds the project beside the repository's files (%1).")
       .arg(names(answer.value(QStringLiteral("files")), 5).join(QStringLiteral(", ")));
 }
 
 // What a check of a remote to open found (Open from Cloud).
 QString describeForOpening(const QJsonObject& answer, bool& ok) {
   if (answer.value(QStringLiteral("new_folder")).toBool()) {
-    return tr("An empty repository is made in this folder: Create Project Here makes a Cloud project in it.");
+    return Text::tr("An empty repository is made in this folder: Create Project Here makes a Cloud project in it.");
   }
   if (!answer.value(QStringLiteral("reachable")).toBool(true)) {
     ok = false;
-    return tr("The repository cannot be reached.");
+    return Text::tr("The repository cannot be reached.");
   }
   if (answer.value(QStringLiteral("has_project")).toBool()) {
     const QString name = repositoryNameOf(answer.value(QStringLiteral("url")).toString());
     const int versions = answer.value(QStringLiteral("versions")).toInt();
     const QJsonObject latest = answer.value(QStringLiteral("latest")).toObject();
-    QString text = tr("✓ Project \"%1\": %n version(s)", nullptr, versions).arg(name);
+    QString text = Text::tr("✓ Project \"%1\": %n version(s)", nullptr, versions).arg(name);
     if (!latest.isEmpty()) {
       const QDateTime when = QDateTime::fromSecsSinceEpoch(latest.value(QStringLiteral("time")).toInteger());
-      text += tr(", latest %1 by %2")
+      text += Text::tr(", latest %1 by %2")
                   .arg(when.toLocalTime().toString(QStringLiteral("yyyy-MM-dd")),
                        latest.value(QStringLiteral("author")).toString());
     }
     return text;
   }
   if (answer.value(QStringLiteral("empty")).toBool()) {
-    return tr("The repository is empty: Create Project Here makes a Cloud project in it.");
+    return Text::tr("The repository is empty: Create Project Here makes a Cloud project in it.");
   }
-  return tr("The repository has files but no MitCad project (%1): Make It a Project adds one beside them.")
+  return Text::tr("The repository has files but no MitCad project (%1): Make It a Project adds one beside them.")
       .arg(names(answer.value(QStringLiteral("files")), 5).join(QStringLiteral(", ")));
 }
 
@@ -297,7 +298,7 @@ GitState gitState() {
 }
 
 QLabel* gitMissingNote() {
-  auto* label = new QLabel(tr("Cloud projects need the installed git program, which was not found: "
+  auto* label = new QLabel(Text::tr("Cloud projects need the installed git program, which was not found: "
                               "<a href=\"https://git-scm.com/downloads\">install git</a> and start MitCad again. "
                               "Component libraries over https:// work without it."));
   label->setWordWrap(true);
@@ -366,7 +367,7 @@ private:
 
 NewProjectDialog::NewProjectDialog(QWidget* parent, const NewProjectOptions& options)
     : QDialog(parent) {
-  setWindowTitle(options.title.isEmpty() ? tr("New Project") : options.title);
+  setWindowTitle(options.title.isEmpty() ? Text::tr("New Project") : options.title);
   auto* outer = new QVBoxLayout(this);
   // As tall as its contents (no fixed maximum): the dialog opens at its
   // full height, and the scroll bar is for a screen too low for it.
@@ -382,26 +383,26 @@ NewProjectDialog::NewProjectDialog(QWidget* parent, const NewProjectOptions& opt
   auto* layout = new QVBoxLayout(contents);
   scroll->setWidget(contents);
   outer->addWidget(scroll);
-  layout->addWidget(note(tr("A project is a folder whose designs keep their versions: Local on this computer, or "
+  layout->addWidget(note(Text::tr("A project is a folder whose designs keep their versions: Local on this computer, or "
                             "Cloud in a git repository that others share.")));
   auto* form = new QFormLayout;
   m_folder = new QLineEdit(QDir::toNativeSeparators(options.folder.isEmpty() ? freeProjectFolder() : options.folder));
   m_folder->setObjectName(QStringLiteral("projectFolder"));
   m_folder->setMinimumWidth(420);
-  m_browse = new QPushButton(tr("Brow&se…"));
+  m_browse = new QPushButton(Text::tr("Brow&se…"));
   m_browse->setAutoDefault(false);
   auto* folderRow = new QHBoxLayout;
   folderRow->addWidget(m_folder, 1);
   folderRow->addWidget(m_browse);
-  auto* folderLabel = new QLabel(tr("&Folder:"));
+  auto* folderLabel = new QLabel(Text::tr("&Folder:"));
   folderLabel->setBuddy(m_folder);
   form->addRow(folderLabel, folderRow);
   if (options.folderFixed) {
     m_folder->setReadOnly(true);
     m_browse->hide();
   }
-  m_local = new QRadioButton(tr("&Local – versions on this computer"));
-  m_cloudChoice = new QRadioButton(tr("Cl&oud (git) – versions also in a git repository, shared"));
+  m_local = new QRadioButton(Text::tr("&Local – versions on this computer"));
+  m_cloudChoice = new QRadioButton(Text::tr("Cl&oud (git) – versions also in a git repository, shared"));
   m_local->setObjectName(QStringLiteral("projectStorageLocal"));
   m_cloudChoice->setObjectName(QStringLiteral("projectStorageCloud"));
   auto* storage = new QButtonGroup(this);
@@ -410,9 +411,9 @@ NewProjectDialog::NewProjectDialog(QWidget* parent, const NewProjectOptions& opt
   auto* storageColumn = new QVBoxLayout;
   storageColumn->addWidget(m_local);
   storageColumn->addWidget(m_cloudChoice);
-  form->addRow(tr("Storage:"), storageColumn);
+  form->addRow(Text::tr("Storage:"), storageColumn);
   layout->addLayout(form);
-  m_cloudBox = new QGroupBox(tr("Cloud"));
+  m_cloudBox = new QGroupBox(Text::tr("Cloud"));
   mac::styleSection(m_cloudBox);
   auto* cloudColumn = new QVBoxLayout(m_cloudBox);
   m_section = new CloudSection(checkRemote, describeForNewProject);
@@ -422,7 +423,7 @@ NewProjectDialog::NewProjectDialog(QWidget* parent, const NewProjectOptions& opt
   m_name = m_fields->m_name;
   m_email = m_fields->m_email;
   layout->addWidget(m_fields);
-  m_authorNote = note(tr("With Cloud, the name and email go into every version: anyone who can read the repository "
+  m_authorNote = note(Text::tr("With Cloud, the name and email go into every version: anyone who can read the repository "
                          "sees them."));
   setWarningStyleSheet(m_authorNote);
   layout->addWidget(m_authorNote);
@@ -441,9 +442,9 @@ NewProjectDialog::NewProjectDialog(QWidget* parent, const NewProjectOptions& opt
   m_progress = new ProgressRow;
   outer->addWidget(m_progress);
   m_buttons = new QDialogButtonBox(QDialogButtonBox::Cancel);
-  m_openInstead = m_buttons->addButton(tr("Open It &Instead"), QDialogButtonBox::ActionRole);
-  m_localForNow = m_buttons->addButton(tr("Create as Local for &Now"), QDialogButtonBox::ActionRole);
-  m_create = m_buttons->addButton(tr("&Create"), QDialogButtonBox::AcceptRole);
+  m_openInstead = m_buttons->addButton(Text::tr("Open It &Instead"), QDialogButtonBox::ActionRole);
+  m_localForNow = m_buttons->addButton(Text::tr("Create as Local for &Now"), QDialogButtonBox::ActionRole);
+  m_create = m_buttons->addButton(Text::tr("&Create"), QDialogButtonBox::AcceptRole);
   for (QPushButton* button : {m_openInstead, m_localForNow}) {
     button->setAutoDefault(false);
     button->hide();
@@ -471,7 +472,7 @@ NewProjectDialog::NewProjectDialog(QWidget* parent, const NewProjectOptions& opt
   connect(m_folder, &QLineEdit::textChanged, this, [this] { folderChanged(); });
   connect(m_browse, &QPushButton::clicked, this, [this] {
     const QString chosen =
-        dialogDirectory(this, tr("Project Folder"), QFileInfo(folder()).absolutePath());
+        dialogDirectory(this, Text::tr("Project Folder"), QFileInfo(folder()).absolutePath());
     if (!chosen.isEmpty()) {
       m_folder->setText(QDir::toNativeSeparators(chosen));
     }
@@ -593,21 +594,21 @@ void NewProjectDialog::folderChecked() {
   const QString dir = QDir::toNativeSeparators(folder());
   QString text;
   if (kind == QLatin1String("project")) {
-    text = tr("%1 is a MitCad project already: Open It opens it.").arg(dir);
+    text = Text::tr("%1 is a MitCad project already: Open It opens it.").arg(dir);
   } else if (kind == QLatin1String("inside_project")) {
-    text = tr("%1 is inside the project %2: Open It opens that project.")
+    text = Text::tr("%1 is inside the project %2: Open It opens that project.")
                .arg(dir, QDir::toNativeSeparators(answer.value(QStringLiteral("project_root")).toString()));
   } else if (kind == QLatin1String("repository")) {
-    text = tr("%1 is a git repository: the project goes into it.").arg(dir);
+    text = Text::tr("%1 is a git repository: the project goes into it.").arg(dir);
   } else if (kind == QLatin1String("designs")) {
-    text = tr("The designs in %1 become the project's, in its first version.").arg(dir);
+    text = Text::tr("The designs in %1 become the project's, in its first version.").arg(dir);
   } else if (kind == QLatin1String("other")) {
-    text = tr("The files in %1 stay where they are, and are not versioned.").arg(dir);
+    text = Text::tr("The files in %1 stay where they are, and are not versioned.").arg(dir);
   }
   const QString outer = answer.value(QStringLiteral("outer_repository")).toString();
   if (!outer.isEmpty() && kind != QLatin1String("project") && kind != QLatin1String("inside_project")) {
     text += (text.isEmpty() ? QString() : QStringLiteral(" ")) +
-            tr("It is inside the git repository %1: the project gets a repository of its own, which the other one "
+            Text::tr("It is inside the git repository %1: the project gets a repository of its own, which the other one "
                "does not record.")
                 .arg(QDir::toNativeSeparators(outer));
   }
@@ -637,22 +638,22 @@ void NewProjectDialog::updateState() {
   QString why;
   bool can = true;
   if (dir.isEmpty() || QDir::isRelativePath(dir)) {
-    why = tr("The folder is a full path.");
+    why = Text::tr("The folder is a full path.");
     can = false;
   } else if (QFileInfo(dir).exists() && !QFileInfo(dir).isDir()) {
-    why = tr("%1 is a file.").arg(QDir::toNativeSeparators(dir));
+    why = Text::tr("%1 is a file.").arg(QDir::toNativeSeparators(dir));
     can = false;
   } else if (m_check->pending() || kind.isEmpty()) {
     can = false; // the folder is looked at
   } else if (!opens) {
     if (authorOf(m_name, m_email).isEmpty()) {
-      why = tr("Versions need an author: a name and an email address.");
+      why = Text::tr("Versions need an author: a name and an email address.");
       can = false;
     } else if (cloud()) {
       can = !m_section->url().isEmpty() && m_section->hasAnswer() && m_section->answerOk();
     }
   }
-  m_create->setText(opens ? tr("Open &It") : tr("&Create"));
+  m_create->setText(opens ? Text::tr("Open &It") : Text::tr("&Create"));
   m_create->setEnabled(can);
   m_problem->setText(why);
   const QString cls = errorClassOf(m_section->answer());
@@ -742,8 +743,8 @@ void NewProjectDialog::create(bool asCloud) {
       this);
   m_task = task;
   setBusy(true);
-  m_progress->follow(task, asCloud ? tr("Creating the project and sending it to %1…").arg(url)
-                                   : tr("Creating the project…"));
+  m_progress->follow(task, asCloud ? Text::tr("Creating the project and sending it to %1…").arg(url)
+                                   : Text::tr("Creating the project…"));
   // The progress row is shown: room for it, so that the contents do not
   // start to scroll.
   fitToContents(FitMode::GrowOnly);
@@ -787,9 +788,9 @@ void NewProjectDialog::finished(RemoteTask* task, bool asCloud) {
   qInfo().noquote() << QStringLiteral("New Project failed (%1): %2").arg(cls, errorMessageOf(answer));
   updateState();
   if (cls == QLatin1String("cancelled")) {
-    m_problem->setText(tr("Canceled: the folder is as it was."));
+    m_problem->setText(Text::tr("Canceled: the folder is as it was."));
   } else {
-    m_problem->setText(errorMessageOf(answer).isEmpty() ? tr("The project could not be made.")
+    m_problem->setText(errorMessageOf(answer).isEmpty() ? Text::tr("The project could not be made.")
                                                         : errorMessageOf(answer));
   }
   if (asCloud && (cls == QLatin1String("network") || cls == QLatin1String("timed_out"))) {
@@ -838,9 +839,9 @@ private:
 
 OpenFromCloudDialog::OpenFromCloudDialog(QWidget* parent, const OpenFromCloudOptions& options)
     : QDialog(parent), m_location(projectsDirectory()) {
-  setWindowTitle(tr("Open from Cloud"));
+  setWindowTitle(Text::tr("Open from Cloud"));
   auto* layout = new QVBoxLayout(this);
-  layout->addWidget(note(tr("Opens a Cloud project from its git repository into a new folder on this computer; each "
+  layout->addWidget(note(Text::tr("Opens a Cloud project from its git repository into a new folder on this computer; each "
                             "version saved there is sent back. Signing in is git's: an SSH key or a credential "
                             "helper.")));
   m_section = new CloudSection(checkRemote, describeForOpening);
@@ -848,24 +849,24 @@ OpenFromCloudDialog::OpenFromCloudDialog(QWidget* parent, const OpenFromCloudOpt
   auto* form = new QFormLayout;
   m_folder = new QLineEdit(QDir::toNativeSeparators(options.folder));
   m_folder->setMinimumWidth(420);
-  m_browse = new QPushButton(tr("Brow&se…"));
+  m_browse = new QPushButton(Text::tr("Brow&se…"));
   m_browse->setAutoDefault(false);
   auto* folderRow = new QHBoxLayout;
   folderRow->addWidget(m_folder, 1);
   folderRow->addWidget(m_browse);
-  auto* folderLabel = new QLabel(tr("&Folder:"));
+  auto* folderLabel = new QLabel(Text::tr("&Folder:"));
   folderLabel->setBuddy(m_folder);
   form->addRow(folderLabel, folderRow);
   m_name = new QLineEdit;
-  m_name->setPlaceholderText(tr("Your Name"));
+  m_name->setPlaceholderText(Text::tr("Your Name"));
   m_email = new QLineEdit;
-  m_email->setPlaceholderText(tr("you@example.com"));
+  m_email->setPlaceholderText(Text::tr("you@example.com"));
   m_authorRow = new QWidget;
   auto* authorLayout = new QHBoxLayout(m_authorRow);
   authorLayout->setContentsMargins(0, 0, 0, 0);
   authorLayout->addWidget(m_name, 1);
   authorLayout->addWidget(m_email, 1);
-  m_authorLabel = new QLabel(tr("Au&thor:"));
+  m_authorLabel = new QLabel(Text::tr("Au&thor:"));
   m_authorLabel->setBuddy(m_name);
   form->addRow(m_authorLabel, m_authorRow);
   layout->addLayout(form);
@@ -874,7 +875,7 @@ OpenFromCloudDialog::OpenFromCloudDialog(QWidget* parent, const OpenFromCloudOpt
   m_progress = new ProgressRow;
   layout->addWidget(m_progress);
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel);
-  m_open = buttons->addButton(tr("&Open"), QDialogButtonBox::AcceptRole);
+  m_open = buttons->addButton(Text::tr("&Open"), QDialogButtonBox::AcceptRole);
   buttons->button(QDialogButtonBox::Cancel)->setAutoDefault(false);
   layout->addWidget(buttons);
   mac::styleDialogButtons(buttons, m_open, true);
@@ -907,7 +908,7 @@ OpenFromCloudDialog::OpenFromCloudDialog(QWidget* parent, const OpenFromCloudOpt
     connect(edit, &QLineEdit::textChanged, this, [this] { updateState(); });
   }
   connect(m_browse, &QPushButton::clicked, this, [this] {
-    const QString chosen = dialogDirectory(this, tr("Location"), m_location);
+    const QString chosen = dialogDirectory(this, Text::tr("Location"), m_location);
     if (!chosen.isEmpty()) {
       m_folderTyped = true;
       const QString name = repositoryNameOf(m_section->url());
@@ -987,27 +988,27 @@ void OpenFromCloudDialog::updateState() {
   if (m_section->url().isEmpty()) {
     can = false;
   } else if (dir.isEmpty() || QDir::isRelativePath(dir)) {
-    why = tr("The folder is a full path.");
+    why = Text::tr("The folder is a full path.");
     can = false;
   } else if (m_check->pending() || kind.isEmpty()) {
     can = false;
   } else if (what != QLatin1String("open") && kind != QLatin1String("missing") && kind != QLatin1String("empty")) {
     why = kind == QLatin1String("project") || kind == QLatin1String("inside_project")
-              ? tr("%1 is another project: choose a new or empty folder.").arg(QDir::toNativeSeparators(dir))
-              : tr("%1 is not empty: choose a new or empty folder.").arg(QDir::toNativeSeparators(dir));
+              ? Text::tr("%1 is another project: choose a new or empty folder.").arg(QDir::toNativeSeparators(dir))
+              : Text::tr("%1 is not empty: choose a new or empty folder.").arg(QDir::toNativeSeparators(dir));
     can = false;
   } else if ((what == QLatin1String("create") || what == QLatin1String("adopt")) &&
              authorOf(m_name, m_email).isEmpty()) {
-    why = tr("Making a project needs its author: a name and an email address.");
+    why = Text::tr("Making a project needs its author: a name and an email address.");
     can = false;
   }
-  QString text = tr("&Open");
+  QString text = Text::tr("&Open");
   if (what == QLatin1String("create")) {
-    text = tr("&Create Project Here");
+    text = Text::tr("&Create Project Here");
   } else if (what == QLatin1String("adopt")) {
-    text = tr("&Make It a Project");
+    text = Text::tr("&Make It a Project");
   } else if (what == QLatin1String("open")) {
-    text = tr("&Open It");
+    text = Text::tr("&Open It");
   }
   m_open->setText(text);
   m_open->setEnabled(can);
@@ -1084,8 +1085,8 @@ void OpenFromCloudDialog::openClicked() {
     widget->setEnabled(false);
   }
   m_problem->clear();
-  m_progress->follow(task, what == QLatin1String("clone") ? tr("Opening %1…").arg(url)
-                                                          : tr("Making the project in %1…").arg(url));
+  m_progress->follow(task, what == QLatin1String("clone") ? Text::tr("Opening %1…").arg(url)
+                                                          : Text::tr("Making the project in %1…").arg(url));
   connect(task, &RemoteTask::finished, this, [this, task, what] { finished(task, what); });
   task->start();
 }
@@ -1117,7 +1118,7 @@ void OpenFromCloudDialog::finished(RemoteTask* task, const QString& action) {
   }
   m_progress->hide();
   qInfo().noquote() << QStringLiteral("Open from Cloud failed (%1): %2").arg(cls, errorMessageOf(answer));
-  m_problem->setText(cls == QLatin1String("cancelled") ? tr("Canceled: nothing was opened.")
+  m_problem->setText(cls == QLatin1String("cancelled") ? Text::tr("Canceled: nothing was opened.")
                                                        : errorMessageOf(answer));
   setErrorStyleSheet(m_problem);
   m_check->check(QString());
@@ -1146,9 +1147,9 @@ std::optional<OpenFromCloudResult> askOpenFromCloud(QWidget* parent, const OpenF
 
 std::optional<QString> askChangeAddress(QWidget* parent, const QString& root, const QString& current) {
   QDialog dialog(parent);
-  dialog.setWindowTitle(tr("Change Address"));
+  dialog.setWindowTitle(Text::tr("Change Address"));
   auto* layout = new QVBoxLayout(&dialog);
-  layout->addWidget(note(tr("The new address of the project's repository, when it moved or was renamed. Only the "
+  layout->addWidget(note(Text::tr("The new address of the project's repository, when it moved or was renamed. Only the "
                             "same repository is taken: one that holds the project's history.")));
   const auto checker = [root](const QString& url, QObject* owner) {
     return RemoteTask::command(root, {{QStringLiteral("cmd"), QStringLiteral("remote_check")}, {QStringLiteral("url"), url}},
@@ -1157,20 +1158,20 @@ std::optional<QString> askChangeAddress(QWidget* parent, const QString& root, co
   const auto describe = [current](const QJsonObject& answer, bool& ok) -> QString {
     if (answer.value(QStringLiteral("new_folder")).toBool() || answer.value(QStringLiteral("empty")).toBool()) {
       ok = false;
-      return tr("This repository is empty, not the project's: Change… only takes a new address of the same "
+      return Text::tr("This repository is empty, not the project's: Change… only takes a new address of the same "
                 "repository.");
     }
     if (answer.value(QStringLiteral("related")).toBool()) {
-      return tr("✓ The same repository: it holds the project's history.");
+      return Text::tr("✓ The same repository: it holds the project's history.");
     }
     ok = false;
-    return tr("This repository has another history: Change… only takes a new address of the same repository. "
+    return Text::tr("This repository has another history: Change… only takes a new address of the same repository. "
               "Choose an empty repository with Stop Syncing and Share, or open that project with Open from Cloud.");
   };
   auto* section = new CloudSection(checker, describe);
   layout->addWidget(section);
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-  buttons->button(QDialogButtonBox::Ok)->setText(tr("&Change"));
+  buttons->button(QDialogButtonBox::Ok)->setText(Text::tr("&Change"));
   buttons->button(QDialogButtonBox::Ok)->setEnabled(false);
   layout->addWidget(buttons);
   section->setAddress(current);

@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 
+#include <QCoreApplication>
 #include <QObject>
 #include <QString>
 
@@ -23,6 +24,8 @@ namespace mitcad {
 // <backend> disconnected", "3D mouse: button <n> runs <command>" (debug;
 // "3D mouse: button <n> has no command").
 class SpaceMouseController : public QObject {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::SpaceMouseController)
+
 public:
   struct Hooks {
     // The settings in use (the view's navigation).

@@ -135,6 +135,129 @@ void test_mirrors_and_scales() {
   CHECK(throws_with([&] { transform_shape(*cube, flat); }, "flattens"));
 }
 
+// A sphere of radius r at `centre`, scaled along z by `z` about its centre.
+ShapePtr flattened_sphere(const std::string& feature, const gp_Pnt& centre, double r, double z) {
+  PrimitiveSpec sphere;
+  sphere.feature = feature;
+  sphere.kind = PrimitiveKind::Sphere;
+  sphere.a = r;
+  sphere.frame.origin = centre;
+  Affine flat;
+  flat.linear = {{{1, 0, 0}, {0, 1, 0}, {0, 0, z}}};
+  flat.translation = {0, 0, centre.Z() * (1 - z)};
+  return transform_shape(*primitive(sphere), flat);
+}
+
+// A sphere scaled along its axis (mitcad#1504): flattened by 0.1 and 0.15
+// it came out of the B-spline conversion with an unorientable face; it is
+// the exact ellipsoid of revolution, valid, of the sphere's volume times
+// the scale, its face named as the sphere's. Elongated, its seam's circle
+// would become an ellipse whose major axis moves the parameter, so it is
+// still converted to a B-spline (and valid).
+void test_flattened_spheres() {
+  const gp_Pnt centre(40, -30, -100);
+  const double r = 150;
+  for (const double z : {0.1, 0.15, 0.2, 2.0}) {
+    const ShapePtr flattened = flattened_sphere("F5", centre, r, z);
+    CHECK(BRepCheck_Analyzer(flattened->occt()).IsValid());
+    CHECK(flattened->face_count() == 1);
+    const std::string surface = face_infos(*flattened).front().surface;
+    const char* expected = z < 1.0 ? "revolution" : "bspline";
+    if (surface != expected) {
+      std::fprintf(stderr, "scale %g: the surface is %s, not %s\n", z, surface.c_str(), expected);
+    }
+    CHECK(surface == expected);
+    const MassProperties mass = mass_properties(*flattened);
+    CHECK_NEAR(mass.volume, 4.0 / 3.0 * kPi * r * r * r * z);
+    CHECK(mass.center.Distance(centre) < 1e-6);
+    CHECK(faces_named(*flattened, mitcad::geometry::face_name("F5", "side0")) == 1);
+  }
+}
+
+// A plate joined with spheres flattened along z by 0.2 whose tops rise
+// 3 mm above it and which overlap each other (mitcad#1504: 38 of them ended
+// in BRepCheck_UnorientableShape after 2.5 GB): one valid solid. A Combine's
+// Join unites the target with all its tools at once, as here (a compound of
+// overlapping tools is no boolean tool: its solids interfere).
+void test_plate_with_flattened_spheres() {
+  const ShapePtr plate = extrude("F1", {rectangle(1, -300, -300, 600, 600)}, 0, 10);
+  const double radii[] = {100, 137, 174, 110, 147, 120};
+  std::vector<ShapePtr> caps;
+  double caps_volume = 0.0;
+  for (int i = 0; i < 6; ++i) {
+    const double r = radii[i];
+    const double z = 0.2;
+    const gp_Pnt centre(-150 + 120 * (i % 3), -100 + 140 * (i / 3), 13.0 - z * r);
+    caps.push_back(flattened_sphere("F" + std::to_string(2 + i), centre, r, z));
+    caps_volume += 4.0 / 3.0 * kPi * r * r * r * z;
+  }
+  std::vector<const Shape*> all{plate.get()};
+  for (const ShapePtr& cap : caps) {
+    all.push_back(cap.get());
+  }
+  const ShapePtr joined = unite(all);
+  const std::size_t pieces = solids(*joined).size();
+  if (pieces != 1) {
+    std::fprintf(stderr, "the plate and the flattened spheres joined into %zu solids\n", pieces);
+  }
+  CHECK(pieces == 1);
+  if (pieces == 1) {
+    const ShapePtr body = joined;
+    CHECK(BRepCheck_Analyzer(body->occt()).IsValid());
+    const double v = volume(*body);
+    CHECK(v > 600.0 * 600 * 10);
+    CHECK(v < 600.0 * 600 * 10 + caps_volume);
+  }
+}
+
+// The case of mitcad#1493 and mitcad#1529: a 1000 x 1000 x 10 plate joined
+// at once with 38 overlapping spheres of radius 100-199 flattened along z
+// by 0.2, their tops 3 mm above it (the layout of the MCP reproduction
+// cli.mcp_memory_boolean). As B-splines this union took 2.3-2.5 GiB and
+// ended in BRepCheck_UnorientableShape; as ellipsoids of revolution
+// (mitcad#1504) it is one valid closed solid, built in about 2 s with a
+// peak of 1.8 GB on 32 threads.
+void test_plate_with_38_flattened_spheres() {
+  const ShapePtr plate = extrude("F1", {rectangle(1, -500, -500, 1000, 1000)}, 0, 10);
+  std::vector<ShapePtr> caps;
+  double caps_volume = 0.0;
+  for (int k = 0; k < 38; ++k) {
+    const int row = k / 7;
+    const int column = k % 7;
+    const double r = 100 + (37 * k) % 100;
+    const double z = 0.2;
+    const gp_Pnt centre(-420 + 150 * column + 40 * (row % 2), -430 + 130 * row, 13.0 - z * r);
+    caps.push_back(flattened_sphere("F" + std::to_string(2 + k), centre, r, z));
+    caps_volume += 4.0 / 3.0 * kPi * r * r * r * z;
+  }
+  std::vector<const Shape*> all{plate.get()};
+  for (const ShapePtr& cap : caps) {
+    all.push_back(cap.get());
+  }
+  const ShapePtr joined = unite(all);
+  const std::size_t pieces = solids(*joined).size();
+  if (pieces != 1) {
+    std::fprintf(stderr, "the plate and the 38 flattened spheres joined into %zu solids\n", pieces);
+  }
+  CHECK(pieces == 1);
+  if (pieces == 1) {
+    CHECK(BRepCheck_Analyzer(joined->occt()).IsValid());
+    int shells = 0;
+    for (TopExp_Explorer it(joined->occt(), TopAbs_SHELL); it.More(); it.Next()) {
+      ++shells;
+      CHECK(BRep_Tool::IsClosed(it.Current()));
+    }
+    CHECK(shells == 1);
+    // More than the plate, less than the plate and every sphere whole; and
+    // the volume this union had when it was first built (mitcad#1529), to
+    // 0.01 %.
+    const double v = volume(*joined);
+    CHECK(v > 1000.0 * 1000 * 10);
+    CHECK(v < 1000.0 * 1000 * 10 + caps_volume);
+    CHECK(std::abs(v - 63745105.55) < 1e-4 * v);
+  }
+}
+
 // Each face's triangulation, in the order the faces are explored (null
 // where a face has none).
 std::vector<const Poly_Triangulation*> triangulations(const TopoDS_Shape& shape) {
@@ -510,6 +633,9 @@ void test_adopted_bodies_are_their_data_read() {
 void transform_tests() {
   test_moves_keep_or_rename_faces();
   test_mirrors_and_scales();
+  test_flattened_spheres();
+  test_plate_with_flattened_spheres();
+  test_plate_with_38_flattened_spheres();
   test_mesh_bodies_move();
   test_moves_keep_meshes();
   test_invalid_bodies_move();

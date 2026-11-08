@@ -122,6 +122,7 @@ pub(crate) fn repeat<K: Kernel>(
                     feature: copy.feature,
                     kind: SheetOverlayKind::Change {
                         placement: copy.transform,
+                        source: None,
                     },
                     removed: volume(&shape)? - volume(&changed)?,
                 });

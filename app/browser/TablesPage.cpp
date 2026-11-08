@@ -10,6 +10,7 @@
 
 #include <QAbstractItemView>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -324,6 +325,8 @@ QString problemText(const QJsonValue& value) {
 // New Table and Rename Table: a name; stays open with the model's reason
 // when the model refuses it.
 class TableNameDialog : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::TableNameDialog)
+
 public:
   TableNameDialog(const QString& title, const QString& initial, std::function<QString(const QString&)> apply,
                   QWidget* parent)
@@ -371,6 +374,8 @@ private:
 // parameters whose values change and those that would fail (which refuse
 // the import). Import runs `import_table_csv`, Cancel leaves the design.
 class TableImportDialog : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::TableImportDialog)
+
 public:
   TableImportDialog(DocumentHost& host, QString csv, QString file, const QString& name, QHash<QString, int> existing,
                     QWidget* parent)

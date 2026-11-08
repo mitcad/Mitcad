@@ -61,7 +61,8 @@ the probe cannot use the document's tools or replace its conversation.
 | `core/usdz` (`mitcad-usdz`) | Rust | USDZ writer: the binary USD layer (crate format 0.8.0, LZ4 and USD's integer coding written here, no USD library) of a scene of meshes, `Xform`s and `UsdPreviewSurface` materials, packed with its textures 64-byte aligned; a checking reader for tests (mitcad#123). |
 | `core/vcs` (`mitcad-vcs`) | Rust | Version history of projects in git (gitoxide, only here); remotes through the system's git; component libraries and community indexes in git repositories ([libraries.md](libraries.md)). |
 | `core/update` (`mitcad-update`) | Rust | Release manifest, signatures, version selection; the `mitcad-release` tool. No network ([updates.md](updates.md)). |
-| `core/mcp` (`mitcad-mcp`) | Rust | MCP lifecycle, JSON-RPC envelopes, tool schemas, the command-reference resource and `model_reference`, the reference in sections (mitcad#714); headless stdio and live application profiles. No geometry dependency ([mcp.md](mcp.md)). |
+| `core/mcp` (`mitcad-mcp`) | Rust | MCP lifecycle, JSON-RPC envelopes, tool schemas, the command-reference resource and `model_reference`, the reference in sections (mitcad#714); the guides for agents (`core/mcp/guide/`, Agent Skills layout, behind `model_reference {"guide": …}` and `mitcad://guide/<id>`, mitcad#1508); headless stdio and live application profiles. No geometry dependency; its tests read the model API's permitted names ([mcp.md](mcp.md)). |
+| `core/preview` (`mitcad-preview`) | Rust | Preview images without a GPU or a display (mitcad#1486): `model_render`'s arguments, its camera (shared by every quality), a software rasterizer over the bodies' display meshes (with a section's caps and highlighted edges, mitcad#1487, and the overlay of an analysis' triangles over them, mitcad#1488) and a PNG writer; deterministic on one platform. The live server draws the same pictures through `Document::mcp_render`. The model builds the scene (`core/model/src/preview.rs`) ([mcp.md](mcp.md), Preview images). |
 | `core/ffi` (`mitcad-ffi-bridges`), `core/cpp` | Rust, C++ | CXX bridges: the `Kernel` on OCCT, the document API for C++. An rlib (mitcad#792), so that Cargo starts it on its dependencies' metadata. |
 | `core/ffi-staticlib` (`mitcad-ffi`) | Rust | The static library the application links (CMake target `mitcad_ffi`): `mitcad-ffi-bridges` with every Rust library it uses, no code of its own ([README](../core/ffi-staticlib/README.md)). |
 | `geometry` (`mitcad_geometry`) | C++ | OCCT facade: profiles, features, booleans, name transfer, queries, file formats, ASM bodies, analyses. No Qt. |
@@ -1338,6 +1339,16 @@ the `Shape` type.
   valid, and checking each of a pattern's copies was four fifths of their
   time. A copy that only renames faces (a tool a pattern rebuilt in
   place) shares the input's B-rep.
+- A general affine map (a non-uniform scale) of a body with a sphere maps
+  it exactly where it can (mitcad#1504, `geometry/src/transform.cpp`): a
+  sphere whose axes stay at right angles, the two about its axis equally
+  long, becomes the ellipsoid of revolution with the sphere's parameters
+  (a surface of revolution of half an ellipse), its circles circles or
+  ellipses, B-splines their moved poles; other bodies go through OCCT's
+  `BRepBuilderAPI_GTransform`, which converts every face to a B-spline
+  (a sphere flattened by 0.1 came out with an unorientable face). A
+  face the checker calls unorientable names the problem of its edge or
+  wire in it that made it so (`util.cpp`, `first_problem`).
 - Checks where a boolean changed the body (mitcad#121, `geometry/src/
   util.hpp`, `is_valid_where_changed`): a shape the checker found valid
   says so (`Shape::checked_valid`: boolean results, roundings and
@@ -1968,7 +1979,24 @@ not recompute.
   triangulations into shared sub-shapes). Explicit Qt commands stay synchronous:
   50 ms blocked, then input queued, after 400 ms a modal progress dialog
   whose Cancel goes to the job's `RecomputeMonitor` (`JobControl` in the
-  bridge). The wait cursor is a guard of the wait
+  bridge). The memory guard of model commands (mitcad#1480,
+  `core/ffi/src/command_memory.rs` over
+  `mitcad_model::monitor::memory_guard`) measures the process every 0.02 s
+  while a model command (not an import, undo or redo) computes and, at 85 % of its
+  tightest memory limit, when the memory grows so fast that it would
+  get there within 0.1 s (a boolean's threads can add gigabytes a second,
+  mitcad#1493), or after a failed allocation in the kernel,
+  cancels the same monitor with its reason (`cancel_because`): the
+  command fails with "the operation ran out of memory …" and changes
+  nothing, and the job counts as failed, not cancelled
+  (`JobControl::cancel_reason`). The application, the headless MCP server
+  (`--memory-limit` for a lower limit) and `mitcad-cli info`/`run` turn it
+  on (`guard_command_memory`); the imports keep their own guard
+  (mitcad#80, `mitcad_import_base::memory_guard`), which measures as often
+  and looks ahead with the same code (`MemoryGrowth`, `low_ahead`;
+  mitcad#1505), only from 50 % of the limit and at growth kept up over two
+  measurements, and cuts the definition being evaluated short instead of
+  failing the import. The wait cursor is a guard of the wait
   (`app/framework/WaitCursor`, mitcad#268): restored once, by the dialog
   or at the end, logged; one left on is cleared when the window is idle.
   Hover, clicks and candidate-point enumeration all suspend while a job
@@ -2636,6 +2664,20 @@ not recompute.
   `fill-opacity`/`stroke-opacity`/`stop-opacity`; the same on every
   platform. Amber is for construction and inspection only. A disabled icon
   draws every role in the outline colour and the whole icon at 34 %.
+- **Interface languages** (mitcad#1460, [translations.md](translations.md)):
+  English is the source language of every `tr()` text. Each other language
+  is a Qt Linguist file `app/translations/mitcad_<code>.ts` and a line of
+  `languages.txt`; the build compiles it (`cmake/Translations.cmake`, the
+  tool `tools/translations`) and the packages carry the `.qm` files with
+  Qt's own `qtbase_<code>.qm`. `framework/Language` installs them in
+  `main()` before any window or command definition takes its texts
+  (`--language`, `MITCAD_LANGUAGE`, Preferences › General › Language,
+  else the system's first language when MitCad has it), with a
+  context-free part of the catalogue for texts whose context at run time
+  differs from the source's, and keeps the English source of every
+  translated text (the command search matches English names). A language
+  is data: no code lists languages. The model's messages (Rust) stay
+  English for now.
 
 ## Window layouts and the macOS layer
 

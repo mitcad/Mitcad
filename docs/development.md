@@ -1177,6 +1177,8 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_SKETCH_FIRST_DIMENSION_SCALE=0` | Preferences › Sketch › *Scale the sketch to its first dimension* is off until it is saved (mitcad#860); the UI test libraries set it, so that their drawn sketches keep their sizes. |
 | `MITCAD_REMEMBER_PANEL_VALUES=0` | Command panels start from their definitions' defaults and keep nothing on OK: no remembered Fillet Radius or Chamfer Distance (mitcad#1028, [app/COMMANDS.md](../app/COMMANDS.md#remembered-values)), and no Thread starting from the last thread's settings on a face of its size (mitcad#1298); the UI test libraries set it, so that a value one step gives never changes where a later step's panel starts. |
 | `MITCAD_START_PAGE=0`, `MITCAD_START_PAGE=1` | `0`: MitCad never starts on the Start tab (mitcad#1258, [app/COMMANDS.md](../app/COMMANDS.md#the-start-tab)); the UI test libraries set it, so that every test starts on an empty design. `1`: the Start tab at launch by its *Show start page at launch*, also in a UI test script's run (`MITCAD_TEST_INPUT`), which without the variable starts without it. |
+| `MITCAD_LANGUAGE=en\|fi\|xx` | The interface language, over Preferences › General › Language; `--language` comes first (mitcad#1460, [translations.md](translations.md)). The UI test libraries and the Python UI tests set `en`, so that every test reads English texts whatever the machine's language; `xx` is a test build's pseudo-language. |
+| `MITCAD_LOG_UNTRANSLATED=1` | Every text no catalogue translated is logged once, `Untranslated: <context>: <text>`, and every text found only without its context, `Fallback: <context>: <text>` (in a language other than English; [translations.md](translations.md#the-pseudo-language)). |
 | `MITCAD_TEST_LOG_URLS=1` | Addresses the app would open in the browser (a report's issue form) are logged, not opened; the UI test library sets it. |
 | `MITCAD_LOG_TYPED_TEXT=1` | Text fields are logged as they change: `File dialog <title>: <text>` (Qt's file dialog's file name), `Dialog field <title>: <text>` and `Panel field <input>: <text>` (typed into another dialog's field or a command panel's input; never a password); the UI test libraries set it (`app/framework/TypedTextLog.hpp`). |
 | `MITCAD_TEST_CRASH=app\|app-exception\|model-worker\|import-worker\|render-worker` | That process (or the model's worker thread) crashes as an access violation would (`app-exception`: the application throws an exception nothing catches, mitcad#773), for the crash reports' tests ([app/COMMANDS.md](../app/COMMANDS.md#feedback-and-error-reports)). |
@@ -1190,7 +1192,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 
 App options for tests: `--demo` (a ready block), `--screenshot <png>`,
 `--no-recovery`, `--no-native-dialogs` (Qt's file dialogs, so paths can
-be typed), `--open <file>`, `--set d3=35`.
+be typed), `--open <file>`, `--set d3=35`, `--language en|fi|xx`.
 
 ### Linux UI tests
 
@@ -1957,6 +1959,15 @@ runs one step after another. Build and lint use half the cores unless
   never the style's default or a number of its own: the ctest
   `repo.tree-indentation` (`tools/tree-indentation-check`) fails on a
   view made without it ([UI conventions](ui-conventions.md#6-lists-and-trees)).
+- Every user-facing text goes through `tr()` (or
+  `QCoreApplication::translate`, `QT_TRANSLATE_NOOP`), so that the
+  interface languages can translate it; log lines, JSON keys, ids and file
+  names stay `QStringLiteral`. A text is one whole sentence with
+  placeholders (`tr("%1 of %2")`), never glued from translated pieces, and a
+  count uses Qt's plural forms (`tr("%n body(s)", nullptr, n)`). The
+  catalogues (`app/translations`, Qt's Linguist tools from the Qt the build
+  uses) are refreshed with the target `update_translations`, and
+  `repo.translations` checks them ([translations.md](translations.md)).
 - A tooltip says in one short line what the control is or does: a
   command's (`CommandDef::tooltip`, the ribbon and the menus) at most 80
   characters, an input's or any other control's at most 100. No usage

@@ -69,5 +69,5 @@ pub mod transform {
 
 /// Values in commands resolved with the parameters.
 pub mod values {
-    pub use crate::values::{resolve_value, resolve_value_as, split_named};
+    pub use crate::values::{resolve_value, resolve_value_as, split_named, value_uses_parameter};
 }

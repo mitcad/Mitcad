@@ -51,7 +51,11 @@
 namespace mitcad {
 namespace {
 
-QString tr(const char* text) { return QCoreApplication::translate("ProjectBrowser", text); }
+// The file's texts in the context ProjectBrowser, where lupdate records them
+// too (mitcad#1472).
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(ProjectBrowser)
+};
 
 // What a row of the folders' tree stands for.
 constexpr int kRootRole = Qt::UserRole + 1;
@@ -103,9 +107,9 @@ QString lockText(const ProjectDesignRow& design) {
     return {};
   }
   if (design.lockMine) {
-    return tr("Editing");
+    return Text::tr("Editing");
   }
-  return design.lockSameOwner ? tr("Editing elsewhere") : tr("Locked: %1").arg(design.lockOwner);
+  return design.lockSameOwner ? Text::tr("Editing elsewhere") : Text::tr("Locked: %1").arg(design.lockOwner);
 }
 
 class BrowserDialog : public QDialog {
@@ -189,19 +193,19 @@ BrowserDialog::BrowserDialog(QWidget* parent, ProjectBrowserOptions options)
   m_pathLayout->setContentsMargins(0, 0, 0, 0);
   m_pathLayout->setSpacing(2);
   top->addWidget(m_pathBar, 1);
-  auto* searchLabel = new QLabel(tr("&Search:"), this);
+  auto* searchLabel = new QLabel(Text::tr("&Search:"), this);
   m_search = new QLineEdit;
   m_search->setClearButtonEnabled(true);
-  m_search->setAccessibleName(tr("Search designs"));
-  m_search->setPlaceholderText(tr("Design name"));
-  m_search->setToolTip(tr("Lists the designs whose name holds the text, as you type"));
+  m_search->setAccessibleName(Text::tr("Search designs"));
+  m_search->setPlaceholderText(Text::tr("Design name"));
+  m_search->setToolTip(Text::tr("Lists the designs whose name holds the text, as you type"));
   m_search->setMinimumWidth(180);
   searchLabel->setBuddy(m_search);
-  auto* scopeLabel = new QLabel(tr("&In:"));
+  auto* scopeLabel = new QLabel(Text::tr("&In:"));
   m_scope = new QComboBox;
-  m_scope->addItem(tr("All Projects"));
-  m_scope->addItem(tr("This Project"));
-  m_scope->setToolTip(tr("Where the search looks: every project, or the project shown"));
+  m_scope->addItem(Text::tr("All Projects"));
+  m_scope->addItem(Text::tr("This Project"));
+  m_scope->setToolTip(Text::tr("Where the search looks: every project, or the project shown"));
   scopeLabel->setBuddy(m_scope);
 #ifdef MITCAD_MAC_UI
   searchLabel->hide();
@@ -227,8 +231,8 @@ BrowserDialog::BrowserDialog(QWidget* parent, ProjectBrowserOptions options)
   m_contents = new KeyedTree;
   panel::setCompactIndentation(m_contents, panel::Indent::Flat);
   m_contents->setColumnCount(kColumns);
-  m_contents->setHeaderLabels({tr("Name"), tr("Version"), tr("Edit lock"), tr("Last change"), tr("By"),
-                               tr("Project and folder")});
+  m_contents->setHeaderLabels({Text::tr("Name"), Text::tr("Version"), Text::tr("Edit lock"), Text::tr("Last change"), Text::tr("By"),
+                               Text::tr("Project and folder")});
   m_contents->setRootIsDecorated(false);
   m_contents->setIconSize(QSize(16, 16));
   m_contents->setUniformRowHeights(true);
@@ -247,7 +251,7 @@ BrowserDialog::BrowserDialog(QWidget* parent, ProjectBrowserOptions options)
   splitter->setStretchFactor(1, 3);
   splitter->setSizes({220, 600});
   layout->addWidget(splitter, 1);
-  m_status = new QLabel(tr("Reading the projects…"));
+  m_status = new QLabel(Text::tr("Reading the projects…"));
   m_status->setWordWrap(true);
   m_status->setTextFormat(Qt::PlainText);
   layout->addWidget(m_status);
@@ -263,17 +267,17 @@ BrowserDialog::BrowserDialog(QWidget* parent, ProjectBrowserOptions options)
   bottom->addStretch(1);
   if (!m_options.readOnlyText.isEmpty()) {
     m_readOnly = new QCheckBox(m_options.readOnlyText);
-    m_readOnly->setToolTip(tr("Opens the design without its edit lock: to look at it while someone else edits it"));
+    m_readOnly->setToolTip(Text::tr("Opens the design without its edit lock: to look at it while someone else edits it"));
     bottom->addWidget(m_readOnly);
     connect(m_readOnly, &QCheckBox::toggled, this, [](bool on) {
       qInfo().noquote() << QStringLiteral("Project browser read-only: %1").arg(on ? QStringLiteral("on")
                                                                                   : QStringLiteral("off"));
     });
   }
-  m_open = new QPushButton(m_options.acceptText.isEmpty() ? tr("&Open") : m_options.acceptText);
+  m_open = new QPushButton(m_options.acceptText.isEmpty() ? Text::tr("&Open") : m_options.acceptText);
   m_open->setDefault(true);
   m_open->setEnabled(false);
-  m_cancel = new QPushButton(tr("Cancel"));
+  m_cancel = new QPushButton(Text::tr("Cancel"));
   m_cancel->setAutoDefault(false);
   buttons->addButton(m_open, QDialogButtonBox::AcceptRole);
   buttons->addButton(m_cancel, QDialogButtonBox::RejectRole);
@@ -404,7 +408,7 @@ void BrowserDialog::fill(const QJsonObject& answer) {
     top->setData(0, kRootRole, row.root);
     top->setData(0, kFolderRole, QString());
     top->setData(0, kKeyRole, key);
-    QStringList tip{row.name, row.kind == ProjectRow::Kind::Cloud ? tr("Cloud project") : tr("Local project")};
+    QStringList tip{row.name, row.kind == ProjectRow::Kind::Cloud ? Text::tr("Cloud project") : Text::tr("Local project")};
     if (!row.remoteUrl.isEmpty()) {
       tip << row.remoteUrl;
     }
@@ -436,9 +440,9 @@ void BrowserDialog::fill(const QJsonObject& answer) {
                            .arg(listed.join(QStringLiteral(" | ")));
   const QString error = answer.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString();
   if (!error.isEmpty()) {
-    m_status->setText(tr("The projects could not be read: %1").arg(error));
+    m_status->setText(Text::tr("The projects could not be read: %1").arg(error));
   } else if (m_projects.isEmpty()) {
-    m_status->setText(tr("No projects with versions are listed: Another File… opens any design."));
+    m_status->setText(Text::tr("No projects with versions are listed: Another File… opens any design."));
   }
   m_status->setVisible(!error.isEmpty() || m_projects.isEmpty());
   if (m_projects.isEmpty()) {
@@ -627,7 +631,7 @@ void BrowserDialog::search() {
   for (const BrowserEntry& entry : found) {
     keys << entry.key();
   }
-  m_status->setText(found.isEmpty() ? tr("No design's name holds “%1”.").arg(text) : QString());
+  m_status->setText(found.isEmpty() ? Text::tr("No design's name holds “%1”.").arg(text) : QString());
   m_status->setVisible(found.isEmpty());
   const QString where = here ? keyOfPlace({m_place.root, QString()}) : QStringLiteral("all projects");
   qInfo().noquote() << QStringLiteral("Project browser search \"%1\" in %2: %3 found%4")

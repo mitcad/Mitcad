@@ -85,6 +85,19 @@ impl<K: Kernel> Document<K> {
         preview.result.datums.get(&preview.uid).map(|d| d.value)
     }
 
+    /// The curve of the previewed Intersection Curve (mitcad#1496), as
+    /// [`Self::feature_curve`] gives the finished one: its pieces in order
+    /// along it, in its component's coordinates; None for another feature
+    /// or when the preview failed.
+    pub fn preview_curve(&self) -> Option<Arc<Vec<PathCurve>>> {
+        let preview = self.preview.as_ref()?;
+        let output = preview.result.result(preview.uid)?.output.as_deref()?;
+        if output.result.is_err() {
+            return None;
+        }
+        output.curve.clone()
+    }
+
     pub fn resolver(&self) -> DocResolver<'_, K> {
         DocResolver { document: self }
     }

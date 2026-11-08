@@ -261,7 +261,8 @@ def _run_locked(app, cli, out, ui, gui_options):
             env[key] = str(work / name)
         env.update(QT_FORCE_STDERR_LOGGING="1", MITCAD_LOG_VOLUMES="1", MITCAD_RESULT_STORE="off",
                    MITCAD_MCP_TEST_WORK=str(work), MITCAD_MCP_TEST_OUT=str(out),
-                   MITCAD_START_PAGE="0", MITCAD_NO_UPDATE_CHECK="1", MITCAD_TEST_LOG_URLS="1", GIT_CONFIG_NOSYSTEM="1")
+                   MITCAD_START_PAGE="0", MITCAD_LANGUAGE="en", MITCAD_NO_UPDATE_CHECK="1", MITCAD_TEST_LOG_URLS="1",
+                   GIT_CONFIG_NOSYSTEM="1")
         gitconfig = work / "gitconfig"
         gitconfig.write_text("", encoding="utf-8")
         env["GIT_CONFIG_GLOBAL"] = str(gitconfig)

@@ -24,7 +24,100 @@ WORK = Path(sys.argv[2]).resolve()
 TIMEOUT = 20
 PROTOCOL = "2025-11-25"
 TOOLS = {"document_create", "document_open", "document_list", "document_close",
-         "model_command", "model_query", "document_save", "model_export", "model_reference"}
+         "model_command", "model_query", "document_save", "model_export", "model_reference",
+         "model_render"}
+CYLINDER = {"cmd": "add_feature", "def": {
+    "type": "cylinder", "plane": {"type": "origin", "plane": "xy"},
+    "center": [45, 10], "diameter": 16, "height": 25, "operation": "new_body"}}
+
+
+def render(client, arguments, error=False):
+    """model_render's structuredContent and PNG bytes (None for a refusal)."""
+    response = client.request("tools/call", {"name": "model_render", "arguments": arguments})
+    assert "error" not in response, response
+    result = response["result"]
+    assert bool(result.get("isError", False)) == error, result
+    content = result["structuredContent"]
+    assert json.loads(result["content"][0]["text"]) == content, result
+    if error:
+        assert len(result["content"]) == 1, result
+        return content, None
+    assert "image_base64" not in content, content
+    image = result["content"][1]
+    assert image["type"] == "image" and image["mimeType"] == "image/png", image
+    png = base64.b64decode(image["data"])
+    assert png.startswith(b"\x89PNG\r\n\x1a\n"), png[:8]
+    assert len(png) == content["bytes"], content
+    return content, png
+
+
+def render_views(client, arguments):
+    """model_render with views: structuredContent and each view's PNG."""
+    response = client.request("tools/call", {"name": "model_render", "arguments": arguments})
+    assert "error" not in response, response
+    result = response["result"]
+    assert not result.get("isError", False), result
+    content = result["structuredContent"]
+    assert json.loads(result["content"][0]["text"]) == content, result
+    images = result["content"][1:]
+    assert len(images) == len(content["views"]), result
+    pngs = []
+    for image, view in zip(images, content["views"]):
+        assert image["type"] == "image" and image["mimeType"] == "image/png", image
+        assert "image_base64" not in view, view
+        png = base64.b64decode(image["data"])
+        assert len(png) == view["bytes"], view
+        pngs.append(png)
+    return content, pngs
+
+
+def count_pixels(png, test):
+    """How many pixels of a PNG pass test((r, g, b))."""
+    _, _, channels, rows = png_pixels(png)
+    return sum(1 for row in rows for i in range(0, len(row), channels) if test(row[i:i + 3]))
+
+
+def uniform(png, x0, y0, size):
+    """Whether a size x size block of a PNG from (x0, y0) has one color."""
+    _, _, channels, rows = png_pixels(png)
+    colors = {rows[y][x * channels:x * channels + 3] for y in range(y0, y0 + size) for x in range(x0, x0 + size)}
+    return len(colors) == 1
+
+
+def png_pixels(png):
+    """Width, height, bytes a pixel and rows of an 8-bit RGB(A) PNG."""
+    import zlib
+    width, height = int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+    channels = {2: 3, 6: 4}[png[25]]
+    at, data = 8, b""
+    while at < len(png):
+        length = int.from_bytes(png[at:at + 4], "big")
+        if png[at + 4:at + 8] == b"IDAT":
+            data += png[at + 8:at + 8 + length]
+        at += 12 + length
+    raw = zlib.decompress(data)
+    stride = width * channels
+    rows, above = [], bytearray(stride)
+    for y in range(height):
+        kind = raw[y * (stride + 1)]
+        line = bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for i in range(stride):
+            a = line[i - channels] if i >= channels else 0
+            b = above[i]
+            c = above[i - channels] if i >= channels else 0
+            if kind == 1:
+                line[i] = (line[i] + a) & 255
+            elif kind == 2:
+                line[i] = (line[i] + b) & 255
+            elif kind == 3:
+                line[i] = (line[i] + (a + b) // 2) & 255
+            elif kind == 4:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        rows.append(bytes(line))
+        above = line
+    return width, height, channels, rows
 BOX = {"cmd": "add_feature", "def": {
     "type": "box", "plane": {"type": "origin", "plane": "xy"},
     "corner": [0, 0], "length": 30, "width": 20, "height": 10,
@@ -979,6 +1072,66 @@ class McpTest(unittest.TestCase):
             self.assertEqual(len(result["files"]), 2)
             client.finish()
 
+    def test_print_plates_are_exported_with_their_files_checked(self):
+        """mitcad#1490: a plate per box, one file or a file per plate."""
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            client.tool("model_command", {"document": document, "command": BOX})
+            second = copy.deepcopy(BOX)
+            second["def"]["corner"] = [50, 0]
+            client.tool("model_command", {"document": document, "command": second})
+            client.tool("model_command", {"document": document, "command": [
+                {"cmd": "add_print_plate", "name": "Red"},
+                {"cmd": "add_print_plate", "name": "Blue"},
+                {"cmd": "place_on_plate", "plate": "Red", "items": [{"body": "F1.b0"}]},
+                {"cmd": "place_on_plate", "plate": "Blue", "items": [{"body": "F2.b0"}]}]})
+            # Every plate in one file for a Bambu-family slicer.
+            result = client.tool("model_export", {
+                "document": document, "path": "kit.3mf", "format": "3mf",
+                "plates": "one_file", "dialect": "bambu_studio"})["result"]
+            self.assertEqual([plate["name"] for plate in result["plates"]], ["Red", "Blue"])
+            for plate in result["plates"]:
+                self.assertEqual(Path(plate["path"]).name, "kit.3mf")
+                self.assertEqual(plate["pieces"], 1)
+                self.assertIn("origin", plate)
+                self.assertIn("bed", plate)
+                self.assertIn("warnings", plate)
+            self.assertEqual([Path(path).name for path in result["files"]], ["kit.3mf"])
+            self.assertEqual(result["dialect"], "bambu_studio")
+            self.assertTrue((self.workspace / "kit.3mf").is_file())
+            # The plates go into 3MF files only; bodies are the plates' to name.
+            refused = client.tool("model_export", {
+                "document": document, "path": "kit.stl", "format": "stl", "plates": "one_file"},
+                error=True)
+            self.assertIn("3MF", refused["error"])
+            self.assertFalse((self.workspace / "kit.stl").exists())
+            client.tool("model_export", {
+                "document": document, "path": "bodies.3mf", "format": "3mf",
+                "plates": "one_file", "bodies": ["F1.b0"]}, error=True)
+            self.assertFalse((self.workspace / "bodies.3mf").exists())
+            # A file per plate: refused while one of them exists, nothing
+            # written; then one file per plate beside the path.
+            blue = self.workspace / "cura - Blue.3mf"
+            blue.write_bytes(b"existing plate")
+            refused = client.tool("model_export", {
+                "document": document, "path": "cura.3mf", "format": "3mf",
+                "plates": "file_per_plate", "dialect": "cura"}, error=True)
+            self.assertIn("already exists", refused["error"])
+            self.assertEqual(blue.read_bytes(), b"existing plate")
+            self.assertFalse((self.workspace / "cura - Red.3mf").exists())
+            blue.unlink()
+            result = client.tool("model_export", {
+                "document": document, "path": "cura.3mf", "format": "3mf",
+                "plates": "file_per_plate", "dialect": "cura", "spacing": 8})["result"]
+            self.assertEqual(sorted(Path(path).name for path in result["files"]),
+                             ["cura - Blue.3mf", "cura - Red.3mf"])
+            for name in ("cura - Red.3mf", "cura - Blue.3mf"):
+                self.assertTrue((self.workspace / name).is_file())
+            self.assertFalse((self.workspace / "cura.3mf").exists())
+            client.tool("document_close", {"document": document, "discard": True})
+            client.finish()
+
     def test_compact_results_and_command_arrays(self):
         """mitcad#689: what a command changed, arrays as one undo step."""
         with Session(self.workspace) as client:
@@ -1052,6 +1205,279 @@ class McpTest(unittest.TestCase):
                 "query": "print_thickness", "minimum": 20}})["result"]
             self.assertNotIn("triangles", walls["bodies"][0])
             self.assertGreater(walls["thin_triangles"], 0)
+            client.finish()
+
+    def test_model_render_pictures(self):
+        """mitcad#1486: a preview image, deterministic, its camera reproducible."""
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            client.tool("model_command", {"document": document, "command": [BOX, CYLINDER]})
+            # The default: home, perspective, 1024 x 768, the theme's background.
+            default, png = render(client, {"document": document})
+            self.assertEqual((default["width"], default["height"]), (1024, 768))
+            self.assertEqual(default["camera"]["projection"], "perspective")
+            self.assertEqual(default["camera"]["fov"], 45)
+            self.assertEqual(sorted(default["bodies"]), ["F1.b0", "F2.b0"])
+            self.assertEqual(default["warnings"], [])
+            self.assertFalse(default["downscaled_for_bytes"])
+            self.assertGreater(default["triangles"], 12)
+            self.assertGreater(default["edges"], 12)
+            print("model_render default timing_ms:", default["timing_ms"], "bytes:", default["bytes"],
+                  file=sys.stderr)
+            self.assertLess(default["timing_ms"]["total"], 10000)
+            width, height, channels, rows = png_pixels(png)
+            self.assertEqual((width, height, channels), (1024, 768, 3))
+            self.assertEqual(rows[0][0:3], bytes([247, 248, 250]))
+            self.assertNotEqual(rows[384][512 * 3:512 * 3 + 3], rows[384][0:3])
+            # The same arguments twice: the same bytes.
+            arguments = {"document": document, "view": "iso", "size": [320, 240]}
+            first, first_png = render(client, arguments)
+            second, second_png = render(client, arguments)
+            self.assertEqual(first_png, second_png)
+            self.assertEqual(first["camera"], second["camera"])
+            # Another view, another picture.
+            top, top_png = render(client, dict(arguments, view="top"))
+            self.assertNotEqual(top_png, first_png)
+            self.assertEqual(top["camera"]["up"], [0, 1, 0])
+            angles, angles_png = render(client, dict(arguments, view={"azimuth": 30, "elevation": 20}))
+            self.assertNotEqual(angles_png, first_png)
+            # The camera answered, given back as the view, gives the picture again.
+            for camera, png in ((first["camera"], first_png), (angles["camera"], angles_png)):
+                view = {key: camera[key] for key in ("eye", "target", "up")}
+                again, again_png = render(client, dict(arguments, view=view))
+                self.assertEqual(again["camera"], camera)
+                self.assertEqual(again_png, png)
+            ortho, ortho_png = render(client, dict(arguments, projection="orthographic"))
+            again, again_png = render(client, {"document": document, "size": [320, 240],
+                                               "view": ortho["camera"]})
+            self.assertEqual(again_png, ortho_png)
+            # Restricted, hidden, a box, a transparent background, no edges.
+            only, only_png = render(client, dict(arguments, bodies=["F2.b0"]))
+            self.assertEqual(only["bodies"], ["F2.b0"])
+            self.assertNotEqual(only_png, first_png)
+            hidden, _ = render(client, dict(arguments, hidden=["F2"]))
+            self.assertEqual(hidden["bodies"], ["F1.b0"])
+            detail, detail_png = render(client, dict(arguments, fit={"min": [0, 0, 0], "max": [5, 5, 5]}))
+            self.assertLess(detail["camera"]["height"], first["camera"]["height"] / 3)
+            clear, clear_png = render(client, dict(arguments, background="transparent", edges=False))
+            self.assertEqual(png_pixels(clear_png)[2], 4)
+            self.assertEqual(png_pixels(clear_png)[3][0][0:4], bytes(4))
+            refused, _ = render(client, dict(arguments, bodies=["F9.b0"]), error=True)
+            self.assertIn("F9.b0", refused["error"])
+            refused, _ = render(client, dict(arguments, view="nowhere"), error=True)
+            self.assertIn("top", refused["error"])
+            # The byte budget draws a smaller picture with the same camera.
+            small, small_png = render(client, dict(arguments, max_bytes=6000))
+            self.assertTrue(small["downscaled_for_bytes"])
+            self.assertLessEqual(len(small_png), 6000)
+            self.assertLess(small["width"], 320)
+            self.assertEqual(small["camera"], first["camera"])
+            # path writes the full picture too.
+            written, written_png = render(client, dict(arguments, path="iso.png"))
+            self.assertEqual((self.workspace / "iso.png").read_bytes(), written_png)
+            self.assertEqual(written_png, first_png)
+            render(client, dict(arguments, path="iso.png"), error=True)
+            render(client, dict(arguments, path="iso.png", overwrite=True))
+            render(client, dict(arguments, path="iso.jpg"), error=True)
+            # A named view of the design.
+            client.tool("model_command", {"document": document, "command": {
+                "cmd": "add_named_view", "name": "Detail", "eye": [100, -100, 60],
+                "target": [20, 10, 5], "up": [0, 0, 1], "height": 60}})
+            named, _ = render(client, dict(arguments, view="Detail"))
+            self.assertEqual(named["camera"]["eye"], [100, -100, 60])
+            self.assertEqual(named["camera"]["projection"], "orthographic")
+            client.tool("document_save", {"document": document, "path": "render.mitcad"})
+            client.finish()
+        # Read-only, without a display and with no GPU driver to be found
+        # (every OpenGL, EGL, GBM and Vulkan vendor path points nowhere): the
+        # same picture, no file written.
+        nowhere = str(self.workspace / "no-drivers")
+        env = {key: value for key, value in os.environ.items()
+               if key not in ("DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE")}
+        env.update({"__EGL_VENDOR_LIBRARY_DIRS": nowhere, "__GLX_VENDOR_LIBRARY_NAME": "none",
+                    "LIBGL_DRIVERS_PATH": nowhere, "GBM_BACKENDS_PATH": nowhere,
+                    "VK_ICD_FILENAMES": nowhere, "VK_DRIVER_FILES": nowhere,
+                    "MESA_LOADER_DRIVER_OVERRIDE": "none", "CUDA_VISIBLE_DEVICES": ""})
+        with Session(self.workspace, read_only=True, env=env) as client:
+            client.initialize()
+            document = client.tool("document_open", {"path": "render.mitcad"})["document"]
+            # The named view is in the design now: home is still the iso view.
+            again, again_png = render(client, dict(arguments, document=document))
+            self.assertEqual(again_png, first_png)
+            refused, _ = render(client, dict(arguments, document=document, path="ro.png"), error=True)
+            self.assertIn("read-only", refused["error"])
+            client.finish()
+        self.assertFalse((self.workspace / "ro.png").exists())
+
+    def test_model_render_inspection_options(self):
+        """mitcad#1487: colors, highlight, section, explode and views."""
+        def accent(p):
+            return p[2] > 180 and p[2] > p[0] + 100
+
+        def red(p):
+            return p[0] > 150 and p[0] > p[1] + 90 and p[0] > p[2] + 90
+
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            client.tool("model_command", {"document": document, "command": [BOX, CYLINDER]})
+            plain_args = {"document": document, "view": "top", "projection": "orthographic",
+                          "size": [240, 160], "edges": False}
+            plain, plain_png = render(client, plain_args)
+            self.assertEqual(count_pixels(plain_png, accent), 0)
+            self.assertEqual(count_pixels(plain_png, red), 0)
+            # colors: the box red, the cylinder as it was.
+            colored, colored_png = render(client, dict(plain_args, colors={"F1.b0": "#e01010"}))
+            self.assertGreater(count_pixels(colored_png, red), 2000)
+            self.assertEqual(colored["warnings"], [])
+            # The more specific key wins: F1 (all its bodies) and F1.b0.
+            both, both_png = render(client, dict(plain_args, colors={"F1": "#1010e0", "F1.b0": "#e01010"}))
+            self.assertEqual(both_png, colored_png)
+            # highlight: the box's top face in the selection blue, by each form.
+            top = client.tool("model_query", {"document": document, "query": {
+                "query": "faces", "body": "F1.b0", "normal": [0, 0, 1]}})["result"]
+            face = top["faces"][0]["names"][0]
+            lit, lit_png = render(client, dict(plain_args, highlight=[{"body": "F1.b0", "face": face}]))
+            self.assertGreater(count_pixels(lit_png, accent), 2000)
+            self.assertEqual(lit["warnings"], [])
+            for form in ("F1.b0/" + face, face, {"kind": "face", "owner": "F1.b0", "name": face}):
+                again, again_png = render(client, dict(plain_args, highlight=[form]))
+                self.assertEqual(again_png, lit_png, form)
+            # A whole body; an edge drawn over the rest.
+            body, body_png = render(client, dict(plain_args, highlight=["F2"]))
+            self.assertGreater(count_pixels(body_png, accent), 1000)
+            edges = client.tool("model_query", {"document": document, "query": {
+                "query": "edges", "body": "F1.b0"}})["result"]
+            # A 30 mm edge along X (a vertical one is a dot from the top).
+            edge = max(edges, key=lambda e: e["length"])["name"]
+            line, line_png = render(client, dict(plain_args, highlight=[edge]))
+            self.assertGreater(count_pixels(line_png, accent), 20)
+            self.assertLess(count_pixels(line_png, accent), 2000)
+            # Unknown references warn; the picture is drawn without them.
+            unknown, unknown_png = render(client, dict(plain_args, colors={"F9.b0": "#ff0000"},
+                                                       highlight=["F9.b0", "F1.b0/F1:nowhere"]))
+            self.assertEqual(unknown_png, plain_png)
+            self.assertEqual(len(unknown["warnings"]), 3, unknown["warnings"])
+            self.assertTrue(any("F9.b0" in w and "colors" in w for w in unknown["warnings"]))
+            refused, _ = render(client, dict(plain_args, colors={"F1.b0": "red"}), error=True)
+            self.assertIn("#rrggbb", refused["error"])
+            # explode: 0 is no explode; more frames the bodies moved apart.
+            _, still_png = render(client, dict(plain_args, explode=0))
+            self.assertEqual(still_png, plain_png)
+            apart, apart_png = render(client, dict(plain_args, explode=1))
+            self.assertNotEqual(apart_png, plain_png)
+            self.assertGreater(apart["camera"]["height"], plain["camera"]["height"] * 1.2)
+            # views: two pictures equal two single calls, each with its camera.
+            sheet, pngs = render_views(client, {
+                "document": document, "size": [240, 160], "edges": False,
+                "views": ["iso", {"view": "front", "size": [160, 120]}]})
+            iso, iso_png = render(client, {"document": document, "size": [240, 160], "edges": False,
+                                           "view": "iso"})
+            front, front_png = render(client, {"document": document, "size": [160, 120], "edges": False,
+                                               "view": "front"})
+            self.assertEqual(pngs, [iso_png, front_png])
+            self.assertEqual([v["camera"] for v in sheet["views"]], [iso["camera"], front["camera"]])
+            self.assertEqual((sheet["views"][1]["width"], sheet["views"][1]["height"]), (160, 120))
+            self.assertEqual(sheet["bytes"], len(iso_png) + len(front_png))
+            # Within the budget together: each its share.
+            tight, tight_pngs = render_views(client, {"document": document, "size": [400, 300],
+                                                      "views": ["iso", "top"], "max_bytes": 12000})
+            self.assertEqual(tight["share_bytes"], 6000)
+            self.assertLessEqual(sum(len(p) for p in tight_pngs), 12000)
+            self.assertTrue(any(v["downscaled_for_bytes"] for v in tight["views"]))
+            render(client, {"document": document, "views": ["iso"], "path": "sheet.png"}, error=True)
+            # A ray-traced picture refuses the fast mode's options.
+            refused, _ = render(client, {"document": document, "quality": "raytrace",
+                                         "section": {"origin": [0, 0, 0], "normal": [0, 0, 1]}}, error=True)
+            self.assertIn("section", refused["error"])
+            client.finish()
+
+        # section: a hollow cube cut in the middle shows its cavity, the
+        # walls around it capped (hatched); a solid one is capped all over.
+        def cube(cavity):
+            commands = [{"cmd": "add_feature", "def": {
+                "type": "box", "plane": "xy", "corner": [0, 0], "length": 40, "width": 40, "height": 40,
+                "symmetric": True, "operation": "new_body"}}]
+            if cavity:
+                commands.append({"cmd": "add_feature", "def": {
+                    "type": "box", "plane": "xy", "corner": [10, 10], "length": 20, "width": 20, "height": 20,
+                    "symmetric": True, "operation": "cut", "participants": ["F1.b0"]}})
+            return commands
+
+        with Session(self.workspace) as client:
+            client.initialize()
+            # From the front, the box framed: 40 mm on 200 * 0.85 pixels,
+            # the middle (x 20, z 0) at pixel (100, 100).
+            arguments = {"view": "front", "projection": "orthographic", "size": [200, 200],
+                         "fit": {"min": [0, 0, -20], "max": [40, 40, 20]}}
+            cut = {"origin": [20, 20, 0], "normal": [0, -1, 0]}
+            pictures = {}
+            for cavity in (False, True):
+                document = client.tool("document_create", {})["document"]
+                client.tool("model_command", {"document": document, "command": cube(cavity)})
+                bodies = client.tool("model_query", {"document": document, "query": {"query": "bodies",
+                                                                                     "properties": True}})["result"]
+                self.assertEqual(len(bodies), 1)
+                self.assertAlmostEqual(bodies[0]["volume"], 64000 - (8000 if cavity else 0), delta=1e-3)
+                _, whole = render(client, dict(arguments, document=document))
+                result, png = render(client, dict(arguments, document=document, section=cut))
+                self.assertEqual(result["warnings"], [])
+                pictures[cavity] = (whole, png)
+            whole, solid = pictures[False]
+            _, hollow = pictures[True]
+            # Uncut: the front face, one color in the middle and in a wall.
+            self.assertTrue(uniform(whole, 95, 95, 10))
+            self.assertTrue(uniform(whole, 31, 95, 10))
+            # Cut solid: hatched cap in the middle and in the wall.
+            self.assertFalse(uniform(solid, 95, 95, 10))
+            self.assertFalse(uniform(solid, 31, 95, 10))
+            # Cut hollow: the cavity's far wall in the middle, hatched walls.
+            self.assertTrue(uniform(hollow, 95, 95, 10))
+            self.assertFalse(uniform(hollow, 31, 95, 10))
+            self.assertNotEqual(hollow, solid)
+            client.finish()
+
+    def test_model_render_overlays(self):
+        """mitcad#1488: overlays from Print Analysis' functions, with its numbers."""
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            client.tool("model_command", {"document": document, "command": BOX})
+
+            def middle(png):
+                width, height, channels, rows = png_pixels(png)
+                at = (width // 2) * channels
+                return tuple(rows[height // 2][at:at + 3])
+
+            # Printed with up tilted 30 degrees: the bottom, 60 degrees from
+            # the vertical, overhangs; from below it takes the overlay's color.
+            half = 3 ** 0.5 / 2
+            arguments = {"document": document, "view": "bottom", "projection": "orthographic",
+                         "size": [320, 240], "overlay": {"type": "overhang", "up": [-0.5, 0, half]}}
+            below, below_png = render(client, arguments)
+            overlay = below["overlay"]
+            self.assertEqual(overlay["type"], "overhang")
+            self.assertEqual(overlay["color"], "#7e3fd0")
+            self.assertAlmostEqual(overlay["overhang_area"], 600, places=6)
+            self.assertEqual(middle(below_png), (0x7e, 0x3f, 0xd0))
+            self.assertIn("overlay", below["timing_ms"])
+            analysis = client.tool("model_query", {"document": document, "query": {
+                "query": "print_overhangs", "bodies": ["F1.b0"], "down": [0.5, 0, -half]}})["result"]
+            self.assertAlmostEqual(overlay["bodies"][0]["overhang_area"],
+                                   analysis["bodies"][0]["overhang_area"], places=6)
+            self.assertAlmostEqual(overlay["bodies"][0]["area"], analysis["bodies"][0]["area"], places=6)
+            top, top_png = render(client, dict(arguments, view="top"))
+            self.assertNotEqual(middle(top_png), (0x7e, 0x3f, 0xd0))
+            # Walls under 25 mm: all of the 10 mm thick box, from the front too.
+            thin, thin_png = render(client, dict(arguments, view="front",
+                                                 overlay={"type": "thickness", "minimum": 25}))
+            self.assertAlmostEqual(thin["overlay"]["thinnest"], 10, places=6)
+            self.assertEqual(middle(thin_png), (0xc2, 0x18, 0x8b))
+            # Not with the ray tracer; an unknown type is refused.
+            render(client, dict(arguments, quality="raytrace"), error=True)
+            refused, _ = render(client, dict(arguments, overlay="curvature"), error=True)
+            self.assertIn("curvature", refused["error"])
             client.finish()
 
     def test_reference_in_parts_and_errors_that_give_the_choices(self):

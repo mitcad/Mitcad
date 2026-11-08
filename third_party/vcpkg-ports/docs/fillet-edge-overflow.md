@@ -96,6 +96,62 @@ line ends) and the face vanishes. Both roundings convex or both concave
 only. The builder class gets members for this (code built against the port's
 headers must be rebuilt).
 
+Where the overlapping roundings also meet roundings at the face's ends
+(a prism rounded on all its edges: a roof slab's eave 1.506 wide between
+an acute edge and an obtuse one, rounded with 1), the corners there can
+still fail or leave the body open (mitcad#1482). Mitcad's fillet then
+names the face and the two edges in its error (`narrow_face_cause` in
+`geometry/src/dressup.cpp`, `geometry.fillet_roof_slab`); the corners
+themselves are not changed by a patch.
+
+On that slab (a section of 7 points, 1.3 thick across its slopes,
+extruded 25.2, every edge rounded) OCCT's fillet alone fails at every
+radius above 0.65, where the end faces' strips along the slopes (1.3 wide)
+and the eaves (1.506 wide, the roundings of their 60° and 120° edges
+reaching 2.31 r across) become narrower than the roundings of their two
+edges (mitcad#1494). A closed solid exists there (each rounding takes away
+a well-defined part), but the kernel lacked:
+
+- the ride on each end face: the earlier stripe, the underside's edge, is
+  shorter than the later one, the top slope's edge, which runs on past the
+  ends of the line it rides on and throws in its walk (the four slopes'
+  pairs are faulty contours; from 0.66 to 0.9 both stripes of each pair).
+  The shorter one riding on the longer one's line computes;
+- corners at a rider's ends where another rounding ends too: the rider's
+  side on the line lies on the support made from the other blend, not on a
+  face of the solid (`ChFi3d_cherche_edge`: "Failed to find edge"; already
+  on a plate 1.3 thick with its end face's two rims and one vertical edge
+  rounded with 1), and the corners that take a rolling ball's section
+  between the stripe's two faces (`PerformThreeCorner`) would put its ends
+  off the line;
+- a face consumed between two rides that end in corners at both ends (the
+  plate's end face with the vertical edges at both its ends) was kept
+  whole;
+- the eave: its two long edges rounded together fail at 0.9 and 1.0 at the
+  obtuse edge's ends (`OneCorner`: "fillets have too big radiuses"), and
+  with the eave's end edges too with `TopoDS_FrozenShape`.
+
+The patches 1640 to 1642 (mitcad#1499,
+[fillet-ride-corners-1640.md](fillet-ride-corners-1640.md)) build the first
+three: the ride the other way round, the rider's side on the face, the
+corners at its ends (also where its line ends on the arc from its vertex,
+as on the slab's eaves) and the consumed face; the plate rounded on all
+its 12 edges and the slab's end face pair along a slope build valid closed
+solids. The slab rounded on all its edges then stops at the eave's end
+edge (mitcad#1500); until that is built, the fillet refuses the slab with
+the narrow face it names, at 0.9 as at 1.0.
+
+The patches 1650 to 1652 (mitcad#1500,
+[fillet-eave-1650.md](fillet-eave-1650.md)) build the eave: its two long
+edges (the tip's rounding rolling on the obtuse edge, the obtuse edge's
+rounding dropped) and its end edges, and an end face's strip along a slope
+with the eave's end edge. The whole slab then computed but was invalid at
+the eaves' obtuse ends, where the corner at the tip and the corner at the
+obtuse end both cut the eave's end edge's rounding and their cuts crossed;
+with 1653 (mitcad#1530, same file) the corner at the tip cuts the three
+blends by each other, and the slab rounded on all its edges builds a valid
+closed solid at 0.9 and 1; with 1654, 1656 and 1657 (mitcad#1532) from 0.66 to 0.86 and at 1.1 too (what is left: that file).
+
 ### 0017-chfi3d-contact-along-face-edge-ends-at-vertices
 
 0014's ends at the vertices also where the other face's contact ends first

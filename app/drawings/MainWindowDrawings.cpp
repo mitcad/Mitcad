@@ -376,7 +376,10 @@ void MainWindow::registerDrawingCommands() {
     const char* kind;
   };
   static const ExportFormat formats[] = {
-      {"pdf", "PDF…", "drawing"}, {"svg", "SVG…", ""}, {"dxf", "DXF…", ""}, {"dwg", "DWG…", "drawing"}};
+      {"pdf", QT_TRANSLATE_NOOP("mitcad::MainWindow", "PDF…"), "drawing"},
+      {"svg", QT_TRANSLATE_NOOP("mitcad::MainWindow", "SVG…"), ""},
+      {"dxf", QT_TRANSLATE_NOOP("mitcad::MainWindow", "DXF…"), ""},
+      {"dwg", QT_TRANSLATE_NOOP("mitcad::MainWindow", "DWG…"), "drawing"}};
   for (const ExportFormat& exported : formats) {
     const QString suffix = QString::fromLatin1(exported.format);
     add(QStringLiteral("drawing.export_") + suffix, tr(exported.label), QStringLiteral("export"),

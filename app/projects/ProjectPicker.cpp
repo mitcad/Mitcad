@@ -38,7 +38,11 @@
 namespace mitcad {
 namespace {
 
-QString tr(const char* text) { return QCoreApplication::translate("ProjectPicker", text); }
+// The file's texts in the context ProjectPicker, where lupdate records them
+// too (mitcad#1472).
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(ProjectPicker)
+};
 
 // What a row stands for.
 constexpr int kTypeRole = Qt::UserRole + 1;
@@ -153,7 +157,7 @@ std::optional<ProjectPickerResult> pickInProjects(QWidget* parent, const Project
   tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
   tree->setMinimumSize(360, 220);
   layout->addWidget(tree, 1);
-  auto* status = new QLabel(tr("Reading the projects…"));
+  auto* status = new QLabel(Text::tr("Reading the projects…"));
   status->setWordWrap(true);
   status->setTextFormat(Qt::PlainText);
   layout->addWidget(status);
@@ -162,7 +166,7 @@ std::optional<ProjectPickerResult> pickInProjects(QWidget* parent, const Project
   QLabel* clash = nullptr;
   if (mode == Mode::Place) {
     auto* row = new QHBoxLayout;
-    auto* label = new QLabel(tr("&Name:"));
+    auto* label = new QLabel(Text::tr("&Name:"));
     name = new QLineEdit(options.name);
     label->setBuddy(name);
     row->addWidget(label);
@@ -276,11 +280,11 @@ std::optional<ProjectPickerResult> pickInProjects(QWidget* parent, const Project
         if (designName.isEmpty()) {
           state = QStringLiteral("invalid");
           clash->setText(name->text().trimmed().isEmpty()
-                             ? tr("Type the design's name.")
-                             : tr("A design's name cannot hold / \\ : * ? \" < > |, nor be . or .."));
+                             ? Text::tr("Type the design's name.")
+                             : Text::tr("A design's name cannot hold / \\ : * ? \" < > |, nor be . or .."));
         } else if (QFileInfo::exists(file) && !(!options.ownFile.isEmpty() && sameRoot(file, options.ownFile))) {
           state = QStringLiteral("exists");
-          clash->setText(tr("%1 is in %2 already: choose another name or folder.")
+          clash->setText(Text::tr("%1 is in %2 already: choose another name or folder.")
                              .arg(designName + suffix(),
                                   folder.isEmpty() ? names.value(root) : joinPath(names.value(root), folder)));
         } else {
@@ -357,13 +361,13 @@ std::optional<ProjectPickerResult> pickInProjects(QWidget* parent, const Project
       top->setData(0, kKeyRole, key);
       top->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
       top->setIcon(0, themeIcon(row.kind == ProjectRow::Kind::Cloud ? QStringLiteral("web") : QStringLiteral("home")));
-      QStringList tip{row.kind == ProjectRow::Kind::Cloud ? tr("Cloud project") : tr("Local project")};
+      QStringList tip{row.kind == ProjectRow::Kind::Cloud ? Text::tr("Cloud project") : Text::tr("Local project")};
       if (!row.remoteUrl.isEmpty()) {
         tip << row.remoteUrl;
       }
       tip << QDir::toNativeSeparators(row.root);
       if (row.kind == ProjectRow::Kind::NoHistory) {
-        tip << tr("It keeps no versions yet: Open starts its history.");
+        tip << Text::tr("It keeps no versions yet: Open starts its history.");
       }
       top->setToolTip(0, tip.join(QLatin1Char('\n')));
       const bool preferred = !options.root.isEmpty() && sameRoot(row.root, options.root);
@@ -423,12 +427,12 @@ std::optional<ProjectPickerResult> pickInProjects(QWidget* parent, const Project
     const QString error =
         answer.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString();
     if (!error.isEmpty()) {
-      status->setText(tr("The projects could not be read: %1").arg(error));
+      status->setText(Text::tr("The projects could not be read: %1").arg(error));
     } else if (rows.isEmpty()) {
-      status->setText(mode == Mode::Project ? tr("No projects are listed.")
-                                            : tr("No projects with versions are listed."));
+      status->setText(mode == Mode::Project ? Text::tr("No projects are listed.")
+                                            : Text::tr("No projects with versions are listed."));
     } else if (mode == Mode::Design) {
-      status->setText(tr("Choose a design."));
+      status->setText(Text::tr("Choose a design."));
     }
     status->setVisible(!error.isEmpty() || rows.isEmpty() || mode == Mode::Design);
     qInfo().noquote() << QStringLiteral("Project picker %1: %2 projects: %3")

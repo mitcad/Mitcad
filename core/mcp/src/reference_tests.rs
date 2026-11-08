@@ -189,6 +189,16 @@ fn a_section_by_its_heading_or_a_name_it_lists() {
     assert!(text(&answer).contains("split_body"));
     let (answer, _) = lookup(&mut session, json!({"section": "sketch commands"}));
     assert_eq!(answer["section"], "Sketch commands");
+    // How a sketch's ids are given out, which model_command's description
+    // gives in short (mitcad#1269, mitcad#1506), is at its start.
+    for phrase in [
+        "curves and texts share one numbering",
+        "A new point `[x, y]` is always a point of its own",
+        "join the two ends afterwards with a `coincident`",
+        "not to ids a command earlier in the same array is expected to",
+    ] {
+        assert!(text(&answer).contains(phrase), "{phrase}");
+    }
     let (answer, is_error) = lookup(&mut session, json!({"section": "No such heading"}));
     assert!(is_error);
     assert!(answer["error"].as_str().unwrap().contains("search"));
@@ -292,12 +302,11 @@ fn a_search_gives_sections_and_excerpts() {
 #[test]
 fn a_long_section_is_cut_and_continues_from_its_offset() {
     let mut session = ready(NamingBackend::default());
-    let start = COMMANDS_REFERENCE
-        .find("\n## Feature definitions\n")
-        .unwrap()
-        + 1;
-    let end = start + COMMANDS_REFERENCE[start..].find("\n## Commands\n").unwrap();
-    let whole = &COMMANDS_REFERENCE[start..end];
+    // The section as agents see it (mitcad#1509).
+    let reference = reference_text(&names());
+    let start = reference.find("\n## Feature definitions\n").unwrap() + 1;
+    let end = start + reference[start..].find("\n## Commands\n").unwrap();
+    let whole = &reference[start..end];
     assert!(whole.len() > 2 * reference::LIMIT);
     let (first, is_error) = lookup(&mut session, json!({"section": "Feature definitions"}));
     assert!(!is_error);
@@ -326,6 +335,191 @@ fn a_long_section_is_cut_and_continues_from_its_offset() {
     );
     assert!(is_error);
     assert!(answer["error"].as_str().unwrap().contains("next_offset"));
+}
+
+/// The contents' lines for a vocabulary.
+fn contents(vocabulary: &Vocabulary) -> Vec<String> {
+    let answer = reference::answer(&json!({}), vocabulary).unwrap();
+    assert_eq!(answer["truncated"], false);
+    answer["contents"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// mitcad#1509: a section whose command and query tables name only names
+/// MCP does not permit is left out of the agents' reference.
+#[test]
+fn sections_of_names_mcp_does_not_permit_are_left_out() {
+    let mut session = ready(NamingBackend::default());
+    let (answer, _) = lookup(&mut session, json!({}));
+    let shown: Vec<&str> = answer["contents"].as_str().unwrap().lines().collect();
+    // Edit locks' and Projects' tables name only their own commands;
+    // Remote repositories' too, and its subsection without names of its
+    // own goes with it.
+    for heading in [
+        "Edit locks",
+        "Projects",
+        "Remote repositories",
+        "  Sync and conflicts",
+        "  Following a remote",
+    ] {
+        assert!(!shown.contains(&heading), "{heading}");
+    }
+    for heading in ["Sketch commands", "Queries", "Values", "Import and export"] {
+        assert!(shown.contains(&heading), "{heading}");
+    }
+    let (answer, is_error) = lookup(&mut session, json!({"section": "Edit locks"}));
+    assert!(is_error, "{answer}");
+    let (answer, is_error) = lookup(&mut session, json!({"search": "lock_take"}));
+    assert!(!is_error);
+    assert_eq!(answer["total"], 0);
+    assert_eq!(answer["hits"], json!([]));
+    // A command that only such a section describes is not available.
+    let (answer, is_error) = lookup(&mut session, json!({"command": "lock_take"}));
+    assert!(is_error);
+    let error = answer["error"].as_str().unwrap();
+    assert!(
+        error.starts_with(
+            "the command lock_take is not available through MCP; the commands MCP permits: add_feature, "
+        ),
+        "{error}"
+    );
+    // Nor is it in the resource.
+    let resource = reference_text(&names());
+    assert!(!resource.contains("\n## Edit locks\n"));
+    assert!(!resource.contains("`lock_take`"));
+    assert!(resource.contains("\n## Sketch commands\n"));
+    // A vocabulary that does not say what is permitted keeps them.
+    assert!(contents(&Vocabulary::default()).contains(&"Edit locks".to_owned()));
+    let whole =
+        reference::answer(&json!({"section": "Edit locks"}), &Vocabulary::default()).unwrap();
+    assert!(text(&whole).contains("`lock_take`"));
+}
+
+/// mitcad#1509: a section marked as internal is left out, whatever the
+/// vocabulary; a subsection with a permitted name of its own stays under
+/// its heading.
+#[test]
+fn sections_marked_internal_are_left_out() {
+    // The developers' file keeps them, under the marker.
+    assert!(COMMANDS_REFERENCE.contains(&format!("\n## Adding to the API\n\n{INTERNAL_MARKER}\n")));
+    for vocabulary in [names(), Vocabulary::default()] {
+        let shown = contents(&vocabulary);
+        for heading in [
+            "Adding to the API",
+            "Recompute workers",
+            "Classes of commands and queries",
+            "Readers of files in the application's process",
+            "The reference in parts over MCP",
+            "Live updates",
+            "  Topics and payloads",
+            "Progress and cancellation",
+        ] {
+            assert!(!shown.contains(&heading.to_owned()), "{heading}");
+        }
+        assert!(reference::answer(&json!({"section": "Recompute workers"}), &vocabulary).is_err());
+        let search =
+            reference::answer(&json!({"search": "set_recompute_workers"}), &vocabulary).unwrap();
+        assert_eq!(search["total"], 0);
+        let resource = reference_text(&vocabulary);
+        assert!(!resource.contains(INTERNAL_MARKER));
+        assert!(!resource.contains("\n## Adding to the API\n"));
+    }
+    // Caches is marked; its subsection of the cache query stays when that
+    // query is permitted, under the heading Caches, without Caches' own
+    // text and its other subsections.
+    let cache = Vocabulary {
+        queries: vec!["cache".to_owned()],
+        ..Vocabulary::default()
+    };
+    let shown = contents(&cache);
+    assert!(shown.contains(&"Caches".to_owned()));
+    assert!(shown.contains(&"  Memory cache and diagnostics".to_owned()));
+    assert!(!shown.contains(&"  Result store".to_owned()));
+    let section = reference::answer(&json!({"section": "Caches"}), &cache).unwrap();
+    assert!(
+        text(&section).starts_with("## Caches\n### Memory cache and diagnostics\n"),
+        "{section}"
+    );
+    let rows = reference::answer(&json!({"query": "cache"}), &cache).unwrap();
+    assert!(text(&rows).contains("| `cache` query |"));
+    assert!(!contents(&names()).contains(&"Caches".to_owned()));
+}
+
+/// mitcad#1509: headings are shown without their issue numbers and found
+/// by either form.
+#[test]
+fn headings_are_shown_without_their_issue_numbers() {
+    let mut session = ready(NamingBackend::default());
+    let (answer, _) = lookup(&mut session, json!({}));
+    let shown = answer["contents"].as_str().unwrap();
+    assert!(shown.lines().any(|line| line == "Joins that lose volume"));
+    assert!(
+        shown
+            .lines()
+            .any(|line| line == "  Section Analysis of many bodies")
+    );
+    assert!(!shown.contains("mitcad#"), "{shown}");
+    for name in [
+        "Joins that lose volume (mitcad#964)",
+        "Joins that lose volume",
+        "joins that lose volume",
+    ] {
+        let (answer, is_error) = lookup(&mut session, json!({"section": name}));
+        assert!(!is_error, "{name}: {answer}");
+        assert_eq!(answer["section"], "Joins that lose volume", "{name}");
+        assert_eq!(
+            text(&answer).lines().next(),
+            Some("## Joins that lose volume")
+        );
+    }
+    let (answer, _) = lookup(&mut session, json!({"search": "lose volume"}));
+    assert_eq!(answer["headings"], json!(["Joins that lose volume"]));
+    assert!(!reference_text(&names()).contains("\n## Joins that lose volume (mitcad#964)\n"));
+    for (heading, shown) in [
+        ("Frames of members (mitcad#485)", "Frames of members"),
+        ("Walls (#12, mitcad#14) that meet", "Walls that meet"),
+        ("Face features: shell, draft", "Face features: shell, draft"),
+        ("Spacing (in mm)", "Spacing (in mm)"),
+        ("(mitcad#5)", "(mitcad#5)"),
+    ] {
+        assert_eq!(reference::shown_title(heading), shown);
+    }
+}
+
+/// mitcad#1509: every permitted command, query and feature type still
+/// finds its rows or its section in the agents' reference; with the names
+/// the backend permits in `core/model-tests/api/src/mcp_reference_tests.rs`.
+#[test]
+fn every_permitted_name_keeps_its_reference() {
+    assert_eq!(reference_losses(&names()), Vec::<String>::new());
+    let mut session = ready(NamingBackend::default());
+    for (kind, name) in [
+        ("query", "bodies"),
+        ("query", "faces"),
+        ("query", "timeline"),
+        ("command", "add_feature"),
+        ("command", "edit_feature"),
+        ("command", "sketch.add_line"),
+        ("command", "undo"),
+    ] {
+        let (answer, is_error) = lookup(&mut session, json!({kind: name}));
+        assert!(!is_error, "{name}: {answer}");
+        assert!(text(&answer).contains(&format!("| `{name}`")), "{name}");
+    }
+    for name in [
+        "extrude",
+        "construction_plane",
+        "split_body",
+        "rectangular_pattern",
+    ] {
+        let (answer, is_error) = lookup(&mut session, json!({"feature": name}));
+        assert!(!is_error, "{name}: {answer}");
+        assert_eq!(answer["permitted"], true);
+    }
 }
 
 #[test]

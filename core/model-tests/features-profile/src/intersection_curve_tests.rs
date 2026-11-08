@@ -6,7 +6,8 @@
 //! crossing, one sketch twice, a path naming another feature). Since
 //! mitcad#1417 also ribs and webs grown from it, construction along a 1 m
 //! curve within 1e-6 mm, and the curve taken in another component through
-//! an occurrence (a construction point, a sketch's section).
+//! an occurrence (a construction point, a sketch's section); since
+//! mitcad#1496 the curve in the preview's report.
 
 use serde_json::{Value, json};
 
@@ -810,4 +811,95 @@ fn another_component_takes_the_curve_through_its_occurrence() {
     assert_eq!(status(&doc, &sketch), FeatureStatus::Ok);
     let q = point_at(&doc, &sketch, &crossing);
     assert!((q[1] + 35.0).abs() < 1e-6, "{q:?}");
+}
+
+fn preview(doc: &mut Document<MockKernel>, value: Value) -> Value {
+    serde_json::from_str(&doc.preview(&value.to_string()).unwrap()).unwrap()
+}
+
+/// The preview of an Intersection Curve carries its curve as the
+/// `feature_curves` query gives the finished one (mitcad#1496), added and
+/// edited; a failed one, and another feature, carry none.
+#[test]
+fn the_preview_carries_the_curve_as_it_is_drawn() {
+    let mut doc = Document::new(MockKernel::default());
+    let (arc, line, _, _) = sketches(&mut doc);
+    let def = intersection("F1", &arc, "F2", &line);
+    let added = preview(&mut doc, json!({"cmd": "add_feature", "def": def}));
+    assert_eq!(added["status"], "ok", "{added}");
+    let points = added["curve"]["points"]
+        .as_array()
+        .expect("the curve's points")
+        .clone();
+    // The mock's 32 lines, their ends once.
+    assert!(points.len() >= 30, "{} points", points.len());
+    for p in &points {
+        let (x, y, z) = (
+            p[0].as_f64().unwrap(),
+            p[1].as_f64().unwrap(),
+            p[2].as_f64().unwrap(),
+        );
+        assert!((y - 10.0).abs() < 1e-6, "{p} is not 10 from XZ");
+        assert!(
+            (x.hypot(z) - 20.0).abs() < 1e-6,
+            "{p} is not 20 from the Y axis"
+        );
+    }
+    doc.clear_preview();
+
+    // As the view draws the finished one.
+    let curve = add(&mut doc, def.clone());
+    let drawn: Value = serde_json::from_str(
+        &doc.query(&json!({"query": "feature_curves"}).to_string())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(drawn[0]["uid"], json!(curve));
+    assert_eq!(drawn[0]["points"], Value::Array(points.clone()));
+
+    // Edited: the curve again, under the feature's own uid.
+    let edited = preview(
+        &mut doc,
+        json!({"cmd": "edit_feature", "uid": curve, "def": def}),
+    );
+    assert_eq!(edited["status"], "ok", "{edited}");
+    assert_eq!(edited["curve"]["points"], Value::Array(points));
+    doc.clear_preview();
+
+    // Curves that do not cross: the model's message, no curve.
+    let far = command(
+        &mut doc,
+        json!({"cmd": "sketch.add_line", "sketch": "F2", "start": [100, -5], "end": [130, -5]}),
+    );
+    let far = text(&far["made"][0]);
+    let failed = preview(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": intersection("F1", &arc, "F2", &far)}),
+    );
+    assert_eq!(failed["status"], "error", "{failed}");
+    assert!(
+        failed["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("do not cross")),
+        "{failed}"
+    );
+    assert!(failed.get("curve").is_none(), "{failed}");
+    doc.clear_preview();
+
+    // Another feature carries none: a sweep along the curve.
+    let sketch = command(&mut doc, json!({"cmd": "sketch.create", "plane": "yz"}));
+    let sketch = text(&sketch["uid"]);
+    let circle = command(
+        &mut doc,
+        json!({"cmd": "sketch.add_circle", "sketch": sketch, "center": [20, 10], "diameter": 4}),
+    );
+    let region = text(&circle["region"]);
+    let sweep = preview(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "sweep",
+               "profiles": [{"sketch": sketch, "region": region}],
+               "path": {"feature": curve}, "operation": "new_body"}}),
+    );
+    assert_eq!(sweep["status"], "ok", "{sweep}");
+    assert!(sweep.get("curve").is_none(), "{sweep}");
 }

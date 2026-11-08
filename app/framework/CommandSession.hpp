@@ -3,9 +3,11 @@
 
 #include <exception>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <QByteArray>
@@ -29,6 +31,7 @@
 #include "CommandPanel.hpp"
 #include "PreviewHold.hpp"
 #include "SectionPreview.hpp"
+#include "mitcad/geometry/item_origin.hpp"
 #include "mitcad_bridge/lib.h"
 
 namespace mitcad {
@@ -433,6 +436,10 @@ private:
     // A construction feature's datum where the view draws it, in the
     // design (mitcad#1029); empty for other features.
     QJsonObject datum;
+    // An Intersection Curve's curve, `tool` drawn as its polyline where the
+    // view draws the finished curve (mitcad#1496), for the log: "N point(s)
+    // from (x, y, z) to (x, y, z)" in the design; empty for other features.
+    QString curve;
     // The bodies shown now that the preview removes, where they are shown
     // (removedShownBodies): a consumed tool's occurrences (mitcad#561).
     std::vector<BodyDisplay> removed;
@@ -576,6 +583,35 @@ private:
   // those of the active input left out, to the view (mitcad#147).
   void updateGhosts();
   bool isReferable(const SelectionItem& item) const;
+  // What an item picked in the view names on the bodies before the
+  // previewed feature (mitcad#1458, CommandSessionPreviewPicks.cpp): the
+  // item itself, or the face, edge or vertex of the body before that a
+  // face, edge or vertex the preview changed comes from (a foot edge the
+  // preview's roundings split); none for an item the preview made (a
+  // fillet's rounding) or one whose origin cannot be told.
+  std::optional<SelectionItem> referable(const SelectionItem& item) const;
+  // Why the preview's own item is not taken, for the status line (it says
+  // that Ctrl held shows the part's own items); empty for an item taken or
+  // not the preview's.
+  QString previewRefusal(const SelectionItem& item) const;
+  // The shape the view draws for the item's body in the shown preview when
+  // the preview changes that body; null otherwise (no preview shown, Ctrl
+  // holding it hidden, a body the preview leaves as it is).
+  std::shared_ptr<geometry::Shape> previewedShape(const SelectionItem& item) const;
+  // item_origin of an item of a body the shown preview changes, worked out
+  // once per preview: the pick filter asks it for every item it is
+  // offered, again on each pass (mitcad#1464).
+  geometry::ItemOrigin previewOrigin(const SelectionItem& item, char kind,
+                                     const std::shared_ptr<geometry::Shape>& before,
+                                     const std::shared_ptr<geometry::Shape>& after) const;
+  // previewOrigin's results by body (owner, occurrence), each for the
+  // shapes before and after it was worked out for.
+  struct PreviewOrigins {
+    std::weak_ptr<geometry::Shape> before;
+    std::weak_ptr<geometry::Shape> after;
+    std::map<std::pair<char, std::string>, geometry::ItemOrigin> items;
+  };
+  mutable std::map<std::pair<QString, QString>, PreviewOrigins> m_previewOrigins;
   // Names the region a profile item means now (the model's `profile`
   // query), each item asked once per resolver: selection inputs keep a
   // region once however its key or occurrence is given (mitcad#199).
@@ -685,6 +721,8 @@ private:
   QString m_loggedPreviewBodies; // the bodies the last preview logged (mitcad#266)
   QString m_loggedPreviewTool;   // where it drew its tool, as logged (mitcad#636)
   QString m_loggedPreviewDatum = QStringLiteral("none"); // where it drew its datum, as logged (mitcad#1029)
+  QString m_loggedPreviewCurve = QStringLiteral("none"); // the curve it drew, as logged (mitcad#1496)
+  void logPreviewCurve(const QString& curve);
   QString m_loggedExtendedTool;  // the box of the extended tool it drew, as logged (mitcad#712)
   // A part placed by its first pick is moved out from under the panels
   // floating over the view once its preview is drawn (mitcad#656).
@@ -904,6 +942,7 @@ private:
     std::vector<double> updateMs; // each proxy update's own time
     quint64 frames = 0;           // frames drawn before the drag
     qint64 releasedAt = -1;       // ms: the button went up
+    qint64 inputAt = -1;          // ms: the last dragged value came
   } m_proxyStats;
   void dragProxyMoved(const QString& key, double value);
   void updateDragProxy();

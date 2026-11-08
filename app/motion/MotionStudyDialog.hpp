@@ -13,6 +13,7 @@
 
 #include <functional>
 
+#include <QCoreApplication>
 #include <QDialog>
 #include <QJsonObject>
 #include <QString>
@@ -48,6 +49,8 @@ struct MotionStudyHost {
 };
 
 class MotionStudyDialog : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::MotionStudyDialog)
+
 public:
   // `study` by name; empty: the first, else a new one.
   MotionStudyDialog(MotionStudyHost host, const QString& study, QWidget* parent);

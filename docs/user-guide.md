@@ -176,6 +176,7 @@ search: type the start of a command's name and press Enter.
   - [Web viewer](#web-viewer)
 - [Preferences and diagnostics](#preferences-and-diagnostics)
   - [Preferences](#preferences)
+  - [Language](#language)
   - [Cache of computed results](#cache-of-computed-results)
   - [Updates](#updates)
   - [Feedback and error reports](#feedback-and-error-reports)
@@ -562,6 +563,14 @@ is not in pictures of the view (Export Snapshot, screenshots,
 thumbnails, renders). To hide it, turn off **Show the version in the
 view** in Preferences › General; the window title keeps the version.
 
+To make everything in the window larger, choose **Preferences › Display ›
+Interface size**: 100% (the default), 125%, 150%, 175% or 200%. Icons,
+texts, the toolbar, the panels, the floating cards, the dialogs and what
+MitCad draws over the 3D view (the orientation cube, the navigation bar,
+handles) grow together, and the 3D view draws at the higher resolution.
+The size takes effect when MitCad starts again. It comes on top of the
+display scaling set in your system.
+
 On macOS, the keys that say Ctrl in this guide are Cmd keys (Cmd+N,
 Cmd+S, Cmd+Z and so on). Refer to [Shortcuts](#shortcuts) for the
 other keys that differ on macOS.
@@ -631,7 +640,9 @@ MitCad arranges the window:
 
 - **Floating** (the default): the panels are cards over a full-window
   3D view.
-- **Docked**: the panels are in docks around the 3D view.
+- **Docked**: the panels are in docks around the 3D view. A right-click
+  on a dock's title or on the toolbar opens a menu that shows and hides
+  the panels; the toolbar with its tabs always stays.
 
 Tools › Preferences has a page for each kind of setting. Refer to
 [Preferences](#preferences).
@@ -701,11 +712,22 @@ any window size. The parts of the Floating layout are:
   state. The remote's commands are in File › Project.
 - **Settings** on macOS (MitCad › Settings, Cmd+,) is a window with the
   same pages as Preferences elsewhere, in the same list. Changes apply at
-  once. There is no OK. Typed cache budgets apply when editing finishes; arrow buttons
+  once and are saved automatically. There is no OK. After each change the
+  note *Changes are saved automatically* shows under the page for a few
+  seconds. Typed cache budgets apply when editing finishes; arrow buttons
   apply immediately. Camera and background controls follow changes made
   through View while Settings is open. Cmd+W closes the active tool window;
   in the design window it closes the design. The background can follow
   the system's appearance.
+
+In the Docked layout the panels are docks: the Browser, the Timeline, the
+Command panel and, when shown, the Projects, Configuration and Chat
+panels. To hide a dock, click the × on its title row (it shows while the
+pointer is over the row), or right-click a dock's title row and clear the
+dock's name in the menu. To show it again, choose it in the View menu:
+View › Browser, View › Timeline, View › Projects, View › Command or
+View › Chat. The Configuration panel shows while the design has options
+and cannot be hidden.
 
 ### Messages and their history
 
@@ -843,6 +865,28 @@ change **Turn View Left**, **Turn View Right**, **Turn View Up** and
 The cube keeps its size and place in the corner with each choice, and a
 click on it turns the view to what you clicked.
 
+**View › Anaglyph 3D** shows the view in stereo for red/cyan 3D glasses
+(the red filter over the left eye). It is off by default; select it
+again to turn it off. While it is on, the camera is a perspective one;
+when you turn it off, the camera goes back to Orthographic or
+Perspective as it was before. Choosing **Orthographic** (View › Camera,
+the cube's menu or Preferences) turns Anaglyph 3D off. Selecting,
+highlights, handles and the orientation cube work as usual. The
+**Rendered** visual style is not available while Anaglyph 3D is on:
+turning Anaglyph 3D on leaves the rendered view. **Export Snapshot**
+saves the normal perspective picture, without the red/cyan colors.
+Anaglyph 3D is a user preference; it does not change the design.
+
+Two settings in **Preferences › Display › Anaglyph 3D** set its depth.
+The view shows a change at once:
+
+- **Stereo depth** (1–20 %, default 5 %): how far apart the two eyes
+  are. More gives more depth; too much is tiring to look at.
+- **Convergence** (25–400 %, default 100 %): the distance that lies in
+  the plane of the screen, in percent of the distance to the middle of
+  the view. What is nearer than it stands out of the screen, and what is
+  farther lies behind it.
+
 **Preferences › Display › Small circles** sets how finely the view draws
 small holes, circles and arcs:
 
@@ -910,8 +954,8 @@ they are on. Hold the pointer over a button to see its command and its
 shortcut.
 
 In the Floating layout the bar is a small card at the bottom center of
-the view, above the Timeline. In the Docked layout it is in the status
-bar. It shows in every workspace and in sketches. While a drawing takes
+the view, above the Timeline. In the Docked layout its buttons are at
+the right end of the status bar, at the bottom of the window. It shows in every workspace and in sketches. While a drawing takes
 the view, the bar is hidden with the other cards. To hide the bar, clear
 **Show the navigation bar** on the Display page of Tools › Preferences.
 
@@ -1059,6 +1103,16 @@ Ctrl+A, Ctrl+C and Ctrl+V edit the text. A value field of the panel
 that has the keyboard but in which you have typed nothing yet does not
 count: the panel puts the keyboard there after the picks and as it
 opens.
+
+**Pick on the preview.** While the preview shows, you can click the
+faces and edges it shows. A face or edge that the preview only changed
+picks the face or edge of the part it comes from: for example, after a
+Fillet's first two edges along the sides of a rib, the rib's foot edge
+between them is shorter in the preview, and a click on it adds the foot
+edge. The faces and edges that the command itself makes, such as a
+fillet's rounding, cannot be picked. A click on one tells you so in the
+status bar, and that holding Ctrl (Cmd on macOS) shows the part's own
+faces and edges to pick from.
 
 A value field takes an expression with units (`20`, `2 in`, `d1 * 2`).
 The value of an expression, or an error, shows below the field; a
@@ -1715,6 +1769,23 @@ On a closed path the sweep goes once round; Distance 1 less than 1
 covers that part of it. **Pipe** has Distance 1 only: its section is at
 the start of the path.
 
+When the path of a **Pipe** has sharp corners, *Corners* shows. *Mitered*
+(the default) runs the sides on until they meet in the corner. *Rounded*
+turns the section about the corner, so the outside of the corner is
+round. The choice holds for every corner. For a bend of a given radius,
+or a bevel, or a different joint at one corner, use *Sketch Fillet* or
+*Sketch Chamfer* on that corner of the path in its sketch.
+
+A pipe folds through itself where its path bends more tightly than its
+section reaches from the path: a fillet in the sketch whose radius is
+less than half the pipe's size, for example. A short straight piece
+between two mitered corners, such as a small chamfer, folds the same way
+when the two miters overlap. **Pipe** then warns, naming the curve of the
+path and the numbers: the radius it bends with and the smallest that
+works, or the piece's length and the length its miters need. Make the
+fillet larger or the pipe smaller, lengthen the chamfer, or choose
+*Rounded* corners. Only a pipe along its whole path is checked.
+
 **Sweep** can obey a *Guide Rail* as well as the path. *Rail Point* says
 where the rail meets the profile. This is on the plane square to the
 path. Or it is at the same fraction of the length of the rail as of
@@ -2129,6 +2200,17 @@ MitCad makes it 0.1 % smaller and removes the narrow strip that this
 leaves; a strip along a long chain of edges (more than 16 faces beside
 it) stays, a thousandth of the size wide. The panel and the feature's
 details then show this as information, not as a warning.
+
+Where the roundings of two edges of a narrow face together are wider
+than the face, they would meet beyond each other and the face would
+vanish under them. The geometry kernel can build that only in some
+cases, for example both rims of a thin plate. When it cannot, the error
+names the face and the two edges, how far each rounding reaches into
+the face and how wide the face is, for example "the roundings of the
+edges reach 1.73 and 0.577 mm into a face between them, which is only
+1.51 mm wide there". An eave 1.5 mm wide with an acute edge at its tip
+is such a face for a radius of 1 mm. Use a smaller radius, or leave one
+of the two edges out of the fillet.
 
 At a difficult corner, the geometry kernel can build a fillet or chamfer
 whose corner folds back on itself or ends in a spike. A rounding of
@@ -4107,6 +4189,18 @@ inches is 1 in (25.4 mm).
 To change the unit of the open design, double-click the Units row, or
 use **Change Active Units**. The change is one undo step.
 
+Every length that you type is read in the unit of the design: the value
+fields of the sketch tools (a rectangle's width, a circle's diameter), a
+dimension's value, the values of a command panel and of Edit Parameters.
+In a design in inches, a rectangle typed as 0.875 by 12.125 is 0.875 in
+by 12.125 in (22.225 mm by 307.975 mm). **Add User Parameter**, and Add
+Option and Add Column of Configurations, start with the unit of the
+design. A dimension that was made while the design had another unit
+takes the unit of the design when you type a new value into it: `0.25 *
+2` is 0.5 in. Changing the unit does not change the sizes that the design
+already has: a bar drawn as 0.875 mm stays 0.875 mm, now shown as 0.03.
+The chat's assistant is told the unit of the design with each message.
+
 The values that a command starts with are in the unit of the design,
 rounded to a usual size of that unit. In a design in inches, **Extrude**
 starts at 0.5 in (10 mm in a design in mm), a sketch chamfer at 0.1 in and
@@ -4126,9 +4220,13 @@ and every new design starts in inches: the untitled design when MitCad
 starts, **New** and **New Design** in a project. The new design is not
 modified and has no undo step for its unit.
 
-The preference does not change the open design. Designs that you open
-and files that you import keep the units that their files store. For an
-open design, use Change Active Units.
+An untitled design that has nothing in it yet, such as the one that
+MitCad starts with, is still a new design: when you change the
+preference, it starts again in the new unit. The Start page's New Design
+card shows the unit. The preference does not change any other open
+design: a design that has a sketch or a body, designs that you open and
+files that you import keep their units. For such a design, use Change
+Active Units.
 
 ### Timeline
 
@@ -4455,6 +4553,14 @@ separates the arguments of a function. A `;` always separates the
 arguments. Thus `max(a, b)`, `max(1, 5)` and `max(1; 5)` have two
 arguments, but `max(1,5)` is `max(1.5)`. There are no thousands
 separators: `1,000` is 1, and `1 000` is an error.
+
+**Inch and foot marks.** A `"` directly after a number means inches,
+and a `'` means feet, with or without a space between: `.875"` is
+0.875 in (22.225 mm, also in a design in mm), `2.5 "` is 2.5 in and `3'`
+is 3 ft. Two single quotes, `2''`, are inches too. Feet and inches
+together add up: `3' 6"` is 3 ft 6 in (42 in). The value below the
+field shows the converted value. Only a number takes a mark; elsewhere
+quotes enclose a text, as in `'Width'` or `VALUE(d1; "in")`.
 
 **Formulas like in a spreadsheet.** An expression can use the functions
 and the syntax of spreadsheet formulas. All expressions that you wrote
@@ -6161,6 +6267,10 @@ and its preference are described in
 
 If you enter the rendered view, MitCad sets View › Component Colors to
 off. If you enable Component Colors, MitCad leaves the rendered view.
+
+The rendered view is not available while View › Anaglyph 3D is on (its
+tooltip says so), and turning Anaglyph 3D on leaves it. Render Image
+renders the normal picture also then.
 
 **View › Render Environment** sets how the rendered view lights and
 shows the design. The command is also in Visual Style and Environment.
@@ -8266,6 +8376,26 @@ model's commands (scripts, `mitcad-cli run`, MCP) and by the
 All three features keep the body a sheet. The sheet unfolds, refolds and
 has a Flat Pattern like any other sheet. The details are in
 `sheet-metal.md` in the docs folder, a developer document.
+
+**Mirror** and the patterns copy a sheet body as a sheet. A copy that is
+a new body takes the sheet tools: Fold, Flange, Cut and the Flat Pattern
+work on it as on the original. With **Join**, the copy and the original
+become one sheet: where their flat panels meet in one plane, they are
+one panel, and the bends on either side stay bends. The Flat Pattern
+unfolds the whole part. MitCad refuses the join when the two halves
+overlap, do not touch, or meet only at a bend or a wall that crosses the
+mirror plane. The message says which.
+
+This also holds for a sheet with an ordinary fillet or chamfer on it, for
+a pattern of a pattern of the sheet body, and for **Join any**, where a
+copy becomes one sheet with the one sheet it touches. Later features on a
+joined copy keep finding the panels they were made on when you change
+the sheet before the mirror or pattern. A scaled copy is not a sheet,
+because scaling changes the thickness; MitCad warns about it, and also
+when a join turns a sheet into an ordinary solid, for example a copy
+that joins two sheets at once where one of them has a bend. Where such a
+join leaves only flat material in one plane, the result is still a
+sheet.
 
 ### Mortise and Tenon
 
@@ -10610,8 +10740,18 @@ Each change is a step of its own in the undo history; **Close** keeps
 them. MitCad lays each plate out by itself: every piece on its print bed
 face (or the automatic orientation's), side by side, centered on the plate.
 With **Center on Plate** off, the pieces stay where the design has them,
-but the copies of an item with a count still lie side by side, 5 mm
-apart, starting where the design has the first.
+but the copies of an item with a count still lie side by side, starting
+where the design has the first.
+
+Neighbouring pieces lie 5 mm apart beyond their brims, so that the
+slicer's brims do not run into each other. MitCad reads each piece's
+brim from the settings it prints with (the plate's included): its
+**Brim width** and **Brim gap**, unless **Brim type** is *None* or
+*Inner only* (*Auto* counts, as the slicer adds a brim to tall, narrow
+pieces), or its own skirt when **Skirt per object** is on. Two pieces
+with an 8 mm brim lie 8 + 5 + 8 = 21 mm apart. When the pieces and their
+brims no longer fit on the bed, MitCad warns, and you can move some to
+another plate.
 
 **Settings order.** A plate's values come after the design's printer and
 process and before everything else: the design's process < the plate <
@@ -10627,6 +10767,11 @@ slicer keeps them per plate (the Bambu family's spiral vase and print
 sequence); UltiMaker Cura and older PrusaSlicer versions get a 3MF per
 plate. PrusaSlicer keeps spiral vase for the whole project, so a plate's
 spiral vase reaches it only in a file of its own (MitCad warns).
+
+A connected AI assistant ([Connect an AI assistant](#connect-an-ai-assistant))
+can write the same files: it exports the design's plates for the slicer
+you name into a folder for designs, one file of every plate or a file
+per plate. It never writes over a file that is already there.
 
 #### Print Analysis
 
@@ -11444,7 +11589,9 @@ Command search finds each page by its name or by what it sets, for example "auto
 The window opens no larger than the screen, and you can resize it.
 
 On macOS, the same pages are in the **Settings** window
-(MitCad › Settings, Cmd+,). Changes apply at once. There is no OK. The
+(MitCad › Settings, Cmd+,). Changes apply at once and are saved
+automatically. There is no OK. After each change the note *Changes are
+saved automatically* shows under the page for a few seconds. The
 background can follow the system's appearance.
 
 The table that follows lists the pages. Each page has a chapter in this
@@ -11452,9 +11599,9 @@ guide that explains its settings.
 
 | Page | What it sets | Refer to |
 |---|---|---|
-| **General** | The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts) |
+| **General** | The **Language** of the interface. The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts) |
 | **Navigation** | The mouse scheme for orbit, pan and zoom | [View and navigation](#view-and-navigation) |
-| **Display** | **Camera**, **Orientation cube**, **Layout**, **Browser background**, **Ghost inactive components**, **Pick the active component first**, **Small circles** | [View and navigation](#view-and-navigation), [Layouts](#layouts), [Components](#components) |
+| **Display** | **Camera**, **Orientation cube**, **Interface size**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Layout**, **Browser background**, **Ghost inactive components**, **Pick the active component first**, **Small circles** | [The window](#the-window), [View and navigation](#view-and-navigation), [Layouts](#layouts), [Components](#components) |
 | **Cache** | The cache of computed results: on or off, the size, the folder, **Clear**, the memory limit | [Cache of computed results](#cache-of-computed-results) |
 | **Cloud** | The git program, the default author, the defaults of projects, live updates, the broker, **Known brokers** | [Sharing a project](#sharing-a-project), [Live updates](#live-updates) |
 | **Updates** | The automatic check for updates: on or off. Pre-releases: offered or not | [Updates](#updates) |
@@ -11542,6 +11689,24 @@ the open design to these folders and open designs from them. There are
 none until you add one: **Add…** chooses a folder, **Remove** takes the
 selected ones off the list (the files stay). Connect in Connect AI
 Assistant adds its folder too. Refer to [mcp.md](mcp.md).
+
+### Language
+
+The **Language** setting of the General page selects the language of
+MitCad's menus, toolbar, panels and dialogs: **Automatic**, **English**,
+or a language MitCad has, listed by its own name (**Suomi** for Finnish).
+Automatic uses the system's language when it is the first language of the
+system and MitCad has it, else English. The language takes effect when
+MitCad starts again. A text that the language does not have yet shows in
+English.
+
+Command search also finds a command by its English name. For example,
+"preferences" finds Preferences in every language. Names that you give,
+parameter names, formulas and file formats stay as they are. The messages
+of the model, for example the errors of a feature, are in English.
+
+`--language en` or `--language fi` on the command line replaces the
+setting for one run.
 
 ### Cache of computed results
 
@@ -11774,6 +11939,9 @@ The application is `mitcad`, on Windows `mitcad.exe`. Its options:
 - `--debug-log [file.log]`, `--debug-log=file`: writes a debug log for
   this run ([Debug log](#debug-log)). It goes to the file given, or to a
   new file in the log folder.
+- `--language en|fi`: the language of the interface for this run. The
+  default is the Language selected in Preferences › General
+  ([Language](#language)).
 
 Environment variables:
 
@@ -11781,6 +11949,7 @@ Environment variables:
 |---|---|
 | `MITCAD_NO_UPDATE_CHECK=1` | Sets update checks to off |
 | `MITCAD_DEBUG_LOG` | `1`, or a file's path: writes a debug log as `--debug-log` does |
+| `MITCAD_LANGUAGE` | `en`, `fi`: the language of the interface, over Preferences; `--language` comes first |
 | `MITCAD_PROJECTS_DIR` | Where New Project puts projects, instead of Documents/Mitcad |
 | `MITCAD_GIT` | The git program when it is not on `PATH`. Preferences › Cloud sets it for the application |
 | `MITCAD_LIBRARIES_DIR` | Where fetched component libraries are kept |

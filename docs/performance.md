@@ -347,6 +347,14 @@ preview of the last value replaced the proxy 8 ms (box) and 351 ms (holes)
 later, 1.4 to 1.5 s with the 500 ms hold. These are one machine's
 software-rendered timings, not a frame rate of a GPU or of the model.
 
+The moves that reach the handle follow the frames (mitcad#1457): beside
+other UI tests and CPU load the frames took 100 to 300 ms each, and only
+19 to 45 of the 180 moves arrived, one a frame (the handle's own count,
+`Manipulator feedback ... moves=`); every one of them still changed the
+snapped value, reached the command and was drawn by the proxy. So the
+test checks that, the proxy's update time and that the arrow ends where
+the pointer was released, not a number of inputs.
+
 ## Display meshing: planes through Delabella (mitcad#644)
 
 Whether the final display tier (commit, refinement, opening a design) could

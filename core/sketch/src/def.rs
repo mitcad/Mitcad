@@ -1190,19 +1190,32 @@ impl<P> SketchDef<P> {
 
     /// The consistency of entities, constraints and dimensions.
     pub fn check_definition(&self) -> Result<(), String> {
-        let mut ids = BTreeSet::new();
-        for e in &self.entities {
-            if e.id.0 == 0 || !ids.insert(e.id) {
-                return Err(format!(
-                    "entity {} is used more than once or is 0",
-                    e.as_ref()
-                ));
+        // Points, curves and texts share one id numbering (mitcad#1485):
+        // the first one keeps its number and a later one is named with it.
+        let mut ids: BTreeMap<EntityUid, String> = BTreeMap::new();
+        let mut number = |what: &str, id: EntityUid, name: String| -> Result<(), String> {
+            if id.0 == 0 {
+                return Err(format!("{what} {name}: id 0 is not allowed"));
             }
+            match ids.get(&id) {
+                Some(first) if *first == name => {
+                    Err(format!("{what} {name} is used more than once"))
+                }
+                Some(first) => Err(format!(
+                    "{what} {name} has the id number of {first}: curves, points and texts \
+                     share one numbering"
+                )),
+                None => {
+                    ids.insert(id, name);
+                    Ok(())
+                }
+            }
+        };
+        for e in &self.entities {
+            number("entity", e.id, e.as_ref().to_string())?;
         }
         for t in &self.texts {
-            if t.id.0 == 0 || !ids.insert(t.id) {
-                return Err(format!("text t{} is used more than once or is 0", t.id.0));
-            }
+            number("text", t.id, format!("t{}", t.id.0))?;
         }
         let index = EntityIndex::new(&self.entities);
         for t in &self.texts {

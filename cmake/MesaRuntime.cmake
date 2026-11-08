@@ -1370,6 +1370,17 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-docked-toolbar-colors"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-docked-toolbar-colors PROPERTIES TIMEOUT 180)
+    # The Docked layout's Command and Projects docks hidden from the
+    # window's menu of its panels and with their close buttons, shown again
+    # from the View menu; no Configuration in that menu (mitcad#1455); the
+    # Linux test's shared input script.
+    add_test(NAME app.ui-windows-docked-panels
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-docked-panels-test.ps1"
+              -App "$<TARGET_FILE:mitcad>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-docked-panels"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-docked-panels PROPERTIES TIMEOUT 180)
     # Up, Down and the mouse wheel step a value field's number (GitHub
     # mitcad/Mitcad#129, mitcad#1254): an expression left alone, Shift+Up
     # by 10 mm, Circular Pattern's Quantity 4 to 5 previewed, the wheel only
@@ -1585,6 +1596,16 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-theme-preference"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-theme-preference PROPERTIES TIMEOUT 600)
+    # The interface language (mitcad#1460): English by default and with
+    # --language en, Finnish with --language fi (the tabs, the command search
+    # by the English name, the Language preference), the pseudo-language
+    # with no group caption cut. The Linux test is tools/ui-language-test.sh.
+    add_test(NAME app.ui-windows-language
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-language-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-language"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-language PROPERTIES TIMEOUT 600)
     # Keys while a pasted component is still computed (mitcad#1360, GitHub
     # mitcad/Mitcad#156, a crash of 0.47.0 here): Paste New opens
     # Move/Copy, and Shift and Up in its X Distance field while the preview
@@ -1747,6 +1768,76 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-render-section-toggle"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-render-section-toggle PROPERTIES TIMEOUT 420)
+    # The ribbon, the Browser and the navigation bar with the design in
+    # front (mitcad#1451, GitHub mitcad/Mitcad#185): a member placed with
+    # Build > Profile, a second design and back, Docked and Floating; the
+    # window's menu of its panels offers no Toolbar. The Linux test's shared
+    # input script (tools/ui-docked-ribbon-test.sh).
+    add_test(NAME app.ui-windows-docked-ribbon
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-docked-ribbon-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-docked-ribbon"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-docked-ribbon PROPERTIES TIMEOUT 600)
+    # Anaglyph 3D (mitcad#1449): View > Anaglyph 3D's stereo camera, a pick
+    # in it, Preferences > Display's stereo depth and convergence, and the
+    # projection back when it ends. The Linux test's shared input script
+    # (tools/ui-view-anaglyph-test.sh).
+    add_test(NAME app.ui-windows-view-anaglyph
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-view-anaglyph-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-view-anaglyph"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-view-anaglyph PROPERTIES TIMEOUT 180)
+    # A pick on Fillet's preview names the edge before the fillet it comes
+    # from (mitcad#1458, GitHub mitcad/Mitcad#177): Fillet1, rounding a
+    # block's end foot edges on a plate, edited; the front's foot edge
+    # between the roundings, clicked in the preview without Ctrl, joins
+    # Edges and the three roundings warn of nothing hanging out. The Linux
+    # test's shared input script (tools/ui-fillet-preview-pick-test.sh).
+    add_test(NAME app.ui-windows-fillet-preview-pick
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-fillet-preview-pick-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-fillet-preview-pick"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-fillet-preview-pick PROPERTIES TIMEOUT 300)
+    # Lengths typed in a design in inches are stored as inches (mitcad#1452,
+    # GitHub mitcad/Mitcad#187): Add User Parameter, a dimension made in mm,
+    # a rectangle and a circle by typed values. The Linux test's shared
+    # input script (tools/ui-sketch-inch-entry-test.sh).
+    add_test(NAME app.ui-windows-sketch-inch-entry
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-inch-entry-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-inch-entry"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-inch-entry PROPERTIES TIMEOUT 180)
+    # A sketch dimension's value that uses its own parameter keeps that
+    # parameter as a user parameter (mitcad#1535): BuckleDiameter * 2 in the
+    # dimension of BuckleDiameter, and Move to User Parameters from the
+    # context menu. The Linux test's shared input script
+    # (tools/ui-sketch-own-parameter-test.sh).
+    add_test(NAME app.ui-windows-sketch-own-parameter
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-own-parameter-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-own-parameter"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-own-parameter PROPERTIES TIMEOUT 180)
+    # A command panel value that uses the field's own parameter keeps that
+    # parameter as a user parameter (mitcad#1536): depth * 2 in Edit
+    # Extrude's Distance of depth. The Linux test's shared input script
+    # (tools/ui-feature-own-parameter-test.sh).
+    add_test(NAME app.ui-windows-feature-own-parameter
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-feature-own-parameter-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-feature-own-parameter"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-feature-own-parameter PROPERTIES TIMEOUT 180)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

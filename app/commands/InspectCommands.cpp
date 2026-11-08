@@ -190,7 +190,7 @@ std::vector<Inspection::Value> measuredValues(const QJsonObject& item, const QSt
 // or an edge's geometry ("cylindrical face", "straight edge", "sketch
 // arc"), else the kind of the pick ("vertex", "body", "plane").
 QString pickKind(const SelectionItem& item, const CommandContext& context) {
-  const QString kind = SelectionItem::kindName(item.kind);
+  const QString kind = SelectionItem::kindText(item.kind);
   if (item.kind != SelectKind::Face && item.kind != SelectKind::Edge && item.kind != SelectKind::SketchCurve) {
     return kind;
   }
@@ -283,7 +283,7 @@ QString mainValue(const Inspection& result) {
 // The picks' kinds for a history row: "Face ↔ Edge".
 QString pickedKinds(const SelectionItem& first, const SelectionItem* second) {
   const auto kind = [](const SelectionItem& item) {
-    QString text = SelectionItem::kindName(item.kind);
+    QString text = SelectionItem::kindText(item.kind);
     if (!text.isEmpty()) {
       text[0] = text[0].toUpper();
     }
@@ -330,7 +330,7 @@ TopoDS_Shape axisLine(const QJsonObject& item) {
 // a body's name, "Sketch curve of Sketch1", a construction feature's name,
 // or an origin datum ("Plane XY").
 QString pickedName(const SelectionItem& item, const CommandContext& context) {
-  QString kind = SelectionItem::kindName(item.kind);
+  QString kind = SelectionItem::kindText(item.kind);
   if (!kind.isEmpty()) {
     kind[0] = kind[0].toUpper();
   }
@@ -485,7 +485,7 @@ std::optional<gp_Dir> lineDirection(const TopoDS_Shape& shape) {
 // here on the shapes the view shows.
 QString describeShape(const SelectionItem& item, const TopoDS_Shape& shape, QStringList& log, const QString& unit) {
   QStringList lines;
-  lines << QStringLiteral("<b>%1</b>").arg(SelectionItem::kindName(item.kind));
+  lines << QStringLiteral("<b>%1</b>").arg(SelectionItem::kindText(item.kind));
   if (shape.ShapeType() == TopAbs_VERTEX) {
     const gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(shape));
     lines << QObject::tr("Position: %1").arg(pointTextIn(p, unit));

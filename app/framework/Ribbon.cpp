@@ -9,7 +9,9 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QByteArray>
 #include <QContextMenuEvent>
+#include <QCoreApplication>
 #include <QCursor>
 #include <QEvent>
 #include <QFrame>
@@ -31,6 +33,7 @@
 #include <QStackedWidget>
 #include <QStyleOptionToolButton>
 #include <QTabBar>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QtLogging>
@@ -188,6 +191,34 @@ protected:
     painter.drawText(QRect(left, 0, textWidth, height()), Qt::AlignVCenter | Qt::AlignLeft, text());
     drawChevron(painter, QPointF(left + textWidth + 5 + 4, height() / 2.0 + 0.5), color);
   }
+};
+
+// The group's name with ▾ in the Classic ribbon: never narrower than its
+// whole caption (mitcad#1477). A size taken once, when the group was made,
+// fell a pixel short on Windows in the pseudo-language: the caption's
+// metrics changed after the group came into the window, and QToolButton
+// drops its cached size on change events that do not tell the layout (the
+// layout kept the old width). So the minimum is the caption's size as it is
+// now, and a change of that size lays the group out and fits the ribbon
+// again.
+class ClassicGroupCaption : public QToolButton {
+public:
+  explicit ClassicGroupCaption(std::function<void()> resized) : m_resized(std::move(resized)) {}
+
+  QSize minimumSizeHint() const override { return sizeHint(); }
+
+protected:
+  void changeEvent(QEvent* event) override {
+    const QSize before = sizeHint();
+    QToolButton::changeEvent(event);
+    if (sizeHint() != before) {
+      updateGeometry();
+      if (m_resized) m_resized();
+    }
+  }
+
+private:
+  std::function<void()> m_resized;
 };
 
 // The workspace tabs as a macOS segmented control: a capsule track with the
@@ -357,6 +388,8 @@ protected:
 // buttons reveal the same groups and menus without moving the whole ribbon
 // into QToolBar's overflow menu or clipping individual captions.
 class ClassicRibbonPage final : public QWidget {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::ClassicRibbonPage)
+
 public:
   explicit ClassicRibbonPage(QWidget* page) {
     auto* row = new QHBoxLayout(this);
@@ -713,6 +746,50 @@ void Ribbon::addTabRowWidget(QWidget* widget) {
   m_tabRow->insertWidget(m_tabRow->indexOf(m_tabs) + 1, widget, 0, Qt::AlignVCenter);
 }
 
+namespace {
+
+// The names of the tabs, the groups and the menus' subgroups as the
+// interface shows them, for the translations (mitcad#1460): the commands
+// name their tab and group by an id in capitals ("SHEET METAL") and a
+// subgroup by its English name, which code compares and keys settings on;
+// displayName gives the shown name, in the interface language.
+[[maybe_unused]] const char* const kRibbonNames[] = {
+    // Tabs.
+    QT_TRANSLATE_NOOP("RibbonName", "Start"), QT_TRANSLATE_NOOP("RibbonName", "Solid"),
+    QT_TRANSLATE_NOOP("RibbonName", "Build"), QT_TRANSLATE_NOOP("RibbonName", "Make"),
+    QT_TRANSLATE_NOOP("RibbonName", "Sketch"), QT_TRANSLATE_NOOP("RibbonName", "Drawing"),
+    QT_TRANSLATE_NOOP("RibbonName", "Cut Sheet"),
+    // Groups.
+    QT_TRANSLATE_NOOP("RibbonName", "Create"), QT_TRANSLATE_NOOP("RibbonName", "Modify"),
+    QT_TRANSLATE_NOOP("RibbonName", "Sheet Metal"), QT_TRANSLATE_NOOP("RibbonName", "Surface"),
+    QT_TRANSLATE_NOOP("RibbonName", "Assemble"), QT_TRANSLATE_NOOP("RibbonName", "Construct"),
+    QT_TRANSLATE_NOOP("RibbonName", "Inspect"), QT_TRANSLATE_NOOP("RibbonName", "Insert"),
+    QT_TRANSLATE_NOOP("RibbonName", "Render"), QT_TRANSLATE_NOOP("RibbonName", "Select"),
+    QT_TRANSLATE_NOOP("RibbonName", "Constraints"), QT_TRANSLATE_NOOP("RibbonName", "Finish Sketch"),
+    QT_TRANSLATE_NOOP("RibbonName", "Profile"), QT_TRANSLATE_NOOP("RibbonName", "Timber"),
+    QT_TRANSLATE_NOOP("RibbonName", "Connect"), QT_TRANSLATE_NOOP("RibbonName", "Output"),
+    QT_TRANSLATE_NOOP("RibbonName", "Close Drawing"), QT_TRANSLATE_NOOP("RibbonName", "Geometry"),
+    QT_TRANSLATE_NOOP("RibbonName", "Dimensions"), QT_TRANSLATE_NOOP("RibbonName", "Text"),
+    QT_TRANSLATE_NOOP("RibbonName", "Symbols"), QT_TRANSLATE_NOOP("RibbonName", "Tables"),
+    QT_TRANSLATE_NOOP("RibbonName", "Export"), QT_TRANSLATE_NOOP("RibbonName", "Parts"),
+    QT_TRANSLATE_NOOP("RibbonName", "Materials"), QT_TRANSLATE_NOOP("RibbonName", "Annotate"),
+    QT_TRANSLATE_NOOP("RibbonName", "3D Print"), QT_TRANSLATE_NOOP("RibbonName", "Laser"),
+    QT_TRANSLATE_NOOP("RibbonName", "CNC"),
+    // Subgroups of the groups' menus.
+    QT_TRANSLATE_NOOP("RibbonName", "Arcs"), QT_TRANSLATE_NOOP("RibbonName", "Circles"),
+    QT_TRANSLATE_NOOP("RibbonName", "Lines"), QT_TRANSLATE_NOOP("RibbonName", "Other Geometry"),
+    QT_TRANSLATE_NOOP("RibbonName", "Patterns"), QT_TRANSLATE_NOOP("RibbonName", "Rectangles"),
+    QT_TRANSLATE_NOOP("RibbonName", "References"), QT_TRANSLATE_NOOP("RibbonName", "Machine Elements"),
+    QT_TRANSLATE_NOOP("RibbonName", "Pattern")};
+
+// A subgroup's name as the menus show it.
+QString subgroupTitle(const QString& subgroup) {
+  const QByteArray source = subgroup.toUtf8();
+  return QCoreApplication::translate("RibbonName", source.constData());
+}
+
+} // namespace
+
 QString displayName(const QString& name) {
   QStringList words = name.toLower().split(QLatin1Char(' '), Qt::SkipEmptyParts);
   for (QString& word : words) {
@@ -720,7 +797,10 @@ QString displayName(const QString& name) {
     // "3D Print", mitcad#1049).
     word = word.at(0).isDigit() ? word.toUpper() : word.at(0).toUpper() + word.mid(1);
   }
-  return words.join(QLatin1Char(' '));
+  // In the interface language (kRibbonNames); English, title-cased, when it
+  // has no translation.
+  const QByteArray english = words.join(QLatin1Char(' ')).toUtf8();
+  return QCoreApplication::translate("RibbonName", english.constData());
 }
 
 RibbonButton::RibbonButton(QAction* action, int iconSize, QWidget* parent)
@@ -1111,7 +1191,11 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
   auto* buttons = new QHBoxLayout(row);
   buttons->setContentsMargins(0, 0, 0, 0);
   buttons->setSpacing(0);
-  QToolButton* menuButton = mac ? new GroupCaption(displayName(group)) : new QToolButton;
+  // A change of a Classic caption's size fits the groups again, after the
+  // event that changed it (mitcad#1477).
+  const auto refit = [this] { QTimer::singleShot(0, this, [this] { fitGroups(); }); };
+  QToolButton* menuButton = mac ? static_cast<QToolButton*>(new GroupCaption(displayName(group)))
+                                : new ClassicGroupCaption(refit);
   QMenu* menu = createGroupMenu(tab, key(tab, group), menuButton);
   // The group's commands in registration order; a subgroup's together,
   // where its first command is (CommandDef::subgroup, mitcad#222).
@@ -1164,7 +1248,7 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
     // in the group's menu only.
     const QString path = key(tab, group) + QLatin1Char('/') + entry.subgroup;
     QMenu* submenu = createGroupMenu(tab, path, menu);
-    submenu->setTitle(entry.subgroup);
+    submenu->setTitle(subgroupTitle(entry.subgroup));
     menu->addMenu(submenu);
     submenu->setObjectName(QStringLiteral("ribbonSubmenu_") + path);
     const CommandDef* primary = nullptr;
@@ -1187,7 +1271,8 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
       button->setObjectName(QStringLiteral("ribbon_") + primary->id);
       button->setMenu(submenu);
       button->setPopupMode(QToolButton::MenuButtonPopup);
-      button->setAccessibleDescription(tr("%1; its arrow opens %2").arg(action->text(), entry.subgroup));
+      button->setAccessibleDescription(
+          tr("%1; its arrow opens %2").arg(action->text(), subgroupTitle(entry.subgroup)));
       buttons->addWidget(button);
       m_splitButtons.insert(path, button);
       ++pinnedCount;
@@ -1256,9 +1341,15 @@ QWidget* Ribbon::finishGroup(QWidget* widget, QWidget* row, QToolButton* menuBut
   } else {
     // Preserve the complete caption and its menu indicator. The page can
     // scroll if even the caption-only groups cannot fit in the viewport.
+    // The caption's own minimum is its size as it is when laid out
+    // (ClassicGroupCaption, mitcad#1477). The group's minimum is its
+    // caption's width, kept current by fitGroups: without it a Fixed group's
+    // minimum is its whole row, and the page's minimum, which decides its
+    // scroll arrows (updateOverflow), counted a pinned button just folded
+    // (its layout not yet redone), so the left arrow showed and moved every
+    // group right.
     const int margins = column->contentsMargins().left() + column->contentsMargins().right();
     const int caption = menuButton->sizeHint().width();
-    menuButton->setMinimumWidth(caption);
     widget->setMinimumWidth(caption + margins);
     widget->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
     info->capsule = widget;
@@ -1623,6 +1714,20 @@ void Ribbon::fitGroups() {
     const QMargins outside = layout()->contentsMargins();
     const int available = std::max(0, width() - outside.left() - outside.right());
     for (auto it = m_groupsOfPage.begin(); it != m_groupsOfPage.end(); ++it) {
+      // The captions' widths as they are now, not as when the groups were
+      // made (mitcad#1477), also as the groups' minimums (finishGroup).
+      for (GroupInfo& info : it.value()) {
+        QWidget* caption = m_groupButtons.value(key(info.tab, info.group));
+        if (caption == nullptr || info.capsule == nullptr || info.capsule->layout() == nullptr) continue;
+        const QMargins around = info.capsule->layout()->contentsMargins();
+        const int width = caption->sizeHint().width() + around.left() + around.right();
+        info.capsule->setMinimumWidth(width);
+        if (width != info.collapsedWidth) {
+          info.collapsedWidth = width;
+          info.minWidth = width;
+          info.fullWidth = groupWidth(info, static_cast<int>(info.pinButtons.size()));
+        }
+      }
       QLayout* row = it.key()->layout();
       const QMargins margins = row->contentsMargins();
       int fixed = margins.left() + margins.right() + std::max(0, row->spacing()) * std::max(0, row->count() - 2);

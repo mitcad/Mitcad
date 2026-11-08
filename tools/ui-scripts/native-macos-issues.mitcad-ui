@@ -13,8 +13,8 @@ sleep 800
 native-resize 1280 820
 native-appearance light
 expect-native-text native.browser.failures '^1 failed$'
-# The plane and the move at 90 radians; Fillet1, built 0.1 % smaller, is
-# information (mitcad#1106).
+# The plane and the move at 90 radians; Fillet1, the rib's full round, is
+# no warning.
 expect-native-text native.browser.warnings '^2 warnings'
 expect-native-layout
 expect-native-history

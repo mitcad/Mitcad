@@ -16,7 +16,13 @@ pub use changes::{
 };
 // The command reference in parts, errors that give the choices (mitcad#714).
 mod reference;
-pub use reference::{ECHO_CHARS, Vocabulary, echoed, missing_name, unknown_command, unknown_query};
+pub use reference::{
+    ECHO_CHARS, INTERNAL_MARKER, Vocabulary, echoed, missing_name, reference_losses,
+    reference_text, unknown_command, unknown_query,
+};
+// The guides on how to model well, behind model_reference's guide and as
+// mitcad://guide/<id> resources (mitcad#1508).
+mod guide;
 // The AI chat panel's own logic: agent streams, approvals, undo merge,
 // history (mitcad#947).
 pub mod chat;
@@ -38,17 +44,37 @@ pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 // Leave room for a compact error that preserves the request id and, for
 // an applied command, acknowledges that the document already changed.
 const RESPONSE_RESERVE_BYTES: usize = 4096;
+/// The largest image returned inline by default, in its encoded bytes
+/// (`ui_screenshot`'s and `model_render`'s `max_bytes`; mitcad#1188,
+/// mitcad#1486).
+pub const IMAGE_INLINE_BYTES: u64 = catalog::SCREENSHOT_INLINE_BYTES;
 /// Resource containing the model's command and query reference.
 pub const COMMANDS_URI: &str = "mitcad://reference/commands";
 
 const COMMANDS_REFERENCE: &str = include_str!("../../model-api/src/commands.md");
 
-/// How a sketch's ids are given out, for the server instructions
-/// (mitcad#1269).
-const SKETCH_IDS: &str = "In a sketch, points, curves and texts share one numbering (p3, c4, t5 name different entities) and constraints and dimensions another (k6): take ids from a result (entities, made, constraints, dimensions) or the sketch query, and do not guess the ids a command earlier in the same model_command array will make. A point input [x, y] is always a new point, also where a curve ends; to join a new curve to an end, give the end's id (the drawing tools' point inputs take an existing point id where the reference says so), or hold the two ends together afterwards with a coincident constraint (two curve ends become one point).";
+/// The longest server instructions, in characters (mitcad#1506): Claude
+/// Code before v2.1.296 keeps only the first 2,048 and later versions the
+/// first 4,096, without telling the user. What applies to one tool is in
+/// that tool's description, read when it is called.
+pub const INSTRUCTIONS_CHARS: usize = 2000;
 
-/// How the application's command ids are found (mitcad#1269).
-const UI_COMMAND_IDS: &str = "ui_command with search (\"\" for all, or words such as \"fillet\") lists the command registry's ids with whether an agent may run each; an unknown id is refused with the nearest ones.";
+/// The headless server's instructions (mitcad#1506): only what applies
+/// across tools, the most important first.
+const HEADLESS_INSTRUCTIONS: &str = "Local headless CAD documents: document_create or document_open gives a handle; use the explicit document handle on every call. Documents last until closed or the server exits; files are confined to the configured workspace. A design can hold comments, notes pinned to features, faces, edges and points for an agent: read the open ones first with model_query {\"query\": \"comments\", \"status\": \"open\"}, and after the change each asks for, put {\"cmd\": \"address_comment\", \"id\": ..., \"resolution\": \"<what was done, briefly>\"} in the same model_command array as that change; resolving comments is left to the user. Look up commands, queries, feature types and their fields with model_reference (no arguments: its contents and every permitted name; then one section, query, command, feature or search). How to model well here: model_reference {\"guide\": \"index\"}. JSON numbers are millimeters and radians; write \"90 deg\" for degrees. They are millimeters also in a design in another length unit (the document query's units.length): convert the user's lengths, or write them as text, read in that unit (\"0.875\", \"0.875 in\"). Place a part or a sketch on an existing face, construction plane, axis or point where there is one (a primitive's at, a sketch's plane), so that it follows the model; a fixed plane ({\"origin\", \"normal\"}) stays where it is written. Unless the user asks otherwise, make every sketch fully constrained and dimensioned: dimensions for the sizes that matter (named parameters where a value is used again) and constraints for the rest, tied to the origin or existing geometry, until the sketch query's dof is 0. A model_command array runs in order as one undo step and stops at the first refusal (undoing the entries before it) or failed feature; a query is one object. Each tool's description holds its own rules.";
+
+/// The live server's instructions (mitcad#1506): only what applies across
+/// tools, the most important first.
+const LIVE_INSTRUCTIONS: &str = "Control the documents open in the Mitcad application, alongside its user. document_list gives every handle and the active flag. Pass document to target a specific design; omitting it uses the active design (a chat agent's own, or the last one it made with document_new). Comments first: the user pins notes for you (\"make this hole an M6 thread\") to features, faces, edges and points; ui_state's comments.open counts the open ones. Read them before other work (mitcad://comments, or model_query {\"query\": \"comments\", \"status\": \"open\"}); after the change one asks for, address it in the same model_command array, {\"cmd\": \"address_comment\", \"id\": \"C3\", \"resolution\": \"<what was done, briefly>\"}, so both undo together; resolving comments is left to the user. Look up commands, queries, feature types and their fields with model_reference (no arguments: its contents and every permitted name; then one section, query, command, feature or search). How to model well here: model_reference {\"guide\": \"index\"}. JSON numbers are millimeters and radians; write \"90 deg\" for degrees. They are millimeters also in a design in another length unit (the document query's units.length): convert the user's lengths, or write them as text, read in that unit (\"0.875\", \"0.875 in\"). Place a part or a sketch on an existing face, construction plane, axis or point where there is one (a primitive's at, a sketch's plane), so that it follows the model; a fixed plane ({\"origin\", \"normal\"}) stays where it is written. Unless the user asks otherwise, make every sketch fully constrained and dimensioned: dimensions for the sizes that matter (named parameters where a value is used again) and constraints for the rest, tied to the origin or existing geometry, until the sketch query's dof is 0. A model_command array runs in order as one undo step and stops at the first refusal (undoing the entries before it) or failed feature. Each tool's description holds its own rules.";
+
+/// The instructions `initialize` gives: one text per profile, so that a
+/// later discovery answer can give the same (mitcad#1506).
+fn instructions(profile: Profile) -> &'static str {
+    match profile {
+        Profile::Headless => HEADLESS_INSTRUCTIONS,
+        Profile::Live => LIVE_INSTRUCTIONS,
+    }
+}
 
 /// Data returned by a document tool. Errors remain visible to the model.
 pub struct ToolResult {
@@ -169,13 +195,18 @@ impl<B: Backend> Session<B> {
             } => Some(match self.backend.call(&name, &arguments) {
                 Ok(mut result) => {
                     if result.is_error {
-                        explain_refusal(&name, &arguments, &mut result.value);
+                        explain_refusal(&name, &arguments, &mut result.value, &self.vocabulary);
                     }
-                    success(&id, tool_content(result.value, result.is_error))
+                    // A preview image as an image block (mitcad#1486).
+                    if name == "model_render" && !result.is_error {
+                        success(&id, image_content(result.value))
+                    } else {
+                        success(&id, tool_content(result.value, result.is_error))
+                    }
                 }
                 Err(message) => {
                     let mut value = json!({"error": message});
-                    explain_refusal(&name, &arguments, &mut value);
+                    explain_refusal(&name, &arguments, &mut value, &self.vocabulary);
                     success(&id, tool_content(value, true))
                 }
             }),
@@ -285,6 +316,8 @@ impl<B: Backend> Session<B> {
                         if live {
                             resources.push(comments::resource());
                         }
+                        // The guides mirrored (mitcad#1508).
+                        resources.extend(guide::resources());
                         json!({"resources": resources})
                     }
                     "resources/subscribe" | "resources/unsubscribe" => {
@@ -295,15 +328,16 @@ impl<B: Backend> Session<B> {
                                 "uri must be a string",
                             ));
                         };
-                        if uri != COMMANDS_URI && uri != COMMENTS_URI {
+                        if uri != COMMANDS_URI && uri != COMMENTS_URI && guide::read(uri).is_none()
+                        {
                             return Dispatch::response(error(
                                 Some(id),
                                 -32002,
                                 "Unknown resource URI",
                             ));
                         }
-                        // The reference never changes while connected; the
-                        // comments notify (mitcad#1119).
+                        // The reference and the guides never change while
+                        // connected; the comments notify (mitcad#1119).
                         if method == "resources/subscribe" {
                             self.subscriptions.insert(uri.to_owned());
                         } else {
@@ -335,6 +369,9 @@ impl<B: Backend> Session<B> {
                                 ),
                             });
                         }
+                        if let Some(contents) = guide::read(uri) {
+                            return Dispatch::response(success(id, contents));
+                        }
                         if uri != COMMANDS_URI {
                             return Dispatch::response(error(
                                 Some(id),
@@ -342,10 +379,11 @@ impl<B: Backend> Session<B> {
                                 "Unknown resource URI",
                             ));
                         }
+                        // As agents see it (mitcad#1509).
                         json!({"contents": [{
                             "uri": COMMANDS_URI,
                             "mimeType": "text/markdown",
-                            "text": COMMANDS_REFERENCE
+                            "text": reference::reference_text(&self.vocabulary)
                         }]})
                     }
                     _ => unreachable!(),
@@ -384,20 +422,6 @@ impl<B: Backend> Session<B> {
         self.phase = Phase::AwaitingInitialized;
         // Its comment commands carry its name (mitcad#1119).
         self.author = comments::author_name(params["clientInfo"]["name"].as_str().unwrap_or(""));
-        let instructions = match self.profile {
-            Profile::Headless => {
-                "Local headless CAD documents. A design can hold comments, notes pinned to features, faces, edges and points for an agent: read the open ones with model_query {\"query\": \"comments\", \"status\": \"open\"} first, and after the change each asks for, put {\"cmd\": \"address_comment\", \"id\": ..., \"resolution\": \"<what was done, briefly>\"} in the same model_command array as that change; resolving comments is left to the user. Look up commands, queries, feature types and their fields with model_reference: without arguments it gives the reference's contents and every name this server permits, then one section, query, command, feature type or search at a time (the resource mitcad://reference/commands is the whole reference, about 1 MB). Use the explicit document handle on every call. Files are confined to the configured workspace. A model_command is one command object or an array of them run in order (stopping at the first refusal, which undoes the ones before it, or at the first failed feature); its result lists what it changed (timeline: full gives the whole timeline and bodies). Queries are single objects. JSON numbers are millimeters and radians; write \"90 deg\" for degrees. Place a part or a sketch on a reference to an existing face, construction plane, axis or point where there is one (a primitive's at, a sketch's plane), so that it follows the model; a fixed plane ({\"origin\", \"normal\"}) stays where it is written and does not follow the model. Unless the user asks otherwise, make every sketch fully constrained and dimensioned: dimensions for the sizes that matter (named parameters where a value is used again) and constraints for the rest, tied to the origin or existing geometry, until the sketch query's dof is 0. Documents last until closed or the server exits."
-            }
-            Profile::Live => {
-                "Control the documents open in the Mitcad application, alongside its user. Call document_list to obtain every handle and the active flag. Pass document to target a specific design; omitting it uses the active design. A chat agent remains bound to its own design, or to the last one it made with document_new. Handles become invalid when their document is closed or replaced. Comments first: the user pins comments (notes such as \"make this hole an M6 thread\") to features, faces, edges and points for you; ui_state's comments.open counts the open ones. Read the open comments before other work (the resource mitcad://comments, which notifies subscribers when comments change, or model_query {\"query\": \"comments\", \"status\": \"open\"}; ui_select or ui_camera with comment shows one's target). After the change a comment asks for, address it in the same model_command array as that change, {\"cmd\": \"address_comment\", \"id\": \"C3\", \"resolution\": \"<what was done, briefly>\"}, so both undo together; resolving comments is left to the user. Look up commands, queries, feature types and their fields with model_reference: without arguments it gives the reference's contents and every name this server permits, then one section, query, command, feature type or search at a time (the resource mitcad://reference/commands is the whole reference, about 1 MB). A model_command is one command object or an array of them run in order as one undo step (stopping at the first refusal, which undoes the ones before it, or at the first failed feature); its result lists what it changed (timeline: full gives the whole timeline and bodies). Queries are single objects. JSON numbers are millimeters and radians; write \"90 deg\" for degrees. Place a part or a sketch on a reference to an existing face, construction plane, axis or point where there is one (a primitive's at, a sketch's plane), so that it follows the model; a fixed plane ({\"origin\", \"normal\"}) stays where it is written and does not follow the model. Unless the user asks otherwise, make every sketch fully constrained and dimensioned: dimensions for the sizes that matter (named parameters where a value is used again) and constraints for the rest, tied to the origin or existing geometry, until the sketch query's dof is 0 (ui_state shows the Sketch Palette's warnings). Queries work at any time except while the model computes (the result then says busy and when to retry). While a sketch is open, its sketch.* commands go through the sketch session; other model commands wait until the sketch or command panel is finished, and editing is refused when the document is read-only. ui_state shows what the user sees (mode, selection, Sketch Palette warnings, messages), ui_log the application's log, ui_screenshot the view; ui_select points at entities, ui_command runs the application's commands by id, ui_camera reads or sets the view's camera (and frames a box, the shown bodies or the selection) for screenshots. document_save saves to the document's own path, or with path (Save As) into a folder the user allows agents to use; document_open opens a design from such a folder in place of the selected document; document_new makes an empty design beside the open ones (in such a folder, or the current project's top folder, or untitled), and your calls without a handle go to it; document_list lists the allowed folders; model_export writes the bodies (3MF, STL, STEP, drawings, ...) to a new file in such a folder without changing the document, and ui_screenshot can write its image there too. Changes you make are labeled (agent) in the undo text and undo with Ctrl+Z. File imports and closing are not available through this connection. Disconnecting leaves the application's document open, including unsaved changes."
-            }
-        };
-        // Ids an agent should not guess (mitcad#1269): a sketch's, and in
-        // the application the command registry's.
-        let instructions = match self.profile {
-            Profile::Headless => format!("{instructions} {SKETCH_IDS}"),
-            Profile::Live => format!("{instructions} {SKETCH_IDS} {UI_COMMAND_IDS}"),
-        };
         // The live comments resource notifies its subscribers (mitcad#1119).
         let resources = match self.profile {
             Profile::Headless => json!({}),
@@ -409,7 +433,7 @@ impl<B: Backend> Session<B> {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {}, "resources": resources},
                 "serverInfo": {"name": "mitcad", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": instructions
+                "instructions": instructions(self.profile)
             }),
         )
     }
@@ -487,9 +511,9 @@ fn mcp_defaults(name: &str, arguments: &Value) -> Value {
 
 /// A refused `model_command` that misses fields gets the reference of its
 /// feature type or command (mitcad#714).
-fn explain_refusal(name: &str, arguments: &Value, value: &mut Value) {
+fn explain_refusal(name: &str, arguments: &Value, value: &mut Value, vocabulary: &Vocabulary) {
     if name == "model_command" {
-        reference::explain_refusal(arguments, value);
+        reference::explain_refusal(arguments, value, vocabulary);
     }
 }
 
@@ -628,11 +652,12 @@ impl LiveSession {
             command_outcome(&mut value)
         } else {
             if is_error {
-                explain_refusal(&name, &arguments, &mut value);
+                explain_refusal(&name, &arguments, &mut value, &self.session.vocabulary);
             }
             is_error
         };
-        let content = if name == "ui_screenshot" && !is_error {
+        // The live model_render's pictures too (mitcad#1487).
+        let content = if matches!(name.as_str(), "ui_screenshot" | "model_render") && !is_error {
             image_content(value)
         } else {
             tool_content(value, is_error)
@@ -646,21 +671,40 @@ impl LiveSession {
 /// the format and `mime_type`. A result without an image (one written to
 /// a file) stays text.
 fn image_content(mut value: Value) -> Value {
-    let data = value
+    let mut images = Vec::new();
+    if let Some(Value::String(data)) = value
         .as_object_mut()
-        .and_then(|fields| fields.remove("image_base64"));
-    let Some(Value::String(data)) = data else {
+        .and_then(|fields| fields.remove("image_base64"))
+    {
+        images.push(data);
+    }
+    // model_render's views (mitcad#1487): an image block per view, in
+    // their order.
+    if let Some(views) = value.get_mut("views").and_then(Value::as_array_mut) {
+        for view in views {
+            if let Some(Value::String(data)) = view
+                .as_object_mut()
+                .and_then(|fields| fields.remove("image_base64"))
+            {
+                images.push(data);
+            }
+        }
+    }
+    if images.is_empty() {
         return tool_content(value, false);
-    };
+    }
     let mime = value["mime_type"]
         .as_str()
         .unwrap_or("image/png")
         .to_owned();
+    let mut content = vec![json!({"type": "text", "text": value.to_string()})];
+    content.extend(
+        images
+            .into_iter()
+            .map(|data| json!({"type": "image", "data": data, "mimeType": mime})),
+    );
     json!({
-        "content": [
-            {"type": "text", "text": value.to_string()},
-            {"type": "image", "data": data, "mimeType": mime}
-        ],
+        "content": content,
         "structuredContent": value,
         "isError": false
     })
@@ -673,18 +717,65 @@ fn image_content(mut value: Value) -> Value {
 /// command reference) go to the top level, an empty list when none failed.
 /// The command failed (true: `isError`) only when a feature it added or
 /// edited fails; a failure elsewhere in the timeline is listed, not the
-/// command's error.
+/// command's error. That error's `error` text says the feature stays in
+/// the timeline and how to remove it (mitcad#1481).
 pub fn command_outcome(value: &mut Value) -> bool {
     let failed = value
         .pointer("/result/failed_features")
         .filter(|failed| failed.is_array())
         .cloned()
         .unwrap_or_else(|| json!([]));
-    let is_error = failed
+    let own: Vec<&Value> = failed
         .as_array()
-        .is_some_and(|failed| failed.iter().any(|f| f["edited"] == true));
+        .into_iter()
+        .flatten()
+        .filter(|f| f["edited"] == true)
+        .collect();
+    let is_error = !own.is_empty();
+    if is_error {
+        let text = failed_feature_error(value, &own);
+        value["error"] = json!(text);
+    }
     value["failed_features"] = failed;
     is_error
+}
+
+/// The error text of a command whose added or edited features fail
+/// (mitcad#1481): the feature is applied and stays, as in the UI, so the
+/// text says so and how to remove it. An array's entry is named by its
+/// index.
+fn failed_feature_error(value: &Value, own: &[&Value]) -> String {
+    let added = value.pointer("/result/uid");
+    let mut text = own
+        .iter()
+        .map(|f| {
+            let uid = f["uid"].as_str().unwrap_or("?");
+            let how = if added.and_then(Value::as_str) == Some(uid) {
+                "added"
+            } else {
+                "changed"
+            };
+            format!(
+                "{uid} ({}) was {how} but failed: {}. It stays in the timeline; edit it, or \
+                 remove it with undo or delete_feature",
+                f["name"].as_str().unwrap_or(uid),
+                f["error"].as_str().unwrap_or("unknown error")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(". ");
+    if value.get("results").is_some() {
+        let entry = value["stopped_at"]
+            .as_u64()
+            .or_else(|| value["ran"].as_u64().and_then(|ran| ran.checked_sub(1)));
+        if let Some(i) = entry {
+            text = format!("commands[{i}]: {text}");
+        }
+        if value.get("stopped_at").is_some() {
+            text.push_str("; the entries after it did not run");
+        }
+    }
+    text
 }
 
 fn valid_id(id: &Value) -> bool {
@@ -796,6 +887,8 @@ fn bounded_response(response: Value) -> Value {
     }
 }
 
+#[cfg(test)]
+mod guide_tests;
 #[cfg(test)]
 mod reference_tests;
 #[cfg(test)]

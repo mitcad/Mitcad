@@ -18,6 +18,13 @@
 //! item's, mitcad#69). Deadlines are on the import's clock ([`now`],
 //! mitcad#874): the time the process's work took, without the time its
 //! threads waited for a processor that other work held.
+//!
+//! The memory guard of a command ([`memory_guard`], mitcad#1480) cancels
+//! a monitor with its reason ([`RecomputeMonitor::cancel_because`]), so
+//! that the command's error says why instead of "canceled".
+
+// The memory guard of model commands (mitcad#1480).
+pub mod memory_guard;
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
@@ -55,6 +62,9 @@ pub struct RecomputeMonitor {
     /// A question the job puts to its user, and the user's answer
     /// ([`RecomputeMonitor::ask`]).
     question: Mutex<Question>,
+    /// Why it was cancelled, when not on the user's request
+    /// ([`RecomputeMonitor::cancel_because`]).
+    reason: Mutex<Option<String>>,
 }
 
 /// A job's question to its user ([`RecomputeMonitor::ask`]).
@@ -114,6 +124,7 @@ impl Default for RecomputeMonitor {
             parents: Vec::new(),
             deadline: None,
             question: Mutex::new(Question::default()),
+            reason: Mutex::new(None),
         }
     }
 }
@@ -153,6 +164,31 @@ impl RecomputeMonitor {
     pub fn cancel(&self) {
         // Nothing is published with the flag, so no ordering is needed.
         self.cancel.store(true, Ordering::Relaxed);
+    }
+
+    /// Cancels as [`RecomputeMonitor::cancel`] does, for `reason` rather
+    /// than on the user's request (the memory guard, mitcad#1480): what
+    /// the cancelled work fails with says it. The first reason given
+    /// stays; a monitor cancelled already (by the user) takes none.
+    pub fn cancel_because(&self, reason: &str) {
+        {
+            let mut kept = self.reason.lock().unwrap_or_else(PoisonError::into_inner);
+            if kept.is_none() && !self.is_cancelled() {
+                *kept = Some(reason.to_owned());
+            }
+        }
+        self.cancel();
+    }
+
+    /// Why it was cancelled ([`RecomputeMonitor::cancel_because`]), or a
+    /// parent's reason; None while it is not cancelled for a reason (also
+    /// when the user cancelled it).
+    pub fn cancel_reason(&self) -> Option<String> {
+        self.reason
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .or_else(|| self.parents.iter().find_map(|p| p.cancel_reason()))
     }
 
     /// Whether it was cancelled, one of its parents was, or its deadline

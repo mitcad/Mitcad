@@ -39,6 +39,12 @@ bool valueHintWorthShowing(const QString& text, bool namesParameters) {
   if (namesParameters) {
     return true;
   }
+  // An inch or foot mark after a number (`.875"`, `3' 6"`, mitcad#1531):
+  // the hint shows the converted value.
+  static const QRegularExpression unitMark(QStringLiteral(R"([\d.,]\s*["'])"));
+  if (text.contains(unitMark)) {
+    return true;
+  }
   // A number with an optional sign, decimal point or comma, exponent and
   // one unit word after it ("-8 mm", "+3 mm", "-5°", "1e-3 mm").
   static const QRegularExpression signedNumber(

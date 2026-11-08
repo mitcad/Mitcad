@@ -8,6 +8,11 @@
 #     y = 10, picked as the first and the second curves: the half circle
 #     lifted to y = 10, drawn in the view and listed under Construction in
 #     the Browser, its light bulb hiding and showing it;
+#   - the preview (mitcad#1496): the arc and a line beyond its reach
+#     refused with the model's message and no preview curve; the arc and
+#     the line previewed as the lifted half circle ("Preview curve: N
+#     point(s) from (20, 10, 0) to (-20, 10, 0)", either way round) before
+#     Cancel and before OK, none after Cancel, and nothing added;
 #   - a 4 mm circle on YZ swept along it, the path picked on the timeline:
 #     a half ring, pi 2^2 times the half circle's 20 pi (Pappus);
 #   - the file keeps the sweep's path as the curve's feature; the sweep and
@@ -28,6 +33,7 @@
 # check-all sources: app/commands/SketchCommands.cpp app/framework/SelectionScope.cpp app/framework/Selection.cpp
 # check-all sources: app/framework/CommandSession.cpp core/model/src/features/sketch.rs
 # check-all sources: core/model/src/document/intersection_curves.rs app/sketch
+# check-all sources: core/model/src/document/datums.rs app/framework/ModelShapes.cpp app/framework/CommandSessionHold.cpp
 
 source "$(dirname "$0")/ui-test-lib.sh"
 
@@ -47,7 +53,9 @@ expect_file() {
 
 # Sketch1 (F1) on XZ: the arc c1 about the origin from (20, 0) round to
 # (-20, 0), the half circle below XY (the sketch's y is -Z); Sketch2 (F2)
-# on XY: the line c1 from (-30, 10) to (30, 10); Sketch3 (F3) on YZ: a 4 mm
+# on XY: the line c1 from (-30, 10) to (30, 10), and the line c4 from
+# (25, -10) to (30, -10), beyond the arc's reach (no crossing with it,
+# mitcad#1496); Sketch3 (F3) on YZ: a 4 mm
 # circle at (20, 10), the curve's top (0, 10, -20) (the sketch's x is -Z).
 cat > "$WORK/curve.json" << EOF
 [
@@ -56,6 +64,7 @@ cat > "$WORK/curve.json" << EOF
    "end": [-20, 0]},
   {"cmd": "sketch.create", "plane": "xy"},
   {"cmd": "sketch.add_line", "sketch": "F2", "start": [-30, 10], "end": [30, 10]},
+  {"cmd": "sketch.add_line", "sketch": "F2", "start": [25, -10], "end": [30, -10]},
   {"cmd": "sketch.create", "plane": "yz"},
   {"cmd": "sketch.add_circle", "sketch": "F3", "center": [20, 10], "diameter": 4}
 ]
@@ -66,6 +75,67 @@ EOF
 ui_start_display
 ui_start_app --open "$WORK/curve.mitcad"
 ui_step "fit (F6)"                         ui_key F6
+
+# curve_since_mark: the last preview curve logged since the mark.
+curve_since_mark() {
+  tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Preview curve: " | tail -1 | sed 's/.*Preview curve: //'
+}
+# The half circle lifted to y = 10, its ends at (+-20, 10, 0) in either
+# order (mitcad#1496).
+CURVE_ENDS='^[0-9]+ point\(s\) from \((20|-20)\.000, 10\.000, 0\.000\) to \((-20|20)\.000, 10\.000, 0\.000\)$'
+# expect_preview_curve what: the preview curve logged since the mark, the
+# lifted half circle with at least a few points.
+expect_preview_curve() {
+  ui_expect_new "Preview curve: " "$1: a preview curve logged"
+  local curve
+  curve=$(curve_since_mark)
+  echo "$curve" | grep -qE "$CURVE_ENDS" || ui_fail "$1: the preview curve is '$curve'"
+  [ "${curve%% *}" -ge 3 ] || ui_fail "$1: only ${curve%% *} point(s)"
+  [ "$(echo "$curve" | grep -oE '\((-?20)\.000' | sort -u | wc -l)" -eq 2 ] ||
+    ui_fail "$1: both ends of '$curve' at the same place"
+  echo "ok   $1: $curve"
+}
+
+echo "--- Intersection Curve of curves that do not cross: refused, no preview curve (mitcad#1496)"
+ui_mark
+ui_step "intersection curve (search)"      ui_command "Intersection Curve"
+ui_expect_new "Command Intersection Curve started" "the command started"
+ui_step "the first curves input"           ui_click_logged "Panel Intersection Curve input first"
+ui_step "pick the arc"                     ui_click_logged "Sketch entity F1/c1"
+ui_expect_new "Intersection Curve First Curves: 1 sketch curve [sketch curve c1 of F1]" "the arc picked"
+ui_step "the second curves input"          ui_click_logged "Panel Intersection Curve input second"
+ui_step "pick the line beyond the arc"     ui_click_logged "Sketch entity F2/c4"
+ui_expect_new "Intersection Curve Second Curves: 1 sketch curve [sketch curve c4 of F2]" "the far line picked"
+ui_expect_new "Preview Intersection Curve: failed: " "the preview failed"
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Preview Intersection Curve: failed: " | tail -1 |
+  grep -q "do not cross" || ui_fail "the failure does not say the curves do not cross"
+echo "ok   the model's message: the curves do not cross"
+grep -qE "Preview curve: [0-9]" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG") &&
+  ui_fail "a failed preview drew a curve"
+echo "ok   no preview curve for the failure"
+ui_step "cancel (Esc)"                     ui_key Escape
+ui_expect_new "Command Intersection Curve cancelled" "nothing added"
+
+echo "--- The preview curve while the panel is open, none after Cancel (mitcad#1496)"
+ui_mark
+ui_step "intersection curve (search)"      ui_command "Intersection Curve"
+ui_expect_new "Command Intersection Curve started" "the command started"
+ui_step "the first curves input"           ui_click_logged "Panel Intersection Curve input first"
+ui_step "pick the arc"                     ui_click_logged "Sketch entity F1/c1"
+ui_expect_new "Intersection Curve First Curves: 1 sketch curve [sketch curve c1 of F1]" "the arc picked"
+ui_step "the second curves input"          ui_click_logged "Panel Intersection Curve input second"
+ui_step "pick the line"                    ui_click_logged "Sketch entity F2/c1"
+ui_expect_new "Intersection Curve Second Curves: 1 sketch curve [sketch curve c1 of F2]" "the line picked"
+ui_expect_new "Preview Intersection Curve: ok" "previewed"
+expect_preview_curve "before Cancel"
+ui_mark
+ui_step "cancel (Esc)"                     ui_key Escape
+ui_expect_new "Command Intersection Curve cancelled" "cancelled"
+ui_expect_new "Preview curve: none" "no preview curve after Cancel"
+ui_sync
+grep -qE "Added intersection curve|Construction shown: IntersectionCurve" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG") &&
+  ui_fail "Cancel left a curve"
+echo "ok   no curve after Cancel"
 
 echo "--- Intersection Curve of the arc and the line"
 ui_mark
@@ -78,6 +148,7 @@ ui_step "the second curves input"          ui_click_logged "Panel Intersection C
 ui_step "pick the line"                    ui_click_logged "Sketch entity F2/c1"
 ui_expect_new "Intersection Curve Second Curves: 1 sketch curve [sketch curve c1 of F2]" "the line picked"
 ui_expect_new "Preview Intersection Curve: ok" "previewed"
+expect_preview_curve "before OK"
 ui_step "OK (Enter)"                       ui_key Return
 ui_expect_new "Added intersection curve of 1 and 1 curve(s)" "the curve added"
 ui_expect_new "Construction shown: IntersectionCurve1" "the curve drawn in the view"
@@ -127,6 +198,8 @@ ui_step "double-click IntersectionCurve1"  ui_double_click_logged "Timeline Inte
 ui_expect_new "Editing F4 with Intersection Curve" "editing IntersectionCurve1"
 ui_expect_new "Intersection Curve First Curves: 1 sketch curve [sketch curve c1 of F1]" "the arc"
 ui_expect_new "Intersection Curve Second Curves: 1 sketch curve [sketch curve c1 of F2]" "the line"
+ui_expect_new "Preview Intersection Curve: ok" "previewed as it is"
+expect_preview_curve "editing IntersectionCurve1"
 ui_step "cancel (Esc)"                     ui_key Escape
 ui_expect_new "Command Intersection Curve cancelled" "nothing changed"
 

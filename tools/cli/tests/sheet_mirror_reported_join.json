@@ -1,0 +1,15 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT. The reported design of GitHub #188 (mitcad#1450; opened with --open, never committed) with its mirror (F6) joining the copy: one valid sheet, both halves' panels one panel, folded again by the second fold (F8) and by a fold on the mirrored half; its Flat Pattern unfolds the whole part, twice the face's area. The sketch on the copy's panel (F9) has no body left to stand on and is suppressed; the third fold's line is drawn on the joined panel instead."},
+  {"cmd":"edit_feature","uid":"F6","def":{"type":"mirror","objects":{"type":"bodies","bodies":["F3.b0"]},"plane":"yz","combine":true}},
+  {"cmd":"suppress_feature","uid":"F9"},
+  {"expect":{"feature":"F6","status":"ok","bodies":1}},
+  {"expect":{"feature":"F8","status":"ok"}},
+  {"expect":{"query":{"query":"sheet_state","body":"F3.b0"},"result":{"status":"valid"}}},
+  {"expect":{"query":{"query":"flat_pattern","body":"F3.b0"},"result":{"status":"valid","area":15151.384623874335,"regions":[{}]}}},
+  {"cmd":"sketch.create","plane":{"face":"F3:sheet_back(0)","body":"F3.b0"}},
+  {"cmd":"sketch.add_line","sketch":"F10","start":[-31.759928299745336,123.7593531750601],"end":[-76.20460598182916,36.721859380979254]},
+  {"cmd":"add_feature","def":{"type":"sheet_fold","body":"F3.b0","panel":{"feature":"F3","slot":0},"line":{"sketch":"F10","curve":"c1"},"stationary_side":"left","angle":0.5235987755982988,"position":"bend_line"}},
+  {"expect":{"feature":"F11","status":"ok"}},
+  {"expect":{"query":{"query":"sheet_state","body":"F3.b0"},"result":{"status":"valid"}}},
+  {"expect":{"query":{"query":"flat_pattern","body":"F3.b0"},"result":{"status":"valid","area":15151.384623874335,"regions":[{}]}}}
+]

@@ -11,6 +11,7 @@
 
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRep_Builder.hxx>
 #include <Geom_BSplineCurve.hxx>
@@ -152,6 +153,17 @@ std::optional<gp_Pnt> pointFrom(const QJsonValue& xyz) {
     return std::nullopt;
   }
   return gp_Pnt(a.at(0).toDouble(), a.at(1).toDouble(), a.at(2).toDouble());
+}
+
+TopoDS_Shape polylineShape(const QJsonArray& points) {
+  if (points.size() < 2) {
+    return TopoDS_Shape();
+  }
+  BRepBuilderAPI_MakePolygon polygon;
+  for (const QJsonValue& point : points) {
+    polygon.Add(pointOf(point));
+  }
+  return polygon.IsDone() ? TopoDS_Shape(polygon.Wire()) : TopoDS_Shape();
 }
 
 gp_Vec vectorOf(const QJsonValue& xyz) {

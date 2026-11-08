@@ -3,6 +3,7 @@
 #include "MainWindow.hpp"
 #include "framework/AppSettings.hpp"
 #include "framework/CommandRegistry.hpp"
+#include "framework/InterfaceSize.hpp"
 #include "platform/MacChrome.hpp"
 
 #include <QAction>
@@ -76,7 +77,8 @@ MainWindow* WindowManager::createWindow(bool demo, MainWindow* source, bool sepa
   if (!m_nativeUi) {
     // Floating chrome has a small layout minimum. Every new document needs
     // the same usable viewport as its source, not that minimum-sized shell.
-    window->resize(sourceGuard ? sourceGuard->window()->size() : QSize(1280, 800));
+    // Within the screen at a larger Interface size (mitcad#1495).
+    window->resize(sourceGuard ? sourceGuard->window()->size() : startWindowSize());
   }
   window->m_windowManager = this;
   window->setProperty("documentWindowHandle", QStringLiteral("window-%1").arg(m_nextHandle++));

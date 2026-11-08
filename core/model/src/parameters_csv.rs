@@ -381,12 +381,22 @@ pub fn write(parameters: &Parameters, favorites: &BTreeSet<ParamId>) -> String {
 
 /// Identifiers of an expression (names, units, functions), with their byte
 /// ranges; enough to rename parameters textually (as the `.f3d` import
-/// does). Words in quoted texts (`'Width'`, mitcad#664) are none.
+/// does). Words in quoted texts (`'Width'`, mitcad#664) are none; a quote
+/// right after a number is an inch or foot mark (`3' 6" + d1`, mitcad#1531),
+/// as the expression lexer reads it.
 pub(crate) fn identifiers(expression: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut chars = expression.char_indices().peekable();
+    let mut after_number = false;
     while let Some((start, c)) = chars.next() {
-        if c == '\'' || c == '"' {
+        let number_before = after_number;
+        after_number = c.is_whitespace() && number_before;
+        if (c == '\'' || c == '"') && number_before {
+            // `''` is the inch mark too.
+            if c == '\'' && chars.peek().is_some_and(|&(_, after)| after == '\'') {
+                chars.next();
+            }
+        } else if c == '\'' || c == '"' {
             // To the closing quote; a doubled one is a quote inside.
             while let Some((_, next)) = chars.next() {
                 if next == c {
@@ -417,13 +427,17 @@ pub(crate) fn identifiers(expression: &str) -> Vec<(usize, usize)> {
             }
         } else if c.is_ascii_digit() || c == '.' {
             // Skip the rest of the number, including an exponent.
+            let mut unit = false;
             while let Some(&(_, c)) = chars.peek() {
                 if c.is_ascii_alphanumeric() || c == '.' {
+                    unit = unit || (c.is_ascii_alphabetic() && !matches!(c, 'e' | 'E'));
                     chars.next();
                 } else {
                     break;
                 }
             }
+            // A mark may follow the number, not a unit name (`5 mm'`).
+            after_number = !unit;
         }
     }
     out
@@ -576,6 +590,11 @@ mod tests {
         assert_eq!(
             rename_in("'mil ''mil''' & mil & \"mil\"", &renamed),
             "'mil ''mil''' & mil_1 & \"mil\""
+        );
+        // Inch and foot marks after numbers start no text (mitcad#1531).
+        assert_eq!(
+            rename_in("3' 6\" + mil * 2'' + 1e1 \" & 'mil'", &renamed),
+            "3' 6\" + mil_1 * 2'' + 1e1 \" & 'mil'"
         );
         assert_eq!(free_name("mil", &BTreeSet::new()), "mil_1");
         assert_eq!(free_name("a b", &BTreeSet::new()), "a_b");

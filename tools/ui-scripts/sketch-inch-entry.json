@@ -1,0 +1,8 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design in inches for tools/ui-scripts/sketch-inch-entry.mitcad-ui (mitcad#1452): Sketch1 on XY, made while the design was in mm, holds a construction line across the place the steps draw in and a circle of 20 mm diameter dimensioned in mm (d1); then the design is set to inches."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_line", "sketch": "F1", "start": [-80, -40], "end": [80, 80], "construction": true},
+  {"cmd": "sketch.add_circle", "sketch": "F1", "center": [-40, 40], "diameter": 20},
+  {"cmd": "set_units", "length": "in"}
+]

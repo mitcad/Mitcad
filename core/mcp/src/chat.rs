@@ -212,6 +212,9 @@ pub(crate) fn pictures(request: &Value) -> Result<Vec<(&str, &str)>, String> {
 ///   `summary`, `state` or `error`), `index` (optional) → `groups` (`first`,
 ///   `last`, `count`, `failed`, `running`, `state`, `latest`, `head`) and
 ///   `group`, the one holding `index` (the panel's group rows, mitcad#983)
+/// - `units_context`: `length` (the design's length unit, as the document
+///   query gives it) → `context`: what a message tells the agent about it,
+///   empty in millimetres (mitcad#1452)
 pub fn request(request: &Value) -> Result<Value, String> {
     let op = request
         .get("op")
@@ -265,8 +268,41 @@ pub fn request(request: &Value) -> Result<Value, String> {
         "acp_command" => acp::command(request),
         "acp_handshake" => Ok(acp::handshake()),
         "acp_handshake_answer" => Ok(acp::handshake_answer(text_field(request, "output"))),
+        "units_context" => Ok(json!({"context": units_context(text_field(request, "length"))})),
         other => Err(format!("unknown chat op “{}”", crate::echoed(other))),
     }
+}
+
+/// What a chat message tells the agent about the design's length unit
+/// `length` (mitcad#1452): in a design that is not in millimetres, a length
+/// the user writes without a unit is in the design's unit, while the JSON
+/// numbers of MitCad's commands are millimetres in every design. An agent
+/// that took the user's `0.875` (inches) as a JSON number made a part
+/// 25.4 times too small. Empty in millimetres, which the instructions
+/// already say.
+fn units_context(length: &str) -> String {
+    let unit = length.trim();
+    if unit.is_empty() || unit == "mm" {
+        return String::new();
+    }
+    let size = match unit {
+        "um" => Some("0.001"),
+        "cm" => Some("10"),
+        "m" => Some("1000"),
+        "in" => Some("25.4"),
+        "ft" => Some("304.8"),
+        "mil" => Some("0.0254"),
+        "yd" => Some("914.4"),
+        _ => None,
+    };
+    let convert = size.map_or_else(String::new, |mm| format!(" (1 {unit} = {mm} mm)"));
+    format!(
+        "The design's length unit is {unit}: a length the user gives without a unit is in {unit}. \
+         JSON numbers in MitCad's commands are millimetres in every design, so convert such a \
+         length to millimetres{convert}, or give a value as text, which is read in the design's \
+         unit (\"0.875\" or \"0.875 {unit}\"); coordinates of positions (corner, center, at, \
+         start, end) are numbers in millimetres only."
+    )
 }
 
 /// [`request`] on JSON text, answered in JSON text; an error is an answer

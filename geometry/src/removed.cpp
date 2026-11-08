@@ -253,7 +253,8 @@ Shape box_solids(const std::vector<Bnd_Box>& boxes, double by) {
 
 // The body cut down to the boxes, each grown by `by`: the pieces of the
 // intersection, the body itself when a box holds all of it (the
-// intersection leaves it as it is, without pieces), none when the boxes
+// intersection's one piece since mitcad#1534; the test of the boxes below
+// stays for an intersection that leaves it untouched), none when the boxes
 // miss it.
 std::vector<ShapePtr> clipped(const Shape& body, const std::vector<Bnd_Box>& boxes, double by) {
   const BooleanResult common = boolean(BooleanOp::Intersect, {&body}, box_solids(boxes, by));

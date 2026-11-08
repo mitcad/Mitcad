@@ -1151,7 +1151,12 @@ fn repeat_body_places<K: Kernel>(
     }
     let combine = combine.joins();
     let mut changes = Vec::new();
+    let mut sheets = std::collections::BTreeMap::new();
     let mut merged: Vec<(BodyUid, K::Shape)> = Vec::new();
+    // The sheets of the bodies copies are joined to, as the joins leave
+    // them; None once one is an ordinary solid (mitcad#1462).
+    let mut joined_sheets: Vec<(BodyUid, Option<crate::sheet::SheetState>)> = Vec::new();
+    let mut pending = Vec::new();
     let mut next = 0u32;
     for (place, elements) in places.iter().zip(own) {
         let bodies = body_leaf(ctx, place.feature)?.unwrap_or_default();
@@ -1161,6 +1166,15 @@ fn repeat_body_places<K: Kernel>(
                 // Copies of a mesh body are not joined (mitcad#399).
                 ctx.require_surfaces(body, &source)?;
             }
+            // Copies of a sheet metal body as it was before its pattern
+            // are sheets (mitcad#1462).
+            let sheet = crate::sheet::body_copy::source_before(ctx, place.feature, body);
+            let at = place.at();
+            let steps: Vec<(FeatureUid, u32)> = place
+                .steps
+                .iter()
+                .map(|(_, inner)| (inner.feature, inner.index))
+                .collect();
             for element in elements {
                 let instance = Instance {
                     feature: ctx.uid,
@@ -1174,6 +1188,12 @@ fn repeat_body_places<K: Kernel>(
                     instance,
                     combine,
                 )?;
+                let uid = BodyUid::new(ctx.uid, next);
+                let transform = element.transform.after(&at);
+                let image = sheet
+                    .as_ref()
+                    .filter(|_| transform.is_orthogonal())
+                    .map(|s| crate::sheet::body_copy::image(s, &transform, uid));
                 if combine {
                     let target = match merged.iter().find(|(b, _)| *b == body) {
                         Some((_, shape)) => shape.clone(),
@@ -1184,23 +1204,91 @@ fn repeat_body_places<K: Kernel>(
                     // not stays a body of its own.
                     let joined = result.pieces.into_iter().find(|p| !p.sources.is_empty());
                     if let Some(piece) = joined.filter(|_| result.touched[0]) {
+                        // The body's sheet as the joins before left it.
+                        let entry = match joined_sheets.iter().position(|(b, _)| *b == body) {
+                            Some(entry) => entry,
+                            None => {
+                                let current = crate::sheet::body_copy::source(ctx, body);
+                                joined_sheets.push((body, current));
+                                joined_sheets.len() - 1
+                            }
+                        };
+                        let shape = match (joined_sheets[entry].1.clone(), &image) {
+                            // The two sheets merged into one.
+                            (Some(current), Some(image)) => {
+                                let key =
+                                    crate::sheet::body_copy::copy_key(body, &steps, element.index);
+                                let (state, rebuilt) = crate::sheet::body_copy::joined(
+                                    ctx,
+                                    &current,
+                                    image,
+                                    &key,
+                                    &piece.shape,
+                                )
+                                .map_err(|e| {
+                                    format!("sheet {body} cannot be joined to its copy: {e}")
+                                })?;
+                                joined_sheets[entry].1 = Some(state);
+                                rebuilt
+                            }
+                            (Some(_), None) => {
+                                joined_sheets[entry].1 = None;
+                                let why = if sheet.is_some() {
+                                    "it is joined to a scaled copy of it (scaling changes the \
+                                     sheet's thickness)"
+                                        .to_owned()
+                                } else {
+                                    format!(
+                                        "it is joined to a copy of it as it was before {}, \
+                                         which is not a sheet the copy can carry (ordinary \
+                                         modelling had made it an invalid sheet)",
+                                        ctx.feature_name(place.feature)
+                                    )
+                                };
+                                pending.push((vec![body], why));
+                                piece.shape
+                            }
+                            (None, _) => piece.shape,
+                        };
                         match merged.iter_mut().find(|(b, _)| *b == body) {
-                            Some(entry) => entry.1 = piece.shape,
-                            None => merged.push((body, piece.shape)),
+                            Some(entry) => entry.1 = shape,
+                            None => merged.push((body, shape)),
                         }
                         continue;
                     }
                 }
-                changes.push(BodyChange::Set(BodyUid::new(ctx.uid, next), copy));
+                match image {
+                    Some(image) => {
+                        sheets.insert(uid, crate::sheet::SheetChange::Set(image));
+                    }
+                    // A scaled copy of a sheet.
+                    None if sheet.is_some() => crate::sheet::body_copy::scaled(ctx, body),
+                    None => {}
+                }
+                changes.push(BodyChange::Set(uid, copy));
                 next += 1;
             }
         }
     }
+    // Sheets the joins took that the sheet-domain adapter re-derives are
+    // sheets again (mitcad#1462).
+    let derived = {
+        let results: Vec<(BodyUid, &K::Shape)> = merged.iter().map(|(b, s)| (*b, s)).collect();
+        crate::sheet::body_copy::settle(ctx, pending, &results)
+    };
     for (body, shape) in merged {
+        let state = match joined_sheets.iter().find(|(b, _)| *b == body) {
+            Some((_, Some(state))) => Some(state),
+            _ => derived.get(&body),
+        };
+        if let Some(state) = state {
+            sheets.insert(body, crate::sheet::SheetChange::Set(state.clone()));
+        }
         changes.push(BodyChange::Set(body, shape));
     }
     Ok(FeatureOutput {
         changes,
+        sheets,
         ..FeatureOutput::default()
     })
 }
@@ -1232,6 +1320,15 @@ fn repeat_body_places_joining_any<K: Kernel>(
             start.push((body, shape));
         }
     }
+    // The sheets of the bodies the copies may join, as the joins leave
+    // them (mitcad#1462).
+    let mut sheets = std::collections::BTreeMap::new();
+    let mut pending = Vec::new();
+    for (body, _) in &start {
+        if let Some(state) = crate::sheet::body_copy::source(ctx, *body) {
+            sheets.insert(*body, state);
+        }
+    }
     let mut joining = Joining::new(ctx.kernel, start);
     let mut next = 0u32;
     for (place, elements) in places.iter().zip(own) {
@@ -1239,6 +1336,14 @@ fn repeat_body_places_joining_any<K: Kernel>(
         for body in bodies {
             let source = source_body(ctx, place.feature, body)?;
             ctx.require_surfaces(body, &source)?;
+            // Copies of a sheet as it was before its pattern are sheets.
+            let sheet = crate::sheet::body_copy::source_before(ctx, place.feature, body);
+            let at = place.at();
+            let steps: Vec<(FeatureUid, u32)> = place
+                .steps
+                .iter()
+                .map(|(_, inner)| (inner.feature, inner.index))
+                .collect();
             for element in elements {
                 let instance = Instance {
                     feature: ctx.uid,
@@ -1252,21 +1357,49 @@ fn repeat_body_places_joining_any<K: Kernel>(
                     instance,
                     true,
                 )?;
-                let pieces = match join_any(ctx, &mut joining, &copy)? {
-                    Some(strays) => strays,
-                    None => vec![copy],
-                };
-                for piece in pieces {
-                    joining.add(ctx.kernel, BodyUid::new(ctx.uid, next), piece);
-                    next += 1;
+                let uid = BodyUid::new(ctx.uid, next);
+                let transform = element.transform.after(&at);
+                let image = sheet
+                    .as_ref()
+                    .filter(|_| transform.is_orthogonal())
+                    .map(|s| crate::sheet::body_copy::image(s, &transform, uid));
+                let key = crate::sheet::body_copy::copy_key(body, &steps, element.index);
+                let joined = join_any_sheets(
+                    ctx,
+                    &mut joining,
+                    &mut sheets,
+                    &mut pending,
+                    body,
+                    sheet.is_some(),
+                    image.as_ref(),
+                    &key,
+                    &copy,
+                )?;
+                match joined {
+                    None => {
+                        joining.add(ctx.kernel, uid, copy);
+                        next += 1;
+                        match image {
+                            Some(image) => {
+                                sheets.insert(uid, image);
+                            }
+                            None if sheet.is_some() => {
+                                crate::sheet::body_copy::scaled(ctx, body);
+                            }
+                            None => {}
+                        }
+                    }
+                    Some(strays) => {
+                        for stray in strays {
+                            joining.add(ctx.kernel, BodyUid::new(ctx.uid, next), stray);
+                            next += 1;
+                        }
+                    }
                 }
             }
         }
     }
-    Ok(FeatureOutput {
-        changes: joining.changes(),
-        ..FeatureOutput::default()
-    })
+    Ok(any_output(ctx, joining, &sheets, pending))
 }
 
 /// The elements other than the original that are not suppressed.
@@ -1854,6 +1987,7 @@ pub(crate) fn repeat<K: Kernel>(
         PatternObjects::Bodies { bodies } => {
             let combine = combine.joins();
             let mut changes = Vec::new();
+            let mut sheets = std::collections::BTreeMap::new();
             let count = bodies.len() as u32;
             for (j, body) in bodies.iter().enumerate() {
                 let shape = ctx.body(*body)?;
@@ -1861,7 +1995,15 @@ pub(crate) fn repeat<K: Kernel>(
                     // Copies of a mesh body are not joined (mitcad#399).
                     ctx.require_surfaces(*body, &shape)?;
                 }
+                // Copies of a sheet metal body are sheets (mitcad#1450).
+                let sheet = crate::sheet::body_copy::source(ctx, *body);
                 let mut merged = None;
+                let mut merged_sheet = None;
+                // Whether the body joined to its copies so far is a sheet:
+                // a scaled copy joined to it makes it an ordinary solid
+                // (mitcad#1462).
+                let mut joinable = sheet.is_some();
+                let mut pending = Vec::new();
                 // Skipped copies (mitcad#547): their numbers are the
                 // elements'.
                 for element in elements.iter().filter(|e| !skipped.contains(&e.index)) {
@@ -1873,25 +2015,92 @@ pub(crate) fn repeat<K: Kernel>(
                         combine,
                     )?;
                     let uid = BodyUid::new(ctx.uid, (element.index - 1) * count + j as u32);
+                    let image = sheet
+                        .as_ref()
+                        .filter(|_| element.transform.is_orthogonal())
+                        .map(|s| crate::sheet::body_copy::image(s, &element.transform, uid));
                     if combine {
                         let target = merged.as_ref().unwrap_or(&shape);
                         let result = combined(ctx, target, &copy)?;
                         // A copy that touches the original joins it; one
                         // that does not stays a body of its own.
                         let joined = result.pieces.into_iter().find(|p| !p.sources.is_empty());
-                        if let Some(piece) = joined.filter(|_| result.touched[0]) {
-                            merged = Some(piece.shape);
-                            continue;
+                        match (
+                            joined.filter(|_| result.touched[0]),
+                            image.as_ref().filter(|_| joinable),
+                        ) {
+                            // The two sheets merged into one (mitcad#1450).
+                            (Some(piece), Some(image)) => {
+                                let current = merged_sheet
+                                    .as_ref()
+                                    .or(sheet.as_ref())
+                                    .expect("a sheet with its image");
+                                let key =
+                                    crate::sheet::body_copy::copy_key(*body, &[], element.index);
+                                let (state, rebuilt) = crate::sheet::body_copy::joined(
+                                    ctx,
+                                    current,
+                                    image,
+                                    &key,
+                                    &piece.shape,
+                                )
+                                .map_err(|e| {
+                                    format!("sheet {body} cannot be joined to its copy: {e}")
+                                })?;
+                                merged = Some(rebuilt);
+                                merged_sheet = Some(state);
+                                continue;
+                            }
+                            (Some(piece), None) => {
+                                if joinable {
+                                    joinable = false;
+                                    merged_sheet = None;
+                                    pending.push((
+                                        vec![*body],
+                                        "it is joined to a scaled copy of it (scaling changes \
+                                         the sheet's thickness)"
+                                            .to_owned(),
+                                    ));
+                                }
+                                merged = Some(piece.shape);
+                                continue;
+                            }
+                            (None, Some(_)) => {
+                                return Err(format!(
+                                    "the copy of sheet {body} does not touch it: a sheet is \
+                                     joined to its copy where coplanar panels meet at a seam"
+                                ));
+                            }
+                            (None, None) => {}
                         }
+                    }
+                    match image {
+                        Some(image) => {
+                            sheets.insert(uid, crate::sheet::SheetChange::Set(image));
+                        }
+                        // A scaled copy of a sheet (mitcad#1462).
+                        None if sheet.is_some() => crate::sheet::body_copy::scaled(ctx, *body),
+                        None => {}
                     }
                     changes.push(BodyChange::Set(uid, copy));
                 }
                 if let Some(merged) = merged {
+                    // A sheet a scaled copy joined is one again where the
+                    // sheet-domain adapter re-derives it (mitcad#1462).
+                    let mut derived =
+                        crate::sheet::body_copy::settle(ctx, pending, &[(*body, &merged)]);
+                    if let Some(state) = derived.remove(body) {
+                        merged_sheet = Some(state);
+                    }
                     changes.push(BodyChange::Set(*body, merged));
+                }
+                if let Some(state) = merged_sheet {
+                    sheets.insert(*body, crate::sheet::SheetChange::Set(state));
                 }
             }
             Ok(FeatureOutput {
                 changes,
+                sheets,
                 ..FeatureOutput::default()
             })
         }
@@ -3089,20 +3298,26 @@ impl<S: Clone> Joining<S> {
     }
 }
 
+/// The bodies a `combine_any` copy reached (as they were named before the
+/// join) and the solids of it that touch none (mitcad#1462).
+type Reached<S> = (Vec<BodyUid>, Vec<S>);
+
 /// Joins a copy with every body of `joining` it touches (`combine_any`,
 /// mitcad#1006): with one of them as `combine` joins a copy with its
 /// original ([`combined`]: a mirror image's near-copy join too); with
 /// several in one join of their lumps, the bodies it joins together going
 /// into the first of them (the bodies there before the pattern first).
-/// None when it touches none; else the solids of the copy that touch none,
-/// to be bodies of their own.
+/// None when it touches none; else the bodies it reached (as they were
+/// named before the join) and the solids of the copy that touch none, to
+/// be bodies of their own.
 fn join_any<K: Kernel>(
     ctx: &EvalContext<'_, K>,
     joining: &mut Joining<K::Shape>,
     copy: &K::Shape,
-) -> Result<Option<Vec<K::Shape>>, String> {
+) -> Result<Option<Reached<K::Shape>>, String> {
     let around = ctx.kernel.bounding_box(copy).ok().flatten();
     let reached = joining.reached(ctx.kernel, copy, around);
+    let names: Vec<BodyUid> = reached.iter().map(|i| joining.bodies[*i].0).collect();
     let mut strays = Vec::new();
     match reached[..] {
         [] => return Ok(None),
@@ -3147,6 +3362,75 @@ fn join_any<K: Kernel>(
             joining.remove(merged);
         }
     }
+    Ok(Some((names, strays)))
+}
+
+/// A copy of a `combine_any` pattern joined to the bodies it touches, with
+/// their sheets (mitcad#1462): a copy of a sheet (`image`, its sheet) that
+/// touches one sheet whole merges into it as [`crate::sheet::body_copy::joined`]
+/// does; a join that makes a sheet an ordinary solid (several bodies at
+/// once, a copy that is not a sheet, a copy partly apart) goes to
+/// `pending`, to be settled when the bodies are final
+/// ([`crate::sheet::body_copy::settle`]). `sheets` holds the sheets of the
+/// bodies the copies may join, as the joins leave them. As [`join_any`]:
+/// None when the copy touches none, else the solids of it that touch none.
+#[allow(clippy::too_many_arguments)]
+fn join_any_sheets<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    joining: &mut Joining<K::Shape>,
+    sheets: &mut std::collections::BTreeMap<BodyUid, crate::sheet::SheetState>,
+    pending: &mut crate::sheet::body_copy::Lost,
+    source: BodyUid,
+    sheet: bool,
+    image: Option<&crate::sheet::SheetState>,
+    key: &str,
+    copy: &K::Shape,
+) -> Result<Option<Vec<K::Shape>>, String> {
+    let Some((reached, strays)) = join_any(ctx, joining, copy)? else {
+        return Ok(None);
+    };
+    let target = match (reached.as_slice(), image) {
+        ([target], Some(image)) if strays.is_empty() => sheets
+            .get(target)
+            .cloned()
+            .map(|current| (*target, current, image)),
+        _ => None,
+    };
+    if let Some((target, current, image)) = target {
+        let at = joining
+            .bodies
+            .iter()
+            .position(|(b, _, _)| *b == target)
+            .ok_or("a joined body is unavailable")?;
+        let (state, rebuilt) =
+            crate::sheet::body_copy::joined(ctx, &current, image, key, &joining.bodies[at].1)
+                .map_err(|e| {
+                    format!("sheet {target} cannot be joined to the copy of {source}: {e}")
+                })?;
+        joining.reshape(ctx.kernel, at, rebuilt);
+        sheets.insert(target, state);
+        return Ok(Some(strays));
+    }
+    let lost: Vec<BodyUid> = reached
+        .iter()
+        .filter(|b| sheets.remove(*b).is_some())
+        .copied()
+        .collect();
+    let why = if reached.len() > 1 {
+        format!(
+            "a copy of {source} joins several bodies at once (a copy of a sheet is joined to one \
+             sheet at a time)"
+        )
+    } else if !strays.is_empty() && image.is_some() {
+        format!("only part of a copy of {source} touches it")
+    } else if sheet {
+        format!("it is joined to a scaled copy of {source} (scaling changes the sheet's thickness)")
+    } else {
+        format!("it is joined to a copy of {source}, which is not a sheet metal body")
+    };
+    if !lost.is_empty() {
+        pending.push((lost, why));
+    }
     Ok(Some(strays))
 }
 
@@ -3171,8 +3455,20 @@ fn repeat_bodies_joining_any<K: Kernel>(
         originals.push((*body, shape));
     }
     let mut joining = Joining::new(ctx.kernel, originals.clone());
+    // The sheets of the bodies the copies may join, as the joins leave
+    // them (mitcad#1462).
+    let mut sheets = std::collections::BTreeMap::new();
+    let mut pending = Vec::new();
+    let mut sources = Vec::with_capacity(originals.len());
+    for (body, _) in &originals {
+        let sheet = crate::sheet::body_copy::source(ctx, *body);
+        if let Some(state) = &sheet {
+            sheets.insert(*body, state.clone());
+        }
+        sources.push(sheet);
+    }
     let mut next = elements.iter().map(|e| e.index).max().unwrap_or(0) * count;
-    for (j, (_, shape)) in originals.iter().enumerate() {
+    for (j, (body, shape)) in originals.iter().enumerate() {
         // Skipped copies (mitcad#547): their numbers are the elements'.
         for element in elements.iter().filter(|e| !skipped.contains(&e.index)) {
             let instance = Instance {
@@ -3180,10 +3476,35 @@ fn repeat_bodies_joining_any<K: Kernel>(
                 index: element.index,
             };
             let copy = body_copy(ctx, shape, &element.transform, instance, true)?;
-            match join_any(ctx, &mut joining, &copy)? {
+            let uid = BodyUid::new(ctx.uid, (element.index - 1) * count + j as u32);
+            let image = sources[j]
+                .as_ref()
+                .filter(|_| element.transform.is_orthogonal())
+                .map(|s| crate::sheet::body_copy::image(s, &element.transform, uid));
+            let key = crate::sheet::body_copy::copy_key(*body, &[], element.index);
+            let joined = join_any_sheets(
+                ctx,
+                &mut joining,
+                &mut sheets,
+                &mut pending,
+                *body,
+                sources[j].is_some(),
+                image.as_ref(),
+                &key,
+                &copy,
+            )?;
+            match joined {
                 None => {
-                    let uid = BodyUid::new(ctx.uid, (element.index - 1) * count + j as u32);
                     joining.add(ctx.kernel, uid, copy);
+                    match image {
+                        Some(image) => {
+                            sheets.insert(uid, image);
+                        }
+                        None if sources[j].is_some() => {
+                            crate::sheet::body_copy::scaled(ctx, *body);
+                        }
+                        None => {}
+                    }
                 }
                 Some(strays) => {
                     for stray in strays {
@@ -3194,10 +3515,43 @@ fn repeat_bodies_joining_any<K: Kernel>(
             }
         }
     }
-    Ok(FeatureOutput {
-        changes: joining.changes(),
+    Ok(any_output(ctx, joining, &sheets, pending))
+}
+
+/// The output of a `combine_any` pattern: the bodies it changed or made,
+/// with the sheets of those that are sheets, the sheets joins took
+/// (`pending`) settled on the final bodies (mitcad#1462).
+fn any_output<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    joining: Joining<K::Shape>,
+    sheets: &std::collections::BTreeMap<BodyUid, crate::sheet::SheetState>,
+    pending: crate::sheet::body_copy::Lost,
+) -> FeatureOutput<K::Shape> {
+    let changes = joining.changes();
+    let sheets = {
+        let results: Vec<(BodyUid, &K::Shape)> = changes
+            .iter()
+            .filter_map(|change| match change {
+                BodyChange::Set(uid, shape) => Some((*uid, shape)),
+                BodyChange::Remove(_) => None,
+            })
+            .collect();
+        let derived = crate::sheet::body_copy::settle(ctx, pending, &results);
+        results
+            .iter()
+            .filter_map(|(uid, _)| {
+                sheets
+                    .get(uid)
+                    .or_else(|| derived.get(uid))
+                    .map(|state| (*uid, crate::sheet::SheetChange::Set(state.clone())))
+            })
+            .collect()
+    };
+    FeatureOutput {
+        changes,
+        sheets,
         ..FeatureOutput::default()
-    })
+    }
 }
 
 /// Adjust's copies of a feature's tool applied in one boolean operation

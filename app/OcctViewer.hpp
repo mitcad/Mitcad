@@ -299,6 +299,8 @@ public:
     ExtendedTool, // orange, see-through: a split's or trim's tool as the
                   // feature extends it (mitcad#712)
     MeasurementWire, // opaque dimension lines through the measured bodies
+    Curve, // an Intersection Curve's curve, as the finished one is drawn: a
+           // solid line in the axes' colour (mitcad#1496)
   };
 
   explicit OcctViewer(QWidget* parent = nullptr);
@@ -444,6 +446,26 @@ public:
   // and the cube's places and outline again.
   void setCubeProjection(CubeProjection projection);
   CubeProjection cubeProjection() const { return m_cubeProjection; }
+  // Anaglyph 3D (mitcad#1449): the view drawn for red/cyan glasses through
+  // OCCT's stereo camera (Graphic3d_Camera::Projection_Stereo) and its
+  // anaglyph stereo mode (Graphic3d_RenderingParams, red/cyan optimized).
+  // On, the camera is a stereo one, so in perspective; off, it is in the
+  // projection it had before, or the one setPerspective or setCamera chose
+  // meanwhile. Picking, highlights, handles and the orientation cube go on
+  // with the camera's middle eye (OCCT's mono projection). Logs "Anaglyph
+  // 3D on: stereo camera, red/cyan, stereo depth 5 %, convergence 100 %"
+  // or "Anaglyph 3D off: perspective camera" from what the view does.
+  void setAnaglyph(bool on);
+  bool anaglyph() const { return m_anaglyph; }
+  // The camera is a stereo one drawn as a red/cyan anaglyph.
+  bool isStereo() const;
+  // Anaglyph 3D's stereo depth, the eyes' separation as a share of the
+  // focus distance (OCCT's relative IOD), and its convergence, the focus
+  // distance where things lie in the screen's plane as a share of the
+  // distance from the eye to the camera's centre (OCCT's relative ZFocus).
+  // Applied at once while Anaglyph 3D is on; logs "Anaglyph 3D: stereo
+  // depth 5 %, convergence 100 %" when they change.
+  void setStereoParameters(double depth, double convergence);
   // Looks along `direction` (from the eye to the model) with `up` upwards,
   // fitted, smoothly when the navigation settings say so (standard views,
   // the orientation cube's home).
@@ -1531,6 +1553,20 @@ private:
   double m_cubeBaseSize = 0.0;   // the cube's size and font height at ratio 1
   double m_cubeBaseFont = 0.0;
   CubeProjection m_cubeProjection = CubeProjection::FollowView; // mitcad#774
+  // Anaglyph 3D (mitcad#1449): on or off, the projection to go back to when
+  // it ends, and its stereo depth and convergence (relative, as OCCT's).
+  bool m_anaglyph = false;
+  bool m_monoPerspective = false;
+  double m_stereoDepth = 0.05;
+  double m_stereoConvergence = 1.0;
+  // The camera's projection as the view keeps it: a stereo one with
+  // Anaglyph 3D's depth and convergence while it is on, otherwise a
+  // stereo one goes back to m_monoPerspective's (a camera saved before
+  // Anaglyph 3D was switched).
+  void keepProjection(Graphic3d_Camera& camera) const;
+  // "stereo", "perspective" or "orthographic": the camera's projection, as
+  // the log names it.
+  QString projectionName() const;
   // up, down, left, right, cw, ccw
   std::vector<std::pair<QString, QToolButton*>> m_cubeArrows;
   bool m_cubeFaceOn = false; // the view looks straight at a face

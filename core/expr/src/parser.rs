@@ -375,22 +375,54 @@ impl Parser<'_> {
             };
             return Err(ParseError::new(kind, token.span));
         };
+        let foot_mark = name == "'";
         self.pos += 1;
         let mut unit = Unit::of_base(base);
+        let mut powered = false;
         if let Some((power, used, span)) = unit_power(self.text, &self.tokens[self.pos..])? {
             unit = unit
                 .powi(power)
                 .ok_or_else(|| ParseError::new(ParseErrorKind::InvalidUnitPower, span))?;
             self.pos += used;
+            powered = true;
         }
         let span = self.span_from(start);
-        Ok(Node::new(
+        let node = Node::new(
             NodeKind::WithUnit {
                 value: Box::new(value),
                 unit,
             },
             span,
-        ))
+        );
+        if foot_mark && !powered {
+            return Ok(self.inches_after_feet(node, start));
+        }
+        Ok(node)
+    }
+
+    /// `feet` (a value with the foot mark) and the inches that follow it,
+    /// `3' 6"`, added up (mitcad#1531); `feet` alone when no number with
+    /// the inch mark follows.
+    fn inches_after_feet(&mut self, feet: Node, start: usize) -> Node {
+        let after = self.tokens.get(self.pos + 1).copied();
+        let (Some(number), Some(mark)) = (self.peek(), after) else {
+            return feet;
+        };
+        let Tok::Number(inches) = number.tok else {
+            return feet;
+        };
+        if mark.tok != Tok::Ident || !matches!(self.source(mark), "\"" | "''") {
+            return feet;
+        }
+        self.pos += 2;
+        let inches = Node::new(
+            NodeKind::WithUnit {
+                value: Box::new(Node::new(NodeKind::Number(inches), number.span)),
+                unit: Unit::IN,
+            },
+            Span::new(number.span.start, mark.span.end),
+        );
+        binary(BinaryOp::Add, feet, inches, self.span_from(start))
     }
 
     fn primary(&mut self) -> Result<Node, ParseError> {

@@ -59,6 +59,18 @@ struct ViewSettings {
   // The navigation bar at the bottom of the view (mitcad#1086,
   // `view/navigationBar`): shown by default.
   bool navigationBar = true;
+  // Anaglyph 3D (mitcad#1449, `view/anaglyph`): off by default. Its stereo
+  // depth (`view/stereoDepth`), the eyes' separation in percent of the
+  // focus distance, and convergence (`view/stereoConvergence`), the focus
+  // distance in percent of the distance to the view's centre; OCCT's own
+  // defaults.
+  bool anaglyph = false;
+  int stereoDepth = 5;
+  int stereoConvergence = 100;
+  static constexpr int kMinStereoDepth = 1;
+  static constexpr int kMaxStereoDepth = 20;
+  static constexpr int kMinStereoConvergence = 25;
+  static constexpr int kMaxStereoConvergence = 400;
 
   static ViewSettings load();
   void save() const;
@@ -92,6 +104,8 @@ public:
   std::function<void(bool on, double step)> gridSnapChanged;
   // Preferences saved new general settings (GeneralSettings: autosave).
   std::function<void()> generalChanged;
+  // Preferences changed the default units for new designs (mitcad#1452).
+  std::function<void()> newDesignUnitsChanged;
   // Help > Diagnostics, from Preferences' Cache group (P7d).
   std::function<void()> showDiagnostics;
   // Preferences' Layout changed and Restart Now was chosen (mitcad#419):
@@ -165,6 +179,11 @@ private:
   void apply();
   void setStyle(VisualStyle style);
   void setPerspective(bool perspective);
+  // Anaglyph 3D (mitcad#1449): the view in red/cyan stereo, in perspective
+  // while on; the rendered view is left and not offered meanwhile.
+  void setAnaglyph(bool on);
+  // Its stereo depth and convergence (percent) to the view.
+  void applyStereo(int depth, int convergence);
   void setBackground(ViewSettings::Background background);
   void setGridShown(bool shown);
   void syncChecks();

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/commands
 # check-all sources: core/model/src/features/sweep.rs
+# check-all sources: core/model/src/features/pipe.rs
 # Sweep, Pipe, Loft, Coil, Rib and Web (U4) through the real UI, with the
 # volumes the model reports (tools/cli/tests/f3_*.json):
 #   - Sweep: a 10 mm circle on YZ along a 75 mm line through it, 50 mm
@@ -10,7 +11,9 @@
 #     75 mm cylinder (saved as `full`); edited to Distance 2 = 0 and
 #     Distance 1 = 0.5: half of the 25 mm beyond the profile, saved as
 #     `partial` with `fraction2` 0, and opened again with those values.
-#   - Pipe: hollow, 10 mm with a 1 mm wall along a 50 mm line.
+#   - Pipe: hollow, 10 mm with a 1 mm wall along a 50 mm line, its
+#     Corners row hidden there; shown along the sides of a square
+#     (mitcad#1448), that pipe cancelled.
 #   - Loft: a 40 mm square up to a 20 mm one 30 mm above: a frustum; again
 #     with a Direction start condition (the squares' sketches, hidden since
 #     the first loft uses them, shown with their light bulbs), edited to
@@ -237,8 +240,21 @@ ui_step "size 10"                          ui_type_in "Panel Pipe input size" "1
 ui_step "hollow"                           ui_click_logged "Panel Pipe input hollow"
 ui_expect_log "Pipe: Hollow = on" "hollow"
 ui_expect_log "Preview Pipe: ok" "previewed"
+ui_expect_log "Pipe: the path has 0 sharp corners; Corners hidden" "no corners along a line"
+ui_sync
+expect_row Pipe corners hidden "Corners hidden along a straight line"
 ui_step "OK (Enter)"                       ui_key Return
 ui_expect_volume "New body Body2 (F10.b0): volume \([0-9.]*\) mm3" 1413.7166941154069 "hollow pipe"
+
+echo "--- Pipe: Corners shown along the square's sides (mitcad#1448)"
+ui_step "pipe (search)"                    ui_command "Pipe"
+ui_step "pick a side of the square"        ui_click_logged "Sketch entity F4/c1"
+ui_expect_log "Pipe: the path has 4 sharp corners; Corners shown" "four corners round the square"
+ui_sync
+expect_row Pipe corners shown "Corners shown"
+ui_mark
+ui_step "cancel (Esc)"                     ui_key Escape
+ui_expect_new "Command Pipe cancelled" "nothing added"
 
 echo "--- Loft: the two squares in order"
 ui_step "loft (search)"                    ui_command "Loft"

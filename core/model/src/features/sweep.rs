@@ -157,10 +157,21 @@ fn check_fractions(one: f64, two: f64, closed: bool) -> Result<(), String> {
 /// reports it as `sweep_path`, and the Sweep panel shows Distance 2 (the
 /// part before the profile) only for a profile past the start of an open
 /// path.
+///
+/// A pipe's preview reports it too (mitcad#1448), its section at the
+/// path's start, with `corners`: how many sharp corners the path has
+/// (where its curves meet at an angle), so that the Pipe panel shows its
+/// Corners choice only for such a path. A sweep leaves it out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SweepPlace {
     pub closed: bool,
     pub profile_at: ProfileAt,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub corners: usize,
+}
+
+fn is_zero(count: &usize) -> bool {
+    *count == 0
 }
 
 /// The place of the profile along the path as it is swept (after `flip`).
@@ -195,6 +206,7 @@ pub(crate) fn profile_place(
         return SweepPlace {
             closed,
             profile_at: ProfileAt::Inside,
+            corners: 0,
         };
     };
     let tolerance = mitcad_model_base::curves::tolerance(path);
@@ -211,7 +223,11 @@ pub(crate) fn profile_place(
         (false, true) => ProfileAt::End,
         (false, false) => ProfileAt::Inside,
     };
-    SweepPlace { closed, profile_at }
+    SweepPlace {
+        closed,
+        profile_at,
+        corners: 0,
+    }
 }
 
 /// The middle of the profile regions' bounds, in model space.

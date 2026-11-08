@@ -1477,3 +1477,38 @@ fn a_text_below_a_circle_hangs_from_its_capitals_from_the_circles_start() {
     let y = at[..4].iter().map(|p| p[1]).sum::<f64>() / 4.0;
     assert!((angle(&[x, y]) - 0.05).abs() < 1e-6);
 }
+
+/// Points, curves and texts share one id numbering: a clash names both
+/// entities and says so (mitcad#1485).
+#[test]
+fn clashing_entity_ids_name_both_entities() {
+    let refused = |def: &SketchDef<ParamId>| def.check_definition().unwrap_err();
+    // A point p1 and a curve c1.
+    let mut b = Builder::new();
+    b.def.entities.push(Entity::point(EntityUid(1), [5.0, 5.0]));
+    b.line([0.0, 0.0], [10.0, 0.0]);
+    assert_eq!(
+        refused(&b.def),
+        "entity c1 has the id number of p1: curves, points and texts share one numbering"
+    );
+    // The same curve twice.
+    let mut b = Builder::new();
+    b.line([0.0, 0.0], [10.0, 0.0]);
+    let twice = b.def.entities.last().unwrap().clone();
+    b.def.entities.push(twice);
+    assert_eq!(refused(&b.def), "entity c1 is used more than once");
+    // A text with a curve's number.
+    let mut b = Builder::new();
+    b.line([0.0, 0.0], [10.0, 0.0]);
+    b.def
+        .texts
+        .push(SketchText::new(EntityUid(1), "A", [0.0, 0.0], 5.0));
+    assert_eq!(
+        refused(&b.def),
+        "text t1 has the id number of c1: curves, points and texts share one numbering"
+    );
+    // Id 0 on its own.
+    let mut b = Builder::new();
+    b.def.entities.push(Entity::point(EntityUid(0), [5.0, 5.0]));
+    assert_eq!(refused(&b.def), "entity p0: id 0 is not allowed");
+}

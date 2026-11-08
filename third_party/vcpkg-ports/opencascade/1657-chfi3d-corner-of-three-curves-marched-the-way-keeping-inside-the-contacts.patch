@@ -1,0 +1,149 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the curves of the corner of three blends cut by each other (1653)
+are marched the way that keeps their p-curves inside both contacts
+(mitcad#1532).
+
+The roof slab rounded on all its edges with 1.1: at the far end's left
+eave the intersection of the eave's end edge's blend and the slope's top
+edge's blend, marched from where their contacts meet on the end face, left
+it tangent to both contacts (both blends touch that face there), and its
+p-curves crossed the contacts' p-curves near it (by 0.005 in the blend's
+parameters): both blends' wires crossed themselves.
+
+- threeCornerByInter (1653): each pair's intersection is computed from
+  where their contacts meet to the point of all three, and where its
+  p-curves cross either contact's p-curve to the side away from that point
+  (sampled), from that point back; the way crossing least is kept.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
+index 0185540c..a7312933 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
+@@ -59,6 +59,7 @@
+ #include <TopOpeBRepDS_HDataStructure.hxx>
+ #include <TopOpeBRepDS_Surface.hxx>
+ #include <Geom_Curve.hxx>
++#include <Geom2dAPI_ProjectPointOnCurve.hxx>
+ #include <GeomAdaptor_Curve.hxx>
+ #include <NCollection_Array1.hxx>
+ #include <StdFail_NotDone.hxx>
+@@ -395,7 +396,57 @@ static int threeCornerByInter(TopOpeBRepDS_DataStructure&       DStr,
+   uvP[R] = uvPR;
+   uvP[Y] = uvPY;
+   uvP[Z] = uvPZ;
+-  // The three curves, from where each pair's contacts meet to P.
++  // The three curves, between where each pair's contacts meet and P. Both
++  // blends of a pair touch their common face there, so that their
++  // intersection leaves it tangent to both contacts; its p-curves, marched
++  // from there or from P, may cross a contact's p-curve near that point (at
++  // the slab's far end with 1.1, the blend's wire then crossing itself): the
++  // way whose p-curves stay on P's side of both contacts is taken, or the
++  // one crossing them least.
++  // (How far p-curve thePc crosses the contact's p-curve theCo, over
++  // [theF, theL], to the side away from theIn; sampled.)
++  const auto crosses = [](const occ::handle<Geom2d_Curve>& thePc,
++                          const occ::handle<Geom2d_Curve>& theCo,
++                          const double                     theF,
++                          const double                     theL,
++                          const gp_Pnt2d&                  theIn) {
++    if (thePc.IsNull() || theCo.IsNull())
++    {
++      return 0.;
++    }
++    const double aLo = std::min(theF, theL), aHi = std::max(theF, theL);
++    // (The side of the contact P lies on, at P's foot on it.)
++    const auto sideOf = [&](const gp_Pnt2d& theP, double& theDist) {
++      Geom2dAPI_ProjectPointOnCurve aProj(theP, theCo, aLo, aHi);
++      if (aProj.NbPoints() == 0)
++      {
++        theDist = 0.;
++        return 0;
++      }
++      gp_Pnt2d aQ;
++      gp_Vec2d aD;
++      theCo->D1(aProj.LowerDistanceParameter(), aQ, aD);
++      const double aCross = aD.Crossed(gp_Vec2d(aQ, theP));
++      theDist             = aProj.LowerDistance();
++      return aCross > 0. ? 1 : (aCross < 0. ? -1 : 0);
++    };
++    double    aIgnored = 0.;
++    const int aSideIn  = sideOf(theIn, aIgnored);
++    double    aMax     = 0.;
++    const int aNb      = 40;
++    for (int is = 1; is < aNb; is++)
++    {
++      const double w =
++        thePc->FirstParameter() + (thePc->LastParameter() - thePc->FirstParameter()) * is / aNb;
++      double aDist = 0.;
++      const int aSide = sideOf(thePc->Value(w), aDist);
++      if (aSideIn != 0 && aSide == -aSideIn)
++      {
++        aMax = std::max(aMax, aDist);
++      }
++    }
++    return aMax;
++  };
+   occ::handle<Geom_Curve>   C[3][3];
+   occ::handle<Geom2d_Curve> Pc[3][3]; // Pc[a][b]: pair (a, b)'s curve on a
+   double                    tolc[3][3];
+@@ -403,22 +454,45 @@ static int threeCornerByInter(TopOpeBRepDS_DataStructure&       DStr,
+   {
+     for (int b = a + 1; b < 3; b++)
+     {
+-      Pardeb(1) = uv[a][b].X();
+-      Pardeb(2) = uv[a][b].Y();
+-      Pardeb(3) = uv[b][a].X();
+-      Pardeb(4) = uv[b][a].Y();
+-      Parfin(1) = uvP[a].X();
+-      Parfin(2) = uvP[a].Y();
+-      Parfin(3) = uvP[b].X();
+-      Parfin(4) = uvP[b].Y();
+-      double tolr = tol3d;
+-      if (!ChFi3d_ComputeCurves(
+-            HS[a], HS[b], Pardeb, Parfin, C[a][b], Pc[a][b], Pc[b][a], tol3d, tol2d, tolr))
++      double aBest = RealLast();
++      for (int way = 0; way < 2 && aBest > tol2d; way++)
++      {
++        NCollection_Array1<double>& From = way == 0 ? Pardeb : Parfin;
++        NCollection_Array1<double>& To   = way == 0 ? Parfin : Pardeb;
++        From(1)                          = uv[a][b].X();
++        From(2)                          = uv[a][b].Y();
++        From(3)                          = uv[b][a].X();
++        From(4)                          = uv[b][a].Y();
++        To(1)                            = uvP[a].X();
++        To(2)                            = uvP[a].Y();
++        To(3)                            = uvP[b].X();
++        To(4)                            = uvP[b].Y();
++        occ::handle<Geom_Curve>   aC;
++        occ::handle<Geom2d_Curve> aPa, aPb;
++        double                    tolr = tol3d;
++        if (!ChFi3d_ComputeCurves(HS[a], HS[b], Pardeb, Parfin, aC, aPa, aPb, tol3d, tol2d, tolr))
++        {
++          continue;
++        }
++        const ChFiDS_FaceInterference& Fia  = Fd[a]->Interference(jf[a][b]);
++        const ChFiDS_FaceInterference& Fib  = Fd[b]->Interference(jf[b][a]);
++        const double                   aOut = std::max(
++          crosses(aPa, Fia.PCurveOnSurf(), Fia.FirstParameter(), Fia.LastParameter(), uvP[a]),
++          crosses(aPb, Fib.PCurveOnSurf(), Fib.FirstParameter(), Fib.LastParameter(), uvP[b]));
++        if (aOut < aBest)
++        {
++          aBest      = aOut;
++          C[a][b]    = aC;
++          Pc[a][b]   = aPa;
++          Pc[b][a]   = aPb;
++          tolc[a][b] = tolc[b][a] = tolr;
++        }
++      }
++      if (C[a][b].IsNull())
+       {
+         return -1;
+       }
+-      C[b][a]    = C[a][b];
+-      tolc[a][b] = tolc[b][a] = tolr;
++      C[b][a] = C[a][b];
+     }
+   }
+   // Points.

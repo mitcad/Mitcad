@@ -694,6 +694,9 @@ int info_or_run(const std::string& mode, const std::vector<std::string>& args) {
   if (!store.dir.empty() && design.empty()) {
     return usage("--result-store needs a design to open");
   }
+  // A recompute that would run the process out of memory stops with an
+  // error that says so, rather than the system ending it (mitcad#1480).
+  mitcad::guard_command_memory(0.0);
   rust::Box<mitcad::Document> document = mitcad::new_document();
   if (!design.empty()) {
     // The store's line goes before the report, or to stderr with --json.

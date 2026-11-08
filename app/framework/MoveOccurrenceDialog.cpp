@@ -4,6 +4,7 @@
 #include <exception>
 #include <utility>
 
+#include <QCoreApplication>
 #include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -29,6 +30,8 @@ namespace mitcad {
 namespace {
 
 class MoveOccurrenceDialog final : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::MoveOccurrenceDialog)
+
 public:
   MoveOccurrenceDialog(QWidget* parent, const HybridModel& model, const QString& occurrence)
       : QDialog(parent), m_model(model), m_occurrence(occurrence) {

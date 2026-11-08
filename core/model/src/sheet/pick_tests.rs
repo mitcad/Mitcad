@@ -67,6 +67,27 @@ fn face_names_name_their_domain_and_wall() {
     assert_eq!(parse_face("F2:end(r{c1[c4,c2],c2[c1,c3]})"), None);
     assert_eq!(parse_face("F2:side(c1[c4,c2])"), None);
     assert_eq!(parse_face("F3:sheet_side0(c2)"), None);
+    // A mirror's or pattern's copy of a sheet body keeps its domains
+    // (mitcad#1450): the copies' wrappers name the same domain and wall.
+    assert_eq!(
+        parse_face("F6:inst1(F3:sheet_back(0))"),
+        Some(PickedFace::Surface(panel("F3", 0)))
+    );
+    assert_eq!(
+        parse_face("F9:inst2(F6:inst1(F4:sheet_bend_front(0)))#1"),
+        Some(PickedFace::Surface(bend("F4", 0)))
+    );
+    assert_eq!(
+        parse_face("F6:inst1(F3:sheet_side0(F2:sheet_curve(c2[c1,c3]))#2)"),
+        Some(PickedFace::Wall(
+            panel("F3", 0),
+            SheetCurveId::Sketch {
+                sketch: uid("F2"),
+                segment: "c2[c1,c3]".parse().unwrap()
+            }
+        ))
+    );
+    assert_eq!(parse_face("F6:inst1(F2:side(c1[c4,c2]))"), None);
 }
 
 #[test]

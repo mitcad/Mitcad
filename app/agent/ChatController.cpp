@@ -939,6 +939,18 @@ void ChatController::send(const QString& text, bool attachSelection, bool attach
       attached << QStringLiteral("%1 open comments").arg(comments.size());
     }
   }
+  // The design's length unit when it is not millimetres (mitcad#1452): the
+  // user's bare lengths are in it, while JSON numbers stay millimetres.
+  if (m_host.lengthUnit) {
+    const QString units = chatRequest({{QStringLiteral("op"), QStringLiteral("units_context")},
+                                       {QStringLiteral("length"), m_host.lengthUnit()}})
+                              .value(QStringLiteral("context"))
+                              .toString();
+    if (!units.isEmpty()) {
+      message.context = message.context.isEmpty() ? units : units + QStringLiteral("\n\n") + message.context;
+      qInfo().noquote() << QStringLiteral("Chat: the design's length unit %1 told").arg(m_host.lengthUnit());
+    }
+  }
   if (attachView) {
     const QByteArray picture = m_host.viewPicture();
     if (!picture.isEmpty()) {
@@ -1220,7 +1232,7 @@ void ChatController::stop() {
     return;
   }
   qInfo().noquote() << QStringLiteral("Chat: Stop");
-  denyCards(tr("The user stopped the message."));
+  denyCards(QStringLiteral("The user stopped the message."));
   if (!m_queue.isEmpty()) {
     notice(tr("%n waiting message(s) were not sent.", nullptr, int(m_queue.size())), NoticeLevel::Warning);
     m_queue.clear();
@@ -1235,7 +1247,7 @@ void ChatController::endTurn(bool merge) {
   }
   const Turn turn = m_turn;
   m_turn.active = false;
-  denyCards(tr("The message ended."));
+  denyCards(QStringLiteral("The message ended."));
   if (!merge) {
     return;
   }
@@ -1333,20 +1345,22 @@ void ChatController::answer(const QString& id, Answer choice) {
     }
   }
   if (card.answer) {
-    card.answer(allowed, allowed ? QString() : tr("The user did not allow this (%1).").arg(card.kind));
+    card.answer(allowed, allowed ? QString() : QStringLiteral("The user did not allow this (%1).").arg(card.kind));
   }
 }
 
 mcp::ChatGate::Decision ChatController::decide(const QString& marker, const QString& tool, const QJsonObject& arguments,
                                                std::function<void(bool allowed, const QString& reason)> reply) {
+  // The reasons are tool results the agent reads: English in every
+  // interface language (mitcad#1471), as denyCards' are.
   if (marker.isEmpty() || marker != m_marker) {
-    return {Verdict::Deny, tr("This chat's conversation has ended.")};
+    return {Verdict::Deny, QStringLiteral("This chat's conversation has ended.")};
   }
   if (!m_turn.active) {
-    return {Verdict::Deny, tr("No message of the chat is running.")};
+    return {Verdict::Deny, QStringLiteral("No message of the chat is running.")};
   }
   if (!accountError().isEmpty()) {
-    return {Verdict::Deny, tr("The agent's account cannot be used. Check it again in the chat panel.")};
+    return {Verdict::Deny, QStringLiteral("The agent's account cannot be used. Check it again in the chat panel.")};
   }
   const ChatSettings settings = ChatSettings::load();
   const QJsonObject state = m_host.documentState();

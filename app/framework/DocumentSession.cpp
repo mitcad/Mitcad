@@ -287,9 +287,12 @@ bool DocumentSession::runJob(const QString& label, const QString& stage, const J
     }
     error = m_worker->take();
   }
+  // A job the memory guard stopped (mitcad#1480) failed with its command's
+  // error, which says why; it was not the user's cancel.
+  const bool userCancel = state.control().is_cancelled() && state.control().cancel_reason().empty();
   // Also a cancel that stopped only the job's meshing (mitcad#1267).
-  m_lastJobCancelRequested = state.control().is_cancelled();
-  const bool cancelled = error && state.control().is_cancelled();
+  m_lastJobCancelRequested = userCancel;
+  const bool cancelled = error && userCancel;
   QString failure;
   if (error && !cancelled) {
     try {
@@ -618,8 +621,11 @@ void DocumentSession::finishAsync(bool queueCompletion) {
   const std::exception_ptr error = m_worker->take();
   std::unique_ptr<AsyncJob> finished = std::move(m_async);
   m_progressTimer.stop();
-  m_lastJobCancelRequested = finished->job.control().is_cancelled();
-  finished->result->cancelled = error && finished->job.control().is_cancelled();
+  // As runJob: the memory guard's stop is an error (mitcad#1480).
+  const bool userCancel =
+      finished->job.control().is_cancelled() && finished->job.control().cancel_reason().empty();
+  m_lastJobCancelRequested = userCancel;
+  finished->result->cancelled = error && userCancel;
   if (error && !finished->result->cancelled) {
     try {
       std::rethrow_exception(error);

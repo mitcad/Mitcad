@@ -8,6 +8,7 @@
 // and Gui for that, but not its windows.
 
 #include "render.hpp"
+#include "render-scene.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -44,11 +45,7 @@ namespace mitcad::cli {
 
 namespace {
 
-QJsonValue query(const mitcad::Document& document, const QString& name) {
-  const std::string answer(document.query("{\"query\": \"" + name.toStdString() + "\"}"));
-  const QJsonDocument parsed = QJsonDocument::fromJson(QByteArray::fromStdString(answer));
-  return parsed.isArray() ? QJsonValue(parsed.array()) : QJsonValue(parsed.object());
-}
+QJsonValue query(const mitcad::Document& document, const QString& name) { return renderQuery(document, name); }
 
 // A placement of the model's queries: 3 or 4 rows of 4 numbers.
 gp_Trsf trsfOf(const QJsonArray& rows) {
@@ -108,6 +105,110 @@ int usage(const std::string& problem) {
 }
 
 } // namespace
+
+QJsonValue renderQuery(const mitcad::Document& document, const QString& name) {
+  const std::string answer(document.query("{\"query\": \"" + name.toStdString() + "\"}"));
+  const QJsonDocument parsed = QJsonDocument::fromJson(QByteArray::fromStdString(answer));
+  return parsed.isArray() ? QJsonValue(parsed.array()) : QJsonValue(parsed.object());
+}
+
+DocumentScene documentScene(const mitcad::Document& document, const QString& folder, const QJsonArray& instances) {
+  // The bodies' appearances and their faces' (mitcad#53); textures with
+  // their image files.
+  QHash<QString, Appearance> known =
+      appearancesById(appearancesOf(query(document, QStringLiteral("appearances")).toArray()));
+  for (Appearance& appearance : known) {
+    if (appearance.hasTexture) {
+      const QString id = appearance.id;
+      // The base colour's image and every map's (mitcad#314).
+      resolveTextureMaps(appearance.texture, folder, [&document, &id](const QString& map) {
+        const QJsonObject request{{QStringLiteral("query"), QStringLiteral("appearance_image")},
+                                  {QStringLiteral("id"), id},
+                                  {QStringLiteral("map"), map}};
+        const std::string answer(
+            document.query(QJsonDocument(request).toJson(QJsonDocument::Compact).toStdString()));
+        return QByteArray::fromBase64(QJsonDocument::fromJson(QByteArray::fromStdString(answer))
+                                          .object()
+                                          .value(QStringLiteral("data"))
+                                          .toString()
+                                          .toLatin1());
+      });
+    }
+  }
+  QHash<QString, Appearance> looks;
+  QHash<QString, QVector<QPair<QStringList, QString>>> faceAppearances;
+  for (const QJsonValue& value : query(document, QStringLiteral("bodies")).toArray()) {
+    const QJsonObject body = value.toObject();
+    const QString uid = body.value(QStringLiteral("uid")).toString();
+    const auto appearance = known.constFind(body.value(QStringLiteral("appearance")).toString());
+    if (appearance != known.cend()) {
+      looks.insert(uid, appearance.value());
+    }
+    for (const QJsonValue& face : body.value(QStringLiteral("face_appearances")).toArray()) {
+      QStringList names;
+      for (const QJsonValue& name : face.toObject().value(QStringLiteral("faces")).toArray()) {
+        names << name.toString();
+      }
+      faceAppearances[uid].append({names, face.toObject().value(QStringLiteral("appearance")).toString()});
+    }
+  }
+  DocumentScene scene;
+  for (const QJsonValue& value : instances) {
+    const QJsonObject instance = value.toObject();
+    const QString uid = instance.value(QStringLiteral("body")).toString();
+    const auto shape = document.body_shape(uid.toStdString());
+    if (!shape) {
+      continue;
+    }
+    render::SceneBody body;
+    const QString occurrence = instance.value(QStringLiteral("occurrence")).toString();
+    body.name = (occurrence.isEmpty() ? uid : uid + QLatin1Char('@') + occurrence).toStdString();
+    body.shape = shape->occt();
+    body.placement = trsfOf(instance.value(QStringLiteral("transform")).toArray());
+    body.appearance = looks.value(uid);
+    // The body's or an occurrence's on its path (mitcad#1093).
+    body.transparent = instance.value(QStringLiteral("transparent")).toBool();
+    // The faces by their names, grouped by appearance (a face named twice
+    // takes the later one).
+    std::map<int, QString> byFace;
+    for (const auto& [names, id] : faceAppearances.value(uid)) {
+      for (const QString& name : names) {
+        for (const int face : shape->find_faces(name.toStdString())) {
+          byFace[face] = id;
+        }
+      }
+    }
+    std::map<QString, std::vector<int>> byAppearance;
+    for (const auto& [face, id] : byFace) {
+      byAppearance[id].push_back(face);
+    }
+    for (const auto& [id, faces] : byAppearance) {
+      body.faces.push_back({faces, known.value(id)});
+    }
+    BRepBndLib::Add(body.shape.Moved(TopLoc_Location(body.placement)), scene.box);
+    scene.bodies.push_back(std::move(body));
+  }
+  // Textures whose base colour images are missing show their base colour;
+  // maps whose images are missing are left out (mitcad#314).
+  std::vector<const Appearance*> shownLooks;
+  for (const render::SceneBody& body : scene.bodies) {
+    shownLooks.push_back(&body.appearance);
+    for (const render::SceneFaces& group : body.faces) {
+      shownLooks.push_back(&group.appearance);
+    }
+  }
+  scene.missingTextures = render::missingTextures(shownLooks);
+  return scene;
+}
+
+void renderBackground(const QJsonObject& settings, QColor& top, QColor& bottom) {
+  top = QColor(247, 248, 250);
+  bottom = QColor(223, 227, 234);
+  const QJsonObject background = settings.value(QStringLiteral("background")).toObject();
+  if (background.value(QStringLiteral("mode")).toString() == QLatin1String("color")) {
+    top = bottom = colorOf(background.value(QStringLiteral("color")));
+  }
+}
 
 int render(int argc, char* argv[], const OpenPart& open) {
   std::string input;
@@ -238,93 +339,12 @@ int render(int argc, char* argv[], const OpenPart& open) {
   const QSize size = render::outputSize(outputSettings, -1.0);
   const double aspect = static_cast<double>(size.width()) / size.height();
 
-  // The visible bodies as placed, with their appearances and their faces'
-  // (mitcad#53); textures with their image files.
+  // The visible bodies as placed, with their looks (render-scene.hpp).
   const QString folder = QFileInfo(QString::fromLocal8Bit(input.c_str())).absolutePath();
-  QHash<QString, Appearance> known =
-      appearancesById(appearancesOf(query(*document, QStringLiteral("appearances")).toArray()));
-  for (Appearance& appearance : known) {
-    if (appearance.hasTexture) {
-      const QString id = appearance.id;
-      // The base colour's image and every map's (mitcad#314).
-      resolveTextureMaps(appearance.texture, folder, [&document, &id](const QString& map) {
-        const QJsonObject request{{QStringLiteral("query"), QStringLiteral("appearance_image")},
-                                  {QStringLiteral("id"), id},
-                                  {QStringLiteral("map"), map}};
-        const std::string answer(
-            document->query(QJsonDocument(request).toJson(QJsonDocument::Compact).toStdString()));
-        return QByteArray::fromBase64(QJsonDocument::fromJson(QByteArray::fromStdString(answer))
-                                          .object()
-                                          .value(QStringLiteral("data"))
-                                          .toString()
-                                          .toLatin1());
-      });
-    }
-  }
-  QHash<QString, Appearance> looks;
-  QHash<QString, QVector<QPair<QStringList, QString>>> faceAppearances;
-  for (const QJsonValue& value : query(*document, QStringLiteral("bodies")).toArray()) {
-    const QJsonObject body = value.toObject();
-    const QString uid = body.value(QStringLiteral("uid")).toString();
-    const auto appearance = known.constFind(body.value(QStringLiteral("appearance")).toString());
-    if (appearance != known.cend()) {
-      looks.insert(uid, appearance.value());
-    }
-    for (const QJsonValue& face : body.value(QStringLiteral("face_appearances")).toArray()) {
-      QStringList names;
-      for (const QJsonValue& name : face.toObject().value(QStringLiteral("faces")).toArray()) {
-        names << name.toString();
-      }
-      faceAppearances[uid].append({names, face.toObject().value(QStringLiteral("appearance")).toString()});
-    }
-  }
-  std::vector<render::SceneBody> bodies;
-  Bnd_Box box;
-  for (const QJsonValue& value : query(*document, QStringLiteral("instances")).toArray()) {
-    const QJsonObject instance = value.toObject();
-    const QString uid = instance.value(QStringLiteral("body")).toString();
-    const auto shape = document->body_shape(uid.toStdString());
-    if (!shape) {
-      continue;
-    }
-    render::SceneBody body;
-    const QString occurrence = instance.value(QStringLiteral("occurrence")).toString();
-    body.name = (occurrence.isEmpty() ? uid : uid + QLatin1Char('@') + occurrence).toStdString();
-    body.shape = shape->occt();
-    body.placement = trsfOf(instance.value(QStringLiteral("transform")).toArray());
-    body.appearance = looks.value(uid);
-    // The body's or an occurrence's on its path (mitcad#1093).
-    body.transparent = instance.value(QStringLiteral("transparent")).toBool();
-    // The faces by their names, grouped by appearance (a face named twice
-    // takes the later one).
-    std::map<int, QString> byFace;
-    for (const auto& [names, id] : faceAppearances.value(uid)) {
-      for (const QString& name : names) {
-        for (const int face : shape->find_faces(name.toStdString())) {
-          byFace[face] = id;
-        }
-      }
-    }
-    std::map<QString, std::vector<int>> byAppearance;
-    for (const auto& [face, id] : byFace) {
-      byAppearance[id].push_back(face);
-    }
-    for (const auto& [id, faces] : byAppearance) {
-      body.faces.push_back({faces, known.value(id)});
-    }
-    BRepBndLib::Add(body.shape.Moved(TopLoc_Location(body.placement)), box);
-    bodies.push_back(std::move(body));
-  }
-  // Textures whose base colour images are missing show their base colour;
-  // maps whose images are missing are left out (mitcad#314).
-  std::vector<const Appearance*> shownLooks;
-  for (const render::SceneBody& body : bodies) {
-    shownLooks.push_back(&body.appearance);
-    for (const render::SceneFaces& group : body.faces) {
-      shownLooks.push_back(&group.appearance);
-    }
-  }
-  for (const QString& line : render::missingTextures(shownLooks)) {
+  DocumentScene scene = documentScene(*document, folder, query(*document, QStringLiteral("instances")).toArray());
+  const std::vector<render::SceneBody>& bodies = scene.bodies;
+  const Bnd_Box& box = scene.box;
+  for (const QString& line : scene.missingTextures) {
     std::cerr << "mitcad-cli: a texture image is not drawn: " << line.toStdString() << "\n";
   }
 
@@ -372,14 +392,9 @@ int render(int argc, char* argv[], const OpenPart& open) {
     std::cerr << "mitcad-cli: the scene cannot be written: " << error << "\n";
     return 1;
   }
-  // Behind the bodies: the settings' colour, or the 3D view's default
-  // light gradient for the view's background.
-  QColor top(247, 248, 250);
-  QColor bottom(223, 227, 234);
-  const QJsonObject background = settings.value(QStringLiteral("background")).toObject();
-  if (background.value(QStringLiteral("mode")).toString() == QLatin1String("color")) {
-    top = bottom = colorOf(background.value(QStringLiteral("color")));
-  }
+  QColor top;
+  QColor bottom;
+  renderBackground(settings, top, bottom);
   QJsonObject job = render::finalJob(settings, folder, scenePath, render::finalView(camera, size), outputPath, top,
                                      bottom, QString());
   job.insert(QStringLiteral("device"), device);

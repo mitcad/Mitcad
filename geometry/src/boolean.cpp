@@ -1784,14 +1784,18 @@ BooleanResult merged_boolean(BooleanOp op, const std::vector<const Shape*>& targ
           }
         }
       }
-      // A single piece of the same volume is the target unchanged (a tool
-      // touching a face shares the face but removes nothing); no piece at
-      // all is a target cut away completely, or one the tool of an
-      // intersection does not reach.
+      // A cut's single piece of the same volume is the target unchanged (a
+      // tool touching a face shares the face but removes nothing); no piece
+      // at all is a target cut away completely, or one the tool of an
+      // intersection does not reach. An intersection's piece is its result
+      // whatever its volume: one equal to the whole target is a target
+      // lying wholly inside the tool, and the intersection is the target,
+      // with its names (mitcad#1534; a tool touching only a face leaves no
+      // piece of an intersection).
       bool changed = solids.empty() ? op == BooleanOp::Cut : solids.size() > 1;
       trace.mark("op");
       if (solids.size() == 1) {
-        changed = volume_changed(*targets[i], seen.front(), *solids.front().shape);
+        changed = op == BooleanOp::Intersect || volume_changed(*targets[i], seen.front(), *solids.front().shape);
       }
       trace.mark("volume");
       // A cut that removes nothing from a target with a stepping seam

@@ -11,7 +11,8 @@ pub(crate) const MAX_TOKENS: usize = 4096;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Tok {
     Number(f64),
-    /// Name, unit, function or constant; the text is in the span.
+    /// Name, unit, function or constant; the text is in the span. Also an
+    /// inch or foot mark after a number, `"`, `''` or `'` (mitcad#1531).
     Ident,
     Plus,
     Minus,
@@ -125,6 +126,21 @@ pub(crate) fn lex(text: &str) -> Result<Vec<Token>, ParseError> {
                 ';' => Tok::Semicolon,
                 ',' => Tok::Comma,
                 '&' => Tok::Amp,
+                // An inch or foot mark (mitcad#1531): a quote right after a
+                // number, spaces allowed between, is its unit (`.875"`,
+                // `3' 6"`, `2''`), never the start of a text. Nothing else
+                // could stand there, as a value never follows a number.
+                '"' | '\''
+                    if tokens
+                        .last()
+                        .is_some_and(|t| matches!(t.tok, Tok::Number(_))) =>
+                {
+                    if c == '\'' && next_byte == Some(b'\'') {
+                        // Two single quotes, `2''`, are the inch mark too.
+                        i += 1;
+                    }
+                    Tok::Ident
+                }
                 '"' | '\'' => {
                     i = quoted_end(text, start, c).ok_or_else(|| {
                         ParseError::new(
@@ -452,6 +468,27 @@ mod tests {
         );
         // A comma before `&` ends a number with a decimal comma.
         assert_eq!(kinds("5,&'a'"), [Tok::Number(5.0), Tok::Amp, Tok::Str]);
+    }
+
+    #[test]
+    fn inch_and_foot_marks_after_numbers() {
+        // mitcad#1531: a quote right after a number is its unit.
+        assert_eq!(kinds(".875\""), [Tok::Number(0.875), Tok::Ident]);
+        assert_eq!(kinds("2.5 \""), [Tok::Number(2.5), Tok::Ident]);
+        let tokens = lex("3' 6''").unwrap();
+        assert_eq!(
+            tokens.iter().map(|t| t.tok).collect::<Vec<_>>(),
+            [Tok::Number(3.0), Tok::Ident, Tok::Number(6.0), Tok::Ident]
+        );
+        assert_eq!(tokens[1].span, Span::new(1, 2));
+        assert_eq!(tokens[3].span, Span::new(4, 6));
+        // Elsewhere a quote starts a text.
+        assert_eq!(kinds("5 & 'a'"), [Tok::Number(5.0), Tok::Amp, Tok::Str]);
+        assert_eq!(kinds("a 'b'"), [Tok::Ident, Tok::Str]);
+        assert_eq!(
+            lex("d1\"").unwrap_err().kind,
+            ParseErrorKind::UnterminatedText
+        );
     }
 
     #[test]

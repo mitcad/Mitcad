@@ -82,7 +82,15 @@ struct SelectionItem {
   // The feature that created the entity (F3 of F3:side(c1)), or empty.
   QString creatingFeature() const;
 
+  // The kind's English id ("face", with a count other than 1 "faces"), for
+  // log lines, keys and the API: the same in every interface language.
   static QString kindName(SelectKind kind, int count = 1);
+  // The kind as user-facing text, in the interface language (mitcad#1471):
+  // "face", with a count other than 1 "faces" (the plural without a count,
+  // as in "pick the body's own faces").
+  static QString kindText(SelectKind kind, int count = 1);
+  // A count and the kind, in the interface language: "1 face", "2 faces".
+  static QString countText(SelectKind kind, int count);
 };
 
 using Selection = QVector<SelectionItem>;
@@ -141,8 +149,10 @@ bool toggleEntry(Selection& items, const SelectionItem& item, const ItemResolver
 // they are.
 Selection uniqueProfiles(const Selection& items, const ItemResolver& resolve = {});
 
-// Text such as "2 edges, 1 face".
+// Text such as "2 edges, 1 face", in English for log lines.
 QString summarize(const Selection& items);
+// The same in the interface language, for user-facing text (mitcad#1471).
+QString summarizeText(const Selection& items);
 
 // Compact rich text for one item returned by the model's measure query.
 // Missing properties are omitted; circular edges include radius and diameter.

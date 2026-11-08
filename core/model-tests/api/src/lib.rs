@@ -47,3 +47,11 @@ mod table_reference_rename_tests;
 mod rolled_back_tests;
 // View › Show of the whole design (mitcad#1287).
 mod view_show_tests;
+// Lengths entered in a design in inches (mitcad#1452).
+mod inch_entry_tests;
+// The command reference as MCP's agents see it, with the names MCP permits
+// (mitcad#1509).
+mod mcp_reference_tests;
+// A feature value that uses the field's own parameter keeps it as a user
+// parameter (mitcad#1536).
+mod feature_own_parameter_tests;

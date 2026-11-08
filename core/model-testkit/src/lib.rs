@@ -32,6 +32,7 @@ use mitcad_model_base::kernel::{
 use mitcad_model_base::kernel::{DraftSpec, FilletSet, FilletSize, ShellSpec, ToolInput};
 use mitcad_model_base::kernel::{FontGlyphs, FontRequest, Glyph};
 use mitcad_model_base::monitor::RecomputeMonitor;
+use mitcad_model_base::sweeps::PipeCorners;
 use mitcad_model_base::sweeps::{
     CoilSpec, LoftSection, LoftSpec, PipeSection, PipeSpec, RibSpec, SweepSpec,
 };
@@ -349,6 +350,13 @@ pub struct MockKernel {
     /// otherwise it samples the first chain as [`MockKernel::intersection_curves`]
     /// tells.
     pub crossing: RefCell<Option<Vec<mitcad_model_base::kernel::Curve3>>>,
+    /// Intersections by the bounds (mitcad#1534): a target whose bounds
+    /// lie within the tool's is the one piece as it was (its faces, edges
+    /// and bounds; the history `common(<target>,<tool>)`), as the OCCT
+    /// facade gives a target lying wholly inside the tool; one whose bounds
+    /// do not overlap the tool's by volume is not touched; the others as
+    /// without this.
+    pub intersects_by_bounds: Cell<bool>,
 }
 
 /// A whole round face of a mock body ([`MockKernel::round_faces`],
@@ -1210,11 +1218,29 @@ impl Kernel for MockKernel {
         if self.boolean_fail_tools.borrow().contains(&tool.history) {
             return Err(KernelError::failed("tool Boolean failed"));
         }
-        let touched = self
+        let mut touched = self
             .touch
             .borrow()
             .clone()
             .unwrap_or_else(|| vec![true; targets.len()]);
+        // Intersections by the bounds (mitcad#1534): which targets lie
+        // within the tool's bounds, and which miss them.
+        let by_bounds = op == BooleanOp::Intersect && self.intersects_by_bounds.get();
+        let within_tool = |target: &MockShape| match (target.bounds, tool.bounds) {
+            (Some(t), Some(b)) => {
+                (0..3).all(|k| t.min[k] >= b.min[k] - 1e-9 && t.max[k] <= b.max[k] + 1e-9)
+            }
+            _ => false,
+        };
+        if by_bounds {
+            for (i, target) in targets.iter().enumerate() {
+                if let (Some(t), Some(b)) = (target.bounds, tool.bounds)
+                    && !t.overlaps(&b, -1e-9)
+                {
+                    touched[i] = false;
+                }
+            }
+        }
         let lost = self.lose.borrow().clone();
         let mut pieces = Vec::new();
         if op == BooleanOp::Join {
@@ -1263,6 +1289,15 @@ impl Kernel for MockKernel {
             let boxes = self.piece_boxes.borrow().clone();
             for (i, target) in targets.iter().enumerate() {
                 if !touched[i] {
+                    continue;
+                }
+                if by_bounds && within_tool(target) {
+                    let mut shape = (*target).clone();
+                    shape.history = format!("common({},{})", target.history, tool.history);
+                    pieces.push(BooleanPiece {
+                        shape,
+                        sources: vec![i],
+                    });
                     continue;
                 }
                 if let Some(boxes) = &boxes {
@@ -2796,15 +2831,22 @@ impl Kernel for MockKernel {
     fn pipe(&self, spec: &PipeSpec<'_>) -> Result<MockShape, KernelError> {
         self.call("pipe")?;
         let names: Vec<&str> = spec.path.iter().map(|p| p.name.as_str()).collect();
+        // Rounded corners (mitcad#1448) only where asked, so that the
+        // specs of mitered pipes read as before.
+        let corners = match spec.corners {
+            PipeCorners::Mitered => String::new(),
+            other => format!(" corners {other:?}"),
+        };
         self.specs.borrow_mut().push(format!(
-            "pipe {} path {} extents {} {} {:?} size {} thickness {:?}",
+            "pipe {} path {} extents {} {} {:?} size {} thickness {:?}{}",
             spec.feature,
             names.join(","),
             number(spec.extent1),
             number(spec.extent2),
             spec.section,
             number(spec.size),
-            spec.thickness
+            spec.thickness,
+            corners
         ));
         let sides = match spec.section {
             PipeSection::Circular => 1,
@@ -3314,6 +3356,7 @@ impl Kernel for MockKernel {
             extrusion_axes: self.extrusion_axes.clone(),
             extrusion_directions: Arc::clone(&self.extrusion_directions),
             crossing: self.crossing.clone(),
+            intersects_by_bounds: self.intersects_by_bounds.clone(),
             ..MockKernel::default()
         })
     }

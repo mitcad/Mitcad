@@ -208,6 +208,16 @@ CommandSession::CommandSession(const CommandDef& def, CommandHost& host, const Q
   m_motionPause.setInterval(kMotionPauseMs);
   connect(&m_motionPause, &QTimer::timeout, this, [this] {
     m_motionPaused = true;
+    if (m_proxyStats.active && m_proxyStats.releasedAt < 0 && m_proxyStats.inputAt >= 0 && !m_proxyKey.isEmpty()) {
+      // How long since the last value came, by the drag's own clock: what
+      // an exact preview while the button is held answers (mitcad#1459).
+      // (A coarse timer: it may fire up to 5 % early.)
+      qDebug().noquote() << QStringLiteral("Drag proxy %1 %2: the pointer rested %3 ms at %4 (a rest: %5 ms)")
+                                .arg(m_def.name, m_proxyKey)
+                                .arg(m_proxyStats.clock.elapsed() - m_proxyStats.inputAt)
+                                .arg(proxyValueText(m_proxyKey, m_proxyValue))
+                                .arg(kMotionPauseMs);
+    }
     schedulePreview(0);
   });
   TestSync::watch(&m_motionPause);
@@ -1421,28 +1431,10 @@ void CommandSession::scopeChanged() {
 }
 
 // Items made by the previewed feature itself, such as a fillet's own faces
-// on a preview body, cannot be its input.
+// on a preview body, cannot be its input; items the preview changed are
+// taken as the items they come from (referable, mitcad#1458).
 bool CommandSession::isReferable(const SelectionItem& item) const {
-  switch (item.kind) {
-  case SelectKind::Face:
-  case SelectKind::Edge:
-  case SelectKind::Vertex: {
-    const auto shape = m_host.bodyShape(item.owner);
-    if (!shape) {
-      return false;
-    }
-    const std::string name = item.name.toStdString();
-    if (item.kind == SelectKind::Face) {
-      return !shape->find_faces(name).empty();
-    }
-    return item.kind == SelectKind::Edge ? !shape->find_edges(name).empty()
-                                         : !shape->find_vertices(name).empty();
-  }
-  case SelectKind::Body:
-    return m_host.bodyShape(item.owner) != nullptr;
-  default:
-    return true;
-  }
+  return referable(item).has_value();
 }
 
 void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifiers, bool window) {
@@ -1460,9 +1452,15 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
   Selection accepted;
   Selection raw; // as picked, with where the click hit
   for (const SelectionItem& item : items) {
-    if (acceptsNow(input, item) && isReferable(item)) {
-      accepted.append(input->convert ? input->convert(item) : item);
-      raw.append(item);
+    // An item the preview changed is the item it comes from (mitcad#1458).
+    const std::optional<SelectionItem> named = acceptsNow(input, item) ? referable(item) : std::nullopt;
+    if (named) {
+      if (named->name != item.name) {
+        qDebug().noquote() << QStringLiteral("%1 %2: %3 of the preview taken as %4")
+                                  .arg(m_def.name, input->label, item.describe(), named->name);
+      }
+      accepted.append(input->convert ? input->convert(*named) : *named);
+      raw.append(*named);
     } else if (input->refusesMeshes && item.geometry == QStringLiteral("mesh") && input->filter.testFlag(item.kind)) {
       // A mesh body picked in the browser (the view does not offer one):
       // say why it is not taken (mitcad#399).
@@ -1544,9 +1542,23 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
     // to click instead, in the status bar (InputDef::refusedHint,
     // mitcad#857). A click on nothing changes nothing in a command.
     m_changedBeforePick.reset();
-    if (!window && input->refusedHint) {
-      const std::optional<SelectionItem> refused =
-          !items.isEmpty() ? std::optional<SelectionItem>(items.first()) : m_host.viewer().takeRefusedClick();
+    if (window) {
+      return;
+    }
+    const std::optional<SelectionItem> refused =
+        !items.isEmpty() ? std::optional<SelectionItem>(items.first()) : m_host.viewer().takeRefusedClick();
+    // The preview's own item, or one whose item before it cannot be told:
+    // why, and that Ctrl held shows the part's own (mitcad#1458).
+    if (refused && acceptsNow(input, *refused)) {
+      const QString why = previewRefusal(*refused);
+      if (!why.isEmpty()) {
+        qDebug().noquote() << QStringLiteral("%1 %2: %3 not taken: %4")
+                                  .arg(m_def.name, input->label, refused->describe(), why);
+        m_host.showHint(why);
+        return;
+      }
+    }
+    if (input->refusedHint) {
       const QString hint = refused ? input->refusedHint(*refused, m_state) : QString();
       if (!hint.isEmpty()) {
         qDebug().noquote() << QStringLiteral("%1 %2: %3 not taken: %4")
@@ -2758,6 +2770,31 @@ CommandSession::Preview CommandSession::previewFromReport(
       preview.datum = placedDatum(preview.report.value(QStringLiteral("datum")).toObject(),
                                   m_host.datumPlacement(m_editUid));
       preview.tool = datumShape(preview.datum, 100.0);
+    } else if (preview.report.contains(QStringLiteral("curve"))) {
+      // An Intersection Curve's curve where the view draws the finished one
+      // (MainWindow::showDatums): its polyline, in its component's
+      // coordinates, placed by the occurrence of that component, as a
+      // construction feature's datum is (mitcad#1496).
+      const QJsonArray points =
+          preview.report.value(QStringLiteral("curve")).toObject().value(QStringLiteral("points")).toArray();
+      const gp_Trsf placement = m_host.datumPlacement(m_editUid);
+      const TopoDS_Shape polyline = polylineShape(points);
+      if (!polyline.IsNull()) {
+        preview.tool = polyline.Moved(TopLoc_Location(placement));
+        const auto pointText = [&placement](const QJsonValue& value) {
+          const gp_Pnt point = pointOf(value).Transformed(placement);
+          QStringList parts;
+          for (const double coordinate : {point.X(), point.Y(), point.Z()}) {
+            // To the thousandth, never "-0.000".
+            const double rounded = std::round(coordinate * 1000.0) / 1000.0;
+            parts << QString::number(rounded == 0.0 ? 0.0 : rounded, 'f', 3);
+          }
+          return QStringLiteral("(%1)").arg(parts.join(QStringLiteral(", ")));
+        };
+        preview.curve = QStringLiteral("%1 point(s) from %2 to %3")
+                            .arg(points.size())
+                            .arg(pointText(points.first()), pointText(points.last()));
+      }
     }
   }
   return preview;
@@ -3043,6 +3080,7 @@ void CommandSession::showPreview(const Preview& preview, const QString& operatio
   // While Ctrl hides the preview it is kept, not drawn, and drawn once Ctrl
   // is released (mitcad#1421, CommandSessionHold.cpp).
   m_drawnPreview = DrawnPreview{preview, operation};
+  m_previewOrigins.clear(); // worked out again for this preview's shapes (mitcad#1464)
   m_shownOperation = operation;
   if (m_previewHidden) {
     return;
@@ -3067,7 +3105,7 @@ void CommandSession::showPreview(const Preview& preview, const QString& operatio
   // Where the tool is drawn (its box's middle in the design), for UI tests:
   // placed where its component's occurrences put it (mitcad#636).
   QString toolAt = QStringLiteral("none");
-  if (!preview.tool.IsNull() && !preview.report.contains(QStringLiteral("datum"))) {
+  if (!preview.tool.IsNull() && !preview.report.contains(QStringLiteral("datum")) && preview.curve.isEmpty()) {
     Bnd_Box box;
     BRepBndLib::Add(preview.tool, box);
     if (!box.IsVoid()) {
@@ -3105,6 +3143,8 @@ void CommandSession::showPreview(const Preview& preview, const QString& operatio
     m_loggedPreviewDatum = datumAt;
     qDebug().noquote() << QStringLiteral("Preview datum in the design: %1").arg(datumAt);
   }
+  // An Intersection Curve's curve, for UI tests (mitcad#1496).
+  logPreviewCurve(preview.curve.isEmpty() ? QStringLiteral("none") : preview.curve);
   // A split's or trim's extended tool (mitcad#712) shows see-through orange
   // over the result, where the cut runs; logged with its box for UI tests.
   QString extended = QStringLiteral("none");
@@ -3138,6 +3178,8 @@ void CommandSession::showPreview(const Preview& preview, const QString& operatio
     viewer.setPreview(TopoDS_Shape());
   } else if (preview.report.contains(QStringLiteral("datum"))) {
     viewer.setPreview(preview.tool, OcctViewer::PreviewStyle::Datum);
+  } else if (!preview.curve.isEmpty()) {
+    viewer.setPreview(preview.tool, OcctViewer::PreviewStyle::Curve);
   } else {
     viewer.setPreview(preview.tool, OcctViewer::PreviewStyle::Add);
   }
@@ -3469,9 +3511,17 @@ void CommandSession::clearPreview() {
   m_host.viewer().setBodies(modelShown);
   m_host.showSectionCapsOf(modelShown, false); // the caps of the bodies at the marker again (mitcad#943)
   m_host.viewer().setPreview(TopoDS_Shape());
+  logPreviewCurve(QStringLiteral("none"));
   if (!m_shownReport.isEmpty()) {
     m_shownReport = {};
     updateManipulators();
+  }
+}
+
+void CommandSession::logPreviewCurve(const QString& curve) {
+  if (curve != m_loggedPreviewCurve) {
+    m_loggedPreviewCurve = curve;
+    qDebug().noquote() << QStringLiteral("Preview curve: %1").arg(curve);
   }
 }
 
@@ -4957,6 +5007,7 @@ void CommandSession::finish(bool committed) {
   }
   OcctViewer& viewer = m_host.viewer();
   viewer.setPreview(TopoDS_Shape());
+  logPreviewCurve(QStringLiteral("none")); // an Intersection Curve's (mitcad#1496)
   viewer.setPlanesBehind(false);
   viewer.setPlanesByDepth(false);
   viewer.setSketchesBehind(false);

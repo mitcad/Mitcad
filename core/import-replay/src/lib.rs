@@ -120,6 +120,8 @@ pub use refs::DEFAULT_GEOMETRIC_TOLERANCE;
 pub use mitcad_import_base::{Helper, Progress, Ticking, abandoned, current_progress, tick};
 // When the memory guard gives the allocator's free memory back (mitcad#885).
 pub use mitcad_import_base::FreeMemoryRelease;
+// The memory guard's judgement of its measurements (mitcad#1505).
+pub use mitcad_import_base::{ImportMemoryGuard, memory_guard};
 // The outcomes of the .ipt, .iam and .dwg imports (mitcad#1051).
 pub use mitcad_import_base::outcomes;
 pub use report::{

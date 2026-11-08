@@ -137,6 +137,7 @@ fn dressup_overlay<K: Kernel>(
         feature: ctx.uid,
         kind: SheetOverlayKind::Change {
             placement: crate::transform::Transform::IDENTITY,
+            source: None,
         },
         removed: v0 - volume(shape)?,
     });
@@ -176,6 +177,20 @@ fn rederive<K: Kernel>(
     let (state, rules) = read(ctx, body)?;
     let before = ctx.body(body)?;
     derive(ctx, state, &rules, &before, shape)
+}
+
+/// The sheet of `body` re-derived from `shape`, as [`adapt`] would, for a
+/// sheet a copy of a pattern joined without carrying it (mitcad#1462);
+/// None where the adapter cannot.
+pub(super) fn rederive_joined<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    body: BodyUid,
+    shape: &K::Shape,
+) -> Option<SheetState> {
+    let warnings = ctx.warnings.len();
+    let result = rederive(ctx, body, shape).ok();
+    ctx.warnings.truncate(warnings);
+    result
 }
 
 /// The sheet `state` of `before` re-derived from `shape`, a change of its

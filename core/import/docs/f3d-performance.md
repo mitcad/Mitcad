@@ -195,8 +195,10 @@ holds a second copy of it beside the abandoned one (mitcad#80).
 An allocation that fails ends the process: Rust's cannot be caught, and
 the import used to lose everything, also the items done (mitcad#80). So
 the import guards its memory (`core/ffi/src/f3d_import.rs`,
-`MemoryGuard`), on the watchdog's loop or, without one, on a thread of
-its own, ten times a second: it measures the process against the
+`MemoryGuard`, over `mitcad_import_base::memory_guard`), on the
+watchdog's loop or, without one, on a thread of its own, every 0.02 s as
+the guard of model commands does (mitcad#1493, mitcad#1505): it measures
+the process against the
 tightest limit it runs under (`core/ffi/src/memory.rs`,
 `core/cpp/bridge/memory.cpp`): an address-space (`ulimit -v`) or data
 limit, the memory the system has left (available memory and free swap)
@@ -271,9 +273,21 @@ or not.
   history states behind the replay (`Oracle::release_behind`,
   `StoredGeometry::release_before`), which are built again if they are
   asked for; what it imports stays the same.
-- At 85 % it is *low* (`Progress::low_memory`): the definition being
-  evaluated is cut short as on a stop and its item takes its history
-  state (note "the import ran low on memory"), as do the modelling
+- At 85 % it is *low* (`Progress::low_memory`), and also from 50 % on
+  when the memory grows so fast that it would get there within 0.1 s at
+  the rate it kept up over the last two measurements (the slower of the
+  two; mitcad#1505, the look-ahead of the guard of model commands,
+  `mitcad_model::monitor::memory_guard`: a boolean of many B-spline faces
+  grew by about 6 GiB a second and passed a limit measured every 0.1 s
+  before the guard saw it near; the report's memory then reads "growing
+  too fast to go on, 2.5 GiB of …"). A single jump between two
+  measurements is not growth to go on with: a new thread's allocator
+  arena, one large buffer or another import of the same process moves a
+  data limit's reading by hundreds of MiB at once, and looking ahead at
+  such a jump cut an ordinary extrusion short at 40 % of the limit. The
+  definition being evaluated is cut short as on a stop and its item
+  takes its history state (note "the import ran low on memory"), as do
+  the modelling
   items after it until the memory is back under 70 %
   (`Progress::memory_recovered`); the import drops what it can as above,
   and from then on caches at most 256 MiB of results

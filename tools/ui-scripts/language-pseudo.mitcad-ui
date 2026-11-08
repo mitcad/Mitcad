@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# The tests' pseudo-language (mitcad#1460, docs/translations.md), MitCad
+# started with --language xx: every text marked ([…]), a third longer and
+# accented. The tabs show it, no group caption is cut (expect-ribbon-labels
+# checks each caption's width), and the command search finds a command by
+# its English name.
+# Run by tools/ui-language-test.sh.
+expect-ever '^Language: xx [(]--language[)]$' 30
+wait-idle
+expect-ribbon-labels '[Štárt ··]' '[Šólíd ··]' '[Búíld ··]' '[Máké ··]'
+command tools.search
+focus-widget commandSearchInput
+type preferences
+expect-command-search preferences tools.preferences
+key Escape
+focus-main

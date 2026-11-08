@@ -16,6 +16,19 @@ const PATH_CHARS: u64 = 4096;
 // application's mcp/ScreenshotBudget.hpp has the same numbers.
 pub(crate) const SCREENSHOT_MIN_BYTES: u64 = 4096;
 pub(crate) const SCREENSHOT_INLINE_BYTES: u64 = 5 * 1024 * 1024;
+/// The longest tool description, in characters (mitcad#1506): the rules
+/// of one tool are in its description, which clients keep whole.
+#[cfg(test)]
+pub(crate) const DESCRIPTION_CHARS: usize = 2048;
+
+/// How a sketch's ids are given out (mitcad#1269), in `model_command`'s
+/// description since the server instructions became too long to arrive
+/// whole (mitcad#1506); the reference's "Sketch commands" says it too.
+pub(crate) const SKETCH_IDS: &str = "In a sketch, points, curves and texts share one numbering (p3, c4, t5 name different entities) and constraints and dimensions another (k6): take ids from a result (entities, made, constraints, dimensions) or the sketch query, and do not guess the ids a command earlier in the same model_command array will make. A point input [x, y] is always a new point, also where a curve ends; to join a new curve to an end, give the end's id (the drawing tools' point inputs take an existing point id where the reference says so), or hold the two ends together afterwards with a coincident constraint (two curve ends become one point).";
+
+/// How the application's command ids are found (mitcad#1269), in
+/// `ui_command`'s description (mitcad#1506).
+pub(crate) const UI_COMMAND_IDS: &str = "ui_command with search (\"\" for all, or words such as \"fillet\") lists the command registry's ids with whether an agent may run each; an unknown id is refused with the nearest ones.";
 
 pub(crate) fn tools() -> Vec<Value> {
     let document = json!({"type": "string", "minLength": 1, "maxLength": ID_CHARS, "description": "Explicit document handle returned by document_create or document_open"});
@@ -58,7 +71,7 @@ pub(crate) fn tools() -> Vec<Value> {
         ),
         tool(
             "model_query",
-            "Read a document using one existing JSON model query. model_reference lists the query names and gives each one's arguments and result (identities and units too). print_thickness answers its summary only (thinnest wall, where, regions, thin_triangles) unless the query sets triangles (true, with max_triangles to cap them).",
+            "Read a document using one existing JSON model query. model_reference lists the query names and gives each one's arguments and result (identities and units too). print_thickness answers its summary only (thinnest wall, where, regions, thin_triangles) unless the query sets triangles (true, with max_triangles to cap them). What numbers miss (a slab past a gable, a cut under a step) shows in a picture: model_render.",
             json!({"document": document, "query": query_schema()}),
             &["document", "query"],
             true,
@@ -66,7 +79,9 @@ pub(crate) fn tools() -> Vec<Value> {
         ),
         tool(
             "model_command",
-            "Apply a JSON model command, or an array of them in order, to a document. Look up the command, or the feature type of add_feature, with model_reference first. An array stops at the first refused entry (the entries before it are undone, nothing of the array stays; the result names the entry) or at the first entry whose added or edited feature fails (applied; stopped_at names it). File imports and external links are not supported through this tool. isError is true only when a command is refused or a feature it added or edited fails; failed_features lists every failed feature in the timeline (edited, new). The result holds the document's state and what the command changed (changes: features added, changed, recomputed or failed, bodies added or changed, what was removed); timeline: full gives the whole timeline and bodies instead, none neither.",
+            &format!(
+                "Apply a JSON model command, or an array of them in order, to a document. Look up the command, or the feature type of add_feature, with model_reference first. An array stops at the first refused entry (the entries before it are undone, nothing of the array stays; the result names the entry) or at the first entry whose added or edited feature fails (applied; stopped_at names it). File imports and external links are not supported through this tool. isError is true only when a command is refused or a feature it added or edited fails; failed_features lists every failed feature in the timeline (edited, new). A feature that was added or edited but failed is applied and stays in the timeline, as in the UI, and the result's error says so: edit it, or remove it with undo or delete_feature. The result holds the document's state and what the command changed (changes: features added, changed, recomputed or failed, bodies added or changed, what was removed); timeline: full gives the whole timeline and bodies instead, none neither. {SKETCH_IDS}"
+            ),
             json!({
                 "document": document,
                 "command": command_schema(),
@@ -90,7 +105,7 @@ pub(crate) fn tools() -> Vec<Value> {
         ),
         tool(
             "model_export",
-            "Export geometry to a new file inside the workspace. Existing output files are refused. Optionally select bodies; DXF requires a sketch handle, or a sheet-metal body whose Flat Pattern is written, instead of bodies, unless drawing or cut_sheet is given; cut_sheet writes a cut sheet kept in the design (DXF or SVG at 1:1, model_reference {\"section\": \"Cut sheets\"}). PDF and SVG (and DXF with drawing) write a drawing of the bodies: views with hidden lines removed, overall dimensions, hole diameters, a hole table and a title block; drawing holds the export_drawing options (sheet, orientation, scale, projection, views, section, hidden_lines, ...; model_reference {\"section\": \"Drawings\"}). Defaults are metric.",
+            "Export geometry to a new file inside the workspace. Existing output files are refused. Optionally select bodies; DXF requires a sketch handle, or a sheet-metal body whose Flat Pattern is written, instead of bodies, unless drawing or cut_sheet is given; cut_sheet writes a cut sheet kept in the design (DXF or SVG at 1:1, model_reference {\"section\": \"Cut sheets\"}). PDF and SVG (and DXF with drawing) write a drawing of the bodies: views with hidden lines removed, overall dimensions, hole diameters, a hole table and a title block; drawing holds the export_drawing options (sheet, orientation, scale, projection, views, section, hidden_lines, ...; model_reference {\"section\": \"Drawings\"}). 3MF for a slicer: plates writes the design's print plates (one_file: every plate in one file, for Bambu Studio, OrcaSlicer, QIDI Studio and PrusaSlicer 2.9+; file_per_plate: a file per plate beside path, for Cura and older PrusaSlicer, each checked as a new file before any is written; model_reference {\"section\": \"Print plates\"}), plate one of them, dialect the slicer whose settings go with the bodies (bambu_studio, orcaslicer, qidi_studio, prusaslicer, cura); on_bed, center, drop, auto_orient, bed_face and spacing lay the pieces on the print bed (also STL and OBJ; model_reference {\"section\": \"Print bed faces\"}), occurrences and whole pick placements. The result is the export command's (plates with each plate's path, origin, bed and warnings, and files). Defaults are metric.",
             json!({
                 "document": document,
                 "path": path,
@@ -101,14 +116,135 @@ pub(crate) fn tools() -> Vec<Value> {
                 "flat_pattern": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "Sheet-metal body identity for a Flat Pattern DXF, for example F3.b0"},
                 "drawing": {"type": "object", "description": "Drawing options (export_drawing without cmd, path and bodies), for example {\"sheet\": \"A3\", \"views\": [\"front\", \"top\", \"right\", \"iso\"], \"hidden_lines\": true}"},
                 "cut_sheet": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "A cut sheet kept in the design (its id like D2, or its name) written as DXF or SVG: its parts' outlines at 1:1 on the layers CUT_OUTER and CUT_INNER"},
-                "labels": {"type": "boolean", "default": false, "description": "With cut_sheet: each part's name as text on the layer LABEL"}
+                "labels": {"type": "boolean", "default": false, "description": "With cut_sheet: each part's name as text on the layer LABEL"},
+                "plates": {"type": "string", "enum": ["one_file", "file_per_plate"], "description": "3MF: the design's print plates instead of bodies, on the print bed: one_file every plate in path (Bambu Studio, OrcaSlicer, QIDI Studio, PrusaSlicer 2.9+), file_per_plate a file per plate beside path, '<name> - <plate name>.3mf' (Cura, older PrusaSlicer); no bodies, occurrence, occurrences, whole or bed_face with it (model_reference {\"section\": \"Print plates\"})"},
+                "plate": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "3MF: one print plate (its id like plate2, or its name) alone, in path, on the print bed"},
+                "dialect": {"type": "string", "enum": ["bambu_studio", "orcaslicer", "qidi_studio", "prusaslicer", "cura"], "description": "3MF: the slicer whose print settings go with the bodies (model_reference {\"section\": \"Print profiles\"})"},
+                "on_bed": {"type": "boolean", "default": false, "description": "3MF, STL, OBJ: the bodies on the print bed by their print bed faces, centred on the plate (implied by plates and plate)"},
+                "center": {"type": "boolean", "default": true, "description": "On the print bed: each piece's middle over the plate's centre"},
+                "drop": {"type": "boolean", "default": true, "description": "On the print bed: each piece's lowest point on the bed"},
+                "auto_orient": {"type": "boolean", "default": true, "description": "On the print bed: a piece without a usable print bed face turned onto the face the automatic orientation finds"},
+                "spacing": {"type": "number", "minimum": 0, "maximum": 1000, "default": 5, "description": "On the print bed: mm between neighbouring pieces beyond their brims (model_reference {\"section\": \"Spacing beyond the brims\"})"},
+                "bed_face": {"type": ["object", "array"], "description": "On the print bed: the print bed face that turns the piece it is in, {\"body\": \"F2.b0\", \"occurrence\": \"Arm:1\"} (occurrence \"\" or left out for the design itself), or a list of them, one per piece"},
+                "occurrence": {"type": "string", "maxLength": NAME_CHARS, "description": "Only the placements by this occurrence (\"O1/O4\" or \"Arm:1/Pin:2\")"},
+                "occurrences": {"type": "object", "description": "3MF: per body (uid or name), the occurrences whose placements are written, e.g. {\"F2.b0\": [\"Nuts:1\"]} (\"\" the design itself; [] all of them)"},
+                "whole": {"type": "array", "items": {"type": "string", "maxLength": NAME_CHARS}, "description": "3MF on the print bed: occurrences sent whole, each one object as assembled"}
             }),
             &["document", "path", "format"],
             false,
             false,
         ),
-        reference_tool(),
+        {
+            // The headless server draws pictures (mitcad#1486).
+            let mut reference = reference_tool();
+            reference["description"] = json!(format!(
+                "{} To see what a document looks like, model_render draws it (PNG).",
+                reference["description"].as_str().unwrap_or_default()
+            ));
+            reference
+        },
+        with_raytrace(with_overlay(render_tool())),
     ]
+}
+
+/// model_render's overlay in its description (mitcad#1488).
+const RENDER_OVERLAY: &str = "overlay draws what Print Analysis' functions find over the bodies, with a summary per body in the result's overlay: overhang (angle; up, else the print bed face, else +Z), thickness (walls under minimum), draft (angle, pull) or failed (the bodies failed features read); a name or {type, ...}; fast quality only.";
+
+/// model_render's overlay (mitcad#1488): what Print Analysis' functions
+/// find, drawn over the bodies, with its summary in the result.
+fn with_overlay(mut tool: Value) -> Value {
+    tool["description"] = json!(format!(
+        "{} {RENDER_OVERLAY}",
+        tool["description"].as_str().unwrap_or_default()
+    ));
+    let direction = |description: &str| json!({"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": description});
+    if let Some(properties) = tool["inputSchema"]["properties"].as_object_mut() {
+        properties.insert(
+            "overlay".to_owned(),
+            json!({
+                "type": ["string", "object"],
+                "minLength": 1,
+                "maxLength": 16,
+                "description": "overhang, thickness, draft or failed, or {\"type\": one of them, with its settings and color \"#rrggbb\"}",
+                "properties": {
+                    "type": {"type": "string", "enum": ["overhang", "thickness", "draft", "failed"]},
+                    "angle": {"type": "number", "minimum": 0, "maximum": 90, "description": "overhang: degrees from the vertical (default 45); draft: the least draft in degrees (default 1)"},
+                    "up": direction("overhang: printed with this direction up (default: the body's print bed face, else +Z)"),
+                    "minimum": {"type": "number", "minimum": 0, "description": "thickness: the thinnest wall in mm (default 0.8)"},
+                    "pull": direction("draft: the mold's pull direction (default +Z)"),
+                    "color": {"type": "string", "minLength": 7, "maxLength": 7, "description": "#rrggbb"}
+                },
+                "required": ["type"],
+                "additionalProperties": false
+            }),
+        );
+    }
+    tool
+}
+
+/// model_render's ray-traced picture (mitcad#1489): its quality and the
+/// render worker's samples, time limit and denoising.
+fn with_raytrace(mut tool: Value) -> Value {
+    tool["description"] = json!(format!(
+        "{} quality raytrace ray traces the picture with the Cycles render worker as mitcad-cli render does (the design's render settings; samples, time_limit_s, denoise), with the same camera as the fast mode for the same arguments; slower, and refused with error_code render_worker_missing or render_worker_failed (suggesting quality fast) when the worker is not installed or fails.",
+        tool["description"].as_str().unwrap_or_default()
+    ));
+    if let (Some(properties), Value::Object(quality)) = (
+        tool["inputSchema"]["properties"].as_object_mut(),
+        json!({
+            "quality": {"type": "string", "enum": ["fast", "raytrace"], "default": "fast", "description": "fast: shaded and edged as the 3D view shows it; raytrace: the Cycles render worker as mitcad-cli render runs it, with the same camera"},
+            "samples": {"type": "integer", "minimum": 1, "maximum": 4096, "default": 64, "description": "raytrace: samples per pixel"},
+            "time_limit_s": {"type": "number", "minimum": 1, "maximum": 600, "default": 30, "description": "raytrace: the most seconds the render may take; it stops with the samples it has"},
+            "denoise": {"type": "boolean", "default": true, "description": "raytrace: denoise the picture"}
+        }),
+    ) {
+        properties.extend(quality);
+    }
+    tool
+}
+
+/// model_render's description (mitcad#1486), both servers': what it
+/// draws, its camera and its budget.
+const RENDER_ABOUT: &str = "A picture of the document's bodies, shaded with their appearances and edged as the 3D view shows them, returned as an MCP image (PNG) after the text, to see what a design looks like: drawn without a GPU or a display, the same arguments giving the same bytes. view: home (default), iso, front, back, left, right, top, bottom, a named view of the design, {azimuth, elevation} in degrees, or a camera {eye, target, up}; the result's camera (eye, target, up, projection, height, fov) passed back as view gives the same picture, to turn or zoom from it. fit frames all bodies drawn, some by id (F2.b0, F7, C1, O1/O4, or a body's name) or a box {min, max} to zoom on a detail; bodies and hidden choose what is drawn. max_bytes counts the PNG (default 5 MiB): a larger picture is drawn smaller, downscaled_for_bytes says so.";
+/// Its inspection options and views (mitcad#1487).
+const RENDER_OPTIONS: &str = "colors {id: \"#rrggbb\"} recolors bodies; highlight draws ids, faces (F2:side(...), Body1/F2:end(...)) and edges (E{...}) in the selection blue; section {origin, normal} cuts away the normal's side, solids capped; explode spreads components apart by a factor; views (up to 8) answers an image per view, each with its camera in structuredContent.views, sharing max_bytes. Unknown references are warnings.";
+
+/// The live server's model_render (mitcad#1487).
+const RENDER_LIVE: &str = "The live server draws the design at the timeline marker as the headless server does for the same file and arguments, whatever the window's view shows (ui_screenshot shows that). path also writes the PNG at full size to a new .png file in a folder the user allows agents to use.";
+
+/// A preview image of a document (mitcad#1486), headless.
+fn render_tool() -> Value {
+    let document = json!({"type": "string", "minLength": 1, "maxLength": ID_CHARS, "description": "Explicit document handle returned by document_create or document_open"});
+    let ids = json!({"type": "array", "minItems": 1, "maxItems": 10000, "items": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS}});
+    tool(
+        "model_render",
+        &format!(
+            "{RENDER_ABOUT} {RENDER_OPTIONS} path also writes the PNG at full size to a new .png file in the workspace. Read-only: allowed with --read-only (without path)."
+        ),
+        json!({
+            "document": document,
+            "view": {"type": ["string", "object"], "description": "A view name (home, iso, front, back, left, right, top, bottom, or a named view of the design), {\"azimuth\": deg, \"elevation\": deg} (azimuth about Z from the front, 90 from the right), or a camera {\"eye\": [x,y,z], \"target\": [x,y,z], \"up\": [x,y,z]} in mm with optional height, fov and projection, as the result's camera gives it. Default home"},
+            "projection": {"type": "string", "enum": ["perspective", "orthographic"], "description": "Default: the view's own, else perspective"},
+            "fit": {"type": ["string", "array", "object"], "description": "\"all\": the bodies drawn (the default for a view name or angles; a camera stays as given unless fit is given); a list of body, feature, component or occurrence ids or body names; or a box {\"min\": [x,y,z], \"max\": [x,y,z]} in mm", "items": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS}, "minItems": 1, "maxItems": 10000},
+            "bodies": {"type": ["string", "array"], "description": "\"visible\" (default: what the design shows), \"all\" (hidden bodies too), or a list of ids as for fit: only these", "items": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS}, "minItems": 1, "maxItems": 10000},
+            "hidden": ids,
+            "size": {"type": "array", "items": {"type": "integer", "minimum": 16, "maximum": 4096}, "minItems": 2, "maxItems": 2, "default": [1024, 768], "description": "[width, height] in pixels"},
+            "edges": {"type": "boolean", "default": true, "description": "Face boundaries and silhouettes"},
+            "background": {"type": "string", "minLength": 1, "maxLength": 16, "default": "theme", "description": "theme (the view's light gradient), transparent (a PNG with alpha), white, black or #rrggbb"},
+            "path": {"type": "string", "minLength": 1, "maxLength": PATH_CHARS, "description": "Also write the PNG at full size to this .png file in the workspace (refused when the server is read-only)"},
+            "overwrite": {"type": "boolean", "default": false, "description": "Explicitly allow replacement of an existing file at path"},
+            "max_bytes": {"type": "integer", "minimum": SCREENSHOT_MIN_BYTES, "maximum": SCREENSHOT_INLINE_BYTES, "description": "The returned PNG's largest size in bytes (not its base64): the picture is drawn smaller until it fits. Default 5 MiB"},
+            // The inspection options and views (mitcad#1487).
+            "colors": {"type": "object", "description": "Per-body colors: {\"F2.b0\": \"#a52a2a\", \"C1\": \"#3060c0\"}, ids as for bodies; a body several name takes the most specific's. An id naming no body drawn is a warning"},
+            "highlight": {"type": "array", "minItems": 1, "maxItems": 1000, "items": {"type": ["string", "object"]}, "description": "References drawn in the selection blue: body, feature, component or occurrence ids or body names (the whole body), face names (F2:side(c1[c4,c2])), edge names (E{...|...}, a line over everything), body/face text (Body1/F2:end(...)), {\"body\", \"face\" or \"edge\", \"occurrence\"} or an entity as ui_state lists it {\"kind\", \"owner\", \"name\"}. One naming nothing drawn is a warning"},
+            "section": {"type": "object", "description": "A clip plane {\"origin\": [x,y,z], \"normal\": [x,y,z]} in mm: the side the normal points to is cut away, solid bodies capped (their color, hatched), to look inside fits and cavities"},
+            "explode": {"type": "number", "minimum": 0, "maximum": 10, "default": 0, "description": "Moves top-level components (in a design of one, its bodies) apart from the drawn bodies' centre: each by this factor times its centre's distance from it; 0 draws them where they are"},
+            "views": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": ["string", "object"]}, "description": "Several pictures in one call: each a view (as view takes it) or {\"view\", \"projection\", \"fit\", \"size\", \"section\"} over this call's arguments; structuredContent.views holds each one's camera and size in order, and an image block follows the text for each. Each picture gets max_bytes / count bytes. Not with path"}
+        }),
+        &["document"],
+        true,
+        false,
+    )
 }
 
 /// The command reference in parts (mitcad#714), in both servers; the
@@ -116,13 +252,14 @@ pub(crate) fn tools() -> Vec<Value> {
 fn reference_tool() -> Value {
     tool(
         "model_reference",
-        "Look up the model API reference: commands, queries, feature definitions, values and units, identities. Without arguments: the contents (the sections' headings) and the names of every query, command and feature type this server permits. With one of: section (a heading or a name it lists, e.g. \"Values\", \"split_body\", \"Sketch commands\"), query or command (its reference row: fields and result), feature (a feature type's section with an example definition), search (the sections and excerpts that contain a text). Each answer holds at most 64 kB of text; a longer one says truncated and gives next_offset, to pass as offset for the rest. The resource mitcad://reference/commands is the whole reference (about 1 MB).",
+        "Look up the model API reference: commands, queries, feature definitions, values and units, identities. Without arguments: the contents (the sections' headings) and the names of every query, command and feature type this server permits. With one of: section (a heading or a name it lists, e.g. \"Values\", \"split_body\", \"Sketch commands\"), query or command (its reference row: fields and result), feature (a feature type's section with an example definition), search (the sections and excerpts that contain a text), guide (how to model well in MitCad rather than what exists: \"index\" lists the topics with when to read each, as the contents' guides do; read the topic that fits the task). Each answer holds at most 64 kB of text; a longer one says truncated and gives next_offset, to pass as offset for the rest. The resource mitcad://reference/commands is the whole reference (about 1 MB), and mitcad://guide/<id> each guide.",
         json!({
             "section": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "A section's heading, or a name its heading lists, e.g. \"Values\", \"split_body\" or \"Sketch commands\""},
             "query": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "A query's name, e.g. \"bodies\" or \"faces\""},
             "command": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "A command's name (its cmd), e.g. \"add_feature\" or \"sketch.add_line\""},
             "feature": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "A feature type (a definition's type), e.g. \"extrude\" or \"construction_plane\""},
             "search": {"type": "string", "minLength": 2, "maxLength": NAME_CHARS, "description": "A text to find in any case, e.g. \"bbox\""},
+            "guide": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "A guide on how to model well here: \"index\" (the topics, with when to read each) or a topic's id, e.g. \"principles\""},
             "offset": {"type": "integer", "minimum": 0, "description": "Where a truncated answer continues: its next_offset"}
         }),
         &[],
@@ -139,7 +276,7 @@ fn command_schema() -> Value {
         "items": {"type": "object"},
         "minItems": 1,
         "maxItems": 1000,
-        "description": "One JSON command object {\"cmd\": \"<name>\", ...its fields}, for example {\"cmd\": \"add_feature\", \"def\": {...}}, or an array of them run in order. JSON numbers are millimeters and radians; write \"90 deg\" for degrees. model_reference gives each command's fields."
+        "description": "One JSON command object {\"cmd\": \"<name>\", ...its fields}, for example {\"cmd\": \"add_feature\", \"def\": {...}}, or an array of them run in order. JSON numbers are millimeters and radians; write \"90 deg\" for degrees. They are millimeters in a design in any length unit (the document query's units.length): convert a length the user gives in the design's unit, or write it as text, which is read in that unit (\"0.875\", \"0.875 in\"). model_reference gives each command's fields."
     })
 }
 
@@ -173,6 +310,7 @@ pub(crate) fn live_tools() -> Vec<Value> {
                         | "model_command"
                         | "model_export"
                         | "model_reference"
+                        | "model_render"
                 )
             )
         })
@@ -181,8 +319,11 @@ pub(crate) fn live_tools() -> Vec<Value> {
         match tool["name"].as_str() {
             Some("document_list") => {
                 tool["description"] = json!(
-                    "List every open document (its handle, path, name, active flag and state) and the folders the user allows agents to save to and open from (folders; empty: none allowed)."
+                    "List every open document (its handle, path, name, active flag and state) and the folders the user allows agents to save to and open from (folders; empty: none allowed). Handles become invalid when their document is closed or replaced. File imports and closing are not available through this connection. Disconnecting leaves the application's document open, including unsaved changes."
                 );
+            }
+            Some("model_reference") => {
+                tool["description"] = reference_tool()["description"].clone();
             }
             Some("model_query") => {
                 tool["description"] = json!(
@@ -190,18 +331,32 @@ pub(crate) fn live_tools() -> Vec<Value> {
                 );
             }
             Some("model_command") => {
-                tool["description"] = json!(
-                    "Apply a JSON model command, or an array of them in order, to the open document through its normal undo workflow; the change is one undo step labeled (agent) in the undo text. While a sketch is open, sketch.* commands on it (and edit_feature of it, undo, redo) go through the sketch session as the user's would; other commands wait until it is finished. Look up the command, or the feature type of add_feature, with model_reference first. File, remote and internal commands are refused. An array stops at the first refused entry (the entries before it are undone, nothing of the array stays; the result names the entry) or at the first entry whose added or edited feature fails (applied; stopped_at names it); undo and redo run alone. isError is true only when a command is refused or a feature it added or edited fails; failed_features lists every failed feature in the timeline (edited, new). The result holds the document's state and what the command changed (changes: features added, changed, recomputed or failed, bodies added or changed, what was removed); timeline: full gives the whole timeline and bodies instead, none neither."
-                );
+                tool["description"] = json!(format!(
+                    "Apply a JSON model command, or an array of them in order, to the open document through its undo workflow as one undo step labeled (agent) in the undo text, which the user undoes with Ctrl+Z. While a sketch is open, sketch.* commands on it (and edit_feature of it, undo, redo) go through the sketch session as the user's would; other commands wait until the sketch or command panel is finished. Editing is refused when the document is read-only. Look up the command, or the feature type of add_feature, with model_reference first. File, remote and internal commands are refused. An array stops at the first refused entry (the entries before it are undone; the result names the entry) or at the first entry whose added or edited feature fails (applied; stopped_at names it); undo and redo run alone. isError is true only when a command is refused or a feature it added or edited fails; failed_features lists every failed feature in the timeline (edited, new). A failed feature is applied and stays in the timeline, as in the UI, and the result's error says so: edit it, or remove it with undo or delete_feature. The result holds the document's state and what the command changed (changes: features added, changed, recomputed or failed, bodies added or changed, what was removed); timeline: full gives the whole timeline and bodies instead, none neither. {SKETCH_IDS}"
+                ));
             }
             // Into the folders for designs (mitcad#689), as
             // document_save's path.
             Some("model_export") => {
                 tool["description"] = json!(
-                    "Export the open document's geometry to a new file in a folder the user allows agents to use (document_list lists them); the document does not change. An existing file is refused. bodies selects what is written (for example leaving out a helper body). DXF requires a sketch handle, or a sheet-metal body whose Flat Pattern is written, instead of bodies, unless drawing or cut_sheet is given; cut_sheet writes a cut sheet kept in the design (DXF or SVG at 1:1, model_reference {\"section\": \"Cut sheets\"}). PDF and SVG (and DXF with drawing) write a drawing of the bodies: views with hidden lines removed, overall dimensions, hole diameters, a hole table and a title block; drawing holds the export_drawing options (model_reference {\"section\": \"Drawings\"}). Refused while a command panel is open, while a sketch in the middle of the timeline is edited (its later features are rolled back until it is finished), or when the document has failed features. Defaults are metric."
+                    "Export the open document's geometry to a new file in a folder the user allows agents to use (document_list lists them); the document does not change. An existing file is refused. bodies selects what is written (for example leaving out a helper body). DXF requires a sketch handle, or a sheet-metal body whose Flat Pattern is written, instead of bodies, unless drawing or cut_sheet is given; cut_sheet writes a cut sheet kept in the design (DXF or SVG at 1:1, model_reference {\"section\": \"Cut sheets\"}). PDF and SVG (and DXF with drawing) write a drawing of the bodies: views with hidden lines removed, overall dimensions, hole diameters, a hole table and a title block; drawing holds the export_drawing options (model_reference {\"section\": \"Drawings\"}). 3MF for a slicer: plates writes the design's print plates (one_file: every plate in one file, for Bambu Studio, OrcaSlicer, QIDI Studio and PrusaSlicer 2.9+; file_per_plate: a file per plate beside path, for Cura and older PrusaSlicer, each checked as a new file in an allowed folder before any is written; model_reference {\"section\": \"Print plates\"}), plate one of them, dialect the slicer whose settings go with the bodies (bambu_studio, orcaslicer, qidi_studio, prusaslicer, cura); on_bed, center, drop, auto_orient, bed_face and spacing lay the pieces on the print bed (also STL and OBJ; model_reference {\"section\": \"Print bed faces\"}), occurrences and whole pick placements. The result is the export command's (plates with each plate's path, origin, bed and warnings, and files). Refused while a command panel is open, while a sketch in the middle of the timeline is edited (its later features are rolled back until it is finished), or when the document has failed features. Defaults are metric."
                 );
                 tool["inputSchema"]["properties"]["path"]["description"] = json!(
                     "A new file in a folder the user allows agents to use (Preferences > AI Assistants, or the application's --mcp-folder), with the format's extension; a relative path is relative to the first allowed folder; '..' is refused"
+                );
+            }
+            // The headless server's fast picture (mitcad#1487).
+            Some("model_render") => {
+                tool["description"] = json!(format!(
+                    "{RENDER_ABOUT} {RENDER_OPTIONS} {RENDER_OVERLAY} {RENDER_LIVE}"
+                ));
+                if let Some(properties) = tool["inputSchema"]["properties"].as_object_mut() {
+                    for raytrace in ["quality", "samples", "time_limit_s", "denoise"] {
+                        properties.remove(raytrace);
+                    }
+                }
+                tool["inputSchema"]["properties"]["path"]["description"] = json!(
+                    "Also write the PNG at full size to this new .png file in a folder the user allows agents to use (document_list lists them); a relative path is relative to the first allowed folder"
                 );
             }
             _ => {}
@@ -345,7 +500,9 @@ fn ui_tools() -> Vec<Value> {
         ),
         tool(
             "ui_command",
-            "Run a command of the application's command registry by its id (as app/COMMANDS.md lists them: sketch.clean_up_stale_projections, sketch.project, sketch.finish, ...) with input values, then OK or Cancel; or with edit, open a feature for editing (a sketch in sketch mode) as a double-click in the timeline does; or with only finish, end the open command panel, or with cancel a sketch being edited (its changes taken back). The result carries the panel's validation, preview and warnings. Commands that open a file dialog or another modal dialog are refused, and so is file.new_design (it waits for the user to name the design): document_new makes a new design.",
+            &format!(
+                "Run a command of the application's command registry by its id (as app/COMMANDS.md lists them: sketch.clean_up_stale_projections, sketch.project, sketch.finish, ...) with input values, then OK or Cancel; or with edit, open a feature for editing (a sketch in sketch mode) as a double-click in the timeline does; or with only finish, end the open command panel, or with cancel a sketch being edited (its changes taken back). The result carries the panel's validation, preview and warnings. Commands that open a file dialog or another modal dialog are refused, and so is file.new_design (it waits for the user to name the design): document_new makes a new design. {UI_COMMAND_IDS}"
+            ),
             json!({
                 "document": document,
                 "id": {"type": "string", "minLength": 1, "maxLength": ID_CHARS, "description": "A command id of the registry; search lists them (an unknown id is refused with the nearest ids)"},

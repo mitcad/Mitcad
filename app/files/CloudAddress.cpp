@@ -10,7 +10,11 @@
 namespace mitcad {
 namespace {
 
-QString tr(const char* text) { return QCoreApplication::translate("CloudAddress", text); }
+// The file's texts in the context CloudAddress, where lupdate records them
+// too (mitcad#1472).
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(CloudAddress)
+};
 
 // The host, port and path of an SSH or web address: [user@]host:path (git's
 // short form for SSH) or scheme://[user@]host[:port]/path; nothing for a
@@ -190,11 +194,11 @@ QString cloudServiceName(CloudService service) {
   case CloudService::Forgejo:
     return QStringLiteral("Forgejo / Gitea");
   case CloudService::SharedFolder:
-    return tr("Shared folder");
+    return Text::tr("Shared folder");
   case CloudService::Other:
     break;
   }
-  return tr("Other address");
+  return Text::tr("Other address");
 }
 
 QString cloudServiceHost(CloudService service, const QString& server) {
@@ -406,7 +410,7 @@ QString repositoryAddressProblem(const QString& typed) {
   if (text.isEmpty() || isLocalPath(text)) {
     return {};
   }
-  const QString bad = tr("This is not a valid repository address: %1").arg(typed.trimmed());
+  const QString bad = Text::tr("This is not a valid repository address: %1").arg(typed.trimmed());
   if (text.contains(QStringLiteral("://"))) {
     const QUrl parsed(text);
     const QString scheme = parsed.scheme().toLower();

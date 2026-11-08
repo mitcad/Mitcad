@@ -18,8 +18,8 @@ python3 - "$here/cli/tests/p9_warnings.json" "$MITCAD_TEST_WORK/model.json" <<'P
 import json
 import sys
 
-# The rib and its full round (F3), built 0.1 % smaller: information, not
-# a warning (mitcad#1106).
+# The rib and its full round (F3), built at its size: neither a warning nor
+# information.
 commands = []
 for entry in json.load(open(sys.argv[1])):
     if "cmd" in entry:

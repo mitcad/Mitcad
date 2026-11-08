@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# The English interface (mitcad#1460): MitCad started as the UI tests start
+# it (MITCAD_LANGUAGE=en from the test library) or with --language en, the
+# reason in ${MITCAD_TEST_LANGUAGE_REASON}; the tabs in English and the
+# command search by the English name.
+# Run by tools/ui-language-test.sh (Linux) and
+# tools/ui-windows-language-test.ps1 (Windows).
+expect-ever '^Language: en [(]${MITCAD_TEST_LANGUAGE_REASON}[)]$' 30
+wait-idle
+expect-ribbon-labels Start Solid Build Make
+command tools.search
+focus-widget commandSearchInput
+type preferences
+expect-command-search preferences tools.preferences
+key Escape
+focus-main

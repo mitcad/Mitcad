@@ -1296,6 +1296,15 @@ if(BUILD_TESTING)
   endif()
 endif()
 
+# The interface languages (mitcad#1460): the language chosen at start-up and
+# its catalogues, built from app/translations and copied beside mitcad
+# (cmake/Translations.cmake, before the bundle, which carries them).
+target_sources(mitcad PRIVATE framework/Language.cpp framework/Language.hpp)
+if(BUILD_TESTING)
+  target_sources(test_app PRIVATE tests/language.cpp framework/Language.cpp framework/Language.hpp)
+endif()
+include("${PROJECT_SOURCE_DIR}/cmake/Translations.cmake")
+
 if(APPLE)
   # Configure the bundle after its render worker exists, so its
   # install rules include the worker, denoiser module and their libraries.
@@ -2797,4 +2806,31 @@ if(BUILD_TESTING)
   # The step with a finer and a coarser scale, without one, from the value,
   # the floor; the sizes of OCCT shapes.
   target_sources(test_app PRIVATE tests/handle_step.cpp framework/HandleStep.cpp framework/HandleStep.hpp)
+endif()
+
+# The Docked layout's docks hidden from their close button or the window's
+# menu of its panels and shown again from the View menu (mitcad#1455): the
+# test steps dock-title-context, expect-popup-entries, dock-close and
+# expect-dock.
+target_sources(mitcad PRIVATE framework/TestDriverDocks.cpp)
+
+# The interface walked in another language (mitcad#1473): the test steps
+# walk-commands, walk-menus and walk-context-menus.
+target_sources(mitcad PRIVATE framework/TestDriverWalk.cpp)
+
+# A pick on a feature's preview names the face, edge or vertex of the body
+# before the feature that a changed one comes from; one the preview made is
+# refused with a hint that Ctrl held shows the part's own (mitcad#1458,
+# app/COMMANDS.md "Picks on the preview").
+target_sources(mitcad PRIVATE framework/CommandSessionPreviewPicks.cpp)
+
+# Preferences › Display › Interface size (mitcad#1495, GitHub
+# mitcad/Mitcad#194, app/COMMANDS.md "Interface size"): the whole UI at
+# 100 to 200 %, Qt's scale factor set before the application object at the
+# next start; the test step expect-interface-size (TestDriverChrome.cpp).
+target_sources(mitcad PRIVATE framework/InterfaceSize.cpp framework/InterfaceSize.hpp)
+if(BUILD_TESTING)
+  # The kept choice, the factor over the user's own QT_SCALE_FACTOR and
+  # what a started process inherits: plain Qt Core.
+  target_sources(test_app PRIVATE tests/interface_size.cpp framework/InterfaceSize.cpp framework/InterfaceSize.hpp)
 endif()

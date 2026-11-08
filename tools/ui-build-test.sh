@@ -15,10 +15,10 @@
 #      profiles' faces are picked and the planes are hidden; a click on its
 #      side places one flush with an end and fills Offset and From (no
 #      check box); a click in the middle of its end face continues it
-#      straight (Mitre: cut the new part), the hover near an edge previews
+#      straight (Miter: cut the new part), the hover near an edge previews
 #      nothing (mitcad#508), the click there turns it (a
-#      corner on the end face with square ends, its mitre Auto: none;
-#      Shared chosen mitres it at offset 0) and places it (mitcad#417,
+#      corner on the end face with square ends, its miter Auto: none;
+#      Shared chosen miters it at offset 0) and places it (mitcad#417,
 #      #427); a brace on its side by Tilt (its foot cut by the tilt,
 #      mitcad#444; the Tilt row only on a side); Close shows the planes
 #      again.
@@ -46,7 +46,7 @@
 #      picked (mitcad#448; its hover names the side and previews nothing,
 #      mitcad#508) (each chosen in the
 #      part picker from the Component tile);
-#      Ends: an end of the third profile mitred and bored (end machining).
+#      Ends: an end of the third profile mitered and bored (end machining).
 #   7. Save, reopen: the parts are there (their sources in the design);
 #      Cut List: its rows (one with a 45 degree end), Copy as CSV, Save as
 #      PDF, Print (to a PDF file in place of the system's dialog,
@@ -501,7 +501,7 @@ expect_row axis=z shown "the Direction's X, Y and Z buttons"
 ui_expect_new "Panel Profile tile part: Profile 20 test" "the Component tile shows the chosen profile (mitcad#427)"
 expect_row search hidden "no Search row: the part picker has it"
 expect_row system hidden "no System row: the part picker has it"
-expect_row mitre hidden "no Mitre before an end pick"
+expect_row mitre hidden "no Miter before an end pick"
 expect_row offset hidden "no Offset before a side pick"
 expect_row rotate hidden "no Rotate before another part is picked"
 expect_row place hidden "no Placement before a part to go on (mitcad#427)"
@@ -551,7 +551,7 @@ ui_expect_new "; snap end_" "flush with the end near the click"
 ui_expect_new "BUILD side click: From End " "the click fills From with the end it is flush with"
 expect_row offset shown "Offset for a side pick (no check box)"
 expect_row from shown "From for a side pick"
-expect_row mitre hidden "no Mitre for a side pick"
+expect_row mitre hidden "no Miter for a side pick"
 expect_row rotate shown "Rotate against another part"
 expect_row tilt shown "Tilt for a side pick (mitcad#444)"
 ui_step "Place (Enter)"                    ui_key Return
@@ -566,16 +566,16 @@ ui_expect_new "Inspect Profile: place end" "on the end"
 ui_expect_new "BUILD end click: straight towards " "a click in the middle of the end continues straight"
 expect_inspect "; end straight towards " "; least snap " "the preview straight on, with the click's snap distance"
 expect_row direction shown "Direction for an end pick"
-expect_row mitre shown "Mitre for an end pick"
+expect_row mitre shown "Miter for an end pick"
 expect_row offset hidden "no side Offset for an end pick"
 expect_row corner_offset hidden "no corner Offset straight on"
 expect_row tilt hidden "no Tilt for an end pick (mitcad#444)"
 ui_mark
-ui_step "mitre the new part"               ui_choose "Panel Profile input mitre" 3
-ui_expect_new "ends A 45 deg" "the new part's end mitred"
+ui_step "miter the new part"               ui_choose "Panel Profile input mitre" 3
+ui_expect_new "ends A 45 deg" "the new part's end mitered"
 ui_mark
-ui_step "the mitre Auto again"             ui_choose "Panel Profile input mitre" -3
-expect_inspect "; end straight towards " "mitre none" "Auto: no mitre straight on"
+ui_step "the miter Auto again"             ui_choose "Panel Profile input mitre" -3
+expect_inspect "; end straight towards " "mitre none" "Auto: no miter straight on"
 # Near an edge of the end face (its zone's marker): the hover previews
 # nothing, the part stays straight on (mitcad#508); the click there turns
 # it, a corner (mitcad#417).
@@ -589,19 +589,19 @@ ui_mark
 ui_step "a click there"                    xdotool click 1
 ui_expect_new "BUILD end click: edge towards " "a click near an edge turns the part"
 expect_inspect "; end edge towards " "mitre none, offset 0.0 mm" "square ends" \
-  "a square corner on the end face, flush with the outer side: its mitre Auto: none (mitcad#427)"
+  "a square corner on the end face, flush with the outer side: its miter Auto: none (mitcad#427)"
 expect_row corner_offset shown "the corner's Offset"
 ui_mark
 ui_step "the corner's offset 10"           ui_type_in "Panel Profile input corner_offset" "10"
-expect_inspect "; end edge towards " "mitre none, offset 10.0 mm" "at another offset the mitre is none"
+expect_inspect "; end edge towards " "mitre none, offset 10.0 mm" "at another offset the miter is none"
 ui_mark
 ui_step "the corner's offset 0"            ui_type_in "Panel Profile input corner_offset" "0"
 expect_inspect "; end edge towards " "mitre none, offset 0.0 mm" "square ends" "on the end face again at offset 0"
 ui_mark
-ui_step "Mitre: Shared"                    ui_choose "Panel Profile input mitre" 2
+ui_step "Miter: Shared"                    ui_choose "Panel Profile input mitre" 2
 expect_inspect "; end edge towards " "mitre shared, offset 0.0 mm" "ends A 45 deg" "Shared chosen: both on the bisector"
 ui_step "Place (Enter)"                    ui_key Return
-ui_expect_new "Placed Profile 20 test as " "the third profile placed at the corner, mitred" 30
+ui_expect_new "Placed Profile 20 test as " "the third profile placed at the corner, mitered" 30
 no_policy_message
 # A brace on the first one's side (mitcad#444): Tilt, its foot cut by the
 # tilt to lie on the side.
@@ -922,7 +922,7 @@ ui_step "Place (Enter)"                    ui_key Return
 ui_expect_new "Placed Slider 5 test as " "the second slider placed" 30
 ui_step "Close (Escape)"                   ui_key Escape
 
-echo "--- 6b. Ends: an end of the third profile mitred and bored"
+echo "--- 6b. Ends: an end of the third profile mitered and bored"
 ui_step "fit the view (F6)"                ui_key F6
 ui_mark
 ui_step "Ends (command search)"            ui_command "Ends"
@@ -955,7 +955,7 @@ ui_step "Cut List (command search)"        ui_command "Cut List"
 ui_focus_dialog '^Cut List$'
 ui_expect_new "Cut list row: " "the cut list's rows"
 ui_expect_new "x Profile 20 test" "the profiles in it"
-ui_expect_new " 45 deg (" "the mitred end"
+ui_expect_new " 45 deg (" "the mitered end"
 ui_expect_new "x Rail 15 test" "the rail in it"
 ui_expect_new "machining D6.8" "the bored end"
 rows=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | sed -n 's/^Cut list: \([0-9]*\) row(s).*/\1/p' | tail -1)

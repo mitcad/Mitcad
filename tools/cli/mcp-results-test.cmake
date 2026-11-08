@@ -5,7 +5,9 @@
 # timeline, an unrelated parameter, a new body, an insert and a deletion
 # are not errors, and each lists the cut in failed_features. add_feature
 # with "after" inserts after that feature in one command, the marker
-# staying at the end.
+# staying at the end. The error text of a failing add_feature, alone and
+# as an array's entry, says the feature stays in the timeline and how to
+# remove it (mitcad#1481).
 #
 # cmake -DCLI=<mitcad-cli> -DWORK=<test folder> -P mcp-results-test.cmake
 
@@ -53,6 +55,10 @@ box(inserted "[200, 0]" new_body ", \"after\": \"F1\"")
 # The whole timeline on request (mitcad#689).
 request(7 model_command "{\"document\": \"D1\", \"command\": ${inserted}, \"timeline\": \"full\"}")
 command(8 [=[{"cmd": "delete_feature", "uid": "F3"}]=])
+# An array whose entry 1 adds another failing cut: it stops there, and its
+# error text names that entry and the cut (mitcad#1481).
+box(more "[0, 300]" new_body)
+command(9 "[${more}, ${cut}, ${other}]")
 file(WRITE "${WORK}/requests.jsonl" "${input}")
 
 execute_process(COMMAND "${CLI}" mcp --workspace "${WORK}"
@@ -75,6 +81,17 @@ function(count response what expected)
   string(JSON length ERROR_VARIABLE failure LENGTH "${response}" result structuredContent failed_features)
   if(failure OR NOT length EQUAL expected)
     message(FATAL_ERROR "${what}: ${length} failed features, ${expected} expected ${failure}:\n${response}")
+  endif()
+endfunction()
+
+# says(<response> <what> <text>): the error text holds this text
+# (mitcad#1481: the failed feature stays in the timeline, and how to
+# remove it).
+function(says response what text)
+  string(JSON error ERROR_VARIABLE failure GET "${response}" result structuredContent error)
+  string(FIND "${error}" "${text}" at)
+  if(failure OR at EQUAL -1)
+    message(FATAL_ERROR "${what}: the error text '${error}' does not say '${text}' ${failure}:\n${response}")
   endif()
 endfunction()
 
@@ -105,6 +122,23 @@ while(NOT output STREQUAL "")
     count("${response}" "the failing cut" 1)
     check("${response}" "the failing cut" F2 result structuredContent failed_features 0 uid)
     check("${response}" "the failing cut" ON result structuredContent failed_features 0 edited)
+    says("${response}" "the failing cut" "F2 (")
+    says("${response}" "the failing cut" ") was added but failed: ")
+    says("${response}" "the failing cut" "It stays in the timeline")
+    says("${response}" "the failing cut" "remove it with undo or delete_feature")
+  elseif(id EQUAL 9)
+    set(what "the array with a failing cut")
+    check("${response}" "${what}" ON result isError)
+    check("${response}" "${what}" ON result structuredContent applied)
+    check("${response}" "${what}" 1 result structuredContent stopped_at)
+    check("${response}" "${what}" 2 result structuredContent ran)
+    count("${response}" "${what}" 2)
+    string(JSON stopped GET "${response}" result structuredContent results 1 uid)
+    says("${response}" "${what}" "commands[1]: ${stopped} (")
+    says("${response}" "${what}" ") was added but failed: ")
+    says("${response}" "${what}" "It stays in the timeline")
+    says("${response}" "${what}" "remove it with undo or delete_feature")
+    says("${response}" "${what}" "the entries after it did not run")
   elseif(id GREATER_EQUAL 5)
     set(what "command ${id} while the cut fails")
     check("${response}" "${what}" OFF result isError)
@@ -133,6 +167,6 @@ while(NOT output STREQUAL "")
   endif()
   math(EXPR checked "${checked} + 1")
 endwhile()
-if(NOT checked EQUAL 8)
-  message(FATAL_ERROR "${checked} MCP responses, 8 expected:\n${errors}")
+if(NOT checked EQUAL 9)
+  message(FATAL_ERROR "${checked} MCP responses, 9 expected:\n${errors}")
 endif()

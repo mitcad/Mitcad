@@ -404,8 +404,11 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
   m_export = button(QStringLiteral("export"), tr("Export…"), tr("The drawing as PDF, SVG, DXF or DWG"));
   m_export->setPopupMode(QToolButton::InstantPopup);
   auto* formats = new QMenu(m_export);
-  for (const auto& [format, label] : {std::pair{"pdf", "PDF…"}, std::pair{"svg", "SVG…"}, std::pair{"dxf", "DXF…"},
-                                      std::pair{"dwg", "DWG…"}}) {
+  for (const auto& [format, label] :
+       {std::pair{"pdf", QT_TRANSLATE_NOOP("mitcad::drawings::DrawingWorkspace", "PDF…")},
+        std::pair{"svg", QT_TRANSLATE_NOOP("mitcad::drawings::DrawingWorkspace", "SVG…")},
+        std::pair{"dxf", QT_TRANSLATE_NOOP("mitcad::drawings::DrawingWorkspace", "DXF…")},
+        std::pair{"dwg", QT_TRANSLATE_NOOP("mitcad::drawings::DrawingWorkspace", "DWG…")}}) {
     const QString name = QString::fromLatin1(format);
     formats->addAction(tr(label), this, [this, name] { exportDrawing(name); });
   }
@@ -1302,8 +1305,9 @@ void DrawingWorkspace::fillViewPanel(int id) {
     });
     m_form->addRow(tr("Rotation (°)"), named(rotation, "drawingViewRotation"));
   }
-  for (const auto& [field, label] : {std::pair{"hidden_lines", "Hidden Edges"}, std::pair{"tangent_edges", "Tangent Edges"},
-                                     std::pair{"shaded", "Shaded"}}) {
+  for (const auto& [field, label] : {std::pair{"hidden_lines", QT_TR_NOOP("Hidden Edges")},
+                                     std::pair{"tangent_edges", QT_TR_NOOP("Tangent Edges")},
+                                     std::pair{"shaded", QT_TR_NOOP("Shaded")}}) {
     const QString name = QString::fromLatin1(field);
     auto* check = new QCheckBox;
     check->setObjectName(QStringLiteral("drawingViewStyle_") + name);
@@ -1322,9 +1326,9 @@ void DrawingWorkspace::fillViewPanel(int id) {
   // What the model works out for the view: centre marks and centrelines
   // on its round edges and faces, the sketch dimensions it sees square on.
   for (const auto& [flag, caption, object] :
-       {std::tuple{"center_marks", "Center Marks", "drawingViewCenterMarks"},
-        std::tuple{"retrieved_dimensions", "Sketch Dimensions", "drawingViewRetrievedDimensions"},
-        std::tuple{"model_annotations", "Model Annotations", "drawingViewModelAnnotations"}}) {
+       {std::tuple{"center_marks", QT_TR_NOOP("Center Marks"), "drawingViewCenterMarks"},
+        std::tuple{"retrieved_dimensions", QT_TR_NOOP("Sketch Dimensions"), "drawingViewRetrievedDimensions"},
+        std::tuple{"model_annotations", QT_TR_NOOP("Model Annotations"), "drawingViewModelAnnotations"}}) {
     const QString flagName = QString::fromLatin1(flag);
     auto* flagBox = new QCheckBox;
     flagBox->setChecked(json.value(flagName).toBool());
@@ -2712,7 +2716,8 @@ void DrawingWorkspace::contextMenu(QPointF at, const QPoint& global) {
     // parent.
     if (shown != nullptr && shown->type != QStringLiteral("detail")) {
       const double turned = shown->json.value(QStringLiteral("rotation")).toDouble();
-      for (const auto& [text, by] : {std::pair{"Rotate 90° Left", 90.0}, std::pair{"Rotate 90° Right", -90.0}}) {
+      for (const auto& [text, by] :
+           {std::pair{QT_TR_NOOP("Rotate 90° Left"), 90.0}, std::pair{QT_TR_NOOP("Rotate 90° Right"), -90.0}}) {
         const QString degrees = QString::number(turned + by, 'g', 10);
         add(tr(text), later([this, viewId, degrees] { editView(viewId, QStringLiteral("rotation"), degrees); }));
       }

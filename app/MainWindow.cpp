@@ -54,7 +54,6 @@
 #include <BRepBndLib.hxx>
 #include <BOPTools_AlgoTools3D.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
-#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRep_Builder.hxx>
 #include <Bnd_Box.hxx>
 #include <IntTools_Context.hxx>
@@ -189,19 +188,6 @@ QString pathOf(const QJsonValue& uids) {
     path << uid.toString();
   }
   return path.join(QLatin1Char('/'));
-}
-
-// An Intersection Curve's polyline (the feature_curves query, mitcad#1405)
-// as a wire; null for fewer than two points.
-TopoDS_Shape polylineShape(const QJsonArray& points) {
-  if (points.size() < 2) {
-    return TopoDS_Shape();
-  }
-  BRepBuilderAPI_MakePolygon polygon;
-  for (const QJsonValue& point : points) {
-    polygon.Add(pointOf(point));
-  }
-  return polygon.IsDone() ? TopoDS_Shape(polygon.Wire()) : TopoDS_Shape();
 }
 
 SelectKind datumKind(const QString& type) {
@@ -820,6 +806,27 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   createDebugLog();
   // A wait cursor left on is cleared once the window is idle (mitcad#268).
   createWaitCursorRecovery();
+  // A dock or a toolbar shown or hidden (its close button, the window's
+  // menu of its panels, View) moves the view without a resize: the layout
+  // is logged again then too, once the first line is (mitcad#1451: a
+  // hidden ribbon left no line of its own).
+  if (!m_nativeUi) {
+    for (QWidget* child : findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly)) {
+      QAction* toggle = nullptr;
+      if (auto* dock = qobject_cast<QDockWidget*>(child)) {
+        toggle = dock->toggleViewAction();
+      } else if (auto* bar = qobject_cast<QToolBar*>(child)) {
+        toggle = bar->toggleViewAction();
+      }
+      if (toggle != nullptr) {
+        connect(toggle, &QAction::toggled, this, [this] {
+          if (m_loggedWindowSize.isValid()) {
+            TestSync::singleShot(0, this, [this] { logLayout(); });
+          }
+        });
+      }
+    }
+  }
 
 #ifdef MITCAD_MACOS_NATIVE_UI
   if (m_nativeUi) {
@@ -955,6 +962,29 @@ void MainWindow::logLayout() const {
   parts << bars;
   m_loggedWindowSize = size();
   qDebug().noquote() << QStringLiteral("Window layout: ") + parts.join(QStringLiteral("; "));
+}
+
+QMenu* MainWindow::createPopupMenu() {
+  QMenu* menu = QMainWindow::createPopupMenu();
+  if (menu == nullptr) {
+    return nullptr;
+  }
+  QStringList entries;
+  for (const QAction* entry : menu->actions()) {
+    if (!entry->isSeparator() && entry->isVisible()) {
+      QString text = entry->text();
+      entries << text.remove(QLatin1Char('&'));
+    }
+  }
+  // Only the hidden toggles of the notice bars and the ribbon's toolbar:
+  // no menu at all rather than an empty one.
+  if (entries.isEmpty()) {
+    delete menu;
+    return nullptr;
+  }
+  menu->setObjectName(QStringLiteral("windowContextMenu"));
+  qDebug().noquote() << QStringLiteral("Window context menu: ") + entries.join(QStringLiteral(" | "));
+  return menu;
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event) {
@@ -1613,6 +1643,12 @@ void MainWindow::createRibbon() {
   bar->setObjectName(QStringLiteral("ribbonToolbar"));
   bar->setMovable(false);
   bar->setFloatable(false);
+  // Never offered in the window's menu of its panels (createPopupMenu,
+  // which a right-click on the ribbon's tab row opens): its Toolbar entry
+  // hid the design's whole ribbon, which nothing brought back but a new
+  // design, and the hidden ribbon came back with the design whenever it
+  // was in front again (mitcad#1451).
+  bar->toggleViewAction()->setVisible(false);
   // Undo and Redo at hand in the application bar; named for the tests of
   // the bar's colours (mitcad#1245).
   for (const char* id : {"edit.undo", "edit.redo"}) {
@@ -1719,6 +1755,13 @@ void MainWindow::createPanels() {
   commandDock->setObjectName(QStringLiteral("commandDock"));
   commandDock->setWidget(m_commandPages);
   addDockWidget(Qt::RightDockWidgetArea, commandDock);
+  // View › Command shows it again once its close button or the window's
+  // menu of its panels hid it, as View › Browser and View › Timeline do
+  // theirs (mitcad#1455: nothing brought it back). After View › Projects,
+  // in the order of that menu.
+  if (QMenu* view = findChild<QMenu*>(QStringLiteral("viewMenu"))) {
+    view->addAction(commandDock->toggleViewAction());
+  }
 }
 
 void MainWindow::createFloatingPanels() {
@@ -2622,6 +2665,7 @@ bool MainWindow::runCommand(const QJsonObject& cmd, QJsonObject* result) {
     qDebug().noquote() << line;
   }
   notePlacement(answer);
+  noteKeptParameters(answer); // own parameters kept as user parameters (mitcad#1536)
   if (result != nullptr) {
     *result = answer;
   }
@@ -2638,6 +2682,41 @@ void MainWindow::notePlacement(const QJsonObject& result) {
   m_placementNote = warning;
   showHint(warning);
   qInfo().noquote() << QStringLiteral("Placement warning: %1").arg(warning);
+}
+
+void MainWindow::noteKeptParameters(const QJsonObject& result) {
+  // A feature's (`slot`); a sketch dimension's (`dimension`) the sketch
+  // says itself (SketchController::noteKeptParameters).
+  QStringList moved;
+  for (const QJsonValue& value : result.value(QStringLiteral("user_parameters")).toArray()) {
+    const QJsonObject kept = value.toObject();
+    if (!kept.contains(QStringLiteral("slot"))) {
+      continue;
+    }
+    // "Slot extent.distance: depth kept as a user parameter, now d3", for
+    // UI tests.
+    qDebug().noquote() << QStringLiteral("Slot %1: %2 kept as a user parameter, now %3")
+                              .arg(kept.value(QStringLiteral("slot")).toString(),
+                                   kept.value(QStringLiteral("name")).toString(),
+                                   kept.value(QStringLiteral("parameter")).toString());
+    moved << kept.value(QStringLiteral("name")).toString();
+  }
+  if (moved.isEmpty()) {
+    return;
+  }
+  QStringList notes;
+  for (const QJsonValue& note : result.value(QStringLiteral("notes")).toArray()) {
+    notes << note.toString();
+  }
+  // The model's words, shown now and again when the command's panel closes
+  // (onCommandFinished), after a placement warning.
+  QString note = notes.join(QStringLiteral("; "));
+  if (!note.isEmpty() && !note.endsWith(QLatin1Char('.'))) {
+    note += QLatin1Char('.');
+  }
+  m_placementNote = m_placementNote.isEmpty() ? note : QStringLiteral("%1 %2").arg(m_placementNote, note);
+  showHint(m_placementNote);
+  qInfo().noquote() << QStringLiteral("Feature notice: %1").arg(note);
 }
 
 bool MainWindow::runCommands(const QJsonArray& commands, const QString& label) {
@@ -5221,9 +5300,9 @@ void MainWindow::updateIdleCard() {
         }
       }
       if (featureCount > named) featureNames << tr("%n more feature(s)", nullptr, featureCount - named);
-      if (!featureNames.isEmpty() && !others.isEmpty()) featureNames << summarize(others);
+      if (!featureNames.isEmpty() && !others.isEmpty()) featureNames << summarizeText(others);
     }
-    text += tr("<br><br>Selected: %1").arg(featureNames.isEmpty() ? summarize(m_selection)
+    text += tr("<br><br>Selected: %1").arg(featureNames.isEmpty() ? summarizeText(m_selection)
                                                               : featureNames.join(QStringLiteral(", ")).toHtmlEscaped());
     QStringList details;
     for (const SelectionItem& item : m_selection.mid(0, 8)) {
@@ -5245,7 +5324,7 @@ void MainWindow::updateIdleCard() {
         jointCards << joint;
         continue;
       }
-      QString label = SelectionItem::kindName(item.kind);
+      QString label = SelectionItem::kindText(item.kind);
       if (!label.isEmpty()) {
         label[0] = label[0].toUpper();
       }
@@ -5455,6 +5534,12 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
           const bool on = !d->signedOffset;
           addCall(QStringLiteral("dimension"), on ? tr("Make Distance Signed") : tr("Make Distance Unsigned"),
                   [this, id, on] { m_sketch->setDimensionSigned(id, on); });
+        }
+        // Its own parameter kept as a user parameter, which the dimension
+        // then uses at the same value (mitcad#1535).
+        if (const QString own = m_sketch->ownParameter(id); !own.isEmpty()) {
+          addCall(QStringLiteral("parameters"), tr("Move %1 to User Parameters").arg(own),
+                  [this, id] { m_sketch->keepAsUserParameter(id); });
         }
       }
       // A spline right-clicked gets a point there (Insert Point,
@@ -6805,8 +6890,10 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
   // Its edit lock (mitcad#89): taken, or the same design's kept.
   m_locks->designOpened(path, readOnlyOpen);
   // A design opened, recovered or made new shows in the 3D view, not
-  // under the Start page (mitcad#1258).
-  leaveStartPage();
+  // under the Start page (mitcad#1258), unless only its units changed.
+  if (!m_keepStartPage) {
+    leaveStartPage();
+  }
   updateActions();
   return true;
 }

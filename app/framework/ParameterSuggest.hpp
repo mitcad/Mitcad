@@ -112,6 +112,10 @@ struct SuggestContext {
   ParameterKind kind = ParameterKind::Length;
   bool anyKind = false; // takes any kind (a parameter table's row)
   QString own;
+  // The own parameter is kept as a user parameter when the value uses it
+  // (a sketch dimension's, mitcad#1535; a command panel field's,
+  // mitcad#1536): those that use it are no cycle.
+  bool keepOwn = false;
   // The sketch the field is in (its uid): the references its own driven
   // dimensions measure cannot be used in it (commands.md, Values).
   QString sketch;
@@ -124,7 +128,7 @@ struct SuggestContext {
 // the better match first, then by name with numbers in order (d2 before
 // d10). The field's own parameter is left out. A choice's problem says why
 // the field cannot take it: a parameter that uses the field's own (a
-// cycle), or one of another kind when it would be the field's whole
+// cycle, unless the context keeps the own one), or one of another kind when it would be the field's whole
 // expression (`insertedText`: the text after the choice, as
 // insertParameter gives it; an angle inside `d1 * tan(a)` is fine).
 std::vector<ParameterChoice> matchParameters(const std::vector<SuggestedParameter>& parameters,

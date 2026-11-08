@@ -652,6 +652,13 @@ fails on:
   `QObject::tr`;
 - a value quoted as `'{x}'` in a Rust string (rule 6).
 
+The commands' developer document (`app/COMMANDS.md`) is read for the
+British spellings only (`--spelling`, mitcad#1478): it names code, log
+lines and keys that the other rules would read as UI texts. Its code
+spans may go on over the lines of a paragraph, a list item or a table
+row; a line that would start a list item (`+ 5 mm`) or a heading ends
+the paragraph there, as Markdown reads it.
+
 `repo.ui-strings-self-test` checks the scan on planted text. A string
 that must keep a retired word (a quoted stored id, a file format's own
 term, a string of Qt's own translation context) goes into the check's

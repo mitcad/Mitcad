@@ -2095,8 +2095,10 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
   node.type = BrowserNode::Type::NamedViews;
   node.name = tr("Named Views");
   QTreeWidgetItem* views = addRow(rootItem, node, QStringLiteral("named-view"));
-  for (const auto& [uid, name] : {std::pair{"home", "Home"}, std::pair{"top", "Top"},
-                                  std::pair{"front", "Front"}, std::pair{"right", "Right"}}) {
+  for (const auto& [uid, name] : {std::pair{"home", QT_TRANSLATE_NOOP("mitcad::BrowserPanel", "Home")},
+                                  std::pair{"top", QT_TRANSLATE_NOOP("mitcad::BrowserPanel", "Top")},
+                                  std::pair{"front", QT_TRANSLATE_NOOP("mitcad::BrowserPanel", "Front")},
+                                  std::pair{"right", QT_TRANSLATE_NOOP("mitcad::BrowserPanel", "Right")}}) {
     node.type = BrowserNode::Type::NamedView;
     node.uid = QString::fromLatin1(uid);
     node.name = tr(name);

@@ -74,6 +74,10 @@ void MainWindow::createAutosave() {
     applyCacheSettings(); // the result store (P7d)
     m_remote->settingsChanged(); // the git program, remote checks (P12 remote)
   };
+  // After the dialog's OK has run: the untitled design may start again.
+  m_viewController->newDesignUnitsChanged = [this] {
+    QTimer::singleShot(0, this, [this] { newDesignUnitsChanged(); });
+  };
 }
 
 int MainWindow::autosaveMarker() const {

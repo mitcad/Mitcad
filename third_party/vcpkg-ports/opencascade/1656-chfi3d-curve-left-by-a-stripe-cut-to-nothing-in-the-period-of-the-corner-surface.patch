@@ -1,0 +1,59 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a stripe cut to nothing between its corners leaves its curve to
+a periodic corner surface in that surface's own period (mitcad#1532).
+
+The roof slab rounded on all its edges with 0.66 to 0.86: the eave's end
+edge's contacts are cut to the same two points by the corner at the tip (a
+torus, PerformThreeCorner) and the plate at the obtuse end (1654), and
+dropStripesCutToNothing (1640) drops its blend, the torus taking the
+plate's curve with a p-curve of its own projected on the torus
+(GeomProjLib). The projection landed a period away in u: the torus's face
+was built over the other part of the torus, with an edge of no length that
+is no degenerated edge (area -2.68 at r = 0.8).
+
+- dropStripesCutToNothing: on a periodic surface the new p-curve is moved
+  by whole periods to the start of the p-curve it replaces.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 58f1e2b8..9717114e 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -3109,9 +3109,34 @@ static void dropStripesCutToNothing(TopOpeBRepDS_DataStructure&
+             {
+               continue;
+             }
+-            const occ::handle<Geom2d_Curve> aPC =
+-              GeomProjLib::Curve2d(CK, f[k], l[k], DStr.Surface(js).Surface());
++            occ::handle<Geom2d_Curve> aPC = GeomProjLib::Curve2d(CK, f[k], l[k], DStr.Surface(js).Surface());
+             aDone = !aPC.IsNull();
++            // (On a periodic surface, in the period of the curve it replaces
++            // there: a torus's corner took the other half of its torus.)
++            const occ::handle<TopOpeBRepDS_SurfaceCurveInterference> anOld =
++              occ::down_cast<TopOpeBRepDS_SurfaceCurveInterference>(it.Value());
++            const occ::handle<Geom_Surface>& aSurfJ = DStr.Surface(js).Surface();
++            if (aDone && !anOld.IsNull() && !anOld->PCurve().IsNull()
++                && (aSurfJ->IsUPeriodic() || aSurfJ->IsVPeriodic()))
++            {
++              const gp_Pnt2d aOldStart = anOld->PCurve()->Value(aSameWay ? f[1 - k] : l[1 - k]);
++              const gp_Pnt2d aNewStart = aPC->Value(f[k]);
++              double         aDu = 0., aDv = 0.;
++              if (aSurfJ->IsUPeriodic())
++              {
++                const double T = aSurfJ->UPeriod();
++                aDu            = T * std::round((aOldStart.X() - aNewStart.X()) / T);
++              }
++              if (aSurfJ->IsVPeriodic())
++              {
++                const double T = aSurfJ->VPeriod();
++                aDv            = T * std::round((aOldStart.Y() - aNewStart.Y()) / T);
++              }
++              if (aDu != 0. || aDv != 0.)
++              {
++                aPC = occ::down_cast<Geom2d_Curve>(aPC->Translated(gp_Vec2d(aDu, aDv)));
++              }
++            }
+             if (aDone)
+             {
+               const TopAbs_Orientation anO = it.Value()->Transition().Orientation(TopAbs_IN);

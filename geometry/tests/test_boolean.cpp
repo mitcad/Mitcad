@@ -720,9 +720,70 @@ void test_intersect() {
   CHECK(faces_named(common, "F4:side(c5)") == 1);
   CHECK(faces_named(common, "F4:start(r{c5})") == 1);
   CHECK(faces_named(common, end_cap("F2", 1)) == 1);
-  // A tool around the whole body leaves it as it is.
+  // A tool around the whole body holds all of it: the intersection is the
+  // body, with its names (mitcad#1534).
   const ShapePtr around = extrude("F4", {rectangle(5, -10, -10, 80, 60)}, -1, 30);
-  CHECK(run(BooleanOp::Intersect, {block()}, around).touched == std::vector<bool>{false});
+  const BooleanResult held = run(BooleanOp::Intersect, {block()}, around);
+  CHECK(held.touched == std::vector<bool>{true});
+  CHECK(held.pieces.size() == 1);
+  if (held.pieces.size() == 1) {
+    const Shape& whole = *held.pieces[0].shape;
+    CHECK(held.pieces[0].sources == std::vector<std::size_t>{0});
+    CHECK(near(volume(whole), 60.0 * 40.0 * 20.0));
+    CHECK(whole.face_count() == 6);
+    CHECK(faces_named(whole, start_cap("F2", 1)) == 1);
+    CHECK(faces_named(whole, end_cap("F2", 1)) == 1);
+    for (int k = 0; k < 4; ++k) {
+      CHECK(faces_named(whole, side("F2", 1, k)) == 1);
+    }
+    CHECK(whole.find_faces("F4:side(c5)").empty());
+  }
+  // A 2 x 2 x 2 box wholly inside a 10 x 10 x 10 one, and the same box
+  // standing on the big box's bottom face: each intersection is the small
+  // box, 8 mm3.
+  const ShapePtr big = extrude("F6", {rectangle(9, 0, 0, 10, 10)}, 0, 10);
+  const ShapePtr inside = extrude("F8", {rectangle(13, 2, 2, 2, 2)}, 2, 4);
+  const BooleanResult contained = run(BooleanOp::Intersect, {inside}, big);
+  CHECK(contained.touched == std::vector<bool>{true});
+  CHECK(contained.pieces.size() == 1);
+  if (contained.pieces.size() == 1) {
+    const Shape& cube = *contained.pieces[0].shape;
+    CHECK(near(volume(cube), 8.0));
+    CHECK(cube.face_count() == 6);
+    CHECK(faces_named(cube, start_cap("F8", 13)) == 1);
+    CHECK(faces_named(cube, end_cap("F8", 13)) == 1);
+    for (int k = 0; k < 4; ++k) {
+      CHECK(faces_named(cube, side("F8", 13, k)) == 1);
+    }
+  }
+  const ShapePtr standing = extrude("F8", {rectangle(13, 2, 2, 2, 2)}, 0, 2);
+  const BooleanResult on_bottom = run(BooleanOp::Intersect, {standing}, big);
+  CHECK(on_bottom.touched == std::vector<bool>{true});
+  CHECK(on_bottom.pieces.size() == 1);
+  if (on_bottom.pieces.size() == 1) {
+    const Shape& stood = *on_bottom.pieces[0].shape;
+    CHECK(near(volume(stood), 8.0));
+    CHECK(faces_named(stood, end_cap("F8", 13)) == 1);
+    for (int k = 0; k < 4; ++k) {
+      CHECK(faces_named(stood, side("F8", 13, k)) == 1);
+    }
+  }
+  // The inputs stay as they were.
+  CHECK(near(volume(*inside), 8.0) && near(volume(*big), 1000.0));
+  // A tool that does not reach the target, or touches only its face, leaves
+  // no piece: nothing is intersected.
+  const ShapePtr apart = extrude("F8", {rectangle(13, 20, 2, 2, 2)}, 2, 4);
+  const BooleanResult missed = run(BooleanOp::Intersect, {apart}, big);
+  CHECK(missed.touched == std::vector<bool>{false} && missed.pieces.empty());
+  const ShapePtr flush = extrude("F8", {rectangle(13, 10, 2, 2, 2)}, 2, 4);
+  const BooleanResult touching = run(BooleanOp::Intersect, {flush}, big);
+  CHECK(touching.touched == std::vector<bool>{false} && touching.pieces.empty());
+  // A cut by the box around the small one removes all of it; one that only
+  // touches its face leaves it untouched.
+  const BooleanResult removed = run(BooleanOp::Cut, {inside}, big);
+  CHECK(removed.touched == std::vector<bool>{true} && removed.pieces.empty());
+  const BooleanResult flush_cut = run(BooleanOp::Cut, {flush}, big);
+  CHECK(flush_cut.touched == std::vector<bool>{false} && flush_cut.pieces.empty());
 }
 
 // A face split by curves that leave a vertex tangentially to each other

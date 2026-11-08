@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: MIT
+# A pick on Fillet's preview names the edge before the fillet it comes from
+# (mitcad#1458, GitHub mitcad/Mitcad#177), on fillet-preview-pick.json (a
+# block F2 joined on a plate F1.b0; Fillet1, F3, rounds the block's two end
+# foot edges with 4 mm):
+#   Fillet1 edited from the timeline: its two edges picked, the preview
+#   shows both roundings, and the front's foot edge between their ends,
+#   which the preview cuts short or splits, is clicked where the preview
+#   shows it, without Ctrl. It joins Edges as the foot edge of the body
+#   before the fillet (no "not taken"), and the preview of the three
+#   roundings, which meet in mitres at the block's front corners, warns of
+#   nothing hanging out past a face. OK keeps the three.
+# Run by tools/ui-fillet-preview-pick-test.sh (Linux) and
+# tools/ui-windows-fillet-preview-pick-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# Fillet1 edited: its two end roundings previewed.
+mark
+dblclick-logged '^Timeline Fillet1 at '
+expect-log '^Editing F3 with Fillet'
+wait-log '^Pick places:' 20
+wait-log '^Preview Fillet: ok' 30
+wait-idle 30
+
+# The front's foot edge clicked in the preview, no Ctrl held: the edge of
+# the body before the fillet joins Edges.
+mark
+click-pick 'edge F1[.]b0/E[{]F1:top[|]F2:side0[}](?:#[0-9]+)? at '
+wait-log '^Fillet Edges: 3 edges'
+expect-no-log ' not taken: '
+wait-log '^Preview Fillet: ok' 30
+wait-idle 30
+# The mitres at the block's front corners are no rounding hanging out.
+expect-no-log '^Preview Fillet: ok, warning: .*hangs'
+mark
+button '^OK$'
+wait-log '^Edited F3' 30
+wait-idle 30
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

@@ -310,6 +310,12 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/intersection_curve.cpp
   include/mitcad/geometry/intersection_curve.hpp)
+
+# The item of the body before a feature that an item of its result (a pick
+# on the feature's preview) comes from (mitcad#1458).
+target_sources(mitcad_geometry PRIVATE
+  src/item_origin.cpp
+  include/mitcad/geometry/item_origin.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -1062,4 +1068,67 @@ if(BUILD_TESTING)
   target_link_libraries(test_fillet_crease_end_corner PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.fillet_crease_end_corner COMMAND test_fillet_crease_end_corner)
   set_tests_properties(geometry.fillet_crease_end_corner PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A pipe's Corners, mitered or rounded, along an L-shaped path
+  # (mitcad#1448).
+  add_executable(test_pipe_corners tests/test_pipe_corners.cpp)
+  target_link_libraries(test_pipe_corners PRIVATE mitcad_geometry mitcad_geometry_analysis mitcad_warnings)
+  add_test(NAME geometry.pipe_corners COMMAND test_pipe_corners)
+endif()
+
+if(BUILD_TESTING)
+  # A block's foot edges on a plate rounded (mitcad#1458): three of them
+  # meet in mitres at the block's convex corners without the concave
+  # check's warning of a rounding hanging out; with the ends' alone, the
+  # front's foot edge in the result comes from the foot edge before
+  # (item_origin), the roundings are the fillet's own.
+  add_executable(test_fillet_foot_mitre tests/test_fillet_foot_mitre.cpp)
+  target_link_libraries(test_fillet_foot_mitre PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_foot_mitre COMMAND test_fillet_foot_mitre)
+endif()
+
+if(BUILD_TESTING)
+  # A roof slab's section of 7 points extruded and rounded on all its edges
+  # (mitcad#1482): it builds, or the error names the face whose two edges'
+  # roundings reach across it.
+  add_executable(test_fillet_roof_slab tests/test_fillet_roof_slab.cpp)
+  target_link_libraries(test_fillet_roof_slab PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_roof_slab COMMAND test_fillet_roof_slab)
+  set_tests_properties(geometry.fillet_roof_slab PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # Roundings riding on another's contact line and the corners at their ends
+  # (mitcad#1499, the port's patches 1640 to 1642): a plate 1.3 thick
+  # rounded with 1 on an end face's rims, with the vertical edges at both
+  # its ends, and on all 12 edges; the roof slab's end-face pair along one
+  # slope. Valid closed solids with checked volumes.
+  add_executable(test_fillet_ride_corners tests/test_fillet_ride_corners.cpp)
+  target_link_libraries(test_fillet_ride_corners PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_ride_corners COMMAND test_fillet_ride_corners)
+  set_tests_properties(geometry.fillet_ride_corners PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # The roof slab's eave (mitcad#1500, mitcad#1530, the port's patches 1650
+  # to 1653): its two long edges and its end edges rounded with 0.9 and 1,
+  # the tip's rounding rolling on the obtuse edge; an end face's strip along
+  # a slope and the eave's end edge; the tip's corner with the slope's end
+  # edge. Valid closed solids with checked volumes.
+  add_executable(test_fillet_eave tests/test_fillet_eave.cpp)
+  target_link_libraries(test_fillet_eave PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_eave COMMAND test_fillet_eave)
+  set_tests_properties(geometry.fillet_eave PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A rib's four top edges rounded or bevelled by half its width (mitcad#1500,
+  # the port's patch 1655): the long edges' contacts meet on one ridge edge,
+  # the top face gone, no face of no area, the exact shape's volume.
+  add_executable(test_fillet_rib_full_round tests/test_fillet_rib_full_round.cpp)
+  target_link_libraries(test_fillet_rib_full_round PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_rib_full_round COMMAND test_fillet_rib_full_round)
+  set_tests_properties(geometry.fillet_rib_full_round PROPERTIES TIMEOUT 600)
 endif()

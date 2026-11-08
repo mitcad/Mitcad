@@ -703,7 +703,9 @@ void numberTests() {
     }
   }
   for (const char* text :
-       {"-8 mm + 2 mm", "-(4 mm)", "8 mm - 2 mm", "--8 mm", "2 * 4 mm", "10 mm / 2", "2^3 mm", "(8 mm)"}) {
+       {"-8 mm + 2 mm", "-(4 mm)", "8 mm - 2 mm", "--8 mm", "2 * 4 mm", "10 mm / 2", "2^3 mm", "(8 mm)",
+        // The inch and foot marks show the value converted (mitcad#1531).
+        ".875\"", "2.5 \"", "3'", "3' 6\"", "-2''"}) {
     if (!valueHintWorthShowing(QString::fromUtf8(text), false)) {
       std::fprintf(stderr, "'%s' is an expression: its hint shows\n", text);
       ++failures;
@@ -2876,6 +2878,8 @@ int lineArcsTests();
 int linkedFilesTests();
 int previewHoldTests();
 int handleStepTests();
+int languageTests();
+int interfaceSizeTests();
 
 int main(int argc, char* argv[]) {
   // The application's own class: its notify() is tested (busy_input.cpp).
@@ -3029,6 +3033,8 @@ int main(int argc, char* argv[]) {
     failures += linkedFilesTests();
     failures += previewHoldTests();
     failures += handleStepTests();
+    failures += languageTests();
+    failures += interfaceSizeTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

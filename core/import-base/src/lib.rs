@@ -20,6 +20,9 @@
 //!   memory back to the system (mitcad#885).
 //! - [`outcomes`]: how the `.ipt`, `.iam` and `.dwg` imports' items came
 //!   in, and the levels of their notices (mitcad#1051).
+//! - [`memory_guard`]: what the memory guard's measurements tell an
+//!   import's progress, measured as often and looking ahead as the guard
+//!   of model commands (mitcad#1505).
 
 pub mod body_scope;
 pub mod geom;
@@ -39,6 +42,11 @@ pub use free_memory::FreeMemoryRelease;
 // The outcomes of the .ipt, .iam and .dwg imports and their notices'
 // levels (mitcad#1051).
 pub mod outcomes;
+
+// What the memory guard's measurements tell an import (mitcad#80), with the
+// look-ahead of the guard of model commands (mitcad#1505).
+pub mod memory_guard;
+pub use memory_guard::ImportMemoryGuard;
 
 /// The default geometric tolerance of the imports (mm, mitcad#224): how far
 /// the replay's geometry may be from the file's where no exact result is

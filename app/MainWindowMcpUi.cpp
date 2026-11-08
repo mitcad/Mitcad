@@ -145,7 +145,7 @@ std::optional<SelectionItem> readItem(const QJsonValue& value, const CommandCont
   const bool tooLong = item.owner.size() > 1024 || item.name.size() > 4096 || item.occurrence.size() > 1024 ||
                        item.geometry.size() > 1024;
   if (!item.isValid() || item.owner.isEmpty() || tooLong) {
-    problem = QObject::tr("not an entity: %1")
+    problem = QStringLiteral("not an entity: %1")
                   .arg(mcp::echoed(QString::fromUtf8(QJsonDocument(entry).toJson(QJsonDocument::Compact))));
     return std::nullopt;
   }
@@ -374,10 +374,10 @@ CommentShown mcpComment(const QJsonObject& arguments, const CommandContext& mode
   try {
     shown = findComment(id, model);
   } catch (const std::exception& error) {
-    refuse(QObject::tr("The comments could not be read: %1").arg(QString::fromUtf8(error.what())));
+    refuse(QStringLiteral("The comments could not be read: %1").arg(QString::fromUtf8(error.what())));
   }
   if (!shown) {
-    refuse(QObject::tr("The design has no comment %1.").arg(mcp::echoed(id)));
+    refuse(QStringLiteral("The design has no comment %1.").arg(mcp::echoed(id)));
   }
   return *shown;
 }
@@ -498,7 +498,7 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
   const bool whole = arguments.value(QStringLiteral("window")).toBool(false);
   const int maxSize = std::clamp(arguments.value(QStringLiteral("max_size")).toInt(1280), 64, 4096);
   if (m_viewer->isPainting()) {
-    refuseWith(tr("busy: the view is drawing; retry in 100 ms"),
+    refuseWith(QStringLiteral("busy: the view is drawing; retry in 100 ms"),
                {{QStringLiteral("busy"), true}, {QStringLiteral("retry_after_ms"), 100}});
   }
   // The format, a file to write, a size of its own (mitcad#689).
@@ -510,7 +510,7 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
                                                                                  : QStringLiteral("png");
   }
   if (format != QStringLiteral("png") && format != QStringLiteral("jpeg")) {
-    refuse(tr("format must be png or jpeg."));
+    refuse(QStringLiteral("format must be png or jpeg."));
   }
   const bool jpeg = format == QStringLiteral("jpeg");
   const int quality = std::clamp(arguments.value(QStringLiteral("quality")).toInt(90), 1, 100);
@@ -526,7 +526,7 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
   }
   const std::optional<QSize> offscreen = mcpScreenshotSize(arguments, maxSize);
   if (offscreen && whole) {
-    refuse(tr("width, height and aspect render the 3D view, not the whole window."));
+    refuse(QStringLiteral("width, height and aspect render the 3D view, not the whole window."));
   }
   // The view's frame with the widgets over it (the sketch overlay, the
   // orientation cube's buttons), as the user sees it; the version watermark
@@ -550,7 +550,7 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
     // Offscreen at that size, so the picture does not take the window's
     // shape (mitcad#689); the model must not be computing meanwhile.
     if (modelBusy()) {
-      refuseWith(tr("busy: the design is computing; retry in 1000 ms"),
+      refuseWith(QStringLiteral("busy: the design is computing; retry in 1000 ms"),
                  {{QStringLiteral("busy"), true}, {QStringLiteral("retry_after_ms"), 1000}});
     }
     image = m_viewer->snapshot(*offscreen, false, true);
@@ -589,7 +589,7 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
     what = QStringLiteral("window");
   }
   if (image.isNull()) {
-    refuse(tr("No image of the %1 could be made.").arg(what));
+    refuse(QStringLiteral("No image of the %1 could be made.").arg(what));
   }
   const int fullWidth = image.width();
   const int fullHeight = image.height();
@@ -609,11 +609,11 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
   const mcp::FittedImage fitted = mcp::fitImage(
       image, longest, budget, [jpeg, quality](const QImage& picture) { return mcp::encodeImage(picture, jpeg, quality); });
   if (fitted.bytes.isEmpty()) {
-    refuse(tr("The image could not be written as %1.").arg(format.toUpper()));
+    refuse(QStringLiteral("The image could not be written as %1.").arg(format.toUpper()));
   }
   if (!fitted.fits) {
     // Compact and actionable; the session stays usable.
-    refuseWith(tr("The image of the %1 takes %2 bytes as %3 even at %4 × %5 pixels, over the %6 bytes allowed. "
+    refuseWith(QStringLiteral("The image of the %1 takes %2 bytes as %3 even at %4 × %5 pixels, over the %6 bytes allowed. "
                   "Allow more max_bytes, ask for format jpeg with a lower quality, or write it to a file with path.")
                    .arg(what)
                    .arg(fitted.bytes.size())
@@ -647,7 +647,7 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
     // Into the allowed folder: only the path and the size go back.
     QFile file(target);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(bytes) != bytes.size()) {
-      refuse(tr("Could not write %1: %2").arg(QDir::toNativeSeparators(target), file.errorString()));
+      refuse(QStringLiteral("Could not write %1: %2").arg(QDir::toNativeSeparators(target), file.errorString()));
     }
     file.close();
     result.insert(QStringLiteral("path"), target);
@@ -675,7 +675,7 @@ std::optional<QSize> MainWindow::mcpScreenshotSize(const QJsonObject& arguments,
     return std::nullopt;
   }
   if (hasWidth && hasHeight && hasAspect) {
-    refuse(tr("Give width and height, or aspect with at most one of them."));
+    refuse(QStringLiteral("Give width and height, or aspect with at most one of them."));
   }
   const double viewAspect =
       m_viewer->height() > 0 ? static_cast<double>(m_viewer->width()) / m_viewer->height() : 1.0;
@@ -685,7 +685,7 @@ std::optional<QSize> MainWindow::mcpScreenshotSize(const QJsonObject& arguments,
                         : hasWidth && hasHeight && down > 0 ? static_cast<double>(across) / down
                                                               : viewAspect;
   if (!std::isfinite(aspect) || aspect < 0.1 || aspect > 10.0) {
-    refuse(tr("aspect must be between 0.1 and 10."));
+    refuse(QStringLiteral("aspect must be between 0.1 and 10."));
   }
   if (hasWidth && !hasHeight) {
     down = static_cast<int>(std::lround(across / aspect));
@@ -701,7 +701,7 @@ std::optional<QSize> MainWindow::mcpScreenshotSize(const QJsonObject& arguments,
 QJsonObject MainWindow::mcpSelect(const QJsonObject& arguments) {
   mcpRefuseBusy();
   if (m_mode == Mode::PickPlane) {
-    refuse(tr("Create Sketch waits for a plane to be picked: pick one or cancel it first."));
+    refuse(QStringLiteral("Create Sketch waits for a plane to be picked: pick one or cancel it first."));
   }
   const QString reveal = arguments.value(QStringLiteral("reveal")).toString(QStringLiteral("pan"));
   // A comment's target instead of items (mitcad#1119): its entity when it
@@ -777,7 +777,7 @@ QJsonObject MainWindow::mcpSelect(const QJsonObject& arguments) {
       (there ? ids : missing) << item.name;
     }
     if (!missing.isEmpty()) {
-      refuse(tr("%1 has no %2").arg(m_sketch->model().name, mcp::echoed(missing.join(QStringLiteral(", ")))));
+      refuse(QStringLiteral("%1 has no %2").arg(m_sketch->model().name, mcp::echoed(missing.join(QStringLiteral(", ")))));
     }
     m_sketch->selectEntities(ids, reveal != QStringLiteral("none"), reveal == QStringLiteral("fit"));
   } else {
@@ -786,7 +786,7 @@ QJsonObject MainWindow::mcpSelect(const QJsonObject& arguments) {
     std::vector<gp_Pnt> places;
     QString missing;
     if (!mcpItemCorners(items, places, &missing)) {
-      refuse(tr("Not in the design: %1").arg(mcp::echoed(missing)));
+      refuse(QStringLiteral("Not in the design: %1").arg(mcp::echoed(missing)));
     }
     // A comment on a free point, a parameter or a target no longer there:
     // its place (mitcad#1119).
@@ -881,17 +881,17 @@ QJsonObject MainWindow::mcpCameraJson() const {
 
 QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
   if (m_viewer->isPainting()) {
-    refuseWith(tr("busy: the view is drawing; retry in 100 ms"),
+    refuseWith(QStringLiteral("busy: the view is drawing; retry in 100 ms"),
                {{QStringLiteral("busy"), true}, {QStringLiteral("retry_after_ms"), 100}});
   }
   const auto pointOf = [](const QString& key, const QJsonValue& given) {
     const QJsonArray array = given.toArray();
     if (array.size() != 3 || !array[0].isDouble() || !array[1].isDouble() || !array[2].isDouble()) {
-      refuse(tr("%1 must be three numbers (x, y, z in mm).").arg(key));
+      refuse(QStringLiteral("%1 must be three numbers (x, y, z in mm).").arg(key));
     }
     if (!std::isfinite(array[0].toDouble()) || !std::isfinite(array[1].toDouble()) ||
         !std::isfinite(array[2].toDouble())) {
-      refuse(tr("%1 must contain finite numbers.").arg(key));
+      refuse(QStringLiteral("%1 must contain finite numbers.").arg(key));
     }
     return gp_XYZ(array[0].toDouble(), array[1].toDouble(), array[2].toDouble());
   };
@@ -909,7 +909,7 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
   const double fov = hasFov ? arguments.value(QStringLiteral("fov")).toDouble()
                             : m_viewer->fieldOfView();
   if (hasFov && (!std::isfinite(fov) || fov < 1.0 || fov > 170.0)) {
-    refuse(tr("fov must be between 1 and 170 degrees."));
+    refuse(QStringLiteral("fov must be between 1 and 170 degrees."));
   }
   const bool hasEye = arguments.contains(QStringLiteral("eye"));
   const bool hasTarget = arguments.contains(QStringLiteral("target"));
@@ -918,7 +918,7 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
   if (arguments.contains(QStringLiteral("projection"))) {
     const QString projection = arguments.value(QStringLiteral("projection")).toString();
     if (projection != QStringLiteral("orthographic") && projection != QStringLiteral("perspective")) {
-      refuse(tr("projection must be orthographic or perspective."));
+      refuse(QStringLiteral("projection must be orthographic or perspective."));
     }
     camera.perspective = projection == QStringLiteral("perspective");
     set = true;
@@ -930,14 +930,14 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
     camera.target = gp_Pnt(pointOf(QStringLiteral("target"), arguments.value(QStringLiteral("target"))));
   }
   if (!std::isfinite(camera.eye.Distance(camera.target)) || camera.eye.Distance(camera.target) <= Precision::Confusion()) {
-    refuse(tr("The eye and the target must be apart."));
+    refuse(QStringLiteral("The eye and the target must be apart."));
   }
   if (arguments.contains(QStringLiteral("up"))) {
     const gp_XYZ up = pointOf(QStringLiteral("up"), arguments.value(QStringLiteral("up")));
     const gp_XYZ direction = camera.target.XYZ() - camera.eye.XYZ();
     if (!std::isfinite(up.Modulus()) || !std::isfinite(up.Crossed(direction).Modulus()) ||
         up.Modulus() <= Precision::Confusion() || up.Crossed(direction).Modulus() <= 1e-9 * up.Modulus() * direction.Modulus()) {
-      refuse(tr("up must be a vector across the view direction."));
+      refuse(QStringLiteral("up must be a vector across the view direction."));
     }
     camera.up = gp_Dir(up);
     set = true;
@@ -950,7 +950,7 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
   if (hasHeight) {
     const double height = arguments.value(QStringLiteral("height")).toDouble();
     if (!std::isfinite(height) || !(height > 0.0)) {
-      refuse(tr("height must be more than 0 mm."));
+      refuse(QStringLiteral("height must be more than 0 mm."));
     }
     camera.height = height;
   } else if (camera.perspective && (hasEye || hasTarget)) {
@@ -958,7 +958,7 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
     camera.height = 2.0 * camera.eye.Distance(camera.target) * std::tan(fov * kPi / 360.0);
   }
   if (!std::isfinite(camera.height) || !(camera.height > 0.0)) {
-    refuse(tr("The resulting camera height must be finite and more than 0 mm."));
+    refuse(QStringLiteral("The resulting camera height must be finite and more than 0 mm."));
   }
   set = set || hasEye || hasTarget || hasHeight || hasFov;
   // Resolve framing before changing the camera or its field of view.
@@ -971,7 +971,7 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
   std::optional<gp_Pnt> centre;
   if (shown) {
     if (arguments.contains(QStringLiteral("box")) || frame != QStringLiteral("none")) {
-      refuse(tr("Give either comment, box or frame."));
+      refuse(QStringLiteral("Give either comment, box or frame."));
     }
     std::vector<gp_Pnt> corners;
     if (!shown->entity.isEmpty()) {
@@ -991,7 +991,7 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
     }
     if (box.IsVoid()) {
       if (!shown->place) {
-        refuse(tr("Comment %1 has no place in the view (it is on %2).")
+        refuse(QStringLiteral("Comment %1 has no place in the view (it is on %2).")
                    .arg(shown->comment.value(QStringLiteral("id")).toString(),
                         shown->comment.value(QStringLiteral("label")).toString()));
       }
@@ -1000,7 +1000,7 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
     framed = QStringLiteral("comment");
   } else if (arguments.contains(QStringLiteral("box"))) {
     if (frame != QStringLiteral("none")) {
-      refuse(tr("Give either box or frame, not both."));
+      refuse(QStringLiteral("Give either box or frame, not both."));
     }
     const QJsonObject given = arguments.value(QStringLiteral("box")).toObject();
     box.Add(gp_Pnt(pointOf(QStringLiteral("box.min"), given.value(QStringLiteral("min")))));
@@ -1009,30 +1009,30 @@ QJsonObject MainWindow::mcpCamera(const QJsonObject& arguments) {
   } else if (frame == QStringLiteral("shown")) {
     box = m_viewer->bodiesBox();
     if (box.IsVoid()) {
-      refuse(tr("No body is shown to frame."));
+      refuse(QStringLiteral("No body is shown to frame."));
     }
     framed = frame;
   } else if (frame == QStringLiteral("selection")) {
     std::vector<gp_Pnt> corners;
     mcpItemCorners(m_selection, corners, nullptr);
     if (corners.empty()) {
-      refuse(tr("Nothing with a shape is selected to frame."));
+      refuse(QStringLiteral("Nothing with a shape is selected to frame."));
     }
     for (const gp_Pnt& corner : corners) {
       box.Add(corner);
     }
     framed = frame;
   } else if (frame != QStringLiteral("none")) {
-    refuse(tr("frame must be none, shown or selection."));
+    refuse(QStringLiteral("frame must be none, shown or selection."));
   }
   // Framed for a picture of that shape (ui_screenshot's aspect, mitcad#689).
   const bool hasAspect = arguments.contains(QStringLiteral("aspect"));
   const double aspect = arguments.value(QStringLiteral("aspect")).toDouble(0.0);
   if (hasAspect && (!std::isfinite(aspect) || aspect < 0.1 || aspect > 10.0)) {
-    refuse(tr("aspect must be between 0.1 and 10."));
+    refuse(QStringLiteral("aspect must be between 0.1 and 10."));
   }
   if (hasAspect && box.IsVoid() && !centre) {
-    refuse(tr("aspect frames a box or frame (shown or selection): give one of them."));
+    refuse(QStringLiteral("aspect frames a box or frame (shown or selection): give one of them."));
   }
   // All refusals above leave the live viewer (including animation) alone.
   m_viewer->settleCamera();
@@ -1103,14 +1103,14 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
   }
   mcpRefuseBusy();
   if (m_closePending || QApplication::activeModalWidget() != nullptr) {
-    refuse(tr("The design is closing or waiting for a dialog."));
+    refuse(QStringLiteral("The design is closing or waiting for a dialog."));
   }
   const QString id = arguments.value(QStringLiteral("id")).toString();
   const QString edit = arguments.value(QStringLiteral("edit")).toString();
   const QString finish = arguments.value(QStringLiteral("finish")).toString(QStringLiteral("ok"));
   const QJsonObject inputs = arguments.value(QStringLiteral("inputs")).toObject();
   if (!id.isEmpty() && !edit.isEmpty()) {
-    refuse(tr("Give either id or edit, not both."));
+    refuse(QStringLiteral("Give either id or edit, not both."));
   }
   const quint64 logStart = logNext() - 1;
   const int depthBefore = undoDepth();
@@ -1176,7 +1176,7 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
     }
     if (!ended() && session) {
       // OK was refused: the panel stays open with what it says.
-      refuseWith(tr("OK of %1 was refused: %2")
+      refuseWith(QStringLiteral("OK of %1 was refused: %2")
                      .arg(session->def().name,
                           panel.value(QStringLiteral("message")).toString(
                               panel.value(QStringLiteral("panel")).toObject().value(QStringLiteral("message")).toString())),
@@ -1203,7 +1203,7 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
     } else if (m_mode == Mode::Sketch && finish == QStringLiteral("ok")) {
       result.insert(QStringLiteral("command"), QStringLiteral("sketch.finish"));
       if (!finishSketch()) {
-        refuse(tr("The sketch stays open: computing the features after it was canceled."));
+        refuse(QStringLiteral("The sketch stays open: computing the features after it was canceled."));
       }
     } else if (m_mode == Mode::Sketch && finish == QStringLiteral("cancel")) {
       // Every change made since it was opened taken back, then left.
@@ -1217,27 +1217,27 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
         }
       }
       if (m_mode == Mode::Sketch && !finishSketch()) {
-        refuse(tr("The sketch stays open: computing the features after it was canceled."));
+        refuse(QStringLiteral("The sketch stays open: computing the features after it was canceled."));
       }
       qInfo().noquote() << QStringLiteral("MCP: an agent cancelled the sketch %1").arg(name);
     } else {
       // Nothing to end: what could be run instead (mitcad#1269).
-      return listing(QString(), tr("Nothing is open to finish: give id (one of these commands) or edit."));
+      return listing(QString(), QStringLiteral("Nothing is open to finish: give id (one of these commands) or edit."));
     }
   } else if (!edit.isEmpty()) {
     // As a double-click in the timeline: a sketch opens in sketch mode,
     // another feature in its panel.
     if (m_mode == Mode::PickPlane) {
-      refuse(tr("Create Sketch waits for a plane to be picked: pick one or cancel it first."));
+      refuse(QStringLiteral("Create Sketch waits for a plane to be picked: pick one or cancel it first."));
     }
     if (m_mode != Mode::Idle) {
-      refuse(tr("Finish the sketch or command first."));
+      refuse(QStringLiteral("Finish the sketch or command first."));
     }
     if (windowReadOnly()) {
       refuse(readOnlyReason());
     }
     if (!sketchExists(edit)) {
-      refuse(tr("No feature %1 in the design.").arg(mcp::echoed(edit)));
+      refuse(QStringLiteral("No feature %1 in the design.").arg(mcp::echoed(edit)));
     }
     result.insert(QStringLiteral("command"), QStringLiteral("edit"));
     editFeature(edit);
@@ -1245,43 +1245,43 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
     if (m_session) {
       runPanel();
     } else if (m_mode != Mode::Sketch) {
-      refuse(m_statusLabel->text().isEmpty() ? tr("%1 could not be edited.").arg(edit) : m_statusLabel->text());
+      refuse(m_statusLabel->text().isEmpty() ? QStringLiteral("%1 could not be edited.").arg(edit) : m_statusLabel->text());
     }
   } else {
     // New Design waits for the user: it names the design in place in the
     // Projects panel, or asks the name (mitcad#1266); document_new makes it
     // without either.
     if (id == QStringLiteral("file.new_design") || id == QStringLiteral("file.new")) {
-      refuse(tr("New Design asks the user to name the design, which an agent cannot do: call document_new (optional "
+      refuse(QStringLiteral("New Design asks the user to name the design, which an agent cannot do: call document_new (optional "
                 "name and folder) to make an empty design beside the open ones."));
     }
     const CommandDef* def = m_registry->find(id);
     if (def == nullptr) {
       // The nearest ids, not a file the agent cannot read (mitcad#1269).
-      refuse(tr("No command %1 in the command registry. %2")
+      refuse(QStringLiteral("No command %1 in the command registry. %2")
                  .arg(mcp::echoed(id), mcp::nearestCommandsText(*m_registry, id)));
     }
     if (mcp::opensDialog(id)) {
-      refuse(tr("%1 opens a file dialog or another window, which an agent cannot use: run it in the application.")
+      refuse(QStringLiteral("%1 opens a file dialog or another window, which an agent cannot use: run it in the application.")
                  .arg(def->name));
     }
     if (windowReadOnly() && !readOnlyCommand(*def)) {
       refuse(readOnlyReason());
     }
     if (!isAvailable(*def)) {
-      refuse(tr("%1 is not available now (mode %2).").arg(def->name, modeName(m_mode)));
+      refuse(QStringLiteral("%1 is not available now (mode %2).").arg(def->name, modeName(m_mode)));
     }
     result.insert(QStringLiteral("command"), id);
     if (def->kind == CommandDef::Kind::Feature) {
       trigger(id);
       waitUntil(panelStarted, 60000);
       if (!m_session) {
-        refuse(m_statusLabel->text().isEmpty() ? tr("%1 did not start.").arg(def->name) : m_statusLabel->text());
+        refuse(m_statusLabel->text().isEmpty() ? QStringLiteral("%1 did not start.").arg(def->name) : m_statusLabel->text());
       }
       runPanel();
     } else {
       if (!inputs.isEmpty()) {
-        refuse(tr("%1 has no panel: it takes no inputs.").arg(def->name));
+        refuse(QStringLiteral("%1 has no panel: it takes no inputs.").arg(def->name));
       }
       trigger(id);
       waitUntil([this] { return !modelBusy(); }, 120000);
@@ -1292,7 +1292,7 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
     }
   }
   if (!guard.opened().isEmpty()) {
-    refuse(tr("%1 opened the dialog %2, which was closed: an agent cannot answer dialogs; run it in the application.")
+    refuse(QStringLiteral("%1 opened the dialog %2, which was closed: an agent cannot answer dialogs; run it in the application.")
                .arg(id.isEmpty() ? edit : id, guard.opened()));
   }
   if (changes && undoDepth() > depthBefore) {

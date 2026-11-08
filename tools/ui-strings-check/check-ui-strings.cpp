@@ -16,6 +16,12 @@
 //                                  out) and each Markdown file; prints every
 //                                  text that breaks a rule as file:line and
 //                                  fails if any
+//   mitcad-check-ui-strings ... --spelling FILE.md...
+//                                  scans the prose of each Markdown file after
+//                                  --spelling for the British spellings only
+//                                  (a developer document, app/COMMANDS.md,
+//                                  mitcad#1478: it names code, logs and keys
+//                                  the other rules would read as UI texts)
 //   mitcad-check-ui-strings --self-test
 //                                  checks the scan on planted sources
 //
@@ -49,6 +55,7 @@
 #include <iostream>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -66,6 +73,9 @@ const Allowed kAllowed[] = {
     {"\"...\"", "Show Details...", "QMessageBox's own source text, looked up in Qt's translations"},
     {"\"...\"", "Hide Details...", "QMessageBox's own source text, looked up in Qt's translations"},
     {"deg", "The value to key (30 deg, 12 mm)", "an example of the expression typed in the field"},
+    {"modelling", "\"Surface modelling\"", "a heading of core's commands.md, quoted by its name in app/COMMANDS.md"},
+    {"centre", "\"Corners and centre lines on drawing views\"",
+     "a heading of core's commands.md, quoted by its name in app/COMMANDS.md"},
 };
 
 // Objective-C literals that read as text but are not the frontend's own
@@ -126,16 +136,18 @@ const char* const kRetired[] = {
     "Floating chrome",   "Search Commands",  "Change Parameters", "Save As DXF",
 };
 
-// Retired words, matched as whole words in any case: British spellings and
-// "ribbon" (the toolbar).
-const std::set<std::string> kRetiredWords = {
+// Retired words, matched as whole words in any case: the British spellings,
+// and "ribbon" (the toolbar), which the spelling-only scan leaves to the
+// developer documents.
+const std::set<std::string> kBritishSpellings = {
     "colour",     "colours",     "coloured",   "colouring",  "centre",     "centres",    "centred",
     "centring",   "metre",       "metres",     "millimetre", "millimetres", "centimetre", "centimetres",
     "kilometre",  "kilometres",  "licence",    "licences",   "cancelled",  "cancelling", "modelling",
     "modelled",   "favourite",   "favourites", "mitre",      "mitres",     "mitred",     "grey",
     "greys",      "greyed",      "behaviour",  "behaviours", "neighbour",  "neighbours", "catalogue",
-    "catalogues", "aluminium",   "ribbon",
+    "catalogues", "aluminium",
 };
+const char* const kRetiredWord = "ribbon";
 
 bool identStart(char c) {
   return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
@@ -230,20 +242,45 @@ bool timesInSize(const std::string& text) {
   return false;
 }
 
+// Whether kAllowed lets `text` keep what `rule` retires.
+bool allowedText(const std::string& rule, const std::string& text) {
+  for (const Allowed& allowed : kAllowed) {
+    if (rule == allowed.rule && text.find(allowed.fragment) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // The rules a text breaks, each by its name ("\"...\"", "Mitcad", ...);
-// `source` for a text of the app's sources, not of a document.
-std::vector<std::string> broken(const std::string& text, bool source) {
+// `source` for a text of the app's sources, not of a document; `spelling`
+// for the British spellings only.
+std::vector<std::string> broken(const std::string& text, bool source, bool spelling = false) {
   std::vector<std::string> rules;
   const auto add = [&rules, &text](const std::string& rule) {
-    for (const Allowed& allowed : kAllowed) {
-      if (rule == allowed.rule && text.find(allowed.fragment) != std::string::npos) {
-        return;
-      }
-    }
-    if (std::find(rules.begin(), rules.end(), rule) == rules.end()) {
+    if (!allowedText(rule, text) && std::find(rules.begin(), rules.end(), rule) == rules.end()) {
       rules.push_back(rule);
     }
   };
+  // The retired words, whole in any case.
+  const auto words = [&text, &add, spelling] {
+    std::string word;
+    for (std::size_t i = 0; i <= text.size(); ++i) {
+      const char c = i < text.size() ? text[i] : ' ';
+      if (letter(c)) {
+        word += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        continue;
+      }
+      if (kBritishSpellings.count(word) || (!spelling && word == kRetiredWord)) {
+        add(word);
+      }
+      word.clear();
+    }
+  };
+  if (spelling) {
+    words();
+    return rules;
+  }
   for (std::size_t at = text.find("..."); at != std::string::npos; at = text.find("...", at + 1)) {
     const bool before = at > 0 && text[at - 1] == '.';
     const bool after = at + 3 < text.size() && text[at + 3] == '.';
@@ -272,18 +309,7 @@ std::vector<std::string> broken(const std::string& text, bool source) {
       add(term);
     }
   }
-  std::string word;
-  for (std::size_t i = 0; i <= text.size(); ++i) {
-    const char c = i < text.size() ? text[i] : ' ';
-    if (letter(c)) {
-      word += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-      continue;
-    }
-    if (kRetiredWords.count(word)) {
-      add(word);
-    }
-    word.clear();
-  }
+  words();
   if (titleCaseSmallWord(text)) {
     add("Title Case");
   }
@@ -593,10 +619,17 @@ void scanSource(const std::string& file, const std::string& source, std::vector<
   }
 }
 
-// Markdown prose without its code, link targets, URLs and HTML tags.
+// Markdown prose without its code, link targets, URLs and HTML tags. The
+// text is a line or a block of lines: a code span may go on over the
+// block's lines (its line breaks are kept, so the lines keep their
+// numbers), a link target, a URL and a tag end on their own line.
 std::string prose(const std::string& line) {
   std::string out;
   std::size_t i = 0;
+  // `close` on the line `i` is on.
+  const auto sameLine = [&line, &i](std::size_t close) {
+    return close != std::string::npos && line.find('\n', i) > close;
+  };
   while (i < line.size()) {
     if (line[i] == '`') {
       std::size_t run = 0;
@@ -610,26 +643,31 @@ std::string prose(const std::string& line) {
         continue;
       }
       out += ' ';
+      for (std::size_t k = i; k < close; ++k) {
+        if (line[k] == '\n') {
+          out += '\n';
+        }
+      }
       i = close + run;
       continue;
     }
     if (line[i] == ']' && i + 1 < line.size() && line[i + 1] == '(') {
       const std::size_t close = line.find(')', i + 2);
-      if (close != std::string::npos) {
+      if (sameLine(close)) {
         out += "] ";
         i = close + 1;
         continue;
       }
     }
     if (line.compare(i, 7, "http://") == 0 || line.compare(i, 8, "https://") == 0) {
-      while (i < line.size() && line[i] != ' ' && line[i] != '\t') {
+      while (i < line.size() && line[i] != ' ' && line[i] != '\t' && line[i] != '\n') {
         ++i;
       }
       continue;
     }
     if (line[i] == '<') {
       const std::size_t close = line.find('>', i + 1);
-      if (close != std::string::npos) {
+      if (sameLine(close)) {
         out += ' ';
         i = close + 1;
         continue;
@@ -656,6 +694,93 @@ void scanMarkdown(const std::string& file, const std::string& source, std::vecto
       checkText(file, number, prose(line), false, false, out);
     }
   }
+}
+
+// A Markdown heading: one to six '#' and a space ("#4b2d0b" is a color).
+bool heading(const std::string& line) {
+  const std::size_t first = line.find_first_not_of(" \t");
+  if (first == std::string::npos) {
+    return false;
+  }
+  std::size_t end = first;
+  while (end < line.size() && line[end] == '#') {
+    ++end;
+  }
+  return end > first && end - first <= 6 && (end == line.size() || line[end] == ' ' || line[end] == '\t');
+}
+
+// A Markdown line that starts a block of its own: a heading, a table row or
+// a list item.
+bool blockStart(const std::string& line) {
+  const std::size_t first = line.find_first_not_of(" \t");
+  if (first == std::string::npos) {
+    return false;
+  }
+  const char c = line[first];
+  if (heading(line) || c == '|') {
+    return true;
+  }
+  if ((c == '-' || c == '*' || c == '+') && first + 1 < line.size() && line[first + 1] == ' ') {
+    return true;
+  }
+  std::size_t end = first;
+  while (end < line.size() && digit(line[end])) {
+    ++end;
+  }
+  return end > first && end + 1 < line.size() && (line[end] == '.' || line[end] == ')') && line[end + 1] == ' ';
+}
+
+// The British spellings in the prose of a developer document (mitcad#1478):
+// only those, as the document names code, logs and keys the other rules
+// would read as UI texts. A code span may go on over the lines of its
+// paragraph, list item or table row.
+void scanMarkdownSpelling(const std::string& file, const std::string& source, std::vector<Violation>& out) {
+  std::istringstream in(source);
+  std::string line;
+  int number = 0;
+  bool fence = false;
+  std::string block;
+  int first = 0; // the block's first line
+  const auto flush = [&file, &out, &block, &first] {
+    std::istringstream lines(prose(block));
+    std::string text;
+    for (int at = first; std::getline(lines, text); ++at) {
+      const std::vector<std::string> rules = broken(text, false, true);
+      if (!rules.empty()) {
+        out.push_back({file, at, rules, text});
+      }
+    }
+    block.clear();
+  };
+  while (std::getline(in, line)) {
+    ++number;
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    const std::size_t start = line.find_first_not_of(" \t");
+    const bool fenceLine =
+        start != std::string::npos && (line.compare(start, 3, "```") == 0 || line.compare(start, 3, "~~~") == 0);
+    if (fenceLine || start == std::string::npos || fence || blockStart(line)) {
+      flush();
+    }
+    if (fenceLine) {
+      fence = !fence;
+      continue;
+    }
+    if (fence || start == std::string::npos) {
+      continue;
+    }
+    if (block.empty()) {
+      first = number;
+    } else {
+      block += '\n';
+    }
+    block += line;
+    if (heading(line)) {
+      flush(); // a heading is a block of one line
+    }
+  }
+  flush();
 }
 
 // The words that start a Rust item or statement whose own commas (a where
@@ -863,7 +988,8 @@ std::string readFile(const std::filesystem::path& path) {
   return text.str();
 }
 
-std::vector<Violation> scan(const std::vector<std::string>& paths) {
+// `spelling`: the Markdown files scanned for the British spellings only.
+std::vector<Violation> scan(const std::vector<std::string>& paths, const std::vector<std::string>& spelling) {
   namespace fs = std::filesystem;
   std::vector<Violation> out;
   for (const std::string& given : paths) {
@@ -898,6 +1024,14 @@ std::vector<Violation> scan(const std::vector<std::string>& paths) {
         scanSource(name, readFile(file), out);
       }
     }
+  }
+  for (const std::string& given : spelling) {
+    const fs::path path = fs::path(given).lexically_normal();
+    if (!fs::is_regular_file(path)) {
+      throw std::runtime_error("not a file: " + given);
+    }
+    const fs::path base = path.has_parent_path() ? path.parent_path() : fs::path();
+    scanMarkdownSpelling(path.lexically_relative(base).generic_string(), readFile(path), out);
   }
   return out;
 }
@@ -982,6 +1116,29 @@ int selfTest() {
   scanMarkdown("planted.md", markdown, found);
   scanRust("core/planted/src/lib.rs", rust, found);
   scanRust("core/expr/src/format.rs", "fn q(t: &str) -> String { format!(\"'{}'\", t) }\n", found);
+  // A developer document, for the spellings only (mitcad#1478).
+  const std::string spelling =
+      "# The colour `of\n"                                                     // 1: colour
+      "The colour of the `log's\n"                                             // 2: colour, a span
+      "centre` is grey... in Tools > Preferences\n"                            // 3: grey only
+      "at 30 deg on the ribbon, and Mitcad.\n"                                 // 4: fine
+      "\n"                                                                     // 5
+      "A stray ` backtick and the licence.\n"                                  // 6: licence
+      "\n"                                                                     // 7
+      "Then `the mitre\n"                                                      // 8: no closer in
+      "- A list` item and the centre,\r\n"                                     // 9: its block
+      "  then centre` and [the guide](a.md#the-colour).\n"                     // 10: a span
+      "```\n"                                                                  // 11
+      "the colour\n"                                                           // 12: code
+      "```\n"                                                                  // 13
+      "| Colour | `centre |\n"                                                 // 14: two
+      "| x | centre` |\n"                                                      // 15: centre
+      "\n"                                                                     // 16
+      "In commands.md, \"Corners and centre lines on drawing views\".\n"       // 17: allowed
+      "\n"                                                                     // 18
+      "Logs `Section caps: 3 colour(s) [a\n"                                   // 19: a span
+      "#4b2d0b hatch], colours` (the caps).\n";                                // 20: no heading
+  scanMarkdownSpelling("spelling.md", spelling, found);
   const std::set<std::string> expected = {
       "planted.cpp:3 \"...\"",          "planted.cpp:5 Mitcad",
       "planted.cpp:8 \" > \"",          "planted.cpp:10 Parts List, colour",
@@ -995,6 +1152,10 @@ int selfTest() {
       "core/planted/src/lib.rs:11 '{x}'", "core/planted/src/lib.rs:16 '{x}'",
       "core/planted/src/lib.rs:17 '{x}'", "core/planted/src/lib.rs:20 '{x}'",
       "core/planted/src/lib.rs:21 '{x}'",
+      "spelling.md:1 colour",           "spelling.md:2 colour",
+      "spelling.md:3 grey",             "spelling.md:6 licence",
+      "spelling.md:8 mitre",            "spelling.md:14 colour, centre",
+      "spelling.md:15 centre",
   };
   std::set<std::string> got;
   for (const Violation& v : found) {
@@ -1023,13 +1184,24 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::string(argv[1]) == "--self-test") {
     return selfTest();
   }
-  if (argc < 2) {
-    std::cerr << "usage: mitcad-check-ui-strings DIR|FILE.md... | --self-test\n";
+  std::vector<std::string> paths;
+  std::vector<std::string> spelling;
+  bool spellingOnly = false;
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--spelling") {
+      spellingOnly = true;
+    } else {
+      (spellingOnly ? spelling : paths).push_back(arg);
+    }
+  }
+  if (paths.empty() && spelling.empty()) {
+    std::cerr << "usage: mitcad-check-ui-strings [DIR|FILE.md...] [--spelling FILE.md...] | --self-test\n";
     return 2;
   }
   std::vector<Violation> found;
   try {
-    found = scan(std::vector<std::string>(argv + 1, argv + argc));
+    found = scan(paths, spelling);
   } catch (const std::exception& error) {
     std::cerr << "mitcad-check-ui-strings: " << error.what() << "\n";
     return 2;

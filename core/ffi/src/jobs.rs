@@ -41,6 +41,15 @@ impl JobControl {
         self.0.is_cancelled()
     }
 
+    /// Why the job was cancelled when not on the user's request: the
+    /// memory guard of model commands (mitcad#1480, `command_memory.rs`)
+    /// stops a command that would run the process out of memory, and the
+    /// application reports the command's error instead of a cancel. Empty
+    /// otherwise.
+    pub fn cancel_reason(&self) -> String {
+        self.0.cancel_reason().unwrap_or_default()
+    }
+
     pub fn progress(&self) -> JobProgress {
         let progress = self.0.progress();
         JobProgress {

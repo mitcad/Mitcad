@@ -1,0 +1,342 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a corner of three stripes where one rolls on an edge of the face
+it consumes and another's contact on that face reaches the edge only at
+its other end: the blends cut by each other, meeting at one point
+(mitcad#1530).
+
+The roof slab rounded on all its edges with 0.9 or 1: at each eave's tip
+the tip's rounding rolls on the obtuse edge (1650), and the eave's end
+edge and the slope's top edge on the end face are rounded too. The corner
+of the three (PerformThreeCorner) cut the end edge's blend from its point
+on the obtuse edge (1651) to where its contact on the end face meets the
+line the slope's two roundings ride on (0016), both at that blend's other
+end; the corner there, with the underside's rider, cut it along a curve
+that crossed the first one (up to 0.06 past it), and the end edge's face
+was left a sliver whose wire crossed itself.
+
+No ball rolls between the three faces at the tip (it would touch the
+consumed eave). The three blends are cut by each other, as the union of
+the three roundings' removal sets is: each pair along its intersection
+from where their contacts meet (the end edge's and the tip's at the point
+on the obtuse edge) to the point where all three surfaces meet, which lies
+on the intersection of the end edge's and the tip's blends. The end edge's
+blend then keeps the piece between that corner's two curves, the rider's
+intersection and the underside's cut.
+
+- threeCornerByInter (PerformThreeCorner, after the three SearchFD): where
+  one stripe has its side towards another on curve E (rolling on E) and the
+  other's contact on the common face (1651) reaches E at its far end, the
+  three stripes' pairs facing each other, one SurfData each at the corner:
+  the intersection of those two from that point to where the other's
+  second contact meets the rolling blend, the third surface's cut of it
+  (the point P of all three), and the three intersections from where each
+  pair's contacts meet to P. Each stripe's end is its two curves (on its
+  surface, the stripe in the data structure at that end, as the big one's
+  end of PerformTwoCornerbyInter); its points and its contacts' parameters
+  are those of its pairs. A corner of this kind that fails is a failed
+  corner ("ThreeCorner : the blends do not meet").
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
+index 1740b795..0185540c 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
+@@ -58,6 +58,13 @@
+ #include <TopOpeBRepDS_DataStructure.hxx>
+ #include <TopOpeBRepDS_HDataStructure.hxx>
+ #include <TopOpeBRepDS_Surface.hxx>
++#include <Geom_Curve.hxx>
++#include <GeomAdaptor_Curve.hxx>
++#include <NCollection_Array1.hxx>
++#include <StdFail_NotDone.hxx>
++#include <TopOpeBRepDS_CurvePointInterference.hxx>
++#include <TopOpeBRepDS_Point.hxx>
++#include <TopOpeBRepDS_SurfaceCurveInterference.hxx>
+ 
+ #ifdef OCCT_DEBUG
+   #include <Geom_TrimmedCurve.hxx>
+@@ -238,6 +245,261 @@ static bool ToricCorner(const TopoDS_Face& F, const double rd, const double rf,
+ //           incident carrying each edge.
+ //=======================================================================
+ 
++// A corner of three stripes, one of them (R) rolling on an edge E of the
++// face its blend consumes (a side on curve E, 0011), another (Y) with its
++// contact on that face, which reaches E only at its other end (their common
++// face there, ChFi3d_IsInFront, 1651), the third (Z) meeting both on faces
++// of their own. The rolling ball's corner between three faces does not
++// exist (no ball touches the consumed face), and the corner filled between
++// the stripes cut where their contacts meet cut Y at its far end, across
++// the corner at that end. The blends are cut by each other: each pair along
++// its intersection from where their contacts meet (for R and Y the point on
++// E) to the point where all three meet, which lies on the intersection of
++// R and Y. Each stripe's end is the two curves of its pairs (in the data
++// structure, as the big stripe's end of PerformTwoCornerbyInter).
++// Returns 0 where the corner is not of this kind, 1 when it is made, -1
++// when it is of this kind and fails.
++static int threeCornerByInter(TopOpeBRepDS_DataStructure&       DStr,
++                              const occ::handle<ChFiDS_Stripe>* CD,
++                              const int                         sens[3],
++                              const int                         ifd[3][3],
++                              const double                      par[3][3],
++                              const int                         jf[3][3],
++                              const bool                        oksea[3],
++                              const double                      tol3d,
++                              const double                      tol2d)
++{
++  int R = -1, Y = -1;
++  for (int a = 0; a < 3 && R < 0; a++)
++  {
++    for (int b = 0; b < 3 && R < 0; b++)
++    {
++      if (a == b || CD[a] == CD[b] || !oksea[3 - a - b])
++      {
++        continue;
++      }
++      const occ::handle<ChFiDS_SurfData>& Fa = CD[a]->SetOfSurfData()->Value(ifd[a][b]);
++      const occ::handle<ChFiDS_SurfData>& Fb = CD[b]->SetOfSurfData()->Value(ifd[b][a]);
++      const int                           sa = jf[a][b], sb = jf[b][a];
++      if (!Fa->IsOnCurve(sa) || Fa->IndexOfC(sa) <= 0 || Fb->IsOnCurve(sb) || Fb->IsOnCurve(3 - sb))
++      {
++        continue;
++      }
++      const ChFiDS_CommonPoint& CPfar = Fb->Vertex(sens[b] != 1, sb);
++      if (CPfar.IsOnArc() && CPfar.Arc().IsSame(DStr.Shape(Fa->IndexOfC(sa))))
++      {
++        R = a;
++        Y = b;
++      }
++    }
++  }
++  if (R < 0)
++  {
++    return 0;
++  }
++  const int Z = 3 - R - Y;
++  if (CD[Z] == CD[R] || CD[Z] == CD[Y] || !oksea[R] || !oksea[Y])
++  {
++    return 0;
++  }
++  for (int k = 0; k < 3; k++)
++  {
++    const int a = (k + 1) % 3, b = (k + 2) % 3;
++    if (ifd[k][a] != ifd[k][b] || jf[k][a] == jf[k][b])
++    {
++      return 0;
++    }
++  }
++  occ::handle<ChFiDS_SurfData>     Fd[3];
++  occ::handle<GeomAdaptor_Surface> HS[3];
++  bool                             isf[3];
++  for (int k = 0; k < 3; k++)
++  {
++    Fd[k]  = CD[k]->SetOfSurfData()->Value(ifd[k][(k + 1) % 3]);
++    HS[k]  = ChFi3d_BoundSurf(DStr, Fd[k], 1, 2);
++    isf[k] = sens[k] == 1;
++  }
++  // Where the contacts of each pair meet: the parameters on both, their
++  // points on both surfaces, the point.
++  double   u[3][3];
++  gp_Pnt2d uv[3][3];
++  gp_Pnt   pt[3][3];
++  for (int a = 0; a < 3; a++)
++  {
++    for (int b = a + 1; b < 3; b++)
++    {
++      double ua = par[a][b], ub = par[b][a];
++      ChFi3d_ComputesIntPC(Fd[a]->Interference(jf[a][b]),
++                           Fd[b]->Interference(jf[b][a]),
++                           HS[a],
++                           HS[b],
++                           ua,
++                           ub);
++      u[a][b]  = ua;
++      u[b][a]  = ub;
++      uv[a][b] = Fd[a]->Interference(jf[a][b]).PCurveOnSurf()->Value(ua);
++      uv[b][a] = Fd[b]->Interference(jf[b][a]).PCurveOnSurf()->Value(ub);
++      pt[a][b] = HS[a]->Value(uv[a][b].X(), uv[a][b].Y());
++      pt[b][a] = pt[a][b];
++      if (pt[a][b].Distance(HS[b]->Value(uv[b][a].X(), uv[b][a].Y())) > 1.e-4)
++      {
++        return -1;
++      }
++    }
++  }
++  // R and Y's intersection from the point on E to where Y's other contact
++  // meets R's surface, and on it the point where Z's surface cuts it.
++  const ChFiDS_FaceInterference& FiYZ = Fd[Y]->Interference(jf[Y][Z]);
++  if (FiYZ.LineIndex() <= 0)
++  {
++    return -1;
++  }
++  occ::handle<GeomAdaptor_Curve> Hyz =
++    new GeomAdaptor_Curve(DStr.Curve(FiYZ.LineIndex()).Curve(), FiYZ.FirstParameter(), FiYZ.LastParameter());
++  gp_Pnt2d uvB;
++  double   wB = FiYZ.Parameter(isf[Y]);
++  if (!ChFi3d_IntCS(HS[R], Hyz, uvB, wB))
++  {
++    return -1;
++  }
++  NCollection_Array1<double> Pardeb(1, 4), Parfin(1, 4);
++  occ::handle<Geom_Curve>    Cry;
++  occ::handle<Geom2d_Curve>  PcY, PcR;
++  double                     tolry = tol3d;
++  const gp_Pnt2d             uvBY  = FiYZ.PCurveOnSurf()->Value(wB);
++  Pardeb(1) = uv[Y][R].X();
++  Pardeb(2) = uv[Y][R].Y();
++  Pardeb(3) = uv[R][Y].X();
++  Pardeb(4) = uv[R][Y].Y();
++  Parfin(1) = uvBY.X();
++  Parfin(2) = uvBY.Y();
++  Parfin(3) = uvB.X();
++  Parfin(4) = uvB.Y();
++  if (!ChFi3d_ComputeCurves(HS[Y], HS[R], Pardeb, Parfin, Cry, PcY, PcR, tol3d, tol2d, tolry))
++  {
++    return -1;
++  }
++  occ::handle<GeomAdaptor_Curve> Hry = new GeomAdaptor_Curve(Cry);
++  gp_Pnt2d                       uvPZ;
++  double                         wP = Cry->Value(Cry->FirstParameter()).Distance(pt[R][Y])
++                         < Cry->Value(Cry->LastParameter()).Distance(pt[R][Y])
++                                        ? -2.e100
++                                        : 2.e100;
++  if (!ChFi3d_IntCS(HS[Z], Hry, uvPZ, wP))
++  {
++    return -1;
++  }
++  const gp_Pnt   P    = Cry->Value(wP);
++  const gp_Pnt2d uvPY = PcY->Value(wP), uvPR = PcR->Value(wP);
++  gp_Pnt2d       uvP[3];
++  uvP[R] = uvPR;
++  uvP[Y] = uvPY;
++  uvP[Z] = uvPZ;
++  // The three curves, from where each pair's contacts meet to P.
++  occ::handle<Geom_Curve>   C[3][3];
++  occ::handle<Geom2d_Curve> Pc[3][3]; // Pc[a][b]: pair (a, b)'s curve on a
++  double                    tolc[3][3];
++  for (int a = 0; a < 3; a++)
++  {
++    for (int b = a + 1; b < 3; b++)
++    {
++      Pardeb(1) = uv[a][b].X();
++      Pardeb(2) = uv[a][b].Y();
++      Pardeb(3) = uv[b][a].X();
++      Pardeb(4) = uv[b][a].Y();
++      Parfin(1) = uvP[a].X();
++      Parfin(2) = uvP[a].Y();
++      Parfin(3) = uvP[b].X();
++      Parfin(4) = uvP[b].Y();
++      double tolr = tol3d;
++      if (!ChFi3d_ComputeCurves(
++            HS[a], HS[b], Pardeb, Parfin, C[a][b], Pc[a][b], Pc[b][a], tol3d, tol2d, tolr))
++      {
++        return -1;
++      }
++      C[b][a]    = C[a][b];
++      tolc[a][b] = tolc[b][a] = tolr;
++    }
++  }
++  // Points.
++  const auto addPoint = [&](const gp_Pnt& thePnt, const double theTol) {
++    return DStr.AddPoint(TopOpeBRepDS_Point(thePnt, std::max(theTol, tol3d)));
++  };
++  double tolP = 0.;
++  for (int a = 0; a < 3; a++)
++  {
++    for (int b = a + 1; b < 3; b++)
++    {
++      tolP = std::max(tolP, tolc[a][b]);
++    }
++  }
++  const int IpP = addPoint(P, tolP);
++  int       Ip[3][3];
++  for (int a = 0; a < 3; a++)
++  {
++    for (int b = a + 1; b < 3; b++)
++    {
++      Ip[a][b] = Ip[b][a] = addPoint(pt[a][b], tolc[a][b]);
++    }
++  }
++  // Curves, each with its points at its ends.
++  int  Ic[3][3];
++  bool fromStart[3][3]; // the curve's parameters run from the pair's point to P
++  for (int a = 0; a < 3; a++)
++  {
++    for (int b = a + 1; b < 3; b++)
++    {
++      const occ::handle<Geom_Curve>& Cab = C[a][b];
++      const double                   w1 = Cab->FirstParameter(), w2 = Cab->LastParameter();
++      const bool fwd = Cab->Value(w1).Distance(pt[a][b]) <= Cab->Value(w2).Distance(pt[a][b]);
++      fromStart[a][b] = fromStart[b][a] = fwd;
++      Ic[a][b] = Ic[b][a] = DStr.AddCurve(TopOpeBRepDS_Curve(Cab, tolc[a][b]));
++      NCollection_List<occ::handle<TopOpeBRepDS_Interference>>& Li = DStr.ChangeCurveInterferences(Ic[a][b]);
++      Li.Append(ChFi3d_FilPointInDS(TopAbs_FORWARD, Ic[a][b], fwd ? Ip[a][b] : IpP, w1));
++      Li.Append(ChFi3d_FilPointInDS(TopAbs_REVERSED, Ic[a][b], fwd ? IpP : Ip[a][b], w2));
++    }
++  }
++  // Each stripe's end: its points, its contacts' parameters, the two curves
++  // on its surface. A curve oriented from the end's point on side 1 to that
++  // on side 2 takes the orientation of the end's curve (as in
++  // PerformTwoCornerbyInter).
++  for (int k = 0; k < 3; k++)
++  {
++    const occ::handle<ChFiDS_SurfData>& D = Fd[k];
++    TopAbs_Orientation                  tra =
++      TopAbs::Compose(TopAbs::Compose(DStr.Shape(D->IndexOfS1()).Orientation(), D->Orientation()),
++                      D->InterferenceOnS1().Transition());
++    if (!isf[k])
++    {
++      tra = TopAbs::Reverse(tra);
++    }
++    for (int n = 0; n < 3; n++)
++    {
++      if (n == k)
++      {
++        continue;
++      }
++      const int           s  = jf[k][n];
++      ChFiDS_CommonPoint& CP = D->ChangeVertex(isf[k], s);
++      CP.Reset();
++      CP.SetPoint(pt[k][n]);
++      CP.SetTolerance(std::max(tolc[k][n], tol3d));
++      D->ChangeInterference(s).SetParameter(u[k][n], isf[k]);
++      CD[k]->SetIndexPoint(Ip[k][n], isf[k], s);
++      // (From side s's point to P: towards side 2 where s is 1.)
++      TopAbs_Orientation o = s == 1 ? tra : TopAbs::Reverse(tra);
++      if (!fromStart[k][n])
++      {
++        o = TopAbs::Reverse(o);
++      }
++      DStr.ChangeSurfaceInterferences(D->Surf())
++        .Append(ChFi3d_FilCurveInDS(Ic[k][n], D->Surf(), Pc[k][n], o));
++    }
++    CD[k]->InDS(isf[k]);
++  }
++  return 1;
++}
++
+ void ChFi3d_FilBuilder::PerformThreeCorner(const int Jndex)
+ {
+ 
+@@ -337,6 +599,21 @@ void ChFi3d_FilBuilder::PerformThreeCorner(const int Jndex)
+                       sameside[0],
+                       jf[1][2],
+                       jf[2][1]);
++  // (A stripe rolling on an edge of the face it consumes, and one whose
++  // contact on that face reaches the edge only at its other end: the blends
++  // cut by each other, threeCornerByInter.)
++  {
++    const int aByInter = threeCornerByInter(DStr, CD, sens, i, p, jf, oksea, tolapp3d, tol2d);
++    if (aByInter > 0)
++    {
++      done = true;
++      return;
++    }
++    if (aByInter < 0)
++    {
++      throw StdFail_NotDone("ThreeCorner : the blends do not meet");
++    }
++  }
+   //
+   // Analyze concavities of 3 fillets :
+   //        - 2 concavities identic and 1 inverted.

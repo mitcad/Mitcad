@@ -1,0 +1,8 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/feature-own-parameter.mitcad-ui (mitcad#1536): Sketch1 on XY holds a 20 x 10 rectangle, and Extrude1 (F2) extrudes it as a new body by its own distance parameter depth = 10 mm (2000 mm3)."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 10},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}], "extent": {"type": "distance", "distance": "depth = 10 mm"}, "operation": "new_body"}},
+  {"expect": {"instances": 1, "world_volume": 2000}}
+]

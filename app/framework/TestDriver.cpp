@@ -378,6 +378,10 @@ const StepSpec kSpecs[] = {
     {"expect-native-color-field", 4, 5, kIdle},
     {"expect-native-button-order", 1, -1, kIdle},
     {"expect-native-control-focus", 1, 1, kIdle},
+    // The interface walked (mitcad#1473, TestDriverWalk.cpp).
+    {"walk-commands", 1, 2, kInputOfMain},
+    {"walk-menus", 0, 0, kInputOfMain},
+    {"walk-context-menus", 0, 0, kInputOfMain},
     {"expect-native-layout-contract", 0, 0, kIdle},
     {"expect-native-settings-layout", 1, 1, kIdle},
     {"native-pointer-click", 1, 3, kInputOfTarget},
@@ -409,6 +413,12 @@ const StepSpec kSpecs[] = {
     {"document-tab-drop", 3, 3, kInputOfMain},
     {"expect-document-hidden-quiet", 2, 2, kIdle},
     {"observe-document-frame-close-all", 0, 0, kIdle},
+    // The Docked layout's docks hidden and shown again (mitcad#1455,
+    // TestDriverDocks.cpp).
+    {"dock-title-context", 1, 1, kInputOfMain},
+    {"expect-popup-entries", 1, 1, kPlain},
+    {"dock-close", 1, 1, kInputOfMain},
+    {"expect-dock", 2, 2, kIdle},
     // The colour a widget shows as drawn in its window (mitcad#1245).
     {"expect-widget-background", 3, 3, kIdle},
     // Whether that colour is dark or light (mitcad#1282).
@@ -423,6 +433,12 @@ const StepSpec kSpecs[] = {
     // The wheel over a logged place without the model-idle gate: a panel's
     // value field while its preview computes (mitcad#1407).
     {"wheel-logged-now", 2, 3, kPlain},
+    // The design in front shows its ribbon, Browser and navigation bar, the
+    // Docked view below the ribbon (mitcad#1451).
+    {"expect-design-chrome", 0, 0, kIdle},
+    // The window, the ribbon, the Browser and a command panel at the
+    // Interface size's device pixel ratio (mitcad#1495).
+    {"expect-interface-size", 1, 1, kIdle},
 };
 
 // The colour that covers most of a visible widget's area as its window
@@ -1762,6 +1778,14 @@ void TestDriver::run(const Step& step) {
     return;
   }
   if (runDocumentFrameStep(name, a, line)) {
+    return;
+  }
+  // The Docked layout's docks (mitcad#1455).
+  if (runDockStep(name, a, line)) {
+    return;
+  }
+  // The interface walked (mitcad#1473).
+  if (runWalkStep(name, a, line)) {
     return;
   }
 
@@ -5092,6 +5116,15 @@ void TestDriver::run(const Step& step) {
     testSketchFinishLayout();
   } else if (name == QLatin1String("expect-ribbon-labels")) {
     testRibbonLabels(a);
+  } else if (name == QLatin1String("expect-design-chrome")) {
+    testDesignChrome();
+  } else if (name == QLatin1String("expect-interface-size")) {
+    bool ok = false;
+    const double ratio = a.at(0).toDouble(&ok);
+    if (!ok || ratio <= 0.0) {
+      fail(line, QStringLiteral("expect-interface-size <device pixel ratio>")); return;
+    }
+    testInterfaceSize(ratio);
   } else if (name == QLatin1String("test-dialog-controls")) {
     testDialogControls(a.at(0));
   } else if (name == QLatin1String("expect-dialog-appearance")) {

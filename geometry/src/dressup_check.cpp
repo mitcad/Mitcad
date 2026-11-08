@@ -34,9 +34,11 @@
 #include <ChFi3d.hxx>
 #include <Standard_ErrorHandler.hxx>
 #include <Standard_Failure.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
+#include <TopoDS_Vertex.hxx>
 #include <gp.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Lin.hxx>
@@ -371,6 +373,63 @@ std::vector<int> smooth_neighbours(const Shape& input, int face) {
   return found;
 }
 
+// The convex edges of the input's face `face` past which the rounding of
+// its concave edge `own` meets the rounding of another edge the dressup
+// rounds (`rounded`) in a mitre (mitcad#1458): an edge of the face from a
+// vertex of `own` whose other face holds a rounded edge from that vertex.
+// Three foot edges of a block standing on a plate, two of them meeting the
+// block's vertical corners: each rounding runs on past the corner, outside
+// the faces whose corner it fills, until it meets the other along the
+// mitre that continues the corner's edge down to the plate. What lies past
+// such an edge there is the two roundings' meeting, which fills the corner
+// outside the convex edge as it fills those beside it; it hangs out past
+// nothing.
+std::vector<int> mitre_edges(const Shape& input, int face, int own, const std::set<int>& rounded) {
+  std::vector<int> found;
+  TopoDS_Vertex own_first;
+  TopoDS_Vertex own_last;
+  TopExp::Vertices(input.edge(own), own_first, own_last);
+  for (TopExp_Explorer e(input.face(face), TopAbs_EDGE); e.More(); e.Next()) {
+    const int edge = input.edge_index(e.Current());
+    if (edge < 0 || edge == own || std::find(found.begin(), found.end(), edge) != found.end()) {
+      continue;
+    }
+    const std::array<int, 2> faces = input.edge_faces(edge);
+    const int other = faces[0] == face ? faces[1] : faces[0];
+    if (other < 0 || other == face) {
+      continue;
+    }
+    // The vertex it shares with `own`.
+    TopoDS_Vertex first;
+    TopoDS_Vertex last;
+    TopExp::Vertices(input.edge(edge), first, last);
+    TopoDS_Vertex corner;
+    for (const TopoDS_Vertex& end : {own_first, own_last}) {
+      if (!end.IsNull() && ((!first.IsNull() && end.IsSame(first)) || (!last.IsNull() && end.IsSame(last)))) {
+        corner = end;
+      }
+    }
+    if (corner.IsNull() || ChFi3d::DefineConnectType(input.edge(edge), input.face(face), input.face(other), 1.0e-4,
+                                                      false) != ChFiDS_Convex) {
+      continue;
+    }
+    for (const int r : rounded) {
+      const std::array<int, 2> beside = input.edge_faces(r);
+      if (r == own || (beside[0] != other && beside[1] != other)) {
+        continue;
+      }
+      TopoDS_Vertex r_first;
+      TopoDS_Vertex r_last;
+      TopExp::Vertices(input.edge(r), r_first, r_last);
+      if ((!r_first.IsNull() && corner.IsSame(r_first)) || (!r_last.IsNull() && corner.IsSame(r_last))) {
+        found.push_back(edge);
+        break;
+      }
+    }
+  }
+  return found;
+}
+
 // A face of `shape` as a place, by its first name (none without one).
 void add_face(std::vector<Place>& places, const Shape& shape, int f) {
   if (f >= 0 && f < shape.face_count() && !shape.face_names(f).empty()) {
@@ -607,6 +666,23 @@ DressupFinding dressup_check(const Shape& input, const Shape& result, const std:
     Outcome past;
     // The input's faces that continue each face beside an edge smoothly.
     std::map<int, std::vector<int>> smooth;
+    // Of concave edges: the input's edges the made faces are named after,
+    // and by an edge and a face beside it the face's edges past which the
+    // edge's rounding meets another in a mitre (mitre_edges, mitcad#1458).
+    std::set<int> rounded;
+    if (side == DressupSide::Outside) {
+      for (const int f : made) {
+        const NameList& names = result.face_names(f);
+        const std::string edge = names.empty() ? std::string() : own_edge(names.front(), feature, role);
+        if (!edge.empty()) {
+          const std::vector<int> named_edges = input.find_edges(edge);
+          if (named_edges.size() == 1) {
+            rounded.insert(named_edges.front());
+          }
+        }
+      }
+    }
+    std::map<std::pair<int, int>, std::vector<int>> mitres;
     for (const int f : made) {
       throw_if_cancelled();
       const TopoDS_Face& face = result.face(f);
@@ -625,11 +701,13 @@ DressupFinding dressup_check(const Shape& input, const Shape& result, const std:
       // point of it over both faces. (Elementary surfaces only, whose feet
       // are found at once; a B-spline face's would cost a search a point.)
       std::vector<int> beside;
+      int own = -1;
       if (side == DressupSide::Outside && !result.face_names(f).empty()) {
         const std::string edge = own_edge(result.face_names(f).front(), feature, role);
         if (!edge.empty()) {
           const std::vector<int> named_edges = input.find_edges(edge);
           if (named_edges.size() == 1) {
+            own = named_edges.front();
             for (const int b : input.edge_faces(named_edges.front())) {
               if (b >= 0 && elementary(input.face(b))) {
                 beside.push_back(b);
@@ -667,6 +745,28 @@ DressupFinding dressup_check(const Shape& input, const Shape& result, const std:
               });
           if (continued) {
             continue;
+          }
+          // Past a convex edge of the face where the rounding meets the
+          // rounding of another of the edges in a mitre (mitcad#1458): the
+          // foot no farther from that edge than from the face.
+          auto mitre = mitres.find({own, b});
+          if (mitre == mitres.end()) {
+            mitre = mitres.emplace(std::make_pair(own, b), own >= 0 ? mitre_edges(input, b, own, rounded)
+                                                                    : std::vector<int>())
+                        .first;
+          }
+          if (!mitre->second.empty()) {
+            const TopoDS_Vertex foot_vertex = BRepBuilderAPI_MakeVertex(foot->at).Vertex();
+            BRepExtrema_DistShapeShape to_face(foot_vertex, input.face(b));
+            const bool mitred =
+                to_face.IsDone() &&
+                std::any_of(mitre->second.begin(), mitre->second.end(), [&](int e) {
+                  BRepExtrema_DistShapeShape to_edge(foot_vertex, input.edge(e));
+                  return to_edge.IsDone() && to_edge.Value() <= to_face.Value() + allowed;
+                });
+            if (mitred) {
+              continue;
+            }
           }
           ++distances;
           ++past_measured;

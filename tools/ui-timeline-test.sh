@@ -15,8 +15,9 @@
 #   - A warning (P9): a plane at 90 radians is yellow, its level the same
 #     on every surface (mitcad#1040: the Browser row, the status line, the
 #     selection card, the panel's warning box), and its tooltip and its
-#     panel's preview say why; a rib's full round built 0.1 % smaller is
-#     information, not yellow (mitcad#1106).
+#     panel's preview say why; a boss's top edge rounded with the boss's
+#     own radius, built 0.1 % smaller, is information, not yellow
+#     (mitcad#1106); a rib's full round, built at its size, has no status.
 #   - The mouse wheel over a timeline longer than the window scrolls it
 #     sideways and stops at both ends (mitcad#826).
 #   - Timeline groups (P9): a Shift+click run grouped, folded into one
@@ -280,11 +281,13 @@ echo "--- A warning (P9)"
 # A plane at 90 radians (Tilted, an angle typed as a number of more than
 # one turn, mitcad#714) succeeds with a warning: its presentation on every
 # surface (mitcad#1040). The rib turned by 90 radians (Turned) warns too,
-# so that the Warnings badge has a menu of two. A rib 2 mm wide with a full round on all four top
-# edges: OCCT cannot take the top face away at the rib's ends, so the
-# fillet is built 0.1 % smaller (tools/cli/tests/p9_warnings.json), which
-# is information, not a warning (mitcad#1106). 60 planes after them make
-# the timeline longer than the window, for the wheel (mitcad#826).
+# so that the Warnings badge has a menu of two. A rib 2 mm wide with a full
+# round on all four top edges builds at its size (the OCCT port's patch
+# 1655): no status. A boss 10 across with its top edge rounded by 5 (Dome):
+# OCCT cannot close the top face to a point, so the fillet is built 0.1 %
+# smaller (tools/cli/tests/p9_warnings.json), which is information, not a
+# warning (mitcad#1106). 60 planes after them make the timeline longer than
+# the window, for the wheel (mitcad#826).
 {
   cat << 'EOF'
 [
@@ -301,7 +304,13 @@ echo "--- A warning (P9)"
   {"cmd": "add_feature", "name": "Tilted", "def": {"type": "construction_plane",
     "definition": {"type": "angle", "line": "z", "angle": 90, "plane": "xz"}}},
   {"cmd": "add_feature", "name": "Turned", "def": {"type": "move", "bodies": ["F2.b0"],
-    "transform": {"type": "rotate", "axis": "z", "angle": 90}}}
+    "transform": {"type": "rotate", "axis": "z", "angle": 90}}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F6", "center": [20, 0], "diameter": 10},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F6", "region": "r{c1}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "add_feature", "name": "Dome", "def": {"type": "fillet", "body": "F7.b0",
+    "edges": ["E{F7:end(r{c1})|F7:side(c1)}"], "radius": 5}}
 EOF
   for i in $(seq 1 60); do
     printf ',\n  {"cmd": "add_feature", "def": {"type": "construction_plane",'
@@ -316,19 +325,22 @@ ui_step "fit (F6)"                       ui_key F6
 ui_expect_log "Feature warnings: Tilted: $TURN; Turned: Turned angle: 90 is read as radians" \
   "Tilted and Turned succeeded with a warning, the only ones"
 ui_expect_log "Timeline cell Tilted: warning, status ring, badge" "its cell is yellow with the badge (mitcad#961)"
-grep -q "Failed features: Fillet1" "$UI_LOG" && ui_fail "Fillet1 failed"
-grep -q "Feature warnings: .*Fillet1" "$UI_LOG" && ui_fail "Fillet1 has a warning"
-ui_expect_log "Timeline cell Fillet1: info, badge" \
-  "Fillet1, built 0.1 % smaller, is information: its badge, not yellow (mitcad#1106)"
+grep -q "Failed features: .*Dome" "$UI_LOG" && ui_fail "Dome failed"
+grep -q "Feature warnings: .*Dome" "$UI_LOG" && ui_fail "Dome has a warning"
+ui_expect_log "Timeline cell Dome: info, badge" \
+  "Dome, built 0.1 % smaller, is information: its badge, not yellow (mitcad#1106)"
+grep -q "Failed features: .*Fillet1" "$UI_LOG" && ui_fail "Fillet1 failed"
+grep -q "Timeline cell Fillet1:" "$UI_LOG" && ui_fail "Fillet1, the rib's full round built at its size, has a status"
+echo "ok   Fillet1, the rib's full round, is built at its size: no status"
 ui_expect_log "Timeline Tilted at" "the timeline is logged"
 ui_step "hover over Tilted"              xdotool mousemove $(ui_logged_at "Timeline Tilted")
 # (The tooltip's log keeps its HTML escapes: up to the quotes.)
 ui_expect_log "Timeline tooltip: Tilted: Warning: ${TURN%%\"*}" \
   "its tooltip has the warning, with its word (mitcad#1040)"
-ui_step "hover over Fillet1"             xdotool mousemove $(ui_logged_at "Timeline Fillet1")
-ui_expect_log "Timeline tooltip: Fillet1: the fillet is built 0.1 % smaller" \
-  "Fillet1's tooltip tells it, without the warning's word (mitcad#1106)"
-grep -q "Timeline tooltip: Fillet1: Warning" "$UI_LOG" && ui_fail "Fillet1's tooltip is a warning"
+ui_step "hover over Dome"                xdotool mousemove $(ui_logged_at "Timeline Dome")
+ui_expect_log "Timeline tooltip: Dome: the fillet is built 0.1 % smaller" \
+  "Dome's tooltip tells it, without the warning's word (mitcad#1106)"
+grep -q "Timeline tooltip: Dome: Warning" "$UI_LOG" && ui_fail "Dome's tooltip is a warning"
 # One level per surface (mitcad#1040): the warning stays a warning in the
 # Browser, the selection card, the status line and the command panel's box.
 ui_expect_log "/Tilted: warning" "the warned plane's Browser row has the warning level"
@@ -336,8 +348,8 @@ ui_mark
 ui_step "click the warnings badge"       ui_click_logged "Warnings button"
 ui_expect_new "Context menu: Tilted: $TURN | Turned: Turned angle: 90 is read as radians" \
   "the badge lists the plane and the move"
-tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Context menu: " | tail -1 | grep -qF "Fillet1" &&
-  ui_fail "the warnings badge lists Fillet1"
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Context menu: " | tail -1 | grep -qF "Dome" &&
+  ui_fail "the warnings badge lists Dome"
 ui_step "choose Tilted"                  ui_menu_choose "Tilted: $TURN"
 ui_expect_new "Revealed Tilted" "revealed"
 ui_expect_new "Status warning: Tilted: $TURN" "the status line says it as a warning, not red"
@@ -353,12 +365,12 @@ ui_expect_new "Panel Plane at Angle message box: warning: $TURN" \
 ui_step "cancel (Esc)"                   ui_key Escape
 ui_wait_idle
 ui_mark
-ui_step "double-click Fillet1"           ui_double_click_logged "Timeline Fillet1"
-ui_expect_new "Editing F3 with Fillet" "editing Fillet1"
+ui_step "double-click Dome"              ui_double_click_logged "Timeline Dome"
+ui_expect_new "Editing F8 with Fillet" "editing Dome"
 ui_expect_new "Preview Fillet: ok, info: the fillet is built 0.1 % smaller" \
   "its preview tells the info, no warning (mitcad#1106)" 30
 tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Panel Fillet message box: warning" &&
-  ui_fail "Fillet1's panel has a warning box"
+  ui_fail "Dome's panel has a warning box"
 ui_step "cancel (Esc)"                   ui_key Escape
 
 echo "--- A fillet's picked edges where they were (mitcad#957)"

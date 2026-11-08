@@ -178,6 +178,9 @@ private:
   // message or a note changed, for UI tests (mitcad#198).
   void scheduleLogFit();
   void logFit() const;
+  // Lays out what changed and shows or hides the page's scroll bar now, so
+  // that the places and widths logged are the settled ones (mitcad#1456).
+  void settleLayout() const;
   void rebuildList(Row& list, const CommandState& state);
   void refreshRow(Row& row, const CommandState& scope, const CommandState& state);
   void updateNote(Row& row);

@@ -34,6 +34,19 @@ pub struct EditReport {
     /// What the user may like to know that is no warning (mitcad#1234: the
     /// curves of an offset that vanish at its distance).
     pub notes: Vec<String>,
+    /// Own parameters of dimensions kept as user parameters because the
+    /// dimension's new value uses them (mitcad#1535).
+    pub kept: Vec<KeptParameter>,
+}
+
+/// A dimension's own parameter kept as a user parameter (mitcad#1535):
+/// its name, the dimension, and the parameter the dimension uses now (a
+/// new one of its own, or the kept one for its bare name).
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeptParameter {
+    pub name: String,
+    pub dimension: ConstraintUid,
+    pub parameter: String,
 }
 
 /// A point of a command: an existing point or a new one at a position.

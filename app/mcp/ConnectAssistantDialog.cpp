@@ -1428,7 +1428,7 @@ void ConnectAssistantDialog::setupBundle() {
     if (!work.isEmpty() && qEnvironmentVariable("MITCAD_TEST_ASSISTANT_BUNDLE_OPEN") == QStringLiteral("capture")) {
       setProperty("assistantBundlePath", path);
       m_bundleOpened = true;
-      message(tr("Bundle prepared for the isolated installer test.")); return;
+      message(QStringLiteral("Bundle prepared for the isolated installer test.")); return;
     }
     // No application takes the extension (Windows would offer "Open with"
     // and report success).

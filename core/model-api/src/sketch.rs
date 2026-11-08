@@ -1033,6 +1033,18 @@ pub(super) fn report_json(report: &EditReport, def: Option<&SketchDef>) -> Value
     if !report.notes.is_empty() {
         value["notes"] = json!(report.notes);
     }
+    // Own parameters kept as user parameters (mitcad#1535).
+    if !report.kept.is_empty() {
+        let kept: Vec<Value> = report
+            .kept
+            .iter()
+            .map(|k| {
+                json!({"name": k.name, "dimension": k.dimension.to_string(),
+                       "parameter": k.parameter})
+            })
+            .collect();
+        value["user_parameters"] = json!(kept);
+    }
     if let Some(def) = def {
         value["status"] = status_json(&report.status, def);
     }

@@ -1,0 +1,60 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a contact the corners at both ends cut down to one point inside
+its face is one point (mitcad#1500).
+
+The roof slab's end face, its two edges along a slope (1.3 apart) and the
+eave's end edge rounded with r above 0.65: the slope's two roundings ride
+on one line on the end face (0016, 1640) and the strip between them
+vanishes; the eave's end edge's contact on the end face (at height r) is
+cut by the corner at each of its ends where it crosses that line, the same
+point. Each corner made a point of its own there, and the contact's edge
+of no length between them left the blend's wire open (an invalid result
+from r = 0.66 on, except near 0.86).
+
+- Compute, after the corners (1651): a contact of a stripe of one SurfData
+  whose two ends are the corners' points within ten tolerances, inside the
+  face, gets one point index for both ends (in the stripe and the corners'
+  curves) and one parameter; ChFi3d_FilDS (1651) then gives it a
+  degenerated edge.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index dc9ef268..7f0e6903 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -4544,8 +4544,14 @@ void ChFi3d_Builder::Compute()
+           const ChFiDS_CommonPoint& CPb = D->Vertex(f != 0, k);  // on the edge
+           const int                 ia  = S->IndexPoint(f == 0, k);
+           const int                 ib  = S->IndexPoint(f != 0, k);
+-          if (D->IsOnCurve(k) || CPa.IsOnArc() || !CPb.IsOnArc() || CPb.IsVertex() || ia <= 0 || ib <= 0
+-              || ia == ib || CPa.Point().Distance(CPb.Point()) > 10. * tolapp3d)
++          // (Or the corners at both ends cut it down to one point inside
++          // the face, each making a point of its own there: an end face's
++          // edge rounded where the strip along a slope beside it vanishes
++          // between two rides, 0016; the two points are made one, the
++          // stripes' points left as they are.)
++          const bool aInside = !CPa.IsOnArc() && !CPb.IsOnArc() && f == 1;
++          if (D->IsOnCurve(k) || CPa.IsOnArc() || (!CPb.IsOnArc() && !aInside) || CPb.IsVertex() || ia <= 0
++              || ib <= 0 || ia == ib || CPa.Point().Distance(CPb.Point()) > 10. * tolapp3d)
+           {
+             continue;
+           }
+@@ -4587,11 +4593,16 @@ void ChFi3d_Builder::Compute()
+                 Q->SetIndexPoint(ib, g == 0, kq);
+                 const occ::handle<ChFiDS_SurfData>& DQ =
+                   Q->SetOfSurfData()->Value(g == 0 ? 1 : Q->SetOfSurfData()->Length());
+-                if (DQ->IsOnCurve(kq) && DQ->IndexOfC(kq) > 0 && DStr.Shape(DQ->IndexOfC(kq)).IsSame(aOn.Arc()))
++                if (!aInside && DQ->IsOnCurve(kq) && DQ->IndexOfC(kq) > 0
++                    && DStr.Shape(DQ->IndexOfC(kq)).IsSame(aOn.Arc()))
+                 {
+                   aWholeObstacles.Append(aOn.Arc());
+                   aWholePoints.Append(ib);
+                 }
++                if (aInside)
++                {
++                  continue;
++                }
+                 ChFiDS_CommonPoint& CPq = DQ->ChangeVertex(g == 0, kq);
+                 CPq                     = aOn;
+               }

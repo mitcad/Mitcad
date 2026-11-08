@@ -5,6 +5,7 @@
 #include <optional>
 #include <utility>
 
+#include <QCoreApplication>
 #include <QDialog>
 #include <QString>
 #include <QVector>
@@ -39,6 +40,8 @@ namespace mitcad {
 // main window's coordinates ("Comments row C1 at x,y", "Comments filter
 // Resolved at x,y", "Comments Resolve at x,y (disabled)").
 class CommentsWindow : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::CommentsWindow)
+
 public:
   struct Actions {
     std::function<void(const QString& id)> selected; // a row clicked: its target selected and framed

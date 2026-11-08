@@ -98,6 +98,30 @@ key ctrl+w
 expect-dialog-gone '^Settings$'
 expect-setting cache/diskMegabytes 22528
 
+# A saved change shows the footer's note, which fades out again (mitcad#1479).
+focus-main
+key ctrl+,
+focus-dialog '^Settings$'
+command tools.preferences.navigation
+focus-dialog '^Settings$'
+expect-widget-property settingsSavedNote noteShown false
+expect-setting view/constrainedOrbit false
+mark
+focus-widget navigationConstrainedOrbit
+key Space
+wait-log '^Settings: saved note shown'
+expect-setting view/constrainedOrbit true
+expect-widget-property settingsSavedNote noteShown true
+expect-widget-property settingsSavedNote text 'Changes are saved automatically'
+wait-log '^Settings: saved note faded' 10
+expect-widget-property settingsSavedNote noteShown false
+mark
+key Space
+wait-log '^Settings: saved note shown'
+expect-setting view/constrainedOrbit false
+key ctrl+w
+expect-dialog-gone '^Settings$'
+
 # Cmd+W from the global menu must close Parameters without replacing the design.
 focus-main
 command solid.parameters

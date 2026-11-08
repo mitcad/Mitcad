@@ -155,6 +155,11 @@ public:
   // are ("Window layout: ..."), which every UI test's clicks and
   // screenshots depend on (tools/ui-layout.sh, mitcad#412).
   void logLayout() const;
+  // The window's own menu of its panels, which a right-click on a dock's
+  // title, the Docked toolbar or the space between them opens (Qt's): the
+  // docks' entries only, never the ribbon's toolbar (mitcad#1451), logged
+  // as "Window context menu: Browser | Timeline | ...".
+  QMenu* createPopupMenu() override;
 
   OcctViewer* viewerWidget() const { return m_viewer; }
   // The 3D mouse (mitcad#951): the test driver injects its input here.
@@ -466,6 +471,8 @@ private:
   QJsonObject mcpSnapshot() const;
   // model_export into a folder for designs (mitcad#689).
   QJsonObject mcpExport(const QJsonObject& arguments);
+  // model_render: the headless server's picture of the design (mitcad#1487).
+  QJsonObject mcpRender(const QJsonObject& arguments) const;
   void mcpLabelAgentChange(int depthBefore);
   QJsonObject mcpSave(const QJsonObject& arguments);
   QJsonObject mcpUiState();
@@ -586,6 +593,10 @@ private:
   // A new component placed beside a component that takes none (mitcad#292):
   // the reply's warning shown as a hint, also when its command finishes.
   void notePlacement(const QJsonObject& result);
+  // A feature's own parameters an edit kept as user parameters
+  // (mitcad#1536): the reply's notes shown as a hint, also when its command
+  // finishes, and logged.
+  void noteKeptParameters(const QJsonObject& result);
   int undoDepth() const;
 
   void recompute();
@@ -1442,6 +1453,9 @@ private:
   bool installEmptyDocument(const QString& name, QString* error = nullptr);
   // Logs `Opened the new design with <name> active` (mitcad#844, mitcad#898).
   void logNewDesignActive();
+  // Preferences changed the default units for new designs: the untitled
+  // designs nothing is made in yet take them (mitcad#1452).
+  void newDesignUnitsChanged();
   void resetCommandState();
   void updateWindowTitle();
 
@@ -1524,6 +1538,9 @@ private:
   // The next document installed keeps the camera (a read-only window
   // following the editor's versions).
   bool m_keepView = false;
+  // The next document installed leaves a shown Start page shown (the
+  // untitled design restarted in new default units, mitcad#1452).
+  bool m_keepStartPage = false;
   // The remote of the current project: sync, sending versions, its state
   // in the indicator (P12 remote).
   RemoteController* m_remote = nullptr;

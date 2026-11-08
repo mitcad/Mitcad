@@ -68,6 +68,10 @@ struct ChatHost {
   // window over MCP, not the chat's own agent (mitcad#1297: Claude Desktop
   // among them).
   std::function<QStringList()> assistants;
+  // The design's length unit, as the document query gives it ("in"): a
+  // message tells the agent that the user's bare lengths are in it
+  // (mitcad#1452).
+  std::function<QString()> lengthUnit;
 };
 
 class ChatController : public QObject, public mcp::ChatGate {

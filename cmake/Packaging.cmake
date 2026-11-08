@@ -95,6 +95,14 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/third_party/fonts/iso-lettering/lettering.ttf")
   install(FILES "${PROJECT_SOURCE_DIR}/third_party/fonts/iso-lettering/lettering.ttf" DESTINATION bin/fonts)
   install(FILES "${PROJECT_SOURCE_DIR}/third_party/fonts/iso-lettering/LICENSE.txt" DESTINATION licenses/iso-lettering)
 endif()
+# The interface languages (mitcad#1460, cmake/Translations.cmake): MitCad's
+# catalogues and Qt's own (qtbase_<code>.qm, BSD-3-Clause) in bin/translations
+# beside mitcad.exe, where Language.cpp looks; never the tests'
+# pseudo-language.
+get_property(mitcad_translation_files GLOBAL PROPERTY MITCAD_TRANSLATION_FILES)
+if(mitcad_translation_files)
+  install(FILES ${mitcad_translation_files} DESTINATION bin/translations)
+endif()
 # three.js, embedded for the web viewer (app/web/viewer).
 install(FILES "${PROJECT_SOURCE_DIR}/third_party/three/LICENSE" DESTINATION licenses/three)
 # The bundled material dataset (mitcad#1213), compiled into the model as data.

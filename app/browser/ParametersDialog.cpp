@@ -11,6 +11,7 @@
 #include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QEvent>
@@ -88,6 +89,15 @@ QString limitKey(int column, int minColumn, int maxColumn) {
                              : column == maxColumn ? QStringLiteral("max") : QStringLiteral("step");
 }
 
+// A column as log lines name it, in English whatever the interface
+// language (mitcad#1471): in the order of the dialog's Column enum.
+QString columnLogName(int column) {
+  static const char* const names[] = {"name", "unit",  "expression", "value",  "comment", "favorite",
+                                      "min",  "max",   "step",       "strict", "slider"};
+  return column >= 0 && column < int(std::size(names)) ? QString::fromLatin1(names[column])
+                                                         : QString::number(column);
+}
+
 QString refusedKey(const QString& name, int column) {
   return QStringLiteral("%1|%2").arg(name).arg(column);
 }
@@ -95,6 +105,20 @@ QString refusedKey(const QString& name, int column) {
 // The unit of a text parameter (mitcad#664).
 bool isTextUnit(const QString& unit) {
   return unit.trimmed().compare(QStringLiteral("Text"), Qt::CaseInsensitive) == 0;
+}
+
+// A unit box starts at `unit`, the design's length unit (mitcad#1452):
+// its item when it lists one, else typed in.
+void selectUnit(QComboBox* box, const QString& unit) {
+  if (unit.isEmpty()) {
+    return;
+  }
+  const int item = box->findText(unit);
+  if (item >= 0) {
+    box->setCurrentIndex(item);
+  } else {
+    box->setCurrentText(unit);
+  }
 }
 
 // A bare number gets the parameter's unit ("30" in a
@@ -113,6 +137,8 @@ QString withUnit(const QString& expression, const QString& unit) {
 // Add User Parameter: name, unit, expression and comment; stays open with
 // the model's reason when the model refuses them.
 class AddParameterDialog : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::AddParameterDialog)
+
 public:
   AddParameterDialog(DocumentHost& host, QWidget* parent) : QDialog(parent), m_host(host) {
     setObjectName(QStringLiteral("addParameterDialog"));
@@ -125,6 +151,9 @@ public:
                       QStringLiteral("in"), QStringLiteral("ft"), QStringLiteral("deg"),
                       QStringLiteral("rad"), QStringLiteral("Text"), QString()});
     m_unit->setItemText(m_unit->count() - 1, QString());
+    // The design's length unit (mitcad#1452): 0.875 typed in a design in
+    // inches is 0.875 in, as in every value field, unless chosen otherwise.
+    selectUnit(m_unit, m_host.model().lengthUnit());
     m_unit->setToolTip(tr("Empty for a number without a unit; Text for a text, such as 'Box ' & Width"));
     m_expression = new QLineEdit;
     m_comment = new QLineEdit;
@@ -209,6 +238,8 @@ private:
 // as the model's `parameters_csv_preview` says, row by row; Import runs the
 // import, Cancel leaves the design as it is.
 class ImportPreviewDialog : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::ImportPreviewDialog)
+
 public:
   ImportPreviewDialog(const QJsonObject& preview, const QString& file, QWidget* parent) : QDialog(parent) {
     setObjectName(QStringLiteral("parametersImportPreview"));
@@ -911,8 +942,7 @@ void ParametersDialog::edit(QTreeWidgetItem* item, int column) {
     }
   }
   qDebug().noquote() << QStringLiteral("Editing parameter %1 %2")
-                            .arg(item->data(kName, kNameRole).toString(),
-                                 m_table->headerItem()->text(column).toLower());
+                            .arg(item->data(kName, kNameRole).toString(), columnLogName(column));
 }
 
 void ParametersDialog::cellEdited(QTreeWidgetItem* item, int column) {
@@ -976,9 +1006,7 @@ void ParametersDialog::cellEdited(QTreeWidgetItem* item, int column) {
   default:
     return;
   }
-  const QString what =
-      column == kFavorite ? QStringLiteral("favorite") : m_table->headerItem()->text(column).toLower();
-  submit(name, column, text, what, command);
+  submit(name, column, text, columnLogName(column), command);
 }
 
 void ParametersDialog::submit(const QString& name, int column, const QString& text, const QString& what,
@@ -1157,7 +1185,7 @@ void ParametersDialog::editFormula() {
   options.anyKind=true;
   FormulaEditor dialog(*source,options,item->text(kExpression),this);
   if (execDialog(&dialog)!=QDialog::Accepted) return;
-  submit(name,kExpression,dialog.expression(),tr("Edited formula"),dialog.parameterCommand());
+  submit(name,kExpression,dialog.expression(),QStringLiteral("Edited formula"),dialog.parameterCommand());
 }
 
 void ParametersDialog::updateButtons() {
@@ -1214,10 +1242,7 @@ void ParametersDialog::logLayout() {
       const QPoint point =
           column == kFavorite || column == kStrict ? QPoint(cell.left() + 10, cell.center().y()) : cell.center();
       lines << QStringLiteral("Parameters %1 %2 at %3")
-                   .arg(name,
-                        column == kFavorite ? QStringLiteral("favorite")
-                                            : m_table->headerItem()->text(column).toLower(),
-                        at(m_table->viewport(), point));
+                   .arg(name, columnLogName(column), at(m_table->viewport(), point));
     }
   }
   // Where each aligned number's decimal separator and unit are (mitcad#566);
@@ -1236,7 +1261,7 @@ void ParametersDialog::logLayout() {
       if (!place) {
         continue;
       }
-      const QString what = m_table->headerItem()->text(column).toLower();
+      const QString what = columnLogName(column);
       lines << QStringLiteral("Parameters %1 %2 decimal at %3")
                    .arg(name, what, at(m_table->viewport(), QPoint(left + place->axisX, rect.center().y())));
       if (place->unitX >= 0) {

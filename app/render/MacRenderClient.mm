@@ -28,6 +28,13 @@
 
 namespace mitcad::render {
 namespace {
+// The file's texts in the context MacRenderClient, where lupdate records
+// them too: MacRenderClient has no Q_OBJECT, so its own tr() is QObject's
+// (mitcad#1474).
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(MacRenderClient)
+};
+
 struct DispatchGate {
   std::mutex mutex;
   QObject* receiver = nullptr;
@@ -90,7 +97,7 @@ struct MacRenderClient::Impl {
     QObject::connect(&heartbeat, &QTimer::timeout, owner, [this] { submit(message("heartbeat"), 0); });
     startup.setSingleShot(true);
     startup.setInterval(120000); // A first Metal pipeline compilation may be slow, but remains bounded.
-    QObject::connect(&startup, &QTimer::timeout, owner, [this] { fail(QObject::tr("the render service did not become ready")); });
+    QObject::connect(&startup, &QTimer::timeout, owner, [this] { fail(Text::tr("the render service did not become ready")); });
   }
   void fail(const QString& reason) {
     if (!connection) return;
@@ -132,7 +139,7 @@ struct MacRenderClient::Impl {
             auto& state = *guarded->m_impl;
             state.completed(request);
             if (request->payload) state.bulkOutstanding = false;
-            if (!accepted) { state.fail(QObject::tr("the render service rejected a command or disconnected")); return; }
+            if (!accepted) { state.fail(Text::tr("the render service rejected a command or disconnected")); return; }
             if (request->allocation) {
               state.allocationSent = false;
               state.allocationOutstanding = false;
@@ -162,7 +169,7 @@ struct MacRenderClient::Impl {
     const auto bulkBytes = request->payload ? request->payload->size() : 0;
     if (bytes > kMacRenderMessageBytes || pendingBytes + bytes > kMacRenderPendingBytes || pendingRequests >= 1024 ||
         bulkBytes > kMacRenderPendingBulkBytes - pendingBulkBytes) {
-      fail(QObject::tr("the render command queue exceeded its bounded capacity")); return;
+      fail(Text::tr("the render command queue exceeded its bounded capacity")); return;
     }
     pendingBytes += bytes;
     pendingBulkBytes += bulkBytes;
@@ -176,7 +183,7 @@ struct MacRenderClient::Impl {
     deadlines.insert(request->id, deadline);
     QObject::connect(deadline, &QTimer::timeout, owner, [guarded, sequence, answered] {
       if (guarded && guarded->m_impl->epoch == sequence && !answered->load())
-        guarded->m_impl->fail(QObject::tr("the render service command timed out"));
+        guarded->m_impl->fail(Text::tr("the render service command timed out"));
     });
     deadline->start(120000); // Includes bounded FIFO waiting, not just service time.
     const auto* op = xpc_dictionary_get_string(message, "op");
@@ -191,7 +198,7 @@ struct MacRenderClient::Impl {
   }
   void received(const QByteArray& json) {
     const auto document = QJsonDocument::fromJson(json);
-    if (!document.isObject()) { fail(QObject::tr("the render service sent an invalid event")); return; }
+    if (!document.isObject()) { fail(Text::tr("the render service sent an invalid event")); return; }
     const auto object = document.object();
     const auto name = object.value(QStringLiteral("event")).toString();
     if (name == QLatin1String("error")) lastServiceError = object.value(QStringLiteral("message")).toString();
@@ -246,7 +253,7 @@ bool MacRenderClient::start(Event event, Failure failure) {
       auto& target = *guarded->m_impl;
       if (failed || malformed) {
         const auto detail = target.lastServiceError.isEmpty() ? reason : target.lastServiceError + QStringLiteral("; ") + reason;
-        target.fail(QObject::tr("the render service disconnected: %1").arg(detail));
+        target.fail(Text::tr("the render service disconnected: %1").arg(detail));
       }
       else target.received(payload);
     });
@@ -318,7 +325,7 @@ void MacRenderClient::send(const QJsonObject& command) {
   if (static_cast<std::size_t>(json.size()) > kMacRenderMessageBytes) {
     // Check spool capacity before writing another potentially large file.
     if (static_cast<std::uint64_t>(json.size()) > kMacRenderPendingBulkBytes - state.pendingBulkBytes) {
-      xpc_release(request); state.fail(tr("the render command queue exceeded its bounded capacity")); return;
+      xpc_release(request); state.fail(Text::tr("the render command queue exceeded its bounded capacity")); return;
     }
     auto payload = std::make_shared<MacCommandPayload>();
     std::string error;
@@ -344,7 +351,7 @@ void MacRenderClient::reserve(int width, int height) {
   const auto capacityWidth = std::min(kMacFrameMaxDimension, (std::uint32_t(width) + std::uint32_t(width) / 4 + 7) & ~7u);
   const auto capacityHeight = std::min(kMacFrameMaxDimension, std::uint32_t(height) + std::uint32_t(height) / 4);
   if (!validMacFrameDimensions(capacityWidth, capacityHeight)) {
-    state.fail(tr("the rendered view exceeds the supported surface capacity")); return;
+    state.fail(Text::tr("the rendered view exceeds the supported surface capacity")); return;
   }
   auto mapping = std::make_shared<FrameMemory>();
   auto surfaces = std::make_shared<MacFrameSurfaces>();
@@ -379,7 +386,7 @@ bool MacRenderClient::takeFrame(Frame& frame) {
   state.waiting = false;
   ScopedTiming claim("render surface claim");
   frame.surface = claimMacFrame(state.surfaces, state.control, frame.info);
-  if (!frame.surface) { state.fail(tr("the render service published an invalid surface frame")); return false; }
+  if (!frame.surface) { state.fail(Text::tr("the render service published an invalid surface frame")); return false; }
   if (frame.surface && timingLogged()) claim.setDetail(QStringLiteral("view %1 samples %2 %3x%4 denoised %5")
       .arg(frame.info.view).arg(frame.info.samples).arg(frame.info.width).arg(frame.info.height).arg(frame.info.denoised));
   frame.pixels.clear();

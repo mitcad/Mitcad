@@ -204,6 +204,7 @@ void CommandSession::dragProxyMoved(const QString& key, double value) {
     m_proxyStats.frames = m_host.viewer().framesDrawn();
   }
   ++m_proxyStats.inputs;
+  m_proxyStats.inputAt = m_proxyStats.clock.elapsed();
   m_proxyKey = key;
   m_proxyValue = value;
   if (m_def.dragMotion) {

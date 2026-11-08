@@ -118,6 +118,10 @@ pub(super) struct ExportCommand {
     /// 3MF (mitcad#1050): one print plate (id or name) alone, in the path.
     #[serde(default)]
     plate: Option<String>,
+    /// On the print bed (mitcad#1491): the clearance between two
+    /// neighbouring pieces beyond their brims, mm (default 5).
+    #[serde(default)]
+    spacing: Option<f64>,
 }
 
 /// `plates` (mitcad#1050).
@@ -406,11 +410,20 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
         // The automatic orientation and the settling (mitcad#1109): on the
         // print bed only, each true unless given false.
         let rules = [command.center, command.drop, command.auto_orient];
-        if !on_bed && rules.iter().any(Option::is_some) {
+        if !on_bed && (rules.iter().any(Option::is_some) || command.spacing.is_some()) {
             return Err(ApiError(
-                "center, drop and auto_orient are for the bodies put on the print bed (on_bed)"
+                "center, drop, auto_orient and spacing are for the bodies put on the print bed \
+                 (on_bed)"
                     .to_owned(),
             ));
+        }
+        // The clearance between neighbouring pieces (mitcad#1491).
+        if let Some(spacing) = command.spacing
+            && !(spacing.is_finite() && (0.0..=1000.0).contains(&spacing))
+        {
+            return Err(ApiError(format!(
+                "spacing is a clearance in mm from 0 to 1000, not {spacing}"
+            )));
         }
         let placement = ExportPlacement {
             coordinates: command.coordinates,
@@ -426,6 +439,7 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
                 drop: command.drop.unwrap_or(true),
             },
             plates,
+            spacing: command.spacing,
         };
         let exported = self.export_bodies(&command.path, &bodies, &options, &colors, &placement)?;
         let mut result =

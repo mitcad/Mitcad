@@ -12,3 +12,9 @@ publish.workspace = true
 serde_json.workspace = true
 toml_edit = { version = "0.25.15", default-features = false, features = ["parse", "display"] }
 mitcad-zip = { path = "../zip" }
+
+# The names MCP permits, which the guides may use (mitcad#1508): the
+# application gives the same lists to model_reference (core/ffi/src/mcp.rs).
+[dev-dependencies]
+mitcad-model.workspace = true
+mitcad-model-api = { path = "../model-api" }

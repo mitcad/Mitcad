@@ -1,0 +1,142 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: two roundings that consume a face whose edges are all rounded
+meet on one contact edge where their contacts end inside the face
+(mitcad#1500).
+
+A rib 2 wide with its four top edges rounded (or bevelled) by 1: the end
+edges' contacts on the top face are cut to one point at the ridge by the
+corners at both their ends (1652), and the long edges' contacts lie along
+each other on the ridge, ending at those points, inside the face. 0950
+joins such contacts only where they end on an edge of the face, so each
+long blend kept its own contact edge and the top face was left as a face
+of no area between the two edges along the ridge.
+
+- joinEndsAlongContacts (0950): the ends of two such contacts inside the
+  face (on no arc) are joined too, when every edge of the face is an edge
+  of a stripe's spine (allEdgesRounded): the points are made one, and with
+  both ends one the contacts are one edge, A's. With no edge of the face
+  left for its contacts to end on, the face's edges are cut at their
+  vertices, leaving the face on both sides, and the builder drops it.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 7f0e6903..58f1e2b8 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -1877,6 +1877,35 @@ static bool contactAlong(const TopOpeBRepDS_DataStructure&   DStr,
+   return true;
+ }
+ 
++// Whether every edge of face F is an edge of a stripe's spine (the face's
++// whole outline rounded).
++static bool allEdgesRounded(const TopoDS_Face&                                  F,
++                            const NCollection_List<occ::handle<ChFiDS_Stripe>>& theStripes)
++{
++  for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next())
++  {
++    const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
++    if (BRep_Tool::Degenerated(E))
++    {
++      continue;
++    }
++    bool aFound = false;
++    for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator it(theStripes); it.More() && !aFound; it.Next())
++    {
++      const occ::handle<ChFiDS_Spine>& Sp = it.Value()->Spine();
++      for (int i = 1; !Sp.IsNull() && i <= Sp->NbEdges() && !aFound; i++)
++      {
++        aFound = Sp->Edges(i).IsSame(E);
++      }
++    }
++    if (!aFound)
++    {
++      return false;
++    }
++  }
++  return true;
++}
++
+ // Two stripes of one piece each whose contacts on a face lie along each other
+ // all the way (two roundings that consume the face between them, a strip as
+ // wide as both): each stripe's corner made its own point where the contacts
+@@ -1916,7 +1945,8 @@ static void joinEndsAlongContacts(TopOpeBRepDS_DataStructure&
+           {
+             continue;
+           }
+-          int aJoined = 0;
++          const bool aConsumed = allEdgesRounded(TopoDS::Face(DStr.Shape(a->Index(ka))), theStripes);
++          int        aJoined   = 0;
+           for (const bool fa : {true, false})
+           {
+             for (const bool fb : {true, false})
+@@ -1925,8 +1955,13 @@ static void joinEndsAlongContacts(TopOpeBRepDS_DataStructure&
+               const ChFiDS_CommonPoint& Pb = b->Vertex(fb, kb);
+               const int                 ia = A->IndexPoint(fa, ka);
+               const int                 ib = B->IndexPoint(fb, kb);
+-              if (Pa.IsVertex() || Pb.IsVertex() || !Pa.IsOnArc() || !Pb.IsOnArc() || !Pa.Arc().IsSame(Pb.Arc())
+-                  || ia <= 0 || ib <= 0 || ia > DStr.NbPoints() || ib > DStr.NbPoints()
++              const bool aOnArc = Pa.IsOnArc() && Pb.IsOnArc() && Pa.Arc().IsSame(Pb.Arc());
++              // (Or both ends inside a face whose edges are all rounded: the
++              // corners with the roundings of its other edges end the
++              // contacts there, mitcad#1500.)
++              const bool aInside = !Pa.IsOnArc() && !Pb.IsOnArc() && aConsumed;
++              if (Pa.IsVertex() || Pb.IsVertex() || (!aOnArc && !aInside) || ia <= 0 || ib <= 0
++                  || ia > DStr.NbPoints() || ib > DStr.NbPoints()
+                   || DStr.Point(ia).Point().Distance(DStr.Point(ib).Point()) > Tol)
+               {
+                 continue;
+@@ -1938,7 +1973,7 @@ static void joinEndsAlongContacts(TopOpeBRepDS_DataStructure&
+               }
+               aJoined++;
+               // (The edge leaves the face on both sides of the point.)
+-              if (!DStr.HasShape(Pa.Arc()))
++              if (!aOnArc || !DStr.HasShape(Pa.Arc()))
+               {
+                 continue;
+               }
+@@ -2034,6 +2069,44 @@ static void joinEndsAlongContacts(TopOpeBRepDS_DataStructure&
+             it.Next();
+           }
+           DStr.ChangeCurveInterferences(cb).Clear();
++          // (A face whose edges are all rounded, the contacts ending inside
++          // it: no edge of it left to end on, so its edges are cut at their
++          // vertices, leaving it on both sides, and the builder drops it.)
++          if (aConsumed && !a->Vertex(true, ka).IsOnArc() && !a->Vertex(false, ka).IsOnArc())
++          {
++            TopoDS_Face aF = TopoDS::Face(DStr.Shape(a->Index(ka)));
++            aF.Orientation(TopAbs_FORWARD);
++            for (TopExp_Explorer ex(aF, TopAbs_EDGE); ex.More(); ex.Next())
++            {
++              TopoDS_Edge E = TopoDS::Edge(ex.Current());
++              if (BRep_Tool::Degenerated(E))
++              {
++                continue;
++              }
++              E.Orientation(TopAbs_FORWARD);
++              const int IE = DStr.AddShape(E);
++              for (TopExp_Explorer exv(E, TopAbs_VERTEX); exv.More(); exv.Next())
++              {
++                const TopoDS_Vertex& vv = TopoDS::Vertex(exv.Current());
++                const int            IV = DStr.AddShape(vv);
++                const double         aPar = BRep_Tool::Parameter(vv, E);
++                const TopAbs_Orientation anOr = TopAbs::Reverse(vv.Orientation());
++                bool                     aHas = false;
++                for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator itI(
++                       DStr.ShapeInterferences(IE));
++                     itI.More() && !aHas;
++                     itI.Next())
++                {
++                  aHas = itI.Value()->GeometryType() == TopOpeBRepDS_VERTEX && itI.Value()->Geometry() == IV
++                         && itI.Value()->Transition().Orientation(TopAbs_IN) == anOr;
++                }
++                if (!aHas)
++                {
++                  DStr.ChangeShapeInterferences(IE).Append(ChFi3d_FilVertexInDS(anOr, IE, IV, aPar));
++                }
++              }
++            }
++          }
+         }
+       }
+     }

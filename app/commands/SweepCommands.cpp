@@ -916,6 +916,34 @@ CommandDef coilCommand(const CommandContext& context) {
 // ---------------------------------------------------------------------------
 // Pipe
 
+namespace {
+
+// The Pipe panel's Corners (mitcad#1448): shown when the preview found
+// sharp corners on the path (the `corners` of its "sweep_path"), or when
+// the edited pipe has a kind of its own.
+bool pipeCornersShown(const CommandState& state) {
+  return state.checked(QStringLiteral("corners_kept")) ||
+         state.object(QStringLiteral("sweep_path")).value(QStringLiteral("corners")).toInt() > 0;
+}
+
+// The preview's corners of the path: true when Corners is shown or hidden
+// by them now, so that the panel and the preview follow.
+bool takePipePath(const QJsonObject& report, CommandState& state) {
+  const QJsonObject place = report.value(QStringLiteral("sweep_path")).toObject();
+  if (place.isEmpty() || place == state.object(QStringLiteral("sweep_path"))) {
+    return false;
+  }
+  const bool shown = pipeCornersShown(state);
+  state.setObject(QStringLiteral("sweep_path"), place);
+  const bool now = pipeCornersShown(state);
+  qDebug().noquote() << QStringLiteral("Pipe: the path has %1 sharp corners; Corners %2")
+                            .arg(place.value(QStringLiteral("corners")).toInt())
+                            .arg(now ? QStringLiteral("shown") : QStringLiteral("hidden"));
+  return shown != now;
+}
+
+} // namespace
+
 CommandDef pipeCommand(const CommandContext& context) {
   CommandDef def;
   def.id = QStringLiteral("solid.pipe");
@@ -942,9 +970,18 @@ CommandDef pipeCommand(const CommandContext& context) {
       checkInput(QStringLiteral("hollow"), QObject::tr("Hollow"), false),
       valueInput(QStringLiteral("thickness"), QObject::tr("Section Thickness"), ValueKind::Length, QStringLiteral("1 mm")).withStepMinimum(0.0, true)
           .withVisible([](const CommandState& s) { return s.checked(QStringLiteral("hollow")); }),
+      // mitcad#1448: the joints at the path's sharp corners; a bend or a
+      // bevel at one corner is a fillet or a chamfer in the path's sketch.
+      choiceInput(QStringLiteral("corners"), QObject::tr("Corners"),
+                  {{QStringLiteral("mitered"), QStringLiteral("Mitered")},
+                   {QStringLiteral("rounded"), QStringLiteral("Rounded")}},
+                  QStringLiteral("mitered"))
+          .withTooltip(QObject::tr("The joints at the path's sharp corners: mitered, or rounded about the corner"))
+          .withVisible(pipeCornersShown),
   };
   def.inputs += operationInputs();
   def.enabled = [&context] { return hasSketches(context) || hasBodies(context); };
+  def.previewReported = takePipePath;
 
   def.build = [](const CommandState& state, const CommandContext&) {
     Built result;
@@ -961,6 +998,10 @@ CommandDef pipeCommand(const CommandContext& context) {
     if (state.checked(QStringLiteral("hollow"))) {
       result.def.insert(QStringLiteral("thickness"), state.expression(QStringLiteral("thickness")));
     }
+    // Mitered is left out (a pipe as before the choice).
+    if (pipeCornersShown(state) && state.choice(QStringLiteral("corners")) == QStringLiteral("rounded")) {
+      result.def.insert(QStringLiteral("corners"), QStringLiteral("rounded"));
+    }
     addOperation(result.def, state);
     return result;
   };
@@ -968,6 +1009,10 @@ CommandDef pipeCommand(const CommandContext& context) {
   def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
     loadPath(feature.value(QStringLiteral("path")), state, QStringLiteral("path"), context);
     state.setChoice(QStringLiteral("section"), feature.value(QStringLiteral("section")).toString(QStringLiteral("circular")));
+    if (feature.contains(QStringLiteral("corners"))) {
+      state.setChoice(QStringLiteral("corners"), feature.value(QStringLiteral("corners")).toString(QStringLiteral("mitered")));
+      state.setChecked(QStringLiteral("corners_kept"), true);
+    }
     loadValue(state, QStringLiteral("size"), feature.value(QStringLiteral("size")), feature, context);
     if (feature.contains(QStringLiteral("thickness"))) {
       state.setChecked(QStringLiteral("hollow"), true);

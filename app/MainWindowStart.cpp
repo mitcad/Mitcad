@@ -22,6 +22,7 @@
 #include <QtLogging>
 
 #include "OcctViewer.hpp"
+#include "WindowManager.hpp"
 #include "framework/AppSettings.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/FloatingLayout.hpp"
@@ -180,6 +181,33 @@ void MainWindow::showStartPageAtLaunch(const QString& skip) {
   }
   qInfo().noquote() << QStringLiteral("Start page at launch: shown");
   m_ribbon->showTab(kStartTab);
+}
+
+void MainWindow::newDesignUnitsChanged() {
+  // An untitled design nothing is made in yet (the one at start, or one
+  // New made: WindowManager::reusable) is a new design still: it starts
+  // again in the new default units, as New would make it (mitcad#1452: the
+  // units set to in after the start, the untitled design drawn in stayed
+  // in mm and took the typed inches as millimetres). A design with
+  // anything in it, or read from a file, keeps its units (mitcad#1036).
+  const QString units = GeneralSettings::load().newDesignUnits;
+  WindowManager* manager = windowManager();
+  const QList<MainWindow*> windows = manager != nullptr ? manager->windows() : QList<MainWindow*>{this};
+  for (MainWindow* window : windows) {
+    if (window == nullptr || manager == nullptr || !manager->reusable(window) || window->lengthUnit() == units) {
+      continue;
+    }
+    // Where it was: under the Start page while that shows.
+    window->m_keepStartPage = true;
+    const bool restarted = window->installEmptyDocument(window->m_documentName);
+    window->m_keepStartPage = false;
+    if (restarted) {
+      qInfo().noquote() << QStringLiteral("The untitled design starts again in %1").arg(units);
+    }
+  }
+  if (startPageShown()) {
+    m_startPage->refresh(); // its New Design card names the units
+  }
 }
 
 void MainWindow::saveDesignPreview(const QString& path) {

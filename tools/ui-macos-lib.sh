@@ -227,6 +227,9 @@ JSON
   # An empty design at the start, not the Start tab (mitcad#1258), as in
   # ui-test-lib.sh.
   export MITCAD_START_PAGE=0
+  # The interface in English whatever the Mac's language (mitcad#1460), as
+  # in ui-test-lib.sh.
+  export MITCAD_LANGUAGE=en
   # Git's configuration of our own (empty), as in ui-test-lib.sh.
   : > "$UI_ROOT/gitconfig"
   export GIT_CONFIG_GLOBAL=$UI_ROOT/gitconfig

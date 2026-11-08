@@ -270,6 +270,29 @@ std::string status_name(BRepCheck_Status status) {
   return name;
 }
 
+// What made the checker call `face` unorientable (mitcad#1504): the first
+// problem of one of its edges or wires in the face (an edge's curve off the
+// face's surface, a wire not closed in the face's parameters), which the
+// statuses of the face itself do not tell, as "; its <kind>: BRepCheck_...".
+std::string unorientable_cause(const BRepCheck_Analyzer& analyzer, const TopoDS_Shape& face) {
+  static const std::pair<TopAbs_ShapeEnum, const char*> kinds[] = {
+      {TopAbs_EDGE, "edge"}, {TopAbs_WIRE, "wire"}, {TopAbs_VERTEX, "vertex"}};
+  for (const auto& [type, kind] : kinds) {
+    for (TopExp_Explorer it(face, type); it.More(); it.Next()) {
+      const occ::handle<BRepCheck_Result>& result = analyzer.Result(it.Current());
+      if (result.IsNull() || !result->IsStatusOnShape(face)) {
+        continue;
+      }
+      for (const BRepCheck_Status status : result->StatusOnShape(face)) {
+        if (status != BRepCheck_NoError) {
+          return std::string("; its ") + kind + ": " + status_name(status);
+        }
+      }
+    }
+  }
+  return "";
+}
+
 // The first problem the analyzer found, as " (<kind>: BRepCheck_...)" for
 // messages: of a sub-shape itself, or of one in the context of another.
 std::string first_problem(const BRepCheck_Analyzer& analyzer, const TopoDS_Shape& shape) {
@@ -284,7 +307,10 @@ std::string first_problem(const BRepCheck_Analyzer& analyzer, const TopoDS_Shape
       }
       for (const BRepCheck_Status status : result->Status()) {
         if (status != BRepCheck_NoError) {
-          return std::string(" (") + kind + ": " + status_name(status) + ")";
+          const std::string cause =
+              status == BRepCheck_UnorientableShape && type == TopAbs_FACE ? unorientable_cause(analyzer, it.Current())
+                                                                           : std::string();
+          return std::string(" (") + kind + ": " + status_name(status) + cause + ")";
         }
       }
       // Sub-shapes checked in this one's context (wires of a face).

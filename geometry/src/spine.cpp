@@ -1038,23 +1038,27 @@ std::optional<NamedWire> halved(const NamedWire& loop) {
 } // namespace
 
 ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeMode& mode,
-                    const NameList& first, const NameList& last, double tolerance) {
+                    const NameList& first, const NameList& last, double tolerance, PipeCorners corners) {
   int edges = 0;
   for (TopExp_Explorer e(spine, TopAbs_EDGE); e.More(); e.Next()) {
     ++edges;
   }
-  // Corners of the spine are mitred: the sides run on until they meet.
+  // Corners of the spine are mitered (the sides run on until they meet) or,
+  // asked for (mitcad#1448), rounded (the section turns about the corner).
   // Where that cannot be built (a slight kink, whose mitre is a sliver)
-  // they are rounded instead, else the section turns through them.
+  // the other kind is tried, else the section turns through them.
+  const bool rounded = corners == PipeCorners::Rounded;
+  const BRepBuilderAPI_TransitionMode asked = rounded ? BRepBuilderAPI_RoundCorner : BRepBuilderAPI_RightCorner;
+  const BRepBuilderAPI_TransitionMode instead = rounded ? BRepBuilderAPI_RightCorner : BRepBuilderAPI_RoundCorner;
   if (edges < 2) {
-    return pipe_shell_with(loop, spine, mode, first, last, tolerance, BRepBuilderAPI_RightCorner);
+    return pipe_shell_with(loop, spine, mode, first, last, tolerance, asked);
   }
-  ShapePtr mitred;
+  ShapePtr built;
   std::exception_ptr error;
   try {
-    mitred = pipe_shell_with(loop, spine, mode, first, last, tolerance, BRepBuilderAPI_RightCorner);
-    if (sound(*mitred)) {
-      return mitred;
+    built = pipe_shell_with(loop, spine, mode, first, last, tolerance, asked);
+    if (sound(*built)) {
+      return built;
     }
   } catch (const Cancelled&) {
     throw;
@@ -1065,10 +1069,11 @@ ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeM
   // (mitcad#385) The mitres of a section of one closed edge can fail to
   // build from it (an ellipse whose seam vertex, at an end of its major
   // axis, lies along the normal of the path's plane): the same section as
-  // two halves joined a quarter turn from that seam builds them.
+  // two halves joined a quarter turn from that seam builds them (the
+  // corners asked for, rounded ones too).
   if (const std::optional<NamedWire> other = halved(loop)) {
     try {
-      ShapePtr again = pipe_shell_with(*other, spine, mode, first, last, tolerance, BRepBuilderAPI_RightCorner);
+      ShapePtr again = pipe_shell_with(*other, spine, mode, first, last, tolerance, asked);
       if (sound(*again)) {
         return again;
       }
@@ -1078,8 +1083,7 @@ ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeM
       throw_if_cancelled();
     }
   }
-  for (const BRepBuilderAPI_TransitionMode transition :
-       {BRepBuilderAPI_RoundCorner, BRepBuilderAPI_Transformed}) {
+  for (const BRepBuilderAPI_TransitionMode transition : {instead, BRepBuilderAPI_Transformed}) {
     try {
       ShapePtr other = pipe_shell_with(loop, spine, mode, first, last, tolerance, transition);
       if (sound(*other)) {
@@ -1094,7 +1098,7 @@ ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeM
   if (error) {
     std::rethrow_exception(error);
   }
-  return mitred;
+  return built;
 }
 
 ShapePtr through_sections(const std::vector<TopoDS_Shape>& sections, const NamedWire& named,

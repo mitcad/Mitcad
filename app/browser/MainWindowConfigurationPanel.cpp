@@ -13,6 +13,7 @@
 #include <memory>
 #include <utility>
 
+#include <QAction>
 #include <QDockWidget>
 #include <QEvent>
 #include <QFrame>
@@ -148,6 +149,10 @@ QDockWidget* MainWindow::dockConfigurationPanel(QDockWidget* browserDock) {
   // Shown with the design's options, not closed by hand (no View menu
   // entry brings it back).
   dock->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+  // Nor from the window's menu of its panels (a right-click on a dock's
+  // title or the toolbar), which would hide it with nothing to bring it
+  // back while the design has options (mitcad#1455).
+  dock->toggleViewAction()->setVisible(false);
   dock->setWidget(configurationScroll(bar, false));
   addDockWidget(Qt::LeftDockWidgetArea, dock);
   // Above the browser and below the Projects dock (split before), in the

@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: MIT
+# Preferences › Display › Interface size (mitcad#1495, GitHub
+# mitcad/Mitcad#194), MitCad started with appearance/interfaceSize=150 and
+# no QT_SCALE_FACTOR of its own:
+#   1. The start-up applies 150 % as Qt's scale factor 1.5, and the window
+#      draws at device pixel ratio 1.5.
+#   2. With Box's command panel open, the window lies within the screen,
+#      the ribbon's captions are complete and its buttons as large as their
+#      icons, the Browser's rows as high as their icons, and the panel's OK
+#      and fields whole (the test step expect-interface-size, which logs
+#      "Interface size layout: ...").
+#   3. Preferences shows 150%; 100% chosen there is kept for the next
+#      start, with no change before it.
+# Run by tools/ui-interface-size-test.sh in the Docked and the Floating
+# layout.
+expect-ever '^Interface size: 150% [(]Qt scale factor 1[.]5; the user.s QT_SCALE_FACTOR none[)]$' 10
+expect-ever '^Device pixel ratio: 1[.]5, screen ' 30
+wait-idle
+
+# 2. The window, the ribbon, the Browser and a command panel at 150 %.
+mark
+command solid.box
+expect-log '^Command Box started$' 10
+wait-idle
+sleep 300
+expect-interface-size 1.5
+key Escape
+wait-idle
+
+# 3. Preferences: 150% shown, 100% kept for the next start.
+mark
+command tools.preferences.display
+focus-dialog '^Preferences$'
+expect-widget-property preferencesInterfaceSize currentText '150%'
+qt-choice preferencesInterfaceSize '100%'
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+expect-log '^Preferences: interface size 100% [(]at the next start[)]$' 10
+expect-setting appearance/interfaceSize 100
+expect-no-log '^Interface size: '
+expect-never 'TestDriver: FAIL'

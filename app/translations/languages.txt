@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# The interface languages besides English (mitcad#1460, docs/translations.md):
+# one line per language, its code (the file mitcad_<code>.ts beside this
+# list) and its count of unfinished entries, the baseline of the ctest
+# repo.translations, which only goes down as the language is completed
+# (tools/translations-update.cmake writes it after new texts come in).
+fi 0

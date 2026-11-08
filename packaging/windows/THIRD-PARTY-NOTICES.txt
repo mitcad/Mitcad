@@ -7,6 +7,11 @@ Qt 6 (Qt6*.dll, plugins in bin)
   other builds of the same Qt version. Qt's source code is available from
   https://download.qt.io/ and https://www.qt.io/ .
 
+Qt's translations (bin\translations\qtbase_*.qm)
+  Licence: BSD-3-Clause (Qt's translations module, qttranslations), shipped
+  unchanged as Qt builds them; the texts of Qt's standard dialogs and buttons
+  in MitCad's interface languages.
+
 Open CASCADE Technology (TK*.dll in bin)
   Licence: GNU LGPL version 2.1 with the Open CASCADE exception. Linked
   dynamically; source code at https://dev.opencascade.org/ . Version 8.0.1

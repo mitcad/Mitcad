@@ -18,6 +18,11 @@ use serde_json::{Map, Value, json};
 use crate::Document;
 use crate::kernel::OcctKernel;
 
+// model_render's ray-traced picture (mitcad#1489).
+mod raytrace;
+// model_render's fast picture, headless and live (mitcad#1486, mitcad#1487).
+mod render;
+
 const MAX_DOCUMENTS: usize = 64;
 const MAX_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_BLOB_BYTES: u64 = 256 * 1024 * 1024;
@@ -100,9 +105,33 @@ pub fn build_mcp_bundle(manifest: &str, launcher_path: &str) -> Result<Vec<u8>, 
     mitcad_mcp::assistant_setup::mcp_bundle(manifest, &bytes).map_err(crate::ApiError)
 }
 
-/// Reads requests from stdin and writes only MCP messages to stdout.
-pub fn run_mcp(workspace: &str, read_only: bool) -> Result<(), crate::ApiError> {
+/// Reads requests from stdin and writes only MCP messages to stdout. Its
+/// model commands, and the recompute of a design it opens, run under the
+/// memory guard (mitcad#1480): one that would run the server out of
+/// memory fails with an error result that says so, the document as it
+/// was, and the server answers the next call. `memory_limit_mib`: a limit
+/// of the commands' own beside the process's limits (0 for none).
+pub fn run_mcp(
+    workspace: &str,
+    read_only: bool,
+    memory_limit_mib: f64,
+) -> Result<(), crate::ApiError> {
+    crate::command_memory::guard_command_memory(memory_limit_mib);
     let backend = CadBackend::new(workspace, read_only).map_err(crate::ApiError)?;
+    mitcad_mcp::serve(io::stdin().lock(), io::stdout().lock(), backend)
+        .map_err(|error| crate::ApiError(error.to_string()))
+}
+
+/// run_mcp with model_render's ray-traced pictures (mitcad#1489).
+pub fn run_mcp_raytraced(
+    workspace: &str,
+    read_only: bool,
+    memory_limit_mib: f64,
+    raytracer: cxx::UniquePtr<crate::ffi::McpRaytracer>,
+) -> Result<(), crate::ApiError> {
+    crate::command_memory::guard_command_memory(memory_limit_mib);
+    let mut backend = CadBackend::new(workspace, read_only).map_err(crate::ApiError)?;
+    backend.raytracer = raytracer;
     mitcad_mcp::serve(io::stdin().lock(), io::stdout().lock(), backend)
         .map_err(|error| crate::ApiError(error.to_string()))
 }
@@ -285,6 +314,9 @@ struct CadBackend {
     read_only: bool,
     documents: BTreeMap<String, OpenDocument>,
     next_document: u64,
+    /// model_render's quality "raytrace" (mitcad#1489, mcp/raytrace.rs);
+    /// null: refused with render_worker_missing.
+    raytracer: cxx::UniquePtr<crate::ffi::McpRaytracer>,
 }
 
 impl CadBackend {
@@ -294,6 +326,7 @@ impl CadBackend {
             read_only,
             documents: BTreeMap::new(),
             next_document: 1,
+            raytracer: cxx::UniquePtr::null(),
         })
     }
 
@@ -531,6 +564,10 @@ impl Backend for CadBackend {
                     self.workspace.write_path(path_text(extra)?, false)?;
                 }
                 let opened = self.document(id)?;
+                // A file per print plate beside the path (mitcad#1490).
+                for output in plate_outputs(&opened.document, &plan.command) {
+                    self.workspace.write_path(path_text(&output)?, false)?;
+                }
                 // A drawing's title block names the design by its file;
                 // USDZ texture paths are relative to the design's folder.
                 let title = opened
@@ -563,8 +600,40 @@ impl Backend for CadBackend {
                     .map_err(|e| e.to_string())?;
                 success(json!({"document": id, "path": path, "result": parse_result(&result)?}))
             }
+            // The ray-traced picture (mitcad#1489), before the fast mode.
+            "model_render" if raytrace::wanted(arguments) => self.raytrace(arguments),
+            // A preview image (mitcad#1486): read-only, a file only when
+            // writable.
+            "model_render" => self.render(arguments),
             _ => Err(format!("unknown tool {name}")),
         }
+    }
+}
+
+impl CadBackend {
+    /// `model_render` (mitcad#1486, docs/mcp.md "Preview images"): the
+    /// picture as an image (`image_base64`, which the protocol turns into
+    /// an image block), the camera, timing and warnings.
+    fn render(&self, arguments: &Value) -> Result<ToolResult, String> {
+        let id = string(arguments, "document")?;
+        let path = match arguments.get("path").and_then(Value::as_str) {
+            Some(path) => {
+                self.require_writable()
+                    .map_err(|e| format!("{e}: model_render cannot write path"))?;
+                let overwrite = boolean(arguments, "overwrite", false)?;
+                let path = self.workspace.write_path(path, overwrite).map_err(|e| {
+                    e.replace(
+                        "document_save requires overwrite",
+                        "model_render requires overwrite",
+                    )
+                })?;
+                require_extension(&path, "png")?;
+                Some(path)
+            }
+            None => None,
+        };
+        let opened = self.document(id)?;
+        render::answer(&opened.document.0, id, arguments, path.as_deref())
     }
 }
 
@@ -747,6 +816,9 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
             "construction",
         ]
         .into_iter()
+        .chain(THREE_MF_FIELDS)
+        .chain(BED_FIELDS)
+        .chain(["occurrence"])
         .find(|k| arguments.get(*k).is_some())
         {
             return Err(format!("cut_sheet does not take {key}"));
@@ -820,6 +892,39 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
     if construction && sketch.is_none() {
         return Err("construction is only accepted with sketch".to_owned());
     }
+    // A 3MF's print plates, slicer and placements, and the print bed of a
+    // 3MF, STL or OBJ (mitcad#1490): passed on to `export` as given, which
+    // checks them and refuses what it does not take together (bodies with
+    // plates).
+    let given: Vec<&str> = THREE_MF_FIELDS
+        .into_iter()
+        .chain(BED_FIELDS)
+        .chain(["occurrence"])
+        .filter(|k| arguments.get(*k).is_some())
+        .collect();
+    let body_export = drawing.is_none() && sketch.is_none() && flat.is_none();
+    if let Some(key) = given.iter().copied().find(|k| THREE_MF_FIELDS.contains(k))
+        && format != "3mf"
+    {
+        return Err(format!(
+            "{key} is for 3MF export (format 3mf): the print plates, a slicer's settings and the \
+             placements picked go into 3MF files"
+        ));
+    }
+    if let Some(key) = given.iter().copied().find(|k| BED_FIELDS.contains(k))
+        && !matches!(format, "3mf" | "stl" | "obj")
+    {
+        return Err(format!(
+            "{key} is for the print bed of a 3MF, STL or OBJ export"
+        ));
+    }
+    if let Some(key) = given.first()
+        && !body_export
+    {
+        return Err(format!(
+            "{key} is for an export of the bodies, not of a drawing, sketch or Flat Pattern"
+        ));
+    }
     let bodies = arguments.get("bodies");
     if let Some(bodies) = bodies
         && !bodies
@@ -854,7 +959,45 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
     if let Some(bodies) = bodies {
         command["bodies"] = bodies.clone();
     }
+    for key in given {
+        command[key] = arguments[key].clone();
+    }
     Ok(ExportPlan { command, extra })
+}
+
+/// The `export` fields of a 3MF that `model_export` passes on
+/// (mitcad#1490): the design's print plates, the slicer whose settings go
+/// with the bodies and the placements picked.
+const THREE_MF_FIELDS: [&str; 5] = ["plates", "plate", "dialect", "occurrences", "whole"];
+
+/// The `export` fields of the print bed (3MF, STL and OBJ) that
+/// `model_export` passes on (mitcad#1490, mitcad#1491).
+const BED_FIELDS: [&str; 6] = [
+    "on_bed",
+    "center",
+    "drop",
+    "auto_orient",
+    "bed_face",
+    "spacing",
+];
+
+/// The files a 3MF export of the design's print plates writes beside its
+/// path (mitcad#1490): one per plate that prints something with `"plates":
+/// "file_per_plate"`, named as the export names them, to be checked as
+/// new files in the workspace before anything is written; none otherwise.
+fn plate_outputs(document: &Document, command: &Value) -> Vec<PathBuf> {
+    if command["cmd"] != "export" || command["plates"] != "file_per_plate" {
+        return Vec::new();
+    }
+    let Some(path) = command["path"].as_str() else {
+        return Vec::new();
+    };
+    document
+        .0
+        .plate_files(path)
+        .into_iter()
+        .map(PathBuf::from)
+        .collect()
 }
 
 /// Completes a `model_export`'s command for `document` and refuses what
@@ -910,10 +1053,14 @@ impl Document {
         let mut command = plan.command;
         let folder = (!design_folder.is_empty()).then_some(design_folder);
         prepare_export(self, &mut command, title, folder).map_err(crate::ApiError)?;
+        // A file per print plate beside the path (mitcad#1490), checked as
+        // the other outputs are.
         let outputs = plan
             .extra
             .iter()
-            .map(|extra| path_text(extra).map(str::to_owned))
+            .cloned()
+            .chain(plate_outputs(self, &command))
+            .map(|extra| path_text(&extra).map(str::to_owned))
             .collect::<Result<Vec<_>, _>>()
             .map_err(crate::ApiError)?;
         let drawing = command["cmd"] == "export_drawing";
@@ -948,6 +1095,33 @@ impl Document {
             })
             .map_err(|e| crate::ApiError(e.to_string()))?;
         Ok(result.to_string())
+    }
+
+    /// The live server's `model_render` (mitcad#1487): the headless
+    /// server's picture of the design at the marker, whatever the window
+    /// shows. `document` is the window's handle; `path` (empty for none) a
+    /// new `.png` file the application checked. The result as the tool
+    /// gives it; a refusal has `error` (and `error_code`).
+    pub fn mcp_render(
+        &self,
+        arguments: &str,
+        document: &str,
+        path: &str,
+    ) -> Result<String, crate::ApiError> {
+        let arguments: Value = serde_json::from_str(arguments)
+            .map_err(|error| crate::ApiError(format!("invalid MCP render JSON: {error}")))?;
+        if arguments.get("quality").and_then(Value::as_str) == Some("raytrace") {
+            return Err(crate::ApiError(
+                "the live server draws quality fast only; ray-traced pictures are the headless server's (mitcad-cli mcp)".to_owned(),
+            ));
+        }
+        let path = (!path.is_empty()).then(|| Path::new(path));
+        if let Some(path) = path {
+            require_extension(path, "png").map_err(crate::ApiError)?;
+        }
+        let result =
+            render::answer(&self.0, document, &arguments, path).map_err(crate::ApiError)?;
+        Ok(result.value.to_string())
     }
 }
 
@@ -1223,6 +1397,12 @@ fn read_bounded(path: &Path, maximum: u64) -> io::Result<Vec<u8>> {
 }
 
 fn save_single(path: &Path, text: &str) -> io::Result<()> {
+    save_bytes(path, text.as_bytes())
+}
+
+/// Writes `bytes` to `path` through a new temporary file beside it
+/// (`save_single`, and `model_render`'s PNG).
+fn save_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
     // Unlike the shared model save helper, exclusive creation cannot
     // follow a pre-existing symlink at the temporary file's name.
     static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
@@ -1252,7 +1432,7 @@ fn save_single(path: &Path, text: &str) -> io::Result<()> {
     let (temporary, mut file) =
         opened.ok_or_else(|| io::Error::other("cannot create a unique save file"))?;
     let written = (|| {
-        file.write_all(text.as_bytes())?;
+        file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
         mitcad_model::file::rename_retrying(&temporary, path)

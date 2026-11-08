@@ -1,0 +1,14 @@
+{
+  "format": "mitcad-library", "version": 1, "id": "test-ribbon", "name": "Test ribbon",
+  "description": "A synthetic BUILD profile of the ribbon UI test (mitcad#1451).", "library_version": "1.0.0",
+  "license": "MIT", "authors": ["MitCad UI test"], "units": "mm",
+  "categories": [{"id": "profiles", "name": "Profiles"}],
+  "components": [
+    {"id": "bar-20-test", "path": "profiles/bar-20-test.mitcad", "name": "Bar 20 test", "category": "profiles",
+     "designation": "Bar 20 test L={L}",
+     "build": {"role": "profile",
+       "length": {"parameter": "L", "min": "10 mm", "max": "3000 mm", "stock": ["1000 mm"]},
+       "section": {"width": "20 mm", "height": "20 mm"},
+       "frames": [{"name": "end_a", "kind": "end"}, {"name": "end_b", "kind": "end"}]}}
+  ]
+}

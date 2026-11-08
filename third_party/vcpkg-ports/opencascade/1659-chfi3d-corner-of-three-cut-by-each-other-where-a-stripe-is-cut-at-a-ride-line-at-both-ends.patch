@@ -1,0 +1,135 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the corner of three blends cut by each other (1653) where a
+stripe is cut at both its ends where its contact meets a ride line, and a
+p-curve that does not follow its curve is not taken (mitcad#1533).
+
+The roof slab with the obtuse edge's rounding dropped (1658, r = 0.862 to
+0.868), or not rounded: at the tip, the corner of three (the tip's, the
+eave's end edge's and the slope's top edge's roundings,
+PerformThreeCorner's ball) cut the end edge's blend along a section near
+the obtuse end, where the corner of the end edge and the underside's
+rider, which rides on the slope edge's line (0016), cut it along their
+intersection: the two cuts crossed, and the end edge's face was a sliver
+whose wire crossed itself (from r = 0.7 on with the obtuse edge not
+rounded).
+
+- PerformThreeCorner: where a stripe Y of the three shares a face with
+  another, Z, ridden on by W (RideOnOverlap) on that face, and W and Y
+  alone meet at Y's other end, the corner is made by threeCornerByInter
+  (1653) with Y and the third stripe as its pair meeting on their common
+  face: the blends cut by each other, consistent with the intersection at
+  Y's other end.
+- dropStripesCutToNothing (1640, 1656): a p-curve projected on the other
+  corner's surface that does not follow the curve within ten tolerances
+  (sampled) is not taken; the other end's curve is kept instead (at the
+  right eave's tip, with 0.85, the projection on the torus of the tip's
+  corner wandered across its period along the torus's pole).
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 2d41f105..9233f729 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -3238,6 +3238,15 @@ static void dropStripesCutToNothing(TopOpeBRepDS_DataStructure&
+                 aPC = occ::down_cast<Geom2d_Curve>(aPC->Translated(gp_Vec2d(aDu, aDv)));
+               }
+             }
++            // (A p-curve that does not follow the curve on the surface, as
++            // a projection on a torus along its pole made, is no p-curve:
++            // the other end's curve is kept instead, 1659.)
++            for (int is = 0; is <= 10 && aDone; is++)
++            {
++              const double   w  = f[k] + (l[k] - f[k]) * is / 10.;
++              const gp_Pnt2d uv = aPC->Value(w);
++              aDone = aSurfJ->Value(uv.X(), uv.Y()).Distance(CK->Value(w)) <= std::max(10. * Tol, 1.e-4);
++            }
+             if (aDone)
+             {
+               const TopAbs_Orientation anO = it.Value()->Transition().Orientation(TopAbs_IN);
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
+index a7312933..a6889599 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
+@@ -268,9 +268,12 @@ static int threeCornerByInter(TopOpeBRepDS_DataStructure&       DStr,
+                               const int                         jf[3][3],
+                               const bool                        oksea[3],
+                               const double                      tol3d,
+-                              const double                      tol2d)
++                              const double                      tol2d,
++                              const int                         theR = -1,
++                              const int                         theY = -1)
+ {
+-  int R = -1, Y = -1;
++  // (Given R and Y, a corner of this form for another reason, 1659.)
++  int R = theR, Y = theY;
+   for (int a = 0; a < 3 && R < 0; a++)
+   {
+     for (int b = 0; b < 3 && R < 0; b++)
+@@ -676,8 +679,65 @@ void ChFi3d_FilBuilder::PerformThreeCorner(const int Jndex)
+   // (A stripe rolling on an edge of the face it consumes, and one whose
+   // contact on that face reaches the edge only at its other end: the blends
+   // cut by each other, threeCornerByInter.)
++  // (Or a stripe Y whose contact on the face it shares with another, Z, is
++  // cut where it meets the line that Z's rider W rides on (0016), at Y's
++  // other end too, where W and Y alone meet and their corner cuts Y along
++  // their intersection: the corner here cuts Y by intersections as well;
++  // a ball's corner here cut Y along a section that W's intersection
++  // crossed, Y's face left a sliver whose wire crossed itself, 1659.)
++  int aForcedR = -1, aForcedY = -1;
++  for (int y = 0; y < 3 && aForcedY < 0; y++)
+   {
+-    const int aByInter = threeCornerByInter(DStr, CD, sens, i, p, jf, oksea, tolapp3d, tol2d);
++    for (int z = 0; z < 3 && aForcedY < 0; z++)
++    {
++      const int r = 3 - y - z;
++      if (y == z || CD[y] == CD[z] || CD[r] == CD[y] || CD[r] == CD[z] || !oksea[0] || !oksea[1] || !oksea[2]
++          || !myRideOn.Contains(CD[z]))
++      {
++        continue;
++      }
++      const TopoDS_Vertex aOther =
++        sens[y] == 1 ? CD[y]->Spine()->LastVertex() : CD[y]->Spine()->FirstVertex();
++      int iOther = 0;
++      for (int iv = 1; iv <= myVDataMap.Extent() && iOther == 0 && !aOther.IsNull(); iv++)
++      {
++        iOther = myVDataMap.FindKey(iv).IsSame(aOther) ? iv : 0;
++      }
++      if (iOther == 0 || myVDataMap.FindFromIndex(iOther).Extent() != 2)
++      {
++        continue;
++      }
++      NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itW(myRideStripes), itOn(myRideOn);
++      NCollection_List<TopoDS_Shape>::Iterator               itRF(myRideFaces);
++      for (; itW.More() && aForcedY < 0; itW.Next(), itOn.Next(), itRF.Next())
++      {
++        const occ::handle<ChFiDS_Stripe>& W = itW.Value();
++        if (itOn.Value() != CD[z] || !itRF.Value().IsSame(face[r]))
++        {
++          continue;
++        }
++        bool aWithY = false, aWithW = false;
++        const NCollection_List<occ::handle<ChFiDS_Stripe>>& aAtOther = myVDataMap.FindFromIndex(iOther);
++        for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itV(aAtOther); itV.More();
++             itV.Next())
++        {
++          aWithY = aWithY || itV.Value() == CD[y];
++          aWithW = aWithW || itV.Value() == W;
++        }
++        if (aWithY && aWithW)
++        {
++          aForcedR = r;
++          aForcedY = y;
++        }
++      }
++    }
++  }
++  {
++    int aByInter = threeCornerByInter(DStr, CD, sens, i, p, jf, oksea, tolapp3d, tol2d);
++    if (aByInter == 0 && aForcedY >= 0)
++    {
++      aByInter = threeCornerByInter(DStr, CD, sens, i, p, jf, oksea, tolapp3d, tol2d, aForcedR, aForcedY);
++    }
+     if (aByInter > 0)
+     {
+       done = true;

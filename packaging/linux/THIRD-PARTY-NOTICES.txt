@@ -8,6 +8,11 @@ Qt 6 (usr/lib/libQt6*.so*, usr/plugins)
   with other builds of the same Qt version. Qt's source code is available
   from https://download.qt.io/ and https://www.qt.io/ .
 
+Qt's translations (usr/share/mitcad/translations/qtbase_*.qm)
+  Licence: BSD-3-Clause (Qt's translations module, qttranslations), shipped
+  unchanged as Qt builds them; the texts of Qt's standard dialogs and buttons
+  in MitCad's interface languages.
+
 ICU (usr/lib/libicu*.so*, used by Qt)
   Licence: the Unicode licence (https://www.unicode.org/license.txt).
 

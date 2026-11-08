@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <exception>
 #include <map>
 #include <optional>
@@ -19,6 +20,7 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepClass_FaceClassifier.hxx>
 #include <BRepCheck_Result.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
@@ -61,7 +63,9 @@
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Pnt2d.hxx>
+#include <gp_Vec.hxx>
 
 #include "blend.hpp"
 #include "canonical.hpp"
@@ -3278,6 +3282,188 @@ double largest_contact(const Shape& input, const std::vector<FilletSet>& sets, c
   return contact;
 }
 
+std::string millimetres(double value) {
+  char text[32];
+  std::snprintf(text, sizeof text, "%.3g", value);
+  return text;
+}
+
+// Why a fillet that the geometry kernel cannot build fails, where a planar
+// face lies between two selected straight edges parallel to each other
+// whose roundings together reach farther across it than it is wide
+// (mitcad#1482): a slab's eave 1.5 wide, rounded along both its edges, the
+// one at its acute tip touching it 1.73 r from the edge and the other
+// 0.58 r. The two roundings would meet beyond each other's contact and the
+// face vanish under them; the kernel joins such roundings only in some
+// cases (port patch 0016: the rims of a plate thinner than the roundings,
+// both convex or both concave, with the corners at their ends and the face
+// consumed between them since 1640 to 1642, mitcad#1499), and elsewhere,
+// where the face vanishes, the corners at its ends have no face to end the
+// roundings on (a slab's eave, mitcad#1500). Each rounding
+// touches its faces r tan(a / 2) from its edge, a the angle between the
+// faces' normals (as largest_contact takes it), r its largest radius. The
+// text names the face where the roundings overlap most for its width, the
+// two edges, how far each reaches and the face's width there, and how many
+// more faces are like it; empty where no face is (or the body cannot be
+// measured). Asymmetric sets, whose distances are not radii, are left
+// out; so are curved faces and edges.
+std::string narrow_face_cause(const Shape& body, const std::vector<FilletSet>& sets, const std::vector<int>& owner) {
+  try {
+    OCC_CATCH_SIGNALS
+    const detail::EdgeFaces edge_faces(body);
+    const int edges = std::min(body.edge_count(), static_cast<int>(owner.size()));
+    // How far from each selected edge its rounding touches its faces; -1
+    // for the edges not measured.
+    std::vector<double> contact(static_cast<std::size_t>(body.edge_count()), -1.0);
+    for (int e = 0; e < edges; ++e) {
+      const int s = owner[static_cast<std::size_t>(e)];
+      if (s < 0 || s >= static_cast<int>(sets.size()) ||
+          sets[static_cast<std::size_t>(s)].size == FilletSize::Asymmetric) {
+        continue;
+      }
+      const std::vector<int> faces = edge_faces.at(e);
+      if (faces.size() != 2 || faces[0] == faces[1]) {
+        continue;
+      }
+      try {
+        OCC_CATCH_SIGNALS
+        const double angle = detail::normal_angle(body.edge(e), body.face(faces[0]), body.face(faces[1]));
+        if (angle > 1.0e-3 && angle < 2.0 * kHalfPi - 1.0e-3) {
+          contact[static_cast<std::size_t>(e)] =
+              largest_radius(body, sets[static_cast<std::size_t>(s)], e) * std::tan(angle / 2.0);
+        }
+      } catch (const Standard_Failure&) {
+      } catch (const std::exception&) {
+        // (A chord length set whose angle varies along the edge.)
+      }
+    }
+    struct Line {
+      int edge = -1;
+      gp_Pnt start;
+      gp_Dir direction;
+      double length = 0.0;
+    };
+    struct Found {
+      int face = -1;
+      int a = -1;
+      int b = -1;
+      double width = 0.0;
+      double ratio = 1.0;
+    } worst;
+    int faces_found = 0;
+    for (int f = 0; f < body.face_count(); ++f) {
+      const TopoDS_Face& face = body.face(f);
+      if (BRepAdaptor_Surface(face, false).GetType() != GeomAbs_Plane) {
+        continue;
+      }
+      std::vector<Line> lines;
+      for (TopExp_Explorer x(face, TopAbs_EDGE); x.More(); x.Next()) {
+        const TopoDS_Edge& edge = TopoDS::Edge(x.Current());
+        const int e = body.edge_index(edge);
+        if (e < 0 || contact[static_cast<std::size_t>(e)] < 0.0 ||
+            std::any_of(lines.begin(), lines.end(), [e](const Line& l) { return l.edge == e; })) {
+          continue;
+        }
+        const BRepAdaptor_Curve curve(edge);
+        if (curve.GetType() != GeomAbs_Line) {
+          continue;
+        }
+        const gp_Pnt p0 = curve.Value(curve.FirstParameter());
+        const gp_Pnt p1 = curve.Value(curve.LastParameter());
+        const double length = p0.Distance(p1);
+        if (length > Precision::Confusion()) {
+          lines.push_back({e, p0, gp_Dir(gp_Vec(p0, p1)), length});
+        }
+      }
+      bool counted = false;
+      for (std::size_t i = 0; i < lines.size(); ++i) {
+        for (std::size_t j = i + 1; j < lines.size(); ++j) {
+          const Line& a = lines[i];
+          const Line& b = lines[j];
+          if (!a.direction.IsParallel(b.direction, 1.0e-6)) {
+            continue;
+          }
+          // Where the two run beside each other, along a.
+          const gp_Vec along(a.direction);
+          double t0 = gp_Vec(a.start, b.start).Dot(along);
+          double t1 = t0 + b.length * (a.direction.IsOpposite(b.direction, 1.0e-6) ? -1.0 : 1.0);
+          if (t0 > t1) {
+            std::swap(t0, t1);
+          }
+          const double from = std::max(0.0, t0);
+          const double to = std::min(a.length, t1);
+          if (!(to - from > Precision::Confusion())) {
+            continue;
+          }
+          // The width across the face between them, at the middle of that
+          // stretch, the face lying between them there.
+          const gp_Pnt on_a = a.start.Translated(along * (0.5 * (from + to)));
+          const gp_Vec to_b(a.start, b.start);
+          const gp_Pnt on_b = on_a.Translated(to_b - along * to_b.Dot(along));
+          const double width = on_a.Distance(on_b);
+          const double reach =
+              contact[static_cast<std::size_t>(a.edge)] + contact[static_cast<std::size_t>(b.edge)];
+          if (!(width > Precision::Confusion()) || !(reach > width * (1.0 + 1.0e-6))) {
+            continue;
+          }
+          const gp_Pnt between((on_a.XYZ() + on_b.XYZ()) * 0.5);
+          if (BRepClass_FaceClassifier(face, between, Precision::Confusion()).State() != TopAbs_IN) {
+            continue;
+          }
+          if (!counted) {
+            counted = true;
+            ++faces_found;
+          }
+          if (reach / width > worst.ratio) {
+            worst = {f, a.edge, b.edge, width, reach / width};
+          }
+        }
+      }
+    }
+    if (worst.face < 0) {
+      return {};
+    }
+    const NameList& names = body.face_names(worst.face);
+    const std::string face = names.empty() ? std::string("an unnamed face") : "face " + names.front();
+    std::string more;
+    if (faces_found > 1) {
+      more = " (and " + std::to_string(faces_found - 1) + (faces_found == 2 ? " more face" : " more faces") +
+             " like it)";
+    }
+    // (The edges as one list of names, which a notice reads as "the edges"
+    // with their places.)
+    const std::string& a = body.edge_name(worst.a);
+    const std::string& b = body.edge_name(worst.b);
+    const std::string edges_named = !a.empty() && !b.empty()
+                                        ? "the edges " + a + " and " + b
+                                        : describe_edge(body, worst.a) + " and " + describe_edge(body, worst.b);
+    return "the roundings of " + edges_named + " reach " +
+           millimetres(contact[static_cast<std::size_t>(worst.a)]) + " and " +
+           millimetres(contact[static_cast<std::size_t>(worst.b)]) + " mm into " + face +
+           " between them, which is only " + millimetres(worst.width) +
+           " mm wide there: the face would vanish under them" + more;
+  } catch (const Standard_Failure&) {
+  } catch (const std::exception&) {
+  }
+  return {};
+}
+
+// A fillet's error with the cause narrow_face_cause found: the error's
+// first clause stays its beginning ("fillet failed; ", "the fillet would
+// leave the body open: ", which the import reads), then the cause, then the
+// rest of the error, the geometry kernel's own words, in brackets.
+std::string with_cause(const std::string& error, const std::string& cause) {
+  const std::size_t p = std::min(error.find("; "), error.find(": "));
+  if (p == std::string::npos) {
+    return error + "; " + cause;
+  }
+  std::string rest = error.substr(p + 2);
+  if (rest.find("geometry kernel") == std::string::npos) {
+    rest = "the geometry kernel: " + rest;
+  }
+  return error.substr(0, p + 2) + cause + " (" + rest + ")";
+}
+
 } // namespace
 
 ShapePtr fillet(const std::string& feature, const Shape& given, const std::vector<FilletSet>& sets,
@@ -3297,57 +3483,71 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
     blended[s] = sets[s].size == FilletSize::Asymmetric || sets[s].curvature ? 1 : 0;
     any_blended = any_blended || blended[s] != 0;
   }
-  ShapePtr result = canonical(input, with_own_chains("fillet", input, sets, owner,
-                                                    [&](const std::vector<int>& selected) {
-    const auto build = [&](const Shape& target, const std::vector<int>& own_edges) {
-      const auto rings = [&](const Shape& body) { return ring_fillet(feature, body, sets, own_edges); };
-      return or_rings("fillet", target, [&] {
-        const auto contact = [&] { return largest_contact(target, sets, own_edges); };
-        return with_shrink_retry("fillet", target, contact, [&](double scale) {
-          const auto rounded = [&] {
-            return dress(target, sets, own_edges, scale, feature, "fillet", true,
-                         [&](const Shape& body, const std::vector<int>& own, double size_scale, bool tight) {
-                           if (any_blended) {
-                             return round_and_blend(feature, body, sets, own, blended, rolling_ball_corners,
-                                                    size_scale, tight);
-                           }
-                           return round_edges(feature, body, sets, own, rolling_ball_corners, size_scale, tight);
-                         });
-          };
-          // At the exact size, before the 0.1 % smaller retry; not for
-          // setback corners.
-          return scale == 1.0 && !any_blended && rolling_ball_corners
-                     ? or_mitred(feature, target, sets, own_edges, rounded)
-                     : rounded();
-        });
-      }, rings);
-    };
-    try {
-      return build(input, selected);
-    } catch (const Cancelled&) {
-      throw;
-    } catch (const std::runtime_error&) {
-      // Where the geometry kernel cannot build it, the roundings may run
-      // over cut-outs or protrusions of their faces: built on the body with
-      // them cleared back to the faces' surfaces, and put back
-      // (mitcad#311). Else the kernel's error stands.
-      ShapePtr over;
+  // Where the geometry kernel cannot round them, a face that the roundings
+  // of two of its edges together reach across is named as the cause
+  // (narrow_face_cause, mitcad#1482).
+  ShapePtr result;
+  try {
+    result = canonical(input, with_own_chains("fillet", input, sets, owner,
+                                                      [&](const std::vector<int>& selected) {
+      const auto build = [&](const Shape& target, const std::vector<int>& own_edges) {
+        const auto rings = [&](const Shape& body) { return ring_fillet(feature, body, sets, own_edges); };
+        return or_rings("fillet", target, [&] {
+          const auto contact = [&] { return largest_contact(target, sets, own_edges); };
+          return with_shrink_retry("fillet", target, contact, [&](double scale) {
+            const auto rounded = [&] {
+              return dress(target, sets, own_edges, scale, feature, "fillet", true,
+                           [&](const Shape& body, const std::vector<int>& own, double size_scale, bool tight) {
+                             if (any_blended) {
+                               return round_and_blend(feature, body, sets, own, blended, rolling_ball_corners,
+                                                      size_scale, tight);
+                             }
+                             return round_edges(feature, body, sets, own, rolling_ball_corners, size_scale, tight);
+                           });
+            };
+            // At the exact size, before the 0.1 % smaller retry; not for
+            // setback corners.
+            return scale == 1.0 && !any_blended && rolling_ball_corners
+                       ? or_mitred(feature, target, sets, own_edges, rounded)
+                       : rounded();
+          });
+        }, rings);
+      };
       try {
-        over = over_cutouts(input, sets, selected, build);
+        return build(input, selected);
       } catch (const Cancelled&) {
         throw;
-      } catch (...) {
-        over = nullptr;
+      } catch (const std::runtime_error&) {
+        // Where the geometry kernel cannot build it, the roundings may run
+        // over cut-outs or protrusions of their faces: built on the body with
+        // them cleared back to the faces' surfaces, and put back
+        // (mitcad#311). Else the kernel's error stands.
+        ShapePtr over;
+        try {
+          over = over_cutouts(input, sets, selected, build);
+        } catch (const Cancelled&) {
+          throw;
+        } catch (...) {
+          over = nullptr;
+        }
+        if (over) {
+          return over;
+        }
+        throw;
       }
-      if (over) {
-        return over;
-      }
+    }));
+    // (Whichever way it was built.)
+    if (result) {
+      require_closed(given.occt(), result->occt(), "fillet");
+    }
+  } catch (const Cancelled&) {
+    throw;
+  } catch (const std::runtime_error& error) {
+    const std::string cause = narrow_face_cause(input, sets, owner);
+    if (cause.empty()) {
       throw;
     }
-  }));
-  // (Whichever way it was built.)
-  if (result) {
-    require_closed(given.occt(), result->occt(), "fillet");
+    throw std::runtime_error(with_cause(error.what(), cause));
   }
   // A result whose made faces reach to the wrong side of the body (a folded
   // or spiked corner) gets a warning, never a refusal (mitcad#1253).

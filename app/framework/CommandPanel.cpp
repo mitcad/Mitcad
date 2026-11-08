@@ -51,6 +51,7 @@
 #include "CutTargetsPanel.hpp"
 #include "GlassCard.hpp"
 #include "Icons.hpp"
+#include "Language.hpp"
 #include "NoteRow.hpp"
 #include "PanelTree.hpp"
 #include "ParameterField.hpp"
@@ -64,6 +65,220 @@
 
 namespace mitcad {
 namespace {
+
+// A fixed choice's label in the interface language (mitcad#1460): the
+// command definitions give the labels of their fixed choices in English,
+// often in lists made once, before the language is installed; the
+// catalogues list those marked QT_TRANSLATE_NOOP("Choice", …), and a label
+// translated in another context is found too (framework/Language). The
+// choice's value, never its label, is what is chosen.
+QString choiceLabel(const QString& label) {
+  // A label the definition translated already (its tr()) is shown as it is.
+  if (englishText(label) != label) {
+    return label;
+  }
+  const QByteArray source = label.toUtf8();
+  return QCoreApplication::translate("Choice", source.constData());
+}
+
+// The fixed choices of the common commands (Extrude, Revolve, Fillet,
+// Chamfer, the primitives, the operations and extents shared by the
+// features, commands/CommandSupport.cpp), for the catalogues: their lists
+// are made before the language is installed.
+[[maybe_unused]] const char* const kChoiceNames[] = {
+    // Operations and extents.
+    QT_TRANSLATE_NOOP("Choice", "New Body"), QT_TRANSLATE_NOOP("Choice", "Join"),
+    QT_TRANSLATE_NOOP("Choice", "Cut"), QT_TRANSLATE_NOOP("Choice", "Intersect"),
+    QT_TRANSLATE_NOOP("Choice", "New Component"), QT_TRANSLATE_NOOP("Choice", "To Selected Face"),
+    QT_TRANSLATE_NOOP("Choice", "To Adjacent Faces"), QT_TRANSLATE_NOOP("Choice", "To Body"),
+    QT_TRANSLATE_NOOP("Choice", "Through Body"), QT_TRANSLATE_NOOP("Choice", "Along Sketch Normal"),
+    QT_TRANSLATE_NOOP("Choice", "Along Vector"),
+    // Directions and distances.
+    QT_TRANSLATE_NOOP("Choice", "One Side"), QT_TRANSLATE_NOOP("Choice", "Two Sides"),
+    QT_TRANSLATE_NOOP("Choice", "Symmetric"), QT_TRANSLATE_NOOP("Choice", "Distance"),
+    QT_TRANSLATE_NOOP("Choice", "To Object"), QT_TRANSLATE_NOOP("Choice", "All"),
+    QT_TRANSLATE_NOOP("Choice", "Side 1"), QT_TRANSLATE_NOOP("Choice", "Center"),
+    QT_TRANSLATE_NOOP("Choice", "Side 2"), QT_TRANSLATE_NOOP("Choice", "Inside"),
+    QT_TRANSLATE_NOOP("Choice", "On Center"), QT_TRANSLATE_NOOP("Choice", "Outside"),
+    // Fillet and Chamfer.
+    QT_TRANSLATE_NOOP("Choice", "Constant"), QT_TRANSLATE_NOOP("Choice", "Chord Length"),
+    QT_TRANSLATE_NOOP("Choice", "Variable"), QT_TRANSLATE_NOOP("Choice", "Asymmetric"),
+    QT_TRANSLATE_NOOP("Choice", "Spline"), QT_TRANSLATE_NOOP("Choice", "Equal Distance"),
+    QT_TRANSLATE_NOOP("Choice", "Two Distances"), QT_TRANSLATE_NOOP("Choice", "Distance and Angle"),
+    QT_TRANSLATE_NOOP("Choice", "Tangent (G1)"), QT_TRANSLATE_NOOP("Choice", "Curvature (G2)"),
+    QT_TRANSLATE_NOOP("Choice", "Rolling Ball"), QT_TRANSLATE_NOOP("Choice", "Setback"),
+    QT_TRANSLATE_NOOP("Choice", "Chamfer"), QT_TRANSLATE_NOOP("Choice", "Miter"),
+    QT_TRANSLATE_NOOP("Choice", "Blend"),
+    // New Component.
+    QT_TRANSLATE_NOOP("Choice", "Empty Component"), QT_TRANSLATE_NOOP("Choice", "From Bodies"),
+    // The other commands' fixed choices (mitcad#1473), by the file that defines
+    // them first.
+    // commands/BearingCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "608 (8 × 22 × 7)"), QT_TRANSLATE_NOOP("Choice", "Airsoft"),
+    QT_TRANSLATE_NOOP("Choice", "Ball"), QT_TRANSLATE_NOOP("Choice", "Dumbbell"),
+    QT_TRANSLATE_NOOP("Choice", "Roller"),
+    // commands/BuildCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "+X"), QT_TRANSLATE_NOOP("Choice", "+Y"), QT_TRANSLATE_NOOP("Choice", "-X"),
+    QT_TRANSLATE_NOOP("Choice", "-Y"), QT_TRANSLATE_NOOP("Choice", "0°"), QT_TRANSLATE_NOOP("Choice", "180°"),
+    QT_TRANSLATE_NOOP("Choice", "270°"), QT_TRANSLATE_NOOP("Choice", "90°"), QT_TRANSLATE_NOOP("Choice", "About x"),
+    QT_TRANSLATE_NOOP("Choice", "About x, the other way"), QT_TRANSLATE_NOOP("Choice", "About y"),
+    QT_TRANSLATE_NOOP("Choice", "About y, the other way"), QT_TRANSLATE_NOOP("Choice", "Along X"),
+    QT_TRANSLATE_NOOP("Choice", "Along Y"), QT_TRANSLATE_NOOP("Choice", "Along Z (standing)"),
+    QT_TRANSLATE_NOOP("Choice", "Auto"), QT_TRANSLATE_NOOP("Choice", "Auto: from the members"),
+    QT_TRANSLATE_NOOP("Choice", "Auto: through"), QT_TRANSLATE_NOOP("Choice", "Auto: through it"),
+    QT_TRANSLATE_NOOP("Choice", "Auto: to its center"), QT_TRANSLATE_NOOP("Choice", "Auto: to the center"),
+    QT_TRANSLATE_NOOP("Choice", "Auto: to the face"), QT_TRANSLATE_NOOP("Choice", "Auto: to the face it meets"),
+    QT_TRANSLATE_NOOP("Choice", "Auto: to the wall it meets"),
+    QT_TRANSLATE_NOOP("Choice", "Automatic: where the click is"),
+    QT_TRANSLATE_NOOP("Choice", "Between two members: on a member's side, to the member it meets"),
+    QT_TRANSLATE_NOOP("Choice", "Bound: through"), QT_TRANSLATE_NOOP("Choice", "Bound: to the center"),
+    QT_TRANSLATE_NOOP("Choice", "Bound: to the face"), QT_TRANSLATE_NOOP("Choice", "Butt"),
+    QT_TRANSLATE_NOOP("Choice", "Center distance"), QT_TRANSLATE_NOOP("Choice", "Cut the existing component"),
+    QT_TRANSLATE_NOOP("Choice", "Cut the new component"), QT_TRANSLATE_NOOP("Choice", "Detached: this length"),
+    QT_TRANSLATE_NOOP("Choice", "End A"), QT_TRANSLATE_NOOP("Choice", "End B"), QT_TRANSLATE_NOOP("Choice", "Flat"),
+    QT_TRANSLATE_NOOP("Choice", "Floor or ceiling: joists within an outline"), QT_TRANSLATE_NOOP("Choice", "Gable"),
+    QT_TRANSLATE_NOOP("Choice", "Gap: a board row"), QT_TRANSLATE_NOOP("Choice", "Lapped plates"),
+    QT_TRANSLATE_NOOP("Choice", "Load-bearing: trimmer studs and a header on edge"),
+    QT_TRANSLATE_NOOP("Choice", "Middle"), QT_TRANSLATE_NOOP("Choice", "Middle of Gap"),
+    QT_TRANSLATE_NOOP("Choice", "Mono-pitch"),
+    QT_TRANSLATE_NOOP("Choice", "Non-load-bearing: a flat header, no trimmers"),
+    QT_TRANSLATE_NOOP("Choice", "None"), QT_TRANSLATE_NOOP("Choice", "On a member's side or end, or on a plane"),
+    QT_TRANSLATE_NOOP("Choice", "On a plane (as the first part)"),
+    QT_TRANSLATE_NOOP("Choice", "On a profile's end"), QT_TRANSLATE_NOOP("Choice", "On a profile's side"),
+    QT_TRANSLATE_NOOP("Choice", "On edge"), QT_TRANSLATE_NOOP("Choice", "One"),
+    QT_TRANSLATE_NOOP("Choice", "Over the supporting faces: a board row, battens"),
+    QT_TRANSLATE_NOOP("Choice", "Roof: rafters on two wall frames"),
+    QT_TRANSLATE_NOOP("Choice", "Shared: both on the bisector"),
+    QT_TRANSLATE_NOOP("Choice", "Spacing: repeated at a center distance, or a board row with a gap"),
+    QT_TRANSLATE_NOOP("Choice", "Straight"), QT_TRANSLATE_NOOP("Choice", "The gaps spread evenly"),
+    QT_TRANSLATE_NOOP("Choice", "The last board cut to what is left"), QT_TRANSLATE_NOOP("Choice", "Two"),
+    QT_TRANSLATE_NOOP("Choice", "Two points: from a click to a second click"),
+    QT_TRANSLATE_NOOP("Choice", "Typed length"),
+    // Belt profiles (Belt Drive, Pulley).
+    QT_TRANSLATE_NOOP("Choice", "HTD 3M"), QT_TRANSLATE_NOOP("Choice", "HTD 5M"), QT_TRANSLATE_NOOP("Choice", "T5"),
+    QT_TRANSLATE_NOOP("Choice", "XL"),
+    // commands/ConvertMeshCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "Analytic"), QT_TRANSLATE_NOOP("Choice", "Faceted Solid"),
+    // commands/DogboneCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "Along a Side"), QT_TRANSLATE_NOOP("Choice", "Diagonal"),
+    QT_TRANSLATE_NOOP("Choice", "X"), QT_TRANSLATE_NOOP("Choice", "Y"), QT_TRANSLATE_NOOP("Choice", "Z"),
+    // commands/DriveCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "All Standard"), QT_TRANSLATE_NOOP("Choice", "From To"),
+    QT_TRANSLATE_NOOP("Choice", "GT2 2 mm"), QT_TRANSLATE_NOOP("Choice", "GT2 3 mm"),
+    QT_TRANSLATE_NOOP("Choice", "Helical"), QT_TRANSLATE_NOOP("Choice", "Spur"),
+    QT_TRANSLATE_NOOP("Choice", "Spur or Helical"),
+    // commands/EmbossCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "Projection"), QT_TRANSLATE_NOOP("Choice", "Raise"),
+    QT_TRANSLATE_NOOP("Choice", "Sink"), QT_TRANSLATE_NOOP("Choice", "Wrap"),
+    // commands/ExtrudeCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "Extrude"), QT_TRANSLATE_NOOP("Choice", "Half Length"),
+    QT_TRANSLATE_NOOP("Choice", "Object"), QT_TRANSLATE_NOOP("Choice", "Offset"),
+    QT_TRANSLATE_NOOP("Choice", "Profile Plane"), QT_TRANSLATE_NOOP("Choice", "Thin Extrude"),
+    QT_TRANSLATE_NOOP("Choice", "Whole Length"),
+    // commands/FaceCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "Both"), QT_TRANSLATE_NOOP("Choice", "Rounded"),
+    QT_TRANSLATE_NOOP("Choice", "Sharp"),
+    // commands/GearCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "Bevel"), QT_TRANSLATE_NOOP("Choice", "Herringbone"),
+    QT_TRANSLATE_NOOP("Choice", "Plain"), QT_TRANSLATE_NOOP("Choice", "Rack"), QT_TRANSLATE_NOOP("Choice", "Ring"),
+    QT_TRANSLATE_NOOP("Choice", "Thread"), QT_TRANSLATE_NOOP("Choice", "14.5°"), QT_TRANSLATE_NOOP("Choice", "20°"),
+    QT_TRANSLATE_NOOP("Choice", "25°"),
+    // commands/HoleCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "ANSI Unified Screw Threads"), QT_TRANSLATE_NOOP("Choice", "Angle"),
+    QT_TRANSLATE_NOOP("Choice", "By Pick"), QT_TRANSLATE_NOOP("Choice", "Clearance"),
+    QT_TRANSLATE_NOOP("Choice", "Counterbore"), QT_TRANSLATE_NOOP("Choice", "Counterdrill"),
+    QT_TRANSLATE_NOOP("Choice", "Countersink"), QT_TRANSLATE_NOOP("Choice", "Custom"),
+    QT_TRANSLATE_NOOP("Choice", "End"), QT_TRANSLATE_NOOP("Choice", "From Sketch"),
+    QT_TRANSLATE_NOOP("Choice", "From Thread Size"), QT_TRANSLATE_NOOP("Choice", "High End"),
+    QT_TRANSLATE_NOOP("Choice", "ISO Metric profile"), QT_TRANSLATE_NOOP("Choice", "Left Hand"),
+    QT_TRANSLATE_NOOP("Choice", "Low End"), QT_TRANSLATE_NOOP("Choice", "Right Hand"),
+    QT_TRANSLATE_NOOP("Choice", "Simple"), QT_TRANSLATE_NOOP("Choice", "Start"),
+    QT_TRANSLATE_NOOP("Choice", "Tapped"), QT_TRANSLATE_NOOP("Choice", "To"),
+    // The thread types of the model's thread table (ThreadStandard::title).
+    QT_TRANSLATE_NOOP("Choice", "British Standard Whitworth"), QT_TRANSLATE_NOOP("Choice", "ANSI Taper Pipe Threads (NPT)"),
+    QT_TRANSLATE_NOOP("Choice", "ISO Tyre Valve Threads"), QT_TRANSLATE_NOOP("Choice", "Metric Forming Screw Threads"),
+    QT_TRANSLATE_NOOP("Choice", "ISO Metric Trapezoidal Threads"),
+    QT_TRANSLATE_NOOP("Choice", "ISO Taper Pipe Threads (R, Rc)"),
+    // commands/JointCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "Align"), QT_TRANSLATE_NOOP("Choice", "Cam"),
+    QT_TRANSLATE_NOOP("Choice", "Cylindrical"), QT_TRANSLATE_NOOP("Choice", "Flat Face"),
+    QT_TRANSLATE_NOOP("Choice", "Foot on a grid"), QT_TRANSLATE_NOOP("Choice", "Gears"),
+    QT_TRANSLATE_NOOP("Choice", "Grid of cells"), QT_TRANSLATE_NOOP("Choice", "Insert"),
+    QT_TRANSLATE_NOOP("Choice", "Insert (Axis)"), QT_TRANSLATE_NOOP("Choice", "Into a hole (its shaft)"),
+    QT_TRANSLATE_NOOP("Choice", "Knife Edge"), QT_TRANSLATE_NOOP("Choice", "On a face"),
+    QT_TRANSLATE_NOOP("Choice", "Onto a shaft (its hole)"), QT_TRANSLATE_NOOP("Choice", "Pin-Slot"),
+    QT_TRANSLATE_NOOP("Choice", "Planar"), QT_TRANSLATE_NOOP("Choice", "Rack and Pinion"),
+    QT_TRANSLATE_NOOP("Choice", "Ratio"), QT_TRANSLATE_NOOP("Choice", "Revolute"),
+    QT_TRANSLATE_NOOP("Choice", "Rigid"), QT_TRANSLATE_NOOP("Choice", "Screw"),
+    QT_TRANSLATE_NOOP("Choice", "Slider"), QT_TRANSLATE_NOOP("Choice", "Tangent"),
+    // commands/MortiseTenonCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "Square"),
+    // commands/MoveCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "Bodies"), QT_TRANSLATE_NOOP("Choice", "Components"),
+    QT_TRANSLATE_NOOP("Choice", "Free Move"), QT_TRANSLATE_NOOP("Choice", "Non Uniform"),
+    QT_TRANSLATE_NOOP("Choice", "Point to Point"), QT_TRANSLATE_NOOP("Choice", "Point to Position"),
+    QT_TRANSLATE_NOOP("Choice", "Rotate"), QT_TRANSLATE_NOOP("Choice", "Translate"),
+    QT_TRANSLATE_NOOP("Choice", "Translate Along"), QT_TRANSLATE_NOOP("Choice", "Uniform"),
+    // commands/PatternCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "Adjust"), QT_TRANSLATE_NOOP("Choice", "Extent"),
+    QT_TRANSLATE_NOOP("Choice", "Faces"), QT_TRANSLATE_NOOP("Choice", "Features"),
+    QT_TRANSLATE_NOOP("Choice", "Identical"), QT_TRANSLATE_NOOP("Choice", "Optimized"),
+    QT_TRANSLATE_NOOP("Choice", "Path Direction"), QT_TRANSLATE_NOOP("Choice", "Spacing"),
+    QT_TRANSLATE_NOOP("Choice", "One Direction"),
+    // commands/PlasticCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "+Z"), QT_TRANSLATE_NOOP("Choice", "-Z"), QT_TRANSLATE_NOOP("Choice", "1 mm"),
+    QT_TRANSLATE_NOOP("Choice", "10 mm"), QT_TRANSLATE_NOOP("Choice", "12 mm"), QT_TRANSLATE_NOOP("Choice", "2 mm"),
+    QT_TRANSLATE_NOOP("Choice", "3 mm"), QT_TRANSLATE_NOOP("Choice", "6 mm"), QT_TRANSLATE_NOOP("Choice", "8 mm"),
+    QT_TRANSLATE_NOOP("Choice", "Along the Opening"), QT_TRANSLATE_NOOP("Choice", "Along the Outer Edge"),
+    QT_TRANSLATE_NOOP("Choice", "Boss"), QT_TRANSLATE_NOOP("Choice", "Groove"), QT_TRANSLATE_NOOP("Choice", "Lip"),
+    QT_TRANSLATE_NOOP("Choice", "Plastic Rule"), QT_TRANSLATE_NOOP("Choice", "Rectangle"),
+    QT_TRANSLATE_NOOP("Choice", "Rest"), QT_TRANSLATE_NOOP("Choice", "Round"),
+    QT_TRANSLATE_NOOP("Choice", "Snap Fit"),
+    // commands/PulleyCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "Idler"), QT_TRANSLATE_NOOP("Choice", "Library"),
+    QT_TRANSLATE_NOOP("Choice", "Toothed"), QT_TRANSLATE_NOOP("Choice", "Toothed Idler"),
+    QT_TRANSLATE_NOOP("Choice", "Whole Teeth"),
+    // commands/SheetCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "At Edge"), QT_TRANSLATE_NOOP("Choice", "Back"),
+    QT_TRANSLATE_NOOP("Choice", "Bend"), QT_TRANSLATE_NOOP("Choice", "Bend Line"),
+    QT_TRANSLATE_NOOP("Choice", "Double"), QT_TRANSLATE_NOOP("Choice", "Double Bend"),
+    QT_TRANSLATE_NOOP("Choice", "Fixed"), QT_TRANSLATE_NOOP("Choice", "From the Middle"),
+    QT_TRANSLATE_NOOP("Choice", "Front"), QT_TRANSLATE_NOOP("Choice", "Half Open"),
+    QT_TRANSLATE_NOOP("Choice", "Inner Length"), QT_TRANSLATE_NOOP("Choice", "Left of the Line"),
+    QT_TRANSLATE_NOOP("Choice", "Moving"), QT_TRANSLATE_NOOP("Choice", "New Rules"),
+    QT_TRANSLATE_NOOP("Choice", "Offsets from the Ends"), QT_TRANSLATE_NOOP("Choice", "Open"),
+    QT_TRANSLATE_NOOP("Choice", "Outer Length"), QT_TRANSLATE_NOOP("Choice", "Outer Tangent Length"),
+    QT_TRANSLATE_NOOP("Choice", "Rectangular"), QT_TRANSLATE_NOOP("Choice", "Right of the Line"),
+    QT_TRANSLATE_NOOP("Choice", "Rope"), QT_TRANSLATE_NOOP("Choice", "Tangent Length"),
+    QT_TRANSLATE_NOOP("Choice", "Tangent to Side"), QT_TRANSLATE_NOOP("Choice", "Tear"),
+    QT_TRANSLATE_NOOP("Choice", "Teardrop"), QT_TRANSLATE_NOOP("Choice", "Whole Edge"),
+    // commands/SketchCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "H (30 %)"), QT_TRANSLATE_NOOP("Choice", "L (7 %)"),
+    QT_TRANSLATE_NOOP("Choice", "M (15 %)"), QT_TRANSLATE_NOOP("Choice", "Q (25 %)"),
+    // commands/SurfaceCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "Curvature"), QT_TRANSLATE_NOOP("Choice", "Fill a Loop"),
+    QT_TRANSLATE_NOOP("Choice", "G0 (through the edges)"), QT_TRANSLATE_NOOP("Choice", "G1 (tangent)"),
+    QT_TRANSLATE_NOOP("Choice", "G2 (curvature)"),
+    QT_TRANSLATE_NOOP("Choice", "Natural"), QT_TRANSLATE_NOOP("Choice", "Network"),
+    QT_TRANSLATE_NOOP("Choice", "Normal"), QT_TRANSLATE_NOOP("Choice", "Parallel"),
+    QT_TRANSLATE_NOOP("Choice", "Perpendicular"),
+    // commands/SweepCommands.cpp.
+    QT_TRANSLATE_NOOP("Choice", "Centerline"), QT_TRANSLATE_NOOP("Choice", "Circular"),
+    QT_TRANSLATE_NOOP("Choice", "Clockwise"), QT_TRANSLATE_NOOP("Choice", "Counterclockwise"),
+    QT_TRANSLATE_NOOP("Choice", "Depth"), QT_TRANSLATE_NOOP("Choice", "Direction"),
+    QT_TRANSLATE_NOOP("Choice", "Fraction of Length"), QT_TRANSLATE_NOOP("Choice", "Free"),
+    QT_TRANSLATE_NOOP("Choice", "Height and Pitch"), QT_TRANSLATE_NOOP("Choice", "Mitered"),
+    QT_TRANSLATE_NOOP("Choice", "Path + Guide Rail"), QT_TRANSLATE_NOOP("Choice", "Path + Guide Surface"),
+    QT_TRANSLATE_NOOP("Choice", "Point Sharp"), QT_TRANSLATE_NOOP("Choice", "Point Tangent"),
+    QT_TRANSLATE_NOOP("Choice", "Rails"), QT_TRANSLATE_NOOP("Choice", "Revolution and Height"),
+    QT_TRANSLATE_NOOP("Choice", "Revolution and Pitch"), QT_TRANSLATE_NOOP("Choice", "Scale"),
+    QT_TRANSLATE_NOOP("Choice", "Single Path"), QT_TRANSLATE_NOOP("Choice", "Smooth"),
+    QT_TRANSLATE_NOOP("Choice", "Spiral"), QT_TRANSLATE_NOOP("Choice", "Square to Path"),
+    QT_TRANSLATE_NOOP("Choice", "Stretch"), QT_TRANSLATE_NOOP("Choice", "To Next"),
+    QT_TRANSLATE_NOOP("Choice", "Triangular"), QT_TRANSLATE_NOOP("Choice", "Triangular (External)"),
+    QT_TRANSLATE_NOOP("Choice", "Triangular (Internal)"),
+    // 3D Print.
+    QT_TRANSLATE_NOOP("Choice", "STL"), QT_TRANSLATE_NOOP("Choice", "3MF")};
 
 // Colours of the selection inputs in order, unless an input sets its own
 // (the role table's, shared with the AppKit panel).
@@ -733,6 +948,9 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
                      : input.valueKind == ValueKind::Unitless ? ParameterKind::Unitless
                                                               : ParameterKind::Length;
       suggest.own = scope.parameterName(input.id);
+      // A value that uses the field's own parameter keeps it as a user
+      // parameter (mitcad#1536): offered so, its dependents no cycle.
+      suggest.keepOwn = !suggest.own.isEmpty();
       suggest.label = QStringLiteral("%1 %2").arg(m_def.name, input.label);
       suggest.naming = true;
       // Up, Down and the wheel step a plain value (mitcad#1254).
@@ -804,7 +1022,7 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       box->setSpacing(4);
       for (const auto& option : input.choices) {
         const QString value = option.first;
-        const QString label = option.second;
+        const QString label = choiceLabel(option.second);
         auto* button = new QToolButton;
         button->setIcon(themeIcon(input.choiceIcons.value(value)));
         button->setIconSize(QSize(20, 20));
@@ -842,7 +1060,7 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
     // Options that follow other inputs are filled by refreshRow.
     if (!input.choicesFor) {
       for (const auto& [value, label] : input.choices) {
-        row.combo->addItem(label, value);
+        row.combo->addItem(choiceLabel(label), value);
       }
     }
     connect(row.combo, &QComboBox::activated, this, [this, key, combo = row.combo](int at) {
@@ -1299,9 +1517,12 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
         }
       }
     }
-    // Its own parameter is not offered to it (mitcad#567).
+    // Its own parameter is not offered to it (mitcad#567), but as kept as a
+    // user parameter by a value that uses it (mitcad#1536).
     if (ParameterField* suggest = ParameterField::of(row.edit)) {
-      suggest->setOwnParameter(scope.parameterName(id));
+      const QString own = scope.parameterName(id);
+      suggest->setOwnParameter(own);
+      suggest->setKeepOwn(!own.isEmpty());
     }
     // The parameter the field edits, after its label: "Distance (d5)"
     // (mitcad#231).
@@ -1665,8 +1886,23 @@ void CommandPanel::scheduleLogFit() {
   m_fitTimer->start();
 }
 
-void CommandPanel::logFit() const {
+void CommandPanel::settleLayout() const {
   QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+  // The scroll area the panel is in resizes the panel to the width the
+  // page will have at once, but shows or hides its scroll bar, which
+  // changes the page's width, one event later (Qt queues it). Read in
+  // between, as a busy event loop can (mitcad#1456), the panel was 276 px
+  // wide in a page still 262 px, the bar just no longer needed after the
+  // floating card grew for an error. Delivered first, the widths logged are
+  // the settled ones: the panel as wide as its page.
+  QWidget* page = parentWidget();
+  if (auto* area = page != nullptr ? qobject_cast<QScrollArea*>(page->parentWidget()) : nullptr) {
+    QCoreApplication::sendPostedEvents(area, QEvent::MetaCall);
+  }
+}
+
+void CommandPanel::logFit() const {
+  settleLayout();
   // What the page shows of the panel: the scroll area's viewport.
   const QWidget* page = parentWidget() != nullptr ? parentWidget() : this;
   QString shown = QStringLiteral("hidden");
@@ -1827,8 +2063,9 @@ void CommandPanel::showEvent(QShowEvent* event) {
 
 QStringList CommandPanel::layoutLines() const {
   QStringList lines;
-  // Rows made or shown just now are placed first.
-  QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+  // Rows made or shown just now are placed first, the page's scroll bar
+  // shown or hidden (mitcad#1456).
+  settleLayout();
   const auto position = [](const QWidget* widget) {
     QRect area = widget->rect();
     if (const auto* edit = qobject_cast<const QLineEdit*>(widget)) {

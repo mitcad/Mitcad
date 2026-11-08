@@ -5,6 +5,7 @@
 #include "AssistantSetup.hpp"
 
 #include <functional>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDialog>
 #include <QHash>
@@ -37,6 +38,8 @@ namespace mitcad::mcp {
 // allows the folder shown. Connected clients are named by the assistant
 // their label matches (Claude Code), else by their own label.
 class ConnectAssistantDialog : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::mcp::ConnectAssistantDialog)
+
 public:
   struct Host {
     // The connected clients (initialized MCP sessions).

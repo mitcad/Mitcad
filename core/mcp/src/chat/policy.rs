@@ -13,7 +13,8 @@
 //!
 //! A kind the user allowed always (Always allow, per agent) runs in every
 //! mode. The kinds: `read`, `edit`, `document_save`, `document_open`,
-//! `model_export`, `screenshot_file`, `file_command` (a `file.*` command of
+//! `model_export`, `screenshot_file`, `render_file` (`model_render` with a
+//! path, mitcad#1487), `file_command` (a `file.*` command of
 //! `ui_command`), `undo_past_start` and `other` (a tool this policy does not
 //! know, which asks); and `document_new` (mitcad#1266), a new design beside
 //! the open ones, which is classed as a model edit.
@@ -83,6 +84,12 @@ fn classify(
         }
         "ui_screenshot" => match path() {
             Some(file) => (Class::Guarded, "screenshot_file", Some(file)),
+            None => (Class::Read, "read", None),
+        },
+        // A picture of the design (mitcad#1487): a read, unless it writes
+        // a file.
+        "model_render" => match path() {
+            Some(file) => (Class::Guarded, "render_file", Some(file)),
             None => (Class::Read, "read", None),
         },
         "model_command" => {

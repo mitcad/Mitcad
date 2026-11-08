@@ -152,6 +152,18 @@ expression (`"d1 / 2 + 5 mm"`, `"30 deg"`; syntax and unit rules in
   feature (the next free `d<n>`, with a comment like `Extrude1
   distance`). Editing a feature with a number or an expression in a slot
   whose parameter the feature owns changes that parameter instead.
+- An expression in a length slot reads its bare numbers in the document's
+  length unit, as `evaluate` reads them (mitcad#1452): in a design in
+  inches `"0.875"` is 22.225 mm, for a new parameter and for the slot's own
+  one alike. A slot's own length parameter made in another length unit
+  (before `set_units` changed the document's) takes the document's unit
+  with a new expression, so `"0.25 * 2"` typed into a dimension made in
+  millimetres is 12.7 mm, not 0.5 mm; a number keeps its unit, and a
+  parameter a slot names by name is never changed. JSON numbers stay
+  millimetres in every design: a client that takes lengths in the
+  design's unit converts them, or writes them as texts (`"0.875"`,
+  `"0.875 in"`); positions (`corner`, `center`, `at`) take numbers only.
+  Tests: `inch_entry_tests` (core/model-tests/api).
 - New dimension parameters show lengths in the document's length unit
   (`set_units`) and angles in degrees. A slot whose name ends in `angle`
   (`size.angle`, `extent.angle`, `dimensions[k3].angle`) is an angle,
@@ -200,6 +212,11 @@ expression (`"d1 / 2 + 5 mm"`, `"30 deg"`; syntax and unit rules in
   write `max(1; 5)`. No thousands separators: `1,000` is 1 and `1 000` an
   error. Parameters keep their expressions with decimal points, in the
   design file and in the `parameters` query.
+- Inch and foot marks (mitcad#1531): a `"` (or `''`) right after a
+  number, spaces allowed between, is `in`, and a `'` is `ft`: `".875\""`
+  is 22.225 mm in any design, `"3' 6\""` is 42 in (feet and inches add
+  up). Only a number takes a mark; elsewhere a quote starts a text.
+  Expressions are kept as typed.
 - `name = expression` in a slot (`"width = 40"`, `"width = d1 * 2"`)
   names the slot's parameter as it sets it, in the same command and undo
   step (mitcad#231): the parameter the feature owns there (or the one the
@@ -209,6 +226,41 @@ expression (`"d1 / 2 + 5 mm"`, `"30 deg"`; syntax and unit rules in
   command. A single `=` after a word is this form; expressions compare
   with `==`. Renames by any command keep configurations, bindings and
   the [comments](#comments) on a parameter in step.
+- **A sketch dimension's value that uses the dimension's own parameter**
+  (mitcad#1535), by its name or through other parameters
+  (`BuckleDiameter * 2` in the dimension of `BuckleDiameter`), keeps
+  that parameter, with its name, expression and value, as a user
+  parameter, and the dimension takes the value as a new parameter of its
+  own (the next free `d<n>`; `Slot = BuckleDiameter * 2` names it `Slot`),
+  in the same `sketch.set_dimension` and undo step. Every expression,
+  configuration and comment that names the parameter keeps it. The bare
+  name (`BuckleDiameter`) only moves the parameter to the user parameters
+  and makes the dimension use it, at the same value. The result's
+  `user_parameters` lists what moved (`name`, `dimension`, and the
+  `parameter` the dimension uses now) and its `notes` say it
+  (`BuckleDiameter is now a user parameter (5 mm); dimension k3 is d7 =
+  BuckleDiameter * 2`). A parameter that another dimension of the sketch
+  uses as well stays the sketch's: the dimension only gets a parameter of
+  its own. `BuckleDiameter = BuckleDiameter * 2` (the own name on the
+  left) names and sets the own parameter as before, so it is refused as a
+  circular reference, as any parameter's own name in its own expression
+  is (`set_parameter`).
+- **A feature value that uses the slot's own parameter** (mitcad#1536)
+  follows the same rule in `edit_feature`: `depth * 2` in the distance of
+  an extrusion whose distance is `depth` (its own parameter) keeps `depth`,
+  with its name, expression and value, as a user parameter, and the
+  distance takes the value as a new parameter of the extrusion (the next
+  free `d<n>`; `height = depth * 2` names it `height`), in the same command
+  and undo step. Unlike a sketch dimension's, the bare own name (`depth`)
+  leaves the slot as it is: definitions read back from the model (the
+  `feature` query's `def`) name their own parameters so. A parameter
+  another slot of the feature or another feature uses as well stays the
+  feature's: the slot only gets a parameter of its own. The result's
+  `user_parameters` lists what moved (`name`, `slot` such as
+  `extent.distance`, and the `parameter` the slot uses now) and its `notes`
+  say it (`depth is now a user parameter (10 mm); Extrude1 distance is d3
+  = depth * 2`); a preview of the edit says it in its `infos` and moves
+  nothing. `depth = depth * 2` is a circular reference, as above.
 - A driven sketch dimension has a read-only **reference parameter**
   (mitcad#231): the next free `d<n>`, commented `Sketch1 length (driven)`,
   kind `reference` in the `parameters` query, owned by the sketch. Its
@@ -1196,7 +1248,8 @@ of the body) stays in that piece's body as a lump. A body of several lumps
 not reach (an intersection leaves nothing of those), and only the other
 pieces of a lump the cut splits are new bodies; before, every piece of such a
 body was a body of its own. A join, cut or intersection that reaches no
-participant fails.
+participant fails. A participant (or lump) lying wholly inside the tool of an
+intersection is kept whole, with its names (mitcad#1534).
 
 A join works on a body of several lumps lump by lump as well
 (mitcad#1003): the lumps it reaches are fused with the tool, the lumps
@@ -2111,6 +2164,21 @@ form lists edge sets:
   that result (found by their edges' names): the concave ball rolls on
   the convex rounding, an S-shaped section without the step's face, as
   the `.ipt` files keep such steps rounded.
+- A face the roundings of two of its edges reach across (mitcad#1482):
+  where the fillet fails and a planar face lies between two selected
+  straight edges parallel to each other whose roundings' contacts on it
+  (r tan(a / 2) from each edge, a the angle between the edge's faces'
+  normals, r the set's largest radius; asymmetric sets left out) add up
+  to more than the face's width there, the error names the face where
+  they overlap most for its width, ahead of the geometry kernel's words,
+  which follow in brackets after the error's first clause: `fillet failed;
+  the roundings of the edges E{…} and E{…} reach 1.73 and 0.577 mm into
+  face F… between them, which is only 1.51 mm wide there: the face would
+  vanish under them (and 3 more faces like it) (the geometry kernel …)`,
+  likewise after `the fillet would leave the body open: `. Its notice
+  shows the edges and the face as places. A roof slab's eave 1.506 wide
+  between an acute edge at its tip and the underside's obtuse one, all
+  edges rounded with 1 (`geometry.fillet_roof_slab`).
 - A suspect result is a warning, never a refusal (mitcad#1253): where the
   geometry kernel builds a corner that folds back on itself or ends in a
   spike and its checker accepts it, the faces the fillet made
@@ -2140,7 +2208,17 @@ form lists edge sets:
   result on the surface of the input's face it is named after but facing
   the other way, `A face beside the chamfer is turned over on its surface
   (it faces into the body), where the chamfer hangs out past it.`;
-  several findings are joined in one warning. A fillet or chamfer of whole
+  several findings are joined in one warning. Not past a convex edge of
+  such a face where the rounding meets the rounding of another of the
+  edges in a mitre (mitcad#1458, GitHub mitcad/Mitcad#177): three foot
+  edges of a block on a plate rounded, two meeting the block's vertical
+  corners, each end's rounding runs on past the corner to the mitre that
+  continues the corner's edge down to the plate, filling the corner
+  outside it; a point whose foot on the face lies no farther from such an
+  edge (from a vertex of the rounded edge, its other face holding another
+  rounded edge from that vertex) than from the face is not counted. That
+  had warned `The fillet hangs 0.72 mm past the edge of the face beside
+  it` of a sound result (`geometry.fillet_foot_mitre`). A fillet or chamfer of whole
   circles built as rings (where the kernel's own stops at a neighbouring
   face) gets no warning for that: only a rounding that meets a face it
   runs onto at more than 30° (`The fillet runs onto a face beside it and
@@ -2856,6 +2934,48 @@ the region or the face name (`F7:start(F4:end(r{c1}))`).
   circle inside the section (half the side, a third of the height).
 - `extent`: as for a sweep from the path's start; `fraction2` only on a
   closed path (the part before the start).
+- `corners` (mitcad#1448): the joints at the path's sharp corners (where
+  its curves meet at an angle), `mitered` (default; left out, also when
+  saved) or `rounded`. Mitered, the sides run on until they meet in the
+  corner's bisecting plane; rounded, both legs end square at the corner
+  and the section turned about it (about the line through the corner at
+  right angles to both legs) fills its outside: a circle sweeps a piece of
+  a ball there, a square a piece of a cylinder. Where the kind asked for
+  cannot be built (a slight kink, whose miter is a sliver), the other kind
+  is tried, then the section turned through the corner. A design saved
+  before the choice reads as mitered, as it was built. One kind for every
+  corner: a bend of a radius, a bevel or a different joint at one corner
+  is a fillet or a chamfer at that corner of the path's sketch. Test:
+  `geometry.pipe_corners` (a circular and a square section along an L),
+  `pipe_corners_tests` (mock kernel), `tools/cli/tests/f3_pipe_coil.json`.
+- Tight bends (mitcad#1497): a pipe folds through itself where its path
+  bends with a smaller radius than the section reaches from the path
+  (half the circle's diameter; along a path in one plane half the
+  square's side or half the triangle's side, along any other path the
+  radius of the circle round the section), and where a straight piece of
+  the path is too short for the miters at its ends. A mitered corner that
+  turns by θ cuts the side leaning towards its other leg back by
+  `reach tan(θ/2)`; the piece needs `reach` times the length of the
+  difference of its two corners' leans (each the other leg's direction
+  across the piece, `tan(θ/2)` long): `2 reach tan(θ/2)` between two
+  corners turning the same way (a chamfer), nothing in a jog, and
+  `reach tan(θ/2)` with a corner at one end only. The model works out
+  the smallest radius of each curve (an arc's radius, an ellipse's at
+  its flattest point, a helix's, a spline's sampled inside its knot
+  spans) and the length each straight piece needs, and warns for each
+  such curve with the place and the numbers:
+  `the path bends with radius 3 mm at Sketch1's c5; the pipe needs at
+  least 5 mm`, `Sketch1's c5 is 2.828 mm long; the pipe's mitered
+  corners need at least 4.142 mm there`. When the geometry then refuses
+  the pipe, its error ends with these messages. Rounded corners have no
+  miters, so only bends are checked for them; a pipe along part of its
+  path (`extent` partial) is not checked. Test: `pipe_tight_bends_tests`
+  (mock kernel), the unit tests in `features/pipe.rs`.
+- A pipe's preview adds `sweep_path` as a sweep's ([sweep](#sweep)), the
+  section at the start of an open path, with `corners`: how many sharp
+  corners the path has (left out when none; a closed path's joint of its
+  last curve to its first counts). The Pipe panel shows Corners only for
+  such a path.
 
 Faces: `side<i>` for the section's edges (`side0` for a circle; the
 square's and the triangle's sides in turn), `inner<i>` inside a hollow
@@ -3582,7 +3702,10 @@ largest stays in that piece's body as a lump, as with an extrusion's cut;
 after an upstream edit the pieces keep their ids:
 [Body ids of a split's pieces](#body-ids-of-a-splits-pieces));
 `intersect` keeps the common volume as the target (fails
-when empty). A join, cut or intersection of bodies with material whose
+when empty: "the target and the tool bodies do not intersect", also for
+bodies that only touch; a target lying wholly inside the tools is the
+intersection as it is, with its face names, mitcad#1534). A join, cut or
+intersection of bodies with material whose
 result (or the union of its tools) holds no solid fails (`the join of 257
 bodies gave an empty result`), keeping the target and the tools
 ([Unions of many bodies](#unions-of-many-bodies-and-empty-results-mitcad1273)).
@@ -4072,7 +4195,7 @@ results](#failed-features-in-command-results)).
 | Command | Fields | Result |
 |---|---|---|
 | `add_feature` | `def`, `name` (optional), `component` (optional: a component's uid or name; the active component when left out), `after` or `index` (optional: where in the timeline, see [Adding a feature in the middle of the timeline](#adding-a-feature-in-the-middle-of-the-timeline)) | `uid`, `name`, `parameters` (created); for a new-component operation placed beside a component that takes no components `placed_in`, `instead_of`, `placement_warning` ([Design policy](#design-policy)) |
-| `edit_feature` | `uid`, `def` (same type) | `parameters` (created); when the edit makes a new component placed beside a component that takes no components `placed_in`, `instead_of`, `placement_warning` ([Design policy](#design-policy)) |
+| `edit_feature` | `uid`, `def` (same type) | `parameters` (created); `user_parameters` and `notes` when a value that uses its slot's own parameter kept that parameter as a user parameter ([Values](#values), mitcad#1536); when the edit makes a new component placed beside a component that takes no components `placed_in`, `instead_of`, `placement_warning` ([Design policy](#design-policy)) |
 | `delete_feature` | `uid`, `dependents` (default false) | `deleted`: uids in timeline order; `notices` for the cut-scope exclusions it dropped ([Assembly scope for Extrude Cut](#assembly-scope-for-extrude-cut)) |
 | `suppress_feature` | `uid`, `suppressed` (default true), or `expression` (a condition the suppression follows; [Bindings](#bindings-values-from-expressions)) | |
 | `reorder_feature` | `uid`, `index` (new timeline index) | |
@@ -5023,7 +5146,8 @@ it on a copy of the document without committing it. The result:
 - A pattern adds `elements`: every element's transform as 3 rows of 4 by
   element number, suppressed ones too. A construction feature adds its
   `datum`. A sweep adds `sweep_path`, where its profile lies on its path
-  ([sweep](#sweep), mitcad#795).
+  ([sweep](#sweep), mitcad#795); a pipe too, with the number of its
+  path's sharp corners ([pipe](#pipe), mitcad#1448).
 - A `move` or `move_occurrence` whose motion is a `rotate`,
   `point_to_point` or `point_to_position` adds `motion` (mitcad#838): what
   the motion was worked out from, in the feature's component's
@@ -5125,7 +5249,11 @@ from a command's result (`entities`, `made`, `constraints`, `dimensions`,
 in the order they were made) or from the `sketch` query; in one
 `model_command` array, refer only to ids that an earlier call's result
 gave you, not to ids a command earlier in the same array is expected to
-make. A point id that names a curve is refused saying so.
+make. A point id that names a curve is refused saying so. A sketch
+definition (`add_feature`, `edit_feature`, a file) in which two of them
+have the same number is refused naming both, `entity c1 has the id number
+of p1: curves, points and texts share one numbering`; the first one keeps
+the number (mitcad#1485).
 
 Values follow [Values](#values); a new
 dimension gets a model parameter owned by the sketch (`Sketch1 fillet
@@ -5156,7 +5284,7 @@ made, in order) and `status` (as the `sketch` query: `dof`,
 | `sketch.edit_text` | `id`, and any of `text`, `at`, `height`, `angle`, `font`, `bold`, `italic`, `align`, `valign`, `spacing`, `path`, `flip_x`, `flip_y`, `cap_height`, `wrap`, `line_spacing`, `pen_align`, `ink_top`, `no_kerning`, `font_file` (a font file's path; `""` leaves the file for `font`), `value` (a text parameter's name or a text expression the text follows; `""` stops it following one, [Text parameters](#text-parameters)) | a new `text`, `font`, `bold` or `italic` drops the text's stored `glyphs`; for a text in a font file it stores the file's outlines again (refused when the file is not there, or when its path came with the design and no `font_file` is given, mitcad#929), and another `font` leaves the file |
 | `sketch.add_constraint` | `constraint`: as in the definition, without `id` | a `coincident` between the end points of two curves merges them into one point (see [Points that become one](#points-that-become-one)): the result has no new constraint, `removed` lists the removed point (and what the merge dropped), and `merged` is `{"kept": "p3", "removed": "p7"}`; a constraint that older geometric constraints imply in part replaces them: `removed` lists them and `implied_removed` is `[{"constraint": "k1", "type": "horizontal"}]` (see [A constraint that replaces one it makes redundant](#a-constraint-that-replaces-one-it-makes-redundant)); `auto` (default false): only when safe, nothing else changes (see [Constraints a drawing tool adds automatically](#constraints-a-drawing-tool-adds-automatically)) |
 | `sketch.add_dimension` | `dimension`: as in the definition, without `id`, `value`, `driven`; `value` (default: what it measures now), `driven`, `text` [x, y] | |
-| `sketch.set_dimension` | `dimension` (`k3`), `value` | a number or an expression changes the dimension's own parameter; a parameter name makes the dimension use that parameter; `name = expression` renames its parameter and sets it (see [Values](#values)); a driven dimension becomes driving (its reference parameter becomes its parameter, under the same name) |
+| `sketch.set_dimension` | `dimension` (`k3`), `value` | a number or an expression changes the dimension's own parameter; a parameter name makes the dimension use that parameter; `name = expression` renames its parameter and sets it (see [Values](#values)); a value that uses the dimension's own parameter keeps that parameter as a user parameter, and its bare name only moves it there (result `user_parameters`, mitcad#1535; see [Values](#values)); a driven dimension becomes driving (its reference parameter becomes its parameter, under the same name) |
 | `sketch.set_driven` | `dimension`, `driven` (default true) | driving again keeps the measured value; driven, its own parameter becomes its reference parameter |
 | `sketch.set_signed` | `dimension` (a `horizontal_distance` or `vertical_distance`), `signed` (default true) | the point stays where it is: a driving value is negated where `b` lies on the negative side (see [Signed point dimensions](#signed-point-dimensions)) |
 | `sketch.set_dimension_text` | `dimension` (`k3`), `text` [x, y] | where the value is shown; undo step `Move Dimension in Sketch1` |
@@ -6442,7 +6570,7 @@ constraints.
 | Command | Fields | Result |
 |---|---|---|
 | `import_file` | `path` (.step/.stp, .iges/.igs, .brep/.brp, .stl, .obj), `name` (of the feature, optional), `unit_mm` (STL and OBJ: mm per file unit, default 1), `structure` (STEP: `components` default, `base`; [STEP assemblies as components](#step-assemblies-as-components-mitcad1274)) | `uid`, `name`, `bodies`: `uid`, `name`, `kind`; `warnings` when empty bodies were left out; a STEP assembly kept also `structure`, `components`, `occurrences` |
-| `export` | `path`, `bodies` (uids or names; all at the marker when left out), `format` (by extension when left out: `step`, `iges`, `stl`, `obj`, `brep`, `3mf`, `usdz`), `schema` (`ap214` default, `ap242`), `unit` (STEP, IGES, STL, OBJ, 3MF: `mm` default, `cm`, `m`, `in`, `ft`; [Mesh files](#mesh-files-in-a-unit-with-a-longest-edge)), `refinement` (STL, OBJ, 3MF, USDZ: `low`, `medium` default, `high` or `{"deviation": mm, "angle": radians, "face_triangles": n, "max_edge": mm}`; see [Mesh refinement](#mesh-refinement)), `ascii` (STL), `colors` (body uid or name: sRGB in [0, 1]), `coordinates` (`design` default, `component`), `occurrence` (a path), `design_folder` (USDZ: the folder relative texture paths are relative to, the design file's), `dialect` (3MF: the slicer whose print settings go with the bodies, [Print profiles](#print-profiles)), `on_bed` (3MF, STL, OBJ: on the print bed faces, [Print bed faces](#print-bed-faces)), `center`, `drop` and `auto_orient` (on the bed, each true by default: [Centered, dropped and oriented on the bed](#centered-dropped-and-oriented-on-the-bed)), `occurrences` and `whole` (3MF: the placements written and the occurrences sent whole, [Export by occurrences](#export-by-occurrences)) | `path`, `format`, `bodies` (uids); 3MF also `meshes`, `skipped`, and with `dialect` `dialect`, `filaments`, `warnings`, `printed` ([Print profiles](#print-profiles), mitcad#1052); USDZ also `materials`, `skipped`, `warnings` |
+| `export` | `path`, `bodies` (uids or names; all at the marker when left out), `format` (by extension when left out: `step`, `iges`, `stl`, `obj`, `brep`, `3mf`, `usdz`), `schema` (`ap214` default, `ap242`), `unit` (STEP, IGES, STL, OBJ, 3MF: `mm` default, `cm`, `m`, `in`, `ft`; [Mesh files](#mesh-files-in-a-unit-with-a-longest-edge)), `refinement` (STL, OBJ, 3MF, USDZ: `low`, `medium` default, `high` or `{"deviation": mm, "angle": radians, "face_triangles": n, "max_edge": mm}`; see [Mesh refinement](#mesh-refinement)), `ascii` (STL), `colors` (body uid or name: sRGB in [0, 1]), `coordinates` (`design` default, `component`), `occurrence` (a path), `design_folder` (USDZ: the folder relative texture paths are relative to, the design file's), `dialect` (3MF: the slicer whose print settings go with the bodies, [Print profiles](#print-profiles)), `on_bed` (3MF, STL, OBJ: on the print bed faces, [Print bed faces](#print-bed-faces)), `center`, `drop` and `auto_orient` (on the bed, each true by default: [Centered, dropped and oriented on the bed](#centered-dropped-and-oriented-on-the-bed)), `spacing` (on the bed: mm between neighbouring pieces beyond their brims, 5 default; [Spacing beyond the brims](#spacing-beyond-the-brims)), `occurrences` and `whole` (3MF: the placements written and the occurrences sent whole, [Export by occurrences](#export-by-occurrences)) | `path`, `format`, `bodies` (uids); 3MF also `meshes`, `skipped`, and with `dialect` `dialect`, `filaments`, `warnings`, `printed` ([Print profiles](#print-profiles), mitcad#1052); USDZ also `materials`, `skipped`, `warnings` |
 | `export_sketch` | `sketch` (uid or name; of a shared name the only sketch, [Feature names are not unique](#feature-names-are-not-unique-mitcad1107)), `path` (.dxf), `version` (`r2000` default, `r12`), `units` (the file's length unit, `mm`, `in`, … as `set_units` reads them; the design's when left out, [DXF units](#the-length-unit-of-dxf-exports-mitcad1408)), `construction` (bool, default false: also the construction curves and center lines, on the layer `construction`; [construction geometry](#construction-geometry-in-a-sketchs-dxf-mitcad1445)) | `path`, `entities`, `units` (the unit written), `construction` (whether construction geometry was written) |
 
 - `import_file` adds one base feature: a body per STEP part or solid,
@@ -6523,6 +6651,18 @@ written (each pen is a layer). `sketch.import_dxf` and `dxf_info` read the
 unit back from `$INSUNITS`, so a MitCad DXF comes back at its size in a
 design of any unit. Each command's result names the unit written (`units`;
 `export_drawing`: `file_units`, as its `units` is the unit of the values).
+
+Only the numbers and the header change with the unit: a sketch's file in
+millimetres and in inches holds the same entities on the same layers with
+the same line types (mitcad#1452, test
+`a_sketch_s_dxf_holds_the_same_entities_in_millimetres_and_in_inches`). A
+program that does not read `$INSUNITS` and asks for the unit instead reads
+the numbers in the unit chosen there: a millimetre file opened as inches
+comes in 25.4 times larger than the design, an inch file opened as
+millimetres 25.4 times smaller. A file opened in its own unit is the
+design's real size, so geometry that is too small for a tool (a slot
+narrower than the cut, a hole smaller than the kerf) is too small in the
+file as well.
 
 ### STEP assemblies as components (mitcad#1274)
 
@@ -6877,7 +7017,7 @@ file's bodies built with OCCT.
 | `text` | `import_f3d_timeline` returns a readable report |
 | `report_path` | also write the JSON report to this file |
 | `list` | `import_f3d_timeline` only lists the designs: `{"designs": [{"label", "items"}]}` |
-| `memory_limit` | MiB the import may take besides the process's own limits (mitcad#80): low on memory (85 % of the tightest limit, always watched), the import cuts the definition being tried short and tries no more until the memory recovers; those items take the file's bodies, and the report's `low_memory` (`item`, `name`, `memory`, `items`) and a warning say so (`core/import/docs/f3d-performance.md`, *Memory*) |
+| `memory_limit` | MiB the import may take besides the process's own limits (mitcad#80): low on memory (85 % of the tightest limit, or from 50 % on growing so fast that it would get there within 0.1 s; always watched), the import cuts the definition being tried short and tries no more until the memory recovers; those items take the file's bodies, and the report's `low_memory` (`item`, `name`, `memory`, `items`) and a warning say so (`core/import/docs/f3d-performance.md`, *Memory*) |
 | `threads` | how many threads the import uses at once (mitcad#95, mitcad#103; default 1, the application gives the logical cores up to 8): workers evaluate the definitions ranked after the one being evaluated, each on its own copy of the document, and the import takes their results in rank order; the file's bodies are read and the history's bodies built ahead of the replay on the same threads. It is the same import as with one thread, only faster (`core/import/docs/f3d-performance.md`, *Definitions evaluated in parallel*, *Work beside the replay*) |
 | `learn` | a directory for the learning dump (mitcad#96): one JSON line per modelling item with its raw record, its candidates and the one the history accepted (`core/import/docs/f3d-learning.md`, *Learning the undecoded inputs*); `MITCAD_IMPORT_LEARN` when left out |
 | `references` | folders searched for the documents the design refers to (its components of other documents, mitcad#196), besides the reference folder next to it (`<design> vN.refs`): see *Components of other documents* below |
@@ -9148,6 +9288,8 @@ lock_json`, `request_json`).
 
 ## Live updates
 
+<!-- mcp: internal -->
+
 The optional MQTT client of Cloud projects (mitcad#89), all in Rust
 (`core/vcs/src/remote/mqtt.rs` and `mqtt/`; design in
 [docs/architecture.md](../../../docs/architecture.md#live-updates)):
@@ -10033,6 +10175,8 @@ with tables; `import_table_csv`'s moves).
 
 ## Progress and cancellation
 
+<!-- mcp: internal -->
+
 A document can be given a `RecomputeMonitor` (`Document::set_monitor`,
 `core/model-base/src/monitor.rs`), shared with another thread that shows the
 progress and may cancel. Every recompute then reports to it and checks
@@ -10048,6 +10192,7 @@ application's worker:
 | `set_test_delay(ms)` | for tests: each evaluation takes `ms` longer, in 10 ms steps that end on a cancel |
 | `cancel_after(n)` | for tests: cancel once `n` evaluations were kept, as between two features |
 | `ask(question)`, `question()`, `answer(answer)`, `take_answer()` | a question the job puts to its user (one line; the `.f3d` import's `retry_bodies` `ask`, mitcad#283): the thread that shows the progress finds it with `question()` until it answers; the job takes the answer once. A new question drops an answer not taken |
+| `cancel_because(reason)`, `cancel_reason()` | cancel for a reason rather than on the user's request (the memory guard of model commands, `monitor::memory_guard`, mitcad#1480); the first reason stays, a monitor the user cancelled first takes none, and a monitor within others has their reason. The bridge's command then fails with the reason instead of `the computation was canceled`, and `JobControl::cancel_reason()` gives it to C++ (empty otherwise) |
 | `Document::try_recompute`, `try_undo`, `try_redo` | fail with `ModelError::Cancelled`; `recompute`, `undo` and `redo` stay for callers without a monitor (a cancelled `undo` gives None, a cancelled `recompute` keeps the last results) |
 
 | C++ (`mitcad_bridge/lib.h`) | Meaning |
@@ -10100,6 +10245,8 @@ application's worker:
   instrumented.
 
 ## Caches
+
+<!-- mcp: internal -->
 
 How the recompute cache and the result store work:
 [docs/architecture.md](../../../docs/architecture.md#the-model).
@@ -10702,6 +10849,8 @@ cached or best-matched references; `profiles` lists the current identities
 of all evaluated sketches when pruning stale application selection.
 
 ## Adding to the API
+
+<!-- mcp: internal -->
 
 - A feature type: a module in `core/model/src/features/` with its
   definition struct (generic over the value form `P`), `map_params`,
@@ -11770,6 +11919,8 @@ interval), `sketch.set_dimension` changes it and `sketch.remove` removes it,
 as for any dimension.
 
 ## Classes of commands and queries
+
+<!-- mcp: internal -->
 
 Every command, query and feature type of this API has a class (mitcad#265,
 `classes.rs`): what it works on besides the document's data. External
@@ -13575,7 +13726,11 @@ command's result has, when any feature is in error after it,
 Without failed features the field is left out. `error` stays the first
 failed feature, as before. The MCP server's `model_command` is an error
 only when one of these is `edited` and lists them at the top level
-([docs/mcp.md](../../../docs/mcp.md)).
+([docs/mcp.md](../../../docs/mcp.md)). Its `error` text then says that
+the feature stays in the timeline and how to remove it (mitcad#1481):
+`F57 (Fillet3) was added but failed: fillet failed. It stays in the
+timeline; edit it, or remove it with undo or delete_feature` ("was changed"
+for an edit; an array's entry is named, `commands[1]: …`).
 
 Tests: `core/model-tests/api/src/failed_features_tests.rs` (mock kernel),
 `core/mcp/src/tests.rs`, `tools/cli/mcp-results-test.cmake`.
@@ -14245,7 +14400,7 @@ surface operations](#mesh-bodies-in-surface-operations)). The kernel's
 methods are grouped under "Surface modelling" in `Kernel`
 (`core/model-base/src/kernel.rs`), the OCCT side is
 `geometry/src/surface_*.cpp`. The application has them in the SURFACE tab
-([app/COMMANDS.md](../../../app/COMMANDS.md), "Surface modelling").
+([app/COMMANDS.md](../../../app/COMMANDS.md), "Surface modeling").
 
 ### Surface extrude, revolve, sweep and loft
 
@@ -18399,11 +18554,13 @@ refused, the Bambu-family and PrusaSlicer exports, both imports),
 
 ## The reference in parts over MCP
 
+<!-- mcp: internal -->
+
 This reference is about 1 MB, more than an agent's context. The MCP
 servers (headless and live, `docs/mcp.md`) give it in parts through the
 read-only tool `model_reference` (mitcad#714), parsed from this file in
 `core/mcp/src/reference.rs`; the resource `mitcad://reference/commands`
-still holds all of it.
+holds all of it as agents see it (below).
 
 | Arguments | Result |
 |---|---|
@@ -18420,6 +18577,31 @@ the type (`### rib, web`, or a list after a colon) or has an example
 `{"type": "<name>", …}`; a command's or query's row is in a table whose
 first header cell is `Command` or `Query` and names it in backticks in
 its first cell.
+
+**What agents see** (mitcad#1509): the tool and the resource give the
+reference without what an agent cannot use, and this file stays as it
+is for the developers:
+
+- A section whose command and query tables name only names MCP does not
+  permit, and whose heading and examples name no permitted feature type
+  (Files, Version history, Projects, Edit locks, …), is left out of the
+  contents, the sections, the rows, the search and the resource. Its
+  subsections go with it, except one that names permitted names of its
+  own. A command or query asked for that only such a section describes
+  gets "not available through MCP" with the permitted names.
+- A section about how the code works inside, not the API, is marked by
+  the line `<!-- mcp: internal -->` as the first line under its heading
+  (a Markdown comment, so the document reads as before). It is left out
+  the same way. Mark new sections of that kind (caches, workers, how to
+  add to the API, how a class of names is chosen).
+- Headings lose their issue numbers: `## Linked designs read again while
+  open (mitcad#1416)` is shown as `## Linked designs read again while
+  open`, and `section` finds it by either.
+
+`mitcad_mcp::reference_losses` names the permitted names whose rows or
+sections agents would no longer find; the test
+`core/model-tests/api/src/mcp_reference_tests.rs` checks with the names
+the backend permits that it names none.
 
 The names come from `api::classes`: `external_queries()` (the model
 class), `external_commands()` (the model class, and the commands that
@@ -19555,12 +19737,14 @@ With `on_bed` the file's objects are:
   as before;
 - the rest: the file's own object (named after the file), as before.
 
-The objects turned are set side by side along X, 5 mm apart, the row
-centred on the plate; a row wider than the printer's bed wraps into rows
-along Y, 5 mm apart and centred on the plate too, and objects that still
-do not fit on the bed give a warning (`the 10 pieces do not fit on the
-256 x 256 mm bed …`, mitcad#1316); overlaps with an object kept as
-designed are left to the slicer's arrange. Several objects are several build items of the
+The objects turned are set side by side along X, the row centred on the
+plate; a row wider than the printer's bed wraps into rows along Y,
+centred on the plate too, and objects that still do not fit on the bed
+give a warning (`the 10 pieces do not fit on the 256 x 256 mm bed …`,
+mitcad#1316; `… mm with their brims)` when brims widen them); overlaps
+with an object kept as designed are left to the slicer's arrange.
+Neighbours, in a row and between rows, lie apart by
+[the spacing beyond their brims](#spacing-beyond-the-brims). Several objects are several build items of the
 3MF file (`mitcad_3mf::Model::objects`), each a components object of the
 parts' placements; the Bambu family's `model_settings.config` names each
 object with its parts. One object is written as before.
@@ -20206,6 +20390,8 @@ with a parameter's name), `api::tables_csv::tests` (the queries and the
 command).
 ## Recompute workers
 
+<!-- mcp: internal -->
+
 `Document::set_recompute_workers(n)` (mitcad#842) lets a recompute
 evaluate the features of independent components on up to `n` threads at
 once, each with a fork of the kernel; `1`, the default, evaluates every
@@ -20767,6 +20953,8 @@ counterbored, a countersunk, a tapped, a partly tapped and a custom-thread
 hole, the drill's size changed; `a_hole_callout_takes_a_frame_and_breaks_with_its_hole`).
 
 ## Readers of files in the application's process
+
+<!-- mcp: internal -->
 
 The application reads whole CAD files only in its import process
 (`mitcad --import-worker`), including the listings asked before an
@@ -22109,7 +22297,9 @@ print, with each plate's own settings.
   along X, the row centred on the plate. With `center: false` the pieces
   keep their places in X and Y, but the copies of an item with a count
   are still set apart (mitcad#1311): each further copy beside the one
-  before it along X, 5 mm apart, from the first copy's place.
+  before it along X, from the first copy's place. Neighbours lie apart by
+  [the spacing beyond their brims](#spacing-beyond-the-brims), by the
+  settings on their plate.
 - **Plate settings:** process values of the key map (the `Print Process`
   set, not the keys kept per slicer), in its JSON form, as a profile keeps
   them. The plate is a level of the settings order: profile < plate <
@@ -22192,6 +22382,15 @@ Export (`export` of a 3MF; on the print bed, `on_bed` implied; no
   own; an empty plate writes no file.
   For Cura and PrusaSlicer before 2.9.
 - `"plate": "Vase"`: that plate alone, in the path.
+
+Through MCP, `model_export` with `"format": "3mf"` takes these fields and
+the other 3MF and print bed fields of `export` (`dialect`, `on_bed`,
+`center`, `drop`, `auto_orient`, `bed_face`, `spacing`, `occurrence`,
+`occurrences`, `whole`) and answers with this result (mitcad#1490,
+`docs/mcp.md`): `{"name": "model_export", "arguments": {"path":
+"kit.3mf", "format": "3mf", "plates": "one_file", "dialect":
+"bambu_studio"}}`. Each file of `file_per_plate` must be a new file in
+the folders the agent may write to, checked before any is written.
 
 The result adds `"plates": [{"id", "name", "path" (null for an empty
 plate of a file per plate), "bodies", "pieces", "origin" (where its bed
@@ -23199,6 +23398,13 @@ points each). The view draws them as the construction geometry's lines;
 a click picks the feature, which path inputs take (`app/COMMANDS.md`,
 "Intersection Curve").
 
+**Previewed** (mitcad#1496). The `preview` of an Intersection Curve (added
+or edited) adds its `curve`: `{"points": [[x, y, z], …]}`, the polyline the
+`feature_curves` query gives the finished curve, in its component's
+coordinates (`Document::preview_curve`). A preview that fails (`status`
+`error`, e.g. curves that do not cross) and the previews of other features
+have none.
+
 Tests: `core/model/src/features/intersection_curve.rs` (joining and
 measuring), `core/model-tests/features-profile/src/intersection_curve_tests.rs`
 (the mock kernel: the curve of an arc on XZ and a line on XY, a circle
@@ -23206,7 +23412,154 @@ swept along it following a dimension of each sketch, construction along
 it, projection, the refusals; mitcad#1417: a rib and a web grown from it
 following it, a curve off any plane refused, construction along a 1 m
 curve of a line and an arc within 1e-6 mm, a construction point and a
-section in another component through Motor:1), `geometry/tests/test_intersection_curve.cpp`
+section in another component through Motor:1; mitcad#1496: the preview's
+`curve`, added and edited, as `feature_curves` gives it, none for a
+failure or a sweep), `geometry/tests/test_intersection_curve.cpp`
 (`geometry.intersection_curve`: an arc and a line, two cylinders whose
 crossing branches), `tools/ui-intersection-curve-test.sh` (mitcad#1417:
 Project and Intersect take the curve, whole sketches as before).
+
+## Mirrors and patterns of sheet metal bodies (mitcad#1450)
+
+A `mirror` or a pattern of bodies (`objects: {type: bodies}`) whose body is
+a valid sheet metal body keeps the copies sheets (`core/model/src/sheet/body_copy.rs`,
+`docs/sheet-metal.md`, "Implementation notes (mitcad#1450)"):
+
+- **As a new body** (`F<pattern>.b<k>`): the copy takes the source's sheet
+  state carried by the element's transform, its charts, bends, ports and
+  straight-cut overlays moved with the material (a mirror turns each
+  planar chart's material side with its plane). Its domains keep their
+  identities (a sheet's domains are named per body), so later sheet
+  features on the copy name the same panels as on the original, with the
+  copy's body: `{"type":"sheet_fold","body":"F6.b0","panel":{"feature":"F3","slot":0},...}`.
+  The copy's faces keep the copy's names (`F6:inst1(F3:sheet_back(0))`);
+  `sheet_reference` reads the domain inside them. Fold, Flange, Cut,
+  Unfold and the Flat Pattern work on it.
+- **Joined** (`combine`): the copy and the sheet become one sheet. The
+  copy's domains and curves are renamed as the pattern's,
+  `{feature: <pattern>, slot: s}`, each slot derived from the copy and the
+  identity it replaces (mitcad#1462): `s` is the 64-bit FNV-1a hash of
+  `<body>/<element>/<identity>` (`F3.b0/1/F5.p0` for the copy of
+  `{feature: F5, slot: 0}` of `F3.b0` at element 1; a pattern of patterns
+  puts the inner patterns' `<feature>:<element>` steps before the element,
+  `F3.b0/F6:1/1`; a curve's identity as `F2/c1[c4,c2]` or `F5/g13`), its
+  two 32-bit halves xor-ed, taken modulo `2^32 - 100000` and added to
+  100000; a slot taken already gives the next free one. An upstream edit
+  that adds or removes domains therefore leaves the other copied domains'
+  names, and a later feature that names one (a Fold on the copied flange,
+  `{"feature":"F8","slot":1108818023}`) still finds it. Every copy
+  panel in the plane of a panel of the sheet that it
+  touches along a seam is united with it into one panel (that panel's
+  identity, the seam gone); bends on either side stay bends. The sheet is
+  built again from the merged charts and must be the two halves joined
+  (volume, area, centre of mass); the Flat Pattern unfolds the whole
+  part. A copy that overlaps the sheet ("the halves overlap"), does not
+  touch it ("does not touch it") or meets it where no coplanar panels
+  share a seam (a bend or a wall across the mirror plane: "no coplanar
+  panels share a seam") is refused with that reason, instead of an
+  invalid sheet.
+
+Since mitcad#1462 the same holds for:
+
+- **A sheet holding a fillet or chamfer overlay**: the copy keeps the
+  overlay, its change read from the body it was made on (the overlay's
+  `source` in `sheet_state`, `"source": "F3.b0"`) and moved with the
+  copy; a joined copy's overlay joins the sheet's.
+- **Patterns of patterns of bodies** (a mirror or pattern of a pattern of
+  bodies): each copy takes the sheet its body had before the inner
+  pattern, carried by the inner and outer elements' transforms. With
+  `combine` a copy that touches the body joins its sheet as above; one
+  that does not is a sheet of its own. A Move between keeps the sheet (it is
+  carried by the move); a body ordinary modelling changed there, so that it
+  had no valid sheet, is copied as an ordinary solid.
+- **`combine_any`**: a copy of a sheet that touches one sheet of the
+  pattern (the original or a copy that stayed a body of its own) is
+  joined to it as one sheet, as with `combine`; one that touches none is
+  a new sheet body.
+
+A join that no sheet carries (below) first goes to the sheet-domain
+adapter, as ordinary modelling does: where it re-derives the joined body
+(flat material joined in a panel's plane, such as two flat sheets one
+`combine_any` copy joins at once), the body is a valid sheet and nothing
+is said. What it cannot re-derive stays an ordinary solid, and the feature
+warns in words instead of leaving an invalid sheet unexplained:
+
+- a scaled copy (a Scale Pattern, a pattern's or mirror's `scale`):
+  `the scaled copies of sheet F3.b0 are not sheet metal bodies: scaling
+  changes the sheet's thickness`; joined to the sheet, `F3.b0 is no longer
+  a sheet metal body: it is joined to a scaled copy of it (scaling changes
+  the sheet's thickness)`;
+- a `combine_any` copy that touches several bodies at once, `F6.b0, F8.b0
+  are no longer sheet metal bodies: a copy of F6.b0 joins several bodies
+  at once (a copy of a sheet is joined to one sheet at a time)`; only
+  partly touching one (`only part of a copy of … touches it`); or a copy
+  that is not a sheet joined to a sheet (`… which is not a sheet metal
+  body`).
+
+The sheet's state is invalid as before (`sheet_state` says why).
+
+Tests: CLI `sheet_copy_stable_slots` (a Z of two folds mirrored with
+Join, a Fold on the copied flange `{"feature":"F8","slot":1108818023}`,
+then a Fold inserted upstream on the original flange: the Fold on the
+copy still names its panel, `3200 + 7 pi`), `sheet_copy_overlay` (a
+chamfered panel mirrored as a new body and flanged, `795 + 15 pi + 200`;
+joined, `1590` with both overlays), `sheet_copy_scaled` (a Scale
+Pattern's copy and a joined mirror scaled by 2: the warnings),
+`sheet_copy_patterns` (a mirror of a pattern of a folded panel: two sheet
+bodies, a Fold and the Flat Pattern on one; joined: one sheet of 1600 and
+a sheet of its own; a folded panel moved before its pattern: both copies
+sheets), `sheet_copy_join_any` (three panels by `combine_any`
+in one sheet, 120 x 20; a copy that joins two flat sheets at once: a
+re-derived sheet; the same with a folded sheet: the warning); `core/model/src/sheet/body_copy.rs`'s unit tests (the slots,
+the overlay's `source`).
+
+Tests of mitcad#1450: CLI `sheet_mirror_body` (a folded 40 x 20 panel mirrored as a new
+body: a pick of its panel, a Fold on the copy `800 + 2 pi`, its Flat
+Pattern; a pattern of three), `sheet_mirror_body_join` (the same joined:
+`1600 + 2 pi`, one panel, the Flat Pattern the 80 x 20 blank at
+`x=-40..40`; a Fold across the mirrored half; the overlap, gap and
+wall-to-wall refusals), `sheet_mirror_reported` (the reported design of
+GitHub #188 under `MITCAD_MITCAD_REPORTED`, as saved and joined); the
+copies' face names in `core/model/src/sheet/pick_tests.rs`.
+
+## Spacing beyond the brims
+
+mitcad#1491 (`core/model/src/exchange/bed.rs`, `first_layer_reach`): the
+export's arranger sets the pieces it puts side by side on the bed
+([Export by occurrences](#export-by-occurrences), the pieces of a
+[print plate](#print-plates) and its copies) far enough apart that a
+slicer's brim does not join two neighbours (a G-code path conflict on the
+first layer). Two neighbours, in a row along X and between rows along Y,
+lie apart by the **spacing** plus how far each one's first layer reaches
+past it by the settings it prints with (a plate's pieces by the plate's,
+profile < plate < component < occurrence < body):
+
+- its brim: `brim_width` plus `brim_separation` (the brim's gap from the
+  piece), unless `brim_type` is `no_brim` or `inner_only`; `auto_brim`
+  (and no `brim_type` at all) counts, as the slicer adds that brim to
+  tall, narrow pieces;
+- a skirt of its own (`skirt_per_object` on, `skirts` loops above 0):
+  `skirt_distance` plus a nozzle's width (the printer's `nozzle_diameter`,
+  else 0.4 mm) per loop;
+- the further of the two; 0 without either. A piece of several bodies
+  reaches as far as its furthest.
+
+So two pieces with an 8 mm brim lie 8 + 5 + 8 = 21 mm apart, two without
+one 5 mm. The rows are wrapped and centred with the brims counted, and
+the warning that pieces do not fit on the bed gives their size with them
+(`… (they take 300 x 40 mm with their brims): …`).
+
+`export` with `on_bed` (implied by `plates` and `plate`) takes `spacing`:
+the clearance in mm between two neighbours beyond their brims, 0 to 1000,
+5 when left out, for slicer settings the export cannot see. Refused
+without `on_bed` and outside its range.
+
+```json
+{"cmd": "export", "path": "kit.3mf", "plates": "one_file", "dialect": "bambu_studio", "spacing": 8}
+```
+
+Tests: `core/model-tests/print/src/print_plates_tests.rs` (mock kernel:
+two pieces on a plate whose values have `brim_width` 8 written 21 mm
+apart, 5 mm with `brim_type` `no_brim`; the copies of an item with a count
+not centred as far apart; `spacing` 12 without a brim 12 mm apart; the
+refusals).

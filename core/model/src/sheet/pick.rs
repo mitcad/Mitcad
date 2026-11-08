@@ -50,14 +50,44 @@ fn curve_of(key: &str) -> Option<SheetCurveId> {
     })
 }
 
+/// A copy's face name without the copies' wrappers: `F6:inst1(n)` is `n`
+/// (a mirror's or pattern's copy of a sheet body keeps its domains,
+/// mitcad#1450).
+fn without_instances(mut name: &str) -> &str {
+    loop {
+        let Some((feature, rest)) = name.split_once(':') else {
+            return name;
+        };
+        let numbered = |text: &str, prefix: &str| {
+            text.strip_prefix(prefix)
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        };
+        let Some(open) = rest.find('(') else {
+            return name;
+        };
+        if !numbered(feature, "F") || !numbered(&rest[..open], "inst") {
+            return name;
+        }
+        let Some(inner) = rest[open + 1..].strip_suffix(')') else {
+            return name;
+        };
+        name = inner;
+    }
+}
+
 /// The domain and wall a face name of a sheet body stands for, or `None`
-/// for a name of another kind. Piece numbers (`#k`) are ignored.
+/// for a name of another kind. Piece numbers (`#k`) are ignored, and so
+/// are the wrappers of copies (`F6:inst1(...)`).
 pub fn parse_face(name: &str) -> Option<PickedFace> {
-    // `#k` suffixes follow the closing parenthesis of the key.
-    let name = match name.rfind(')') {
-        Some(close) => &name[..=close],
-        None => name,
+    // `#k` suffixes follow the closing parenthesis of the key (inside a
+    // copy's wrapper too).
+    let pieceless = |name: &'_ str| match name.rfind(')') {
+        Some(close) => name[..=close].to_owned(),
+        None => name.to_owned(),
     };
+    let outer = pieceless(name);
+    let name = pieceless(without_instances(&outer));
+    let name = name.as_str();
     let (feature, rest) = name.split_once(':')?;
     let feature = feature.parse().ok()?;
     let open = rest.find('(')?;

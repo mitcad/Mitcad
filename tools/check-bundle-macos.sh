@@ -125,6 +125,21 @@ fi
 if ! ls "$contents/Resources/licenses/"* >/dev/null 2>&1; then
   fail "$contents/Resources/licenses" "the licence texts are missing"
 fi
+# The interface languages (mitcad#1460): the catalogue of each language of
+# app/translations/languages.txt in Resources/translations, Qt's own for
+# Finnish, and never the tests' pseudo-language.
+while read -r code _; do
+  case $code in '' | '#'*) continue ;; esac
+  if [ ! -s "$contents/Resources/translations/mitcad_$code.qm" ]; then
+    fail "$contents/Resources/translations/mitcad_$code.qm" "the catalogue of the language $code is missing"
+  fi
+done < "$SCRIPT_DIR/../app/translations/languages.txt"
+if [ ! -s "$contents/Resources/translations/qtbase_fi.qm" ]; then
+  fail "$contents/Resources/translations/qtbase_fi.qm" "Qt's Finnish catalogue is missing"
+fi
+if [ -e "$contents/Resources/translations/mitcad_xx.qm" ]; then
+  fail "$contents/Resources/translations/mitcad_xx.qm" "the tests' pseudo-language is in the bundle"
+fi
 # QtKeychain is linked statically (cmake/Keychain.cmake): its licence text.
 if [ ! -f "$contents/Resources/licenses/QtKeychain-BSD-3-Clause.txt" ]; then
   fail "$contents/Resources/licenses/QtKeychain-BSD-3-Clause.txt" "QtKeychain's licence text is missing"

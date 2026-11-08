@@ -238,6 +238,12 @@ if [ ! -d "$HOME/Qt/$QT_VERSION/macos" ]; then
   (cd "$WORK" && "$HOME/tools/aqt/bin/aqt" install-qt mac desktop "$QT_VERSION" clang_64 \
     -O "$HOME/Qt" > /dev/null)
 fi
+# The interface languages (mitcad#1460) need Qt's Linguist tools (lrelease,
+# lupdate) and Qt's translations (qtbase_<code>.qm), which aqt's base
+# install has (qttools, qttranslations).
+for file in bin/lrelease bin/lupdate translations/qtbase_fi.qm; do
+  [ -e "$HOME/Qt/$QT_VERSION/macos/$file" ] || { echo "Qt $QT_VERSION has no $file" >&2; exit 1; }
+done
 
 echo "== mosquitto (a test tool)"
 # The MQTT broker of the live updates' tests (mitcad#89); they start their

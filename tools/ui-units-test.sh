@@ -13,11 +13,13 @@
 #   - A new user parameter is in mm, the grid's fixed spacing in mm, and
 #     Physical Properties weighs steel (7.85 g/cm3) in kg.
 #   - Default units for new designs (mitcad#1036): mm by default; set to in
-#     in Preferences > General, the open design stays in mm, New makes a
-#     design in inches (Units: in in the browser, not modified) whose
-#     rectangle typed 2 x 1 is 2 x 1 in and extrude distance 1 is an inch;
-#     the untitled design at a new start is in inches, an opened design in
-#     mm keeps mm; set back to mm, New is in mm again.
+#     in Preferences > General, the empty untitled design starts again in
+#     inches (mitcad#1452), New makes a design in inches (Units: in in the
+#     browser, not modified) whose rectangle typed 2 x 1 is 2 x 1 in and
+#     extrude distance 1 is an inch; that design, with its body, stays in
+#     inches when the preference changes; the untitled design at a new
+#     start is in inches, an opened design in mm keeps mm; set back to mm,
+#     New is in mm again.
 #     tools/ui-windows-default-units-test.ps1 does the same on Windows.
 # The model's defaults: core/model-tests/api/src/metric_defaults_tests.rs.
 #
@@ -26,6 +28,7 @@
 # check-all sources: core/dxf
 # check-all sources: app/framework/AppSettings.cpp app/framework/DocumentSession.cpp
 # check-all sources: app/view/ViewController.cpp tools/cli
+# check-all sources: app/MainWindowStart.cpp app/WindowManager.cpp
 
 source "$(dirname "$0")/ui-test-lib.sh"
 
@@ -188,9 +191,8 @@ ui_start_app
 ui_mark
 expect_units mm "the untitled design starts in millimetres by default"
 new_design_units in Down Down Down
-tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Design Settings/Units: in" &&
-  ui_fail "the preference changed the open design's units"
-echo "ok   the open design stays in millimetres"
+ui_expect_new "The untitled design starts again in in" "the empty untitled design takes inches (mitcad#1452)"
+expect_units in "the untitled design is in inches now"
 ui_mark
 ui_step "New (Ctrl+N)"                     ui_key ctrl+n
 ui_expect_new "New design in in" "New makes a design in inches"
@@ -217,6 +219,14 @@ ui_step "to the taper field"               ui_click_logged "Panel Extrude input 
 ui_step "OK (Enter)"                       ui_key Return
 ui_expect_volume "New body Body1 (F2.b0): volume \([0-9.]*\) mm3" 32774.128 "2 x 1 x 1 in (50.8 x 25.4 x 25.4 mm)"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+# A design with something in it keeps its units when the preference
+# changes; the preference goes back to in for the next start.
+new_design_units mm Up Up Up
+ui_sync
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qE "starts again in|New design in" &&
+  ui_fail "the preference changed the open design with a body"
+echo "ok   the open design with a body stays in inches"
+new_design_units in Down Down Down
 
 ui_stop_app
 ui_start_app

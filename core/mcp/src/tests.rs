@@ -287,7 +287,8 @@ fn discovery_contains_typed_tools_without_unimplemented_capabilities() {
             "model_command",
             "document_save",
             "model_export",
-            "model_reference"
+            "model_reference",
+            "model_render"
         ]
     );
     for tool in tools {
@@ -306,6 +307,13 @@ fn discovery_contains_typed_tools_without_unimplemented_capabilities() {
         .find(|tool| tool["name"] == "model_command")
         .unwrap();
     assert_eq!(command["annotations"]["destructiveHint"], true);
+    // The print plates and a slicer's 3MF (mitcad#1490).
+    assert_plate_fields(
+        tools
+            .iter()
+            .find(|tool| tool["name"] == "model_export")
+            .unwrap(),
+    );
     assert!(response["result"].get("nextCursor").is_none());
     assert_eq!(
         session
@@ -449,10 +457,13 @@ fn reference_resource_can_be_discovered_and_read_without_backend_work() {
         response["result"]["contents"][0]["mimeType"],
         "text/markdown"
     );
-    assert_eq!(
-        response["result"]["contents"][0]["text"],
-        COMMANDS_REFERENCE
-    );
+    // The reference as agents see it (mitcad#1509).
+    let text = response["result"]["contents"][0]["text"].as_str().unwrap();
+    assert_eq!(text, reference_text(&Vocabulary::default()));
+    assert!(text.starts_with("# MitCad document API\n"));
+    assert!(text.contains("\n## Feature definitions\n"));
+    assert!(!text.contains(INTERNAL_MARKER));
+    assert!(text.len() < COMMANDS_REFERENCE.len());
     assert_eq!(
         session
             .handle(request(
@@ -592,7 +603,6 @@ fn live_profile_requires_initialization_and_describes_application_ownership() {
     assert!(instructions.contains("Pass document to target a specific design"));
     assert!(instructions.contains("omitting it uses the active design"));
     assert!(instructions.contains("document_list"));
-    assert!(instructions.contains("Disconnecting leaves"));
     // References before fixed planes (mitcad#1137).
     assert!(
         instructions.contains("a fixed plane ({\"origin\", \"normal\"}) stays where it is written")
@@ -601,9 +611,9 @@ fn live_profile_requires_initialization_and_describes_application_ownership() {
     assert!(instructions.contains("make every sketch fully constrained and dimensioned"));
     assert!(instructions.contains("until the sketch query's dof is 0"));
     assert!(!instructions.contains("headless"));
-    // A new design beside the open ones (mitcad#1266); closing stays out.
-    assert!(instructions.contains("document_new makes an empty design beside the open ones"));
-    assert!(instructions.contains("File imports and closing are not available"));
+    // A new design beside the open ones (mitcad#1266); its folders, closing
+    // and disconnecting are in the tools' descriptions (mitcad#1506).
+    assert!(instructions.contains("the last one it made with document_new"));
     assert!(live_response(session.prepare(initialized()).unwrap()).is_none());
     assert!(matches!(
         session.prepare(call("document_list", json!({}))).unwrap(),
@@ -634,6 +644,7 @@ fn live_catalog_has_only_supported_tools_and_live_handles() {
             "model_command",
             "model_export",
             "model_reference",
+            "model_render",
             "document_save",
             "document_open",
             "ui_state",
@@ -731,6 +742,46 @@ fn live_catalog_has_only_supported_tools_and_live_handles() {
             .contains("allows agents")
     );
     assert_eq!(export["inputSchema"]["required"], json!(["path", "format"]));
+    // The print plates and a slicer's 3MF (mitcad#1490), as headless.
+    assert_plate_fields(export);
+}
+
+/// `model_export` names the print plates and the slicers and takes the
+/// 3MF and print bed fields of `export` (mitcad#1490, mitcad#1491).
+fn assert_plate_fields(export: &Value) {
+    let description = export["description"].as_str().unwrap();
+    for text in ["plates", "file_per_plate", "bambu_studio", "Print plates"] {
+        assert!(description.contains(text), "{text}: {description}");
+    }
+    let properties = &export["inputSchema"]["properties"];
+    assert_eq!(
+        properties["plates"]["enum"],
+        json!(["one_file", "file_per_plate"])
+    );
+    assert_eq!(
+        properties["dialect"]["enum"],
+        json!([
+            "bambu_studio",
+            "orcaslicer",
+            "qidi_studio",
+            "prusaslicer",
+            "cura"
+        ])
+    );
+    for field in [
+        "plate",
+        "on_bed",
+        "center",
+        "drop",
+        "auto_orient",
+        "bed_face",
+        "spacing",
+        "occurrence",
+        "occurrences",
+        "whole",
+    ] {
+        assert!(properties.get(field).is_some(), "{field}");
+    }
 }
 
 #[test]
@@ -1064,7 +1115,7 @@ fn live_resources_reuse_the_model_reference() {
     .unwrap();
     assert_eq!(
         response["result"]["contents"][0]["text"],
-        COMMANDS_REFERENCE
+        reference_text(&Vocabulary::default())
     );
     assert!(session.finish(json!({}), false).is_err());
 }
@@ -1120,6 +1171,63 @@ fn command_outcome_lists_failures_and_fails_only_by_edited_features() {
     let mut value = json!({"applied": true, "result": {"error": null}});
     assert!(!command_outcome(&mut value));
     assert_eq!(value["failed_features"], json!([]));
+}
+
+// The error text of a command whose added or edited feature fails says
+// that the feature stays in the timeline and how to remove it
+// (mitcad#1481); a failure elsewhere adds no error text.
+#[test]
+fn command_outcome_says_a_failed_feature_stays_and_how_to_remove_it() {
+    let fillet = json!({"uid": "F57", "name": "Fillet3", "error": "fillet failed",
+                        "edited": true, "new": true});
+    let added = json!({"uid": "F57", "name": "Fillet3", "error": "F57: fillet failed",
+                       "failed_features": [fillet]});
+    let mut value = json!({"applied": true, "result": added});
+    assert!(command_outcome(&mut value));
+    assert_eq!(
+        value["error"],
+        "F57 (Fillet3) was added but failed: fillet failed. It stays in the timeline; \
+         edit it, or remove it with undo or delete_feature"
+    );
+
+    // An edit_feature (its result has no uid).
+    let mut value = json!({"applied": true,
+                           "result": {"parameters": [], "failed_features": [fillet]}});
+    assert!(command_outcome(&mut value));
+    assert_eq!(
+        value["error"],
+        "F57 (Fillet3) was changed but failed: fillet failed. It stays in the timeline; \
+         edit it, or remove it with undo or delete_feature"
+    );
+
+    // An array stopped at its entry 1, which added the feature.
+    let mut value = json!({"applied": true, "ran": 2, "stopped_at": 1,
+                           "results": [{"uid": "F56", "name": "Box1"}, added],
+                           "result": added});
+    assert!(command_outcome(&mut value));
+    assert_eq!(
+        value["error"],
+        "commands[1]: F57 (Fillet3) was added but failed: fillet failed. It stays in the \
+         timeline; edit it, or remove it with undo or delete_feature; the entries after it \
+         did not run"
+    );
+
+    // The array's last entry: nothing after it to stop.
+    let mut value = json!({"applied": true, "ran": 2,
+                           "results": [{"uid": "F56", "name": "Box1"}, added],
+                           "result": added});
+    assert!(command_outcome(&mut value));
+    assert_eq!(
+        value["error"],
+        "commands[1]: F57 (Fillet3) was added but failed: fillet failed. It stays in the \
+         timeline; edit it, or remove it with undo or delete_feature"
+    );
+
+    // A failure elsewhere: no error text.
+    let mut value = json!({"applied": true,
+                           "result": {"failed_features": [failed_feature("F3", false)]}});
+    assert!(!command_outcome(&mut value));
+    assert!(value.get("error").is_none());
 }
 
 #[test]
@@ -1729,7 +1837,13 @@ fn live_comments_resource_is_listed_and_read_from_the_application() {
         .iter()
         .map(|resource| resource["uri"].as_str().unwrap())
         .collect();
-    assert_eq!(uris, [COMMANDS_URI, COMMENTS_URI]);
+    // Then the guides (mitcad#1508).
+    assert_eq!(uris[..2], [COMMANDS_URI, COMMENTS_URI]);
+    assert!(
+        uris[2..]
+            .iter()
+            .all(|uri| uri.starts_with("mitcad://guide/"))
+    );
     assert_eq!(
         list["result"]["resources"][1]["mimeType"],
         "application/json"
@@ -1757,7 +1871,13 @@ fn live_comments_resource_is_listed_and_read_from_the_application() {
     let response = headless
         .handle(request(json!(5), "resources/list", json!({})))
         .unwrap();
-    assert_eq!(response["result"]["resources"].as_array().unwrap().len(), 1);
+    assert!(
+        !response["result"]["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|resource| resource["uri"] == COMMENTS_URI)
+    );
     let response = headless
         .handle(request(
             json!(6),
@@ -2117,17 +2237,14 @@ fn resolve_comment_is_refused_unless_the_user_allows_agents_to_resolve() {
 }
 
 #[test]
-fn ui_command_lists_the_commands_and_the_instructions_say_how_ids_are_found() {
+fn ui_command_lists_the_commands_and_the_descriptions_say_how_ids_are_found() {
     // The chat agent guessed command ids and sketch ids (mitcad#1269): the
     // live catalog lists the commands with ui_command's search, and both
-    // servers' instructions say how sketch ids are given out.
+    // servers' model_command says how sketch ids are given out (in the
+    // descriptions since mitcad#1506).
     let mut session = LiveSession::new();
     let response = live_response(session.prepare(initialize()).unwrap()).unwrap();
     let instructions = response["result"]["instructions"].as_str().unwrap();
-    assert!(instructions.contains("ui_command with search"));
-    assert!(instructions.contains("an unknown id is refused with the nearest ones"));
-    assert!(instructions.contains("points, curves and texts share one numbering"));
-    assert!(instructions.contains("A point input [x, y] is always a new point"));
     assert!(!instructions.contains("app/COMMANDS.md"));
     assert!(live_response(session.prepare(initialized()).unwrap()).is_none());
     let response = live_response(
@@ -2141,6 +2258,17 @@ fn ui_command_lists_the_commands_and_the_instructions_say_how_ids_are_found() {
         .iter()
         .find(|tool| tool["name"] == "ui_command")
         .unwrap();
+    let description = command["description"].as_str().unwrap();
+    assert!(description.contains("ui_command with search"));
+    assert!(description.contains("an unknown id is refused with the nearest ones"));
+    let model_command = tools
+        .iter()
+        .find(|tool| tool["name"] == "model_command")
+        .unwrap()["description"]
+        .as_str()
+        .unwrap();
+    assert!(model_command.contains("points, curves and texts share one numbering"));
+    assert!(model_command.contains("A point input [x, y] is always a new point"));
     let properties = &command["inputSchema"]["properties"];
     assert_eq!(properties["search"]["type"], "string");
     let search = properties["search"]["description"].as_str().unwrap();
@@ -2181,14 +2309,398 @@ fn ui_command_lists_the_commands_and_the_instructions_say_how_ids_are_found() {
         .unwrap();
         assert_eq!(response["error"]["code"], -32602, "{arguments}");
     }
-    // The headless server's instructions say how sketch ids are given out,
-    // without the application's commands.
+    // The headless server's model_command says how sketch ids are given
+    // out, and nothing names the application's commands.
     let mut headless = Session::new(MockBackend::default());
     let response = headless.handle(initialize()).unwrap();
     let instructions = response["result"]["instructions"].as_str().unwrap();
-    assert!(instructions.contains("points, curves and texts share one numbering"));
-    assert!(instructions.contains(
+    assert!(!instructions.contains("ui_command"));
+    let tools = catalog::tools();
+    let model_command = tools
+        .iter()
+        .find(|tool| tool["name"] == "model_command")
+        .unwrap()["description"]
+        .as_str()
+        .unwrap();
+    assert!(model_command.contains("points, curves and texts share one numbering"));
+    assert!(model_command.contains(
         "do not guess the ids a command earlier in the same model_command array will make"
     ));
-    assert!(!instructions.contains("ui_command"));
+    assert!(!model_command.contains("ui_command"));
+}
+
+/// The text of `tool`'s description in `tools`.
+fn description_of<'a>(tools: &'a [Value], tool: &str) -> &'a str {
+    tools
+        .iter()
+        .find(|candidate| candidate["name"] == tool)
+        .unwrap_or_else(|| panic!("no tool {tool}"))["description"]
+        .as_str()
+        .unwrap()
+}
+
+#[test]
+fn the_instructions_arrive_whole_and_the_moved_rules_are_in_their_tools() {
+    // Claude Code keeps only the first 2,048 characters of the instructions
+    // (4,096 since v2.1.296) and cut 4,780 of them without a word
+    // (mitcad#1506). Both profiles' instructions, as the client decodes
+    // them from the initialize result, fit within the shorter cut.
+    let mut live = LiveSession::new();
+    let response = live_response(live.prepare(initialize()).unwrap()).unwrap();
+    let wire = serde_json::to_string(&response).unwrap();
+    let received: Value = serde_json::from_str(&wire).unwrap();
+    let live_text = received["result"]["instructions"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut headless = Session::new(MockBackend::default());
+    let wire = serde_json::to_string(&headless.handle(initialize()).unwrap()).unwrap();
+    let received: Value = serde_json::from_str(&wire).unwrap();
+    let headless_text = received["result"]["instructions"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for (profile, text) in [("live", &live_text), ("headless", &headless_text)] {
+        let length = text.chars().count();
+        assert!(
+            length <= INSTRUCTIONS_CHARS,
+            "the {profile} instructions are {length} characters, more than {INSTRUCTIONS_CHARS}"
+        );
+        // What applies across tools, the most important first.
+        let mut previous = 0;
+        for phrase in [
+            "handle",
+            "address_comment",
+            "model_reference",
+            "JSON numbers are millimeters and radians; write \"90 deg\" for degrees",
+            "the document query's units.length",
+            "Place a part or a sketch on an existing face",
+            "make every sketch fully constrained and dimensioned",
+            "model_command array runs in order as one undo step and stops at the first refusal",
+        ] {
+            let at = text
+                .find(phrase)
+                .unwrap_or_else(|| panic!("{profile}: no {phrase:?}"));
+            assert!(at >= previous, "{profile}: {phrase:?} is out of order");
+            previous = at;
+        }
+    }
+    // Every tool description arrives whole too.
+    let live_tools = catalog::live_tools();
+    let headless_tools = catalog::tools();
+    for tool in live_tools.iter().chain(&headless_tools) {
+        let length = tool["description"].as_str().unwrap().chars().count();
+        assert!(
+            length <= catalog::DESCRIPTION_CHARS,
+            "{}'s description is {length} characters",
+            tool["name"]
+        );
+    }
+    // Each rule moved out of the instructions is in the description of the
+    // tool it is about: "tool: a key phrase of the rule".
+    let moved = [
+        // How a sketch's ids are given out (mitcad#1269).
+        "model_command: points, curves and texts share one numbering",
+        "model_command: do not guess the ids a command earlier in the same model_command array",
+        "model_command: A point input [x, y] is always a new point",
+        "model_command: hold the two ends together afterwards with a coincident constraint",
+        // How the application's command ids are found (mitcad#1269).
+        "ui_command: ui_command with search",
+        "ui_command: an unknown id is refused with the nearest ones",
+        // Busy and retry.
+        "model_query: busy and retry_after_ms",
+        // The sketch session and read-only documents.
+        "model_command: go through the sketch session",
+        "model_command: wait until the sketch or command panel is finished",
+        "model_command: Editing is refused when the document is read-only",
+        // What each ui_* tool shows or does.
+        "ui_state: mode (idle, sketch, command, pick_plane)",
+        "ui_state: Sketch Palette status and warnings",
+        "ui_log: latest log lines",
+        "ui_screenshot: as the user sees it",
+        "ui_select: to show the user something",
+        "ui_select: select that comment's target",
+        "ui_command: by its id",
+        "ui_camera: for inspection screenshots",
+        "ui_camera: comment selects that comment's target",
+        // The folders of save, open, new and export.
+        "document_save: to its own path",
+        "document_save: in a folder the user allows agents to use",
+        "document_open: from a folder the user allows agents to use",
+        "document_open: in place of its document",
+        "document_new: beside the open designs",
+        "document_new: the current project's top folder",
+        "document_new: an untitled design",
+        "document_new: your calls without a document handle go to it",
+        "document_list: the folders the user allows agents to save to and open from",
+        "model_export: a new file in a folder the user allows agents to use",
+        "model_export: the document does not change",
+        "ui_screenshot: written to that file in a folder the user allows agents to use",
+        // Undo labels.
+        "model_command: labeled (agent) in the undo text",
+        "model_command: undoes with Ctrl+Z",
+        // Handles, closing and disconnecting.
+        "document_list: Handles become invalid when their document is closed or replaced",
+        "document_list: File imports and closing are not available through this connection",
+        "document_list: Disconnecting leaves the application's document open, including unsaved",
+        // A failed feature stays in the timeline (mitcad#1481).
+        "model_command: stays in the timeline",
+        // What a command's result lists.
+        "model_command: timeline: full gives the whole timeline and bodies",
+        // The whole reference as a resource.
+        "model_reference: mitcad://reference/commands is the whole reference",
+    ];
+    for rule in moved {
+        let (tool, phrase) = rule.split_once(": ").unwrap();
+        assert!(
+            description_of(&live_tools, tool).contains(phrase),
+            "live {tool}: no {phrase:?}"
+        );
+    }
+    // The headless model_command carries its share.
+    for phrase in [
+        "points, curves and texts share one numbering",
+        "A point input [x, y] is always a new point",
+        "stays in the timeline",
+        "timeline: full gives the whole timeline and bodies",
+    ] {
+        assert!(
+            description_of(&headless_tools, "model_command").contains(phrase),
+            "headless model_command: no {phrase:?}"
+        );
+    }
+    // A chat agent's design, queries as single objects, and the comments
+    // resource's notifications are in the schemas and the resource.
+    let model_query = live_tools
+        .iter()
+        .find(|tool| tool["name"] == "model_query")
+        .unwrap();
+    assert!(
+        model_query["inputSchema"]["properties"]["document"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("chat agents remain bound to their own document")
+    );
+    assert!(
+        model_query["inputSchema"]["properties"]["query"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("One JSON query object")
+    );
+    assert!(
+        comments::resource()["description"]
+            .as_str()
+            .unwrap()
+            .contains("subscribe to hear when they change")
+    );
+    // Nothing moved is lost from the headless instructions it stayed in.
+    assert!(headless_text.contains("Documents last until closed or the server exits"));
+    assert!(headless_text.contains("files are confined to the configured workspace"));
+}
+
+/// `model_render` (mitcad#1486): the picture as an image block after the
+/// text, which keeps everything else; its arguments checked by the schema;
+/// read-only. With views (mitcad#1487) an image block per view.
+#[test]
+fn model_render_answers_an_image_block() {
+    let mut session = ready();
+    session.backend.result = Some(json!({
+        "document": "D1", "mime_type": "image/png", "width": 4, "height": 3,
+        "camera": {"eye": [1, -1, 1], "target": [0, 0, 0], "up": [0, 0, 1]},
+        "image_base64": "iVBORw0KGgo="
+    }));
+    let response = session
+        .handle(call(
+            "model_render",
+            json!({"document": "D1", "view": "top", "size": [40, 30]}),
+        ))
+        .unwrap();
+    let result = &response["result"];
+    assert_eq!(result["isError"], false);
+    assert_eq!(result["content"][1]["type"], "image");
+    assert_eq!(result["content"][1]["data"], "iVBORw0KGgo=");
+    assert_eq!(result["content"][1]["mimeType"], "image/png");
+    assert!(result["structuredContent"].get("image_base64").is_none());
+    assert_eq!(
+        result["structuredContent"]["camera"]["up"],
+        json!([0, 0, 1])
+    );
+    let text: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(text, result["structuredContent"]);
+    // A refusal stays text.
+    session.backend.result = Some(json!({"error": "no open document D9"}));
+    session.backend.is_error = true;
+    let response = session
+        .handle(call("model_render", json!({"document": "D9"})))
+        .unwrap();
+    assert_eq!(response["result"]["isError"], true);
+    assert_eq!(response["result"]["content"].as_array().unwrap().len(), 1);
+    // The schema's limits.
+    for bad in [
+        json!({}),
+        json!({"document": "D1", "size": [8, 8]}),
+        json!({"document": "D1", "size": [100]}),
+        json!({"document": "D1", "projection": "fisheye"}),
+        json!({"document": "D1", "max_bytes": 10}),
+        json!({"document": "D1", "view": 3}),
+        json!({"document": "D1", "unknown": true}),
+        json!({"document": "D1", "explode": -1}),
+        json!({"document": "D1", "explode": 11}),
+        json!({"document": "D1", "colors": ["F2.b0"]}),
+        json!({"document": "D1", "highlight": []}),
+        json!({"document": "D1", "section": [0, 0, 1]}),
+        json!({"document": "D1", "views": []}),
+        json!({"document": "D1", "views": vec!["iso"; 9]}),
+    ] {
+        let response = session.handle(call("model_render", bad.clone())).unwrap();
+        assert_eq!(response["error"]["code"], -32602, "{bad}");
+    }
+    // Several views: an image block per view, in order, each view's
+    // fields kept.
+    session.backend.is_error = false;
+    session.backend.result = Some(json!({
+        "document": "D1", "mime_type": "image/png", "bytes": 8,
+        "views": [
+            {"camera": {"eye": [1, 0, 0]}, "bytes": 4, "image_base64": "AAAA"},
+            {"camera": {"eye": [0, 1, 0]}, "bytes": 4, "image_base64": "BBBB"}
+        ]
+    }));
+    let response = session
+        .handle(call(
+            "model_render",
+            json!({"document": "D1", "views": ["iso", {"view": "top", "size": [64, 48]}]}),
+        ))
+        .unwrap();
+    let result = &response["result"];
+    let content = result["content"].as_array().unwrap();
+    assert_eq!(content.len(), 3);
+    assert_eq!(content[1]["data"], "AAAA");
+    assert_eq!(content[2]["data"], "BBBB");
+    let views = result["structuredContent"]["views"].as_array().unwrap();
+    assert!(views.iter().all(|v| v.get("image_base64").is_none()));
+    assert_eq!(views[1]["camera"]["eye"], json!([0, 1, 0]));
+    let tools = catalog::tools();
+    let render = tools.iter().find(|t| t["name"] == "model_render").unwrap();
+    assert_eq!(render["annotations"]["readOnlyHint"], true);
+    for option in ["colors", "highlight", "section", "explode", "views"] {
+        assert!(
+            render["inputSchema"]["properties"].get(option).is_some(),
+            "{option}"
+        );
+    }
+    // The live server's: the same options without the ray tracer's, the
+    // document optional (mitcad#1487).
+    let live = catalog::live_tools();
+    let render = live.iter().find(|t| t["name"] == "model_render").unwrap();
+    let properties = render["inputSchema"]["properties"].as_object().unwrap();
+    assert!(properties.contains_key("views") && properties.contains_key("section"));
+    assert!(!properties.contains_key("quality") && !properties.contains_key("samples"));
+    assert_eq!(render["inputSchema"]["required"], json!([]));
+    assert!(
+        render["description"]
+            .as_str()
+            .unwrap()
+            .contains("whatever the window's view shows")
+    );
+    assert!(
+        render["description"]
+            .as_str()
+            .unwrap()
+            .contains("overlay draws")
+            && properties.contains_key("overlay")
+    );
+}
+
+/// The live `model_render` (mitcad#1487): the application's pictures as
+/// image blocks after the text, as the headless server's.
+#[test]
+fn live_model_render_answers_image_blocks() {
+    let mut session = ready_live();
+    assert!(matches!(
+        session
+            .prepare(call("model_render", json!({"view": "iso"})))
+            .unwrap(),
+        PreparedMessage::Tool { .. }
+    ));
+    let response = session
+        .finish(
+            json!({"document": "W1", "mime_type": "image/png", "bytes": 4,
+                   "camera": {"eye": [1, 1, 1]}, "image_base64": "iVBORw=="}),
+            false,
+        )
+        .unwrap();
+    let content = response["result"]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2);
+    assert_eq!(content[1]["data"], "iVBORw==");
+    assert!(
+        response["result"]["structuredContent"]
+            .get("image_base64")
+            .is_none()
+    );
+    // The ray tracer's arguments are the headless server's.
+    let refused = live_response(
+        session
+            .prepare(call("model_render", json!({"quality": "raytrace"})))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(refused["error"]["code"], -32602);
+}
+
+/// `model_render`'s overlay (mitcad#1488): a name or an object of a known
+/// type with its own settings passes the schema, and the summary reaches
+/// the structured content; anything else is refused before the backend.
+#[test]
+fn model_render_takes_an_overlay() {
+    let mut session = ready();
+    session.backend.result = Some(json!({
+        "document": "D1", "mime_type": "image/png", "image_base64": "iVBORw0KGgo=",
+        "overlay": {"type": "overhang", "overhang_area": 400.0}
+    }));
+    for good in [
+        json!("overhang"),
+        json!({"type": "overhang", "angle": 60, "up": [0, 0.5, 1]}),
+        json!({"type": "thickness", "minimum": 1.2}),
+        json!({"type": "draft", "pull": [0, 0, 1], "angle": 2, "color": "#00ff00"}),
+        json!({"type": "failed"}),
+    ] {
+        let response = session
+            .handle(call(
+                "model_render",
+                json!({"document": "D1", "overlay": good.clone()}),
+            ))
+            .unwrap();
+        let result = &response["result"];
+        assert_eq!(result["isError"], false, "{good}");
+        assert_eq!(
+            result["structuredContent"]["overlay"]["overhang_area"],
+            400.0
+        );
+        assert_eq!(result["content"][1]["type"], "image");
+    }
+    let calls = session.backend.calls.len();
+    for bad in [
+        json!(3),
+        json!({"angle": 45}),
+        json!({"type": "curvature"}),
+        json!({"type": "overhang", "depth": 1}),
+        json!({"type": "overhang", "angle": 95}),
+        json!({"type": "draft", "pull": [0, 1]}),
+        json!({"type": "failed", "color": "#00ff0000"}),
+    ] {
+        let response = session
+            .handle(call(
+                "model_render",
+                json!({"document": "D1", "overlay": bad.clone()}),
+            ))
+            .unwrap();
+        assert_eq!(response["error"]["code"], -32602, "{bad}");
+    }
+    assert_eq!(session.backend.calls.len(), calls);
+    let tools = catalog::tools();
+    let render = tools.iter().find(|t| t["name"] == "model_render").unwrap();
+    let description = render["description"].as_str().unwrap();
+    assert!(description.contains("overlay draws what Print Analysis' functions find"));
+    assert!(description.contains("quality raytrace"));
+    assert!(render["inputSchema"]["properties"]["overlay"]["properties"]["up"].is_object());
 }

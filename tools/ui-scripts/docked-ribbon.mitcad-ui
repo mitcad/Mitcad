@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: MIT
+# The ribbon, the Browser and the navigation bar stay with the design in
+# front (mitcad#1451), in a window of 1280 x 800 and the layout the runner
+# chose (Docked, Floating), with a library whose one BUILD profile is
+# "Bar 20 test" (tools/ui-scripts/docked-ribbon-library.json):
+#   - the start, a member placed with Build > Profile, a second design and
+#     the first one in front again: each time the design in front shows its
+#     ribbon, its Browser and its navigation bar, the Docked view's top
+#     below the ribbon (expect-design-chrome);
+#   - a right-click on the ribbon's tab row: the window's menu of its
+#     panels has no Toolbar, whose entry had hidden the whole Docked ribbon
+#     of that design (its menu is logged in the Docked layout only: the
+#     Floating window has no docks to offer).
+# Run by tools/ui-docked-ribbon-test.sh (Linux) and
+# tools/ui-windows-docked-ribbon-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+window-resize 1280 800
+wait-idle
+expect-design-chrome
+
+# The window's own menu from the ribbon's tab row: its panels, no Toolbar.
+mark
+context-menu-logged '^Ribbon tab BUILD at ' cancel
+wait-idle
+expect-no-log '^Window context menu: (.* \| )?Toolbar( \| |$)'
+expect-design-chrome
+
+# Build > Profile: a member placed at the origin (Enter).
+mark
+click-logged '^Ribbon tab BUILD at '
+wait-log '^Ribbon BUILD/PROFILE at ' 10
+command build.profile
+wait-log '^Command Profile started' 30
+wait-log '^Inspect Profile: place grounded' 30
+wait-idle
+key Return
+wait-log '^Placed Bar 20 test as ' 60
+wait-log '^Applied Profile ' 30
+wait-idle
+expect-design-chrome
+mark
+key Escape
+wait-log '^Closed Profile after ' 20
+wait-idle
+expect-design-chrome
+
+# A second design, in a tab of its own.
+mark
+command file.new_design
+wait-log '^Document window created: window-2 ' 30
+wait-idle
+expect-document-frame-tabs 2
+expect-design-chrome
+
+# The first design in front again, then the second.
+mark
+document-tab-click 0
+wait-idle
+expect-model-bodies 1 400000
+expect-design-chrome
+mark
+document-tab-click 1
+wait-idle
+expect-model-bodies 0 0
+expect-design-chrome

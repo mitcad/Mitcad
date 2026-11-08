@@ -32,6 +32,7 @@ use mitcad_asm::convert::{self, BodyPrefix, ConvertedBody, Options as ConvertOpt
 use mitcad_asm::history_states::{self, DistinctBody};
 use mitcad_dump::Dump;
 use mitcad_f3d_file::F3dFile;
+use mitcad_import::memory_guard::{MEMORY_TIGHT, MemoryReading};
 use mitcad_import::{StoredBody, StoredGeometry};
 use mitcad_model::RecomputeMonitor;
 use mitcad_model_api::ApiError;
@@ -2731,37 +2732,45 @@ where
     Err(error.expect("at least one stack size is tried"))
 }
 
-/// The share of the tightest memory limit at which the import drops what
-/// it can do without (`Progress::tight_on_memory`), and again at each 5 %
-/// more; below it, memory that was low has recovered.
-const MEMORY_TIGHT: f64 = 0.70;
+// How often the memory guard measures the process: as often as the guard
+// of model commands (`mitcad_model::monitor::memory_guard`, mitcad#1493,
+// mitcad#1505); also the watchdog's loop.
+pub(crate) use mitcad_import::memory_guard::MEMORY_POLL;
 
-/// The share at which the import is low on memory (`Progress::low_memory`):
-/// it cuts the definition being evaluated short and tries no more until
-/// the memory has recovered. An allocation that fails ends the process
-/// (Rust's cannot be caught), and one definition can take gigabytes (a
-/// pattern of a thousand copies).
-const MEMORY_LOW: f64 = 0.85;
+/// How the import's memory guard measures the process ([`measurer`]).
+type Measure = Box<dyn FnMut() -> MemoryReading + Send>;
 
-/// How often the memory guard measures the process.
-pub(crate) const MEMORY_POLL: Duration = Duration::from_millis(100);
+/// What the memory guard measures: the process against its limits and
+/// the import's own `limit` (bytes), the allocator's free memory given
+/// back first when it is due (mitcad#885: what is resident beyond what the
+/// process uses counts against its limits).
+fn measurer(limit: Option<u64>) -> Measure {
+    let mut release: Option<mitcad_import::FreeMemoryRelease> = None;
+    Box::new(move || {
+        let mut memory = crate::memory::memory_use().within(limit);
+        let release =
+            release.get_or_insert_with(|| mitcad_import::FreeMemoryRelease::new(memory.resident));
+        let now = Instant::now();
+        if release.due(memory.resident, memory.share() >= MEMORY_TIGHT, now) {
+            crate::memory::release_free_memory();
+            memory = crate::memory::memory_use().within(limit);
+            release.done(memory.resident, now);
+        }
+        MemoryReading {
+            share: memory.share(),
+            text: memory.describe(),
+            failed_allocations: memory.failed_allocations,
+        }
+    })
+}
 
 /// The import's memory guard (mitcad#80): measures the process against
 /// its limits (`memory::memory_use`, and the import's own
-/// `memory_limit`) and tells a try when memory gets tight or low; also the
-/// `.ipt` import's (`ipt_import.rs`).
-pub(crate) struct MemoryGuard {
-    /// The import's own limit in bytes.
-    limit: Option<u64>,
-    /// The share at which the try is next told that memory is tight.
-    next_tight: f64,
-    /// The allocations in the geometry kernel that had failed when last
-    /// measured.
-    failed_allocations: u64,
-    /// When the allocator's free memory is given back to the system
-    /// (mitcad#885).
-    release: mitcad_import::FreeMemoryRelease,
-}
+/// `memory_limit`) and tells a try when memory gets tight or low, or grows
+/// so fast that it would be low within 0.1 s (`mitcad_import::memory_guard`,
+/// mitcad#1505); also the `.ipt`, IFC and `.rvt` imports' (`ipt_import.rs`,
+/// `ifc_import.rs`, `rvt_import.rs`).
+pub(crate) struct MemoryGuard(mitcad_import::ImportMemoryGuard<Measure>);
 
 impl MemoryGuard {
     fn new(options: &TimelineOptions) -> Self {
@@ -2771,88 +2780,24 @@ impl MemoryGuard {
     /// A guard with the import's own limit in MiB (none or 0: the
     /// process's limits only).
     pub(crate) fn with_limit(memory_limit: Option<f64>) -> Self {
-        let memory = crate::memory::memory_use();
-        Self {
-            limit: memory_limit
-                .filter(|m| *m > 0.0)
-                .map(|m| (m * f64::from(1u32 << 20)) as u64),
-            next_tight: MEMORY_TIGHT,
-            failed_allocations: memory.failed_allocations,
-            release: mitcad_import::FreeMemoryRelease::new(memory.resident),
-        }
+        let limit = memory_limit
+            .filter(|m| *m > 0.0)
+            .map(|m| (m * f64::from(1u32 << 20)) as u64);
+        Self(mitcad_import::ImportMemoryGuard::new(measurer(limit)))
     }
 
     pub(crate) fn check(&mut self, progress: &mitcad_import::Progress) {
-        let mut memory = crate::memory::memory_use().within(self.limit);
-        // The allocator's free memory back to the system first (mitcad#885):
-        // what is resident beyond what the process uses counts against its
-        // limits.
-        let now = Instant::now();
-        if self
-            .release
-            .due(memory.resident, memory.share() >= MEMORY_TIGHT, now)
-        {
-            crate::memory::release_free_memory();
-            memory = crate::memory::memory_use().within(self.limit);
-            self.release.done(memory.resident, now);
-        }
-        let share = memory.share();
-        let text = memory.describe();
-        progress.set_memory(&text);
-        progress.set_memory_share(share);
-        // An allocation in the kernel failed (mitcad#132): also one it
-        // caught inside, which no operation reported, and one on a thread
-        // of no import. The memory ran out, whatever it is now.
-        if memory.failed_allocations != self.failed_allocations {
-            self.failed_allocations = memory.failed_allocations;
-            progress.low_memory_unattributed(&format!(
-                "an allocation in the geometry kernel failed, {text}"
-            ));
-            return;
-        }
-        if share >= MEMORY_LOW {
-            progress.low_memory(&text);
-            return;
-        }
-        if share < MEMORY_TIGHT {
-            progress.memory_recovered();
-        }
-        if share >= self.next_tight {
-            progress.tight_on_memory();
-            self.next_tight = share + 0.05;
-        } else {
-            // (Down again after the import dropped what it could.)
-            self.next_tight = self.next_tight.min((share + 0.05).max(MEMORY_TIGHT));
-        }
+        self.0.check(progress);
     }
 
     /// Runs `f` with the guard measuring the process on a thread of its
     /// own (an import without the watchdog, whose loop measures it).
     pub(crate) fn around<T>(
-        mut self,
+        self,
         progress: &Arc<mitcad_import::Progress>,
         f: impl FnOnce() -> T,
     ) -> T {
-        self.check(progress);
-        let (done, finished) = std::sync::mpsc::channel::<()>();
-        let watched = progress.clone();
-        let guard = std::thread::Builder::new()
-            .name("mitcad-import-memory".to_owned())
-            .stack_size(1 << 20)
-            .spawn(move || {
-                while matches!(
-                    finished.recv_timeout(MEMORY_POLL),
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-                ) {
-                    self.check(&watched);
-                }
-            });
-        let result = f();
-        drop(done);
-        if let Ok(guard) = guard {
-            let _ = guard.join();
-        }
-        result
+        self.0.around(progress, f)
     }
 }
 

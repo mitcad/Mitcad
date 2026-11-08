@@ -6,6 +6,7 @@
 # check-all sources: core/model-api/src/classes.rs tools/cli tools/ui-mcp-live.py
 # check-all sources: app/framework/TestDriverAssistant.cpp app/tests/assistant_client.cpp tools/ui-assistant-setup-test.py
 # check-all sources: app/MainWindow.cpp app/agent/MainWindowChat.cpp app/agent/ChatController.cpp app/agent/ChatSettings.cpp
+# check-all sources: core/preview core/model/src/preview.rs core/model/src/preview core/ffi/src/mcp
 # Live MCP for debugging (mitcad#265) through the real UI on Xvfb and the
 # actual bridge, `mitcad-cli mcp --connect`: the application opens a design
 # whose sketch F4 holds a projection that no longer follows its face

@@ -1,0 +1,14 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT. The reported design of GitHub #188 (mitcad#1450; opened with --open, never committed): a sheet metal face folded once (F5), mirrored as a new body (F6), folded again (F8), and a sketch (F9) on the copy's panel. The copy is a valid sheet whose panel a pick names, and its sketch's line folds it."},
+  {"expect":{"feature":"F6","status":"ok"}},
+  {"expect":{"feature":"F8","status":"ok"}},
+  {"expect":{"feature":"F9","status":"ok"}},
+  {"expect":{"query":{"query":"sheet_state","body":"F6.b0"},"result":{"status":"valid"}}},
+  {"expect":{"query":{"query":"sheet_reference","body":"F6.b0","face":"F6:inst1(F3:sheet_back(0))"},"result":{"domain":{"kind":"panel","id":{"feature":"F3","slot":0}}}}},
+  {"cmd":"add_feature","def":{"type":"sheet_fold","body":"F6.b0","panel":{"feature":"F3","slot":0},"line":{"sketch":"F9","curve":"c1"},"stationary_side":"left","angle":0.5235987755982988,"position":"bend_line"}},
+  {"expect":{"feature":"F10","status":"ok"}},
+  {"expect":{"query":{"query":"sheet_state","body":"F6.b0"},"result":{"status":"valid"}}},
+  {"cmd":"set_flat_pattern","body":"F6.b0"},
+  {"expect":{"query":{"query":"flat_pattern","body":"F6.b0"},"result":{"status":"valid","regions":[{}]}}},
+  {"expect":{"query":{"query":"flat_pattern","body":"F3.b0"},"result":{"status":"valid","regions":[{}]}}}
+]

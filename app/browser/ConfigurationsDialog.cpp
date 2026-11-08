@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <iterator>
 #include <utility>
 
 #include <QAbstractItemView>
@@ -11,6 +12,7 @@
 #include <QClipboard>
 #include <QColor>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QDropEvent>
@@ -57,8 +59,31 @@ namespace cfg = configurations;
 
 constexpr int kNameRole = Qt::UserRole; // an option's or a row's name
 
+// An option column as log lines and refusal keys name it, in English
+// whatever the interface language (mitcad#1471): the English header in
+// lower case, in the order of the dialog's OptionColumn enum.
+QString optionColumnLogName(int column) {
+  static const char* const names[] = {"option", "unit", "possible values", "value", "comment", "by formula", "used by"};
+  return column >= 0 && column < int(std::size(names)) ? QString::fromLatin1(names[column])
+                                                         : QString::number(column);
+}
+
 bool isTextUnit(const QString& unit) {
   return unit.trimmed().compare(QStringLiteral("Text"), Qt::CaseInsensitive) == 0;
+}
+
+// A new parameter's unit box starts at the design's length unit
+// (mitcad#1452): its item when it lists one, else typed in.
+void selectUnit(QComboBox* box, const QString& unit) {
+  if (unit.isEmpty()) {
+    return;
+  }
+  const int item = box->findText(unit);
+  if (item >= 0) {
+    box->setCurrentIndex(item);
+  } else {
+    box->setCurrentText(unit);
+  }
 }
 
 // The window explains itself (mitcad#967): a lead line at the top of each
@@ -191,6 +216,8 @@ private:
 // closed table with rows takes the option; a closed table's parameter
 // column moves to the options with its rows' values.
 class AddOptionDialog : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::AddOptionDialog)
+
 public:
   AddOptionDialog(DocumentHost& host, cfg::Table table, const QStringList& candidates,
                   QHash<QString, QJsonObject> parameters, QWidget* parent)
@@ -213,6 +240,7 @@ public:
     m_unit->setEditable(true);
     m_unit->addItems({QStringLiteral("mm"), QStringLiteral("cm"), QStringLiteral("m"), QStringLiteral("in"),
                       QStringLiteral("deg"), QStringLiteral("Text"), QString()});
+    selectUnit(m_unit, m_host.model().lengthUnit());
     m_value = new QLineEdit(QStringLiteral("0"));
     m_value->setObjectName(QStringLiteral("addOptionValue"));
     m_value->setToolTip(tr("The option's value: a number (with its unit) or a text"));
@@ -310,6 +338,8 @@ private:
 // table's rows set options only), which the dialog says. The parameter
 // and the table are one undo step.
 class AddColumnDialog : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::AddColumnDialog)
+
 public:
   AddColumnDialog(DocumentHost& host, cfg::Table table, const QStringList& candidates,
                   QHash<QString, QJsonObject> parameters, QWidget* parent)
@@ -335,6 +365,7 @@ public:
     m_unit->setEditable(true);
     m_unit->addItems({QStringLiteral("mm"), QStringLiteral("cm"), QStringLiteral("m"), QStringLiteral("in"),
                       QStringLiteral("deg"), QStringLiteral("Text"), QString()});
+    selectUnit(m_unit, m_host.model().lengthUnit());
     m_value = new QLineEdit(QStringLiteral("0"));
     m_value->setObjectName(QStringLiteral("addColumnValue"));
     m_value->setToolTip(tr("The parameter's value, which every row then has: a number (with its unit) or a text"));
@@ -436,6 +467,8 @@ private:
 // text option is a list, a text column or free; a number option takes a
 // number column.
 class DomainDialog : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::DomainDialog)
+
 public:
   DomainDialog(DocumentHost& host, QString name, const QJsonObject& parameter, bool text,
                const std::vector<SuggestedTable>& tables, QWidget* parent)
@@ -659,6 +692,8 @@ private:
 // chosen; the dialog offers first the column an option's values come from
 // and that option.
 class GenerateRowsDialog : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::GenerateRowsDialog)
+
 public:
   GenerateRowsDialog(DocumentHost& host, const std::vector<SuggestedTable>& tables, const cfg::Table& table,
                      const QStringList& userParameters, const QHash<QString, QJsonObject>& parameters,
@@ -925,6 +960,8 @@ void markRefused(QTableWidgetItem* item, const QString& typed, const QString& re
 // which refuses the import. Import runs `import_configuration_rows_csv`;
 // Cancel changes nothing.
 class RowsImportDialog : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::RowsImportDialog)
+
 public:
   RowsImportDialog(DocumentHost& host, const QString& csv, QString file, QWidget* parent)
       : QDialog(parent), m_file(std::move(file)) {
@@ -1209,8 +1246,7 @@ QWidget* ConfigurationsDialog::makeOptionsPage() {
       // A By Formula option's Value is its evaluated value: not edited here.
       m_options->editItem(item, column);
       qDebug().noquote() << QStringLiteral("Editing option %1 %2")
-                                .arg(item->data(kOptionName, kNameRole).toString(),
-                                     m_options->headerItem()->text(column).toLower());
+                                .arg(item->data(kOptionName, kNameRole).toString(), optionColumnLogName(column));
     }
   });
   connect(m_options, &QTreeWidget::itemChanged, this, &ConfigurationsDialog::optionEdited);
@@ -1553,7 +1589,7 @@ void ConfigurationsDialog::fillOptions() {
       marks << QStringLiteral("%1/name %2").arg(name, noticeLevelName(NoticeLevel::Error));
     }
     for (const int column : {kOptionValue, kOptionComment}) {
-      const QString header = m_options->headerItem()->text(column).toLower();
+      const QString header = optionColumnLogName(column);
       const auto refused = m_refused.constFind(QStringLiteral("%1|%2").arg(name, header));
       if (refused != m_refused.cend()) {
         item->setText(column, refused.value().first);
@@ -1871,7 +1907,7 @@ void ConfigurationsDialog::optionEdited(QTreeWidgetItem* item, int column) {
   }
   const QString name = item->data(kOptionName, kNameRole).toString();
   const QString typed = item->text(column);
-  const QString header = m_options->headerItem()->text(column).toLower();
+  const QString header = optionColumnLogName(column);
   later([this, name, typed, header, column] {
     const QString key = QStringLiteral("%1|%2").arg(name, header);
     const QString what = QStringLiteral("option %1 %2").arg(name, header);
@@ -2406,7 +2442,7 @@ void ConfigurationsDialog::logLayout() {
         const QRect cell(m_options->header()->sectionViewportPosition(column), row.top(),
                          m_options->header()->sectionSize(column), row.height());
         place(QStringLiteral("Configurations option %1 %2")
-                  .arg(item->data(kOptionName, kNameRole).toString(), m_options->headerItem()->text(column).toLower()),
+                  .arg(item->data(kOptionName, kNameRole).toString(), optionColumnLogName(column)),
               m_options->viewport(), cell.center());
       }
     }

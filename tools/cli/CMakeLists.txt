@@ -891,8 +891,9 @@ if(BUILD_TESTING)
     PASS_REGULAR_EXPRESSION
     "Cache: {\"last_recompute\":{\"cached\":0,.*\"restored\":8,\"restored_packed\":[0-9]+},\"memory\":{.*\"process\":{\"heap\":[0-9]+,\"peak_resident\":[0-9]+,\"resident\":[1-9][0-9]*},\"store\":{.*\"disk\":{.*\"by_type\":\\[{.*\"type\":\"(rectangular|circular)_pattern\"")
 
-  # Small UI gaps (P9): a full round and a chamfer as wide as a rib succeed
-  # with a warning.
+  # Small UI gaps (P9): a full round and a chamfer as wide as a rib build at
+  # their size; a dome on a boss built 0.1 % smaller is information; a plane
+  # at 90 radians warns.
   add_test(NAME cli.p9_warnings COMMAND mitcad-cli run "${scripts}/p9_warnings.json")
 
   # A block's end rounded to a half round in one fillet keeps its top and
@@ -1342,6 +1343,35 @@ if(BUILD_TESTING)
     set_property(TEST cli.mcp_results APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
+  # The memory guard of model commands with a lowered limit (mitcad#1480):
+  # a refused command, the document as it was, the next calls answered.
+  add_test(NAME cli.mcp_memory
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/mcp-memory"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/mcp-memory-test.cmake")
+  if(WIN32)
+    set_property(TEST cli.mcp_memory APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+  # The guard on the join of a plate and 38 flattened spheres, whose
+  # memory grows by gigabytes a second (mitcad#1493): refused in time.
+  add_test(NAME cli.mcp_memory_boolean
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/mcp-memory-boolean"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/mcp-memory-boolean-test.cmake")
+  set_tests_properties(cli.mcp_memory_boolean PROPERTIES TIMEOUT 300)
+  if(WIN32)
+    set_property(TEST cli.mcp_memory_boolean APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+  # The same join under a limit of 4 GiB (mitcad#1529): one valid body.
+  add_test(NAME cli.mcp_boolean_flattened_spheres
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DBUILT=ON"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/mcp-boolean-flattened-spheres"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/mcp-memory-boolean-test.cmake")
+  set_tests_properties(cli.mcp_boolean_flattened_spheres PROPERTIES TIMEOUT 300)
+  if(WIN32)
+    set_property(TEST cli.mcp_boolean_flattened_spheres APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
     add_test(NAME cli.mcp
@@ -1353,6 +1383,37 @@ if(BUILD_TESTING)
       set_property(TEST cli.mcp APPEND PROPERTY ENVIRONMENT_MODIFICATION
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
+    # The MCP evaluation's metric extractor (mitcad#1507, tools/mcp-eval):
+    # a small design with known values saved through the headless server
+    # and read back, and the agents' transcripts.
+    add_test(NAME cli.mcp-eval
+      COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/tools/mcp-eval/test_metrics.py"
+              --cli "$<TARGET_FILE:mitcad-cli>" --work "${CMAKE_CURRENT_BINARY_DIR}/mcp-eval")
+    set_tests_properties(cli.mcp-eval PROPERTIES TIMEOUT 180
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    if(WIN32)
+      set_property(TEST cli.mcp-eval APPEND PROPERTY ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+  endif()
+endif()
+
+# model_render's ray-traced picture on the headless server (mitcad#1489):
+# the scene and the job of mitcad-cli render through the render worker.
+target_sources(mitcad-cli PRIVATE mcp-raytrace.cpp mcp-raytrace.hpp render-scene.hpp)
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+  # A picture of the asked size from the worker within its time limit, the
+  # fast mode's camera, and the error codes without a worker or with one
+  # that fails.
+  add_test(NAME cli.mcp_raytrace
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/mcp-raytrace-test.py"
+            "$<TARGET_FILE:mitcad-cli>" "$<TARGET_FILE:mitcad-render>" "${CMAKE_CURRENT_BINARY_DIR}/mcp-raytrace")
+  # Seconds normally; a hung GPU fails it in a few minutes (mitcad#146).
+  set_tests_properties(cli.mcp_raytrace PROPERTIES TIMEOUT 300
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  if(WIN32)
+    set_property(TEST cli.mcp_raytrace APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
 endif()
 
@@ -1637,4 +1698,43 @@ if(BUILD_TESTING)
     set_property(TEST cli.sheet_profile_found cli.sheet_profile_found_join cli.sheet_profile_found_reported
       APPEND PROPERTY ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
+endif()
+
+# Mirrors and patterns of sheet metal bodies (mitcad#1450): copies as new
+# sheet bodies that take sheet tools, and a mirror joined to its original as
+# one sheet; then the reported design of GitHub #188 under
+# MITCAD_MITCAD_REPORTED, as saved and with its mirror joined (skipped without
+# the report's file).
+if(BUILD_TESTING)
+  foreach(script sheet_mirror_body sheet_mirror_body_join)
+    add_test(NAME cli.${script} COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/${script}.json")
+  endforeach()
+  add_test(NAME cli.sheet_mirror_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/sheet-mirror-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/sheet-mirror-reported-test.cmake")
+  set_tests_properties(cli.sheet_mirror_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "sheet mirror reported: skipped" TIMEOUT 600)
+  if(WIN32)
+    foreach(test cli.sheet_mirror_body cli.sheet_mirror_body_join cli.sheet_mirror_reported)
+      set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
+  endif()
+endif()
+
+# The rest of the copies of sheet metal bodies (mitcad#1462): joined copies'
+# domains named stably across upstream edits, sheets holding a fillet or
+# chamfer overlay, scaled copies (a warning), patterns of patterns of bodies
+# and combine_any.
+if(BUILD_TESTING)
+  foreach(script sheet_copy_stable_slots sheet_copy_overlay sheet_copy_scaled
+                 sheet_copy_patterns sheet_copy_join_any)
+    add_test(NAME cli.${script} COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/${script}.json")
+    if(WIN32)
+      set_property(TEST cli.${script} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+  endforeach()
 endif()

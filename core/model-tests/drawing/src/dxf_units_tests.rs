@@ -365,3 +365,85 @@ fn an_inch_design_s_sketch_comes_back_at_its_size_through_the_dxf_reader() {
     assert!(radius(&metric).is_some_and(|r| near(r, INCH / 2.0)));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The numbers of a line or a circle (`[x0, y0, x1, y1]`, `[x, y, r]`).
+fn numbers(geometry: &Geometry) -> Vec<f64> {
+    match geometry {
+        Geometry::Line { start, end } => vec![start.x, start.y, end.x, end.y],
+        Geometry::Circle { center, radius } => vec![center.x, center.y, *radius],
+        other => panic!("not a line or a circle: {other:?}"),
+    }
+}
+
+#[test]
+fn a_sketch_s_dxf_holds_the_same_entities_in_millimetres_and_in_inches() {
+    // GitHub #187 (mitcad#1452): a narrow bar with a small hole, written in
+    // millimetres and in inches. Both files hold the same four lines and
+    // one circle on the layer 0 with a continuous line type, and nothing
+    // else; only the numbers (divided by 25.4) and the header differ.
+    let mut doc = Document::new(MockKernel::default());
+    command(&mut doc, json!({"cmd": "sketch.create"}));
+    command(
+        &mut doc,
+        json!({"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [10, 0],
+               "width": 0.875, "height": 12.125}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "sketch.add_circle", "sketch": "F1", "center": [10.4375, 11.125],
+               "diameter": 0.2}),
+    );
+    let dir = mitcad_model::testing::unique_temp_dir("dxf-units-same-entities");
+    let mm_path = dir.join("bar-mm.dxf").to_string_lossy().into_owned();
+    let in_path = dir.join("bar-in.dxf").to_string_lossy().into_owned();
+    let exported = command(
+        &mut doc,
+        json!({"cmd": "export_sketch", "sketch": "F1", "path": mm_path}),
+    );
+    assert_eq!(exported["units"], "mm", "{exported}");
+    assert_eq!(exported["entities"], 5, "{exported}");
+    let exported = command(
+        &mut doc,
+        json!({"cmd": "export_sketch", "sketch": "F1", "path": in_path, "units": "in"}),
+    );
+    assert_eq!(exported["units"], "in", "{exported}");
+    assert_eq!(exported["entities"], 5, "{exported}");
+    assert_eq!(header(&mm_path), (4, 1));
+    assert_eq!(header(&in_path), (1, 0));
+
+    let mm = mitcad_dxf::read_file(&mm_path).unwrap();
+    let inch = mitcad_dxf::read_file(&in_path).unwrap();
+    assert_eq!(mm.units, Units::Millimeters);
+    assert_eq!(inch.units, Units::Inches);
+    for drawing in [&mm, &inch] {
+        let layers: Vec<(&str, &str)> = drawing
+            .layers
+            .iter()
+            .map(|l| (l.name.as_str(), l.linetype.as_str()))
+            .collect();
+        assert_eq!(layers, [("0", "Continuous")]);
+        assert_eq!(drawing.entities.len(), 5);
+        assert!(drawing.entities.iter().all(|e| e.layer == "0"));
+        let circles = drawing
+            .entities
+            .iter()
+            .filter(|e| matches!(e.geometry, Geometry::Circle { .. }))
+            .count();
+        assert_eq!(circles, 1);
+    }
+    // Entity by entity, the inch file is the millimetre file divided by 25.4.
+    for (a, b) in mm.entities.iter().zip(&inch.entities) {
+        let (a, b) = (numbers(&a.geometry), numbers(&b.geometry));
+        assert_eq!(a.len(), b.len(), "{a:?} / {b:?}");
+        assert!(
+            a.iter().zip(&b).all(|(a, b)| near(*a, *b * INCH)),
+            "{a:?} / {b:?}"
+        );
+    }
+    let mm_bar = size(&mm, "0");
+    assert!(
+        near(mm_bar.0, 0.875) && near(mm_bar.1, 12.125),
+        "{mm_bar:?}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

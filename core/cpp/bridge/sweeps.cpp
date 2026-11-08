@@ -245,6 +245,7 @@ std::shared_ptr<geometry::Shape> pipe_solid(rust::Str feature, const PipeInput& 
                                       : geometry::PipeSection::Circular;
   spec.size = input.size;
   spec.thickness = input.thickness;
+  spec.corners = input.corners == 1 ? geometry::PipeCorners::Rounded : geometry::PipeCorners::Mitered;
   return geometry::pipe(spec);
 }
 

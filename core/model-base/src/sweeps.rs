@@ -277,12 +277,26 @@ pub enum PipeSection {
     Triangular,
 }
 
+/// How a pipe turns at the sharp corners of its path (mitcad#1448):
+/// `Mitered` runs the sides on until they meet in the corner's bisecting
+/// plane; `Rounded` turns the section about the corner, the outside of the
+/// corner swept round by it (OCCT's round corner).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PipeCorners {
+    #[default]
+    Mitered,
+    Rounded,
+}
+
 /// Input of [`crate::Kernel::pipe`]: the section at right angles to the
 /// path at its start, swept `extent1` of the path's length along it (and on
 /// a closed path `extent2` of it backwards from the start). A square's sides
 /// and a triangle's first corner follow the path's plane: a corner of the
 /// triangle points along the normal of the path in its plane. A `thickness`
-/// makes it hollow, the wall inside the section.
+/// makes it hollow, the wall inside the section. `corners` gives the joints
+/// at the path's sharp corners; where they cannot be built that way, the
+/// other kind is tried, then the section turned through the corner.
 ///
 /// Faces: `side<i>` for the section's edges (`side0` for a circle, the
 /// square's and the triangle's sides counter-clockwise about the path),
@@ -297,6 +311,7 @@ pub struct PipeSpec<'a> {
     pub section: PipeSection,
     pub size: f64,
     pub thickness: Option<f64>,
+    pub corners: PipeCorners,
 }
 
 /// The section of a coil: a circle of diameter `size`, or a square or an

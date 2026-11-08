@@ -206,6 +206,61 @@ fn unit_suffix_binds_tightest() {
     assert_eq!(eval("10mm"), len(10.0));
 }
 
+#[track_caller]
+fn assert_length(text: &str, mm: f64) {
+    let q = eval(text);
+    assert_eq!(q.dims, Dims::LENGTH, "{text:?}");
+    assert_close(q.value, mm);
+}
+
+#[test]
+fn inch_and_foot_marks_after_numbers() {
+    // mitcad#1531: `"` (or `''`) right after a number is in, `'` is ft.
+    assert_length(".875\"", 22.225);
+    assert_length("0.875\"", 22.225);
+    assert_length("2.5 \"", 63.5);
+    assert_length("2''", 50.8);
+    assert_length("3'", 914.4);
+    assert_length("3 '", 914.4);
+    // Feet and inches add up and bind as one value.
+    assert_length("3' 6\"", 1066.8);
+    assert_length("3'6\"", 1066.8);
+    assert_length("3' 6.5''", 1079.5);
+    assert_length("-3' 6\"", -1066.8);
+    assert_length("2 * 3' 6\"", 2133.6);
+    assert_length("3' 6\" / 2", 533.4);
+    assert_length("3' + 6\"", 1066.8);
+    assert_length("1\" + 1 mm", 26.4);
+    // A mark takes a unit power like a unit name: two square inches.
+    let area = eval("2\"^2");
+    assert_eq!(area.dims, Dims::AREA);
+    assert_close(area.value, 1290.32);
+    // Printed with the unit names; the printing parses back.
+    for (text, printed) in [
+        (".875\"", "0.875 in"),
+        ("3'", "3 ft"),
+        ("3' 6\"", "3 ft + 6 in"),
+        ("2 * 3' 6\"", "2 * (3 ft + 6 in)"),
+        ("-3' 6''", "-(3 ft + 6 in)"),
+    ] {
+        let e = parse(text);
+        assert_eq!(e.to_string(), printed, "{text:?}");
+        assert_eq!(parse(printed), e, "{text:?}");
+    }
+    // A mark names no parameter.
+    assert_eq!(parse("3' 6\" + d1").references(), ["d1"]);
+    // Texts in quotes still parse where a value starts: after an operator,
+    // a separator or a parenthesis, never right after a number.
+    assert!(parse("'6qt'").is_constant());
+    assert!(parse("\"Box\" & 'x'").is_constant());
+    assert!(Expr::parse("if(1 > 2; 3'; 'a')").is_ok());
+    assert!(Expr::parse("value(d1; \"in\")").is_ok());
+    assert!(Expr::parse("max(5,'a')").is_ok());
+    // A quote after anything but a number starts a text.
+    assert_eq!(parse_err("d1\"").kind, ParseErrorKind::UnterminatedText);
+    assert_eq!(parse_err("(3)'").kind, ParseErrorKind::UnterminatedText);
+}
+
 #[test]
 fn equality_ignores_positions() {
     assert_eq!(parse("1+2"), parse("  1 +   2 "));

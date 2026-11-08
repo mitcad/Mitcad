@@ -50,7 +50,11 @@
 namespace mitcad {
 namespace {
 
-QString tr(const char* text) { return QCoreApplication::translate("ProjectSettings", text); }
+// The file's texts in the context ProjectSettings, where lupdate records them
+// too (mitcad#1472).
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(ProjectSettings)
+};
 
 QLabel* note(const QString& text = QString()) {
   auto* label = new QLabel(text);
@@ -80,39 +84,39 @@ const int kCheckChoices[] = {-1, 1, 5, 10, 30, 60, 240, 0};
 
 QString checkText(int minutes) {
   if (minutes == 0) {
-    return tr("never");
+    return Text::tr("never");
   }
   if (minutes == 1) {
-    return tr("every minute");
+    return Text::tr("every minute");
   }
   if (minutes % 60 == 0) {
-    return minutes == 60 ? tr("every hour") : tr("every %1 hours").arg(minutes / 60);
+    return minutes == 60 ? Text::tr("every hour") : Text::tr("every %1 hours").arg(minutes / 60);
   }
-  return tr("every %1 minutes").arg(minutes);
+  return Text::tr("every %1 minutes").arg(minutes);
 }
 
 // What sharing to a remote does, for the Cloud section (a project's
 // remote_check).
 QString describeForSharing(const QJsonObject& answer, bool& ok) {
   if (answer.value(QStringLiteral("new_folder")).toBool()) {
-    return tr("✓ An empty repository is made in this folder: the project's versions go there.");
+    return Text::tr("✓ An empty repository is made in this folder: the project's versions go there.");
   }
   if (answer.value(QStringLiteral("empty")).toBool()) {
-    return tr("✓ Reachable and empty: the project's versions go there.");
+    return Text::tr("✓ Reachable and empty: the project's versions go there.");
   }
   if (answer.value(QStringLiteral("related")).toBool()) {
-    return tr("✓ The repository has this project's history: they are brought together.");
+    return Text::tr("✓ The repository has this project's history: they are brought together.");
   }
   if (answer.value(QStringLiteral("has_project")).toBool()) {
     ok = false;
-    return tr("The repository holds another project, or another history of this one. Choose an empty repository, "
+    return Text::tr("The repository holds another project, or another history of this one. Choose an empty repository, "
               "or open that project with Open from Cloud.");
   }
   QStringList files;
   for (const QJsonValue& file : answer.value(QStringLiteral("files")).toArray()) {
     files << file.toString();
   }
-  return tr("✓ The project's versions go after the repository's files (%1).")
+  return Text::tr("✓ The project's versions go after the repository's files (%1).")
       .arg(files.mid(0, 5).join(QStringLiteral(", ")));
 }
 
@@ -200,19 +204,19 @@ private:
 
 ProjectSettingsDialog::ProjectSettingsDialog(QWidget* parent, QString root, const ProjectSettingsHost& host)
     : QDialog(parent), m_root(std::move(root)), m_host(host) {
-  setWindowTitle(tr("Project Settings - %1").arg(QFileInfo(m_root).fileName()));
+  setWindowTitle(Text::tr("Project Settings - %1").arg(QFileInfo(m_root).fileName()));
   auto* layout = new QVBoxLayout(this);
   m_top = new QFormLayout;
   auto* folder = new QLabel(QDir::toNativeSeparators(m_root));
   folder->setTextInteractionFlags(Qt::TextSelectableByMouse);
-  auto* show = new QPushButton(tr("Show in &Folder"));
+  auto* show = new QPushButton(Text::tr("Show in &Folder"));
   show->setAutoDefault(false);
   auto* folderRow = new QHBoxLayout;
   folderRow->addWidget(folder, 1);
   folderRow->addWidget(show);
-  m_top->addRow(tr("Folder:"), folderRow);
-  m_local = new QRadioButton(tr("&Local"));
-  m_cloud = new QRadioButton(tr("Cl&oud (git)"));
+  m_top->addRow(Text::tr("Folder:"), folderRow);
+  m_local = new QRadioButton(Text::tr("&Local"));
+  m_cloud = new QRadioButton(Text::tr("Cl&oud (git)"));
   auto* storage = new QButtonGroup(this);
   storage->addButton(m_local);
   storage->addButton(m_cloud);
@@ -220,23 +224,23 @@ ProjectSettingsDialog::ProjectSettingsDialog(QWidget* parent, QString root, cons
   storageRow->addWidget(m_local);
   storageRow->addWidget(m_cloud);
   storageRow->addStretch(1);
-  m_top->addRow(tr("Storage:"), storageRow);
+  m_top->addRow(Text::tr("Storage:"), storageRow);
   m_address = new QLabel;
   m_address->setTextInteractionFlags(Qt::TextSelectableByMouse);
   m_address->setTextFormat(Qt::PlainText);
-  m_change = new QPushButton(tr("C&hange…"));
-  m_browser = new QPushButton(tr("Open in &Browser"));
+  m_change = new QPushButton(Text::tr("C&hange…"));
+  m_browser = new QPushButton(Text::tr("Open in &Browser"));
   m_addressRow = new QWidget;
   auto* addressLayout = new QHBoxLayout(m_addressRow);
   addressLayout->setContentsMargins(0, 0, 0, 0);
   addressLayout->addWidget(m_address, 1);
   addressLayout->addWidget(m_change);
   addressLayout->addWidget(m_browser);
-  m_addressLabel = new QLabel(tr("Address:"));
+  m_addressLabel = new QLabel(Text::tr("Address:"));
   m_top->addRow(m_addressLabel, m_addressRow);
   // Several remotes and none followed (mitcad#89): the one to sync with.
   m_followChoice = new QComboBox;
-  m_follow = new QPushButton(tr("Follo&w"));
+  m_follow = new QPushButton(Text::tr("Follo&w"));
   m_followNote = note();
   m_followRow = new QWidget;
   auto* followColumn = new QVBoxLayout(m_followRow);
@@ -246,18 +250,18 @@ ProjectSettingsDialog::ProjectSettingsDialog(QWidget* parent, QString root, cons
   followLayout->addWidget(m_follow);
   followColumn->addLayout(followLayout);
   followColumn->addWidget(m_followNote);
-  m_followLabel = new QLabel(tr("Re&mote:"));
+  m_followLabel = new QLabel(Text::tr("Re&mote:"));
   m_followLabel->setBuddy(m_followChoice);
   m_top->addRow(m_followLabel, m_followRow);
   m_status = new QLabel;
   m_status->setTextFormat(Qt::PlainText);
-  auto* syncNow = new QPushButton(tr("S&ync Now"));
+  auto* syncNow = new QPushButton(Text::tr("S&ync Now"));
   m_statusRow = new QWidget;
   auto* statusLayout = new QHBoxLayout(m_statusRow);
   statusLayout->setContentsMargins(0, 0, 0, 0);
   statusLayout->addWidget(m_status, 1);
   statusLayout->addWidget(syncNow);
-  m_statusLabel = new QLabel(tr("Status:"));
+  m_statusLabel = new QLabel(Text::tr("Status:"));
   m_top->addRow(m_statusLabel, m_statusRow);
   for (QPushButton* button : {m_change, m_browser, m_follow, syncNow}) {
     button->setAutoDefault(false);
@@ -265,7 +269,7 @@ ProjectSettingsDialog::ProjectSettingsDialog(QWidget* parent, QString root, cons
   layout->addLayout(m_top);
 
   // Local -> Cloud: the address, then Share.
-  m_shareBox = new QGroupBox(tr("Share"));
+  m_shareBox = new QGroupBox(Text::tr("Share"));
   mac::styleSection(m_shareBox);
   auto* shareColumn = new QVBoxLayout(m_shareBox);
   m_section = new CloudSection(
@@ -279,7 +283,7 @@ ProjectSettingsDialog::ProjectSettingsDialog(QWidget* parent, QString root, cons
   shareColumn->addWidget(m_section);
   m_authors = note();
   shareColumn->addWidget(m_authors);
-  m_share = new QPushButton(tr("&Share"));
+  m_share = new QPushButton(Text::tr("&Share"));
   m_share->setAutoDefault(false);
   auto* shareRow = new QHBoxLayout;
   shareRow->addStretch(1);
@@ -303,12 +307,12 @@ ProjectSettingsDialog::ProjectSettingsDialog(QWidget* parent, QString root, cons
 
   // The project's web viewer (mitcad#423): File > Project > Web Viewer
   // turns it on; whether a Save updates it is for everyone (a version).
-  m_webBox = new QGroupBox(tr("Web viewer (saved as a version)"));
+  m_webBox = new QGroupBox(Text::tr("Web viewer (saved as a version)"));
   mac::styleSection(m_webBox);
   auto* webColumn = new QVBoxLayout(m_webBox);
-  m_webUpdate = new QCheckBox(tr("&Update the web viewer on each Save"));
+  m_webUpdate = new QCheckBox(Text::tr("&Update the web viewer on each Save"));
   m_webUpdate->setObjectName(QStringLiteral("projectWebViewerUpdate"));
-  m_webUpdate->setToolTip(tr("Each Save that records a version also updates the design's web page"));
+  m_webUpdate->setToolTip(Text::tr("Each Save that records a version also updates the design's web page"));
   m_webNote = note();
   webColumn->addWidget(m_webUpdate);
   webColumn->addWidget(m_webNote);
@@ -419,9 +423,9 @@ void ProjectSettingsDialog::read() {
   m_webUpdate->setChecked(web.isObject() &&
                           web.toObject().value(QStringLiteral("update_on_save")).toBool(true));
   m_webNote->setText(web.isObject()
-                         ? tr("Its pages are in the project's web folder: open web/index.html in a browser, or let a "
+                         ? Text::tr("Its pages are in the project's web folder: open web/index.html in a browser, or let a "
                               "static web host serve the repository.")
-                         : tr("Not turned on: File › Project › Web Viewer writes a page per design into the "
+                         : Text::tr("Not turned on: File › Project › Web Viewer writes a page per design into the "
                               "project's web folder."));
   m_fields->m_test->setVisible(true);
   m_fields->m_test->setEnabled(static_cast<bool>(m_host.testBroker));
@@ -467,7 +471,7 @@ void ProjectSettingsDialog::showKind() {
   m_browser->setEnabled(!addressWebPage(m_url).isEmpty());
   m_fields->m_displayName->setPlaceholderText(defaultName());
   m_fields->m_displayName->setToolTip(
-      tr("The name the Projects panel shows for this project on this computer; empty: %1").arg(defaultName()));
+      Text::tr("The name the Projects panel shows for this project on this computer; empty: %1").arg(defaultName()));
   m_status->setText(m_host.status ? m_host.status() : QString());
   // Several remotes and none followed (mitcad#89): which one first; the
   // project neither syncs nor has edit locks before.
@@ -476,9 +480,9 @@ void ProjectSettingsDialog::showKind() {
   m_top->setRowVisible(m_statusLabel, cloud && !choosing);
   m_top->setRowVisible(m_followLabel, choosing);
   m_local->setEnabled(!choosing);
-  m_local->setToolTip(choosing ? tr("Choose the remote to follow first") : QString());
+  m_local->setToolTip(choosing ? Text::tr("Choose the remote to follow first") : QString());
   if (choosing) {
-    m_followNote->setText(tr("The project's repository has the remotes %1 and follows none of them: choose the one "
+    m_followNote->setText(Text::tr("The project's repository has the remotes %1 and follows none of them: choose the one "
                              "this project sends its versions to and takes others' from.")
                               .arg(m_remotes.join(QStringLiteral(", "))));
     qInfo().noquote() << QStringLiteral("Project Settings: several remotes, none followed: %1")
@@ -580,14 +584,14 @@ void ProjectSettingsDialog::storageChosen() {
 }
 
 void ProjectSettingsDialog::stopSyncing() {
-  QMessageBox box(QMessageBox::Question, tr("Stop Syncing"),
-                  tr("Stop syncing %1?").arg(QFileInfo(m_root).fileName()), QMessageBox::Cancel, this);
-  box.setInformativeText(tr("The versions stay here and in the repository; nothing is deleted. Saved versions are "
+  QMessageBox box(QMessageBox::Question, Text::tr("Stop Syncing"),
+                  Text::tr("Stop syncing %1?").arg(QFileInfo(m_root).fileName()), QMessageBox::Cancel, this);
+  box.setInformativeText(Text::tr("The versions stay here and in the repository; nothing is deleted. Saved versions are "
                             "no longer sent, and newer ones are not fetched."));
-  QPushButton* stop = box.addButton(tr("&Stop Syncing"), QMessageBox::DestructiveRole);
+  QPushButton* stop = box.addButton(Text::tr("&Stop Syncing"), QMessageBox::DestructiveRole);
   qInfo().noquote() << QStringLiteral("Project Settings: stop syncing asked");
   execDialog(&box);
-  if (box.clickedButton() != stop || (m_host.settle && !m_host.settle(tr("stop syncing")))) {
+  if (box.clickedButton() != stop || (m_host.settle && !m_host.settle(Text::tr("stop syncing")))) {
     qInfo().noquote() << QStringLiteral("Project Settings: stop syncing cancelled");
     showKind();
     return;
@@ -622,7 +626,7 @@ void ProjectSettingsDialog::listAuthors() {
   }
   m_authors->setText(authors.isEmpty()
                          ? QString()
-                         : tr("The whole history is sent, with the name and email of each version's author: %1. "
+                         : Text::tr("The whole history is sent, with the name and email of each version's author: %1. "
                               "Anyone who can read the repository sees them.")
                                .arg(authors.join(QStringLiteral(", "))));
   qInfo().noquote() << QStringLiteral("Project Settings: authors to publish: %1").arg(authors.join(QStringLiteral(", ")));
@@ -636,11 +640,11 @@ void ProjectSettingsDialog::share() {
   const QString name = m_fields->m_name->text().trimmed();
   const QString email = m_fields->m_email->text().trimmed();
   if (name.isEmpty() || !email.contains(QLatin1Char('@'))) {
-    m_problem->setText(tr("Sharing needs the project's author below: a name and an email address."));
+    m_problem->setText(Text::tr("Sharing needs the project's author below: a name and an email address."));
     m_fields->m_name->setFocus();
     return;
   }
-  if (m_host.settle && !m_host.settle(tr("share the project"))) {
+  if (m_host.settle && !m_host.settle(Text::tr("share the project"))) {
     return;
   }
   writeAuthor();
@@ -680,7 +684,7 @@ void ProjectSettingsDialog::shareFinished(RemoteTask* done, const QString& url, 
     m_section->stopCheck();
     m_share->setEnabled(false);
     m_shareBox->setEnabled(false);
-    m_progressText->setText(tr("Sending the project's versions to %1…").arg(url));
+    m_progressText->setText(Text::tr("Sending the project's versions to %1…").arg(url));
     m_progress->show();
     connect(task, &RemoteTask::finished, this,
             [this, task, url, author] { shareFinished(task, url, author, QJsonObject()); });
@@ -711,7 +715,7 @@ void ProjectSettingsDialog::shareFinished(RemoteTask* done, const QString& url, 
   const bool set = answer.value(QStringLiteral("set")).isObject() && !answer.value(QStringLiteral("undone")).toBool();
   if (!set) {
     qInfo().noquote() << QStringLiteral("Project Settings: share failed (%1): %2").arg(cls, errorMessageOf(answer));
-    m_problem->setText(cls == QLatin1String("cancelled") ? tr("Canceled: nothing changed.")
+    m_problem->setText(cls == QLatin1String("cancelled") ? Text::tr("Canceled: nothing changed.")
                                                          : errorMessageOf(answer));
     m_share->setEnabled(true);
     return;
@@ -722,7 +726,7 @@ void ProjectSettingsDialog::shareFinished(RemoteTask* done, const QString& url, 
                                 sent ? QStringLiteral("versions sent") : QStringLiteral("nothing sent"),
                                 cls.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(cls));
   m_problem->setText(cls.isEmpty() ? QString()
-                                   : tr("The project is shared to %1, but: %2 Its versions are sent when the "
+                                   : Text::tr("The project is shared to %1, but: %2 Its versions are sent when the "
                                         "repository can be reached.")
                                          .arg(url, errorMessageOf(answer)));
   read();
@@ -735,7 +739,7 @@ void ProjectSettingsDialog::shareFinished(RemoteTask* done, const QString& url, 
 
 void ProjectSettingsDialog::changeAddress() {
   const std::optional<QString> url = askChangeAddress(this, m_root, m_url);
-  if (!url || (m_host.settle && !m_host.settle(tr("change the address")))) {
+  if (!url || (m_host.settle && !m_host.settle(Text::tr("change the address")))) {
     return;
   }
   const QJsonObject answer = projectCommand(
@@ -761,7 +765,7 @@ bool ProjectSettingsDialog::choosingRemote() const {
 
 void ProjectSettingsDialog::followRemote() {
   const QString name = m_followChoice->currentData().toString();
-  if (name.isEmpty() || (m_host.settle && !m_host.settle(tr("follow a remote")))) {
+  if (name.isEmpty() || (m_host.settle && !m_host.settle(Text::tr("follow a remote")))) {
     return;
   }
   const QJsonObject answer = projectCommand(
@@ -805,7 +809,7 @@ void ProjectSettingsDialog::writeShared() {
     return;
   }
   if (author().isEmpty()) {
-    m_problem->setText(tr("A change for everyone is recorded as a version: give the project's author first."));
+    m_problem->setText(Text::tr("A change for everyone is recorded as a version: give the project's author first."));
     return;
   }
   const QJsonObject answer =
@@ -910,7 +914,7 @@ void ProjectSettingsDialog::writeWebViewer() {
     m_webUpdate->setChecked(!on);
   };
   if (author().isEmpty()) {
-    back(tr("A change for everyone is recorded as a version: give the project's author first."));
+    back(Text::tr("A change for everyone is recorded as a version: give the project's author first."));
     return;
   }
   const QJsonObject answer = projectCommand(
@@ -946,7 +950,7 @@ void ProjectSettingsDialog::writeAuthor() {
   m_fields->m_name->setModified(false);
   m_fields->m_email->setModified(false);
   if ((name.isEmpty() != email.isEmpty()) || (!email.isEmpty() && !email.contains(QLatin1Char('@')))) {
-    m_problem->setText(tr("The author is a name and an email address."));
+    m_problem->setText(Text::tr("The author is a name and an email address."));
     return;
   }
   const QJsonObject answer = projectCommand(m_root, {{QStringLiteral("cmd"), QStringLiteral("set_identity")},
@@ -969,25 +973,25 @@ ProjectSettingsFields::ProjectSettingsFields(Host host, QWidget* parent) : QWidg
   auto* layout = new QVBoxLayout(this);
   layout->setContentsMargins(0, 0, 0, 0);
   // For everyone.
-  m_everyone = new QGroupBox(tr("For everyone in this project (saved as a version)"));
+  m_everyone = new QGroupBox(Text::tr("For everyone in this project (saved as a version)"));
   mac::styleSection(m_everyone);
   auto* everyone = new QFormLayout(m_everyone);
-  m_locks = new QCheckBox(creating ? tr("Edi&t locks") : tr("&Edit locks"));
-  m_locks->setToolTip(tr("A design has one editor at a time; the others open it read-only and can ask for it"));
+  m_locks = new QCheckBox(creating ? Text::tr("Edi&t locks") : Text::tr("&Edit locks"));
+  m_locks->setToolTip(Text::tr("A design has one editor at a time; the others open it read-only and can ask for it"));
   m_idle = new QSpinBox;
   m_idle->setRange(1, 120);
-  m_idle->setSuffix(tr(" min"));
+  m_idle->setSuffix(Text::tr(" min"));
   m_poll = new QSpinBox;
   m_poll->setRange(5, 600);
-  m_poll->setSuffix(tr(" s"));
+  m_poll->setSuffix(Text::tr(" s"));
   auto* locksRow = new QHBoxLayout;
   locksRow->addWidget(m_locks);
   locksRow->addSpacing(12);
-  auto* idleLabel = new QLabel(creating ? tr("Idle time:") : tr("Idle &time:"));
+  auto* idleLabel = new QLabel(creating ? Text::tr("Idle time:") : Text::tr("Idle &time:"));
   idleLabel->setBuddy(m_idle);
   locksRow->addWidget(idleLabel);
   locksRow->addWidget(m_idle);
-  auto* pollLabel = new QLabel(creating ? tr("Poll:") : tr("&Poll:"));
+  auto* pollLabel = new QLabel(creating ? Text::tr("Poll:") : Text::tr("&Poll:"));
   pollLabel->setBuddy(m_poll);
   locksRow->addWidget(pollLabel);
   locksRow->addWidget(m_poll);
@@ -997,8 +1001,8 @@ ProjectSettingsFields::ProjectSettingsFields(Host host, QWidget* parent) : QWidg
   setErrorStyleSheet(m_locksNote);
   m_locksNote->hide();
   everyone->addRow(m_locksNote);
-  m_liveNone = new QRadioButton(creating ? tr("None") : tr("&None"));
-  m_liveBroker = new QRadioButton(creating ? tr("Broker:") : tr("B&roker:"));
+  m_liveNone = new QRadioButton(creating ? Text::tr("None") : Text::tr("&None"));
+  m_liveBroker = new QRadioButton(creating ? Text::tr("Broker:") : Text::tr("B&roker:"));
   auto* liveGroup = new QButtonGroup(this);
   liveGroup->addButton(m_liveNone);
   liveGroup->addButton(m_liveBroker);
@@ -1007,22 +1011,22 @@ ProjectSettingsFields::ProjectSettingsFields(Host host, QWidget* parent) : QWidg
   m_prefix = new QLineEdit;
   m_prefix->setPlaceholderText(QStringLiteral("mitcad"));
   m_prefix->setMaximumWidth(120);
-  m_test = new QPushButton(creating ? tr("Test") : tr("Te&st"));
+  m_test = new QPushButton(creating ? Text::tr("Test") : Text::tr("Te&st"));
   m_test->setAutoDefault(false);
   auto* liveColumn = new QVBoxLayout;
   liveColumn->addWidget(m_liveNone);
   auto* brokerRow = new QHBoxLayout;
   brokerRow->addWidget(m_liveBroker);
   brokerRow->addWidget(m_broker, 1);
-  brokerRow->addWidget(new QLabel(tr("Prefix:")));
+  brokerRow->addWidget(new QLabel(Text::tr("Prefix:")));
   brokerRow->addWidget(m_prefix);
   brokerRow->addWidget(m_test);
   liveColumn->addLayout(brokerRow);
-  everyone->addRow(tr("Live updates:"), liveColumn);
+  everyone->addRow(Text::tr("Live updates:"), liveColumn);
   layout->addWidget(m_everyone);
 
   // On this computer.
-  auto* here = new QGroupBox(tr("On this computer"));
+  auto* here = new QGroupBox(Text::tr("On this computer"));
   mac::styleSection(here);
   auto* hereForm = new QFormLayout(here);
   // The name the Projects panel shows (mitcad#152): this computer's, a
@@ -1031,37 +1035,37 @@ ProjectSettingsFields::ProjectSettingsFields(Host host, QWidget* parent) : QWidg
   m_displayName->setObjectName(QStringLiteral("projectDisplayName"));
   m_displayName->setMaxLength(200);
   m_displayName->setClearButtonEnabled(true);
-  auto* displayLabel = new QLabel(creating ? tr("Display na&me:") : tr("&Display name:"));
+  auto* displayLabel = new QLabel(creating ? Text::tr("Display na&me:") : Text::tr("&Display name:"));
   displayLabel->setBuddy(m_displayName);
   hereForm->addRow(displayLabel, m_displayName);
   m_name = new QLineEdit;
   m_name->setObjectName(QStringLiteral("projectAuthorName"));
-  m_name->setPlaceholderText(tr("Your Name"));
+  m_name->setPlaceholderText(Text::tr("Your Name"));
   m_email = new QLineEdit;
   m_email->setObjectName(QStringLiteral("projectAuthorEmail"));
-  m_email->setPlaceholderText(tr("you@example.com"));
+  m_email->setPlaceholderText(Text::tr("you@example.com"));
   auto* authorRow = new QHBoxLayout;
   authorRow->addWidget(m_name, 1);
   authorRow->addWidget(m_email, 1);
-  auto* authorLabel = new QLabel(creating ? tr("A&uthor:") : tr("&Author:"));
+  auto* authorLabel = new QLabel(creating ? Text::tr("A&uthor:") : Text::tr("&Author:"));
   authorLabel->setBuddy(m_name);
   hereForm->addRow(authorLabel, authorRow);
-  m_sendAtOnce = new QCheckBox(tr("Send each version at once"));
+  m_sendAtOnce = new QCheckBox(Text::tr("Send each version at once"));
   hereForm->addRow(QString(), m_sendAtOnce);
   m_check = new QComboBox;
   const RemoteSettings defaults = RemoteSettings::load();
   for (const int minutes : kCheckChoices) {
-    m_check->addItem(minutes < 0 ? tr("as in Preferences (%1)").arg(checkText(defaults.checkMinutes))
+    m_check->addItem(minutes < 0 ? Text::tr("as in Preferences (%1)").arg(checkText(defaults.checkMinutes))
                                  : checkText(minutes),
                      minutes);
   }
-  auto* checkLabel = new QLabel(creating ? tr("C&heck for newer versions:") : tr("&Check for newer versions:"));
+  auto* checkLabel = new QLabel(creating ? Text::tr("C&heck for newer versions:") : Text::tr("&Check for newer versions:"));
   checkLabel->setBuddy(m_check);
   hereForm->addRow(checkLabel, m_check);
   m_liveHere = new QComboBox;
-  m_liveHere->addItem(tr("Use the project's"), QStringLiteral("project"));
-  m_liveHere->addItem(tr("Off"), QStringLiteral("off"));
-  m_liveHere->addItem(tr("Another broker"), QStringLiteral("broker"));
+  m_liveHere->addItem(Text::tr("Use the project's"), QStringLiteral("project"));
+  m_liveHere->addItem(Text::tr("Off"), QStringLiteral("off"));
+  m_liveHere->addItem(Text::tr("Another broker"), QStringLiteral("broker"));
   m_hereBroker = new QLineEdit;
   m_hereBroker->setPlaceholderText(QStringLiteral("mqtts://broker.example.com:8883"));
   m_herePrefix = new QLineEdit;
@@ -1071,9 +1075,9 @@ ProjectSettingsFields::ProjectSettingsFields(Host host, QWidget* parent) : QWidg
   auto* hereRow = new QHBoxLayout(m_hereRow);
   hereRow->setContentsMargins(0, 0, 0, 0);
   hereRow->addWidget(m_hereBroker, 1);
-  hereRow->addWidget(new QLabel(tr("Prefix:")));
+  hereRow->addWidget(new QLabel(Text::tr("Prefix:")));
   hereRow->addWidget(m_herePrefix);
-  auto* liveHereLabel = new QLabel(creating ? tr("Live upd&ates here:") : tr("L&ive updates here:"));
+  auto* liveHereLabel = new QLabel(creating ? Text::tr("Live upd&ates here:") : Text::tr("L&ive updates here:"));
   liveHereLabel->setBuddy(m_liveHere);
   hereForm->addRow(liveHereLabel, m_liveHere);
   hereForm->addRow(QString(), m_hereRow);
@@ -1091,7 +1095,7 @@ ProjectSettingsFields::ProjectSettingsFields(Host host, QWidget* parent) : QWidg
   m_liveHere->setObjectName(QStringLiteral("projectLiveHere"));
   m_hereBroker->setObjectName(QStringLiteral("projectHereBroker"));
   m_herePrefix->setObjectName(QStringLiteral("projectHerePrefix"));
-  m_displayName->setToolTip(tr("The name shown on this computer only. Empty uses the repository address "
+  m_displayName->setToolTip(Text::tr("The name shown on this computer only. Empty uses the repository address "
                              "or folder name."));
   m_name->setMaxLength(200);
   m_email->setMaxLength(200);

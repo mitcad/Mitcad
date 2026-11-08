@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-preview"
+description = "Headless preview images of a design: the arguments, the camera, a software rasterizer and a PNG writer (mitcad#1486)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mitcad_preview"
+
+[dependencies]
+mitcad-vec3 = { path = "../vec3" }
+serde_json.workspace = true
+# The PNG's deflate stream, pure Rust (as the zip writer's).
+miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"] }

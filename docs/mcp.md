@@ -236,6 +236,7 @@ server permits these operations:
 - Open a document
 - List the documents
 - Query a document
+- Draw a picture of a document (`model_render`, without `path`)
 - Close a document
 
 In read-only mode, the server refuses these operations:
@@ -244,6 +245,12 @@ In read-only mode, the server refuses these operations:
 - Model commands
 - Save
 - Export
+
+Add `--memory-limit MiB` to stop model commands (and the recompute of a
+design that the server opens) before the server's resident memory reaches
+85 % of that many MiB (or grows so fast that it would within 0.1 s), when
+that limit is lower than the process's own limits. Without it, the process's limits apply
+([memory](#transport-errors-and-limits)).
 
 The executable is the `mitcad-cli` build target. It is usually under
 `build/dev/tools/cli/`. Use its actual absolute path for your platform
@@ -437,6 +444,8 @@ The live catalogue has these tools:
 - `model_export`
 - `model_reference` (the command reference in parts, as in headless
   mode; [Look up the reference](#look-up-the-reference))
+- `model_render` (a picture of the design, as in headless mode;
+  [Preview images](#preview-images-model_render), mitcad#1487)
 - `document_save`
 - `document_open`
 - The application's own tools `ui_state`, `ui_log`, `ui_screenshot`,
@@ -683,8 +692,8 @@ Assistants May Use… (Preferences › AI Assistants).
 
 If the stdin of the bridge closes, the connection ends after the bridge
 forwards the requested replies. The GUI and its unsaved work stay open.
-A new bridge can connect again to the same document. `--workspace` and
-`--read-only` belong to headless mode. You cannot combine them with
+A new bridge can connect again to the same document. `--workspace`,
+`--read-only` and `--memory-limit` belong to headless mode. You cannot combine them with
 `--connect` or `--list-instances`.
 
 | Tool | Arguments | Result |
@@ -692,8 +701,9 @@ A new bridge can connect again to the same document. `--workspace` and
 | `document_list` | `{}` | `documents`: the document of the window, with `document`, `path`, `name`, `state`, `busy` and `editable`. `folders`: the folders for designs, which AI assistants can save to and open from. An empty list means no folder. |
 | `model_query` | `document`, `query` | `document`. Native JSON in `result`. |
 | `model_command` | `document`, `command` (an object or an array). Optional `timeline` (`changed` default, `full`, `none`). | `document`, `applied`, native `result`, `failed_features`, `state`, `changes` (with `full` `timeline` and `bodies` instead). For an array also `ran`, `results`, `stopped_at`. In a sketch, also `sketch`. Refer to the command arrays above and [failed features](#transport-errors-and-limits). |
-| `model_export` | `document`, `path` (a new file in a folder for designs), `format`. Optional `bodies`, `sketch`, `flat_pattern`, `drawing`, as in headless mode. | `document`, `path`, `exported`, native export `result`. |
+| `model_export` | `document`, `path` (a new file in a folder for designs), `format`. Optional `bodies`, `sketch`, `flat_pattern`, `drawing`, and the print plates and print bed fields (`plates`, `plate`, `dialect`, `on_bed`, `center`, `drop`, `auto_orient`, `bed_face`, `spacing`, `occurrence`, `occurrences`, `whole`), as in headless mode; each file a `file_per_plate` writes is a new file in a folder for designs. | `document`, `path`, `exported`, native export `result`. |
 | `model_reference` | As in headless mode: none, or one of `section`, `query`, `command`, `feature`, `search`; optional `offset`. | As in headless mode ([Look up the reference](#look-up-the-reference)). The protocol answers it, without the document. |
+| `model_render` | As in headless mode, without `quality` and its fields (fast only); `document` optional; `path` a new `.png` file in a folder for designs. | As in headless mode ([Preview images](#preview-images-model_render)): the same picture as the headless server's for the same design and arguments. |
 | `document_save` | `document`. Optional `path`. Optional `overwrite` (default false). | `document`, `path`, `saved`, `status`, `state`. `status` is the text of the status bar, with the recorded version. Refer to the text below the table. |
 | `document_open` | `path`. Optional `discard` (default false). | `document` (the new handle), `path`, `name`, `state`, `busy`, `editable`, `opened`, `replaced` (the old handle). Refer to the text below the table. |
 | `document_new` | Optional `name`, `folder`. | `document` (the new design's handle), `path` (null for an untitled design), `name`, `state`, `busy`, `editable`, `created`, `previous` (the calling design's handle, still valid), `recorded` (true when a project recorded it), `note` when the current project's folder could not be used. Refer to the text below the table. |
@@ -1056,8 +1066,9 @@ required.
 | `model_command` | `document`, `command` (a native JSON object or an array of them), `timeline` (`changed` default, `full`, `none`) | `document`, `applied`, native `result`, `failed_features`, `state`, `changes` (with `full` `timeline` and `bodies` instead); for an array also `ran`, `results`, `stopped_at`. Refer to the command arrays and results under "Live tools" and [failed features](#transport-errors-and-limits). |
 | `model_query` | `document`, `query` (a native JSON object) | `document`, native JSON in `result` |
 | `document_save` | `document`, `path`, `overwrite` (default false) | `document`, canonical `path`, saved `state` |
-| `model_export` | `document`, `path`, `format`. Optional `bodies` (an array of names or UIDs). Optional `sketch`. For DXF, `flat_pattern`. For a drawing, `drawing`. Refer to the text below the table. | `document`, canonical `path`, native export `result` |
+| `model_export` | `document`, `path`, `format`. Optional `bodies` (an array of names or UIDs). Optional `sketch`. For DXF, `flat_pattern`. For a drawing, `drawing`. For 3MF, `plates`, `plate`, `dialect`, `occurrences`, `whole`; on the print bed of 3MF, STL or OBJ, `on_bed`, `center`, `drop`, `auto_orient`, `bed_face`, `spacing`; for the bodies' formats, `occurrence`. Refer to the text below the table. | `document`, canonical `path`, native export `result` |
 | `model_reference` | None, or one of `section`, `query`, `command`, `feature`, `search`. Optional `offset`. Refer to [Look up the reference](#look-up-the-reference). | The contents and the permitted names, or one part of the reference, at most 64 kB of text |
+| `model_render` | `document`. Optional `view`, `projection`, `fit`, `bodies`, `hidden`, `size`, `edges`, `background`, `path`, `overwrite`, `max_bytes`, `colors`, `highlight`, `section`, `explode`, `views`, `quality` (`"raytrace"` with `samples`, `time_limit_s`, `denoise`: [Ray-traced pictures](#ray-traced-pictures)). Refer to [Preview images](#preview-images-model_render). | An MCP image block (PNG) after the text: `camera`, `width`, `height`, `bytes`, `bodies`, `timing_ms`, `warnings`, ...; with `views` an image block per view and `views` |
 
 `document_open` imports a `.solidcraft` design with its history into a
 new document without a `path`. Save that document with `document_save`
@@ -1069,6 +1080,36 @@ its Flat Pattern as DXF. With `format` `pdf` or `svg`, or `dxf` with
 hole table and a title block. `drawing` holds the options of
 `export_drawing` (commands.md "Drawings"). The title is the file name
 of the document, unless `drawing` gives one.
+
+`model_export` writes the design's print plates and a slicer's 3MF
+(mitcad#1490) with the fields of the `export` command (commands.md
+"Print plates", "Print bed faces", "Export by occurrences", "Spacing
+beyond the brims"), passed on as given:
+
+- `plates`: `one_file` writes every plate into `path` (Bambu Studio,
+  OrcaSlicer, QIDI Studio, PrusaSlicer 2.9 and later); `file_per_plate`
+  writes a file per plate beside `path`, `<name> - <plate name>.3mf`
+  (UltiMaker Cura, older PrusaSlicer). `plate` (an id or a name) writes
+  that plate alone into `path`. Plates take no `bodies`, `occurrence`,
+  `occurrences`, `whole` or `bed_face`.
+- `dialect`: the slicer whose print settings go with the bodies,
+  `bambu_studio`, `orcaslicer`, `qidi_studio`, `prusaslicer` or `cura`.
+- `on_bed`, `center`, `drop`, `auto_orient`, `bed_face` and `spacing`:
+  the pieces on the print bed (3MF, STL and OBJ); `occurrences` and
+  `whole` (3MF) pick placements, `occurrence` the placements of one
+  occurrence.
+
+`plates`, `plate`, `dialect`, `occurrences` and `whole` with another
+format than `3mf` are refused with a message naming 3MF. Each file of
+`file_per_plate` must be a new path in the workspace (in a folder for
+designs, live) as `path` is: every one is checked before the first is
+written. The result is the export command's, with `plates` (each
+plate's `id`, `name`, `path`, `bodies`, `pieces`, `origin`, `bed` and
+`warnings`) and `files`.
+
+```json
+{"name":"model_export","arguments":{"document":"D1","path":"kit.3mf","format":"3mf","plates":"one_file","dialect":"bambu_studio"}}
+```
 
 Each tool result includes both `structuredContent` and a text content
 block with the same JSON. For example, `model_query` with
@@ -1102,9 +1143,10 @@ The command reference is
 [the native API reference](../core/model-api/src/commands.md). Use it
 for feature definitions, sketch entities, parameters and topological
 names. The tool `model_reference` gives it in parts (below). The whole
-reference is also available through `resources/list` and
-`resources/read` at `mitcad://reference/commands`, for clients that
-read resources; it is about 1 MB, more than an AI assistant's context. The
+reference, as agents see it (below), is also available through
+`resources/list` and `resources/read` at `mitcad://reference/commands`,
+for clients that read resources; it is over 1 MB, more than an AI
+assistant's context. The
 server permits the commands, feature types and
 queries of the model class. These operate on the data of the document.
 The server refuses the file IO, remote and internal ones by their class
@@ -1123,11 +1165,12 @@ descriptions of `model_query` and `model_command` point to it.
 
 | Arguments | Result |
 |---|---|
-| none | `contents`: the `##` and `###` headings of the reference, one a line (`###` indented); `queries`, `commands`, `features`: every query, command and feature type the server permits; `usage` |
+| none | `contents`: the `##` and `###` headings of the reference, one a line (`###` indented); `guides`: each guide topic's `id` and `read_when` (below); `queries`, `commands`, `features`: every query, command and feature type the server permits; `usage` |
 | `section` | One section with its subsections: `section` (its heading), `path` (the headings above it), `text`. The name is a heading (`"Values"`, `"Sketch commands"`, in any case), a name a heading lists (`"split_body"` finds *Face features: shell, …, split_body, split_face*) or a part of a heading, in that order; `other_sections` names the other matches |
 | `query`, `command` | The reference rows of that query or command, each table with its header and the headings above it, in `text`; `sections`: the headings that list the name; `permitted`. A name without rows gives the lines that name it |
 | `feature` | The section of that feature type (the heading that lists it, or the section of its first example definition), as `section` gives it, with `feature`, `example` (its first example definition) and `permitted` |
 | `search` | `headings` that contain the text, and `hits`: `section` (the headings above the line) and `excerpt` (240 characters around the text) of each line that contains it, in any case; `total` |
+| `guide` | A guide on how to model well (below): `guide` (its id) and `text`. `"index"` gives the index |
 
 Every answer holds at most 64 kB of text. A longer one has `truncated:
 true`, `next_offset` and a `note`: call again with the same argument and
@@ -1137,6 +1180,17 @@ number of hits to skip; a page holds at most 200 hits. An unknown
 section, query, command or feature type is an error (`isError`) that
 lists the names there are. Give one argument at a time.
 
+The tool and the resource give the reference as agents see it
+(mitcad#1509), without what an agent cannot use: the sections whose
+command and query tables name only names the server does not permit
+(files, version history, projects, edit locks, library commands, …;
+asked for by name, such a command or query is "not available through
+MCP"), the sections about how the code works inside (marked
+`<!-- mcp: internal -->` under their heading), and the issue numbers of
+headings (a section is still found by its heading with them). The
+reference file itself stays whole for developers
+([The reference in parts over MCP](../core/model-api/src/commands.md#the-reference-in-parts-over-mcp)).
+
 ```json
 {"name": "model_reference", "arguments": {"feature": "construction_plane"}}
 ```
@@ -1144,6 +1198,366 @@ lists the names there are. Give one argument at a time.
 answers with the section *construction_plane, construction_axis,
 construction_point*, its table of definitions and the example
 `{"type": "construction_plane", "definition": {"type": "offset", "plane": "xy", "distance": 10}}`.
+
+### Guides for agents
+
+The reference says what exists; the guides (mitcad#1508) say how to
+model well in MitCad: design intent, placement on references, fully
+constrained sketches and, in later topics, choosing between overlapping
+features and checking each step. They are short Markdown topics, read one
+at a time when a task needs them, so that they cost an assistant nothing
+until then.
+
+They live in
+[`core/mcp/guide/mitcad-modeling/`](../core/mcp/guide/mitcad-modeling/SKILL.md),
+in the Agent Skills layout, and are compiled into the server like the
+reference:
+
+- `SKILL.md`: its frontmatter `name` and `description` say what the
+  guide is and when to read it; its body is the index, one line per
+  topic, `- [<id>](references/<id>.md): <when to read it>`;
+- `references/<id>.md`: one topic each.
+
+An assistant reaches them three ways, all with the same text:
+
+| Channel | How |
+|---|---|
+| `model_reference` (every client: a tool is the one channel every client passes on) | `{"guide": "index"}` gives the index, `{"guide": "<id>"}` a topic; the answer without arguments lists the topics as `guides`. Answers keep the 64 kB limit and `offset`; an unknown id is an error that lists the ids |
+| Resources | `mitcad://guide/index` and `mitcad://guide/<id>` in `resources/list` and `resources/read`, Markdown |
+| A skill | The folder itself is an Agent Skill, for clients that load skills |
+
+One sentence of the server instructions points at the index, and the
+description of `model_reference` names `guide`.
+
+To add a topic, write `references/<id>.md`, add its line to the index in
+`SKILL.md` and its `include_str!` to `TOPICS` in `core/mcp/src/guide.rs`.
+Unit tests in `mitcad-mcp` fail when a file in `references/` is missing
+from the index or from `TOPICS`, when an index line has no file, or when
+a backticked name in a topic is a command or query that MCP does not
+permit, or a name neither MCP permits nor the reference has (a field is
+in the reference). The `"cmd"` and `"query"` of JSON examples in a topic
+must be permitted ones. These tests read the permitted names from the
+model API, as the application gives them to `model_reference`.
+
+### Preview images: model_render
+
+`model_render` (mitcad#1486) draws a picture of a document on the
+headless server (and on the live one, [below](#inspection-options-and-several-views)),
+so that an agent sees what it builds: a roof slab past
+a gable, a cut that undercuts a step. It is read-only, so `--read-only`
+allows it (without `path`, which writes a file). It needs no display and
+no GPU, and involves no UI state. The bodies are shaded with their
+appearances (the body's, and those of single faces) and drawn with
+their face boundaries and silhouettes, as the 3D view shows them, over
+the view's default light gradient.
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `document` | | The handle |
+| `view` | `"home"` | A name: `home` (the design's named view `Home`, else `iso`), `iso`, `front` (looking along +Y), `back`, `left`, `right` (looking along -X), `top` (looking down, +Y up), `bottom`, or a named view saved in the design. Or `{"azimuth", "elevation"}` in degrees (azimuth about Z from the front, 90 from the right; elevation above the XY plane), or a camera `{"eye", "target", "up"}` (points in mm; optional `height`, `fov`, `projection`). A `camera` the result gave is taken back as it is. |
+| `projection` | the view's, else `"perspective"` | `"perspective"` or `"orthographic"` |
+| `fit` | `"all"` for a named view or angles; none for a saved view or a camera | `"all"` (the bodies drawn), a list of body, component, occurrence or feature ids (`F2.b0`, `C1`, `O1/O4`, `F7`) or body names, or a box `{"min", "max"}` in mm to zoom on a detail. A camera with `fit` keeps its direction and up and is framed. |
+| `bodies` | `"visible"` | `"visible"` (the bodies the design shows: its light bulbs and isolation), `"all"` (hidden ones too), or a list of ids as for `fit`: only these, shown or hidden |
+| `hidden` | none | Ids as for `fit`, left out |
+| `size` | `[1024, 768]` | Width and height in pixels, 16 to 4096 each |
+| `edges` | `true` | Face boundaries and silhouettes |
+| `background` | `"theme"` | `"theme"` (the view's light gradient), `"transparent"` (a PNG with alpha), `"white"`, `"black"` or `"#rrggbb"` |
+| `path` | none | Also write the PNG, at full size, to this `.png` file in the workspace (refused under `--read-only`) |
+| `overwrite` | `false` | Replace an existing file at `path` |
+| `max_bytes` | 5 MiB | The returned PNG's largest size in bytes, as for `ui_screenshot` |
+| `colors` | none | Per-body colors: `{"F2.b0": "#a52a2a", "C1": "#3060c0"}`, each key an id as for `bodies` ([Inspection options](#inspection-options-and-several-views)) |
+| `highlight` | none | References drawn in the selection blue: bodies, faces and edges |
+| `section` | none | A clip plane `{"origin", "normal"}` in mm: the side the normal points to is cut away, solids capped |
+| `explode` | `0` | Moves components (or bodies) apart from the centre by this factor, 0 to 10 |
+| `views` | none | Up to 8 views answered as several pictures in one call |
+| `overlay` | none | What an analysis finds, drawn over the bodies ([Overlays](#overlays)): `"overhang"`, `"thickness"`, `"draft"`, `"failed"`, or an object with `type` and its settings |
+
+The result is the text block, then an MCP `image` block (`image/png`).
+`structuredContent` holds:
+
+- `camera`: the camera used, `{"eye", "target", "up", "projection",
+  "height", "fov"}` (`height`: millimetres of the model shown at the
+  target, top to bottom; `fov`: the vertical field of view in degrees,
+  for a perspective only). Passed back as `view` (with `fit` left out) it
+  gives the same picture, so a follow-up call can turn or zoom from it.
+- `quality` (`"fast"`), `format` (`"png"`), `mime_type`, `width` and
+  `height` of the image returned, `full_width` and `full_height` (the
+  size asked for), `bytes`, `max_bytes`, `downscaled_for_bytes`.
+- `bodies`: the ids of the bodies drawn; `triangles` and `edges`: how
+  many were drawn.
+- `timing_ms`: `mesh`, `raster`, `encode` and `total`.
+- `warnings`: for example a body that could not be meshed, or nothing to
+  frame (an empty design shows the origin).
+- `path`, when the PNG was also written to a file.
+- `overlay`, with an overlay: its summary ([Overlays](#overlays)), and
+  `timing_ms.overlay`.
+
+The byte budget is `ui_screenshot`'s: `max_bytes` counts the PNG, not
+its base64. When the PNG is larger, the picture is drawn again smaller
+with the same camera (at most 8 times, never below 64 pixels on the
+longer side), and `downscaled_for_bytes` says so. When even that does
+not fit, the call is refused with `error_code` `render_too_large`, with
+`max_bytes` and the smallest attempt's `smallest_bytes`,
+`smallest_width` and `smallest_height`. The file written to `path` is
+always the size asked for; a file that cannot be written is refused with
+`error_code` `render_write_failed`. Unknown ids in `bodies`, `hidden`
+or `fit`, and an unknown view name, are refused with the choices.
+
+The same document and arguments give the same bytes on one platform
+(the tests compare them), so agents and tests can compare pictures by
+their bytes. Another platform's floating point may differ in the last
+bit, and a pixel with it.
+
+**How it draws.** A software rasterizer in Rust (`core/preview`, with
+the scene from the model, `core/model/src/preview.rs`), over the bodies'
+display meshes (`Kernel::face_meshes`, each body meshed within a
+thousandth of its box's diagonal, as the 3D view meshes it, 0.01 to
+0.5 mm). It was chosen over an offscreen OCCT view (EGL or OSMesa) for
+three reasons: it needs no GPU, display, EGL or Mesa library in a
+container or CI; its output is exact integer and `f64` arithmetic in a
+fixed order, so it is deterministic, which a GPU driver's rasterization
+is not; and it is our own logic, which goes in Rust first. The camera
+(`core/preview/src/camera.rs`) is a pure function of the view, the
+framed box and the picture's shape, shared with every later quality, so
+that a fast preview and a ray-traced picture of the same arguments frame
+alike. Edges are drawn against the depth of the faces with a small
+tolerance; transparent bodies are drawn faintly after the others.
+Pictures larger than about two million pixels are drawn without the 2x2
+supersampling that smooths the edges of smaller ones.
+
+#### Inspection options and several views
+
+`colors`, `highlight`, `section`, `explode` and `views` (mitcad#1487)
+help an agent check a specific place: a multi-color print, a reference,
+a fit or a cavity, an assembly or a kit. They are the fast mode's; a
+ray-traced picture refuses them. A reference or id that names nothing
+drawn, in `colors` or `highlight`, is a warning in `warnings`
+(`colors: F9.b0 names no body drawn`), not a refusal; a value of the
+wrong form (a color that is not `#rrggbb`, a zero normal) is refused.
+
+- **`colors`**: an object of ids, as `bodies` takes them (a body,
+  feature, component or occurrence id, or a body's name), and colors
+  `"#rrggbb"`. Every face of the bodies named takes the color, their
+  appearances and face appearances replaced for this picture. A body
+  several keys name takes the color of the key naming the fewest bodies
+  (the most specific), then of the key later in sorted order.
+- **`highlight`**: a list of references, drawn in the selection blue
+  (`#1f7aff`, the 3D view's selection color), to confirm that a reference
+  points where the agent thinks:
+  - an id or a body's name, as for `bodies`: every face of those bodies;
+  - a face's topological name, as `model_query` `faces` lists it
+    (`F2:side(c1[c4,c2])`): that face of every body drawn that has it
+    (a face matches when one of its names matches);
+  - an edge's name (`E{F2:side(c1[c4,c2])|F2:end(...)}`): a line two
+    pixels wide along the edge, over everything, also where a face hides
+    it;
+  - `<body>/<face or edge name>` (`"Body1/F2:end(r{c5})"`), or
+    `{"body", "face"}`, `{"body", "edge"}` (optional `"occurrence"`), or
+    an entity as `ui_state` lists the selection
+    (`{"kind": "face", "owner": "F2.b0", "name": ..., "occurrence": ...}`):
+    only in that body (and occurrence).
+- **`section`**: `{"origin": [x, y, z], "normal": [x, y, z]}` in mm.
+  The side the normal points to is cut away, as a Section Analysis cuts.
+  Edges and silhouettes are cut there too, and the cut's outline is drawn
+  with the edges. A solid body (not a surface body, not a transparent
+  one) is capped: its cut faces are drawn in the body's color (its
+  `colors` color, if given), lit as facing the eye, with thin lines at
+  45 degrees in a darker shade, so that the inside of a hollow body, a
+  fit or a hole shows against the walls around it. An `overlay` is cut
+  at the plane too. The camera frames the bodies whole, as without a
+  section.
+- **`explode`**: a factor, 0 to 10. The bodies are grouped by their
+  top-level occurrence (a root body is a group of its own); in a design
+  with one group only, each placed body is a group. Each group moves
+  away from the centre of the drawn bodies' bounding box by `explode`
+  times the distance of its own box's centre from it. The camera frames
+  the moved bodies. `0` is the picture without `explode`.
+- **`views`**: a list of up to 8 entries, each a view as `view` takes it
+  (a name, angles or a camera) or an object with the picture's own
+  `view`, `projection`, `fit`, `size` and `section`; the call's other
+  arguments apply to every picture. The result has one image block per
+  entry after the text, in order, and `views` in `structuredContent`:
+  each picture's `camera`, `width`, `height`, `full_width`,
+  `full_height`, `bytes`, `downscaled_for_bytes`, `bodies`, `triangles`,
+  `edges`, `timing_ms` and `warnings`, as a single call gives them. The
+  call's `max_bytes` is shared: each picture gets `max_bytes` divided by
+  the number of entries (`share_bytes`), and `bytes` is their sum. Each
+  picture is the one a single call with its entry's fields gives, byte
+  for byte, when it fits that share. `views` returns pictures inline
+  only: a call with `path` is refused.
+
+**The live server.** The application's MCP connection answers
+`model_render` too (mitcad#1487), with the same renderer and arguments
+(without `quality` and its fields): the design at the timeline marker,
+as the headless server draws the same design file. The picture does not
+depend on the window's view, its camera, visual style or selection;
+`ui_screenshot` is the tool for what the user sees. Like `model_query`,
+it reads while a sketch or command is open and is refused only while the
+model computes. `path` is a new `.png` file in a folder the user allows
+agents to use (`document_list`'s `folders`), and the chat panel asks
+before a chat agent writes one.
+
+#### Overlays
+
+`overlay` (mitcad#1488) draws what an analysis finds over the bodies in
+one flat color, so that an agent sees where a print needs support or a
+wall is too thin without slicing the design. The overhangs and the walls
+come from the same Rust functions as Print Analysis
+(`core/model/src/print_analysis.rs`, [commands.md](../core/model-api/src/commands.md),
+Print analysis), on the mesh Print Analysis meshes a body with (the 3MF
+export's default tolerance), and the triangles drawn are the ones its
+numbers count: the picture and the numbers agree. A body is analysed
+where Print Analysis prints it from (its first shown placement) for the
+summary, and drawn where each of its placements puts it. The triangles
+lie a little off the surface (0.05 mm, the walls' 0.08 mm, plus the
+picture's mesh deviation of the body), unlit, as the 3D view draws Print
+Analysis; edges are drawn over them.
+
+| `overlay` | Settings | Color | Draws |
+|---|---|---|---|
+| `"overhang"` | `angle`: degrees from the vertical (default 45); `up`: the print direction's up `[x, y, z]` | `#7e3fd0` | The regions that need support, as `print_overhangs` finds them: printed with `up` upward when given, else on the body's print bed face ([Print bed faces](../core/model-api/src/commands.md#print-bed-faces)), else with +Z up; a face on the bed is none |
+| `"thickness"` | `minimum`: the thinnest wall in mm (default 0.8) | `#c2188b` | Walls thinner than the minimum, as `print_thickness` finds them (the thin pieces of a triangle thin in part); the result is the one that query keeps, so asking both computes it once |
+| `"draft"` | `pull`: the mold's pull direction (default `[0, 0, 1]`); `angle`: the least draft in degrees (default 1, less than 90) | `#d98a00` | Faces whose normal is within `angle` of square to the pull, either way (a two-part mold): they need more draft |
+| `"failed"` | none | `#d32f2f` | The bodies the failed features before the marker read (else those of the features they name), whole: a failed feature changes nothing, so they show what it did not do |
+
+Any of them takes `color` (`"#rrggbb"`). Unknown types and fields of
+another type are refused. `overlay` is drawn in the fast mode only; with
+`quality: "raytrace"` it is refused.
+
+The result's `overlay` gives `type`, `color` and per type:
+
+- `overhang`: `angle`, `up` (as given, or null), `area`,
+  `overhang_area` and `share` of the bodies drawn, and `bodies`: per body
+  `body`, `name`, `down` (towards the bed), `bed_face` (whether its print
+  bed face orients it), `area`, `overhang_area`, `share` and `triangles`
+  (their count): `print_overhangs`' numbers for that body and direction.
+- `thickness`: `minimum`, `thinnest` and `at`, `regions`,
+  `thin_triangles`, `thin_area` (mm²), and `bodies`: per body `thinnest`,
+  `at`, `to`, `regions`, `thin_triangles` and `thin_area`, as
+  `print_thickness` answers (with `triangles: false`).
+- `draft`: `pull` (unit), `angle`, `area`, `under_area`, `share`, and
+  `bodies`: per body `area`, `under_area`, `share` and `triangles`.
+- `failed`: `features` (each failed feature's `feature`, `name`, `error`
+  and `bodies`), `bodies` (those marked in the picture), `not_drawn`
+  (marked bodies the picture does not draw, e.g. hidden ones; draw them
+  with `bodies: "all"`) and `errors`.
+
+A body that cannot be meshed for the analysis is left out with a
+warning and an entry `{"body", "name", "error"}` in `bodies` (in
+`errors` for `failed`).
+
+```json
+{"document": "D1", "view": "bottom", "overlay": {"type": "overhang", "angle": 50}}
+→ {"overlay": {"type": "overhang", "color": "#7e3fd0", "angle": 50, "up": null,
+     "overhang_area": 412.6, "area": 5180.2, "share": 0.0797,
+     "bodies": [{"body": "F2.b0", "name": "Body1", "down": [0, 0, -1], "bed_face": false,
+                 "area": 5180.2, "overhang_area": 412.6, "share": 0.0797, "triangles": 38}]}, …}
+```
+
+Tests: `render_overlay_tests` (`core/model-tests/print`: a
+block with one 60-degree overhang whose pixels take the overlay's color
+from below and not from the top, front or right, with `print_overhangs`'
+area; the print bed face and `up`; thin walls from `print_thickness`'
+result; faces under the draft; a failed fillet marking the block it read
+and not the one beside it), `core/preview/src/overlay_tests.rs` (the
+argument; flat over its face, hidden behind others),
+`core/mcp/src/tests.rs` (the schema) and `tools/cli/mcp-test.py`
+(`test_model_render_overlays`: the overhang and the walls of a box on
+the real kernel, with `print_overhangs`' area).
+
+#### Ray-traced pictures
+
+With `quality: "raytrace"` (mitcad#1489), `model_render` ray traces the
+picture with the Cycles render worker `mitcad-render`, as
+`mitcad-cli render` does ([Final render](rendering.md#final-render)): the same
+scene (the bodies as placed, with their appearances, their faces'
+appearances and texture images) and the same job (the design's render
+settings: environment, ground, lights, film). The camera, `fit`,
+`bodies`, `hidden` and `size` are the fast mode's, so that a fast preview
+and its ray-traced picture of the same arguments frame alike: the result's
+`camera` is the one the fast mode gives for them.
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `quality` | `"fast"` | `"raytrace"` for the render worker |
+| `samples` | `64` | Samples per pixel, 1 to 4096 |
+| `time_limit_s` | `30` | The most seconds the render may take, 1 to 600; it stops with the samples it has by then |
+| `denoise` | `true` | Denoise the picture |
+
+`colors`, `highlight`, `section`, `explode` and `views` are the fast
+mode's: a ray-traced call with any of them is refused.
+`samples`, `time_limit_s`, `denoise`, `size` and `background` replace the
+design's render settings for this picture only; the document does not
+change. `background` `"theme"` is the render settings' background (their
+colour, or the view's light gradient), `"transparent"` gives a PNG with
+alpha. `edges` does not apply: a ray-traced picture shows no edge lines.
+The render device is chosen as for `mitcad-cli render --device auto`.
+
+The worker must be next to `mitcad-cli`, as `mitcad-cli render` finds
+it, or `MITCAD_RENDER_WORKER` names it. The call is never answered with a
+blank image:
+
+| `error_code` | When |
+|---|---|
+| `render_worker_missing` | No render worker is installed (or `MITCAD_RENDER_WORKER` names no program) |
+| `render_worker_failed` | The worker failed to start, does not match this MitCad, crashed, or did not finish within `time_limit_s` and a minute for its start |
+| `render_too_large` | The picture does not fit `max_bytes` even scaled down (as in the fast mode) |
+| `render_write_failed` | `path` could not be written |
+
+Each refusal has `suggestion`: render with `quality: "fast"` instead.
+
+The result is the fast mode's (an image block after the text) with
+`quality: "raytrace"`, and also `samples` (the samples rendered), `denoise`,
+`device` (the device it rendered on) and `timing_ms.render` (the worker's
+render time). When the PNG exceeds `max_bytes`, the rendered picture is
+scaled down smoothly until it fits (`downscaled_for_bytes`); the file
+written to `path` is always the size asked for. Ray tracing is not
+deterministic to the byte across devices and samples; compare pictures of
+the fast mode instead. `--read-only` allows it, without `path`.
+
+## Server instructions
+
+The `instructions` of the `initialize` result are one fixed text per
+server, live and headless (`core/mcp/src/lib.rs`), each at most 2,000
+characters (mitcad#1506). Claude Code keeps only the first 2,048
+characters of a server's instructions (4,096 since its v2.1.296) and
+drops the rest without telling the user; the chat panel runs the user's
+own `claude`, which may be older. The instructions hold only what applies
+across tools, the most important first:
+
+1. what the server is, and the document handles;
+2. comments first (read the open ones, `address_comment` in the same
+   array);
+3. `model_reference` for commands, queries and fields, and
+   `model_reference {"guide": "index"}` for how to model well (the guides
+   above);
+4. units: millimetres and radians, `"90 deg"`, the design's length unit;
+5. place a part or a sketch on a reference, not on a fixed plane;
+6. fully constrained and dimensioned sketches;
+7. a `model_command` array is one undo step and stops at the first
+   refusal.
+
+A rule about one tool is in that tool's description, which an assistant
+reads when it calls the tool; each description is at most 2,048
+characters:
+
+| Rule | In the description of |
+|---|---|
+| How a sketch's ids are given out, and that a point input `[x, y]` is always a new point | `model_command` (both servers); also the reference's *Sketch commands* |
+| How the application's command ids are found (`search`) | `ui_command` |
+| Busy and retry | `model_query` |
+| The sketch session, the command panel and read-only documents | `model_command` |
+| The `(agent)` undo label and Ctrl+Z | `model_command` |
+| A failed feature stays in the timeline | `model_command` |
+| What each `ui_*` tool shows or does | the `ui_*` tools |
+| The folders of save, open, new and export | `document_save`, `document_open`, `document_new`, `model_export`, `ui_screenshot`, `model_render`, `document_list` |
+| Handles that become invalid, no imports or closing, what Disconnect leaves | `document_list` |
+
+A unit test in `mitcad-mcp` fails when either server's instructions, as
+the client decodes them, are longer than 2,000 characters, when a tool
+description is longer than 2,048, when the kept rules are out of order,
+or when a moved rule's key phrase is missing from its tool's
+description.
 
 ## Keep an assistant-built timeline readable
 
@@ -1384,11 +1798,37 @@ command changed, the failed feature among them (or the whole timeline
 and bodies with `"timeline": "full"`). Examine the error of the feature. Then edit or undo. Do not
 treat the result as proof that nothing changed.
 
+Such a result's `error` says this itself (mitcad#1481): `F57 (Fillet3)
+was added but failed: fillet failed. It stays in the timeline; edit it, or
+remove it with undo or delete_feature` (`was changed` for an edit). In an
+array the entry is named first (`commands[1]: …`), and when the array
+stopped there, `the entries after it did not run` follows.
+
 A failure elsewhere in the timeline is listed in `failed_features` but
 leaves `isError` false.
 Such a failure is an earlier failure, or one that this command caused in
 a later feature (`new:true`), for example through a parameter. The
 command did what it was asked.
+
+A command that would run the process out of memory is stopped (mitcad#1480),
+in both servers: one boolean of many large, nearly flat spheres can take
+gigabytes, and the system would otherwise end the process without a
+reply. While a model command computes, MitCad measures its memory every
+0.02 s against the tightest limit it runs under (the memory the system has
+left, a cgroup's, `ulimit`'s or a job's limit; headless also
+`--memory-limit`, below). At 85 % of it, when the memory grows so fast
+that it would reach 85 % within 0.1 s (a join of a plate and 38 flattened
+spheres grew by about 6 GiB a second, mitcad#1493), or when an allocation
+inside the geometry kernel fails, the computation stops. The command is
+refused with `isError:true` and an error that starts with `the operation
+ran out of memory` and names the memory (`at 5.9 GiB of 6.9 GiB (memory
+the system has left)`; `(growing too fast to go on)` or `(an allocation
+in the geometry kernel failed)` before `at` when that was the reason);
+the document stays as it was before the command (an array's
+earlier entries are undone), and the server answers the next call. Do
+the work in smaller steps: for example, join the bodies in smaller
+groups. Imports keep their own memory guard; undo and redo are not
+stopped.
 
 If you open a document with failed geometry, the result is a handle, its
 snapshot and the failed features, not an error. Export refuses documents
@@ -1448,7 +1888,9 @@ computations can still use much time and memory.
   permitted names, a section, a query row, a feature type's example, a
   search, a cut section continued) and the errors that give the choices:
   an unknown query and command, a refused query, a command without
-  `cmd`, definitions that miss fields, an unknown variant (mitcad#714).
+  `cmd`, definitions that miss fields, an unknown variant (mitcad#714);
+  the print plates of two boxes in one Bambu-family 3MF and a file per
+  plate, refused while one plate's file exists and for STL (mitcad#1490).
 - Protocol unit tests are with the Rust protocol crate (`core.mcp`;
   `core/mcp/src/reference_tests.rs` for `model_reference` and its
   errors: the contents, a section, a query row, a feature type, a
@@ -1460,6 +1902,20 @@ computations can still use much time and memory.
   (`cli.mcp_results`, no Python) checks `isError` and `failed_features`
   with a failed feature in the timeline, `changes` without the whole
   timeline, and `add_feature` with `after` (with `"timeline": "full"`).
+- [tools/cli/mcp-memory-test.cmake](../tools/cli/mcp-memory-test.cmake)
+  (`cli.mcp_memory`, no Python) runs the server with `--memory-limit 1`:
+  a command and an array are refused with the memory error, the document
+  stays as it was, and the server answers the next calls (mitcad#1480).
+  [tools/cli/mcp-memory-boolean-test.cmake](../tools/cli/mcp-memory-boolean-test.cmake)
+  (`cli.mcp_memory_boolean`) runs the boolean that grew fastest
+  (mitcad#1493: a plate and 38 spheres flattened by a non-uniform scale,
+  joined in one Combine) with `--memory-limit 300`: the join is refused
+  within a second, the document stays as it was. The same script with
+  `-DBUILT=ON` (`cli.mcp_boolean_flattened_spheres`, mitcad#1529) runs
+  the join with `--memory-limit 4096`: it builds one valid body (about
+  2 s and a peak of 1.8 GB on 32 threads).
+  The guard itself, with readings of its own, is tested in
+  `core/model-base/src/monitor/memory_guard.rs` (`core.model_base`).
 - The macOS test `app.ui-macos-mcp`
   ([tools/ui-macos-mcp-test.py](../tools/ui-macos-mcp-test.py)) starts
   the actual GUI and the CLI bridge and checks live discovery, private
@@ -1476,6 +1932,15 @@ computations can still use much time and memory.
   Projections and Finish Sketch, `document_save` and `ui_log`.
 - [tools/ui-mcp-test.sh](../tools/ui-mcp-test.sh) runs the same flow on
   Linux (Xvfb).
+- [tools/mcp-eval](../tools/mcp-eval/README.md) (mitcad#1507) measures
+  what agents build through the headless server: six modelling tasks, a
+  runner that gives each to Claude Code or Codex with MitCad's tools only,
+  and metrics read from the saved designs (sketches not fully
+  constrained, fixed planes, repeated literal lengths, user parameters,
+  default names, groups, failed features, the design after each user
+  parameter's +10 % change) and from the transcripts (tool calls, errors,
+  tokens). Its extractor is tested by `cli.mcp-eval` on a small saved
+  design with known values.
 - The ctest `app.ui-windows-mcp`
   ([tools/ui-windows-mcp-test.ps1](../tools/ui-windows-mcp-test.ps1))
   runs the same flow on Windows, in session 0 with Mesa, with its own

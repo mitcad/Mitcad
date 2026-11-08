@@ -20,7 +20,10 @@ bridge:
   - ui_command Clean Up Stale Projections (its preview and warning), then
     Finish Sketch;
   - document_save to the design's own path;
-  - ui_log: the commands' lines, and since a sequence number.
+  - ui_log: the commands' lines, and since a sequence number;
+  - model_render (mitcad#1487) on another design the window opens: the
+    same picture as the headless server's, whatever the window's camera,
+    also into a file.
 Before the flow (mitcad#935): the bridge authenticates while eight idle
 connections that never authenticate are held open (each opened again when
 the application closes it), and 200 ui_select calls with a 7 MiB owner and
@@ -49,7 +52,7 @@ TIMEOUT = 60
 FRAME_LIMIT = 8 * 1024 * 1024
 LIVE_TOOLS = {"document_list", "model_query", "model_command", "document_save", "document_open", "ui_state", "ui_log",
               "ui_screenshot", "ui_select", "ui_command", "ui_camera", "model_export", "model_reference",
-              "document_new"}
+              "document_new", "model_render"}
 # The projection of the block's bottom face in the sketch F4, as the
 # design's definition lists it.
 PROJECTED = ["p1", "p2", "c3", "p4", "c5", "p6", "c7", "c8"]
@@ -153,11 +156,13 @@ def make_linked_font_fixture(cli, directory, env=None):
 
 
 class Bridge:
-    """`mitcad-cli mcp --connect` with JSON-RPC over its stdin and stdout."""
+    """`mitcad-cli mcp --connect` with JSON-RPC over its stdin and stdout
+    (or, with `mode`, another `mitcad-cli mcp`: the headless server)."""
 
-    def __init__(self, cli, env, err_path):
+    def __init__(self, cli, env, err_path, mode=("--connect",)):
+        self.cli, self.env = cli, env
         self.err = open(err_path, "w+b")
-        self.process = subprocess.Popen([cli, "mcp", "--connect"], env=env, stdin=subprocess.PIPE,
+        self.process = subprocess.Popen([cli, "mcp", *mode], env=env, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=self.err)
         self.messages = queue.Queue()
         self.reader = threading.Thread(target=self.read_output, daemon=True)
@@ -401,6 +406,61 @@ def check_png(shot, limit):
     check(max(width, height) <= limit and min(width, height) >= 32, "ui_screenshot's PNG is not scaled to max_size")
 
 
+def check_live_render(bridge, design, say=print):
+    """model_render on the live server (mitcad#1487): the headless server's
+    picture of the same design and arguments, whatever the window's view
+    shows; into a file in the allowed folder too. The design: a hollow
+    block and a cylinder (a design the headless server opens: no text of a
+    font file)."""
+    folder = Path(design).parent
+    script = folder / "render.json"
+    shape = folder / "render.mitcad"
+    script.write_text(json.dumps([
+        {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0], "length": 40, "width": 40,
+                                       "height": 40, "symmetric": True, "operation": "new_body"}},
+        {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [10, 10], "length": 20,
+                                       "width": 20, "height": 20, "symmetric": True, "operation": "cut",
+                                       "participants": ["F1.b0"]}},
+        {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [70, 20], "diameter": 16,
+                                       "height": 25, "operation": "new_body"}}]), encoding="utf-8")
+    made = subprocess.run([bridge.cli, "run", str(script), "--save", str(shape)], env=bridge.env,
+                          capture_output=True, timeout=TIMEOUT)
+    check(made.returncode == 0 and shape.exists(), "mitcad-cli: " + made.stderr.decode("utf-8", "replace"))
+    document = bridge.tool("document_open", {"path": str(shape), "discard": True})["document"]
+    for _ in range(600):
+        listed = [d for d in bridge.tool("document_list", {})["documents"] if d["document"] == document]
+        if listed and listed[0].get("editable"):
+            break
+        time.sleep(0.1)
+    arguments = {"view": "iso", "size": [320, 240], "highlight": ["F3.b0"],
+                 "section": {"origin": [20, 20, 0], "normal": [0, -1, 0]}}
+    pictures = []
+    for eye in ([200, -50, 80], [-120, 150, 300]):
+        bridge.tool("ui_camera", {"eye": eye, "target": [30, 20, 0], "up": [0, 0, 1]})
+        live = bridge.tool("model_render", dict(arguments, document=document))
+        check(live["document"] == document and live["warnings"] == [], "model_render live: " + repr(live)[:2000])
+        check(live["image"]["mimeType"] == "image/png", "model_render's image is not a PNG block")
+        pictures.append((live["camera"], live["image"]["data"]))
+    check(pictures[0] == pictures[1], "model_render followed the window's camera")
+    headless = Bridge(bridge.cli, bridge.env, folder / "headless.stderr.log",
+                      mode=("--workspace", str(folder), "--read-only"))
+    try:
+        headless.initialize()
+        handle = headless.tool("document_open", {"path": shape.name})["document"]
+        answer = headless.tool("model_render", dict(arguments, document=handle))
+        headless.finish()
+    finally:
+        headless.stop()
+    check((answer["camera"], answer["image"]["data"]) == pictures[0],
+          "model_render live and headless differ: " + repr((answer["camera"], pictures[0][0])))
+    written = bridge.tool("model_render", dict(arguments, document=document, path="live-render.png"))
+    check(Path(written["path"]).read_bytes() == base64.b64decode(pictures[0][1]),
+          "model_render's file is not its picture")
+    refused = bridge.tool("model_render", dict(arguments, document=document, path="live-render.png"), error=True)
+    check("live-render.png" in refused["error"], "model_render overwrote a file: " + repr(refused))
+    say("ok   model_render: the headless server's picture, whatever the window's view, and into a file")
+
+
 def run_flow(bridge, design, say=print):
     """The live debugging flow on the open design (see the module's text)."""
     names = {tool["name"] for tool in bridge.request("tools/list")["result"]["tools"]}
@@ -590,6 +650,8 @@ def run_flow(bridge, design, say=print):
     check(not any("mcp-linked-blocked-font.ttf" in line["text"] for line in later["lines"]),
           "Opening the root evaluated the linked child's font path")
     say("ok   MCP open retains embedded linked bodies without reading a changed child's font")
+
+    check_live_render(bridge, design, say)
 
 
 def main():

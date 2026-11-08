@@ -1,0 +1,65 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the plate of a corner with a rider is oriented from a stripe
+that rides on no line (mitcad#1532).
+
+The roof slab rounded on all its edges with 0.66 to 0.86: at the left
+eave's obtuse edge's ends the obtuse edge's rounding rides on the tip's
+contact line (0016), the underside's end edge on the slope's line, and the
+eave's end edge meets both. PerformMoreThreeCorner (1640, G0 constraints)
+took the orientation of the plate's curves from the corner's first stripe,
+here the obtuse edge's rider: its side on the line has its transition from
+the line's support (RideOnOverlap, 1640), and the plate's face came out
+with its wire the wrong way round (area -0.34 at r = 0.8). At the right
+eave the tip is the rider and the corner's first stripe is not.
+
+- PerformMoreThreeCorner: the orientation of the plate's p-curves (orien)
+  is taken from the first stripe at the corner that rides on no other's
+  line (the first one where all ride).
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+index a5463f46..684d169f 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+@@ -3739,10 +3739,22 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+ 
+     // calculate orientation of Plate orplate corresponding to surfdata
+     // calculation corresponding to the first stripe
+-    Indices(nedge, 0, icplus, icmoins);
+-    isfirst = (sens.Value(0) == 1);
++    // (The first stripe that rides on no other's contact line: a rider's
++    // side on the line has its transition from the line's support, which
++    // turned the plate's curves the wrong way round, RideOnOverlap.)
++    int ic0 = 0;
++    for (int ir = 0; ir < nedge; ir++)
++    {
++      if (!sharp.Value(ir) && !myRideStripes.Contains(CD.Value(ir)))
++      {
++        ic0 = ir;
++        break;
++      }
++    }
++    Indices(nedge, ic0, icplus, icmoins);
++    isfirst = (sens.Value(ic0) == 1);
+     const occ::handle<ChFiDS_SurfData>& Fd =
+-      CD.Value(0)->SetOfSurfData()->Value(i.Value(0, icmoins));
++      CD.Value(ic0)->SetOfSurfData()->Value(i.Value(ic0, icmoins));
+     indice = Fd->Surf();
+     //    Handle (Geom_Surface) surfdata  = DStr.Surface(indice).Surface();
+     //     tpar= (CD.Value(0)->PCurve(isfirst)->FirstParameter()+
+@@ -3802,12 +3814,12 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+     if (isfirst)
+     {
+       orpcurve = TopAbs::Reverse(trafil1);
+-      orpcurve = TopAbs::Compose(orpcurve, CD.Value(0)->FirstPCurveOrientation());
++      orpcurve = TopAbs::Compose(orpcurve, CD.Value(ic0)->FirstPCurveOrientation());
+     }
+     else
+     {
+       orpcurve = trafil1;
+-      orpcurve = TopAbs::Compose(orpcurve, CD.Value(0)->LastPCurveOrientation());
++      orpcurve = TopAbs::Compose(orpcurve, CD.Value(ic0)->LastPCurveOrientation());
+     }
+     if (orsurfdata == orplate)
+     {

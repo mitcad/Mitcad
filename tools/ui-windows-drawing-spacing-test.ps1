@@ -186,6 +186,30 @@ Ui-Mark
 Ui-Step 'end the tool (Esc)'              { Ui-Key 'Escape' }
 Ui-ExpectNew 'Drawing tool: selection' 'back to the selection'
 
+# Zoomed in on what the test clicks. Session 0's window fits its 1024 x 768
+# screen (1024 x 749, mitcad#1495; 1028 px before, larger than the screen),
+# and the Docked layout's Browser and Command docks leave the sheet 230 px
+# wide: about 2.3 mm a pixel, so whether a click at a corner lies within
+# its 2 mm pick reach was a matter of rounding (it picked the edge). Seven
+# wheel steps (1.15^7, about 2.7 times) about the sheet point that brings
+# the middle of what the test clicks (x 55-185, y 86-152 mm) where the A3
+# sheet's middle (210, 148.5) was: all of it stays where the sheet was
+# fitted, in the view, at under 1 mm a pixel.
+$zoomSteps = 7
+$zoomBy = [Math]::Pow(1.15, $zoomSteps)
+$zoomAt = @(((210 - 120 * $zoomBy) / (1 - $zoomBy)), ((148.5 - 119 * $zoomBy) / (1 - $zoomBy)))
+Ui-Mark
+Ui-Step "zoom in (wheel x$zoomSteps)"      {
+  $at = Sheet-At $zoomAt[0] $zoomAt[1]
+  [UiInput]::Move($script:UiWindow, $at[0], $at[1], 0)
+  Start-Sleep -Milliseconds 80
+  [UiInput]::Wheel($script:UiWindow, $at[0], $at[1], $zoomSteps)
+}
+Ui-ExpectNew 'Drawing sheet view ' 'the sheet zoomed in'
+$mmPerPixel = 100 / [Math]::Abs((Sheet-At 100 0)[0] - (Sheet-At 0 0)[0])
+if ($mmPerPixel -gt 1.0) { Ui-Fail "the sheet is still $mmPerPixel mm a pixel" }
+Write-Host "ok   the sheet at $([Math]::Round($mmPerPixel, 2)) mm a pixel"
+
 Write-Host '--- 1. The first dimension: where it is clicked'
 Ui-Mark
 Drawing-Tool 'Dimension' 'Dimensions'

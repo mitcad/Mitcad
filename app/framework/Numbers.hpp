@@ -25,7 +25,9 @@ std::optional<double> parsePlainNumber(const QString& text, QString* normalized 
 // ("-8 mm + 2 mm", "-(4 mm)", "d1 * 2"); false for a plain number and for
 // a number with a leading sign and a unit ("-8 mm", "+3 mm", "-5°",
 // "-2,5 mm"), whose sign is part of the number. A dragged value is written
-// as such a number, so the hint does not come and go across zero.
+// as such a number, so the hint does not come and go across zero. An inch
+// or foot mark after a number (`.875"`, `3' 6"`, mitcad#1531) shows the
+// hint, the value converted.
 bool valueHintWorthShowing(const QString& text, bool namesParameters);
 
 // A spin box that takes a decimal comma as a point and shows a point in

@@ -13,7 +13,11 @@
 namespace mitcad::drawings {
 namespace {
 
-QString tr(const char* text) { return QCoreApplication::translate("DrawingTools", text); }
+// The file's texts in the context DrawingTools, where lupdate records them
+// too (mitcad#1472).
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(DrawingTools)
+};
 
 QJsonArray point(const QPointF& p) { return QJsonArray{p.x(), p.y()}; }
 
@@ -443,32 +447,32 @@ void addTableTools(QVector<DrawingToolDef>& tools) {
                          const QString& value) {
     return ToolOption{id, label, ToolOption::Kind::Choice, choices, value};
   };
-  tools.append({QStringLiteral("drawing.hole_table"), tr("Hole Table"), QStringLiteral("drawing-hole-table"),
-                tr("Lists the holes a view sees end on, tagged in the view"), SheetPick::ViewThenPlace,
-                tr("Click the view whose holes the table lists"),
-                {choice(QStringLiteral("origin"), tr("Origin"),
-                        {{QStringLiteral("corner"), tr("Lower Left Corner")},
-                         {QStringLiteral("model"), tr("Component Origin")}},
+  tools.append({QStringLiteral("drawing.hole_table"), Text::tr("Hole Table"), QStringLiteral("drawing-hole-table"),
+                Text::tr("Lists the holes a view sees end on, tagged in the view"), SheetPick::ViewThenPlace,
+                Text::tr("Click the view whose holes the table lists"),
+                {choice(QStringLiteral("origin"), Text::tr("Origin"),
+                        {{QStringLiteral("corner"), Text::tr("Lower Left Corner")},
+                         {QStringLiteral("model"), Text::tr("Component Origin")}},
                         QStringLiteral("corner")),
-                 choice(QStringLiteral("tags"), tr("Tags"),
-                        {{QStringLiteral("by_size"), tr("By Size")}, {QStringLiteral("numbers"), tr("Numbers")}},
+                 choice(QStringLiteral("tags"), Text::tr("Tags"),
+                        {{QStringLiteral("by_size"), Text::tr("By Size")}, {QStringLiteral("numbers"), Text::tr("Numbers")}},
                         QStringLiteral("by_size"))},
-                &holeTable, true, tr("Click where the table goes"), nullptr, nullptr, true});
-  tools.append({QStringLiteral("drawing.parts_list"), tr("Bill of Materials"), QStringLiteral("drawing-parts-list"),
-                tr("Lists the components a view shows, numbered"), SheetPick::ViewThenPlace,
-                tr("Click the view whose components the list shows"),
-                {choice(QStringLiteral("levels"), tr("Rows"),
-                        {{QStringLiteral("top"), tr("First Level")}, {QStringLiteral("parts"), tr("Components Only")}},
+                &holeTable, true, Text::tr("Click where the table goes"), nullptr, nullptr, true});
+  tools.append({QStringLiteral("drawing.parts_list"), Text::tr("Bill of Materials"), QStringLiteral("drawing-parts-list"),
+                Text::tr("Lists the components a view shows, numbered"), SheetPick::ViewThenPlace,
+                Text::tr("Click the view whose components the list shows"),
+                {choice(QStringLiteral("levels"), Text::tr("Rows"),
+                        {{QStringLiteral("top"), Text::tr("First Level")}, {QStringLiteral("parts"), Text::tr("Components Only")}},
                         QStringLiteral("top")),
-                 ToolOption{QStringLiteral("group_identical"), tr("Group identical parts"), ToolOption::Kind::Check, {},
+                 ToolOption{QStringLiteral("group_identical"), Text::tr("Group identical parts"), ToolOption::Kind::Check, {},
                             QStringLiteral("false")},
-                 ToolOption{QStringLiteral("balloons"), tr("Balloons"), ToolOption::Kind::Check, {},
+                 ToolOption{QStringLiteral("balloons"), Text::tr("Balloons"), ToolOption::Kind::Check, {},
                             QStringLiteral("true")}},
-                &partsList, true, tr("Click where the list goes"), nullptr, nullptr, true});
-  tools.append({QStringLiteral("drawing.balloon"), tr("Balloon"), QStringLiteral("drawing-balloon"),
-                tr("Shows a component's number in the bill of materials"), SheetPick::Picks,
-                tr("Click an edge of the component on a view"), {}, &balloonOn, true,
-                tr("Click where the balloon goes"), &onePick, &balloonType, true});
+                &partsList, true, Text::tr("Click where the list goes"), nullptr, nullptr, true});
+  tools.append({QStringLiteral("drawing.balloon"), Text::tr("Balloon"), QStringLiteral("drawing-balloon"),
+                Text::tr("Shows a component's number in the bill of materials"), SheetPick::Picks,
+                Text::tr("Click an edge of the component on a view"), {}, &balloonOn, true,
+                Text::tr("Click where the balloon goes"), &onePick, &balloonType, true});
 }
 
 void addAnnotationTools(QVector<DrawingToolDef>& tools) {
@@ -479,136 +483,136 @@ void addAnnotationTools(QVector<DrawingToolDef>& tools) {
   const auto text = [](const QString& id, const QString& label) {
     return ToolOption{id, label, ToolOption::Kind::Text, {}, QString()};
   };
-  const QList<QPair<QString, QString>> axes = {{QStringLiteral("horizontal"), tr("Horizontal")},
-                                               {QStringLiteral("vertical"), tr("Vertical")}};
-  tools.append({QStringLiteral("drawing.dimension"), tr("Dimension"), QStringLiteral("dimension"),
-                tr("Dimensions edges, circles and corners of a view"), SheetPick::Picks,
-                tr("Click the edges, circles or corners to dimension on a view"),
+  const QList<QPair<QString, QString>> axes = {{QStringLiteral("horizontal"), Text::tr("Horizontal")},
+                                               {QStringLiteral("vertical"), Text::tr("Vertical")}};
+  tools.append({QStringLiteral("drawing.dimension"), Text::tr("Dimension"), QStringLiteral("dimension"),
+                Text::tr("Dimensions edges, circles and corners of a view"), SheetPick::Picks,
+                Text::tr("Click the edges, circles or corners to dimension on a view"),
                 // Auto: the picks choose (mitcad#1272); the others
                 // override it.
-                {choice(QStringLiteral("type"), tr("Type"),
-                        {{QStringLiteral("auto"), tr("Auto")},
-                         {QStringLiteral("linear"), tr("Linear")},
-                         {QStringLiteral("aligned"), tr("Aligned")},
-                         {QStringLiteral("angle"), tr("Angle")},
-                         {QStringLiteral("radius"), tr("Radius")},
-                         {QStringLiteral("diameter"), tr("Diameter")}},
+                {choice(QStringLiteral("type"), Text::tr("Type"),
+                        {{QStringLiteral("auto"), Text::tr("Auto")},
+                         {QStringLiteral("linear"), Text::tr("Linear")},
+                         {QStringLiteral("aligned"), Text::tr("Aligned")},
+                         {QStringLiteral("angle"), Text::tr("Angle")},
+                         {QStringLiteral("radius"), Text::tr("Radius")},
+                         {QStringLiteral("diameter"), Text::tr("Diameter")}},
                         QStringLiteral("auto"))},
-                &dimension, true, tr("Click where the dimension goes (Shift: no snap)"), &dimensionPicks, &dimensionType, true});
-  tools.append({QStringLiteral("drawing.ordinate"), tr("Ordinate"), QStringLiteral("drawing-ordinate"),
-                tr("Dimensions a point from an origin along the view"), SheetPick::Picks,
-                tr("Click the origin, then the point to dimension"),
-                {choice(QStringLiteral("along"), tr("Direction"), axes, QStringLiteral("horizontal"))}, &ordinate,
-                true, tr("Click where the value goes (Shift: no snap)"), &twoPicks, &ordinateType, true});
-  tools.append({QStringLiteral("drawing.baseline"), tr("Baseline"), QStringLiteral("drawing-baseline"),
-                tr("Dimensions several points from the first, or each from the last"), SheetPick::Picks,
-                tr("Click the points to dimension, then a free place for the dimension lines"),
-                {choice(QStringLiteral("series"), tr("Type"),
-                        {{QStringLiteral("baseline"), tr("Baseline")}, {QStringLiteral("chain"), tr("Chain")}},
+                &dimension, true, Text::tr("Click where the dimension goes (Shift: no snap)"), &dimensionPicks, &dimensionType, true});
+  tools.append({QStringLiteral("drawing.ordinate"), Text::tr("Ordinate"), QStringLiteral("drawing-ordinate"),
+                Text::tr("Dimensions a point from an origin along the view"), SheetPick::Picks,
+                Text::tr("Click the origin, then the point to dimension"),
+                {choice(QStringLiteral("along"), Text::tr("Direction"), axes, QStringLiteral("horizontal"))}, &ordinate,
+                true, Text::tr("Click where the value goes (Shift: no snap)"), &twoPicks, &ordinateType, true});
+  tools.append({QStringLiteral("drawing.baseline"), Text::tr("Baseline"), QStringLiteral("drawing-baseline"),
+                Text::tr("Dimensions several points from the first, or each from the last"), SheetPick::Picks,
+                Text::tr("Click the points to dimension, then a free place for the dimension lines"),
+                {choice(QStringLiteral("series"), Text::tr("Type"),
+                        {{QStringLiteral("baseline"), Text::tr("Baseline")}, {QStringLiteral("chain"), Text::tr("Chain")}},
                         QStringLiteral("baseline")),
-                 choice(QStringLiteral("along"), tr("Direction"), axes, QStringLiteral("horizontal"))},
+                 choice(QStringLiteral("along"), Text::tr("Direction"), axes, QStringLiteral("horizontal"))},
                 &baseline, false, QString(), &openPicks, &linearType, true});
   // The model's items in the selected views, or all the sheet's
   // (mitcad#1406): no picks, its panel's Apply runs it.
   const auto check = [](const QString& id, const QString& label) {
     return ToolOption{id, label, ToolOption::Kind::Check, {}, QStringLiteral("true")};
   };
-  tools.append({QStringLiteral("drawing.model_items"), tr("Model Items"), QStringLiteral("drawing-model-items"),
-                tr("Brings the model's dimensions and annotations into views"), SheetPick::None,
-                tr("Select views (none: all the sheet's), then Apply"),
-                {check(QStringLiteral("sketch_dimensions"), tr("Sketch Dimensions")),
-                 check(QStringLiteral("model_annotations"), tr("Model Annotations"))},
+  tools.append({QStringLiteral("drawing.model_items"), Text::tr("Model Items"), QStringLiteral("drawing-model-items"),
+                Text::tr("Brings the model's dimensions and annotations into views"), SheetPick::None,
+                Text::tr("Select views (none: all the sheet's), then Apply"),
+                {check(QStringLiteral("sketch_dimensions"), Text::tr("Sketch Dimensions")),
+                 check(QStringLiteral("model_annotations"), Text::tr("Model Annotations"))},
                 &modelItems, false, QString(), nullptr, nullptr, false});
-  tools.append({QStringLiteral("drawing.center_mark"), tr("Center Mark"), QStringLiteral("drawing-center-mark"),
-                tr("Marks a circle's center, or a round face's centerline"), SheetPick::Picks,
-                tr("Click a circle, or a round face seen from the side"), {}, &centerMark, false, QString(),
+  tools.append({QStringLiteral("drawing.center_mark"), Text::tr("Center Mark"), QStringLiteral("drawing-center-mark"),
+                Text::tr("Marks a circle's center, or a round face's centerline"), SheetPick::Picks,
+                Text::tr("Click a circle, or a round face seen from the side"), {}, &centerMark, false, QString(),
                 &onePick, &centerMarkType, true});
-  tools.append({QStringLiteral("drawing.centerline"), tr("Centerline"), QStringLiteral("centerline"),
-                tr("Draws a centerline through two circles or between two edges"), SheetPick::Picks,
-                tr("Click two circles, or two parallel edges"), {}, &centerline, false, QString(), &twoPicks,
+  tools.append({QStringLiteral("drawing.centerline"), Text::tr("Centerline"), QStringLiteral("centerline"),
+                Text::tr("Draws a centerline through two circles or between two edges"), SheetPick::Picks,
+                Text::tr("Click two circles, or two parallel edges"), {}, &centerline, false, QString(), &twoPicks,
                 &centerlineType, true});
   // Drawn outside the model, on the sheet or in a view (mitcad#729).
   const auto attach = [&choice](const QString& value) {
-    return choice(QStringLiteral("attach"), tr("Drawn"),
-                  {{QStringLiteral("view"), tr("In the View Clicked")}, {QStringLiteral("sheet"), tr("On the Sheet")}},
+    return choice(QStringLiteral("attach"), Text::tr("Drawn"),
+                  {{QStringLiteral("view"), Text::tr("In the View Clicked")}, {QStringLiteral("sheet"), Text::tr("On the Sheet")}},
                   value);
   };
-  tools.append({QStringLiteral("drawing.line"), tr("Line"), QStringLiteral("line"),
-                tr("Draws a line on the sheet or in a view, outside the design"), SheetPick::Segment,
-                tr("Click the line's two ends"),
+  tools.append({QStringLiteral("drawing.line"), Text::tr("Line"), QStringLiteral("line"),
+                Text::tr("Draws a line on the sheet or in a view, outside the design"), SheetPick::Segment,
+                Text::tr("Click the line's two ends"),
                 {attach(QStringLiteral("view")),
-                 choice(QStringLiteral("width"), tr("Width"), widthChoices(), QStringLiteral("thin")),
-                 choice(QStringLiteral("pattern"), tr("Pattern"), patternChoices(), QStringLiteral("continuous"))},
+                 choice(QStringLiteral("width"), Text::tr("Width"), widthChoices(), QStringLiteral("thin")),
+                 choice(QStringLiteral("pattern"), Text::tr("Pattern"), patternChoices(), QStringLiteral("continuous"))},
                 &sketchLine, false, QString(), nullptr, nullptr, true});
-  tools.append({QStringLiteral("drawing.arc"), tr("Arc"), QStringLiteral("arc-center"),
-                tr("Draws an arc on the sheet or in a view, outside the design"), SheetPick::ArcPoints,
-                tr("Click the arc's center, its start, then its end (counter-clockwise)"),
+  tools.append({QStringLiteral("drawing.arc"), Text::tr("Arc"), QStringLiteral("arc-center"),
+                Text::tr("Draws an arc on the sheet or in a view, outside the design"), SheetPick::ArcPoints,
+                Text::tr("Click the arc's center, its start, then its end (counter-clockwise)"),
                 {attach(QStringLiteral("view")),
-                 choice(QStringLiteral("width"), tr("Width"), widthChoices(), QStringLiteral("thin")),
-                 choice(QStringLiteral("pattern"), tr("Pattern"), patternChoices(), QStringLiteral("continuous"))},
+                 choice(QStringLiteral("width"), Text::tr("Width"), widthChoices(), QStringLiteral("thin")),
+                 choice(QStringLiteral("pattern"), Text::tr("Pattern"), patternChoices(), QStringLiteral("continuous"))},
                 &sketchArc, false, QString(), nullptr, nullptr, true});
-  tools.append({QStringLiteral("drawing.center_pattern"), tr("Center Pattern"), QStringLiteral("circular-pattern"),
-                tr("Marks every hole of a pattern from one of them"), SheetPick::Picks,
-                tr("Click one hole of the pattern, seen end on"), {}, &centerPattern, false, QString(), &onePick,
+  tools.append({QStringLiteral("drawing.center_pattern"), Text::tr("Center Pattern"), QStringLiteral("circular-pattern"),
+                Text::tr("Marks every hole of a pattern from one of them"), SheetPick::Picks,
+                Text::tr("Click one hole of the pattern, seen end on"), {}, &centerPattern, false, QString(), &onePick,
                 &centerPatternType, true});
-  tools.append({QStringLiteral("drawing.edge_extension"), tr("Edge Extension"), QStringLiteral("extend"),
-                tr("Runs straight edges on to where they meet"), SheetPick::Picks,
-                tr("Click the straight edges to run on"),
-                {choice(QStringLiteral("edges"), tr("Edges"),
-                        {{QStringLiteral("two"), tr("Two, to Their Corner")},
-                         {QStringLiteral("one"), tr("One, Both Ways")}},
+  tools.append({QStringLiteral("drawing.edge_extension"), Text::tr("Edge Extension"), QStringLiteral("extend"),
+                Text::tr("Runs straight edges on to where they meet"), SheetPick::Picks,
+                Text::tr("Click the straight edges to run on"),
+                {choice(QStringLiteral("edges"), Text::tr("Edges"),
+                        {{QStringLiteral("two"), Text::tr("Two, to Their Corner")},
+                         {QStringLiteral("one"), Text::tr("One, Both Ways")}},
                         QStringLiteral("two"))},
                 &edgeExtension, false, QString(), &extensionPicks, &edgeExtensionType, true});
-  tools.append({QStringLiteral("drawing.text"), tr("Text"), QStringLiteral("drawing-text"),
-                tr("Writes a note on the sheet or in a view"), SheetPick::Point, tr("Click where the text goes"),
-                {text(QStringLiteral("text"), tr("Text")), attach(QStringLiteral("sheet"))}, &textNote, false,
+  tools.append({QStringLiteral("drawing.text"), Text::tr("Text"), QStringLiteral("drawing-text"),
+                Text::tr("Writes a note on the sheet or in a view"), SheetPick::Point, Text::tr("Click where the text goes"),
+                {text(QStringLiteral("text"), Text::tr("Text")), attach(QStringLiteral("sheet"))}, &textNote, false,
                 QString(), nullptr, nullptr, true});
-  tools.append({QStringLiteral("drawing.note"), tr("Note"), QStringLiteral("drawing-note"),
-                tr("Writes a note on a leader to an edge or a point"), SheetPick::Picks,
-                tr("Click the edge or point the note's arrow points at"), {text(QStringLiteral("text"), tr("Text"))},
-                &leaderNote, true, tr("Click where the note's text goes"), &onePick, &noteType, true});
-  tools.append({QStringLiteral("drawing.datum"), tr("Datum Label"), QStringLiteral("drawing-datum"),
-                tr("Labels a face or an axis as a datum"), SheetPick::Picks,
-                tr("Click the edge of the face, the round face, or inside a face seen face on, that is the datum"),
-                {text(QStringLiteral("letter"), tr("Letter")),
+  tools.append({QStringLiteral("drawing.note"), Text::tr("Note"), QStringLiteral("drawing-note"),
+                Text::tr("Writes a note on a leader to an edge or a point"), SheetPick::Picks,
+                Text::tr("Click the edge or point the note's arrow points at"), {text(QStringLiteral("text"), Text::tr("Text"))},
+                &leaderNote, true, Text::tr("Click where the note's text goes"), &onePick, &noteType, true});
+  tools.append({QStringLiteral("drawing.datum"), Text::tr("Datum Label"), QStringLiteral("drawing-datum"),
+                Text::tr("Labels a face or an axis as a datum"), SheetPick::Picks,
+                Text::tr("Click the edge of the face, the round face, or inside a face seen face on, that is the datum"),
+                {text(QStringLiteral("letter"), Text::tr("Letter")),
                  // mitcad#1296: Auto, a dot on a face and a triangle on
                  // an edge.
-                 choice(QStringLiteral("terminator"), tr("Terminator"),
-                        {{QStringLiteral("auto"), tr("Auto")},
-                         {QStringLiteral("triangle"), tr("Triangle")},
-                         {QStringLiteral("dot"), tr("Dot")}},
+                 choice(QStringLiteral("terminator"), Text::tr("Terminator"),
+                        {{QStringLiteral("auto"), Text::tr("Auto")},
+                         {QStringLiteral("triangle"), Text::tr("Triangle")},
+                         {QStringLiteral("dot"), Text::tr("Dot")}},
                         QStringLiteral("auto"))},
-                &datumLabel, true, tr("Click where its label goes"), &onePick, &datumType, true});
-  tools.append({QStringLiteral("drawing.frame"), tr("Feature Control Frame"), QStringLiteral("drawing-frame"),
-                tr("Adds a geometric tolerance to a face or an axis"), SheetPick::Picks,
-                tr("Click the edge of the face, or the round face, to tolerance"), {}, &controlFrame, true,
-                tr("Click where the frame goes"), &onePick, &frameType, true});
-  tools.append({QStringLiteral("drawing.finish"), tr("Surface Finish"), QStringLiteral("drawing-finish"),
-                tr("Puts a surface finish symbol on a face"), SheetPick::Picks,
-                tr("Click the edge of the face the symbol stands on"),
-                {choice(QStringLiteral("process"), tr("Surface"),
-                        {{QStringLiteral("any"), tr("Any Process")},
-                         {QStringLiteral("removal"), tr("Material Removed")},
-                         {QStringLiteral("no_removal"), tr("No Material Removed")}},
+                &datumLabel, true, Text::tr("Click where its label goes"), &onePick, &datumType, true});
+  tools.append({QStringLiteral("drawing.frame"), Text::tr("Feature Control Frame"), QStringLiteral("drawing-frame"),
+                Text::tr("Adds a geometric tolerance to a face or an axis"), SheetPick::Picks,
+                Text::tr("Click the edge of the face, or the round face, to tolerance"), {}, &controlFrame, true,
+                Text::tr("Click where the frame goes"), &onePick, &frameType, true});
+  tools.append({QStringLiteral("drawing.finish"), Text::tr("Surface Finish"), QStringLiteral("drawing-finish"),
+                Text::tr("Puts a surface finish symbol on a face"), SheetPick::Picks,
+                Text::tr("Click the edge of the face the symbol stands on"),
+                {choice(QStringLiteral("process"), Text::tr("Surface"),
+                        {{QStringLiteral("any"), Text::tr("Any Process")},
+                         {QStringLiteral("removal"), Text::tr("Material Removed")},
+                         {QStringLiteral("no_removal"), Text::tr("No Material Removed")}},
                         QStringLiteral("removal")),
-                 text(QStringLiteral("text"), tr("Requirement"))},
+                 text(QStringLiteral("text"), Text::tr("Requirement"))},
                 &surfaceFinish, false, QString(), &onePick, &finishType, true});
 }
 
 QVector<DrawingToolDef> makeTools() {
   const QList<QPair<QString, QString>> directions = {
-      {QStringLiteral("front"), tr("Front")},
-      {QStringLiteral("top"), tr("Top")},
-      {QStringLiteral("right"), tr("Right")},
-      {QStringLiteral("back"), tr("Back")},
-      {QStringLiteral("bottom"), tr("Bottom")},
-      {QStringLiteral("left"), tr("Left")},
-      {QStringLiteral("iso"), tr("Isometric")},
-      {QStringLiteral("iso_top_left"), tr("Isometric, Top Left")},
-      {QStringLiteral("iso_bottom_right"), tr("Isometric, Bottom Right")},
-      {QStringLiteral("iso_bottom_left"), tr("Isometric, Bottom Left")},
+      {QStringLiteral("front"), Text::tr("Front")},
+      {QStringLiteral("top"), Text::tr("Top")},
+      {QStringLiteral("right"), Text::tr("Right")},
+      {QStringLiteral("back"), Text::tr("Back")},
+      {QStringLiteral("bottom"), Text::tr("Bottom")},
+      {QStringLiteral("left"), Text::tr("Left")},
+      {QStringLiteral("iso"), Text::tr("Isometric")},
+      {QStringLiteral("iso_top_left"), Text::tr("Isometric, Top Left")},
+      {QStringLiteral("iso_bottom_right"), Text::tr("Isometric, Bottom Right")},
+      {QStringLiteral("iso_bottom_left"), Text::tr("Isometric, Bottom Left")},
       // The 3D view's direction and up as they are (mitcad#725).
-      {QStringLiteral("current"), tr("Current View")},
+      {QStringLiteral("current"), Text::tr("Current View")},
   };
   const auto choice = [](const QString& id, const QString& label, const QList<QPair<QString, QString>>& choices,
                          const QString& value) {
@@ -623,42 +627,42 @@ QVector<DrawingToolDef> makeTools() {
   // A detail's scale follows its parent's, twice it, as the view panel
   // says.
   QList<QPair<QString, QString>> detailScales = scaleChoices();
-  detailScales.first().second = tr("Twice Its Parent's");
+  detailScales.first().second = Text::tr("Twice Its Parent's");
   QVector<DrawingToolDef> tools;
-  tools.append({QStringLiteral("drawing.base_view"), tr("Base View"), QStringLiteral("drawing-base-view"),
-                tr("Places a view of the design on the sheet"), SheetPick::Point,
-                tr("Click where the view goes"),
+  tools.append({QStringLiteral("drawing.base_view"), Text::tr("Base View"), QStringLiteral("drawing-base-view"),
+                Text::tr("Places a view of the design on the sheet"), SheetPick::Point,
+                Text::tr("Click where the view goes"),
                 // The whole component; the workspace lists its occurrences
                 // and bodies by name (subjectChoices).
-                {choice(QStringLiteral("subject"), tr("Shows"), {{QStringLiteral("design"), tr("The Design")}},
+                {choice(QStringLiteral("subject"), Text::tr("Shows"), {{QStringLiteral("design"), Text::tr("The Design")}},
                         QStringLiteral("design")),
-                 choice(QStringLiteral("direction"), tr("Orientation"), directions, QStringLiteral("front")),
-                 choice(QStringLiteral("scale"), tr("Scale"), scaleChoices(true), QStringLiteral("fit")),
-                 check(QStringLiteral("hidden_lines"), tr("Hidden Edges"), false),
-                 check(QStringLiteral("tangent_edges"), tr("Tangent Edges"), false),
-                 check(QStringLiteral("shaded"), tr("Shaded"), false)},
+                 choice(QStringLiteral("direction"), Text::tr("Orientation"), directions, QStringLiteral("front")),
+                 choice(QStringLiteral("scale"), Text::tr("Scale"), scaleChoices(true), QStringLiteral("fit")),
+                 check(QStringLiteral("hidden_lines"), Text::tr("Hidden Edges"), false),
+                 check(QStringLiteral("tangent_edges"), Text::tr("Tangent Edges"), false),
+                 check(QStringLiteral("shaded"), Text::tr("Shaded"), false)},
                 &baseView, false, QString(), nullptr, nullptr, false});
-  tools.append({QStringLiteral("drawing.projected_view"), tr("Projected View"),
-                QStringLiteral("drawing-projected-view"), tr("Projects a view from one beside it"),
-                SheetPick::OutOfView, tr("Drag out of a view, or click where the next view goes"), {},
+  tools.append({QStringLiteral("drawing.projected_view"), Text::tr("Projected View"),
+                QStringLiteral("drawing-projected-view"), Text::tr("Projects a view from one beside it"),
+                SheetPick::OutOfView, Text::tr("Drag out of a view, or click where the next view goes"), {},
                 &projectedView, false, QString(), nullptr, nullptr, false});
-  tools.append({QStringLiteral("drawing.section_view"), tr("Section View"), QStringLiteral("drawing-section-view"),
-                tr("Cuts a view along a line drawn on it"), SheetPick::Line,
-                tr("Click the two ends of the section line on a view (Shift: no snap)"),
-                {text(QStringLiteral("letter"), tr("Letter")), check(QStringLiteral("hatch"), tr("Hatching"), true),
-                 check(QStringLiteral("flip"), tr("Look the Other Way"), false)},
-                &sectionView, true, tr("Click where the section view goes"), nullptr, nullptr, false});
-  tools.append({QStringLiteral("drawing.detail_view"), tr("Detail View"), QStringLiteral("drawing-detail-view"),
-                tr("Enlarges a circle of a view"), SheetPick::Circle,
-                tr("Click the middle of the detail on a view, then its edge"),
-                {text(QStringLiteral("letter"), tr("Letter")),
-                 choice(QStringLiteral("scale"), tr("Scale"), detailScales, QStringLiteral("auto"))},
-                &detailView, true, tr("Click where the detail view goes"), nullptr, nullptr, false});
-  tools.append({QStringLiteral("drawing.break"), tr("Break"), QStringLiteral("drawing-break"),
-                tr("Shortens a view by taking a band out"), SheetPick::Line,
-                tr("Click the two sides of the band on a view (Shift: no snap)"),
-                {choice(QStringLiteral("direction"), tr("Direction"),
-                        {{QStringLiteral("horizontal"), tr("Horizontal")}, {QStringLiteral("vertical"), tr("Vertical")}},
+  tools.append({QStringLiteral("drawing.section_view"), Text::tr("Section View"), QStringLiteral("drawing-section-view"),
+                Text::tr("Cuts a view along a line drawn on it"), SheetPick::Line,
+                Text::tr("Click the two ends of the section line on a view (Shift: no snap)"),
+                {text(QStringLiteral("letter"), Text::tr("Letter")), check(QStringLiteral("hatch"), Text::tr("Hatching"), true),
+                 check(QStringLiteral("flip"), Text::tr("Look the Other Way"), false)},
+                &sectionView, true, Text::tr("Click where the section view goes"), nullptr, nullptr, false});
+  tools.append({QStringLiteral("drawing.detail_view"), Text::tr("Detail View"), QStringLiteral("drawing-detail-view"),
+                Text::tr("Enlarges a circle of a view"), SheetPick::Circle,
+                Text::tr("Click the middle of the detail on a view, then its edge"),
+                {text(QStringLiteral("letter"), Text::tr("Letter")),
+                 choice(QStringLiteral("scale"), Text::tr("Scale"), detailScales, QStringLiteral("auto"))},
+                &detailView, true, Text::tr("Click where the detail view goes"), nullptr, nullptr, false});
+  tools.append({QStringLiteral("drawing.break"), Text::tr("Break"), QStringLiteral("drawing-break"),
+                Text::tr("Shortens a view by taking a band out"), SheetPick::Line,
+                Text::tr("Click the two sides of the band on a view (Shift: no snap)"),
+                {choice(QStringLiteral("direction"), Text::tr("Direction"),
+                        {{QStringLiteral("horizontal"), Text::tr("Horizontal")}, {QStringLiteral("vertical"), Text::tr("Vertical")}},
                         QStringLiteral("horizontal"))},
                 &breakView, false, QString(), nullptr, nullptr, false});
   addAnnotationTools(tools);
@@ -710,17 +714,17 @@ int toolGroup(const DrawingToolDef& tool) {
 QString toolGroupName(int group) {
   switch (group) {
   case 0:
-    return tr("Create");
+    return Text::tr("Create");
   case 1:
-    return tr("Geometry");
+    return Text::tr("Geometry");
   case 2:
-    return tr("Dimensions");
+    return Text::tr("Dimensions");
   case 3:
-    return tr("Text");
+    return Text::tr("Text");
   case 4:
-    return tr("Symbols");
+    return Text::tr("Symbols");
   case 5:
-    return tr("Tables");
+    return Text::tr("Tables");
   default:
     return QString();
   }
@@ -803,7 +807,7 @@ QList<QPair<QString, QString>> subjectChoices(const QString& component, const QS
                                               const QJsonObject& components, const QJsonArray& bodies) {
   const bool root = component.isEmpty() || component == QStringLiteral("C0");
   QList<QPair<QString, QString>> out;
-  out.append({QStringLiteral("design"), name.isEmpty() ? tr("The Design") : name});
+  out.append({QStringLiteral("design"), name.isEmpty() ? Text::tr("The Design") : name});
   const QJsonArray tree = components.value(QStringLiteral("occurrences")).toArray();
   bool found = false;
   addOccurrences(root ? tree : childrenOf(tree, component, &found), QString(), QString(), out);
@@ -954,9 +958,9 @@ QString optionValue(const DrawingToolDef& tool, const QHash<QString, QString>& o
 QList<QPair<QString, QString>> scaleChoices(bool fit) {
   QList<QPair<QString, QString>> out;
   if (fit) {
-    out.append({QStringLiteral("fit"), tr("Fit the Sheet")});
+    out.append({QStringLiteral("fit"), Text::tr("Fit the Sheet")});
   } else {
-    out.append({QStringLiteral("auto"), tr("Its Parent's")});
+    out.append({QStringLiteral("auto"), Text::tr("Its Parent's")});
   }
   for (const char* scale : {"10:1", "5:1", "2:1", "1:1", "1:2", "1:5", "1:10", "1:20", "1:50", "1:100"}) {
     out.append({QString::fromLatin1(scale), QString::fromLatin1(scale)});
@@ -995,14 +999,14 @@ std::optional<QString> scaleEntry(const QString& text, const QList<QPair<QString
 }
 
 QList<QPair<QString, QString>> sideChoices() {
-  return {{QStringLiteral("right"), tr("Right")},
-          {QStringLiteral("left"), tr("Left")},
-          {QStringLiteral("above"), tr("Above")},
-          {QStringLiteral("below"), tr("Below")},
-          {QStringLiteral("above_right"), tr("Above Right")},
-          {QStringLiteral("above_left"), tr("Above Left")},
-          {QStringLiteral("below_right"), tr("Below Right")},
-          {QStringLiteral("below_left"), tr("Below Left")}};
+  return {{QStringLiteral("right"), Text::tr("Right")},
+          {QStringLiteral("left"), Text::tr("Left")},
+          {QStringLiteral("above"), Text::tr("Above")},
+          {QStringLiteral("below"), Text::tr("Below")},
+          {QStringLiteral("above_right"), Text::tr("Above Right")},
+          {QStringLiteral("above_left"), Text::tr("Above Left")},
+          {QStringLiteral("below_right"), Text::tr("Below Right")},
+          {QStringLiteral("below_left"), Text::tr("Below Left")}};
 }
 
 QJsonObject viewEdit(const QString& drawing, int view, const QString& field, const QString& value,
@@ -1162,48 +1166,48 @@ QJsonObject annotationEdit(const QString& drawing, int annotation, const QString
 
 QString annotationName(const QString& type) {
   if (type == QStringLiteral("center_mark")) {
-    return tr("Center Mark");
+    return Text::tr("Center Mark");
   }
   if (type == QStringLiteral("centerline")) {
-    return tr("Centerline");
+    return Text::tr("Centerline");
   }
   if (type == QStringLiteral("note")) {
-    return tr("Note");
+    return Text::tr("Note");
   }
   if (type == QStringLiteral("text")) {
-    return tr("Text");
+    return Text::tr("Text");
   }
   if (type == QStringLiteral("datum")) {
-    return tr("Datum Label");
+    return Text::tr("Datum Label");
   }
   if (type == QStringLiteral("frame")) {
-    return tr("Feature Control Frame");
+    return Text::tr("Feature Control Frame");
   }
   if (type == QStringLiteral("finish")) {
-    return tr("Surface Finish");
+    return Text::tr("Surface Finish");
   }
   if (type == QStringLiteral("hole_table")) {
-    return tr("Hole Table");
+    return Text::tr("Hole Table");
   }
   if (type == QStringLiteral("parts_list")) {
-    return tr("Bill of Materials");
+    return Text::tr("Bill of Materials");
   }
   if (type == QStringLiteral("balloon")) {
-    return tr("Balloon");
+    return Text::tr("Balloon");
   }
   if (type == QStringLiteral("line")) {
-    return tr("Line");
+    return Text::tr("Line");
   }
   if (type == QStringLiteral("arc")) {
-    return tr("Arc");
+    return Text::tr("Arc");
   }
   if (type == QStringLiteral("center_pattern")) {
-    return tr("Center Pattern");
+    return Text::tr("Center Pattern");
   }
   if (type == QStringLiteral("edge_extension")) {
-    return tr("Edge Extension");
+    return Text::tr("Edge Extension");
   }
-  return tr("Dimension");
+  return Text::tr("Dimension");
 }
 
 QJsonObject drawingDefaultsEdit(const QString& drawing, const QString& field, const QString& value) {
@@ -1239,15 +1243,15 @@ QJsonObject drawingDefaultsEdit(const QString& drawing, const QString& field, co
 }
 
 QList<QPair<QString, QString>> widthChoices() {
-  return {{QStringLiteral("thin"), tr("Thin")},
-          {QStringLiteral("thick"), tr("Thick")},
-          {QStringLiteral("extra_thick"), tr("Extra Thick")}};
+  return {{QStringLiteral("thin"), Text::tr("Thin")},
+          {QStringLiteral("thick"), Text::tr("Thick")},
+          {QStringLiteral("extra_thick"), Text::tr("Extra Thick")}};
 }
 
 QList<QPair<QString, QString>> patternChoices() {
-  return {{QStringLiteral("continuous"), tr("Continuous")},
-          {QStringLiteral("dashed"), tr("Dashed")},
-          {QStringLiteral("chain"), tr("Center Line")}};
+  return {{QStringLiteral("continuous"), Text::tr("Continuous")},
+          {QStringLiteral("dashed"), Text::tr("Dashed")},
+          {QStringLiteral("chain"), Text::tr("Center Line")}};
 }
 
 QStringList projectionLines(const QJsonArray& projections) {

@@ -18,6 +18,9 @@ pub(crate) use adapter::planar_joins;
 pub(crate) use adapter::{BoundedCurve2Ext, MaterialRegionExt, SheetPatchExt};
 pub(crate) use rederive::adapt;
 pub(crate) mod folded;
+// Mirrors and patterns of sheet bodies, as new bodies or joined
+// (mitcad#1450).
+pub(crate) mod body_copy;
 // The derived whole-body Flat Pattern (mitcad#208).
 pub mod flat;
 // Its DXF drawing and picks resolved to semantic references (mitcad#210).
@@ -96,7 +99,14 @@ pub enum SheetOverlayKind {
     /// An ordinary fillet or chamfer on the sheet (a countersink at a hole's
     /// edge, a rounded surface edge): the material it removed and added (its
     /// body before it against its result), moved by `placement` since.
-    Change { placement: Transform },
+    Change {
+        placement: Transform,
+        /// The body the feature changed, when it is not the sheet's own: a
+        /// copy of a sheet body (a mirror or pattern of it) reads the
+        /// change from the body it was made on (mitcad#1462).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<BodyUid>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -179,7 +189,7 @@ impl SheetState {
                     *frame = transform.apply_frame(frame);
                     *direction = transform.apply_vector(*direction);
                 }
-                SheetOverlayKind::Change { placement } => {
+                SheetOverlayKind::Change { placement, .. } => {
                     *placement = transform.after(placement);
                 }
             }

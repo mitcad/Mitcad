@@ -37,7 +37,9 @@ use std::sync::Mutex;
 use mitcad_vec3::{Vec3, add, cross, dot, norm, scale, sub, unit};
 use serde_json::Value;
 
-use crate::exchange::TriangleMesh;
+use crate::exchange::{MeshTolerance, TriangleMesh};
+use crate::fingerprint::Fingerprint;
+use crate::ids::BodyUid;
 use crate::monitor::Cancelled;
 use crate::transform::Transform;
 
@@ -1105,6 +1107,68 @@ pub fn estimate(volume: f64, area: f64, density: f64, settings: &EstimateSetting
         length,
         cost: settings.price_per_kg.map(|price| price * mass / 1000.0),
     }
+}
+
+/// The mesh tolerance's part of a cache key.
+fn tolerance_key(fp: &mut Fingerprint, tolerance: &MeshTolerance) {
+    fp.f64(tolerance.deviation)
+        .f64(tolerance.angle)
+        .u64(tolerance.face_triangles);
+}
+
+/// The [`PrintCache`] key of a body's mesh: the body, its shape's version
+/// and the mesh tolerance. The Print Analysis queries and `model_render`'s
+/// overlay (mitcad#1488) share the meshes by it.
+pub fn mesh_key(body: BodyUid, version: u128, tolerance: &MeshTolerance) -> u128 {
+    let mut fp = Fingerprint::new("print-mesh-v1");
+    fp.str(&body.to_string()).u128(version);
+    tolerance_key(&mut fp, tolerance);
+    fp.finish()
+}
+
+/// The [`PrintCache`] key of a body's result: what it is of (`tag`), the
+/// body, its shape's version and placement, the mesh tolerance and the
+/// settings.
+pub fn result_key(
+    tag: &str,
+    body: BodyUid,
+    version: u128,
+    placement: &Transform,
+    tolerance: &MeshTolerance,
+    settings: &Value,
+) -> u128 {
+    let mut fp = Fingerprint::new(tag);
+    fp.str(&body.to_string()).u128(version);
+    for row in placement.linear {
+        for value in row {
+            fp.f64(value);
+        }
+    }
+    for value in placement.translation {
+        fp.f64(value);
+    }
+    tolerance_key(&mut fp, tolerance);
+    fp.str(&settings.to_string());
+    fp.finish()
+}
+
+/// What a body's walls are kept as ([`result_key`] with this tag and the
+/// settings `{"minimum": …}`), by `print_thickness` and `model_render`'s
+/// overlay alike (mitcad#1488).
+pub const THICKNESS_TAG: &str = "print-thickness-v3";
+
+/// A body's walls as they are kept: the thinnest, where it is and where
+/// the other side is, the regions, and the thin pieces as 9 numbers each
+/// in design coordinates (`triangles`).
+pub fn thickness_value(found: &Thickness) -> Value {
+    let triangles: Vec<[f64; 9]> = found.pieces.iter().map(flat_corners).collect();
+    serde_json::json!({
+        "thinnest": found.thinnest,
+        "at": found.at,
+        "to": found.to,
+        "regions": found.regions,
+        "triangles": triangles,
+    })
 }
 
 /// Bounds of what the print cache keeps: meshes are large.

@@ -12,6 +12,7 @@ publish.workspace = true
 doctest = false
 
 [dev-dependencies]
+mitcad-mcp = { path = "../../mcp" }
 mitcad-model = { workspace = true, features = ["testing"] }
 mitcad-model-api = { path = "../../model-api" }
 serde_json.workspace = true

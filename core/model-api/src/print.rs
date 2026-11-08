@@ -180,33 +180,23 @@ fn print_tolerance(deviation: Option<f64>) -> Result<MeshTolerance, ApiError> {
     }
 }
 
-fn tolerance_key(fp: &mut Fingerprint, tolerance: &MeshTolerance) {
-    fp.f64(tolerance.deviation)
-        .f64(tolerance.angle)
-        .u64(tolerance.face_triangles);
-}
-
 /// The cache key of a body's result: what it is of, the body's shape and
-/// placement, the mesh tolerance and the settings.
+/// placement, the mesh tolerance and the settings (shared with
+/// `model_render`'s overlay, mitcad#1488).
 fn result_key<S>(
     tag: &str,
     body: &PrintBody<'_, S>,
     tolerance: &MeshTolerance,
     settings: &Value,
 ) -> u128 {
-    let mut fp = Fingerprint::new(tag);
-    fp.str(&body.uid.to_string()).u128(body.version);
-    for row in body.placement.linear {
-        for value in row {
-            fp.f64(value);
-        }
-    }
-    for value in body.placement.translation {
-        fp.f64(value);
-    }
-    tolerance_key(&mut fp, tolerance);
-    fp.str(&settings.to_string());
-    fp.finish()
+    print_analysis::result_key(
+        tag,
+        body.uid,
+        body.version,
+        &body.placement,
+        tolerance,
+        settings,
+    )
 }
 
 /// Sets the body's uid and name (the name may change without the shape).
@@ -335,7 +325,7 @@ impl<K: Kernel> PrintOps<K> for Document<K> {
         let mut truncated = false;
         for body in &bodies {
             self.print_stop()?;
-            let key = result_key("print-thickness-v3", body, &tolerance, &settings);
+            let key = result_key(print_analysis::THICKNESS_TAG, body, &tolerance, &settings);
             let value = match self.print_cache().result(key) {
                 Some(value) => value,
                 None => {
@@ -349,18 +339,7 @@ impl<K: Kernel> PrintOps<K> for Document<K> {
                         .map_err(|_| ApiError::from(ModelError::Cancelled))?;
                     // Where the walls are thin: whole triangles, or the thin
                     // pieces of those thin in part (mitcad#767).
-                    let triangles: Vec<[f64; 9]> = found
-                        .pieces
-                        .iter()
-                        .map(print_analysis::flat_corners)
-                        .collect();
-                    let value = Arc::new(json!({
-                        "thinnest": found.thinnest,
-                        "at": found.at,
-                        "to": found.to,
-                        "regions": found.regions,
-                        "triangles": triangles,
-                    }));
+                    let value = Arc::new(print_analysis::thickness_value(&found));
                     self.print_cache().keep_result(key, Arc::clone(&value));
                     value
                 }
@@ -565,10 +544,7 @@ impl<K: Kernel> PrintLocal<K> for Document<K> {
         body: &PrintBody<'_, K::Shape>,
         tolerance: &MeshTolerance,
     ) -> Result<Arc<TriangleMesh>, String> {
-        let mut fp = Fingerprint::new("print-mesh-v1");
-        fp.str(&body.uid.to_string()).u128(body.version);
-        tolerance_key(&mut fp, tolerance);
-        let key = fp.finish();
+        let key = print_analysis::mesh_key(body.uid, body.version, tolerance);
         if let Some(mesh) = self.print_cache().mesh(key) {
             return Ok(mesh);
         }

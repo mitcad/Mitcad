@@ -32,9 +32,11 @@
 #     coordinates), and the proxy over it.
 #   - Escape and Exit right after a release, while the exact preview
 #     computes: the proxy goes with the command, nothing is added.
-# Each drag's line is printed: inputs (snapped values), proxy updates and
-# their interval, exact previews and theirs, frames drawn (submitted, not
-# fenced) and the time held.
+# Each drag's line is printed: the moves that reached the handle and the
+# frames' median time, inputs (snapped values), proxy updates and their
+# interval, exact previews and theirs, frames drawn (submitted, not
+# fenced) and the time held. How many moves arrive is the machine's
+# (drag_summary): the test checks what the app does with them.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-drag-proxy-test.sh
@@ -68,10 +70,12 @@ near() {
 
 # held_drag "logged text" dx dy: a held left drag from the last "<text> at
 # x,y" by (dx, dy) pixels in 180 moves 16 ms apart, six ticks' pause
-# half-way, then the release.
+# half-way, then the release; sets HELD_MS and RELEASED_AT ("x y", where
+# the pointer was released).
 held_drag() {
   local fx fy i steps=180 args=() start end
   read -r fx fy <<< "$(ui_logged_at "$1")"
+  RELEASED_AT="$((fx + $2)) $((fy + $3))"
   ui_apart "$fx" "$fy"
   args=(mousemove "$fx" "$fy" mousedown 1)
   for ((i = 1; i <= steps; i++)); do
@@ -84,22 +88,53 @@ held_drag() {
   HELD_MS=$(((end - start) / 1000000))
 }
 
-# drag_summary label [min]: checks and prints the drag's line (at least
-# min inputs, default 20); sets INPUTS,
-# PROXIES, EXACTS.
+# drag_summary label: checks and prints the drag's line; sets INPUTS,
+# PROXIES, EXACTS, DRAWN (the drag's proxy lines up to the release).
+#
+# How many of the 180 moves reach the app depends on the machine, not on
+# the app (mitcad#1457): Qt merges the motion events queued while a frame
+# is drawn, so the handle gets about one move a frame. Alone a frame takes
+# 10 to 20 ms here and 150 to 175 moves arrive; beside other UI tests and
+# CPU load Mesa's software renderer takes 100 to 300 ms a frame and 18 to
+# 40 arrive, each a value of its own. So the drag is checked by what the
+# app does with the moves it gets: every value they snap to reaches the
+# command, the proxy draws each one, cheaply, and the arrow ends where the
+# pointer was released (none lost at the end).
 drag_summary() {
-  local line
+  local line feedback moves semantic values frame_ms at
   ui_expect_new " proxy updates (every " "$1: the drag's counts logged" 20 > /dev/null
   line=$(new_line "Drag proxy Extrude distance: [0-9]+ inputs, ")
   [[ $line =~ :\ ([0-9]+)\ inputs,\ ([0-9]+)\ proxy\ updates\ \(every\ ([0-9.]+)\ ms\ median,\ ([0-9.]+)\ ms\ p95\),\ ([0-9]+)\ exact\ previews\ \(every\ ([0-9.]+)\ ms\ median,\ ([0-9.]+)\ ms\ p95\),\ ([0-9]+)\ frames\ in\ ([0-9]+)\ ms\;\ proxy\ update\ ([0-9.]+)\ ms\ median,\ ([0-9.]+)\ ms\ max ]] ||
     ui_fail "$1: drag line not understood: $line"
   INPUTS=${BASH_REMATCH[1]} PROXIES=${BASH_REMATCH[2]} EXACTS=${BASH_REMATCH[5]}
-  local frames=${BASH_REMATCH[8]} held=${BASH_REMATCH[9]}
+  local frames=${BASH_REMATCH[8]} held=${BASH_REMATCH[9]} update_ms=${BASH_REMATCH[10]}
+  local proxy_every="${BASH_REMATCH[3]} ms, p95 ${BASH_REMATCH[4]} ms"
+  local exact_every="${BASH_REMATCH[6]} ms, p95 ${BASH_REMATCH[7]} ms" update_max=${BASH_REMATCH[11]}
+  # The handle's own counts (MITCAD_LOG_TIMING): the moves it got while
+  # held and the snapped values they changed to.
+  feedback=$(new_line "Manipulator feedback Extrude distance: ")
+  [[ $feedback =~ moves=([0-9]+)\ semantic=([0-9]+) ]] || ui_fail "$1: the handle's counts not logged: $feedback"
+  moves=${BASH_REMATCH[1]} semantic=${BASH_REMATCH[2]}
+  # The drag's lines up to the release: the values the proxy drew, and the
+  # frames' own times.
+  DRAWN=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | sed '/Manipulator Extrude distance dragged to /q')
+  values=$(grep -oE "^Drag proxy Extrude distance: [-0-9.e]+ mm over the exact" <<< "$DRAWN" | sort -u | wc -l)
+  frame_ms=$(sed -n 's/^Timing frame: \([0-9.]*\) ms.*/\1/p' <<< "$DRAWN" | sort -n |
+    awk '{ v[NR] = $1 } END { if (NR) printf "%.0f", v[int((NR + 1) / 2)]; else printf "-" }')
   echo "Drag cadence $1: 180 moves sent in ${HELD_MS} ms (xdotool); held ${held} ms in the app;" \
-    "${INPUTS} snapped inputs; ${PROXIES} proxy updates (interval median ${BASH_REMATCH[3]} ms, p95 ${BASH_REMATCH[4]} ms);" \
-    "${EXACTS} exact previews shown (interval median ${BASH_REMATCH[6]} ms, p95 ${BASH_REMATCH[7]} ms);" \
-    "${frames} frames submitted; proxy update ${BASH_REMATCH[10]} ms median, ${BASH_REMATCH[11]} ms max"
-  [ "$INPUTS" -ge "${2:-20}" ] || ui_fail "$1: only $INPUTS inputs delivered"
+    "${moves} moves reached the handle (frames drawn in ${frame_ms} ms median); ${INPUTS} snapped inputs;" \
+    "${PROXIES} proxy updates (interval median ${proxy_every}); ${EXACTS} exact previews shown (interval median ${exact_every});" \
+    "${frames} frames submitted; proxy update ${update_ms} ms median, ${update_max} ms max"
+  # A drag through values, not a jump to the last one.
+  [ "$INPUTS" -ge 3 ] || ui_fail "$1: only $INPUTS inputs delivered in ${held} ms ($moves moves reached the handle)"
+  [ "$INPUTS" -eq "$semantic" ] ||
+    ui_fail "$1: the handle snapped to $semantic values, but $INPUTS reached the command"
+  [ "$values" -eq "$INPUTS" ] || ui_fail "$1: the proxy drew $values of the $INPUTS values dragged to"
+  awk -v ms="$update_ms" 'BEGIN { exit !(ms <= 5) }' || ui_fail "$1: a proxy update took $update_ms ms (median)"
+  at=$(ui_logged_at "Manipulator Extrude distance")
+  near "${at% *}" "${RELEASED_AT% *}" 2 "$1: the arrow ends where the pointer was released (x)"
+  near "${at#* }" "${RELEASED_AT#* }" 2 "$1: the arrow ends where the pointer was released (y)"
+  echo "ok   $1: each of the $INPUTS values reached the command and the proxy drew it"
 }
 
 # The designs.
@@ -207,8 +242,16 @@ join_case() {
   [[ $line =~ at\ 60\.000,50\.000, ]] || ui_fail "$label: the proxy is not over the boss: $line"
   [ "$PROXIES" -gt "$EXACTS" ] || ui_fail "$label: fewer proxy updates ($PROXIES) than exact previews ($EXACTS)"
   if [ "$delay" != 0 ]; then
-    # Every exact preview takes over 500 ms: the proxy evolves meanwhile.
-    [ "$PROXIES" -ge 10 ] || ui_fail "$label: only $PROXIES proxy updates while the exact previews took 500 ms"
+    # Every exact preview takes over 500 ms: the proxy evolves meanwhile,
+    # drawing new values while a preview computes.
+    local meanwhile
+    meanwhile=$(awk '/^Computing preview started$/ { open++ }
+                     /^Computing preview (done in|cancelled after) / { if (open) open-- }
+                     open && /^Drag proxy Extrude distance: .* over the exact / { n++ }
+                     END { print n + 0 }' <<< "$DRAWN")
+    [ "$meanwhile" -ge 2 ] ||
+      ui_fail "$label: the proxy drew $meanwhile values while the exact previews computed ($PROXIES updates)"
+    echo "ok   $label: the proxy drew $meanwhile values while the exact previews computed"
     ui_expect_new "Drag proxy Extrude: the exact preview of $value mm replaced it " \
       "$label: the exact preview of the last value replaces the proxy" 30
   fi
@@ -263,7 +306,7 @@ held_drag "Manipulator Extrude distance" 0 40
 ui_expect_new "Manipulator Extrude distance dragged to " "released" 20
 value=$(new_line "Manipulator Extrude distance dragged to " | sed 's/.* dragged to //')
 awk -v v="$value" 'BEGIN { exit !(v < -10 && v > -30) }' || ui_fail "the drag did not end in the block: $value"
-drag_summary "reach" 4
+drag_summary "reach"
 ui_expect_new "Drag proxy Extrude: shown for distance " "the proxy shows the tool going down"
 ui_expect_new "Extrude: automatic Operation = Cut" "an exact preview going into the block makes it Cut" 30
 ui_wait_idle

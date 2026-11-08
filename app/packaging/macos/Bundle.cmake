@@ -247,6 +247,10 @@ Qt ${Qt6_VERSION}: GNU LGPL-3.0, linked dynamically (the QtCore, QtGui, ... fram
   in Contents/Frameworks). The licence text is https://www.gnu.org/licenses/lgpl-3.0.txt and the source code is available from
   https://download.qt.io/ and https://www.qt.io/ (Qt-* files here, if the Qt
   installation had them).
+Qt's translations (Contents/Resources/translations/qtbase_*.qm): BSD-3-Clause
+  (Qt's translations module, qttranslations), shipped unchanged as Qt builds
+  them; the texts of Qt's standard dialogs and buttons in MitCad's interface
+  languages.
 Open CASCADE Technology ${OpenCASCADE_VERSION}: GNU LGPL-2.1 with the Open CASCADE exception,
   linked dynamically (libTK*.dylib in Contents/Frameworks); source code at
   https://dev.opencascade.org/ . With changes of MitCad's that speed up

@@ -135,6 +135,9 @@ void MainWindow::createChat() {
   host.setWorking = [this](const QString& agentName) { m_agentIndicator->setChatWorking(agentName); };
   host.whenIdle = [this](std::function<void()> call) { whenIdle(this, std::move(call)); };
   host.openUrl = [](const QString& url) { openExternalUrl(QUrl(url)); };
+  // The unit of the design's lengths (mitcad#1452), the snapshot's while
+  // a job computes the model.
+  host.lengthUnit = [this] { return this->lengthUnit(); };
   // The open comments (mitcad#1119), shortened to what the agent needs:
   // the full comment is in mitcad://comments.
   host.comments = [this]() -> QJsonArray {

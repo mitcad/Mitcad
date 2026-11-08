@@ -7,11 +7,12 @@
 //! rejected command. The model re-exports them at their old paths
 //! (`mitcad_model::features::ValueInput`, `mitcad_model::ModelError`).
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::expr::{ParamSpec, Unit, is_valid_name, value_to_expression};
+use crate::expr::{Expr, ParamSpec, Unit, is_valid_name, value_to_expression, with_decimal_points};
 use crate::ids::FeatureUid;
 use crate::monitor::Cancelled;
 use crate::parameters::{ParamId, ParameterError, Parameters, describe, fits_slot, slot_unit};
@@ -161,7 +162,7 @@ pub fn resolve_value_as(
                 )));
             }
             if let Some(id) = own {
-                params.set_expression(id, text).map_err(in_slot)?;
+                set_own_expression(params, id, text, unit).map_err(in_slot)?;
                 return Ok((id, None));
             }
             text.clone()
@@ -171,6 +172,82 @@ pub fn resolve_value_as(
         .add_dimension(&expression, unit, comment, Some(owner))
         .map_err(in_slot)?;
     Ok((id, Some(params.name(id))))
+}
+
+/// Sets the expression of a slot's own parameter `id`. Its bare numbers
+/// are read in the slot's unit `unit` (the document's length unit for a
+/// length), as the `evaluate` query and a new parameter of the slot read
+/// them (mitcad#1452): an own length parameter made in another length unit,
+/// before `set_units` changed the document's, takes the slot's unit with
+/// the expression, so that `0.25 * 2` typed in an inch design is 12.7 mm,
+/// not 0.5 mm. Any other parameter keeps its unit.
+fn set_own_expression(
+    params: &mut Parameters,
+    id: ParamId,
+    expression: &str,
+    unit: Unit,
+) -> Result<(), ParameterError> {
+    let current = params.get(id).map(|p| p.unit());
+    match current {
+        Some(current) if other_length_unit(current, unit) => {
+            params.update(id, expression, unit)?;
+        }
+        _ => {
+            params.set_expression(id, expression)?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether `unit` and `slot` are both plain lengths (`mm`, `in`; not an
+/// area, an angle, a count or a text) in two different length units.
+fn other_length_unit(unit: Unit, slot: Unit) -> bool {
+    let plain = |u: Unit| match u.length() {
+        Some((length, 1)) if u == Unit::of_length(length) => Some(length),
+        _ => None,
+    };
+    matches!((plain(unit), plain(slot)), (Some(a), Some(b)) if a != b)
+}
+
+/// Whether a command value uses the parameter `id`, by its name or through
+/// other parameters (mitcad#1535): the expression of `value`, or of
+/// `name = expression` when `name` is another name than the parameter's.
+/// `id` itself renamed (`BuckleDiameter = …`) is no use: that form names
+/// and sets the slot's own parameter as before. False for a number, and
+/// for text that does not parse (the command then says why).
+#[doc(hidden)]
+pub fn value_uses_parameter(params: &Parameters, value: &ValueInput, id: ParamId) -> bool {
+    let ValueInput::Name(text) = value else {
+        return false;
+    };
+    let Some(own) = params.get(id) else {
+        return false;
+    };
+    let expression = match split_named(text) {
+        Some((name, _)) if name == own.name() => return false,
+        Some((_, rest)) => rest,
+        None => text.as_str(),
+    };
+    let Ok(parsed) = Expr::parse(&with_decimal_points(expression)) else {
+        return false;
+    };
+    let mut seen: BTreeSet<ParamId> = BTreeSet::new();
+    let mut next: Vec<ParamId> = parsed
+        .references()
+        .into_iter()
+        .filter_map(|name| params.find(name))
+        .collect();
+    while let Some(p) = next.pop() {
+        if p == id {
+            return true;
+        }
+        if seen.insert(p)
+            && let Some(param) = params.get(p)
+        {
+            next.extend(param.dependencies().iter().copied());
+        }
+    }
+    false
 }
 
 /// Splits `name = expression` (mitcad#231): a single `=` after a word.
@@ -208,7 +285,11 @@ fn resolve_named(
         .filter(|id| params.owner(*id) == Some(owner) || params.name(*id) == name);
     if let Some(id) = target {
         params.rename(id, name).map_err(in_slot)?;
-        params.set_expression(id, expression).map_err(in_slot)?;
+        if params.owner(id) == Some(owner) {
+            set_own_expression(params, id, expression, unit).map_err(in_slot)?;
+        } else {
+            params.set_expression(id, expression).map_err(in_slot)?;
+        }
         return Ok((id, None));
     }
     let spec = ParamSpec::model(name, expression, unit).with_comment(comment);

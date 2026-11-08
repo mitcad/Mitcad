@@ -23,7 +23,9 @@ struct BooleanPiece {
 
 // `touched[i]`: target i takes part. An untouched target is unchanged and
 // has no piece; the caller keeps it as it was. A touched target without a
-// piece was removed (a cut through all of it).
+// piece was removed (a cut through all of it). An Intersect touches a
+// target lying wholly inside the tool: its one piece is the target, with its
+// names (mitcad#1534).
 struct BooleanResult {
   std::vector<BooleanPiece> pieces;
   std::vector<bool> touched;

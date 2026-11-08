@@ -140,7 +140,10 @@ linuxdeploy --appdir "$APPDIR" \
   "${executables[@]}" \
   --desktop-file "$APPDIR/usr/share/applications/mitcad.desktop" \
   --plugin qt
-# Qt's own translations: Mitcad's interface is English and loads none.
+# Qt's own translations as linuxdeploy copies them (all of Qt's languages):
+# MitCad loads Qt's catalogue of its own interface languages from
+# usr/share/mitcad/translations, which the install rules fill
+# (cmake/AppImage.cmake, mitcad#1460).
 rm -rf "$APPDIR/usr/translations"
 
 # The AppImage's entry point (mitcad#1170): packaging/linux/AppRun, which

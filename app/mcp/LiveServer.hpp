@@ -3,6 +3,7 @@
 
 #include <memory>
 
+#include <QCoreApplication>
 #include <QObject>
 
 namespace mitcad {
@@ -11,6 +12,8 @@ namespace mcp {
 
 // One loopback listener for every document window in this process.
 class LiveServer : public QObject {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::mcp::LiveServer)
+
 public:
   explicit LiveServer(WindowManager* manager, QObject* parent = nullptr);
   ~LiveServer() override;

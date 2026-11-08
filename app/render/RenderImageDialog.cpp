@@ -63,10 +63,14 @@ struct SizePreset {
   const char* name;
 };
 const SizePreset kPresets[] = {
-    {640, 480, nullptr},           {800, 600, nullptr},
-    {1280, 720, "HD"},             {1920, 1080, "Full HD"},
-    {2560, 1440, "QHD"},           {3840, 2160, "4K UHD"},
-    {1080, 1080, "square"},        {1080, 1350, "portrait"},
+    {640, 480, nullptr},
+    {800, 600, nullptr},
+    {1280, 720, QT_TRANSLATE_NOOP("mitcad::RenderImageDialog", "HD")},
+    {1920, 1080, QT_TRANSLATE_NOOP("mitcad::RenderImageDialog", "Full HD")},
+    {2560, 1440, QT_TRANSLATE_NOOP("mitcad::RenderImageDialog", "QHD")},
+    {3840, 2160, QT_TRANSLATE_NOOP("mitcad::RenderImageDialog", "4K UHD")},
+    {1080, 1080, QT_TRANSLATE_NOOP("mitcad::RenderImageDialog", "square")},
+    {1080, 1350, QT_TRANSLATE_NOOP("mitcad::RenderImageDialog", "portrait")},
 };
 
 constexpr QSize kPreviewSize(400, 300);

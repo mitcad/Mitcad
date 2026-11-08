@@ -1213,8 +1213,11 @@ pub(crate) fn with_overlays<K: Kernel>(
             SheetOverlayKind::Straight { .. } => {
                 vec![(BooleanOp::Cut, straight_tool(ctx, overlay)?)]
             }
-            SheetOverlayKind::Change { placement } => {
-                let (removed, added) = feature_change(ctx, overlay.feature, state.body, placement)?;
+            SheetOverlayKind::Change { placement, source } => {
+                // A copy's change is read from the body it was made on
+                // (mitcad#1462).
+                let body = source.unwrap_or(state.body);
+                let (removed, added) = feature_change(ctx, overlay.feature, body, placement)?;
                 removed
                     .into_iter()
                     .map(|s| (BooleanOp::Cut, s))

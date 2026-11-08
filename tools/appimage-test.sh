@@ -171,6 +171,19 @@ if [ -e "$(dirname "$0")/../third_party/fonts/iso-lettering/lettering.ttf" ]; th
     [ -e "$DIR/$file" ] || ui_fail "the AppImage has no $file"
   done
 fi
+# The interface languages (mitcad#1460): the catalogue of each language of
+# app/translations/languages.txt, Qt's own for Finnish (Qt has one for
+# most languages; the build copies it where it has), and never the tests'
+# pseudo-language.
+while read -r code _; do
+  case $code in '' | '#'*) continue ;; esac
+  [ -s "$DIR/usr/share/mitcad/translations/mitcad_$code.qm" ] ||
+    ui_fail "the AppImage has no usr/share/mitcad/translations/mitcad_$code.qm"
+done < "$ROOT/app/translations/languages.txt"
+[ -s "$DIR/usr/share/mitcad/translations/qtbase_fi.qm" ] ||
+  ui_fail "the AppImage has no usr/share/mitcad/translations/qtbase_fi.qm"
+[ ! -e "$DIR/usr/share/mitcad/translations/mitcad_xx.qm" ] || ui_fail "the AppImage has the tests' pseudo-language"
+echo "ok   the interface languages' catalogues, without the pseudo-language"
 # Qt's D-Bus module: the keychain's (KWallet, the Secret Service); Print
 # Support: File › Print (mitcad#1089).
 for library in libQt6Core libQt6Widgets libQt6Network libQt6Svg libQt6PrintSupport libQt6XcbQpa libQt6DBus libTKernel libTKV3d libTKOpenGl; do

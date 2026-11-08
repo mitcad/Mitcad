@@ -8,12 +8,15 @@
 #include <cstdio>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Pnt2d.hxx>
+#include <gp_Vec2d.hxx>
 
 #include "check.hpp"
 
@@ -204,6 +207,103 @@ void test_taper_closing_the_profile_partway() {
   const ShapePtr short_one = extrude_feature(spec);
   CHECK(BRepCheck_Analyzer(short_one->occt()).IsValid());
   CHECK(volume(*short_one) > 0.0);
+}
+
+// A band of 52 lines (mitcad#1483): a curved strip 6 mm wide whose two
+// sides are 26 points each, 2 to 4 mm apart on arcs of radius 27 and 33
+// with a little waviness, joined by two end lines. Tapered over 2 mm by 5
+// or 45 degrees out or 5 degrees in, its walls move 0.17 to 2 mm, nowhere
+// near closing the band, yet OCCT's draft built it invalid from 5 degrees
+// on ("the extrusion produced an invalid shape").
+std::vector<gp_Pnt2d> band_points() {
+  constexpr int kSide = 26;
+  const double sweep = 150.0 * kPi / 180.0;
+  // Uneven steps along each side, and its radius a little wavy.
+  const auto point = [&](double radius, double wave, int waves, int steps, int i) {
+    const double u = static_cast<double>(i) / (kSide - 1);
+    const double theta = sweep * (u + 0.012 * std::sin(2.0 * kPi * steps * u));
+    const double r = radius + wave * std::sin(2.0 * kPi * waves * u);
+    return gp_Pnt2d(r * std::cos(theta), r * std::sin(theta));
+  };
+  std::vector<gp_Pnt2d> points;
+  for (int i = 0; i < kSide; ++i) {
+    points.push_back(point(33.0, 0.1, 5, 3, i));
+  }
+  for (int i = kSide - 1; i >= 0; --i) {
+    points.push_back(point(27.0, 0.08, 7, 4, i));
+  }
+  return points;
+}
+
+Region band_profile(const std::vector<gp_Pnt2d>& points) {
+  const int count = static_cast<int>(points.size());
+  const auto curve = [count](int k) { return "c" + std::to_string((k + count) % count + 1); };
+  Region region;
+  Loop loop;
+  std::string key = "r{";
+  for (int i = 0; i < count; ++i) {
+    Segment segment;
+    segment.kind = SegmentKind::Line;
+    segment.start = points[static_cast<std::size_t>(i)];
+    segment.end = points[static_cast<std::size_t>((i + 1) % count)];
+    segment.name = curve(i) + "[" + curve(i - 1) + "," + curve(i + 1) + "]";
+    key += (i == 0 ? "" : ",") + segment.name;
+    loop.segments.push_back(segment);
+  }
+  region.loops.push_back(loop);
+  region.name = key + "}";
+  return region;
+}
+
+// Each tapered band is a valid solid of the 52 leaned planes and two caps,
+// its volume that of the profile offset by z tan(angle) at height z with
+// mitred corners, whose area is A + P d + K d^2 for the offset d, the
+// perimeter P and K the sum of tan(turn / 2) over the corners' turns:
+// A h + P t h^2 / 2 + K t^2 h^3 / 3 for t = tan(angle).
+void test_taper_of_a_band_of_lines() {
+  const std::vector<gp_Pnt2d> points = band_points();
+  const std::size_t count = points.size();
+  CHECK(count == 52);
+  double twice = 0.0;
+  double perimeter = 0.0;
+  for (std::size_t i = 0; i < count; ++i) {
+    const gp_Pnt2d& a = points[i];
+    const gp_Pnt2d& b = points[(i + 1) % count];
+    twice += a.X() * b.Y() - a.Y() * b.X();
+    perimeter += a.Distance(b);
+  }
+  const double sense = twice > 0.0 ? 1.0 : -1.0;
+  double corners = 0.0;
+  for (std::size_t i = 0; i < count; ++i) {
+    const gp_Vec2d before(points[(i + count - 1) % count], points[i]);
+    const gp_Vec2d after(points[i], points[(i + 1) % count]);
+    corners += std::tan(sense * std::atan2(before.Crossed(after), before.Dot(after)) / 2.0);
+  }
+  const double area = std::abs(twice) / 2.0;
+  const double h = 2.0;
+  for (const double degrees : {5.0, 45.0, -5.0}) {
+    ExtrudeFeatureSpec spec = spec_of({band_profile(points)}, h);
+    spec.side1.taper = degrees * kPi / 180.0;
+    ShapePtr band;
+    try {
+      band = extrude_feature(spec);
+    } catch (const std::exception& error) {
+      std::fprintf(stderr, "the band tapered by %g degrees: %s\n", degrees, error.what());
+    }
+    CHECK(band != nullptr);
+    if (!band) {
+      continue;
+    }
+    const double t = std::tan(spec.side1.taper);
+    CHECK(BRepCheck_Analyzer(band->occt()).IsValid());
+    CHECK(band->face_count() == 54);
+    CHECK_NEAR(volume(*band), area * h + perimeter * t * h * h / 2.0 + corners * t * t * h * h * h / 3.0);
+    CHECK(faces_named(*band, "F2:side(c1[c52,c2])") == 1 && faces_named(*band, "F2:side(c27[c26,c28])") == 1);
+    CHECK(edge_names_unique(*band));
+    for (int i = 0; i < band->face_count(); ++i) {
+      CHECK(BRepAdaptor_Surface(band->face(i)).GetType() == GeomAbs_Plane);
+    }
+  }
 }
 
 void test_taper() {
@@ -805,6 +905,7 @@ void extrude_feature_tests() {
   guarded("test_start", test_start);
   guarded("test_taper", test_taper);
   guarded("test_taper_closing_the_profile_partway", test_taper_closing_the_profile_partway);
+  guarded("test_taper_of_a_band_of_lines", test_taper_of_a_band_of_lines);
   guarded("test_taper_closing_profile", test_taper_closing_profile);
   guarded("test_taper_closing_ring", test_taper_closing_ring);
   guarded("test_thin", test_thin);

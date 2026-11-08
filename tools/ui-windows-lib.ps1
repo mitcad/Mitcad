@@ -15,9 +15,13 @@
 # (AttachThreadInput, SetKeyboardState), held until the app logs that it
 # took the key (MITCAD_LOG_KEYS).
 #
-# Limits in session 0: Qt cannot grab the mouse for a popup in a window
-# station without a visible desktop, so popups close as soon as they open:
-# the command search (S), menus (Alt+F) and the lists of drop-downs. The
+# Limits in session 0: popups opened by the posted keys (the menu bar's
+# Alt+F, a drop-down's list) close as soon as they open. Popups the driver
+# opens in the app stay open and take its input (context menus by `popup`,
+# drop-down lists by `qt-choice`, the command search by `command
+# tools.search`), as long as the app does not ask the system to activate
+# them: the system refuses that in session 0, Qt sees the application lose
+# the focus and closes every popup (the command search did, mitcad#1477). The
 # tests therefore start commands with shortcuts, which they assign in
 # settings of their own (Ui-Init -Shortcuts, as Tools > Keyboard Shortcuts
 # would), and type into dialogs, which are windows of their own. Qt never
@@ -473,6 +477,10 @@ function Ui-StartApp([string]$Name, [string[]]$Arguments = @(), [switch]$Recover
   # MitCad starts on an empty design, not on the Start tab (mitcad#1258), as
   # in the Linux tests; a test of the Start page sets it to 1 first.
   if (-not $env:MITCAD_START_PAGE) { $env:MITCAD_START_PAGE = '0' }
+  # The interface in English whatever the VM's language (mitcad#1460), as in
+  # the Linux tests: the tests read English texts. A test of the language
+  # passes --language, which comes first.
+  $env:MITCAD_LANGUAGE = 'en'
   $env:MITCAD_AUTOSAVE_DIR = $script:UiAutosave
   # Crash reports of the test's own (mitcad#62): none offered from the user's.
   $env:MITCAD_CRASH_DIR = Join-Path $script:UiOut 'crashes'

@@ -1556,6 +1556,59 @@ fn combine_joins_cuts_and_intersects_bodies() {
     }
 }
 
+/// An intersection whose target lies wholly inside the tool is the target
+/// (mitcad#1534): a 2 x 2 x 2 box in a 10 x 10 x 10 one comes out as one
+/// body of 8 mm³ with the small box's face names; a target the tool does
+/// not reach is still refused.
+#[test]
+fn an_intersection_with_a_tool_around_the_target_is_the_target() {
+    use mitcad_model::kernel::Kernel;
+    let mut doc = Document::new(MockKernel::default());
+    doc.kernel().measures.set(true);
+    doc.kernel().intersects_by_bounds.set(true);
+    let cube = |corner: [f64; 2], size: f64| {
+        json!({"type": "box", "plane": {"type": "origin", "plane": "xy"}, "corner": corner,
+               "length": size, "width": size, "height": size, "operation": "new_body"})
+    };
+    let intersect = |target: &str| {
+        json!({"type": "combine", "target": target, "tools": ["F1.b0"],
+               "operation": "intersect", "keep_tools": true})
+    };
+    add(&mut doc, cube([0.0, 0.0], 10.0));
+    add(&mut doc, cube([2.0, 2.0], 2.0));
+    add(&mut doc, cube([20.0, 0.0], 2.0));
+    let inside = shape(&doc, "F2.b0");
+
+    let combine = add(&mut doc, intersect("F2.b0"));
+    assert_eq!(status(&doc, combine), FeatureStatus::Ok);
+    let common = shape(&doc, "F2.b0");
+    assert!(
+        common.history.starts_with("common(box(F2:"),
+        "{}",
+        common.history
+    );
+    assert_eq!(common.faces, inside.faces);
+    assert!(common.faces.contains(&"F2:top".parse().unwrap()));
+    assert!(
+        !common
+            .faces
+            .iter()
+            .any(|f| f.to_string().starts_with("F1:"))
+    );
+    assert_bounds(&doc, "F2.b0", [2.0, 2.0, 0.0], [4.0, 4.0, 2.0]);
+    let volume = doc.kernel().mass_properties(&common).unwrap().volume;
+    assert!((volume - 8.0).abs() < 1e-9, "{volume}");
+    // The tool stays (keep_tools), the target is the one body it was.
+    assert!(shape(&doc, "F1.b0").history.starts_with("box(F1:"));
+    assert_eq!(uids(&doc).len(), 3);
+
+    // Disjoint bodies: nothing to intersect.
+    let apart = add(&mut doc, intersect("F3.b0"));
+    assert!(
+        matches!(status(&doc, apart), FeatureStatus::Failed(m) if m.contains("do not intersect"))
+    );
+}
+
 #[test]
 fn moves_and_copies_place_bodies() {
     let mut b = block();

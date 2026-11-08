@@ -12,8 +12,6 @@
 namespace mitcad {
 namespace {
 
-QString tr(const char* text) { return QCoreApplication::translate("MaterialTool", text); }
-
 QString field(const QJsonObject& object, const char* name) { return object.value(QLatin1String(name)).toString(); }
 
 } // namespace
@@ -140,7 +138,9 @@ BindingTable bindingTable(const QString& name, const BindingOption* option, cons
                                  option->currentText.isEmpty() ? option->currentExpression : option->currentText,
                                  otherwise, false});
   }
-  table.rows.append(BindingRow{QString(), tr("Other"), otherwise, true});
+  // The texts in the context MaterialTool, written out so that lupdate
+  // files them there too (mitcad#1471).
+  table.rows.append(BindingRow{QString(), QCoreApplication::translate("MaterialTool", "Other"), otherwise, true});
   return table;
 }
 
@@ -231,12 +231,16 @@ QString targetsSummary(const QVector<TargetState>& targets) {
   QStringList parts;
   for (const Group& group : std::as_const(groups)) {
     if (group.bodies > 0) {
-      parts << (group.bodies == 1 ? tr("1 body: %1").arg(group.what)
-                                  : tr("%1 bodies: %2").arg(group.bodies).arg(group.what));
+      parts << (group.bodies == 1
+                    ? QCoreApplication::translate("MaterialTool", "1 body: %1").arg(group.what)
+                    : QCoreApplication::translate("MaterialTool", "%1 bodies: %2").arg(group.bodies).arg(group.what));
     }
     if (group.components > 0) {
-      parts << (group.components == 1 ? tr("1 component: %1").arg(group.what)
-                                      : tr("%1 components: %2").arg(group.components).arg(group.what));
+      parts << (group.components == 1
+                    ? QCoreApplication::translate("MaterialTool", "1 component: %1").arg(group.what)
+                    : QCoreApplication::translate("MaterialTool", "%1 components: %2")
+                          .arg(group.components)
+                          .arg(group.what));
     }
   }
   return parts.join(QStringLiteral(", "));

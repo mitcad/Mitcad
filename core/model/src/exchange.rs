@@ -107,6 +107,9 @@ pub struct ExportPlacement {
     /// instead of the bodies chosen, in one file, a file per plate or one
     /// plate (`plates.rs`).
     pub plates: Option<PlateFiles>,
+    /// On the print bed (mitcad#1491): the clearance between two
+    /// neighbouring pieces beyond their brims, mm; 5 mm when `None`.
+    pub spacing: Option<f64>,
 }
 
 /// A 3MF model before its slicer's settings (mitcad#1050,
@@ -714,6 +717,7 @@ impl<K: Kernel> Document<K> {
             chosen: &placement.bed_faces,
             auto_orient: placement.auto_orient,
             settle: placement.settle,
+            spacing: placement.spacing.unwrap_or(bed::GAP),
         };
         let mut on_bed = if placement.on_bed && format != ExportFormat::ThreeMf {
             let uids: Vec<BodyUid> = chosen.iter().map(|b| b.uid).collect();
@@ -1311,13 +1315,15 @@ impl<K: Kernel> Document<K> {
             };
             let centred = pieces.iter().all(|piece| piece.plan.settle.center);
             if turned.len() > 1 && centred {
-                // Each piece's box in X and Y as it lies now.
+                // Each piece's box in X and Y as it lies now, widened by how
+                // far its first layer reaches past it (its brim, mitcad#1491),
+                // and the clearance between two such boxes.
                 let spans: Vec<[(f64, f64); 2]> = turned
                     .iter()
                     .map(|&i| {
                         let t = moved[i].unwrap_or(Transform::IDENTITY);
                         let empty = (f64::INFINITY, f64::NEG_INFINITY);
-                        points(&placed[i])
+                        let [x, y] = points(&placed[i])
                             .into_iter()
                             .map(|p| t.apply_point(p))
                             .fold([empty, empty], |[x, y], p| {
@@ -1325,25 +1331,28 @@ impl<K: Kernel> Document<K> {
                                     (x.0.min(p[0]), x.1.max(p[0])),
                                     (y.0.min(p[1]), y.1.max(p[1])),
                                 ]
-                            })
+                            });
+                        let m = pieces[i].margin;
+                        [(x.0 - m, x.1 + m), (y.0 - m, y.1 + m)]
                     })
                     .collect();
+                let gap = pieces[turned[0]].spacing;
                 let bed_size = self.plate_size();
-                let rows = bed::wrap_rows(&spans, bed_size[0]);
+                let rows = bed::wrap_rows(&spans, bed_size[0], gap);
                 let centre = pieces[turned[0]].plan.plate;
                 let width = |row: &[usize]| -> f64 {
                     row.iter()
                         .map(|&k| spans[k][0].1 - spans[k][0].0)
                         .sum::<f64>()
-                        + bed::GAP * (row.len() - 1) as f64
+                        + gap * (row.len() - 1) as f64
                 };
                 let depth = |row: &[usize]| -> f64 {
                     row.iter()
                         .map(|&k| spans[k][1].1 - spans[k][1].0)
                         .fold(0.0, f64::max)
                 };
-                let total_depth = rows.iter().map(|row| depth(row)).sum::<f64>()
-                    + bed::GAP * (rows.len() - 1) as f64;
+                let total_depth =
+                    rows.iter().map(|row| depth(row)).sum::<f64>() + gap * (rows.len() - 1) as f64;
                 let mut row_start = centre[1] - total_depth / 2.0;
                 for row in &rows {
                     let mut cursor = centre[0] - width(row) / 2.0;
@@ -1359,27 +1368,30 @@ impl<K: Kernel> Document<K> {
                         if let Some(t) = moved[turned[k]].as_mut() {
                             *t = Transform::translation([cursor - lo, dy, 0.0]).after(t);
                         }
-                        cursor += hi - lo + bed::GAP;
+                        cursor += hi - lo + gap;
                     }
-                    row_start += depth(row) + bed::GAP;
+                    row_start += depth(row) + gap;
                 }
                 let widest = rows.iter().map(|row| width(row)).fold(0.0, f64::max);
                 if widest > bed_size[0] + bed::FIT || total_depth > bed_size[1] + bed::FIT {
+                    let brims = turned.iter().any(|&i| pieces[i].margin > 0.0);
                     exported.warnings.push(format!(
                         "the {} pieces do not fit on the {:.0} x {:.0} mm bed (they take {:.0} x \
-                         {:.0} mm): arrange them in the slicer, or put some on another plate",
+                         {:.0} mm{}): arrange them in the slicer, or put some on another plate",
                         turned.len(),
                         bed_size[0],
                         bed_size[1],
                         widest,
-                        total_depth
+                        total_depth,
+                        if brims { " with their brims" } else { "" }
                     ));
                 }
             }
             // Not centred, the further copies of a print plate's item
             // (mitcad#1311) each beside the one before it along X, from the
-            // first copy's place: the copies would otherwise lie in one
-            // place. The other pieces keep theirs.
+            // first copy's place, as far apart as neighbours in a row
+            // (beyond their brims, mitcad#1491): the copies would otherwise
+            // lie in one place. The other pieces keep theirs.
             if !centred {
                 for (i, piece) in pieces.iter().enumerate().skip(1) {
                     if !piece.copy || placed[i].is_empty() || placed[i - 1].is_empty() {
@@ -1390,8 +1402,9 @@ impl<K: Kernel> Document<K> {
                     let (_, end) = x_span(before, &placed[i - 1]);
                     let (start, _) = x_span(here, &placed[i]);
                     if end.is_finite() && start.is_finite() {
+                        let gap = pieces[i - 1].margin + piece.spacing + piece.margin;
                         moved[i] = Some(
-                            Transform::translation([end + bed::GAP - start, 0.0, 0.0]).after(&here),
+                            Transform::translation([end + gap - start, 0.0, 0.0]).after(&here),
                         );
                     }
                 }
@@ -1538,7 +1551,7 @@ impl<K: Kernel> Document<K> {
     }
 
     /// The colour a base feature gave a new body.
-    fn imported_color(&self, body: BodyUid) -> Option<[f64; 3]> {
+    pub(crate) fn imported_color(&self, body: BodyUid) -> Option<[f64; 3]> {
         match &self.feature(body.feature)?.def {
             FeatureDef::Base(base) if base.operation == Operation::NewBody => {
                 base.body_numbered(body.index)?.color

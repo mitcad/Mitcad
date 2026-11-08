@@ -616,15 +616,11 @@ std::vector<int> Shape::find_faces(const std::string& reference) const {
   return found;
 }
 
-std::vector<int> Shape::find_edges(const std::string& reference) const {
-  const auto name = parse_composite_name(reference);
-  if (!name || name->kind != 'E') {
-    return {};
-  }
+std::vector<int> Shape::edges_between(const std::string& a, const std::string& b) const {
   std::vector<int> candidates;
   if (face_count() < kIndexedFaces) {
     for (int i = 0; i < edge_count(); ++i) {
-      if (edge_matches(i, name->faces[0], name->faces[1])) {
+      if (edge_matches(i, a, b)) {
         candidates.push_back(i);
       }
     }
@@ -650,8 +646,8 @@ std::vector<int> Shape::find_edges(const std::string& reference) const {
       edges = made;
       m_faceEdges.set(edges);
     }
-    const std::vector<int> first = matching_faces(name->faces[0]);
-    const std::vector<int> second = matching_faces(name->faces[1]);
+    const std::vector<int> first = matching_faces(a);
+    const std::vector<int> second = matching_faces(b);
     const auto edges_of = [&edges](const std::vector<int>& faces) {
       std::size_t count = 0;
       for (const int f : faces) {
@@ -661,7 +657,7 @@ std::vector<int> Shape::find_edges(const std::string& reference) const {
     };
     for (const int f : edges_of(first) <= edges_of(second) ? first : second) {
       for (const int i : (*edges)[static_cast<std::size_t>(f)]) {
-        if (edge_matches(i, name->faces[0], name->faces[1])) {
+        if (edge_matches(i, a, b)) {
           candidates.push_back(i);
         }
       }
@@ -669,7 +665,23 @@ std::vector<int> Shape::find_edges(const std::string& reference) const {
     std::sort(candidates.begin(), candidates.end());
     candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
   }
-  candidates = sorted_edges(candidates);
+  return candidates;
+}
+
+std::vector<int> Shape::matching_edges(const std::string& reference) const {
+  const auto name = parse_composite_name(reference);
+  if (!name || name->kind != 'E') {
+    return {};
+  }
+  return edges_between(name->faces[0], name->faces[1]);
+}
+
+std::vector<int> Shape::find_edges(const std::string& reference) const {
+  const auto name = parse_composite_name(reference);
+  if (!name || name->kind != 'E') {
+    return {};
+  }
+  std::vector<int> candidates = sorted_edges(edges_between(name->faces[0], name->faces[1]));
   if (name->index < 0) {
     return candidates;
   }

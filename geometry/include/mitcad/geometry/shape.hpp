@@ -178,6 +178,15 @@ public:
   std::vector<int> find_faces(const std::string& reference) const;
   std::vector<int> find_edges(const std::string& reference) const;
   std::vector<int> find_vertices(const std::string& reference) const;
+  // The faces whose names match a reference, in index order: what
+  // find_faces finds without its geometric order, which measures every
+  // face when several match (63 pieces of a modelled thread, mitcad#1464).
+  // For whether a reference resolves, and to how many faces.
+  std::vector<int> matching_faces(const std::string& reference) const;
+  // The edges between the faces an edge reference names, its "#k" left
+  // aside, in index order: find_edges without the order it numbers them
+  // by, which measures every one.
+  std::vector<int> matching_edges(const std::string& reference) const;
 
   // Volume, area and centre {volume, area, x, y, z} once query.cpp's
   // mass_properties has measured them; the shape never changes, and the
@@ -340,6 +349,8 @@ private:
   void derive_edge_names();
   void derive_vertex_names();
   bool edge_matches(int i, const std::string& a, const std::string& b) const;
+  // The edges between faces matching `a` and `b`, in index order.
+  std::vector<int> edges_between(const std::string& a, const std::string& b) const;
   bool vertex_matches(int i, const NameList& faces) const;
   std::vector<int> sorted_edges(std::vector<int> edges) const;
   std::vector<int> sorted_vertices(std::vector<int> vertices) const;
@@ -379,8 +390,6 @@ private:
   // compared with every edge's faces).
   using FaceEdges = std::vector<std::vector<int>>;
   LazyValue<std::shared_ptr<const FaceEdges>> m_faceEdges;
-  // The faces whose names match a reference, in index order.
-  std::vector<int> matching_faces(const std::string& reference) const;
   bool m_unified = false;
   std::vector<std::string> m_notes;
   std::vector<std::vector<NotePlace>> m_notePlaces;

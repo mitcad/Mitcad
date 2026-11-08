@@ -51,6 +51,9 @@ public:
   // Called by MainWindow only after its normal save/lock close guards.
   void windowClosed(MainWindow* window);
   void setPresenter(std::function<void(MainWindow*)> presenter);
+  // An untitled design nothing is made in yet, not modified and not busy:
+  // New reuses its window, and new default units restart it (mitcad#1452).
+  bool reusable(MainWindow* window) const;
 
 signals:
   void windowAdded(MainWindow* window, MainWindow* source, bool separate);
@@ -63,7 +66,6 @@ protected:
   bool eventFilter(QObject* object, QEvent* event) override;
 
 private:
-  bool reusable(MainWindow* window) const;
   void installWindowMenu(MainWindow* window);
   QList<QPointer<MainWindow>> m_windows;
   QPointer<MainWindow> m_active;

@@ -1843,8 +1843,19 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
             Command::EditFeature { uid, def } => {
                 let before = self.assembly().created_by(uid);
                 self.check_two_side_distances(&def, Some(uid))?;
-                let created = self.edit_feature(uid, &def)?;
+                let (created, kept) = self.edit_feature_keeping(uid, &def)?;
                 let mut reply = json!({"parameters": names(&created)});
+                // Own parameters kept as user parameters (mitcad#1536), as
+                // `sketch.set_dimension` reports a dimension's.
+                if !kept.is_empty() {
+                    let moved: Vec<Value> = kept
+                        .iter()
+                        .map(|k| json!({"name": k.name, "slot": k.slot, "parameter": k.parameter}))
+                        .collect();
+                    reply["user_parameters"] = json!(moved);
+                    let notes: Vec<&str> = kept.iter().map(|k| k.note.as_str()).collect();
+                    reply["notes"] = json!(notes);
+                }
                 let warnings = self.warnings(uid);
                 if !warnings.is_empty() {
                     reply["warnings"] = json!(warnings);
@@ -2440,6 +2451,13 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
         let mut value = preview_json(&report);
         if let Some(datum) = self.preview_datum() {
             value["datum"] = analysis::datum_json(&datum);
+        }
+        // An Intersection Curve's curve as the `feature_curves` query gives
+        // the finished one (mitcad#1496): the view draws it as the preview.
+        if let Some(curve) = self.preview_curve() {
+            value["curve"] = json!({
+                "points": mitcad_model::features::intersection_curve::curve_polyline(&curve)
+            });
         }
         if let Some(choice) = auto {
             value["auto_operation"] =

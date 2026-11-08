@@ -62,5 +62,26 @@
   {"cmd": "add_feature", "def": {"type": "coil", "plane": "xy", "center": [0, -100], "diameter": 40,
     "helix": {"type": "revolutions_and_pitch", "revolutions": 3, "pitch": 10}, "section_size": 4,
     "operation": "cut", "participants": ["F9.b0"]}},
-  {"expect": {"feature": "Coil2", "status": "ok", "body": "F9.b0", "volume": 139262.58990311885, "tolerance": 1e-4}}
+  {"expect": {"feature": "Coil2", "status": "ok", "body": "F9.b0", "volume": 139262.58990311885, "tolerance": 1e-4}},
+
+  {"comment": "Corners (mitcad#1448): an L-shaped path (Sketch5 F11), (100,0)-(140,0) and on to (140,40). Left out, the corner is mitered as before (Pipe4, F12): V = pi 4^2 80."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_line", "sketch": "F11", "start": [100, 0], "end": [140, 0]},
+  {"cmd": "sketch.add_line", "sketch": "F11", "start": [140, 0], "end": [140, 40]},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"sketch": "F11", "curves": ["c1"], "chain": true},
+    "size": 8, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe4", "status": "ok", "body": "F12.b0", "volume": 4021.238596594935, "tolerance": 1e-4,
+    "has_face": "F12:end"}},
+  {"comment": "Rounded: the legs end square at the corner and the circle turned about it fills its outside, (4 - pi) 4^3 / 3 less than the miter."},
+  {"cmd": "edit_feature", "uid": "F12", "def": {"type": "pipe", "path": {"sketch": "F11", "curves": ["c1"], "chain": true},
+    "size": 8, "corners": "rounded", "operation": "new_body"}},
+  {"expect": {"feature": "Pipe4", "status": "ok", "body": "F12.b0", "volume": 4002.925906538184, "tolerance": 1e-4,
+    "has_face": "F12:end"}},
+  {"comment": "A square of side 8: 64 80 mitered, (2 - pi / 2) 4^3 less rounded."},
+  {"cmd": "edit_feature", "uid": "F12", "def": {"type": "pipe", "path": {"sketch": "F11", "curves": ["c1"], "chain": true},
+    "section": "square", "size": 8, "corners": "rounded", "operation": "new_body"}},
+  {"expect": {"body": "F12.b0", "volume": 5092.530964914873, "tolerance": 1e-4, "has_face": "F12:side3"}},
+  {"cmd": "edit_feature", "uid": "F12", "def": {"type": "pipe", "path": {"sketch": "F11", "curves": ["c1"], "chain": true},
+    "section": "square", "size": 8, "operation": "new_body"}},
+  {"expect": {"body": "F12.b0", "volume": 5120, "tolerance": 1e-4}}
 ]

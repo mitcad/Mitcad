@@ -4,6 +4,7 @@
 #include <functional>
 #include <vector>
 
+#include <QCoreApplication>
 #include <QStringList>
 #include <QWidget>
 
@@ -18,6 +19,8 @@ namespace mitcad::sketch {
 // with a pointing hand, and a click on it calls `activated` with its index;
 // the others are plain text.
 class PaletteWarnings : public QWidget {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::sketch::PaletteWarnings)
+
 public:
   explicit PaletteWarnings(QWidget* parent = nullptr);
 

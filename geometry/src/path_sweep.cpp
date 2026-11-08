@@ -1150,11 +1150,12 @@ ShapePtr pipe(const PipeSpec& spec) {
     const auto [first, last] =
         cap_order(range, {face_name(spec.feature, "start")}, {face_name(spec.feature, "end")});
     const PipeMode mode = detail::perpendicular_mode(path, spec.path);
-    ShapePtr result = detail::pipe_shell(outer, part, mode, first, last);
+    ShapePtr result = detail::pipe_shell(outer, part, mode, first, last, kPipeTolerance, spec.corners);
     if (spec.thickness > 0.0) {
       const NamedWire inner =
           section(spec.feature, "inner", center, tangent, x, radius - shrink, corners, angle);
-      result = detail::with_holes(result, {detail::pipe_shell(inner, part, mode, {}, {})}, "the pipe");
+      result = detail::with_holes(
+          result, {detail::pipe_shell(inner, part, mode, {}, {}, kPipeTolerance, spec.corners)}, "the pipe");
     }
     return detail::finished(*result, "the pipe");
   });

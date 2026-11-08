@@ -97,7 +97,7 @@ void fitSize(CommandState& state, const CommandContext& model) {
   }
 }
 
-// The standard sizes as the model lists them ("608 (8 x 22 x 7)"), then
+// The standard sizes as the model lists them ("608 (8 × 22 × 7)"), then
 // Custom; read once.
 const Choices& sizeChoices(const CommandContext& context, const std::shared_ptr<Choices>& cache) {
   if (cache->isEmpty()) {
@@ -117,7 +117,7 @@ const Choices& sizeChoices(const CommandContext& context, const std::shared_ptr<
                                            number(size.value(QStringLiteral("width")).toDouble()))});
     }
     if (cache->isEmpty()) {
-      cache->append({QStringLiteral("608"), QStringLiteral("608 (8 x 22 x 7)")});
+      cache->append({QStringLiteral("608"), QStringLiteral("608 (8 × 22 × 7)")});
     }
     cache->append({kCustom, QObject::tr("Custom")});
   }
@@ -337,8 +337,10 @@ CommandDef bearingCommand(const CommandContext& context) {
         walls << length(key);
       }
     }
-    if (!walls.isEmpty()) {
-      parts << QObject::tr("walls %1").arg(walls.join(QStringLiteral(" and ")));
+    if (walls.size() == 2) {
+      parts << QObject::tr("walls %1 and %2").arg(walls.at(0), walls.at(1));
+    } else if (!walls.isEmpty()) {
+      parts << QObject::tr("walls %1").arg(walls.first());
     }
     parts << QObject::tr("least gap %1").arg(length("min_gap"));
     // On a shaft or in a hole (mitcad#578), and whether a size fits it.

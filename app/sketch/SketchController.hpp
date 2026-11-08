@@ -272,6 +272,14 @@ public:
   // A horizontal or vertical distance made signed or unsigned, its point
   // kept where it is (`sketch.set_signed`, mitcad#409).
   void setDimensionSigned(const QString& id, bool on);
+  // The parameter of dimension `id` when it is the sketch's own (a driving
+  // dimension's, owned by the sketch, used by no other of its dimensions):
+  // what Move to User Parameters moves (mitcad#1535); empty otherwise.
+  QString ownParameter(const QString& id) const;
+  // Move BuckleDiameter to User Parameters (mitcad#1535): the dimension's
+  // own parameter becomes a user parameter, which the dimension uses at the
+  // same value (`sketch.set_dimension` with its bare name), one undo step.
+  void keepAsUserParameter(const QString& id);
   // Activates or deactivates constraints and dimensions (`sketch.set_active`,
   // mitcad#721). An activation the sketch does not solve with is refused
   // with the model's reason; nothing changes then.
@@ -522,6 +530,9 @@ private:
   void fieldEdited(int index);
   void acceptEditor();
   void closeEditor();
+  // A `sketch.set_dimension` result's own parameters kept as user
+  // parameters (mitcad#1535): logged, and the model's notes shown.
+  void noteKeptParameters(const QJsonObject& result);
   void selectAnnotation(const QString& kind, const QString& id, Qt::KeyboardModifiers modifiers);
   void startDrag();
   void applyDrag();

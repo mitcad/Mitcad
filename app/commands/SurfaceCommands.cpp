@@ -746,7 +746,7 @@ CommandDef ruledSurfaceCommand(const CommandContext& context) {
           .withVisible(angled),
       flipInput(QStringLiteral("flip"), QObject::tr("Flip")),
       choiceInput(QStringLiteral("corners"), QObject::tr("Corners"),
-                  {{QStringLiteral("mitre"), QStringLiteral("Mitre")}, {QStringLiteral("round"), QStringLiteral("Round")}},
+                  {{QStringLiteral("mitre"), QStringLiteral("Miter")}, {QStringLiteral("round"), QStringLiteral("Round")}},
                   QStringLiteral("mitre")),
   };
   def.enabled = [&context] { return hasBodies(context); };

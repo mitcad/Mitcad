@@ -4,16 +4,21 @@
 #include <algorithm>
 
 #include <QCloseEvent>
+#include <QDebug>
 #include <QFrame>
+#include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
+#include <QLabel>
 #include <QListWidget>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPropertyAnimation>
 #include <QShortcut>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QStyle>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -93,26 +98,25 @@ private:
 SettingsWindow::SettingsWindow(QWidget* parent, Selector selector) : QWidget(parent, Qt::Window) {
   setAttribute(Qt::WA_DeleteOnClose);
   m_pages = new QStackedWidget;
+  auto* layout = new QVBoxLayout(this);
+  // The window takes the size of the chosen pane, and cannot be resized.
+  layout->setSizeConstraint(QLayout::SetFixedSize);
   if (selector == Selector::PageList) {
-    auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(12, 12, 12, 12);
-    // The window takes the size of the chosen pane, and cannot be resized.
-    layout->setSizeConstraint(QLayout::SetFixedSize);
+    auto* row = new QHBoxLayout;
     m_list = new QListWidget;
     m_list->setObjectName(QStringLiteral("settingsPageList"));
     m_list->setSpacing(2);
     m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    layout->addWidget(m_list, 0, Qt::AlignTop);
-    layout->addWidget(m_pages, 1);
+    row->addWidget(m_list, 0, Qt::AlignTop);
+    row->addWidget(m_pages, 1);
+    layout->addLayout(row);
     connect(m_list, &QListWidget::currentRowChanged, this, [this](int row) {
       if (row >= 0) showPane(row);
     });
   } else {
-    auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
-    // The window takes the size of the chosen pane, and cannot be resized.
-    layout->setSizeConstraint(QLayout::SetFixedSize);
 
     m_header = new QWidget;
     auto* row = new QHBoxLayout(m_header);
@@ -127,6 +131,36 @@ SettingsWindow::SettingsWindow(QWidget* parent, Selector selector) : QWidget(par
     layout->addWidget(line);
     layout->addWidget(m_pages);
   }
+
+  // The footer under the pane (mitcad#1479): a quiet note that a change was
+  // saved, at the right, where it covers nothing. Its row keeps its height
+  // while the note is empty, so the window does not change size.
+  m_savedNote = new QLabel;
+  m_savedNote->setObjectName(QStringLiteral("settingsSavedNote"));
+  m_savedNote->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+  m_savedNote->setEnabled(false); // the quiet colour of a hint
+  m_savedNote->setProperty("noteShown", false);
+  m_savedOpacity = new QGraphicsOpacityEffect(m_savedNote);
+  m_savedOpacity->setOpacity(0.0);
+  m_savedNote->setGraphicsEffect(m_savedOpacity);
+  auto* footer = new QHBoxLayout;
+  // The pane's own margins at the sides (addPane), so that the note ends
+  // where the pane's controls do; below it the window's margin.
+  footer->setContentsMargins(24, 0, 24, selector == Selector::IconRow ? 12 : 0);
+  footer->addWidget(m_savedNote, 1);
+  layout->addLayout(footer);
+  m_savedFade = new QPropertyAnimation(m_savedOpacity, "opacity", this);
+  connect(m_savedFade, &QPropertyAnimation::finished, this, [this] {
+    if (m_savedOpacity->opacity() <= 0.0) {
+      m_savedNote->clear();
+      m_savedNote->setProperty("noteShown", false);
+      qDebug().noquote() << QStringLiteral("Settings: saved note faded");
+    }
+  });
+  m_savedHold = new QTimer(this);
+  m_savedHold->setSingleShot(true);
+  m_savedHold->setInterval(3000);
+  connect(m_savedHold, &QTimer::timeout, this, &SettingsWindow::fadeSavedNote);
 
   // Cmd+W (Ctrl+W elsewhere) closes the window, not the document.
   auto* close = new QShortcut(QKeySequence::Close, this);
@@ -184,10 +218,37 @@ void SettingsWindow::showPane(int index) {
 
 void SettingsWindow::showEvent(QShowEvent* event) {
   QWidget::showEvent(event);
+  // The note's row is as tall as a line of its text, empty or not.
+  m_savedNote->setMinimumHeight(m_savedNote->fontMetrics().height());
   // The sizes the layout took before the widgets were polished (the
   // platform's font) were not the final ones.
   layout()->invalidate();
   layout()->activate();
+}
+
+QString SettingsWindow::savedNoteText() {
+  return tr("Changes are saved automatically");
+}
+
+void SettingsWindow::noteSaved() {
+  m_savedNote->setText(savedNoteText());
+  // A property change also tells the native frontend's mirror to refresh.
+  m_savedNote->setProperty("noteShown", true);
+  m_savedFade->stop();
+  m_savedFade->setDuration(150);
+  m_savedFade->setStartValue(m_savedOpacity->opacity());
+  m_savedFade->setEndValue(1.0);
+  m_savedFade->start();
+  m_savedHold->start();
+  qDebug().noquote() << QStringLiteral("Settings: saved note shown");
+}
+
+void SettingsWindow::fadeSavedNote() {
+  m_savedFade->stop();
+  m_savedFade->setDuration(600);
+  m_savedFade->setStartValue(m_savedOpacity->opacity());
+  m_savedFade->setEndValue(0.0);
+  m_savedFade->start();
 }
 
 void SettingsWindow::closeEvent(QCloseEvent* event) {

@@ -1,0 +1,453 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a rounding riding on another's contact line (0016) taken the
+other way round where its ride fails, its side on the line lying on the
+face, and the corners at a rider's ends (mitcad#1499, after mitcad#1494).
+
+Two roundings of a face F narrower than both, no ball touching the faces
+beyond F on both sides: 0016 computes the earlier stripe A on its own faces
+and lets the later one, B, roll on A's contact line on F (RideOnOverlap,
+B's side on the line on a support face made from A's blend), the blends
+meeting on that line (ApplyRides). On a plate 1.3 thick rounded with 1, or
+on a roof slab's end face along a slope (1.3 wide), that failed:
+
+- where B is longer than the line it rides on (the slope's edge riding on
+  the underside's line), B's walk runs on past the line's ends and throws:
+  the ride is now tried the other way round where it fails (A riding on
+  B's line), the failed ride's entry removed;
+- B's side on the line indexed the support, a face of no solid, so the
+  corners at B's ends could not find their faces (ChFi3d_cherche_edge:
+  "Failed to find edge", already with an end face's two rims and one
+  vertical edge rounded): that side now lies on F, its curve's p-curve on
+  F projected from its line, its transition (computed on the support)
+  turned where F lies the other way in the solid; ApplyRides finds B's
+  SurfData on F too, and B's points at the line's ends become A's also
+  where a corner of several stripes made its own point there (within ten
+  tolerances);
+- a corner of three stripes with a rider (PerformThreeCorner) walked the
+  pivot's ball and put the rider's ends off the line: such a corner is
+  filled by PerformMoreThreeCorner, between the stripes cut where their
+  contacts meet, and a plate of a corner with a rider is built with G0
+  constraints (with G1 to the riders' surfaces one of two mirror-image
+  corners of the plate came out folded);
+- the clash check between stripes (ChFi3d_StripeEdgeInter) skips two
+  stripes that both end where a part ride's blends meet;
+- a stripe the corners at both its ends cut down to nothing (one SurfData,
+  its contacts points, its two end curves one curve: a plate's vertical
+  edge between the sphere of the bottom corner and the riders' corner at
+  the top, both cutting it at the height of the lines ridden on) left a
+  face of no area: after ChFi3d_FilDS its surface and contacts leave the
+  data structure and the corner at one end takes the other one's curve,
+  with p-curves of its own along it (dropStripesCutToNothing).
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 6a4a98a3..60496947 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -1696,6 +1696,33 @@ bool ChFi3d_Builder::RideOnOverlap(const occ::handle<ChFiDS_Stripe>& A,
+       }
+     }
+   }
++  // B's side on the line lies on F, with its curve there (not on the support,
++  // a face of no solid): the corners at B's ends find their faces through it
++  // (ChFi3d_cherche_edge), as for A. Its transition, taken on the support,
++  // is turned where F lies the other way in the solid.
++  ChFiDS_FaceInterference&      FIB = SB->ChangeInterference(onB);
++  const occ::handle<Geom_Curve> CB =
++    FIB.LineIndex() > 0 ? DStr.Curve(FIB.LineIndex()).Curve() : occ::handle<Geom_Curve>();
++  const double                    b1 = std::min(FIB.FirstParameter(), FIB.LastParameter());
++  const double                    b2 = std::max(FIB.FirstParameter(), FIB.LastParameter());
++  const occ::handle<Geom2d_Curve> PCF =
++    CB.IsNull() ? occ::handle<Geom2d_Curve>()
++                : GeomProjLib::Curve2d(new Geom_TrimmedCurve(CB, b1, b2), b1, b2, BRep_Tool::Surface(F));
++  if (!PCF.IsNull())
++  {
++    const TopAbs_Orientation aTra = DStr.Shape(iF).Orientation() != Support.Orientation()
++                                      ? TopAbs::Reverse(FIB.Transition())
++                                      : FIB.Transition();
++    FIB.SetInterference(FIB.LineIndex(), aTra, PCF, FIB.PCurveOnSurf());
++    if (onB == 1)
++    {
++      SB->ChangeIndexOfS1(iF);
++    }
++    else
++    {
++      SB->ChangeIndexOfS2(iF);
++    }
++  }
+   return true;
+ }
+ 
+@@ -2764,6 +2791,219 @@ static void keepPartLineEnds(TopOpeBRepDS_DataStructure& DStr, const int Ic, con
+   L = aKept;
+ }
+ 
++// The range of curve Ic of the data structure: its own, or that of the
++// points at its ends (its first and its last).
++static bool curveRange(const TopOpeBRepDS_DataStructure& DStr, const int Ic, double& F, double& L)
++{
++  if (DStr.Curve(Ic).Range(F, L))
++  {
++    return true;
++  }
++  bool aF = false, aL = false;
++  for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator it(DStr.CurveInterferences(Ic));
++       it.More();
++       it.Next())
++  {
++    const occ::handle<TopOpeBRepDS_CurvePointInterference> I =
++      occ::down_cast<TopOpeBRepDS_CurvePointInterference>(it.Value());
++    if (I.IsNull())
++    {
++      continue;
++    }
++    if (I->Transition().Orientation(TopAbs_IN) == TopAbs_FORWARD && !aF)
++    {
++      F  = I->Parameter();
++      aF = true;
++    }
++    else if (I->Transition().Orientation(TopAbs_IN) == TopAbs_REVERSED && !aL)
++    {
++      L  = I->Parameter();
++      aL = true;
++    }
++  }
++  return aF && aL && L > F;
++}
++
++// Whether curves Ic1 and Ic2 of the data structure are one within Tol: the
++// ends of Ic1 those of Ic2, points of Ic1 between them on Ic2; theSameWay
++// where their starts meet. Their ranges in F1, L1 and F2, L2.
++static bool sameCurve(const TopOpeBRepDS_DataStructure& DStr,
++                      const int                         Ic1,
++                      const int                         Ic2,
++                      const double                      Tol,
++                      bool&                             theSameWay,
++                      double&                           f1,
++                      double&                           l1,
++                      double&                           f2,
++                      double&                           l2)
++{
++  const occ::handle<Geom_Curve>& C1 = DStr.Curve(Ic1).Curve();
++  const occ::handle<Geom_Curve>& C2 = DStr.Curve(Ic2).Curve();
++  if (C1.IsNull() || C2.IsNull() || !curveRange(DStr, Ic1, f1, l1) || !curveRange(DStr, Ic2, f2, l2))
++  {
++    return false;
++  }
++  const gp_Pnt a1 = C1->Value(f1), b1 = C1->Value(l1), a2 = C2->Value(f2), b2 = C2->Value(l2);
++  theSameWay      = a1.Distance(a2) <= Tol && b1.Distance(b2) <= Tol;
++  if (!theSameWay && (a1.Distance(b2) > Tol || b1.Distance(a2) > Tol))
++  {
++    return false;
++  }
++  for (int i = 1; i < 8; i++)
++  {
++    GeomAPI_ProjectPointOnCurve aProj(C1->Value(f1 + (l1 - f1) * i / 8.), C2, f2, l2);
++    if (aProj.NbPoints() == 0 || aProj.LowerDistance() > Tol)
++    {
++      return false;
++    }
++  }
++  return true;
++}
++
++// Removes the interferences on geometry I of kind T from list L.
++static void removeInterferences(NCollection_List<occ::handle<TopOpeBRepDS_Interference>>& L,
++                                const TopOpeBRepDS_Kind                                   T,
++                                const int                                                 I)
++{
++  for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator it(L); it.More();)
++  {
++    if (it.Value()->GeometryType() == T && it.Value()->Geometry() == I)
++    {
++      L.Remove(it);
++    }
++    else
++    {
++      it.Next();
++    }
++  }
++}
++
++// Stripes the corners at both their ends cut down to nothing: one SurfData
++// whose contacts are points, its end curves one curve twice (a short edge
++// rounded between the sphere of the corner at one end and the corner of
++// riders at the other, which cuts it where its contacts meet the lines the
++// riders ride on, at the sphere's section). Its surface would make a face of
++// no area between the corners: it is dropped, and the corner at one end
++// takes the curve of the corner at the other end instead of its own (their
++// points are one already: the riders' points at the lines' ends are those
++// of the stripes ridden on, ApplyRides).
++static void dropStripesCutToNothing(TopOpeBRepDS_DataStructure&                         DStr,
++                                    const NCollection_List<occ::handle<ChFiDS_Stripe>>& Stripes,
++                                    const NCollection_List<occ::handle<ChFiDS_Stripe>>& Dropped,
++                                    const double                                        Tol)
++{
++  for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itS(Stripes); itS.More(); itS.Next())
++  {
++    const occ::handle<ChFiDS_Stripe>& S = itS.Value();
++    if (Dropped.Contains(S) || S->SetOfSurfData().IsNull() || S->SetOfSurfData()->Length() != 1)
++    {
++      continue;
++    }
++    const occ::handle<ChFiDS_SurfData>& Fd  = S->SetOfSurfData()->Value(1);
++    const int                           Ic1 = S->Curve(true), Ic2 = S->Curve(false);
++    if (Ic1 <= 0 || Ic2 <= 0 || Ic1 == Ic2)
++    {
++      continue;
++    }
++    bool aPoints = true;
++    for (int k = 1; k <= 2 && aPoints; k++)
++    {
++      aPoints = Fd->Vertex(true, k).Point().Distance(Fd->Vertex(false, k).Point()) <= Tol;
++    }
++    bool   aSameWay = true;
++    double f[2] = {0., 0.}, l[2] = {0., 0.};
++    if (!aPoints || !sameCurve(DStr, Ic1, Ic2, Tol, aSameWay, f[0], l[0], f[1], l[1]))
++    {
++      continue;
++    }
++    const int Isurf = Fd->Surf();
++    // The other surfaces on one of the two curves take the other one, with
++    // p-curves of their own along it (the first end's curve kept, or else,
++    // where a p-curve along it is not found, the last end's).
++    NCollection_List<std::pair<int, occ::handle<TopOpeBRepDS_Interference>>> aNew;
++    int                                                                       aGone = 0;
++    for (int k = 0; k < 2 && aGone == 0; k++)
++    {
++      const int aKeep = k == 0 ? Ic1 : Ic2, aDrop = k == 0 ? Ic2 : Ic1;
++      bool      aDone = true;
++      aNew.Clear();
++      // (Nothing is changed before both curves' users are known: a failure
++      // here leaves the stripe as it is.)
++      try
++      {
++        OCC_CATCH_SIGNALS
++        const occ::handle<Geom_Curve> CK = new Geom_TrimmedCurve(DStr.Curve(aKeep).Curve(), f[k], l[k]);
++        for (int js = 1; js <= DStr.NbSurfaces() && aDone; js++)
++        {
++          if (js == Isurf)
++          {
++            continue;
++          }
++          for (NCollection_List<occ::handle<TopOpeBRepDS_Interference>>::Iterator it(
++                 DStr.SurfaceInterferences(js));
++               it.More() && aDone;
++               it.Next())
++          {
++            if (it.Value()->GeometryType() != TopOpeBRepDS_CURVE || it.Value()->Geometry() != aDrop)
++            {
++              continue;
++            }
++            const occ::handle<Geom2d_Curve> aPC =
++              GeomProjLib::Curve2d(CK, f[k], l[k], DStr.Surface(js).Surface());
++            aDone = !aPC.IsNull();
++            if (aDone)
++            {
++              const TopAbs_Orientation anO = it.Value()->Transition().Orientation(TopAbs_IN);
++              aNew.Append(std::make_pair(js,
++                                         occ::handle<TopOpeBRepDS_Interference>(ChFi3d_FilCurveInDS(
++                                           aKeep, js, aPC, aSameWay ? anO : TopAbs::Reverse(anO)))));
++            }
++          }
++        }
++      }
++      catch (Standard_Failure const&)
++      {
++        aDone = false;
++      }
++      if (aDone && !aNew.IsEmpty())
++      {
++        aGone = aDrop;
++      }
++    }
++    if (aGone == 0)
++    {
++      continue;
++    }
++    for (int js = 1; js <= DStr.NbSurfaces(); js++)
++    {
++      removeInterferences(DStr.ChangeSurfaceInterferences(js), TopOpeBRepDS_CURVE, aGone);
++    }
++    for (NCollection_List<std::pair<int, occ::handle<TopOpeBRepDS_Interference>>>::Iterator it(aNew);
++         it.More();
++         it.Next())
++    {
++      DStr.ChangeSurfaceInterferences(it.Value().first).Append(it.Value().second);
++    }
++    DStr.ChangeCurveInterferences(aGone).Clear();
++    // The stripe's surface goes, and its contacts (points) with it.
++    DStr.ChangeSurfaceInterferences(Isurf).Clear();
++    removeInterferences(DStr.ChangeShapeInterferences(S->SolidIndex()), TopOpeBRepDS_SURFACE, Isurf);
++    for (int k = 1; k <= 2; k++)
++    {
++      const int Ic = Fd->Interference(k).LineIndex();
++      if (Ic <= 0)
++      {
++        continue;
++      }
++      DStr.ChangeCurveInterferences(Ic).Clear();
++      if (Fd->Index(k) > 0)
++      {
++        removeInterferences(DStr.ChangeShapeInterferences(Fd->Index(k)), TopOpeBRepDS_CURVE, Ic);
++      }
++    }
++  }
++}
++
+ void ChFi3d_Builder::ApplyRides()
+ {
+   TopOpeBRepDS_DataStructure&                            DStr = myDS->ChangeDS();
+@@ -2777,7 +3017,9 @@ void ChFi3d_Builder::ApplyRides()
+     // over F's seam, each riding on its own piece of A's line.)
+     NCollection_Sequence<occ::handle<ChFiDS_SurfData>> aSBs;
+     NCollection_Sequence<int>                          aOnBs;
+-    if (surfDatasOn(DStr, B, itS.Value(), aSBs, aOnBs) == 0)
++    // (A rider of RideOnOverlap has its side on F itself, RideOnOverlap.)
++    if (surfDatasOn(DStr, B, itS.Value(), aSBs, aOnBs) == 0
++        && (itS.Value().IsSame(itF.Value()) || surfDatasOn(DStr, B, itF.Value(), aSBs, aOnBs) == 0))
+     {
+       continue;
+     }
+@@ -3020,8 +3262,12 @@ void ChFi3d_Builder::ApplyRides()
+           const int anOld = B->IndexPoint((f == 0) != against, onB);
+           B->SetIndexPoint(aNew, (f == 0) != against, onB);
+           // (At an end inside F, B's corner already used its own point: the
+-          // corners' curves there, which cut F off, meet at A's.)
+-          if (atPoint[f] && anOld > 0 && anOld != aNew)
++          // corners' curves there, which cut F off, meet at A's. So at a
++          // corner of B's own at A's point, a corner of several stripes that
++          // made its own points.)
++          if (anOld > 0 && anOld != aNew
++              && (atPoint[f]
++                  || DStr.Point(anOld).Point().Distance(DStr.Point(aNew).Point()) <= 10. * tolapp3d))
+           {
+             // (A part ride ending at the start of A's closed line, on F's
+             // seam: B's end there cut the seam as for B alone, keeping the
+@@ -3610,9 +3856,17 @@ void ChFi3d_Builder::Compute()
+       NCollection_List<TopoDS_Shape>::Iterator               itPF(pairF);
+       for (; itA.More(); itA.Next(), itB.Next(), itPF.Next())
+       {
++        // (The later stripe rides on the earlier one's line, or the other
++        // way round where that fails: a rider longer than the line, running
++        // on past its ends, fails in its walk.)
+         if (!RideOnOverlap(itA.Value(), itB.Value(), TopoDS::Face(itPF.Value())))
+         {
+-          continue;
++          removeRideOf(itB.Value(), myRideStripes, myRideOn, myRideFaces, myRideEdges, myRideSupports);
++          if (!RideOnOverlap(itB.Value(), itA.Value(), TopoDS::Face(itPF.Value())))
++          {
++            removeRideOf(itA.Value(), myRideStripes, myRideOn, myRideFaces, myRideEdges, myRideSupports);
++            continue;
++          }
+         }
+         for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itBad(badstripes); itBad.More();)
+         {
+@@ -4154,6 +4408,22 @@ void ChFi3d_Builder::Compute()
+       }
+       return false;
+     };
++    // (Whether stripe S has an end of a contact at point P.)
++    const auto hasEndAt = [&](const occ::handle<ChFiDS_Stripe>& S, const gp_Pnt& P) {
++      for (int j = 1; !S->SetOfSurfData().IsNull() && j <= S->SetOfSurfData()->Length(); j++)
++      {
++        const occ::handle<ChFiDS_SurfData>& SD = S->SetOfSurfData()->Value(j);
++        for (int k = 1; k <= 2; k++)
++        {
++          if (SD->Vertex(true, k).Point().Distance(P) <= 10. * tolapp3d
++              || SD->Vertex(false, k).Point().Distance(P) <= 10. * tolapp3d)
++          {
++            return true;
++          }
++        }
++      }
++      return false;
++    };
+     for (itel.Initialize(myListStripe), i1 = 0; itel.More(); itel.Next(), i1++)
+     {
+       const occ::handle<ChFiDS_Stripe>& st = itel.Value();
+@@ -4177,6 +4447,18 @@ void ChFi3d_Builder::Compute()
+         {
+           continue;
+         }
++        // (Two stripes that both end where a part ride's blends meet inside
++        // the line ridden on, ApplyRides: their ends there meet at one point,
++        // made one below, and are no crossing.)
++        bool aMeet = false;
++        for (int ip = 1; ip <= ChFi3d_PartRideEnds().Length() && !aMeet; ip++)
++        {
++          aMeet = hasEndAt(st, ChFi3d_PartRideEnds()(ip)) && hasEndAt(aCheckStripe, ChFi3d_PartRideEnds()(ip));
++        }
++        if (aMeet)
++        {
++          continue;
++        }
+         try
+         {
+           OCC_CATCH_SIGNALS
+@@ -4227,6 +4509,11 @@ void ChFi3d_Builder::Compute()
+     ChFi3d_InitChron(cl_reconstruction);
+ #endif
+ 
++    // (Stripes the corners at both their ends cut down to nothing go.)
++    if (done)
++    {
++      dropStripesCutToNothing(DStr, myListStripe, myDroppedStripes, 10. * tolapp3d);
++    }
+     // (Where blends cut by each other meet the face, each stripe made its
+     // own point.)
+     for (int ip = 1; done && ip <= aCutCurves.Length(); ip++)
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+index 8c11bf2b..a5463f46 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+@@ -1962,7 +1962,7 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+     {
+       int                        jf1 = 0;
+       int                        i1 = 0, i2 = 0;
+-      double                     pa1 = 0., pa2;
++      double                     pa1 = 0., pa2 = 0.;
+       bool                       ok;
+       occ::handle<ChFiDS_Stripe> strip;
+       double                     angedg;
+@@ -2847,6 +2847,18 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+   // 0 very often causes unpredictable undulations of solution
+   int                         degree = 3, nbcurvpnt = 10, nbiter = 1;
+   int                         constr = 1; // G1
++  // (A corner of a stripe that rides on another's contact line, RideOnOverlap:
++  // its blend meets the other's along that line in a crease, and the
++  // stripes at the corner are cut where their contacts meet on faces the
++  // rides consume; the plate only fills between their sections, G0. With G1
++  // to the riders' surfaces, mirror images of one corner came out folded.)
++  for (ic = 0; ic < nedge && constr == 1; ic++)
++  {
++    if (!sharp.Value(ic) && myRideStripes.Contains(CD.Value(ic)))
++    {
++      constr = 0;
++    }
++  }
+   GeomPlate_BuildPlateSurface PSurf(degree, nbcurvpnt, nbiter, tol2d, tolapp3d, angular);
+   // calculation of curves on surface for each stripe
+   for (ic = 0; ic < nedge; ic++)
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
+index a33707e8..1740b795 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C3.cxx
+@@ -342,6 +342,16 @@ void ChFi3d_FilBuilder::PerformThreeCorner(const int Jndex)
+   //        - 2 concavities identic and 1 inverted.
+   //        - 3 concavities identic
+   //
++  // A stripe riding on another's contact line (RideOnOverlap) at the corner:
++  // its side there is the line, so the corner's sections are not those of
++  // a ball rolling between the three stripes' faces (the pivot's walk would
++  // put the rider's ends off the line); the corner is filled between the
++  // stripes cut where their contacts meet (PerformMoreThreeCorner).
++  if (myRideStripes.Contains(CD[0]) || myRideStripes.Contains(CD[1]) || myRideStripes.Contains(CD[2]))
++  {
++    PerformMoreThreeCorner(Jndex, 3);
++    return;
++  }
+   if (oksea[2] && oksea[1] && !sameside[2] && !sameside[1])
+   {
+     pivot = 0;

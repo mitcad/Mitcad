@@ -1567,6 +1567,284 @@ std::string taper_failure(const Shape& solid, const std::vector<bool>& leaned, c
          (closure->walls.size() == 1 ? "s" : "") + " to nothing " + where + ": " + outcome;
 }
 
+// A point in the plane across the pull.
+struct Flat {
+  double x = 0.0;
+  double y = 0.0;
+};
+
+double cross_of(const Flat& o, const Flat& a, const Flat& b) {
+  return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+}
+
+double to_segment(const Flat& p, const Flat& a, const Flat& b) {
+  const double dx = b.x - a.x;
+  const double dy = b.y - a.y;
+  const double square = dx * dx + dy * dy;
+  const double t = square > 0.0 ? std::clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / square, 0.0, 1.0) : 0.0;
+  return std::hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+// Whether the segments ab and cd neither cross nor come within `gap`.
+bool segments_apart(const Flat& a, const Flat& b, const Flat& c, const Flat& d, double gap) {
+  const double c1 = cross_of(a, b, c);
+  const double c2 = cross_of(a, b, d);
+  const double c3 = cross_of(c, d, a);
+  const double c4 = cross_of(c, d, b);
+  if (((c1 > 0.0 && c2 < 0.0) || (c1 < 0.0 && c2 > 0.0)) && ((c3 > 0.0 && c4 < 0.0) || (c3 < 0.0 && c4 > 0.0))) {
+    return false;
+  }
+  return std::min({to_segment(a, c, d), to_segment(b, c, d), to_segment(c, a, b), to_segment(d, a, b)}) > gap;
+}
+
+// The taper of a prism of lines built from the leaned planes themselves
+// (mitcad#1483): each corner of the near cap runs up the line where the
+// leaned planes of its two sides meet, so the far cap is the near cap's
+// loop offset by height * tan(angle) with mitred corners, and each side is
+// the quadrilateral between a line of the one and of the other. OCCT's draft
+// can build such a prism invalid although nothing closes: a band of 52 short
+// lines, nearly in line at its corners, came out invalid from 5 degrees on.
+// Null unless the solid is the prism of one loop of lines on the neutral
+// plane between two caps across the pull, and the loop stays a simple
+// polygon all the way up, no line shrinking to nothing or turning round: a
+// taper that closes or folds the profile stays the draft's, and is
+// explained by taper_failure.
+ShapePtr planar_taper(const Shape& solid, const std::vector<bool>& leaned, const gp_Pln& neutral,
+                      const gp_Dir& pull, double angle) {
+  const int near = near_cap_of(solid, leaned, neutral, pull);
+  if (near < 0) {
+    return nullptr;
+  }
+  const TopoDS_Face& cap = solid.face(near);
+  int loops = 0;
+  for (TopExp_Explorer w(cap, TopAbs_WIRE); w.More(); w.Next()) {
+    ++loops;
+  }
+  const TopoDS_Wire outer = BRepTools::OuterWire(cap);
+  if (loops != 1 || outer.IsNull()) {
+    return nullptr;
+  }
+  const gp_XYZ origin = neutral.Location().XYZ();
+  const gp_XYZ along = pull.XYZ();
+  const double scale = std::max(1.0, diagonal(bounds_of(solid.occt())));
+  const double tolerance = 1.0e-7 * scale;
+  // The far cap across the pull; every other face a plane along it.
+  int far_cap = -1;
+  int sides = 0;
+  for (int i = 0; i < solid.face_count(); ++i) {
+    if (i == near) {
+      continue;
+    }
+    const BRepAdaptor_Surface surface(solid.face(i));
+    if (surface.GetType() != GeomAbs_Plane) {
+      return nullptr;
+    }
+    const double across = std::abs(surface.Plane().Axis().Direction().XYZ().Dot(along));
+    if (leaned[static_cast<std::size_t>(i)]) {
+      if (across > 1.0e-9) {
+        return nullptr;
+      }
+      ++sides;
+    } else {
+      if (far_cap >= 0 || std::abs(across - 1.0) > 1.0e-9) {
+        return nullptr;
+      }
+      far_cap = i;
+    }
+  }
+  if (far_cap < 0 || sides < 3) {
+    return nullptr;
+  }
+  const double height = (BRepAdaptor_Surface(solid.face(far_cap)).Plane().Location().XYZ() - origin).Dot(along);
+  if (!(height > tolerance)) {
+    return nullptr;
+  }
+  // The near cap's corners in the loop's order, and the side each line
+  // from a corner to the next one bounds.
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces_of;
+  TopExp::MapShapesAndUniqueAncestors(solid.occt(), TopAbs_EDGE, TopAbs_FACE, faces_of);
+  std::vector<gp_XYZ> corners;
+  std::vector<int> walls;
+  for (BRepTools_WireExplorer e(outer, cap); e.More(); e.Next()) {
+    const TopoDS_Edge& edge = e.Current();
+    if (BRep_Tool::Degenerated(edge) || BRepAdaptor_Curve(edge).GetType() != GeomAbs_Line) {
+      return nullptr;
+    }
+    int wall = -1;
+    const int index = faces_of.FindIndex(edge);
+    if (index > 0) {
+      for (const TopoDS_Shape& face : faces_of.FindFromIndex(index)) {
+        const int f = solid.face_index(face);
+        if (f >= 0 && f != near && leaned[static_cast<std::size_t>(f)]) {
+          wall = f;
+        }
+      }
+    }
+    if (wall < 0) {
+      return nullptr;
+    }
+    corners.push_back(BRep_Tool::Pnt(e.CurrentVertex()).XYZ());
+    walls.push_back(wall);
+  }
+  const std::size_t count = corners.size();
+  std::vector<int> distinct = walls;
+  std::sort(distinct.begin(), distinct.end());
+  if (count < 3 || static_cast<int>(count) != sides ||
+      std::adjacent_find(distinct.begin(), distinct.end()) != distinct.end()) {
+    return nullptr;
+  }
+  const gp_Ax3 frame(neutral.Location(), pull);
+  const gp_XYZ ex = frame.XDirection().XYZ();
+  const gp_XYZ ey = frame.YDirection().XYZ();
+  const auto flat = [&](const gp_XYZ& p) { return Flat{(p - origin).Dot(ex), (p - origin).Dot(ey)}; };
+  std::vector<Flat> base(count);
+  double twice = 0.0;
+  for (std::size_t k = 0; k < count; ++k) {
+    base[k] = flat(corners[k]);
+  }
+  for (std::size_t k = 0; k < count; ++k) {
+    twice += cross_of(Flat{}, base[k], base[(k + 1) % count]);
+  }
+  if (!(std::abs(twice) > tolerance * scale)) {
+    return nullptr;
+  }
+  // The loop counter-clockwise about the pull, or not: the outward normal
+  // of each line, and the way each corner runs as its sides lean out by
+  // one (along the sum of its sides' normals, (n1 + n2) / (1 + n1.n2)).
+  const double sense = twice > 0.0 ? 1.0 : -1.0;
+  std::vector<gp_XYZ> normals(count);
+  for (std::size_t k = 0; k < count; ++k) {
+    const gp_XYZ line = corners[(k + 1) % count] - corners[k];
+    if (!(line.Modulus() > tolerance)) {
+      return nullptr;
+    }
+    normals[k] = line.Crossed(along).Normalized() * sense;
+  }
+  std::vector<gp_XYZ> mitres(count);
+  for (std::size_t k = 0; k < count; ++k) {
+    const gp_XYZ& before = normals[(k + count - 1) % count];
+    const gp_XYZ& after = normals[k];
+    const double turn = 1.0 + before.Dot(after);
+    if (!(turn > 1.0e-6)) {
+      return nullptr;
+    }
+    mitres[k] = (before + after) / turn;
+  }
+  const double slope = std::tan(angle);
+  const auto at = [&](const std::size_t k, const double s) {
+    return corners[k] + along * s + mitres[k] * (s * slope);
+  };
+  // The loop at heights up the prism: every line keeping its way and some
+  // length, lines not next to each other apart, the area on the same side.
+  constexpr int kSteps = 16;
+  std::vector<Flat> loop(count);
+  for (int step = 1; step <= kSteps; ++step) {
+    const double s = height * step / kSteps;
+    for (std::size_t k = 0; k < count; ++k) {
+      loop[k] = flat(at(k, s));
+    }
+    double area = 0.0;
+    for (std::size_t k = 0; k < count; ++k) {
+      const std::size_t next = (k + 1) % count;
+      area += cross_of(Flat{}, loop[k], loop[next]);
+      const double dx = base[next].x - base[k].x;
+      const double dy = base[next].y - base[k].y;
+      const double along_line = (loop[next].x - loop[k].x) * dx + (loop[next].y - loop[k].y) * dy;
+      if (!(along_line > tolerance * std::hypot(dx, dy))) {
+        return nullptr;
+      }
+    }
+    if (!(area * sense > tolerance * scale)) {
+      return nullptr;
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+      for (std::size_t j = i + 2; j < count; ++j) {
+        // (The last line and the first meet at the first corner.)
+        if (i == 0 && j + 1 == count) {
+          continue;
+        }
+        if (!segments_apart(loop[i], loop[i + 1], loop[j], loop[(j + 1) % count], tolerance)) {
+          return nullptr;
+        }
+      }
+    }
+  }
+  // The caps and the sides as planar polygons on the shared corners, sewn.
+  struct Piece {
+    std::vector<gp_Pnt> outline;
+    int from;
+  };
+  std::vector<gp_Pnt> low(count);
+  std::vector<gp_Pnt> high(count);
+  for (std::size_t k = 0; k < count; ++k) {
+    low[k] = gp_Pnt(corners[k]);
+    high[k] = gp_Pnt(at(k, height));
+  }
+  std::vector<Piece> pieces;
+  pieces.push_back({low, near});
+  pieces.push_back({high, far_cap});
+  for (std::size_t k = 0; k < count; ++k) {
+    const std::size_t next = (k + 1) % count;
+    pieces.push_back({{low[k], low[next], high[next], high[k]}, walls[k]});
+  }
+  BRepBuilderAPI_Sewing sewing(Precision::Confusion());
+  std::vector<TopoDS_Face> faces;
+  for (const Piece& piece : pieces) {
+    BRepBuilderAPI_MakePolygon outline;
+    for (const gp_Pnt& p : piece.outline) {
+      outline.Add(p);
+    }
+    outline.Close();
+    if (!outline.IsDone()) {
+      return nullptr;
+    }
+    BRepBuilderAPI_MakeFace face(outline.Wire(), true);
+    if (!face.IsDone()) {
+      return nullptr;
+    }
+    faces.push_back(face.Face());
+    sewing.Add(face.Face());
+  }
+  sewing.Perform();
+  TopoDS_Shell shell;
+  int shells = 0;
+  for (TopExp_Explorer it(sewing.SewedShape(), TopAbs_SHELL); it.More(); it.Next(), ++shells) {
+    shell = TopoDS::Shell(it.Current());
+  }
+  if (shells != 1 || !BRep_Tool::IsClosed(shell)) {
+    return nullptr;
+  }
+  BRepBuilderAPI_MakeSolid make(shell);
+  if (!make.IsDone()) {
+    return nullptr;
+  }
+  TopoDS_Solid made = make.Solid();
+  if (!BRepLib::OrientClosedSolid(made)) {
+    return nullptr;
+  }
+  FaceNamer namer(made);
+  for (std::size_t i = 0; i < pieces.size(); ++i) {
+    const TopoDS_Shape image = sewing.IsModified(faces[i]) ? sewing.Modified(faces[i]) : faces[i];
+    for (const std::string& name : solid.face_names(pieces[i].from)) {
+      namer.add(image, name);
+    }
+  }
+  return namer.shape();
+}
+
+// planar_taper's solid where it builds one and the checker finds it valid.
+ShapePtr valid_planar_taper(const Shape& solid, const std::vector<bool>& leaned, const gp_Pln& neutral,
+                            const gp_Dir& pull, double angle) {
+  ShapePtr built;
+  try {
+    OCC_CATCH_SIGNALS
+    built = planar_taper(solid, leaned, neutral, pull, angle);
+  } catch (const Standard_Failure&) {
+    return nullptr;
+  }
+  return built && !built->occt().IsNull() && is_valid(built->occt()) ? built : nullptr;
+}
+
 } // namespace
 
 ShapePtr tapered(const Shape& solid, const gp_Pln& neutral, const gp_Dir& pull, double angle,
@@ -1591,7 +1869,9 @@ ShapePtr tapered(const Shape& solid, const gp_Pln& neutral, const gp_Dir& pull, 
   if (loops < 2) {
     // (A draft that fails, or whose walls cross into an invalid solid, is
     // explained by where the taper closes the profile, when it does; a
-    // draft valid or not explained so is as before.)
+    // draft valid or not explained so is as before. A prism of lines that
+    // the taper neither closes nor folds is built from its leaned planes
+    // where the draft fails or comes out invalid, mitcad#1483.)
     ShapePtr drafted;
     try {
       drafted = tapered_draft(solid, leaned, neutral, pull, angle);
@@ -1601,9 +1881,15 @@ ShapePtr tapered(const Shape& solid, const gp_Pln& neutral, const gp_Dir& pull, 
       if (std::string(error.what()).find("out of memory") != std::string::npos) {
         throw;
       }
+      if (ShapePtr planar = valid_planar_taper(solid, leaned, neutral, pull, angle)) {
+        return planar;
+      }
       throw std::runtime_error(taper_failure(solid, leaned, neutral, pull, angle, error.what()));
     }
     if (!drafted->occt().IsNull() && !is_valid(drafted->occt())) {
+      if (ShapePtr planar = valid_planar_taper(solid, leaned, neutral, pull, angle)) {
+        return planar;
+      }
       std::optional<TaperClosure> closure;
       try {
         OCC_CATCH_SIGNALS

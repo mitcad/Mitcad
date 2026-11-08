@@ -1,0 +1,17 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT. Scaled copies of a sheet metal body are not sheets, and the feature says so (mitcad#1462): t=1, r=1, K=0.4, a 40 x 20 panel (800). A Scale Pattern's copy at half size (20 x 10 x 0.5, 100) is an ordinary solid: scaling changes the sheet's thickness. A mirror scaled by 2 and joined (its image x=-60..20, y=-10..30, z=-0.5..1.5 over the original: 6400 + 400) leaves the original an ordinary solid, with a warning instead of an invalid sheet without a word."},
+  {"cmd":"add_feature","def":{"type":"sheet_rules","thickness":1,"bend_radius":1,"allowance":{"type":"k_factor","k":0.4},"reference_side":"front","bend_relief":{"type":"rectangular","width":1,"depth":1},"corner_relief":{"type":"round","width":2,"depth":2}}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F2","corner":[0,0],"width":40,"height":20},
+  {"cmd":"add_feature","def":{"type":"sheet_face","rules":"F1","profiles":[{"sketch":"F2","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}]}},
+  {"cmd":"add_feature","def":{"type":"scale_pattern","objects":{"type":"bodies","bodies":["F3.b0"]},"quantity":2,"scale":0.5}},
+  {"expect":{"feature":"F4","status":"warning","error_contains":"the scaled copies of sheet F3.b0 are not sheet metal bodies: scaling changes the sheet's thickness","bodies":2}},
+  {"expect":{"body":"F4.b0","volume":100}},
+  {"expect":{"query":{"query":"sheet_state","body":"F4.b0"},"result":{"status":"invalid"}}},
+  {"expect":{"query":{"query":"sheet_state","body":"F3.b0"},"result":{"status":"valid"}}},
+  {"comment":"A mirror of the panel about x=0 scaled by 2 and joined to it."},
+  {"cmd":"add_feature","def":{"type":"mirror","objects":{"type":"bodies","bodies":["F3.b0"]},"plane":"yz","combine":true,"scale":2}},
+  {"expect":{"feature":"F5","status":"warning","error_contains":"F3.b0 is no longer a sheet metal body: it is joined to a scaled copy of it","bodies":2}},
+  {"expect":{"body":"F3.b0","volume":6800,"min":[-60,-10,-0.5],"max":[40,30,1.5]}},
+  {"expect":{"query":{"query":"sheet_state","body":"F3.b0"},"result":{"status":"invalid"}}}
+]

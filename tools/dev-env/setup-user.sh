@@ -78,6 +78,12 @@ if [ ! -d "$HOME/Qt/$QT_VERSION/gcc_64" ]; then
   (cd /tmp && "$HOME/tools/aqt/bin/aqt" install-qt linux desktop "$QT_VERSION" linux_gcc_64 \
     -O "$HOME/Qt" > /dev/null)
 fi
+# The interface languages (mitcad#1460) need Qt's Linguist tools (lrelease,
+# lupdate) and Qt's translations (qtbase_<code>.qm), which aqt's base
+# install has (qttools, qttranslations).
+for file in bin/lrelease bin/lupdate translations/qtbase_fi.qm; do
+  [ -e "$HOME/Qt/$QT_VERSION/gcc_64/$file" ] || { echo "Qt $QT_VERSION has no $file" >&2; exit 1; }
+done
 
 # Every build has the render worker (docs/rendering.md "Building"): Cycles
 # and Open Image Denoise, built once outside the build folders; re-running

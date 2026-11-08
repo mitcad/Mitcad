@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <QCoreApplication>
 #include <QDialog>
 #include <QJsonObject>
 #include <QString>
@@ -22,6 +23,8 @@ namespace mitcad {
 
 // Text is always the expression: templates and formatting only edit that text.
 class FormulaEditor : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::FormulaEditor)
+
 public:
   FormulaEditor(ParameterSource source, ParameterFieldOptions options, const QString& expression,
                 QWidget* parent = nullptr);

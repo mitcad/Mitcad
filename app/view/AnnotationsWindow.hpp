@@ -4,6 +4,7 @@
 #include <functional>
 #include <utility>
 
+#include <QCoreApplication>
 #include <QDialog>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -37,6 +38,8 @@ namespace mitcad {
 // and buttons are, in the main window's coordinates ("Annotations row
 // <name> at x,y", "Annotations Colour at x,y").
 class AnnotationsWindow : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::AnnotationsWindow)
+
 public:
   struct Actions {
     std::function<void(const QStringList& names)> selected; // rows selected: highlighted in the view

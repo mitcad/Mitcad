@@ -1224,6 +1224,7 @@ bool MainWindow::modelCommandAsync(const QJsonObject& request, QObject* context,
     if (result.succeeded()) {
       reportRecompute(result.answer, static_cast<double>(clock.nsecsElapsed()) / 1.0e6);
       notePlacement(result.answer);
+      noteKeptParameters(result.answer); // own parameters kept as user parameters (mitcad#1536)
       m_locks->activity();
     } else if (result.cancelled) {
       showHint(tr("Computation canceled."));

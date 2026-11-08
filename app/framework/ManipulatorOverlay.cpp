@@ -893,6 +893,12 @@ void ManipulatorOverlay::logPlaces() {
       lines << QStringLiteral("Arrow direction %1 %2: %3,%4,%5")
                    .arg(m_command, key, rounded(way.X()), rounded(way.Y()), rounded(way.Z()));
     }
+    if (handle.manipulator.kind == Manipulator::Kind::Ring) {
+      // What a ring turns about on the screen, for UI tests: its knob lies
+      // the way the pointer does from here (mitcad#1459).
+      const QPoint centre = mapTo(window(), m_viewer.toWidgetF(handle.manipulator.origin).toPoint());
+      lines << QStringLiteral("Ring centre %1 %2 at %3,%4").arg(m_command, key).arg(centre.x()).arg(centre.y());
+    }
     if (index < m_boxes.size() && !m_boxes[index].isEmpty()) {
       // Where a click edits the value (mitcad#656).
       const QPoint box = mapTo(window(), m_boxes[index].center().toPoint());

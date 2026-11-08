@@ -135,12 +135,17 @@ void saveAskToActivateComponent(bool on) {
 }
 
 QString ActivateQuestion::text() const {
-  return QObject::tr("The %1 belongs to %2, but %3 is active.").arg(kind, picked, active);
+  const QString shown = pickedKind != SelectKind::None ? SelectionItem::kindText(pickedKind) : kind;
+  return QObject::tr("The %1 belongs to %2, but %3 is active.").arg(shown, picked, active);
 }
 
 QString ActivateQuestion::detail() const {
+  const SelectKind what = made == QStringLiteral("plane")   ? SelectKind::Plane
+                          : made == QStringLiteral("axis")  ? SelectKind::Axis
+                          : made == QStringLiteral("point") ? SelectKind::Point
+                                                            : SelectKind::Sketch;
   return QObject::tr("If you activate it, the %1 goes into %2. If you keep %3 active, the %1 goes into %3.")
-      .arg(made, picked, active);
+      .arg(SelectionItem::kindText(what), picked, active);
 }
 
 QString madeBy(const QString& featureType) {
@@ -220,6 +225,7 @@ ActivateQuestion activateQuestion(const DocumentSnapshot& snapshot, const Select
   question.occurrence = path;
   question.picked = occurrenceName(snapshot, path);
   question.kind = SelectionItem::kindName(item.kind, 1);
+  question.pickedKind = item.kind;
   // The active component by the occurrence the pick lies under (its child
   // occurrence's face: the parent's occurrence above it), else its first.
   if (active == kRootComponent) {

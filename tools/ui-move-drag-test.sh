@@ -29,8 +29,11 @@
 #   - Pegs:1 moved by Point to Position's X arrow, a peg's top rim (its
 #     centre, where Pegs:1 places it) as its point: the same, from the
 #     point the model resolved. Point to Point has no value to drag.
-# Each drag's line is printed: inputs (snapped values), proxy updates,
-# exact previews while held, frames drawn and the time held.
+# Each drag's line is printed: the moves that reached the handle and the
+# rests the app logged, inputs (snapped values), proxy updates, exact
+# previews while held, frames drawn and the time held. How many moves
+# arrive is the machine's (drag_summary): the test checks what the app
+# does with them.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-move-drag-test.sh
@@ -41,7 +44,8 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 CLI=${UI_CLI:-$(dirname "$UI_APP")/../tools/cli/mitcad-cli}
 mkdir -p "$ROOT/build"
 WORK=$(mktemp -d "$ROOT/build/ui-move-drag.XXXXXX")
-trap 'ui_cleanup; rm -rf "$WORK"' EXIT
+# UI_KEEP_WORK=1 keeps the design and the application's log.
+trap 'ui_cleanup; [ -n "${UI_KEEP_WORK:-}" ] || rm -rf "$WORK"' EXIT
 FILE=$WORK/design.mitcad
 R='r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}'
 export MITCAD_LOG_TIMING=1
@@ -57,6 +61,7 @@ new_line() { tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -m1 -E -- "$1"; }
 held_drag() {
   local fx fy i steps=180 args=()
   read -r fx fy <<< "$(ui_logged_at "$1")"
+  PRESSED_AT="$fx $fy" RELEASED_AT="$((fx + $2)) $((fy + $3))"
   ui_apart "$fx" "$fy"
   args=(mousemove "$fx" "$fy" mousedown 1)
   for ((i = 1; i <= steps; i++)); do
@@ -66,23 +71,110 @@ held_drag() {
   xdotool "${args[@]}" mouseup 1
 }
 
-# drag_summary label key [min]: checks and prints the drag's line; at
-# least min inputs (default 10), the bodies follow (proxy updates) and the
-# model previewed only a few times while the button was held.
+# drag_summary label key: checks and prints the drag's line.
+#
+# How many of the 180 moves reach the handle, and how often the pointer
+# rests between them, is the machine's, not the app's (mitcad#1457,
+# mitcad#1459): Qt merges the motion events queued while a frame is drawn,
+# so the handle gets about one move a frame, and with frames of 200 to
+# 300 ms (Mesa's software renderer beside other UI tests and CPU load) the
+# value may stay unchanged for longer than the rest that asks for an exact
+# preview. So the drag is checked by what the app does with the moves it
+# gets:
+#   - every value the handle snapped to reaches the command, and the
+#     bodies are drawn at each (by the proxy, or by the exact preview when
+#     the value is the one it shows), cheaply;
+#   - an exact preview while the button is held answers a rest the app
+#     logged (at least its 250 ms, less the 5 % its coarse timer may fire
+#     early): no more previews than rests;
+#   - the handle ends where the pointer was released: an arrow by as much
+#     along its line as the pointer went (within half a step), a ring's
+#     knob the way the pointer is from its centre.
 drag_summary() {
-  local line inputs proxies exacts
+  local line inputs proxies exacts update_ms feedback moves semantic drawn followed rests short
   ui_expect_new " proxy updates (every " "$1: the drag's counts logged" 20 > /dev/null
   line=$(new_line "Drag proxy Move/Copy $2: [0-9]+ inputs, ")
-  [[ $line =~ :\ ([0-9]+)\ inputs,\ ([0-9]+)\ proxy\ updates.*,\ ([0-9]+)\ exact\ previews ]] ||
+  [[ $line =~ :\ ([0-9]+)\ inputs,\ ([0-9]+)\ proxy\ updates.*,\ ([0-9]+)\ exact\ previews.*proxy\ update\ ([0-9.]+)\ ms\ median ]] ||
     ui_fail "$1: drag line not understood: $line"
-  inputs=${BASH_REMATCH[1]} proxies=${BASH_REMATCH[2]} exacts=${BASH_REMATCH[3]}
-  echo "Drag $1: ${line#*: }"
-  [ "$inputs" -ge "${3:-10}" ] || ui_fail "$1: only $inputs inputs delivered"
-  [ "$proxies" -ge "${3:-10}" ] || ui_fail "$1: the bodies followed only $proxies times"
-  # No model preview per move: one when the pointer rested (a loaded
-  # machine may rest it more than once), none otherwise.
-  [ "$exacts" -le 3 ] || ui_fail "$1: $exacts exact previews while the button was held ($inputs inputs)"
-  echo "ok   $1: $proxies proxy updates, $exacts exact previews while held"
+  inputs=${BASH_REMATCH[1]} proxies=${BASH_REMATCH[2]} exacts=${BASH_REMATCH[3]} update_ms=${BASH_REMATCH[4]}
+  # The handle's own counts (MITCAD_LOG_TIMING): the moves it got while
+  # held and the snapped values they changed to.
+  feedback=$(new_line "Manipulator feedback Move/Copy $2: ")
+  [[ $feedback =~ moves=([0-9]+)\ semantic=([0-9]+) ]] || ui_fail "$1: the handle's counts not logged: $feedback"
+  moves=${BASH_REMATCH[1]} semantic=${BASH_REMATCH[2]}
+  # The drag's lines up to the release.
+  drawn=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | sed "\#^Manipulator Move/Copy $2 dragged to #q")
+  # The values the bodies were drawn at, in turn: the proxy's, or the
+  # exact preview's when it showed the value dragged to. A redraw at the
+  # same value (an exact preview arriving re-bases the proxy) is not a new
+  # one.
+  followed=$(awk -v prefix="Drag proxy Move/Copy $2: " '
+    function at(v) { if (v != last) { n++; last = v } }
+    index($0, prefix) == 1 && / over the exact / {
+      v = substr($0, length(prefix) + 1); sub(/ over the exact .*/, "", v); at(v)
+    }
+    /^Drag proxy Move\/Copy: (hidden|not shown): the exact preview shows / { v = $0; sub(/.* shows /, "", v); at(v) }
+    END { print n + 0 }' <<< "$drawn")
+  # The rests the app logged, and those shorter than a rest.
+  read -r rests short <<< "$(awk -v prefix="Drag proxy Move/Copy $2: the pointer rested " '
+    index($0, prefix) == 1 {
+      n++
+      r = $0; sub(/^.* rested /, "", r); sub(/ ms .*/, "", r)
+      t = $0; sub(/^.*\(a rest: /, "", t); sub(/ ms\)$/, "", t)
+      if (r + 0 < 0.95 * t - 1) s++
+    }
+    END { print n + 0, s + 0 }' <<< "$drawn")"
+  echo "Drag $1: ${moves} moves reached the handle, ${rests} rests; ${line#*: }"
+  # A drag through values, not a jump to the last one.
+  [ "$inputs" -ge 3 ] || ui_fail "$1: only $inputs inputs delivered ($moves moves reached the handle)"
+  [ "$inputs" -eq "$semantic" ] ||
+    ui_fail "$1: the handle snapped to $semantic values, but $inputs reached the command"
+  [ "$followed" -eq "$inputs" ] || ui_fail "$1: the bodies were drawn at $followed of the $inputs values dragged to"
+  awk -v ms="$update_ms" 'BEGIN { exit !(ms <= 5) }' || ui_fail "$1: a proxy update took $update_ms ms (median)"
+  [ "$short" -eq 0 ] || ui_fail "$1: $short of the $rests logged rests were shorter than a rest"
+  [ "$exacts" -le "$rests" ] ||
+    ui_fail "$1: $exacts exact previews while the button was held, but the pointer rested $rests times"
+  handle_ends "$1" "$2"
+  echo "ok   $1: each of the $inputs values reached the command and was drawn; $exacts exact previews for $rests rests"
+}
+
+# handle_ends label key: the handle ends where the pointer was released
+# (PRESSED_AT, RELEASED_AT from held_drag): none of the last moves lost.
+handle_ends() {
+  local end centre step value from
+  end=$(ui_logged_at "Manipulator Move/Copy $2")
+  if grep -qF "Ring centre Move/Copy $2 at " "$UI_LOG"; then
+    centre=$(ui_logged_at "Ring centre Move/Copy $2")
+    # The knob turned as far as the pointer about the centre: the same
+    # way from it, within the knob's degree and the pixels' rounding.
+    awk -v c="$centre" -v k="$end" -v p="$RELEASED_AT" 'BEGIN {
+      split(c, C, " "); split(k, K, " "); split(p, P, " ")
+      kx = K[1] - C[1]; ky = K[2] - C[2]; px = P[1] - C[1]; py = P[2] - C[2]
+      a = atan2(kx * py - ky * px, kx * px + ky * py) * 45 / atan2(1, 1)
+      if (a < 0) a = -a
+      printf "%.1f\n", a
+      exit !(a <= 5) }' > "$WORK/angle" ||
+      ui_fail "$1: the knob ends $(cat "$WORK/angle") degrees from the way the pointer was released (centre $centre, knob $end, pointer $RELEASED_AT)"
+    echo "ok   $1: the knob ends the way the pointer was released ($(cat "$WORK/angle") degrees apart)"
+    return
+  fi
+  # An arrow moves along its own line: as far along it as the pointer
+  # went, within half a step's pixels and their rounding.
+  step=$(new_line "Manipulator Move/Copy $2 drag step " | sed 's/.* drag step \([0-9.e-]*\) .*/\1/')
+  value=$(new_line "Manipulator Move/Copy $2 dragged to " | sed 's/.* dragged to //')
+  from=$(new_line "Drag proxy Move/Copy: shown for $2 " | sed 's/.*(the exact preview at \([-0-9.e]*\) .*/\1/')
+  awk -v s="$PRESSED_AT" -v e="$end" -v p="$RELEASED_AT" -v step="$step" -v value="$value" -v from="$from" 'BEGIN {
+    split(s, S, " "); split(e, E, " "); split(p, P, " ")
+    ax = E[1] - S[1]; ay = E[2] - S[2]; mx = P[1] - S[1]; my = P[2] - S[2]
+    moved = sqrt(ax * ax + ay * ay)
+    if (moved < 1) { print "the arrow did not move"; exit 1 }
+    along = (mx * ax + my * ay) / moved
+    d = value - from; if (d < 0) d = -d
+    tolerance = (d > 0 ? step * moved / d / 2 : 0) + 1.5
+    printf "%.1f px along it, the arrow %.1f px (within %.1f)\n", along, moved, tolerance
+    exit !(along - moved <= tolerance && moved - along <= tolerance) }' > "$WORK/along" ||
+    ui_fail "$1: the arrow does not end where the pointer was released: $(cat "$WORK/along")"
+  echo "ok   $1: the arrow ends where the pointer was released: the pointer went $(cat "$WORK/along")"
 }
 
 # no_meshing label: the last display meshing since the mark of each tier
@@ -95,11 +187,37 @@ no_meshing() {
   echo "ok   $1: nothing meshed again (${line#*: })"
 }
 
-# exact_agrees label: the exact preview of the last value replaced the
+# exact_replaces label key [value]: the exact preview of the last value
+# (value: its text, "48 mm") replaced the provisional motion after the
+# release; or it showed that value already when the button went up (the
+# proxy hidden for it: an exact preview after a rest, or a ring's value
+# back at the one previewed), so that nothing provisional was left. Sets
+# REPLACED when it replaced the proxy after the release.
+exact_replaces() {
+  local last
+  REPLACED=""
+  last=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | sed "\#^Manipulator Move/Copy $2 dragged to #q" |
+    grep -E "^Drag proxy Move/Copy: (shown for |hidden: )" | tail -1)
+  if [[ $last == "Drag proxy Move/Copy: hidden: the exact preview shows "* ]]; then
+    [ -z "${3:-}" ] || [ "${last##* shows }" = "$3" ] ||
+      ui_fail "$1: the exact preview showed ${last##* shows } at the release, not $3"
+    echo "ok   $1: the exact preview showed the last value (${last##* shows }) when the button went up"
+    return
+  fi
+  ui_expect_new "Drag proxy Move/Copy: the exact preview of ${3:+$3 replaced it }" \
+    "$1: the exact preview of the last value ${3:+$3 }replaces it" 30
+  REPLACED=1
+}
+
+# exact_agrees label key: the exact preview of the last value replaced the
 # provisional motion where the motion drew the first moved body.
 exact_agrees() {
   local line apart
-  ui_expect_new "Drag proxy Move/Copy: the exact preview of " "$1: the exact preview replaces it" 30
+  exact_replaces "$1" "$2"
+  if [ -z "$REPLACED" ]; then
+    echo "ok   $1: no proxy left to compare with the exact preview"
+    return
+  fi
   line=$(new_line "Drag proxy Move/Copy: the exact preview of .* replaced it ")
   [[ $line =~ ,\ ([0-9.]+)\ mm\ from\ the\ proxy$ ]] || ui_fail "$1: no distance from the proxy: $line"
   apart=${BASH_REMATCH[1]}
@@ -182,8 +300,7 @@ ui_expect_new "Drag proxy Move/Copy: shown for tx " "the body follows the arrow"
 line=$(new_line "Drag proxy Move/Copy: shown for tx ")
 [[ $line =~ at\ [0-9.-]+,0\.000,10\.000$ ]] || ui_fail "the body is not shown along X from its place: $line"
 ui_wait_idle
-ui_expect_new "Drag proxy Move/Copy: the exact preview of $value mm replaced it " \
-  "the exact preview of the last value $value mm replaces it" 30
+exact_replaces "X arrow" tx "$value mm"
 no_meshing "the exact preview" interactive
 ui_focus_main
 ui_mark
@@ -207,10 +324,10 @@ ui_mark
 # is seen.
 held_drag "Manipulator Move/Copy rz" 70 40
 ui_expect_new "Manipulator Move/Copy rz dragged to " "released" 20
-drag_summary "Z ring" rz 3
+drag_summary "Z ring" rz
 ui_expect_new "Drag proxy Move/Copy: shown for rz " "the body turns with the ring"
 ui_wait_idle
-ui_expect_new "Drag proxy Move/Copy: the exact preview of " "the exact preview replaces it" 30
+exact_replaces "Z ring" rz
 no_meshing "the turned preview" interactive
 ui_focus_main
 ui_mark
@@ -241,7 +358,7 @@ line=$(new_line "Drag proxy Move/Copy: shown for tz ")
 # Only placed elsewhere: its drawn objects kept and moved.
 ui_expect_new " 0 new, 1 placed" "the body's drawn objects only placed elsewhere"
 ui_wait_idle
-ui_expect_new "Drag proxy Move/Copy: the exact preview of " "the exact preview replaces it" 30
+exact_replaces "component's Z arrow" tz
 ui_focus_main
 ui_mark
 ui_step "OK (Enter)"                     ui_key Return
@@ -269,11 +386,11 @@ ui_focus_main
 ui_mark
 held_drag "Manipulator Move/Copy angle" 70 40
 ui_expect_new "Manipulator Move/Copy angle dragged to " "released" 20
-drag_summary "Rotate's ring" angle 3
+drag_summary "Rotate's ring" angle
 ui_expect_new "Drag proxy Move/Copy: shown for angle " "the component turns with the ring"
 only_placed "Rotate's ring"
 ui_wait_idle
-exact_agrees "Rotate's ring"
+exact_agrees "Rotate's ring" angle
 ui_focus_main
 ui_mark
 ui_step "OK (Enter)"                     ui_key Return
@@ -307,7 +424,7 @@ drag_summary "Point to Position's X arrow" px
 ui_expect_new "Drag proxy Move/Copy: shown for px " "the component follows the arrow"
 only_placed "Point to Position's X arrow"
 ui_wait_idle
-exact_agrees "Point to Position's X arrow"
+exact_agrees "Point to Position's X arrow" px
 ui_focus_main
 ui_mark
 ui_step "OK (Enter)"                     ui_key Return
@@ -317,5 +434,6 @@ grep -q "faces that could not be meshed" "$UI_LOG" && ui_fail "faces failed to m
 grep -qE "The document was read while a job computes it|OCCT view event failed" "$UI_LOG" &&
   ui_fail "the model or the view was used while a job computed"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+[ -z "${UI_KEEP_WORK:-}" ] || cp "$UI_LOG" "$WORK/app.log"
 ui_stop_app
 echo "PASS: Move/Copy drags"

@@ -550,7 +550,7 @@ function Corner([string]$Cmd, [string]$Body, [string]$Turn, [string]$Length) {
   }
   if (-not "$line".Contains('mitre shared')) {
     Ui-Mark
-    Ui-Step 'Mitre: Shared'              { Wheel-Choice $Cmd 'mitre' 2 }
+    Ui-Step 'Miter: Shared'              { Wheel-Choice $Cmd 'mitre' 2 }
   }
   Expect-Inspect $Cmd @("; end edge towards $Turn", 'mitre shared, offset 0.0 mm') 'a shared mitre at the corner'
   Ui-Mark

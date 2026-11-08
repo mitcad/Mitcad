@@ -18,3 +18,7 @@ mod thread_fit_tests;
 mod extent_point_tests;
 // Intersection Curve: a 3D curve from two sketches, a path (mitcad#1405).
 mod intersection_curve_tests;
+// A pipe's Corners, mitered or rounded (mitcad#1448).
+mod pipe_corners_tests;
+// A pipe whose path bends tighter than its section warns (mitcad#1497).
+mod pipe_tight_bends_tests;

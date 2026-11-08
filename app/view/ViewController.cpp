@@ -62,8 +62,10 @@
 #include "../platform/NativeDialogs.hpp"
 #include "../framework/AppSettings.hpp"
 #include "../framework/AppTheme.hpp"
+#include "../framework/Language.hpp"
 #include "../print/MaterialProperties.hpp"
 #include "../framework/CachePreferences.hpp"
+#include "../framework/InterfaceSize.hpp"
 #include "../framework/ChromeStyle.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/DebugLog.hpp"
@@ -410,6 +412,10 @@ ViewSettings ViewSettings::load() {
       s.cubeProjection = projection;
     }
   }
+  s.anaglyph = flag("anaglyph", s.anaglyph); // mitcad#1449
+  s.stereoDepth = std::clamp(number("stereoDepth", s.stereoDepth), kMinStereoDepth, kMaxStereoDepth);
+  s.stereoConvergence =
+      std::clamp(number("stereoConvergence", s.stereoConvergence), kMinStereoConvergence, kMaxStereoConvergence);
   return s;
 }
 
@@ -435,6 +441,9 @@ void ViewSettings::save() const {
   store.setValue(kGroup + QStringLiteral("activePickPriority"), activePickPriority);
   store.setValue(kGroup + QStringLiteral("cubeProjection"), cubeProjectionId(cubeProjection));
   store.setValue(kGroup + QStringLiteral("navigationBar"), navigationBar); // mitcad#1086
+  store.setValue(kGroup + QStringLiteral("anaglyph"), anaglyph);           // mitcad#1449
+  store.setValue(kGroup + QStringLiteral("stereoDepth"), stereoDepth);
+  store.setValue(kGroup + QStringLiteral("stereoConvergence"), stereoConvergence);
 }
 
 void ViewSettings::colors(QColor& upper, QColor& lower, bool& gradient) const {
@@ -541,6 +550,10 @@ void ViewController::registerCommands() {
     static const QStringList waiting = {QStringLiteral("view.named_view"), QStringLiteral("view.set_home"),
                                         QStringLiteral("view.reset_home"), QStringLiteral("view.look_at")};
     def.duringCommands = !waiting.contains(def.id);
+    if (def.id == QLatin1String("view.rendered")) {
+      // Not offered in Anaglyph 3D (mitcad#1449, syncChecks).
+      def.enabled = [this] { return !m_settings.anaglyph; };
+    }
     m_registry.add(def);
   };
   add("view.home", tr("Home"), "home", [this] {
@@ -549,9 +562,10 @@ void ViewController::registerCommands() {
   }, {QStringLiteral("home view")}, tr("The home view of the whole design"));
   for (const StandardView& view : kStandardViews) {
     const QString key = QString::fromLatin1(view.key);
-    add(qPrintable(QStringLiteral("view.%1").arg(key)), tr("%1 View").arg(tr(view.name)), "orientation-cube",
+    const QString name = QCoreApplication::translate("View", view.name);
+    add(qPrintable(QStringLiteral("view.%1").arg(key)), tr("%1 View").arg(name), "orientation-cube",
         [this, key] { showStandardView(key); }, {QStringLiteral("standard view"), key},
-        tr("Looks at the design from the %1").arg(tr(view.name).toLower()));
+        tr("Looks at the design from the %1").arg(name.toLower()));
   }
   add("view.look_at", tr("Look At"), "look-at", [this] { m_lookAt(); }, {QStringLiteral("normal to")},
       tr("Looks straight at the selected plane, planar face or sketch"));
@@ -628,6 +642,12 @@ void ViewController::registerCommands() {
     qDebug() << "Component colors" << (m_settings.componentColors ? "on" : "off");
   }, {QStringLiteral("component"), QStringLiteral("color"), QStringLiteral("colour"), QStringLiteral("assembly")},
       tr("Shows each component in a distinct color"));
+  // Red/cyan stereo through OCCT's stereo camera (mitcad#1449), its depth
+  // and convergence in Preferences › Display.
+  add("view.anaglyph", tr("Anaglyph 3D"), "perspective", [this] { setAnaglyph(!m_settings.anaglyph); },
+      {QStringLiteral("stereo"), QStringLiteral("anaglyph"), QStringLiteral("3d glasses"), QStringLiteral("red cyan"),
+       QStringLiteral("depth"), QStringLiteral("camera")},
+      tr("Shows the view in red/cyan stereo for 3D glasses, with a perspective camera"));
   // The design printer's bed and height (mitcad#640, view/BuildVolume.cpp).
   add("view.build_volume", tr("Show Build Volume"), "print-3d", [this] { setBuildVolumeShown(!m_buildVolume); },
       {QStringLiteral("printer"), QStringLiteral("bed"), QStringLiteral("print"), QStringLiteral("3d print"),
@@ -738,6 +758,7 @@ void ViewController::createMenus(QMenu* view, QMenu* tools, QMenu* help) {
   auto* projection = new QActionGroup(this);
   camera->addAction(checkable(QStringLiteral("view.orthographic"), projection));
   camera->addAction(checkable(QStringLiteral("view.perspective"), projection));
+  view->addAction(checkable(QStringLiteral("view.anaglyph"))); // mitcad#1449
   QMenu* styles = view->addMenu(themeIcon(QStringLiteral("visual-style")), tr("Visual Style"));
   auto* styleGroup = new QActionGroup(this);
   for (const StyleEntry& entry : kStyles) {
@@ -824,6 +845,9 @@ void ViewController::apply() {
   m_viewer.setComponentColors(m_settings.componentColors);
   m_viewer.setNavigation(m_settings.navigation);
   m_viewer.setPerspective(m_settings.perspective);
+  // Anaglyph 3D (mitcad#1449) after the projection it goes back to.
+  m_viewer.setStereoParameters(m_settings.stereoDepth / 100.0, m_settings.stereoConvergence / 100.0);
+  m_viewer.setAnaglyph(m_settings.anaglyph);
   m_viewer.setCubeProjection(m_settings.cubeProjection); // mitcad#774
   QColor top;
   QColor bottom;
@@ -851,14 +875,32 @@ void ViewController::syncChecks() {
   for (const BackgroundEntry& entry : kBackgrounds) {
     check(QString::fromLatin1(entry.id), entry.background == m_settings.background);
   }
-  check(QStringLiteral("view.orthographic"), !m_settings.perspective);
-  check(QStringLiteral("view.perspective"), m_settings.perspective);
+  // Anaglyph 3D's camera is a perspective one (mitcad#1449).
+  check(QStringLiteral("view.orthographic"), !m_settings.perspective && !m_settings.anaglyph);
+  check(QStringLiteral("view.perspective"), m_settings.perspective || m_settings.anaglyph);
+  check(QStringLiteral("view.anaglyph"), m_settings.anaglyph);
   check(QStringLiteral("view.component_colors"), m_settings.componentColors);
   check(QStringLiteral("view.grid"), m_settings.gridShown);
   check(QStringLiteral("view.snap_grid"), m_settings.snapToGrid);
   check(QStringLiteral("view.build_volume"), m_buildVolume);
   if (m_render != nullptr) {
     check(QStringLiteral("view.rendered"), m_render->isEnabled());
+    // The rendered view is not offered in Anaglyph 3D (mitcad#1449): the
+    // path tracer draws one eye's picture. Its tooltip says so meanwhile;
+    // its own comes back after.
+    if (QAction* rendered = m_checks.value(QStringLiteral("view.rendered"))) {
+      static constexpr char kOwnTip[] = "mitcadOwnToolTip";
+      rendered->setEnabled(!m_settings.anaglyph);
+      if (m_settings.anaglyph) {
+        if (!rendered->property(kOwnTip).isValid()) {
+          rendered->setProperty(kOwnTip, rendered->toolTip());
+        }
+        rendered->setToolTip(tr("Rendered: not available in Anaglyph 3D; turn View › Anaglyph 3D off first"));
+      } else if (rendered->property(kOwnTip).isValid()) {
+        rendered->setToolTip(rendered->property(kOwnTip).toString());
+        rendered->setProperty(kOwnTip, QVariant());
+      }
+    }
     if (m_renderEnvironment) {
       m_renderEnvironment->setRenderedShown(m_render->isEnabled());
     }
@@ -874,6 +916,11 @@ void ViewController::setStyle(VisualStyle style) {
 }
 
 void ViewController::setPerspective(bool perspective) {
+  if (!perspective && m_settings.anaglyph) {
+    // Anaglyph 3D's camera is a perspective one (mitcad#1449): Orthographic
+    // ends it.
+    setAnaglyph(false);
+  }
   m_settings.perspective = perspective;
   m_settings.save();
   m_viewer.setPerspective(perspective);
@@ -900,7 +947,31 @@ void ViewController::setBackground(ViewSettings::Background background) {
   qDebug().noquote() << QStringLiteral("Background %1 %2").arg(top.name(), bottom.name());
 }
 
+void ViewController::setAnaglyph(bool on) {
+  if (on && m_render != nullptr && m_render->isEnabled()) {
+    // The rendered view is not offered in Anaglyph 3D (mitcad#1449).
+    m_render->setEnabled(false);
+    qDebug().noquote() << QStringLiteral("Rendered view left for Anaglyph 3D");
+  }
+  m_settings.anaglyph = on;
+  m_settings.save();
+  m_viewer.setAnaglyph(on); // logs "Anaglyph 3D on: …" or "… off: …"
+  syncChecks();
+  emit displaySettingsChanged();
+}
+
+void ViewController::applyStereo(int depth, int convergence) {
+  m_viewer.setStereoParameters(depth / 100.0, convergence / 100.0);
+}
+
 void ViewController::setRendered(bool on) {
+  if (on && m_settings.anaglyph) {
+    // Not offered in Anaglyph 3D (mitcad#1449): the action is disabled; a
+    // caller that runs it all the same is told so.
+    qDebug().noquote() << QStringLiteral("Rendered view not available in Anaglyph 3D");
+    syncChecks();
+    return;
+  }
   if (on && m_settings.componentColors) {
     m_settings.componentColors = false;
     m_viewer.setComponentColors(false);
@@ -1236,9 +1307,25 @@ void ViewController::showPreferences(const QString& page) {
   // What a change does: the dialog takes all of them when it is accepted,
   // the window as each is made.
   auto commit = std::make_shared<std::function<void()>>();
-  const auto changed = [commit, live = window != nullptr] {
+  // Every change the window saves shows its saved note (mitcad#1479): the
+  // shared commit below, and through saving() the controls that save on
+  // their own.
+  const QPointer<SettingsWindow> savedIn(window);
+  const auto saved = [savedIn] {
+    if (savedIn) {
+      savedIn->noteSaved();
+    }
+  };
+  const auto saving = [saved](auto apply) {
+    return [apply, saved] {
+      apply();
+      saved();
+    };
+  };
+  const auto changed = [commit, saved, live = window != nullptr] {
     if (live && *commit) {
       (*commit)();
+      saved();
     }
   };
 
@@ -1246,6 +1333,22 @@ void ViewController::showPreferences(const QString& page) {
   const auto general = std::make_shared<GeneralSettings>(GeneralSettings::load());
   QWidget* generalBox = section(tr("General"));
   auto* generalForm = new QFormLayout(generalBox);
+  // The interface language (mitcad#1460), for the next starts: Automatic
+  // (the system's), English, or a language whose catalogue MitCad has, by
+  // its own name (framework/Language).
+  auto* languageChoice = new QComboBox;
+  languageChoice->setObjectName(QStringLiteral("preferencesLanguage"));
+  languageChoice->addItem(tr("Automatic"), QString());
+  for (const InterfaceLanguage& language : availableLanguages()) {
+    languageChoice->addItem(language.nativeName, language.code);
+  }
+  languageChoice->setCurrentIndex(std::max(0, languageChoice->findData(languagePreference())));
+  languageChoice->setToolTip(tr("The language of MitCad's menus, panels and dialogs; Automatic follows the system"));
+  auto* languageNote = new QLabel(tr("Takes effect when MitCad starts again."));
+  languageNote->setObjectName(QStringLiteral("preferencesLanguageNote"));
+  languageNote->setWordWrap(true);
+  generalForm->addRow(tr("&Language:"), languageChoice);
+  generalForm->addRow(QString(), languageNote);
   auto* autosave = new QCheckBox(tr("&Save recovery data every"));
   autosave->setChecked(general->autosave);
   autosave->setToolTip(tr("Unsaved changes are written to the recovery folder, from where they can be "
@@ -1343,7 +1446,7 @@ void ViewController::showPreferences(const QString& page) {
                               .arg(onOff(on));
   };
   if (window != nullptr) {
-    connect(askActivate, &QCheckBox::toggled, host, applyAskActivate);
+    connect(askActivate, &QCheckBox::toggled, host, saving(applyAskActivate));
   } else {
     connect(dialog.get(), &QDialog::accepted, askActivate, applyAskActivate);
   }
@@ -1364,7 +1467,7 @@ void ViewController::showPreferences(const QString& page) {
     qDebug().noquote() << QStringLiteral("Preferences: show the version in the view %1").arg(onOff(on));
   };
   if (window != nullptr) {
-    connect(showVersion, &QCheckBox::toggled, host, applyShowVersion);
+    connect(showVersion, &QCheckBox::toggled, host, saving(applyShowVersion));
   } else {
     connect(dialog.get(), &QDialog::accepted, showVersion, applyShowVersion);
   }
@@ -1390,7 +1493,7 @@ void ViewController::showPreferences(const QString& page) {
     qDebug().noquote() << QStringLiteral("Preferences: native macOS interface %1 (at the next start)").arg(onOff(on));
   };
   if (window != nullptr) {
-    connect(nativeInterface, &QCheckBox::toggled, host, applyNativeInterface);
+    connect(nativeInterface, &QCheckBox::toggled, host, saving(applyNativeInterface));
   } else {
     connect(dialog.get(), &QDialog::accepted, nativeInterface, applyNativeInterface);
   }
@@ -1480,7 +1583,7 @@ void ViewController::showPreferences(const QString& page) {
     qDebug().noquote() << QStringLiteral("Preferences: agents may resolve comments %1").arg(onOff(on));
   };
   if (window != nullptr) {
-    connect(agentsResolve, &QCheckBox::toggled, host, applyAgentsResolve);
+    connect(agentsResolve, &QCheckBox::toggled, host, saving(applyAgentsResolve));
   } else {
     connect(dialog.get(), &QDialog::accepted, agentsResolve, applyAgentsResolve);
   }
@@ -1517,7 +1620,7 @@ void ViewController::showPreferences(const QString& page) {
     qDebug().noquote() << QStringLiteral("Preferences: scale the sketch to its first dimension %1").arg(onOff(on));
   };
   if (window != nullptr) {
-    connect(firstDimensionScale, &QCheckBox::toggled, host, applyScaleToFirstDimension);
+    connect(firstDimensionScale, &QCheckBox::toggled, host, saving(applyScaleToFirstDimension));
   } else {
     connect(dialog.get(), &QDialog::accepted, firstDimensionScale, applyScaleToFirstDimension);
   }
@@ -1537,7 +1640,7 @@ void ViewController::showPreferences(const QString& page) {
     qDebug().noquote() << QStringLiteral("Preferences: click adds to the selection in sketches %1").arg(onOff(on));
   };
   if (window != nullptr) {
-    connect(clickAdds, &QCheckBox::toggled, host, applyClickAdds);
+    connect(clickAdds, &QCheckBox::toggled, host, saving(applyClickAdds));
   } else {
     connect(dialog.get(), &QDialog::accepted, clickAdds, applyClickAdds);
   }
@@ -1547,7 +1650,8 @@ void ViewController::showPreferences(const QString& page) {
   // once in the Settings window.
   auto* suppliersBox = new SupplierPreferencesBox;
   if (window != nullptr) {
-    connect(suppliersBox, &SupplierPreferencesBox::changed, suppliersBox, &SupplierPreferencesBox::apply);
+    connect(suppliersBox, &SupplierPreferencesBox::changed, suppliersBox,
+            saving([suppliersBox] { suppliersBox->apply(); }));
   } else {
     connect(dialog.get(), &QDialog::accepted, suppliersBox, &SupplierPreferencesBox::apply);
   }
@@ -1577,12 +1681,13 @@ void ViewController::showPreferences(const QString& page) {
   offer(QStringLiteral("view.perspective"));
   auto* navigation = new NavigationPreferences(m_settings.navigation, navigationSchemes, nullptr, buttonCommands);
   navigationLayout->addWidget(navigation);
-  navigation->changed = [this, navigation, window] {
+  navigation->changed = [this, navigation, window, saved] {
     const NavigationSettings chosen = navigation->chosen();
     m_viewer.setNavigation(chosen);
     if (window != nullptr) {
       m_settings.navigation = chosen;
       m_settings.save();
+      saved();
     }
     qDebug().noquote() << QStringLiteral("Preferences: navigation %1, orbit speed %2, pan speed %3, "
                                          "zoom speed %4, trackpad speed %5, 3D mouse %6 speed %7, %8 mode, "
@@ -1613,6 +1718,57 @@ void ViewController::showPreferences(const QString& page) {
   cubeProjection->addItems({tr("Follow the View"), tr("Orthographic"), tr("Perspective")});
   cubeProjection->setCurrentIndex(int(m_settings.cubeProjection));
   display->addRow(tr("&Orientation cube:"), cubeProjection);
+  // Anaglyph 3D's stereo depth and convergence (mitcad#1449), in percent,
+  // side by side in one row (Preferences fits a 1366 x 768 screen): the
+  // view takes a change at once (put back when the dialog is cancelled);
+  // saved when the dialog is accepted, at once in the Settings window.
+  auto* stereoDepth = new QSpinBox;
+  stereoDepth->setObjectName(QStringLiteral("preferencesStereoDepth"));
+  stereoDepth->setRange(ViewSettings::kMinStereoDepth, ViewSettings::kMaxStereoDepth);
+  stereoDepth->setSuffix(tr(" %"));
+  stereoDepth->setValue(m_settings.stereoDepth);
+  stereoDepth->setToolTip(tr("Anaglyph 3D: how far apart the eyes are; more gives more depth"));
+  auto* stereoConvergence = new QSpinBox;
+  stereoConvergence->setObjectName(QStringLiteral("preferencesStereoConvergence"));
+  stereoConvergence->setRange(ViewSettings::kMinStereoConvergence, ViewSettings::kMaxStereoConvergence);
+  stereoConvergence->setSingleStep(5);
+  stereoConvergence->setSuffix(tr(" %"));
+  stereoConvergence->setValue(m_settings.stereoConvergence);
+  stereoConvergence->setToolTip(tr("Anaglyph 3D: the distance that lies in the plane of the screen"));
+  auto* stereoRow = new QHBoxLayout;
+  auto* stereoDepthLabel = new QLabel(tr("Stereo &depth"));
+  stereoDepthLabel->setBuddy(stereoDepth);
+  auto* stereoConvergenceLabel = new QLabel(tr("Co&nvergence"));
+  stereoConvergenceLabel->setBuddy(stereoConvergence);
+  stereoRow->addWidget(stereoDepthLabel);
+  stereoRow->addWidget(stereoDepth);
+  stereoRow->addSpacing(12);
+  stereoRow->addWidget(stereoConvergenceLabel);
+  stereoRow->addWidget(stereoConvergence);
+  stereoRow->addStretch(1);
+  display->addRow(tr("Anaglyph 3D:"), stereoRow);
+  const auto previewStereo = [this, stereoDepth, stereoConvergence] {
+    applyStereo(stereoDepth->value(), stereoConvergence->value());
+  };
+  connect(stereoDepth, &QSpinBox::valueChanged, host, previewStereo);
+  connect(stereoConvergence, &QSpinBox::valueChanged, host, previewStereo);
+  const auto saveStereo = [this, stereoDepth, stereoConvergence] {
+    if (stereoDepth->value() == m_settings.stereoDepth && stereoConvergence->value() == m_settings.stereoConvergence) {
+      return;
+    }
+    m_settings.stereoDepth = stereoDepth->value();
+    m_settings.stereoConvergence = stereoConvergence->value();
+    m_settings.save();
+    qDebug().noquote() << QStringLiteral("Preferences: stereo depth %1 %, convergence %2 %")
+                              .arg(m_settings.stereoDepth)
+                              .arg(m_settings.stereoConvergence);
+  };
+  if (window != nullptr) {
+    connect(stereoDepth, &QSpinBox::valueChanged, host, saveStereo);
+    connect(stereoConvergence, &QSpinBox::valueChanged, host, saveStereo);
+  } else {
+    connect(dialog.get(), &QDialog::accepted, stereoDepth, saveStereo);
+  }
   auto* background = new QComboBox;
   background->setObjectName(QStringLiteral("preferencesBackground"));
   for (const BackgroundEntry& entry : kBackgrounds) {
@@ -1664,8 +1820,19 @@ void ViewController::showPreferences(const QString& page) {
       bottomButton->setEnabled(custom);
     });
   }
-  display->addRow(tr("Custom top:"), topButton);
-  display->addRow(tr("Custom bottom:"), bottomButton);
+  // Both custom colours in one row, as Anaglyph 3D's two values: the page
+  // keeps Preferences within a 1366 x 768 screen.
+  auto* customRow = new QHBoxLayout;
+  auto* customBottomLabel = new QLabel(tr("Custom bottom:"));
+  customBottomLabel->setBuddy(bottomButton);
+  customRow->addWidget(topButton);
+  customRow->addSpacing(12);
+  customRow->addWidget(customBottomLabel);
+  customRow->addWidget(bottomButton);
+  customRow->addStretch(1);
+  auto* customTopLabel = new QLabel(tr("Custom top:"));
+  customTopLabel->setBuddy(topButton);
+  display->addRow(customTopLabel, customRow);
   const auto enableCustom = [background, topButton, bottomButton] {
     const bool custom = background->currentIndex() == int(ViewSettings::Background::Custom);
     topButton->setEnabled(custom);
@@ -1787,6 +1954,37 @@ void ViewController::showPreferences(const QString& page) {
   themeChoice->setToolTip(tr("The colors of MitCad's panels, cards and dialogs: the desktop's, or always light or "
                              "dark"));
   display->addRow(tr("&Theme:"), themeChoice);
+  // The size of the whole UI (mitcad#1495, GitHub mitcad/Mitcad#194): Qt's
+  // scale factor at the next start (framework/InterfaceSize). Saved when
+  // the dialog is accepted, at once in the Settings window.
+  auto* interfaceSize = new QComboBox;
+  interfaceSize->setObjectName(QStringLiteral("preferencesInterfaceSize"));
+  for (const int percent : kInterfaceSizes) {
+    interfaceSize->addItem(tr("%1%").arg(percent), percent);
+  }
+  interfaceSize->setCurrentIndex(std::max(0, interfaceSize->findData(savedInterfaceSize())));
+  interfaceSize->setToolTip(tr("Makes icons, texts, panels and the toolbar larger together"));
+  auto* interfaceSizeNote = new QLabel(tr("Takes effect when MitCad starts again."));
+  interfaceSizeNote->setObjectName(QStringLiteral("interfaceSizeNote"));
+  interfaceSizeNote->setEnabled(false); // the quiet colour of a hint
+  auto* interfaceSizeRow = new QHBoxLayout;
+  interfaceSizeRow->addWidget(interfaceSize);
+  interfaceSizeRow->addWidget(interfaceSizeNote, 1);
+  // A label of its own: a row of a layout gets no buddy from the form.
+  auto* interfaceSizeLabel = new QLabel(tr("&Interface size:"));
+  interfaceSizeLabel->setBuddy(interfaceSize);
+  display->addRow(interfaceSizeLabel, interfaceSizeRow);
+  const auto saveInterfaceSizeChoice = [interfaceSize] {
+    const int percent = interfaceSize->currentData().toInt();
+    if (saveInterfaceSize(percent)) {
+      qDebug().noquote() << QStringLiteral("Preferences: interface size %1% (at the next start)").arg(percent);
+    }
+  };
+  if (window != nullptr) {
+    connect(interfaceSize, &QComboBox::currentIndexChanged, host, saving(saveInterfaceSizeChoice));
+  } else {
+    connect(dialog.get(), &QDialog::accepted, interfaceSize, saveInterfaceSizeChoice);
+  }
   // The window's layout (mitcad#419), for the next starts: Docked or
   // Floating, the platform's until one is chosen. Not in the native macOS
   // frontend, which has its own.
@@ -1838,7 +2036,7 @@ void ViewController::showPreferences(const QString& page) {
     }
   };
   if (window != nullptr) {
-    connect(windowMenuBar, &QCheckBox::toggled, host, applyWindowMenuBar);
+    connect(windowMenuBar, &QCheckBox::toggled, host, saving(applyWindowMenuBar));
   } else {
     connect(dialog.get(), &QDialog::accepted, windowMenuBar, applyWindowMenuBar);
   }
@@ -1938,7 +2136,6 @@ void ViewController::showPreferences(const QString& page) {
   cornerDots->setObjectName(QStringLiteral("alwaysShowCorners"));
   cornerDots->setChecked(savedDots.always);
   cornerDots->setToolTip(tr("Draws every corner of a drawing's views as a dot on the screen, never printed or exported"));
-  control(display, cornerDots);
   auto* cornerDotSize = new QComboBox;
   cornerDotSize->setObjectName(QStringLiteral("cornerDotSize"));
   cornerDotSize->addItem(tr("Small"), drawings::cornerDotSizeId(drawings::CornerDotSize::Small));
@@ -1947,7 +2144,22 @@ void ViewController::showPreferences(const QString& page) {
   cornerDotSize->setCurrentIndex(cornerDotSize->findData(drawings::cornerDotSizeId(savedDots.size)));
   cornerDotSize->setEnabled(savedDots.always);
   cornerDotSize->setToolTip(tr("How large the corner dots of a drawing are"));
-  display->addRow(tr("Corner dot si&ze:"), cornerDotSize);
+  // The size beside its check box, in one row (Preferences fits a 1366 x 768
+  // screen); Alt+Z still reaches it through its label.
+  auto* cornerDotSizeLabel = new QLabel(tr("Corner dot si&ze:"));
+  cornerDotSizeLabel->setBuddy(cornerDotSize);
+  auto* cornerDotsRow = new QHBoxLayout;
+  cornerDotsRow->addWidget(cornerDots);
+  cornerDotsRow->addSpacing(12);
+  cornerDotsRow->addWidget(cornerDotSizeLabel);
+  cornerDotsRow->addWidget(cornerDotSize);
+  cornerDotsRow->addStretch(1);
+  if (window != nullptr) {
+    // macOS sizes a check box a few pixels short of its text (as control()).
+    cornerDots->ensurePolished();
+    cornerDots->setMinimumWidth(cornerDots->sizeHint().width() + 8);
+  }
+  control(display, cornerDotsRow);
   connect(cornerDots, &QCheckBox::toggled, cornerDotSize, &QWidget::setEnabled);
   const auto applyCornerDots = [cornerDots, cornerDotSize] {
     drawings::CornerDots chosen;
@@ -1960,8 +2172,8 @@ void ViewController::showPreferences(const QString& page) {
     }
   };
   if (window != nullptr) {
-    connect(cornerDots, &QCheckBox::toggled, host, applyCornerDots);
-    connect(cornerDotSize, &QComboBox::currentIndexChanged, host, applyCornerDots);
+    connect(cornerDots, &QCheckBox::toggled, host, saving(applyCornerDots));
+    connect(cornerDotSize, &QComboBox::currentIndexChanged, host, saving(applyCornerDots));
   } else {
     connect(dialog.get(), &QDialog::accepted, cornerDots, applyCornerDots);
   }
@@ -1994,15 +2206,15 @@ void ViewController::showPreferences(const QString& page) {
     }
   };
   if (window != nullptr) {
-    connect(smallCircles, &QComboBox::currentIndexChanged, host, applySmallCircles);
+    connect(smallCircles, &QComboBox::currentIndexChanged, host, saving(applySmallCircles));
   } else {
     connect(dialog.get(), &QDialog::accepted, smallCircles, applySmallCircles);
   }
   if (window != nullptr) {
-    connect(ghostInactive, &QCheckBox::toggled, host, applyGhostInactive);
-    connect(activePickPriority, &QCheckBox::toggled, host, applyActivePickPriority);
-    connect(navigationBar, &QCheckBox::toggled, host, applyNavigationBar);
-    connect(quickAccess, &QCheckBox::toggled, host, applyQuickAccess);
+    connect(ghostInactive, &QCheckBox::toggled, host, saving(applyGhostInactive));
+    connect(activePickPriority, &QCheckBox::toggled, host, saving(applyActivePickPriority));
+    connect(navigationBar, &QCheckBox::toggled, host, saving(applyNavigationBar));
+    connect(quickAccess, &QCheckBox::toggled, host, saving(applyQuickAccess));
   } else {
     connect(dialog.get(), &QDialog::accepted, ghostInactive, applyGhostInactive);
     connect(dialog.get(), &QDialog::accepted, activePickPriority, applyActivePickPriority);
@@ -2015,7 +2227,14 @@ void ViewController::showPreferences(const QString& page) {
              autosave, minutes, importTolerance, newDesignUnits, temperatureUnit, openInCurrent, openDesignsIn,
              cacheBox, updatesBox, slicerBox, remoteBox, renderWorker,
              renderDevice, debugLog, debugLogApplied, texturesBox, agentsBox, chatBox, fontsBox, layoutChoice,
-             layoutApplied, themeChoice] {
+             layoutApplied, themeChoice, languageChoice] {
+    // The interface language (mitcad#1460): saved for the next starts.
+    const QString language = languageChoice->currentData().toString();
+    if (language != languagePreference()) {
+      setLanguagePreference(language);
+      qDebug().noquote() << QStringLiteral("Preferences: language %1 (at the next start; this run: %2)")
+                                .arg(language.isEmpty() ? QStringLiteral("automatic") : language, interfaceLanguage());
+    }
     // Font folders for sketch text (mitcad#473).
     const QStringList fontFolders = fontsBox->chosen();
     if (fontFolders != sketch::savedFontFolders()) {
@@ -2068,7 +2287,13 @@ void ViewController::showPreferences(const QString& page) {
       }
     }
     m_settings.navigation = navigation->chosen();
-    m_settings.perspective = camera->currentIndex() == 1;
+    const bool perspective = camera->currentIndex() == 1;
+    if (m_settings.anaglyph && m_settings.perspective && !perspective) {
+      // Orthographic ends Anaglyph 3D, as View › Camera does (mitcad#1449);
+      // apply() below switches it off.
+      m_settings.anaglyph = false;
+    }
+    m_settings.perspective = perspective;
     // The orientation cube's projection (mitcad#774): applied below.
     const auto cube = static_cast<CubeProjection>(cubeProjection->currentIndex());
     if (cube != m_settings.cubeProjection) {
@@ -2088,7 +2313,9 @@ void ViewController::showPreferences(const QString& page) {
     chosen.openInCurrentWindow = openInCurrent->isChecked();
     chosen.openDesignsIn = openDesignsIn->currentData().toString();
     chosen.save();
-    // No open design changes: the next new one takes it (mitcad#1036).
+    // The next new design takes it (mitcad#1036), and an untitled design
+    // nothing is made in yet (newDesignUnitsChanged, mitcad#1452); any
+    // other open design keeps its units.
     if (chosen.newDesignUnits != general->newDesignUnits) {
       qDebug().noquote() << QStringLiteral("Preferences: default units for new designs %1").arg(chosen.newDesignUnits);
     }
@@ -2149,6 +2376,9 @@ void ViewController::showPreferences(const QString& page) {
     apply();
     if (generalChanged) {
       generalChanged();
+    }
+    if (newDesignUnitsChanged && chosen.newDesignUnits != general->newDesignUnits) {
+      newDesignUnitsChanged();
     }
     *general = chosen;
     qDebug().noquote() << QStringLiteral("Preferences: navigation %1, zoom to cursor %2, reverse zoom %3, "
@@ -2262,6 +2492,7 @@ void ViewController::showPreferences(const QString& page) {
       connect(layoutChoice, &QComboBox::currentIndexChanged, host, changed);
     }
     connect(themeChoice, &QComboBox::currentIndexChanged, host, changed);
+    connect(languageChoice, &QComboBox::currentIndexChanged, host, changed);
     for (QCheckBox* box : {autosave, debugLog}) {
       connect(box, &QCheckBox::toggled, host, changed);
     }
@@ -2438,6 +2669,7 @@ void ViewController::showPreferences(const QString& page) {
   }
   if (execDialog(dialog.get()) != QDialog::Accepted) {
     m_viewer.setNavigation(m_settings.navigation);
+    applyStereo(m_settings.stereoDepth, m_settings.stereoConvergence); // mitcad#1449
     return;
   }
   (*commit)();

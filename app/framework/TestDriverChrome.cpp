@@ -1,14 +1,24 @@
 // SPDX-License-Identifier: MIT
 #include "TestDriver.hpp"
 
+#include <cmath>
+
+#include <QAbstractButton>
+#include <QAbstractItemView>
+#include <QAbstractSpinBox>
 #include <QAction>
 #include <QAccessible>
+#include <QComboBox>
 #include <QDebug>
 #include <QLayout>
+#include <QLineEdit>
 #include <QMenu>
 #include <QRegion>
+#include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QStringList>
+#include <QToolBar>
 #include <QToolButton>
 #include <QTabBar>
 
@@ -87,6 +97,225 @@ void TestDriver::testRibbonLabels(const QStringList& expected) {
     qInfo() << "Ribbon labels: passed" << expected;
     return true;
   }, 6, QStringLiteral("workspace labels/accessibility, complete captions or reachable group menus differ"));
+}
+
+void TestDriver::testDesignChrome() {
+  whenReady([this] {
+    QWidget* main = m_main.data();
+    QWidget* top = topWindow();
+    QWidget* view = viewer();
+    auto* ribbon = main != nullptr ? main->findChild<Ribbon*>() : nullptr;
+    if (main == nullptr || top == nullptr || view == nullptr || ribbon == nullptr) {
+      m_waitDetail = QStringLiteral("no design window, view or ribbon");
+      return false;
+    }
+    const bool docked = chromeStyle() == ChromeStyle::Docked;
+    // In the top-level window's coordinates, as the log's places are.
+    const auto place = [top](const QWidget* widget) { return QRect(widget->mapTo(top, QPoint(0, 0)), widget->size()); };
+    const auto text = [](const QRect& r) {
+      return QStringLiteral("%1,%2 %3x%4").arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height());
+    };
+    // Shown, not empty, inside the window and not all covered.
+    const auto shown = [top, &place](const QWidget* widget) {
+      return widget != nullptr && widget->isVisible() && !widget->size().isEmpty() &&
+             top->rect().contains(place(widget)) && !widget->visibleRegion().isEmpty();
+    };
+    QWidget* holder = docked ? main->findChild<QToolBar*>(QStringLiteral("ribbonToolbar"), Qt::FindDirectChildrenOnly)
+                             : static_cast<QWidget*>(ribbon);
+    QWidget* browser = main->findChild<QWidget*>(QStringLiteral("browserDock"));
+    QWidget* navigation = main->findChild<QWidget*>(QStringLiteral("navigationBarButtons"));
+    QStringList missing;
+    if (!shown(holder) || !ribbon->isVisible() || (!docked && ribbon->groupCards().empty())) {
+      missing << QStringLiteral("the ribbon");
+    } else if (docked && place(view).top() <= place(holder).bottom()) {
+      missing << QStringLiteral("the view below the ribbon (view top %1, ribbon bottom %2)")
+                     .arg(place(view).top())
+                     .arg(place(holder).bottom());
+    }
+    if (!shown(browser)) {
+      missing << QStringLiteral("the Browser");
+    }
+    if (!shown(navigation)) {
+      missing << QStringLiteral("the navigation bar");
+    }
+    if (!view->isVisible() || view->size().isEmpty()) {
+      missing << QStringLiteral("the view");
+    }
+    if (!missing.isEmpty()) {
+      m_waitDetail = QStringLiteral("not shown: %1").arg(missing.join(QStringLiteral(", ")));
+      return false;
+    }
+    qInfo().noquote() << QStringLiteral("Design chrome: %1, ribbon %2, view %3, browser %4, navigation bar %5")
+                             .arg(docked ? QStringLiteral("docked") : QStringLiteral("floating"), text(place(holder)),
+                                  text(place(view)), text(place(browser)), text(place(navigation)));
+    return true;
+  }, 6, QStringLiteral("the design in front does not show its ribbon, Browser and navigation bar"));
+}
+
+void TestDriver::testInterfaceSize(double ratio) {
+  whenReady([this, ratio] {
+    QWidget* main = m_main.data();
+    QWidget* top = topWindow();
+    QWidget* view = viewer();
+    auto* ribbon = main != nullptr ? main->findChild<Ribbon*>() : nullptr;
+    if (main == nullptr || top == nullptr || view == nullptr || ribbon == nullptr) {
+      m_waitDetail = QStringLiteral("no design window, view or ribbon");
+      return false;
+    }
+    const auto sameRatio = [](double a, double b) { return std::abs(a - b) < 0.01; };
+    // The window and the 3D view draw at the ratio the Interface size gives.
+    if (!sameRatio(top->devicePixelRatioF(), ratio) || !sameRatio(view->devicePixelRatioF(), ratio)) {
+      m_waitDetail = QStringLiteral("device pixel ratio %1 (view %2), expected %3")
+                         .arg(top->devicePixelRatioF())
+                         .arg(view->devicePixelRatioF())
+                         .arg(ratio);
+      return false;
+    }
+    // The window within the screen's logical area.
+    const QScreen* screen = top->screen();
+    if (screen == nullptr || !screen->availableGeometry().contains(top->frameGeometry())) {
+      QString detail;
+      QDebug(&detail).nospace() << "window " << top->frameGeometry() << " outside the screen's "
+                                << (screen != nullptr ? screen->availableGeometry() : QRect());
+      m_waitDetail = detail;
+      return false;
+    }
+    // In the top-level window's coordinates.
+    const auto place = [top](const QWidget* widget) { return QRect(widget->mapTo(top, QPoint(0, 0)), widget->size()); };
+    const auto text = [](const QRect& r) {
+      return QStringLiteral("%1,%2 %3x%4").arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height());
+    };
+    // Shown, not empty and inside the window.
+    const auto shown = [top, &place](const QWidget* widget) {
+      return widget != nullptr && widget->isVisible() && !widget->size().isEmpty() &&
+             top->rect().contains(place(widget)) && !widget->visibleRegion().isEmpty();
+    };
+    // Shown and nothing of it cut off by its parents or covered.
+    const auto whole = [&shown](const QWidget* widget) {
+      return shown(widget) && QRegion(widget->rect()).subtracted(widget->visibleRegion()).isEmpty();
+    };
+    const bool docked = chromeStyle() == ChromeStyle::Docked;
+
+    // The ribbon: its tabs shown, every group's caption complete, every
+    // button at least as large as its icon.
+    QWidget* holder = docked ? main->findChild<QToolBar*>(QStringLiteral("ribbonToolbar"), Qt::FindDirectChildrenOnly)
+                             : static_cast<QWidget*>(ribbon);
+    if (!shown(holder) || !ribbon->isVisible() || (!docked && ribbon->groupCards().empty()) ||
+        !shown(ribbon->tabBar())) {
+      m_waitDetail = QStringLiteral("the ribbon or its tabs not shown whole");
+      return false;
+    }
+    int captions = 0;
+    int buttons = 0;
+    for (QToolButton* button : ribbon->findChildren<QToolButton*>()) {
+      // The overflow's scroll arrows are drawn smaller than an icon.
+      if (!button->isVisible() || button->objectName().startsWith(QLatin1String("ribbonScroll"))) continue;
+      if (button->objectName().startsWith(QLatin1String("ribbonMenu_"))) {
+        if (button->width() < button->sizeHint().width()) {
+          m_waitDetail = QStringLiteral("clipped ribbon caption %1 (%2 < %3)")
+                             .arg(button->text())
+                             .arg(button->width())
+                             .arg(button->sizeHint().width());
+          return false;
+        }
+        ++captions;
+      } else if (!button->icon().isNull() && button->toolButtonStyle() != Qt::ToolButtonTextOnly) {
+        if (button->height() < button->iconSize().height() || button->width() < button->iconSize().width()) {
+          m_waitDetail = QStringLiteral("ribbon button %1 smaller than its icon (%2x%3 < %4x%5)")
+                             .arg(button->objectName())
+                             .arg(button->width())
+                             .arg(button->height())
+                             .arg(button->iconSize().width())
+                             .arg(button->iconSize().height());
+          return false;
+        }
+        ++buttons;
+      }
+    }
+    if (captions == 0) {
+      m_waitDetail = QStringLiteral("no ribbon group caption shown");
+      return false;
+    }
+
+    // The Browser: shown in the window, its first row as high as its icon.
+    QWidget* browser = main->findChild<QWidget*>(QStringLiteral("browserDock"));
+    auto* tree = main->findChild<QAbstractItemView*>(QStringLiteral("modelBrowserTree"));
+    if (!shown(browser) || tree == nullptr || !shown(tree) || tree->model() == nullptr ||
+        tree->model()->rowCount(tree->rootIndex()) == 0) {
+      m_waitDetail = QStringLiteral("the Browser or its rows not shown");
+      return false;
+    }
+    const QRect row = tree->visualRect(tree->model()->index(0, 0, tree->rootIndex()));
+    const int iconHeight = tree->iconSize().isValid() ? tree->iconSize().height() : 0;
+    if (row.height() < iconHeight || !tree->viewport()->rect().contains(row.topLeft())) {
+      m_waitDetail = QStringLiteral("the Browser's first row %1 high, its icons %2").arg(row.height()).arg(iconHeight);
+      return false;
+    }
+
+    // The command panel: in the window, OK (or Close) whole with its text,
+    // every field at least as high as its text needs.
+    QWidget* panel = nullptr;
+    for (QWidget* candidate : main->findChildren<QWidget*>(QStringLiteral("commandPanel"))) {
+      if (candidate->isVisible()) panel = candidate;
+    }
+    if (!shown(panel)) {
+      m_waitDetail = QStringLiteral("no command panel shown");
+      return false;
+    }
+    // In the panel, or under it where a page lays its buttons out itself
+    // (CommandPanel::takeButtons).
+    QAbstractButton* ok = nullptr;
+    for (QAbstractButton* button : main->findChildren<QAbstractButton*>()) {
+      if (button->isVisible() && (button->objectName() == QLatin1String("commandOk") ||
+                                  button->objectName() == QLatin1String("commandClose"))) {
+        ok = button;
+      }
+    }
+    if (ok == nullptr || !whole(ok) || ok->width() < ok->fontMetrics().horizontalAdvance(ok->text())) {
+      m_waitDetail = QStringLiteral("the command panel's OK not shown whole");
+      return false;
+    }
+    int fields = 0;
+    for (QWidget* field : panel->findChildren<QWidget*>()) {
+      if (!field->isVisible() || (qobject_cast<QLineEdit*>(field) == nullptr &&
+                                  qobject_cast<QAbstractSpinBox*>(field) == nullptr &&
+                                  qobject_cast<QComboBox*>(field) == nullptr)) {
+        continue;
+      }
+      // A spin box's or a combo box's own line edit counts with its box.
+      if (qobject_cast<QAbstractSpinBox*>(field->parentWidget()) != nullptr ||
+          qobject_cast<QComboBox*>(field->parentWidget()) != nullptr) {
+        continue;
+      }
+      if (field->height() < field->minimumSizeHint().height()) {
+        m_waitDetail = QStringLiteral("command panel field %1 %2 high, its text needs %3")
+                           .arg(field->objectName())
+                           .arg(field->height())
+                           .arg(field->minimumSizeHint().height());
+        return false;
+      }
+      ++fields;
+    }
+    if (fields == 0) {
+      m_waitDetail = QStringLiteral("no field in the command panel");
+      return false;
+    }
+    qInfo().noquote() << QStringLiteral("Interface size layout: %1, device pixel ratio %2, window %3x%4 within the "
+                                        "screen; ribbon %5 (%6 captions, %7 buttons); browser %8 (rows %9 high); "
+                                        "command panel %10 (%11 fields, OK whole)")
+                             .arg(docked ? QStringLiteral("docked") : QStringLiteral("floating"))
+                             .arg(top->devicePixelRatioF())
+                             .arg(top->width())
+                             .arg(top->height())
+                             .arg(text(place(holder)))
+                             .arg(captions)
+                             .arg(buttons)
+                             .arg(text(place(browser)))
+                             .arg(row.height())
+                             .arg(text(place(panel)))
+                             .arg(fields);
+    return true;
+  }, 10, QStringLiteral("the window, ribbon, Browser or command panel does not fit at the Interface size"));
 }
 
 void TestDriver::testSketchFinishLayout() {

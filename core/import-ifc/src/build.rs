@@ -197,6 +197,7 @@ pub fn prepare<K: Kernel>(kernel: &K, item: Item) -> Node {
                 section: mitcad_model::sweeps::PipeSection::Circular,
                 size: 2.0 * radius,
                 thickness: inner_radius.map(|r| radius - r),
+                corners: mitcad_model::sweeps::PipeCorners::Mitered,
             };
             built(
                 kernel.pipe(&spec).map(|s| {

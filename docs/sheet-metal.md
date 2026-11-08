@@ -258,7 +258,7 @@ taking the first surviving face.
 | Rigid body move | Transform all panel/bend frames and named geometric maps along with the shape. |
 | Component/occurrence placement | Keep body-local sheet state unchanged; apply the placement only at the assembly boundary. |
 | Component copy / Paste New | Copy the rule dependency closure by default; remap body, rule, parameter, feature, panel and bend references. Same-document rule sharing requires an explicit choice. |
-| Body pattern/copy or mirror | Preserve semantics only through a sheet-aware copy/handedness adapter with deterministic names; otherwise invalidate the copied result explicitly. |
+| Body pattern/copy or mirror | Preserve semantics only through a sheet-aware copy/handedness adapter with deterministic names; otherwise invalidate the copied result explicitly. Mirrors and patterns of bodies have that adapter, as new bodies and joined (mitcad#1450). |
 | Arbitrary Boolean, scale, shell, generic fillet or face edit | Invalidate affected sheet semantics unless a tested adapter updates the domains; never retain an old flat result. |
 | Planar through Hole / contour edit | A sheet-aware adapter may translate it to the same material-domain cut operation. Until that exists, invalidation is explicit. |
 | Remove body | Remove its sheet state and make its flat item unavailable. |
@@ -1221,6 +1221,93 @@ the joint sets the wall's end from the thickness `t`:
   features on it, the messages). CLI `sheet_fold_loop`: a U-shaped panel
   (`3600`), a first fold across both arms (`3600 + 2 pi`) and a second
   fold between the arms, refused naming the first.
+
+### Implementation notes (mitcad#1450)
+
+- **Copies of sheet bodies** (`sheet/body_copy.rs`, called from the body
+  branch of `features/pattern.rs::repeat`). A mirror's or pattern's copy of
+  a valid sheet body (orthogonal transform) is a new
+  sheet body whose state is the source's carried by the transform
+  (`SheetState::transformed`): planar frames moved (a reflected frame's
+  normal `x × y` points the other way, so the chart's
+  `front_to_back_sign` is turned to keep the material's image), cylinders
+  moved with their basis as given (the construction reads its handedness,
+  `uv_sign` in `geometry/src/sheet_chart.cpp`; the development's stations
+  are linear in it), ports and lineage unchanged (they are chart
+  coordinates). The shape is the copy itself; its domains keep their
+  identities (semantic selections are body plus domain, as after a split),
+  and `pick::parse_face` reads `F6:inst1(...)` as the name inside.
+- **Joining a copy.** With `combine` the copy's domains and curves are
+  renamed as the pattern's (slots derived from the identity they replace,
+  below; ports' tokens after the sheet's) and appended to the sheet; for
+  each copy panel
+  coplanar with a sheet panel (`planar_map`), the union of their regions
+  decides: apart (as many regions), overlapping (less area than both:
+  refused), or touching (fewer regions): the copy panel's regions are
+  mapped into the sheet panel's chart, every reference to the copy panel
+  (ports with their spans moved as the curves move, bends' boundaries,
+  opened bends, lineage with the moved curves' generations) made to the
+  sheet panel, and the panel united with them by `trim_with_lineage`, whose
+  `rebind_ports` binds the ports to the united boundaries. The merged sheet
+  is built again and compared with the generic join of the halves.
+- **Fold ports on the moving panel.** A Fold's moving panel is a trimmed
+  copy of the folded panel; the kernel may return a boundary it keeps
+  running the other way (the union of a join returned such lines), so the
+  ports the moving panel takes are bound again to its boundaries by
+  position (`cut::rebind`) before the branch moves.
+- **Tests.** CLI `sheet_mirror_body`, `sheet_mirror_body_join`,
+  `sheet_mirror_reported` (see the
+  [API section](../core/model-api/src/commands.md#mirrors-and-patterns-of-sheet-metal-bodies-mitcad1450));
+  `pick_tests.rs` for the copies' face names.
+
+### Implementation notes (mitcad#1462)
+
+- **Stable slots of a joined copy.** A joined copy's domain and curve
+  slots were numbered `100000 k + n` by their rank in sorted order, so an
+  upstream edit that added or removed a domain renumbered the others and a
+  later feature naming one of them pointed elsewhere. Each slot is now
+  derived from the copy and the identity it replaces
+  (`body_copy::slot`): the 64-bit FNV-1a hash of `<copy key>/<identity>`
+  (`F3.b0/1/F5.p0`; the key `copy_key` is the source body, the inner
+  patterns' `feature:index` steps of a pattern of patterns, and the
+  element's index), its two halves xor-ed to 32 bits and placed at 100000
+  or above (the pattern's own low slots, a united seam's curves, are never
+  met). A slot taken already (by a copy joined before, or a clash) gives
+  the next free one, in the sorted order of the copy's identities.
+- **Change overlays on copies.** `SheetOverlayKind::Change` holds an
+  optional `source`, the body the fillet or chamfer changed, when it is not
+  the sheet's own; `body_copy::image` sets it, so `cut::with_overlays`
+  reads the change from the body it was made on and moves it by the
+  overlay's placement (the copy's transform after any before). A sheet
+  with such an overlay is copied as a new body and joined like any other.
+- **Patterns of patterns of bodies** (`repeat_body_places` and its
+  `combine_any` twin). The copy's sheet is the sheet the body had before
+  the inner pattern (`body_copy::source_before`: the `Set` state of the
+  last result before it that set the body, carried by the rigid moves
+  (`SheetChange::Transform`) since; none after ordinary
+  modelling), carried by the element's transform after the place's steps.
+  With `combine` a copy that touches its body is joined to the body's
+  current sheet; one that does not is a sheet of its own.
+- **`combine_any`** (`join_any_sheets`). `join_any` also names the bodies
+  a copy reached. A copy of a sheet that touches one sheet, whole, is
+  joined to it as with `combine` (any sheet of the pattern: the original,
+  a copy that stayed a body of its own); the sheets of the bodies the
+  copies may join are kept as the joins leave them.
+- **Warnings instead of silent invalid sheets.** A scaled copy (scaling
+  changes the thickness) stays an ordinary solid, `the scaled copies of
+  sheet F3.b0 are not sheet metal bodies`; a join that makes a sheet an
+  ordinary solid (a scaled copy joined to it, one copy joining several
+  bodies at once, a copy partly apart, a copy that is not a sheet) warns
+  `F3.b0 is no longer a sheet metal body: <why>`. These are collected and
+  settled when the joined bodies are final (`body_copy::settle`): a body
+  the adapter re-derives (`rederive::rederive_joined`, what `adapt` would
+  do; flat material joined in a panel's plane) is a sheet and no warning
+  is given; the others are warned about and invalidated as before
+  (`complete_changes`, the adapter).
+- **Tests.** CLI `sheet_copy_stable_slots`, `sheet_copy_overlay`,
+  `sheet_copy_scaled`, `sheet_copy_patterns`, `sheet_copy_join_any` (see
+  the [API section](../core/model-api/src/commands.md#mirrors-and-patterns-of-sheet-metal-bodies-mitcad1450));
+  the slots and the overlay's `source` in `body_copy.rs`'s unit tests.
 
 ## Kernel seam
 

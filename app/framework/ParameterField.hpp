@@ -71,6 +71,13 @@ struct ParameterFieldOptions {
   // The field takes `name = expression` for its own parameter
   // (mitcad#231): the list offers it and says how (mitcad#568).
   bool naming = false;
+  // The field's own parameter is offered too, as kept as a user parameter
+  // (mitcad#1535): a sketch dimension's value that uses its own parameter
+  // keeps that parameter as a user parameter (commands.md, Values), so the
+  // parameters that use it are no cycle there either. A command panel's
+  // value field too (a feature's value, mitcad#1536); the list's words name
+  // a dimension where `sketch` is set, else the field.
+  bool keepOwn = false;
   // The list offers Create User Parameter... (not where a dialog would end
   // the editing, as in a table's cell).
   bool create = true;
@@ -122,6 +129,8 @@ public:
   ~ParameterField() override;
 
   void setOwnParameter(const QString& name);
+  // ParameterFieldOptions::keepOwn (mitcad#1535).
+  void setKeepOwn(bool keep) { m_options.keepOwn = keep; }
   void setLabel(const QString& label);
   // Native editors use the same current kind, naming and creation rules.
   const ParameterFieldOptions& options() const { return m_options; }

@@ -90,6 +90,8 @@
 #include <Graphic3d_Group.hxx>
 #include <Graphic3d_MarkerImage.hxx>
 #include <Graphic3d_MaterialAspect.hxx>
+#include <Graphic3d_RenderingParams.hxx>
+#include <Graphic3d_StereoMode.hxx>
 #include <Prs3d_Presentation.hxx>
 #include <Prs3d_PresentationShadow.hxx>
 #include <PrsMgr_Presentation.hxx>
@@ -3146,8 +3148,17 @@ void OcctViewer::setPreview(const TopoDS_Shape& shape, PreviewStyle style) {
     if (hasAnyTriangulation(shape)) {
       m_preview->Attributes()->SetAutoTriangulation(false);
     }
-    m_previewMode = style == PreviewStyle::Failed || style == PreviewStyle::MeasurementWire ? AIS_WireFrame : AIS_Shaded;
-    if (style == PreviewStyle::MeasurementWire) {
+    m_previewMode = style == PreviewStyle::Failed || style == PreviewStyle::MeasurementWire ||
+                            style == PreviewStyle::Curve
+                        ? AIS_WireFrame
+                        : AIS_Shaded;
+    if (style == PreviewStyle::Curve) {
+      // As styleDatum draws the finished curve (SelectKind::Feature), over
+      // the picked curves (mitcad#1496).
+      setEdgeStyle(m_preview, kAxisColor, 2.0, Aspect_TOL_SOLID);
+      m_context->Display(m_preview, AIS_WireFrame, -1, false);
+      m_context->SetZLayer(m_preview, Graphic3d_ZLayerId_Top);
+    } else if (style == PreviewStyle::MeasurementWire) {
       // A plane-gap dimension can lie entirely inside a stepped solid.
       // Keep this temporary, non-selectable guide above the body's depth.
       setEdgeStyle(m_preview, viewRole(ColorRole::SketchDimension, m_backgroundDark), 2.0);
@@ -4465,6 +4476,8 @@ void OcctViewer::restoreCamera() {
   if (!m_savedCamera.IsNull()) {
     m_view->Camera()->Copy(m_savedCamera);
     m_savedCamera.Nullify();
+    // Anaglyph 3D switched in the sketch stays as it is (mitcad#1449).
+    keepProjection(*m_view->Camera());
   }
   sceneChanged();
 }
@@ -5197,8 +5210,7 @@ void OcctViewer::logCamera() {
   }
   const QString text = QStringLiteral("Camera direction %1 up %2 (%3)")
                            .arg(vectorText(current->Direction().XYZ()), vectorText(current->Up().XYZ()),
-                                isPerspective() ? QStringLiteral("perspective")
-                                                : QStringLiteral("orthographic"));
+                                projectionName()); // stereo: Anaglyph 3D (mitcad#1449)
   // The grid's spacing once it changes (UI tests check it against the zoom),
   // in the design's unit (mitcad#1210).
   const double step = m_gridShown ? gridStep() : 0.0;
@@ -5328,8 +5340,7 @@ void OcctViewer::logOrientationCube() {
                               .arg(corner.x() + pickRight * kStep)
                               .arg(corner.y() + pickBottom * kStep)
                               .arg(vectorText(camera->Direction().XYZ()),
-                                   isPerspective() ? QStringLiteral("perspective") : QStringLiteral("orthographic"),
-                                   cubeProjectionId(m_cubeProjection));
+                                   projectionName(), cubeProjectionId(m_cubeProjection));
   }
   requestFrame();
 }
@@ -5386,7 +5397,8 @@ CameraState OcctViewer::camera() const {
   state.eye = current->Eye();
   state.target = current->Center();
   state.up = current->Up();
-  state.perspective = current->ProjectionType() == Graphic3d_Camera::Projection_Perspective;
+  // A stereo camera (Anaglyph 3D, mitcad#1449) is a perspective one.
+  state.perspective = !current->IsOrthographic();
   state.height = current->ViewDimensions().Y();
   return state;
 }
@@ -5401,8 +5413,7 @@ CameraState OcctViewer::pendingCamera() const {
   if (m_fitPending) {
     fitPending(pending);
   }
-  return {pending->Eye(), pending->Center(), pending->Up(),
-          pending->ProjectionType() == Graphic3d_Camera::Projection_Perspective,
+  return {pending->Eye(), pending->Center(), pending->Up(), !pending->IsOrthographic(),
           pending->ViewDimensions().Y()};
 }
 
@@ -5418,6 +5429,12 @@ void OcctViewer::setCamera(const CameraState& state) {
     end->Copy(m_view->Camera());
     end->SetProjectionType(state.perspective ? Graphic3d_Camera::Projection_Perspective
                                              : Graphic3d_Camera::Projection_Orthographic);
+    if (m_anaglyph) {
+      // Anaglyph 3D stays on (mitcad#1449): the view's projection is the
+      // one it goes back to.
+      m_monoPerspective = state.perspective;
+      keepProjection(*end);
+    }
     end->SetEyeAndCenter(state.eye, state.target);
     // Square to the direction (mitcad#773): an up along it makes no view.
     end->SetUp(upAcross(end->Direction(), state.up.XYZ()));
@@ -5432,6 +5449,12 @@ void OcctViewer::setCamera(const CameraState& state) {
 }
 
 void OcctViewer::setPerspective(bool perspective) {
+  if (m_anaglyph) {
+    // The camera stays a stereo one (mitcad#1449); this is the projection
+    // Anaglyph 3D goes back to.
+    m_monoPerspective = perspective;
+    return;
+  }
   m_view->Camera()->SetProjectionType(perspective ? Graphic3d_Camera::Projection_Perspective
                                                   : Graphic3d_Camera::Projection_Orthographic);
   m_view->Invalidate();
@@ -5440,7 +5463,90 @@ void OcctViewer::setPerspective(bool perspective) {
 }
 
 bool OcctViewer::isPerspective() const {
-  return m_view->Camera()->ProjectionType() == Graphic3d_Camera::Projection_Perspective;
+  // A stereo camera (Anaglyph 3D, mitcad#1449) is a perspective one.
+  return !m_view->Camera()->IsOrthographic();
+}
+
+QString OcctViewer::projectionName() const {
+  if (m_view->Camera()->IsStereo()) {
+    return QStringLiteral("stereo");
+  }
+  return isPerspective() ? QStringLiteral("perspective") : QStringLiteral("orthographic");
+}
+
+void OcctViewer::keepProjection(Graphic3d_Camera& camera) const {
+  if (m_anaglyph) {
+    camera.SetProjectionType(Graphic3d_Camera::Projection_Stereo);
+    camera.SetIOD(Graphic3d_Camera::IODType_Relative, m_stereoDepth);
+    camera.SetZFocus(Graphic3d_Camera::FocusType_Relative, m_stereoConvergence);
+  } else if (camera.IsStereo()) {
+    camera.SetProjectionType(m_monoPerspective ? Graphic3d_Camera::Projection_Perspective
+                                               : Graphic3d_Camera::Projection_Orthographic);
+  }
+}
+
+bool OcctViewer::isStereo() const {
+  return m_view->Camera()->IsStereo() && m_view->RenderingParams().StereoMode == Graphic3d_StereoMode_Anaglyph;
+}
+
+void OcctViewer::setAnaglyph(bool on) {
+  if (on == m_anaglyph) {
+    return;
+  }
+  // An animation ends where it was going: its cameras have the projection
+  // it started with. (A pending fit keeps the projection it finds.)
+  const occ::handle<AIS_AnimationCamera>& animation = ViewAnimation();
+  if (!animation.IsNull() && !animation->IsStopped()) {
+    const occ::handle<Graphic3d_Camera> end = animation->CameraEnd();
+    AbortViewAnimation();
+    if (!end.IsNull()) {
+      m_view->Camera()->Copy(end);
+    }
+  }
+  const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
+  if (on) {
+    m_monoPerspective = !camera->IsOrthographic();
+    Graphic3d_RenderingParams& params = m_view->ChangeRenderingParams();
+    params.StereoMode = Graphic3d_StereoMode_Anaglyph;
+    params.AnaglyphFilter = Graphic3d_RenderingParams::Anaglyph_RedCyan_Optimized;
+    params.ToReverseStereo = false;
+  }
+  m_anaglyph = on;
+  keepProjection(*camera);
+  m_view->Invalidate();
+  if (isStereo()) {
+    qDebug().noquote() << QStringLiteral("Anaglyph 3D on: stereo camera, red/cyan, stereo depth %1 %, convergence %2 %")
+                              .arg(qRound(m_stereoDepth * 100.0))
+                              .arg(qRound(m_stereoConvergence * 100.0));
+  } else {
+    // Off, or on where the camera did not become a stereo one.
+    qDebug().noquote() << QStringLiteral("Anaglyph 3D %1: %2 camera")
+                              .arg(on ? QStringLiteral("not shown") : QStringLiteral("off"), projectionName());
+  }
+  // The camera's line again with its projection, also where it did not move.
+  m_loggedCamera.clear();
+  cameraMoved();
+  requestFrame();
+}
+
+void OcctViewer::setStereoParameters(double depth, double convergence) {
+  if (!(depth > 0.0) || !(convergence > 0.0) || !std::isfinite(depth) || !std::isfinite(convergence)) {
+    return;
+  }
+  if (depth == m_stereoDepth && convergence == m_stereoConvergence) {
+    return;
+  }
+  m_stereoDepth = depth;
+  m_stereoConvergence = convergence;
+  qDebug().noquote() << QStringLiteral("Anaglyph 3D: stereo depth %1 %, convergence %2 %")
+                            .arg(qRound(depth * 100.0))
+                            .arg(qRound(convergence * 100.0));
+  if (!m_anaglyph) {
+    return;
+  }
+  keepProjection(*m_view->Camera());
+  m_view->Invalidate();
+  requestFrame();
 }
 
 QString cubeProjectionId(CubeProjection projection) {

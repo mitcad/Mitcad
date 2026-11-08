@@ -14,6 +14,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QHeaderView>
@@ -196,6 +197,8 @@ public:
 };
 
 class NavigationPreferences : public QWidget {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::NavigationPreferences)
+
 public:
   // `buttonCommands`: the commands a 3D mouse's button can run, by id and
   // name (Fit and Home when empty).

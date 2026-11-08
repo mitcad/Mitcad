@@ -16,7 +16,11 @@ namespace {
 
 const QString kRoot = QStringLiteral("C0");
 
-QString tr(const char* text) { return QCoreApplication::translate("BindingList", text); }
+// The file's texts in the context BindingList, where lupdate records them
+// too (mitcad#1472).
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(BindingList)
+};
 
 QString field(const QJsonObject& object, const char* key) { return object.value(QLatin1String(key)).toString(); }
 
@@ -242,16 +246,16 @@ BindingItem BindingEntry::target() const {
 QString BindingEntry::property() const {
   switch (kind) {
   case Kind::Appearance:
-    return tr("Appearance");
+    return Text::tr("Appearance");
   case Kind::Material:
-    return tr("Material");
+    return Text::tr("Material");
   case Kind::Shown:
   case Kind::OccurrenceShown:
-    return tr("Shown");
+    return Text::tr("Shown");
   case Kind::FaceAppearance:
-    return tr("Face %1").arg(faceLabel.isEmpty() ? face : faceLabel);
+    return Text::tr("Face %1").arg(faceLabel.isEmpty() ? face : faceLabel);
   case Kind::Suppressed:
-    return tr("Suppressed");
+    return Text::tr("Suppressed");
   }
   return QString();
 }
@@ -573,7 +577,7 @@ QString ReadableBinding::follows() const {
   }
   QStringList parts;
   for (const BindingCase& c : cases) {
-    parts << QStringLiteral("%1 → %2").arg(c.value.isEmpty() ? tr("otherwise") : c.value, c.result);
+    parts << QStringLiteral("%1 → %2").arg(c.value.isEmpty() ? Text::tr("otherwise") : c.value, c.result);
   }
   return QStringLiteral("%1: %2").arg(option, parts.join(QStringLiteral(", ")));
 }
@@ -584,14 +588,14 @@ QString ReadableBinding::line() const {
     QStringList parts;
     for (const BindingCase& c : cases) {
       parts << QStringLiteral("%1 → %2%3")
-                   .arg(c.value.isEmpty() ? tr("otherwise") : c.value, c.result,
+                   .arg(c.value.isEmpty() ? Text::tr("otherwise") : c.value, c.result,
                         c.current ? QStringLiteral(" ●") : QString());
     }
     return QStringLiteral("%1: %2").arg(option, parts.join(QStringLiteral(", ")));
   }
   case Form::Condition:
   case Form::Expression:
-    return tr("%1 · %2 now").arg(text, now);
+    return Text::tr("%1 · %2 now").arg(text, now);
   case Form::Plain:
     break;
   }
@@ -612,11 +616,11 @@ ReadableBinding readBinding(const BindingEntry& entry, const BindingLookup& look
     } else if (!entry.value.isEmpty()) {
       readable.now = entry.value;
     } else if (material) {
-      readable.now = tr("the component's material");
+      readable.now = Text::tr("the component's material");
     } else if (entry.kind == BindingEntry::Kind::FaceAppearance) {
-      readable.now = tr("the body's look");
+      readable.now = Text::tr("the body's look");
     } else {
-      readable.now = tr("the material's look");
+      readable.now = Text::tr("the material's look");
     }
   }
 
@@ -624,7 +628,7 @@ ReadableBinding readBinding(const BindingEntry& entry, const BindingLookup& look
     readable.form = ReadableBinding::Form::Plain;
     if (material) {
       if (!entry.value.isEmpty()) {
-        readable.text = tr("%1, set by hand").arg(readable.now);
+        readable.text = Text::tr("%1, set by hand").arg(readable.now);
       } else {
         // Its component's default, the root's, else steel.
         QString id = lookup.componentMaterials.value(entry.component);
@@ -632,18 +636,18 @@ ReadableBinding readBinding(const BindingEntry& entry, const BindingLookup& look
           id = lookup.componentMaterials.value(kRoot);
         }
         const BindingChoice* chosen = BindingLookup::named(lookup.materials, id.isEmpty() ? QStringLiteral("steel") : id);
-        const QString name = chosen != nullptr ? chosen->name : (id.isEmpty() ? tr("Steel") : id);
-        readable.text = id.isEmpty() ? tr("%1, the default").arg(name) : tr("%1, the component's default").arg(name);
+        const QString name = chosen != nullptr ? chosen->name : (id.isEmpty() ? Text::tr("Steel") : id);
+        readable.text = id.isEmpty() ? Text::tr("%1, the default").arg(name) : Text::tr("%1, the component's default").arg(name);
         if (chosen != nullptr) {
           readable.nowColor = chosen->color;
         }
         readable.now = name;
       }
     } else if (!entry.value.isEmpty()) {
-      readable.text = entry.byHand ? tr("%1, set by hand").arg(readable.now)
-                                   : tr("%1, from its material").arg(readable.now);
+      readable.text = entry.byHand ? Text::tr("%1, set by hand").arg(readable.now)
+                                   : Text::tr("%1, from its material").arg(readable.now);
     } else {
-      readable.text = tr("its material's look");
+      readable.text = Text::tr("its material's look");
     }
     return readable;
   }
@@ -652,14 +656,14 @@ ReadableBinding readBinding(const BindingEntry& entry, const BindingLookup& look
   case BindingEntry::Kind::Shown:
   case BindingEntry::Kind::OccurrenceShown:
     readable.form = ReadableBinding::Form::Condition;
-    readable.text = tr("when %1").arg(readableCondition(entry.expression));
-    readable.now = entry.holds ? tr("shown") : tr("hidden");
+    readable.text = Text::tr("when %1").arg(readableCondition(entry.expression));
+    readable.now = entry.holds ? Text::tr("shown") : Text::tr("hidden");
     readable.warnings = entry.warnings;
     return readable;
   case BindingEntry::Kind::Suppressed:
     readable.form = ReadableBinding::Form::Condition;
-    readable.text = tr("when %1").arg(readableCondition(entry.expression));
-    readable.now = entry.holds ? tr("suppressed") : tr("not suppressed");
+    readable.text = Text::tr("when %1").arg(readableCondition(entry.expression));
+    readable.now = entry.holds ? Text::tr("suppressed") : Text::tr("not suppressed");
     readable.warnings = entry.warnings;
     return readable;
   case BindingEntry::Kind::Appearance:
@@ -681,7 +685,7 @@ ReadableBinding readBinding(const BindingEntry& entry, const BindingLookup& look
   readable.form = ReadableBinding::Form::Mapping;
   readable.option = mapping.option;
   const QString current = compact(lookup.values.value(mapping.option));
-  const QString what = material ? tr("material") : tr("appearance");
+  const QString what = material ? Text::tr("material") : Text::tr("appearance");
   bool matched = false;
   const auto addCase = [&](const QString& value, const QString& result) {
     BindingCase c;
@@ -698,7 +702,7 @@ ReadableBinding readBinding(const BindingEntry& entry, const BindingLookup& look
       matched = true;
     }
     if (!c.known) {
-      const QString warning = tr("no %1 “%2”").arg(what, c.resultText);
+      const QString warning = Text::tr("no %1 “%2”").arg(what, c.resultText);
       if (!readable.warnings.contains(warning)) {
         readable.warnings << warning;
       }

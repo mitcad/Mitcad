@@ -309,6 +309,9 @@ target_sources(mitcad_bridge PRIVATE
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/intersection_curve.cpp
   cpp/bridge/intersection_curve.hpp)
+# model_render's ray-traced picture through mitcad-cli (mitcad#1489).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/mcp_raytrace.hpp)
 target_include_directories(mitcad_bridge PUBLIC cpp)
 # What corrosion_add_cxxbridge links for a CRATE that Corrosion imported
 # (mitcad#792): the bridge with the Rust library, both ways.
@@ -635,6 +638,9 @@ if(BUILD_TESTING)
   # The test runner's scheduling, profiles and parsers (tools/testrun,
   # mitcad#790); no ctest needed.
   mitcad_cargo_test(tools.testrun mitcad-testrun)
+  # model_render's camera, software rasterizer and PNG writer (mitcad#1486;
+  # no OCCT).
+  mitcad_cargo_test(core.preview mitcad-preview)
 
   # The fixtures that build the test binaries, and the documentation tests
   # (cargo with the fixture's packages, so that it builds nothing again).

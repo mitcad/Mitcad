@@ -251,8 +251,8 @@ use mitcad_model_base::internal::parameters::expression_dims;
 
 // Moved down to the base so that the sketch resolves its values as the
 // document does (mitcad#780).
-use mitcad_model_base::internal::values::resolve_value_as;
 pub use mitcad_model_base::internal::values::split_named;
+use mitcad_model_base::internal::values::{resolve_value_as, value_uses_parameter};
 pub use mitcad_model_base::values::ModelError;
 
 fn invalid(message: impl Into<String>) -> ModelError {
@@ -439,6 +439,18 @@ pub struct Added {
     pub parameters: Vec<String>,
 }
 
+/// A feature's own parameter kept as a user parameter because the new
+/// value of its slot uses it (mitcad#1536), as a sketch dimension's is
+/// (mitcad#1535): its name, the slot (`extent.distance`), the parameter
+/// the slot uses now, and the note that says so.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeptSlotParameter {
+    pub name: String,
+    pub slot: String,
+    pub parameter: String,
+    pub note: String,
+}
+
 /// A shape added to a sketch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShapeAdded {
@@ -518,13 +530,15 @@ impl DocState {
     /// Converts command values to parameters. A name refers to a parameter;
     /// a number sets the parameter of the same slot in `old` if the feature
     /// owns it, or creates a dimension parameter owned by the feature.
+    /// A value that uses the slot's own parameter keeps that parameter as a
+    /// user parameter (mitcad#1536): the third list says what moved.
     fn resolve(
         &mut self,
         def: &FeatureDef<ValueInput>,
         owner: FeatureUid,
         owner_name: &str,
         old: Option<&FeatureDef>,
-    ) -> Result<(FeatureDef, Vec<String>), ModelError> {
+    ) -> Result<(FeatureDef, Vec<String>, Vec<KeptSlotParameter>), ModelError> {
         let mut old_slots = HashMap::new();
         if let Some(old) = old {
             let _ = old.map_params(&mut |slot, id: &ParamId| {
@@ -533,6 +547,15 @@ impl DocState {
             });
         }
         let mut created = Vec::new();
+        let mut kept = Vec::new();
+        // The parameters other features use: a slot's own parameter that one
+        // of them uses stays this feature's (mitcad#1536).
+        let elsewhere: BTreeSet<ParamId> = self
+            .features
+            .iter()
+            .filter(|f| f.uid != owner)
+            .flat_map(|f| f.def.params())
+            .collect();
         // A derived part's values take its source's units (mitcad#801).
         let part_units = crate::part_options::slot_units(self, def);
         let params = &mut self.parameters;
@@ -543,6 +566,28 @@ impl DocState {
                 created.extend(crate::print_fits::ensure(params, expression)?);
             }
             let comment = format!("{owner_name} {}", slot_label(slot));
+            // A value that uses the slot's own parameter (`depth * 2` in the
+            // distance of depth) keeps that parameter, with its name and
+            // value, as a user parameter, and the slot takes the value as a
+            // new parameter of its own (mitcad#1536, as a sketch
+            // dimension's, mitcad#1535). A parameter another slot of the
+            // feature or another feature uses as well stays as it is; this
+            // slot only stops using it.
+            let mut own = old_slots.get(slot).copied();
+            let mut keep = None;
+            if let Some(p) = own.filter(|p| {
+                params.owner(*p) == Some(owner) && uses_own_parameter(params, value, *p)
+            }) {
+                let shared = elsewhere.contains(&p)
+                    || old_slots
+                        .iter()
+                        .any(|(other, id)| other.as_str() != slot && *id == p);
+                if !shared {
+                    params.set_owner(p, None);
+                    keep = Some(p);
+                }
+                own = None;
+            }
             let (id, new) = resolve_value_as(
                 params,
                 slot,
@@ -550,9 +595,12 @@ impl DocState {
                 value,
                 owner,
                 &comment,
-                old_slots.get(slot),
+                own.as_ref(),
             )?;
             created.extend(new);
+            if let Some(p) = keep {
+                kept.push(kept_slot_parameter(params, p, id, slot, &comment));
+            }
             Ok(id)
         })?;
         // Driven dimensions get their reference parameters (mitcad#231).
@@ -598,7 +646,7 @@ impl DocState {
             });
         }
         crate::features::sheet_folded::settle(&mut resolved, old);
-        Ok((resolved, created))
+        Ok((resolved, created, kept))
     }
 
     /// The features that refer to any of `of`, directly or through each
@@ -1008,7 +1056,7 @@ impl DocState {
             }
             None => self.default_name(def.base_name()),
         };
-        let (def, parameters) = self.resolve(def, uid, &name, None)?;
+        let (def, parameters, _) = self.resolve(def, uid, &name, None)?;
         let entry = FeatureEntry {
             uid,
             name: name.clone(),
@@ -1134,6 +1182,18 @@ impl DocState {
         uid: FeatureUid,
         def: &FeatureDef<ValueInput>,
     ) -> Result<Vec<String>, ModelError> {
+        self.edit_feature_keeping(uid, def)
+            .map(|(created, _)| created)
+    }
+
+    /// [`DocState::edit_feature`], also returning the slots' own parameters
+    /// kept as user parameters because their new values use them
+    /// (mitcad#1536).
+    pub fn edit_feature_keeping(
+        &mut self,
+        uid: FeatureUid,
+        def: &FeatureDef<ValueInput>,
+    ) -> Result<(Vec<String>, Vec<KeptSlotParameter>), ModelError> {
         let position = self.require(uid)?;
         let old = self.features[position].clone();
         if old.def.type_name() != def.type_name() {
@@ -1144,7 +1204,7 @@ impl DocState {
                 def.type_name()
             )));
         }
-        let (def, created) = self.resolve(def, uid, &old.name, Some(&old.def))?;
+        let (def, created, kept) = self.resolve(def, uid, &old.name, Some(&old.def))?;
         let entry = FeatureEntry {
             def,
             ..(*old).clone()
@@ -1162,7 +1222,7 @@ impl DocState {
         }
         self.sync_made_component(uid)?;
         self.release_params(uid);
-        Ok(created)
+        Ok((created, kept))
     }
 }
 
@@ -1240,6 +1300,52 @@ pub(crate) fn check_components(
 /// Every parameter the features use.
 pub(crate) fn used_params(features: &[Arc<FeatureEntry>]) -> BTreeSet<ParamId> {
     features.iter().flat_map(|f| f.def.params()).collect()
+}
+
+/// Whether a slot's value uses its own parameter `id` (mitcad#1536):
+/// [`value_uses_parameter`], but not for the bare own name, which leaves
+/// the slot as it is. Definitions read back from the model name their own
+/// parameters so (the `feature` query's `def`, the edits that change one
+/// field of a feature), so the bare name must not move anything.
+fn uses_own_parameter(params: &Parameters, value: &ValueInput, id: ParamId) -> bool {
+    if let ValueInput::Name(text) = value
+        && text.trim() == params.name(id)
+    {
+        return false;
+    }
+    value_uses_parameter(params, value, id)
+}
+
+/// What [`DocState::resolve`] reports of a slot's own parameter `kept` as a
+/// user parameter, the slot using `now` (mitcad#1536): the note says it as
+/// a sketch dimension's does (`depth is now a user parameter (10 mm);
+/// Extrude1 distance is d3 = depth * 2`).
+fn kept_slot_parameter(
+    params: &Parameters,
+    kept: ParamId,
+    now: ParamId,
+    slot: &str,
+    what: &str,
+) -> KeptSlotParameter {
+    let expression = |id: ParamId| {
+        params
+            .get(id)
+            .map(|p| p.expression().to_owned())
+            .unwrap_or_default()
+    };
+    let name = params.name(kept);
+    let parameter = params.name(now);
+    let note = format!(
+        "{name} is now a user parameter ({}); {what} is {parameter} = {}",
+        expression(kept),
+        expression(now)
+    );
+    KeptSlotParameter {
+        name,
+        slot: slot.to_owned(),
+        parameter,
+        note,
+    }
 }
 
 /// The parameters an edit renamed, as (old name, new name): the same id
@@ -2718,16 +2824,28 @@ impl<K: Kernel> Document<K> {
         uid: FeatureUid,
         def: &FeatureDef<ValueInput>,
     ) -> Result<Vec<String>, ModelError> {
+        self.edit_feature_keeping(uid, def)
+            .map(|(created, _)| created)
+    }
+
+    /// [`Document::edit_feature`], also returning the slots' own parameters
+    /// it kept as user parameters because their new values use them
+    /// (mitcad#1536), in the same undo step.
+    pub fn edit_feature_keeping(
+        &mut self,
+        uid: FeatureUid,
+        def: &FeatureDef<ValueInput>,
+    ) -> Result<(Vec<String>, Vec<KeptSlotParameter>), ModelError> {
         if let Some(entry) = self.state.entry(uid) {
             self.state.editable(entry.component)?;
         }
         self.check_profiles(def)?;
         let (made, beside) = self.made_and_beside(uid);
         self.apply(|state| {
-            let created = state.edit_feature(uid, def)?;
+            let edited = state.edit_feature_keeping(uid, def)?;
             state.place_made_beside(uid, made, beside);
             let name = state.entry(uid).expect("edited").name.clone();
-            Ok((format!("Edit {name}"), created))
+            Ok((format!("Edit {name}"), edited))
         })
     }
 
@@ -4187,7 +4305,7 @@ impl<K: Kernel> Document<K> {
         self.check_profiles(def)?;
         let (made, beside) = self.made_and_beside(uid);
         let mut state = self.state.clone();
-        state.edit_feature(uid, def)?;
+        let (_, kept) = state.edit_feature_keeping(uid, def)?;
         state.place_made_beside(uid, made, beside);
         // An editor shows the model as the feature finds it, the marker
         // just before the feature: the edit is computed there as a feature
@@ -4196,7 +4314,12 @@ impl<K: Kernel> Document<K> {
         if let Some(position) = state.features.iter().position(|f| f.uid == uid) {
             state.marker = state.marker.max(position + 1);
         }
-        self.preview_state(state, uid)
+        // The own parameters OK will keep as user parameters (mitcad#1536),
+        // for the panel to say; the preview's state is a copy, so nothing
+        // moves before OK.
+        let mut report = self.preview_state(state, uid)?;
+        report.infos.extend(kept.into_iter().map(|k| k.note));
+        Ok(report)
     }
 
     /// Computes a previewed state; a cancelled preview (P7) leaves none.

@@ -39,7 +39,8 @@ def main():
                 env["MITCAD_" + variable + "_DIR"] = str(Path(temporary) / variable.lower())
             env.update(MITCAD_TEST_INPUT=str(Path(__file__).with_name("ui-scripts") / "formula-builder.mitcad-ui"),
                        MITCAD_TEST_SHOTS=str(shots), MITCAD_RESULT_STORE="off",
-                       MITCAD_START_PAGE="0", MITCAD_NO_UPDATE_CHECK="1", QT_FORCE_STDERR_LOGGING="1")
+                       MITCAD_START_PAGE="0", MITCAD_LANGUAGE="en", MITCAD_NO_UPDATE_CHECK="1",
+                       QT_FORCE_STDERR_LOGGING="1")
             log_path = out / (chrome + ".log")
             with log_path.open("wb") as log:
                 result = run_gui([app, "--ui=qt", "--chrome=" + chrome, "--no-recovery",

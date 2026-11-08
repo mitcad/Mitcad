@@ -161,6 +161,93 @@ QString SelectionItem::kindName(SelectKind kind, int count) {
   return QStringLiteral("nothing");
 }
 
+namespace {
+
+// A kind's words in the interface language: alone and after a count, each
+// in the singular and the plural (the context SelectionKind).
+struct KindWords {
+  const char* one;
+  const char* many;
+  const char* countOne;
+  const char* countMany;
+};
+
+KindWords kindWords(SelectKind kind) {
+  switch (kind) {
+  case SelectKind::Face:
+    return {QT_TRANSLATE_NOOP("SelectionKind", "face"), QT_TRANSLATE_NOOP("SelectionKind", "faces"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 face"), QT_TRANSLATE_NOOP("SelectionKind", "%1 faces")};
+  case SelectKind::Edge:
+    return {QT_TRANSLATE_NOOP("SelectionKind", "edge"), QT_TRANSLATE_NOOP("SelectionKind", "edges"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 edge"), QT_TRANSLATE_NOOP("SelectionKind", "%1 edges")};
+  case SelectKind::Vertex:
+    return {QT_TRANSLATE_NOOP("SelectionKind", "vertex"), QT_TRANSLATE_NOOP("SelectionKind", "vertices"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 vertex"), QT_TRANSLATE_NOOP("SelectionKind", "%1 vertices")};
+  case SelectKind::Body:
+    return {QT_TRANSLATE_NOOP("SelectionKind", "body"), QT_TRANSLATE_NOOP("SelectionKind", "bodies"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 body"), QT_TRANSLATE_NOOP("SelectionKind", "%1 bodies")};
+  case SelectKind::Profile:
+    return {QT_TRANSLATE_NOOP("SelectionKind", "profile"), QT_TRANSLATE_NOOP("SelectionKind", "profiles"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 profile"), QT_TRANSLATE_NOOP("SelectionKind", "%1 profiles")};
+  case SelectKind::SketchCurve:
+    return {QT_TRANSLATE_NOOP("SelectionKind", "sketch curve"), QT_TRANSLATE_NOOP("SelectionKind", "sketch curves"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 sketch curve"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 sketch curves")};
+  case SelectKind::SketchPoint:
+    return {QT_TRANSLATE_NOOP("SelectionKind", "sketch point"), QT_TRANSLATE_NOOP("SelectionKind", "sketch points"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 sketch point"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 sketch points")};
+  case SelectKind::Plane:
+    return {QT_TRANSLATE_NOOP("SelectionKind", "plane"), QT_TRANSLATE_NOOP("SelectionKind", "planes"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 plane"), QT_TRANSLATE_NOOP("SelectionKind", "%1 planes")};
+  case SelectKind::Axis:
+    return {QT_TRANSLATE_NOOP("SelectionKind", "axis"), QT_TRANSLATE_NOOP("SelectionKind", "axes"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 axis"), QT_TRANSLATE_NOOP("SelectionKind", "%1 axes")};
+  case SelectKind::Point:
+    return {QT_TRANSLATE_NOOP("SelectionKind", "point"), QT_TRANSLATE_NOOP("SelectionKind", "points"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 point"), QT_TRANSLATE_NOOP("SelectionKind", "%1 points")};
+  case SelectKind::Component:
+    return {QT_TRANSLATE_NOOP("SelectionKind", "component"), QT_TRANSLATE_NOOP("SelectionKind", "components"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 component"), QT_TRANSLATE_NOOP("SelectionKind", "%1 components")};
+  case SelectKind::SketchConstraint:
+    return {QT_TRANSLATE_NOOP("SelectionKind", "constraint"), QT_TRANSLATE_NOOP("SelectionKind", "constraints"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 constraint"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 constraints")};
+  case SelectKind::SketchDimension:
+    return {QT_TRANSLATE_NOOP("SelectionKind", "dimension"), QT_TRANSLATE_NOOP("SelectionKind", "dimensions"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 dimension"), QT_TRANSLATE_NOOP("SelectionKind", "%1 dimensions")};
+  case SelectKind::Sketch:
+    return {QT_TRANSLATE_NOOP("SelectionKind", "sketch"), QT_TRANSLATE_NOOP("SelectionKind", "sketches"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 sketch"), QT_TRANSLATE_NOOP("SelectionKind", "%1 sketches")};
+  case SelectKind::Feature:
+    return {QT_TRANSLATE_NOOP("SelectionKind", "feature"), QT_TRANSLATE_NOOP("SelectionKind", "features"),
+            QT_TRANSLATE_NOOP("SelectionKind", "%1 feature"), QT_TRANSLATE_NOOP("SelectionKind", "%1 features")};
+  case SelectKind::None:
+    break;
+  }
+  return {nullptr, nullptr, nullptr, nullptr};
+}
+
+QString kindTranslated(const char* text) { return QCoreApplication::translate("SelectionKind", text); }
+
+} // namespace
+
+QString SelectionItem::kindText(SelectKind kind, int count) {
+  const KindWords words = kindWords(kind);
+  if (words.one == nullptr) {
+    return QCoreApplication::translate("SelectionKind", "nothing");
+  }
+  return kindTranslated(count == 1 ? words.one : words.many);
+}
+
+QString SelectionItem::countText(SelectKind kind, int count) {
+  const KindWords words = kindWords(kind);
+  if (words.one == nullptr) {
+    return QCoreApplication::translate("SelectionKind", "nothing");
+  }
+  return kindTranslated(count == 1 ? words.countOne : words.countMany).arg(count);
+}
+
 QString SelectionItem::describe() const {
   const QString kindText = kindName(kind);
   // Where an occurrence places it (components).
@@ -329,6 +416,21 @@ QString summarize(const Selection& items) {
   for (auto it = counts.cbegin(); it != counts.cend(); ++it) {
     parts << QStringLiteral("%1 %2").arg(it.value()).arg(
                  SelectionItem::kindName(static_cast<SelectKind>(it.key()), it.value()));
+  }
+  return parts.join(QStringLiteral(", "));
+}
+
+QString summarizeText(const Selection& items) {
+  if (items.isEmpty()) {
+    return QCoreApplication::translate("SelectionKind", "nothing");
+  }
+  QMap<unsigned, int> counts;
+  for (const SelectionItem& item : items) {
+    ++counts[static_cast<unsigned>(item.kind)];
+  }
+  QStringList parts;
+  for (auto it = counts.cbegin(); it != counts.cend(); ++it) {
+    parts << SelectionItem::countText(static_cast<SelectKind>(it.key()), it.value());
   }
   return parts.join(QStringLiteral(", "));
 }

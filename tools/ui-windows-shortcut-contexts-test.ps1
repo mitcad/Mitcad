@@ -157,7 +157,7 @@ Write-Host '--- 3. S in the model: Command Search'
 Ui-Mark
 Ui-Step 'search (S)'                      { Ui-Key 's' }
 Ui-ExpectNew 'Command search opened' 'S opens the command search in the model'
-# The search's popup closes at once in session 0; Esc for a popup left open.
+# The search's popup stays open in session 0 too (mitcad#1477); Esc closes it.
 Ui-FocusMain
 Ui-Step 'close the search (Esc)'          { Ui-Key 'Escape' }
 Ui-ExpectNew 'Command search closed' 'the search closed'

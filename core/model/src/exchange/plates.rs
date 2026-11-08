@@ -19,10 +19,12 @@
 //! onto the bed, the pieces side by side along X and the row centred on
 //! the plate, as Center on Plate and Drop to Bed say; a row wider than the
 //! bed wraps into rows along Y, and pieces that still do not fit are named
-//! in the plate's warnings (mitcad#1316). Without centring the pieces keep
-//! their places, but the further copies of an item each lie beside the one
-//! before it along X, `bed::GAP` apart (`Piece::copy`, mitcad#1311), not on
-//! top of the first.
+//! in the plate's warnings (mitcad#1316). Neighbours lie the spacing apart
+//! (`bed::GAP` unless the export gives one) beyond their brims, or skirts
+//! of their own, by the settings on the plate (`bed::first_layer_reach`,
+//! mitcad#1491). Without centring the pieces keep their places, but the
+//! further copies of an item each lie beside the one before it along X, as
+//! far apart (`Piece::copy`, mitcad#1311), not on top of the first.
 //!
 //! **Settings.** Every body on a plate takes that plate's values in the
 //! settings order (`document/print_settings.rs`, `effective_print_on`).
@@ -240,6 +242,20 @@ impl<K: Kernel> Document<K> {
         self.plate_content(index, instances).pieces.len()
     }
 
+    /// The files `"plates": "file_per_plate"` writes beside `path`
+    /// (mitcad#1490: an MCP export checks each before anything is
+    /// written): one per plate that prints something, named as the export
+    /// names them; empty plates write none.
+    pub fn plate_files(&self, path: &str) -> Vec<String> {
+        let instances = self.instances();
+        let plates = &self.state().print_plates;
+        let mut taken: Vec<String> = Vec::new();
+        (0..plates.len())
+            .filter(|&i| !self.plate_content(i, &instances).pieces.is_empty())
+            .map(|i| unique_plate_path(path, &plates[i].name, &mut taken))
+            .collect()
+    }
+
     /// A plate's name for warnings, by its index.
     fn plate_label(&self, index: usize) -> String {
         self.state()
@@ -362,9 +378,11 @@ impl<K: Kernel> Document<K> {
     }
 
     /// The pieces of a plate's content, each with its plan on the bed
-    /// (`bed.rs`, [`Document::bed_plan`]).
+    /// (`bed.rs`, [`Document::bed_plan`]) and how far its first layer
+    /// reaches by the settings on `plate` (mitcad#1491).
     fn plate_pieces(
         &self,
+        plate: &PrintPlate,
         content: &PlateContent,
         rules: &BedRules<'_>,
     ) -> Result<Vec<Piece>, ModelError> {
@@ -394,11 +412,19 @@ impl<K: Kernel> Document<K> {
                         .collect()
                 };
                 let plan = self.bed_plan(&mine, &of_piece, &paths_of_piece, rules)?;
+                let margin = self.piece_margin(
+                    members
+                        .iter()
+                        .map(|(b, k)| (content.bodies[*b], content.placed[*b][*k].1.clone())),
+                    Some(plate),
+                );
                 Ok(Piece {
                     name: Some(name.clone()),
                     members: members.clone(),
                     plan,
                     copy: *copy,
+                    margin,
+                    spacing: rules.spacing,
                 })
             })
             .collect()
@@ -431,7 +457,7 @@ impl<K: Kernel> Document<K> {
                 plate.name
             )));
         }
-        let mut pieces = self.plate_pieces(content, rules)?;
+        let mut pieces = self.plate_pieces(plate, content, rules)?;
         let color = |uid: BodyUid| {
             colors
                 .get(&uid)
@@ -529,6 +555,7 @@ impl<K: Kernel> Document<K> {
             chosen: &[],
             auto_orient: placement.auto_orient,
             settle: placement.settle,
+            spacing: placement.spacing.unwrap_or(bed::GAP),
         };
         let instances = self.instances();
         let contents: Vec<PlateContent> = (0..plates.len())
@@ -770,6 +797,7 @@ impl<K: Kernel> Document<K> {
             chosen: &[],
             auto_orient: true,
             settle: bed::Settle::default(),
+            spacing: bed::GAP,
         };
         let mut bodies = Vec::new();
         let mut pieces = 0;

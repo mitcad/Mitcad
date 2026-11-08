@@ -26,6 +26,10 @@ gp_Pnt pointOf(const QJsonValue& xyz);
 // The point of an array of at least three numbers; none for anything else.
 std::optional<gp_Pnt> pointFrom(const QJsonValue& xyz);
 gp_Vec vectorOf(const QJsonValue& xyz);
+// An Intersection Curve's polyline (the `feature_curves` query, mitcad#1405;
+// a preview's `curve`, mitcad#1496) as a wire; null for fewer than two
+// points.
+TopoDS_Shape polylineShape(const QJsonArray& points);
 
 // A placement of the model's queries: 3 or 4 rows of 4 numbers.
 gp_Trsf trsfOf(const QJsonArray& rows);

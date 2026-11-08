@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: MIT
+# Lengths typed in a design in inches are stored as inches (mitcad#1452,
+# GitHub mitcad/Mitcad#187: a 0.875 x 12.125 bar with a 0.2 hole was
+# found 25.4 times too small), on sketch-inch-entry.json (Sketch1, made in
+# mm: a construction line and a circle dimensioned 20 mm, d1; the design
+# then set to inches). Every check reads the stored value in mm:
+#   1. Add User Parameter starts in inches; bar = 0.875 is 22.225 mm.
+#   2. In Sketch1 the circle's dimension made in mm, set to 0.25 * 2 in
+#      its value editor: 0.5 in, 12.7 mm (it was 0.5 mm when the dimension
+#      kept its unit while the editor read the expression in inches).
+#   3. A rectangle typed 0.875 by 12.125: 22.225 x 307.975 mm (d2, d3).
+#   4. A circle typed 0.2: 5.08 mm (d4).
+#   5. The design set to mm, a circle typed with the inch mark, .875":
+#      22.225 mm (d5; mitcad#1531).
+# Run by tools/ui-sketch-inch-entry-test.sh (Linux) and
+# tools/ui-windows-sketch-inch-entry-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+
+# 1. A user parameter in the design's unit.
+mark
+command solid.parameters
+focus-dialog '^Parameters$'
+button '^User Parameter$'
+wait-log '^Add User Parameter dialog opened: unit in$'
+focus-dialog '^Add User Parameter$'
+focus-widget parameterName
+type bar
+focus-widget parameterExpression
+type 0.875
+key Return
+wait-log '^Added parameter bar = 0[.]875 in [(]in[)]$'
+focus-dialog '^Parameters$'
+key Escape
+focus-main
+expect-model-parameter bar 22.225
+
+# 2. The dimension made in mm, given an expression in inches.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+wait-log '^Dimension k[0-9]+ text at '
+mark
+dblclick-logged '^Dimension k[0-9]+ text at '
+wait-log '^Sketch value editor at '
+key ctrl+a
+type '0.25 * 2'
+key Return
+wait-log '^Dimension k[0-9]+ = 0[.]25 [*] 2 [(]d1[)]$'
+expect-model-parameter d1 12.7 model
+
+# 3. A rectangle by its typed sizes, from the origin.
+mark
+key r
+sketch-click 0 0
+type 0.875
+key Tab
+type 12.125
+key Return
+wait-log '^Added rectangle 22[.]22(5|49[0-9]*) x 307[.]97(5|49[0-9]*) mm at [(]0, 0[)]'
+expect-model-parameter d2 22.225 model
+expect-model-parameter d3 307.975 model
+key Escape
+
+# 4. A circle by its typed diameter.
+mark
+command sketch.circle
+sketch-click 40 -20
+type 0.2
+key Return
+wait-log '^Added circle, diameter 5[.]0(8|79[0-9]*) mm at '
+expect-model-parameter d4 5.08 model
+key Escape
+command sketch.finish
+wait-log '^Sketch finished'
+
+# 5. The inch mark (mitcad#1531): the design set to mm, a circle typed
+#    .875" is 22.225 mm. The field takes it as a valid value (it was
+#    "text without its closing quote") and keeps what was typed.
+model-command '{"cmd": "set_units", "length": "mm"}'
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+mark
+command sketch.circle
+sketch-click -60 0
+type '.875"'
+wait-log '^Sketch value [^:]+: [.]875" = [.]875"$'
+key Return
+wait-log '^Added circle, diameter 22[.]22(5|49[0-9]*) mm at '
+expect-model-parameter d5 22.225 model
+key Escape
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

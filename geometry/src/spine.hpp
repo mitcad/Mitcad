@@ -170,9 +170,12 @@ PipeMode frame_mode(bool frenet, const Path& auxiliary, bool curvilinear,
 
 // The loop swept along the spine into a solid: sides named after its edges,
 // the cap at the spine's start `first` and at its end `last`. `tolerance`
-// bounds the approximation of the swept surfaces.
+// bounds the approximation of the swept surfaces. The spine's corners are
+// joined as `corners` asks (mitcad#1448: a pipe's Corners); where that
+// cannot be built, the other kind, then the loop turned through them.
 ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeMode& mode,
-                    const NameList& first, const NameList& last, double tolerance = 1.0e-4);
+                    const NameList& first, const NameList& last, double tolerance = 1.0e-4,
+                    PipeCorners corners = PipeCorners::Mitered);
 
 // The solid through the sections (wires, or vertices first and last), side
 // faces named after the edges of `named` (one of the sections), caps

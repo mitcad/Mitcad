@@ -59,7 +59,8 @@ def main():
                 env.update(CODEX_HOME=str(home), MITCAD_ASSISTANT_TEST_WORK=str(work),
                     MITCAD_TEST_ASSISTANT_EXECUTABLES=str(clients), MITCAD_TEST_ASSISTANT_BUNDLE_OPEN="capture",
                     MITCAD_TEST_ASSISTANT_STUB=str(Path(stub).resolve()),
-                    MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_NO_UPDATE_CHECK="1", QT_FORCE_STDERR_LOGGING="1")
+                    MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_LANGUAGE="en", MITCAD_NO_UPDATE_CHECK="1",
+                    QT_FORCE_STDERR_LOGGING="1")
                 if mode == "cli-fail": env["MITCAD_TEST_ASSISTANT_FAIL"] = "1"
                 if mode == "cli-corrupt": env["MITCAD_TEST_ASSISTANT_CORRUPT"] = "1"
                 if mode == "cli-concurrent": env["MITCAD_TEST_ASSISTANT_CONCURRENT"] = "1"

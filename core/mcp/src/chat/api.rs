@@ -64,7 +64,7 @@ const MAX_EVENT_DATA: usize = 16 * 1024 * 1024;
 const MAX_TRANSCRIPT: usize = 16 * 1024 * 1024;
 const TRANSCRIPT_FORMAT: &str = "mitcad-chat-api";
 /// What the model is told before the live server's own instructions.
-const PREFACE: &str = "You are the assistant in the chat panel of MitCad, a parametric CAD application. The user's messages ask about or for changes to the design open in MitCad's window. Make the changes with MitCad's tools (the only tools you have), check the result, and answer briefly in the user's language. Lengths are millimetres.";
+const PREFACE: &str = "You are the assistant in the chat panel of MitCad, a parametric CAD application. The user's messages ask about or for changes to the design open in MitCad's window. Make the changes with MitCad's tools (the only tools you have), check the result, and answer briefly in the user's language. JSON numbers in MitCad's commands are millimetres and radians in every design; a length the user gives without a unit is in the design's length unit (the document query's units.length), so convert it, or give a value as text, which is read in that unit.";
 /// Why a call ended without its result.
 const STOPPED: &str = "The user stopped the message before this call finished.";
 /// Why a call shown as it streamed was not made (mitcad#1317).

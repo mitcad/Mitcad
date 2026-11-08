@@ -8,8 +8,12 @@
 #include <QString>
 #include <QWidget>
 
+class QGraphicsOpacityEffect;
+class QLabel;
 class QListWidget;
+class QPropertyAnimation;
 class QStackedWidget;
+class QTimer;
 
 namespace mitcad {
 
@@ -18,7 +22,7 @@ class PaneButton;
 // The macOS Settings window: a row of buttons with an icon and a name at the
 // top, one for each pane, and below it the chosen pane. The window is as
 // large as the pane needs and has no OK and Cancel; whoever builds the panes
-// applies their changes as they are made.
+// applies their changes as they are made, and calls noteSaved() after each.
 //
 // PageList: the same window and behaviour with the shared Preferences
 // dialog's page list on the left instead of the row of icons (the shared Qt
@@ -35,15 +39,26 @@ public:
   void showPane(int index);
   // Called when the window is closed (to take what is still being typed).
   void setClosedHandler(std::function<void()> handler) { m_closed = std::move(handler); }
+  // A change was saved (mitcad#1479): the footer's quiet note says so,
+  // fades out after a few seconds and comes back on the next change. The
+  // note's text is empty while it is not shown.
+  void noteSaved();
+  static QString savedNoteText();
 
 protected:
   void closeEvent(QCloseEvent* event) override;
   void showEvent(QShowEvent* event) override;
 
 private:
+  void fadeSavedNote();
+
   QWidget* m_header = nullptr;
   QListWidget* m_list = nullptr;
   QStackedWidget* m_pages = nullptr;
+  QLabel* m_savedNote = nullptr;
+  QGraphicsOpacityEffect* m_savedOpacity = nullptr;
+  QPropertyAnimation* m_savedFade = nullptr;
+  QTimer* m_savedHold = nullptr;
   std::vector<PaneButton*> m_buttons;
   std::function<void()> m_closed;
 };

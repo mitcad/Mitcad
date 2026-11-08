@@ -1,0 +1,12 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/sketch-own-parameter.mitcad-ui (mitcad#1535): Sketch1 on XY holds a construction line across the place the steps look at and a 5 x 25 rectangle whose width k5 is the sketch's own parameter BuckleDiameter = 5 mm and whose height k6 is Strap = 25 mm; the user parameter Clearance = BuckleDiameter + 1 mm refers to BuckleDiameter."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_line", "sketch": "F1", "start": [-40, -40], "end": [60, 60], "construction": true},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 5, "height": 25},
+  {"cmd": "sketch.set_dimension", "sketch": "F1", "dimension": "k5", "value": "BuckleDiameter = 5 mm"},
+  {"cmd": "sketch.set_dimension", "sketch": "F1", "dimension": "k6", "value": "Strap = 25 mm"},
+  {"cmd": "sketch.set_dimension_text", "sketch": "F1", "dimension": "k5", "text": [2.5, -10]},
+  {"cmd": "sketch.set_dimension_text", "sketch": "F1", "dimension": "k6", "text": [15, 12.5]},
+  {"cmd": "add_parameter", "name": "Clearance", "value": "BuckleDiameter + 1 mm"}
+]

@@ -4,6 +4,7 @@
 #include <functional>
 #include <utility>
 
+#include <QCoreApplication>
 #include <QStringList>
 #include <QWidget>
 
@@ -37,6 +38,8 @@ class MeasureHistory;
 // text is clipped ("Measure controls: none clipped"), the clicks and the
 // menus' entries ("Context menu: Copy All | Clear").
 class MeasureHistoryView : public QWidget {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::MeasureHistoryView)
+
 public:
   struct Actions {
     std::function<void(int number)> show; // a row clicked, or its Show

@@ -1,21 +1,33 @@
 // SPDX-License-Identifier: MIT
 #include "mcp.hpp"
 #include "mcp-connect.hpp"
+#include "mcp-raytrace.hpp"
 
 #include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <system_error>
+
+#include <QCoreApplication>
+#include <QLoggingCategory>
+#include <QString>
 
 #include "mitcad_bridge/lib.h"
 
 namespace mitcad::cli {
 
-const char* const kMcpUsage = R"(  mitcad-cli mcp --workspace DIR [--read-only]
+const char* const kMcpUsage = R"(  mitcad-cli mcp --workspace DIR [--read-only] [--memory-limit MiB]
       Serves the Model Context Protocol over stdin/stdout without a UI.
       DIR must be an existing directory; document and export paths stay
       inside it. --read-only permits opening, querying and closing designs.
       stdout holds only JSON-RPC messages; diagnostics go to stderr.
+      A model command that would run the server out of memory stops with
+      an error result that says so, the document as it was before it, at
+      85 % of the tightest memory limit of the process (the memory the
+      system has left, a cgroup's, ulimit's or a job's limit), or of
+      --memory-limit (MiB of resident memory) when that is lower, or
+      when its memory grows so fast that it would get there within 0.1 s.
   mitcad-cli mcp --list-instances
       Lists running desktop instances as JSON, without authentication tokens.
   mitcad-cli mcp --connect [--instance ID] [--chat-session MARKER]
@@ -42,6 +54,9 @@ int mcp(const std::vector<std::string>& args) {
   std::string workspace;
   std::string instance;
   std::string chat_session;
+  // The model commands' own memory limit in MiB; 0 for none (mitcad#1480).
+  double memory_limit = 0.0;
+  bool memory_limit_given = false;
   bool read_only = false;
   bool connect = false;
   bool list_instances = false;
@@ -59,6 +74,21 @@ int mcp(const std::vector<std::string>& args) {
         return argument_error("--read-only may be specified only once");
       }
       read_only = true;
+    } else if (args[i] == "--memory-limit") {
+      if (memory_limit_given) {
+        return argument_error("--memory-limit may be specified only once");
+      }
+      if (i + 1 == args.size()) {
+        return argument_error("--memory-limit requires a number of MiB");
+      }
+      std::istringstream text(args[++i]);
+      double value = 0.0;
+      char rest = 0;
+      if (!(text >> value) || text >> rest || !(value > 0.0)) {
+        return argument_error("--memory-limit requires a positive number of MiB");
+      }
+      memory_limit = value;
+      memory_limit_given = true;
     } else if (args[i] == "--connect") {
       if (connect) {
         return argument_error("--connect may be specified only once");
@@ -92,7 +122,7 @@ int mcp(const std::vector<std::string>& args) {
     }
   }
   if (connect || list_instances || !instance.empty() || !chat_session.empty()) {
-    if (!workspace.empty() || read_only || (connect && list_instances) ||
+    if (!workspace.empty() || read_only || memory_limit_given || (connect && list_instances) ||
         (!connect && (!instance.empty() || !chat_session.empty()))) {
       return argument_error("--connect [--instance ID] and --list-instances are exclusive with headless options");
     }
@@ -105,7 +135,14 @@ int mcp(const std::vector<std::string>& args) {
   if (!std::filesystem::is_directory(std::filesystem::u8path(workspace), error) || error) {
     return argument_error("workspace must be an existing directory: " + workspace);
   }
-  mitcad::run_mcp(workspace, read_only);
+  // model_render's ray-traced pictures (mitcad#1489) run the render worker
+  // in a Qt event loop; Qt's messages go to stderr.
+  int argc = 1;
+  char name[] = "mitcad-cli";
+  char* argv[] = {name, nullptr};
+  QCoreApplication app(argc, argv);
+  QLoggingCategory::setFilterRules(QStringLiteral("*.debug=false"));
+  mitcad::run_mcp_raytraced(workspace, read_only, memory_limit, makeMcpRaytracer());
   return 0;
 }
 

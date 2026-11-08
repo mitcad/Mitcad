@@ -1,15 +1,18 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/framework/AppSettings.cpp app/framework/DocumentSession.cpp
 # check-all sources: app/view/ViewController.cpp tools/cli
+# check-all sources: app/MainWindowStart.cpp app/WindowManager.cpp
 # Input-driven Windows UI test of Preferences > General > Default units
 # for new designs (mitcad#1036) in the build VM (tools/ui-windows-lib.ps1
 # says how the input is posted), as the step "Default units for new
 # designs" of tools/ui-units-test.sh does on Linux:
 #   - The untitled design starts in mm (the default). The preference set to
-#     in (Alt+U, Down x3, OK) leaves the open design in mm.
+#     in (Alt+U, Down x3, OK): the empty untitled design starts again in
+#     inches (mitcad#1452).
 #   - New (Ctrl+N) makes a design in inches, not modified: the browser's
 #     Units row shows in; a rectangle typed 2 x 1 is 2 x 1 in, an extrude's
-#     distance typed 1 is an inch (a 2 x 1 x 1 in body).
+#     distance typed 1 is an inch (a 2 x 1 x 1 in body). With its body it
+#     stays in inches when the preference changes to mm and back.
 #   - A new start: the untitled design is in inches. A design in mm made by
 #     mitcad-cli and opened keeps mm.
 #   - The preference back to mm (Up x3, OK): New is in mm again.
@@ -73,10 +76,8 @@ Ui-StartApp 'default-units'
 Ui-Mark
 Expect-Units 'mm' 'the untitled design starts in millimetres by default'
 New-DesignUnits 'in' @('Down', 'Down', 'Down')
-if (@(Ui-NewLines | Where-Object { $_.Contains('Design Settings/Units: in') }).Count -gt 0) {
-  Ui-Fail "the preference changed the open design's units"
-}
-Write-Host 'ok   the open design stays in millimetres'
+Ui-ExpectNew 'The untitled design starts again in in' 'the empty untitled design takes inches (mitcad#1452)' 20
+Expect-Units 'in' 'the untitled design is in inches now'
 Ui-Mark
 Ui-Step 'New (Ctrl+N)'                     { Ui-Key 'ctrl+n' }
 Ui-ExpectNew 'New design in in' 'New makes a design in inches'
@@ -103,6 +104,15 @@ Ui-Step 'confirm (Enter)'                  { Ui-Key 'Return' }
 Ui-ExpectNew 'Added extrude (New Body), distance ' 'extrusion built' 30
 Ui-ExpectVolume 'New body \S+ \(F2\.b0\): volume ([0-9.]+) mm3' 32774.128 '2 x 1 x 1 in (50.8 x 25.4 x 25.4 mm)'
 if ((Ui-LogLines) | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }
+# A design with something in it keeps its units when the preference
+# changes; the preference goes back to in for the next start.
+New-DesignUnits 'mm' @('Up', 'Up', 'Up')
+Ui-WaitIdle
+if (@(Ui-NewLines | Where-Object { $_.Contains('starts again in') -or $_.Contains('New design in') }).Count -gt 0) {
+  Ui-Fail 'the preference changed the open design with a body'
+}
+Write-Host 'ok   the open design with a body stays in inches'
+New-DesignUnits 'in' @('Down', 'Down', 'Down')
 
 Write-Host '--- A new start and an opened design'
 Ui-StartApp 'default-units-start'

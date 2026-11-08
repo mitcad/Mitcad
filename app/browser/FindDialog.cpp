@@ -8,6 +8,7 @@
 #include <QAbstractTableModel>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QGuiApplication>
 #include <QDialogButtonBox>
 #include <QHBoxLayout>
@@ -34,6 +35,8 @@ namespace mitcad {
 // The results as a table: name, kind and the place in the assembly. A model
 // rather than item widgets, so that thousands of rows stay cheap.
 class FindModel : public QAbstractTableModel {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::FindModel)
+
 public:
   explicit FindModel(QObject* parent) : QAbstractTableModel(parent) {}
 

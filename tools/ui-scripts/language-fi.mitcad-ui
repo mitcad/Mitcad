@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+# The Finnish interface (mitcad#1460), MitCad started with --language fi:
+#   1. the tabs in Finnish, and no group caption cut;
+#   2. the command search finds a command by its English name
+#      (Preferences, Asetukset… in Finnish);
+#   3. Preferences (Asetukset) › General › Language set to English: saved
+#      for the next start, this run stays Finnish.
+# Run by tools/ui-language-test.sh (Linux) and
+# tools/ui-windows-language-test.ps1 (Windows).
+expect-ever '^Language: fi [(]--language[)]$' 30
+wait-idle
+
+# 1. The tabs.
+expect-ribbon-labels Aloitus Solidi Rakenna Valmistus
+
+# 2. The English name in the command search.
+command tools.search
+focus-widget commandSearchInput
+type preferences
+expect-command-search preferences tools.preferences
+mark
+key Return
+expect-log '^Command search chose tools.preferences$'
+
+# 3. The Language preference.
+focus-dialog '^Asetukset$'
+qt-choice preferencesLanguage 'English'
+key Return
+expect-dialog-gone '^Asetukset$'
+focus-main
+expect-log '^Preferences: language en [(]at the next start; this run: fi[)]$' 10
+expect-setting interface/language en

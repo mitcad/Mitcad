@@ -263,6 +263,13 @@ void matchTests() {
   CHECK(choiceOf(choices, QStringLiteral("d2")) && !choiceOf(choices, QStringLiteral("d2"))->problem.isEmpty());
   CHECK(choiceOf(choices, QStringLiteral("d10")) && choiceOf(choices, QStringLiteral("d10"))->problem.isEmpty());
   CHECK(dependentsOf(parameters, QStringLiteral("width")) == QStringList({QStringLiteral("d1"), QStringLiteral("d2")}));
+  // A sketch dimension keeps its own parameter as a user parameter when its
+  // value uses it (mitcad#1535): those that use it are no cycle there.
+  own.keepOwn = true;
+  choices = matchParameters(parameters, QStringLiteral("d"), false, own, whole);
+  CHECK(!choiceOf(choices, QStringLiteral("d1")));
+  CHECK(choiceOf(choices, QStringLiteral("d2")) && choiceOf(choices, QStringLiteral("d2"))->problem.isEmpty());
+  own.keepOwn = false;
   // A sketch cannot use what its own driven dimensions measure.
   SuggestContext sketch;
   sketch.sketch = QStringLiteral("F1");

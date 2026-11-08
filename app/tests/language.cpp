@@ -1,0 +1,101 @@
+// SPDX-License-Identifier: MIT
+// The interface language (mitcad#1460): which language a start takes, and
+// the catalogues the build made (cmake/Translations.cmake): Finnish names
+// itself and translates the commands, the pseudo-language marks every text,
+// and a text is found also where its context at run time is not lupdate's.
+#include "framework/Language.hpp"
+
+#include <cstdio>
+
+#include <QDir>
+#include <QFileInfo>
+#include <QString>
+#include <QStringList>
+#include <QTranslator>
+
+namespace {
+int failures = 0;
+void check(bool condition, const char* expression, int line) {
+  if (!condition) {
+    std::fprintf(stderr, "language.cpp:%d: check failed: %s\n", line, expression);
+    ++failures;
+  }
+}
+#define CHECK(expr) check((expr), #expr, __LINE__)
+} // namespace
+
+int languageTests() {
+  using mitcad::chooseLanguage;
+  const QStringList available{QStringLiteral("fi")};
+  const QStringList finnishSystem{QStringLiteral("fi-FI"), QStringLiteral("en-US")};
+  const QStringList englishSystem{QStringLiteral("en-US")};
+
+  // --language, then MITCAD_LANGUAGE, then the preference, then the system.
+  auto choice = chooseLanguage(QStringLiteral("fi"), QStringLiteral("en"), QString(), englishSystem, available);
+  CHECK(choice.code == QStringLiteral("fi") && choice.reason == QStringLiteral("--language"));
+  choice = chooseLanguage(QStringLiteral("en"), QString(), QStringLiteral("fi"), finnishSystem, available);
+  CHECK(choice.code == QStringLiteral("en") && choice.reason == QStringLiteral("--language"));
+  choice = chooseLanguage(QString(), QStringLiteral("en"), QStringLiteral("fi"), finnishSystem, available);
+  CHECK(choice.code == QStringLiteral("en") && choice.reason == QStringLiteral("MITCAD_LANGUAGE"));
+  choice = chooseLanguage(QString(), QString(), QStringLiteral("fi"), englishSystem, available);
+  CHECK(choice.code == QStringLiteral("fi") && choice.reason == QStringLiteral("preference"));
+  choice = chooseLanguage(QString(), QString(), QStringLiteral("en"), finnishSystem, available);
+  CHECK(choice.code == QStringLiteral("en") && choice.reason == QStringLiteral("preference"));
+  // Automatic: Finnish only when it is the system's first language.
+  choice = chooseLanguage(QString(), QString(), QString(), finnishSystem, available);
+  CHECK(choice.code == QStringLiteral("fi") && choice.reason.startsWith(QStringLiteral("automatic: ")));
+  choice = chooseLanguage(QString(), QString(), QStringLiteral("auto"), englishSystem, available);
+  CHECK(choice.code == QStringLiteral("en") && choice.reason.contains(QStringLiteral("en-US")));
+  choice = chooseLanguage(QString(), QString(), QString(),
+                          {QStringLiteral("sv-SE"), QStringLiteral("fi-FI")}, available);
+  CHECK(choice.code == QStringLiteral("en"));
+  choice = chooseLanguage(QString(), QString(), QString(), {}, available);
+  CHECK(choice.code == QStringLiteral("en"));
+  // A region is matched to its language; a language without a catalogue
+  // is English, and says so.
+  choice = chooseLanguage(QStringLiteral("fi_FI"), QString(), QString(), englishSystem, available);
+  CHECK(choice.code == QStringLiteral("fi"));
+  choice = chooseLanguage(QStringLiteral("de"), QString(), QString(), finnishSystem, available);
+  CHECK(choice.code == QStringLiteral("en") && choice.reason.contains(QStringLiteral("no catalogue for de")));
+  choice = chooseLanguage(QString(), QString(), QStringLiteral("de"), finnishSystem, available);
+  CHECK(choice.code == QStringLiteral("fi") && choice.reason.contains(QStringLiteral("no catalogue for the preference de")));
+
+#ifdef MITCAD_TEST_TRANSLATIONS_DIR
+  // The catalogues the build made.
+  const QDir folder(QStringLiteral(MITCAD_TEST_TRANSLATIONS_DIR));
+  const QString finnish = folder.filePath(QStringLiteral("mitcad_fi.qm"));
+  CHECK(QFileInfo::exists(finnish));
+  CHECK(mitcad::catalogueText(finnish, "LanguageName", "English") == QStringLiteral("Suomi"));
+  CHECK(mitcad::catalogueText(finnish, "QObject", "Extrude") == QStringLiteral("Pursotus"));
+  // The context-free part: a context lupdate did not see.
+  CHECK(mitcad::catalogueText(finnish, "NoSuchContext", "Extrude") == QStringLiteral("Pursotus"));
+  CHECK(mitcad::catalogueText(finnish, "QObject", "No such text in MitCad").isEmpty());
+  // The files that translate outside a Q_OBJECT class have their texts in
+  // the context they look them up in, not only in the context-free part
+  // (mitcad#1472): a plain translator finds them.
+  {
+    QTranslator plain;
+    CHECK(plain.load(finnish));
+    const char* const own[][2] = {
+        {"DrawingTools", "Hole Table"},     {"ProjectDialogs", "Project Folder"},
+        {"BindingList", "Appearance"},      {"ProjectSettings", "never"},
+        {"UpdateController", "It is a pre-release."},
+        {"ProjectBrowser", "Editing"},      {"IamImport", "%1 parametric"},
+        {"CloudAddress", "Shared folder"},  {"ProjectPicker", "Local project"},
+        {"LiveDialogs", "Live Updates"},    {"ProjectsPanel", "Not recorded"},
+        {"ParameterSuggest", "An angle"}};
+    for (const auto& message : own) {
+      if (plain.translate(message[0], message[1]).isEmpty()) {
+        std::fprintf(stderr, "language.cpp: no translation of '%s' in the context %s\n", message[1], message[0]);
+        ++failures;
+      }
+    }
+  }
+  const QString pseudo = folder.filePath(QStringLiteral("mitcad_xx.qm"));
+  CHECK(QFileInfo::exists(pseudo));
+  const QString marked = mitcad::catalogueText(pseudo, "QObject", "Extrude");
+  CHECK(marked.startsWith(QLatin1Char('[')) && marked.endsWith(QLatin1Char(']')) && marked.size() > 9);
+  CHECK(mitcad::catalogueText(pseudo, "LanguageName", "English").startsWith(QLatin1Char('[')));
+#endif
+  return failures;
+}

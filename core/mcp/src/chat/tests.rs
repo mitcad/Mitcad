@@ -321,6 +321,12 @@ fn approvals_by_mode() {
             "run",
             "{mode}"
         );
+        // A picture of the design reads (mitcad#1487).
+        assert_eq!(
+            approval("model_render", json!({"view": "iso"}), mode, json!([]))["verdict"],
+            "run",
+            "{mode}"
+        );
     }
     let saved = approval("document_save", save.clone(), "model", json!([]));
     assert_eq!(saved["kind"], "document_save");
@@ -348,6 +354,11 @@ fn approvals_by_mode() {
             "ui_screenshot",
             json!({"path": "/designs/a.png"}),
             "screenshot_file",
+        ),
+        (
+            "model_render",
+            json!({"path": "/designs/a.png"}),
+            "render_file",
         ),
         ("ui_command", json!({"id": "file.save"}), "file_command"),
         ("some_new_tool", json!({}), "other"),
@@ -633,4 +644,32 @@ fn a_new_design_runs_as_a_model_edit() {
     let untitled = approval("document_new", json!({}), "ask", json!(["document_new"]));
     assert_eq!(untitled["verdict"], "run");
     assert_eq!(untitled["path"], Value::Null);
+}
+
+#[test]
+fn a_message_names_the_design_s_length_unit_when_it_is_not_millimetres() {
+    // mitcad#1452: an agent told only "lengths are millimetres" took the
+    // user's 0.875 in a design in inches as 0.875 mm.
+    let context = |length: &str| {
+        request(&json!({"op": "units_context", "length": length})).unwrap()["context"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(context("mm"), "");
+    assert_eq!(context(""), "");
+    let inches = context("in");
+    assert!(
+        inches.starts_with(
+            "The design's length unit is in: a length the user gives without a unit is in in."
+        ),
+        "{inches}"
+    );
+    assert!(inches.contains("(1 in = 25.4 mm)"), "{inches}");
+    assert!(inches.contains("\"0.875 in\""), "{inches}");
+    assert!(context("ft").contains("(1 ft = 304.8 mm)"));
+    // A unit without a known size still says what the numbers are.
+    let other = context("furlong");
+    assert!(other.contains("millimetres in every design"), "{other}");
+    assert!(!other.contains("(1 furlong"), "{other}");
 }

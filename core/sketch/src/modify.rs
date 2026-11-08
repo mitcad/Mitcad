@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::TAU;
 
 use super::edit::DRIVEN_SUFFIX;
-use super::edit::{PointInput, SketchEdit};
+use super::edit::{KeptParameter, PointInput, SketchEdit};
 use super::fillet::{Leg, fillet_at, is_corner};
 use super::geometry::{Curve2, P2, add, cross, dist, dot, norm, perp, scale, sub, unit};
 use super::intersect::intersections;
@@ -20,7 +20,7 @@ use super::{
 use crate::expr::ParamKind;
 use crate::ids::EntityUid;
 use crate::values::ValueInput;
-use mitcad_model_base::internal::values::resolve_value;
+use mitcad_model_base::internal::values::{resolve_value, value_uses_parameter};
 
 /// Something of a sketch a command names: `p3`, `c4`, `t5` or `k6`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -482,7 +482,32 @@ impl SketchEdit<'_> {
                     .map_err(|e| e.to_string())?;
             }
         }
-        let old = d.value.or(reference);
+        let mut old = d.value.or(reference);
+        // A value that uses the dimension's own parameter (`BuckleDiameter
+        // * 2` in the dimension of BuckleDiameter) keeps that parameter,
+        // with its name and value, as a user parameter, and the dimension
+        // takes the value as a parameter of its own (mitcad#1535): the bare
+        // name makes it use the user parameter. A parameter another
+        // dimension of the sketch uses as well stays as it is; this
+        // dimension only stops using it.
+        let used = old.filter(|p| {
+            self.params.owner(*p) == Some(self.owner())
+                && value_uses_parameter(self.params, value, *p)
+        });
+        let mut kept = None;
+        if let Some(p) = used {
+            let shared = self
+                .def
+                .dimensions
+                .iter()
+                .enumerate()
+                .any(|(j, other)| j != i && other.value == Some(p));
+            if !shared {
+                self.params.set_owner(p, None);
+                kept = Some(p);
+            }
+            old = None;
+        }
         let (param, created) = resolve_value(
             self.params,
             &slot,
@@ -493,6 +518,34 @@ impl SketchEdit<'_> {
         )
         .map_err(|e| e.to_string())?;
         self.report.parameters.extend(created);
+        if let Some(p) = kept {
+            let kept_name = self.params.name(p);
+            let shown = self
+                .params
+                .get(p)
+                .map(|q| q.expression().to_owned())
+                .unwrap_or_default();
+            let now = self.params.name(param);
+            let note = if param == p {
+                format!("{kept_name} is now a user parameter ({shown}); dimension {id} uses it")
+            } else {
+                let expression = self
+                    .params
+                    .get(param)
+                    .map(|q| q.expression().to_owned())
+                    .unwrap_or_default();
+                format!(
+                    "{kept_name} is now a user parameter ({shown}); dimension {id} is {now} = \
+                     {expression}"
+                )
+            };
+            self.report.notes.push(note);
+            self.report.kept.push(KeptParameter {
+                name: kept_name,
+                dimension: id,
+                parameter: now,
+            });
+        }
         self.def.dimensions[i].value = Some(param);
         self.def.dimensions[i].reference = None;
         Ok(())

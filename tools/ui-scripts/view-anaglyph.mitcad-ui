@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: MIT
+# Anaglyph 3D (mitcad#1449) on view-anaglyph.json, a block: View ›
+# Anaglyph 3D makes the view's camera a stereo one drawn as a red/cyan
+# anaglyph (logged from the camera and the view's stereo mode) and is saved
+# as a view setting; a click in the view still selects a face; Preferences ›
+# Display's stereo depth and convergence reach the view at once, are saved
+# when Preferences is accepted and put back when it is cancelled; off
+# again, the camera is in the projection it had before; Orthographic while
+# it is on ends it. Run by tools/ui-view-anaglyph-test.sh (Linux) and
+# tools/ui-windows-view-anaglyph-test.ps1 (Windows).
+wait-idle
+command view.fit
+mark
+command view.front
+wait-log '^Camera direction 0 1 0 up 0 0 1 [(]orthographic[)]' 30
+
+# On: a stereo camera, red/cyan, OCCT's default depth and convergence.
+mark
+command view.anaglyph
+expect-log '^Anaglyph 3D on: stereo camera, red/cyan, stereo depth 5 %, convergence 100 %$'
+wait-log '^Camera direction -?0 1 -?0 up -?0 -?0 1 [(]stereo[)]$' 30
+expect-setting view/anaglyph true
+
+# A click in the view selects the face under it, as without stereo.
+command view.fit
+wait-idle
+click-visible-face
+
+# Preferences › Display: the depth and convergence reach the view as they
+# are typed and are saved with OK.
+mark
+command tools.preferences.display
+focus-dialog '^Preferences$'
+focus-widget preferencesStereoDepth
+key ctrl+a
+type 8
+expect-log '^Anaglyph 3D: stereo depth 8 %, convergence 100 %$'
+focus-widget preferencesStereoConvergence
+key ctrl+a
+type 150
+expect-log '^Anaglyph 3D: stereo depth 8 %, convergence 150 %$'
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+expect-log '^Preferences: stereo depth 8 %, convergence 150 %$'
+expect-setting view/stereoDepth 8
+expect-setting view/stereoConvergence 150
+# Cancelled, the view goes back to the saved ones.
+mark
+command tools.preferences.display
+focus-dialog '^Preferences$'
+focus-widget preferencesStereoDepth
+key ctrl+a
+type 12
+expect-log '^Anaglyph 3D: stereo depth 12 %, convergence 150 %$'
+key Escape
+expect-dialog-gone '^Preferences$'
+focus-main
+expect-log '^Anaglyph 3D: stereo depth 8 %, convergence 150 %$'
+expect-setting view/stereoDepth 8
+expect-no-log '^Preferences: stereo depth'
+# A standard view keeps the camera a stereo one.
+mark
+command view.top
+wait-log '^Camera direction -?0 -?0 -1 up -?0 1 -?0 [(]stereo[)]$' 30
+
+# Orthographic ends it: the camera is an orthographic one again.
+mark
+command view.orthographic
+expect-log '^Anaglyph 3D off: orthographic camera$'
+wait-log '^Camera direction -?0 -?0 -1 up -?0 1 -?0 [(]orthographic[)]$' 30
+expect-setting view/anaglyph false
+
+# From a perspective camera, off again it is a perspective one.
+mark
+command view.perspective
+wait-log '^Camera direction -?0 -?0 -1 up -?0 1 -?0 [(]perspective[)]$' 30
+mark
+command view.anaglyph
+expect-log '^Anaglyph 3D on: stereo camera, red/cyan, stereo depth 8 %, convergence 150 %$'
+wait-log '^Camera direction -?0 -?0 -1 up -?0 1 -?0 [(]stereo[)]$' 30
+mark
+command view.anaglyph
+expect-log '^Anaglyph 3D off: perspective camera$'
+wait-log '^Camera direction -?0 -?0 -1 up -?0 1 -?0 [(]perspective[)]$' 30
+expect-setting view/anaglyph false
+command view.orthographic
+expect-never 'TestDriver: FAIL'

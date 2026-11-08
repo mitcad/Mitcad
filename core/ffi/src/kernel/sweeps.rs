@@ -110,7 +110,7 @@ pub mod ffi {
     }
 
     /// `section` 0 circular, 1 square, 2 triangular; `thickness` 0 for a
-    /// solid pipe.
+    /// solid pipe; `corners` 0 mitered, 1 rounded (mitcad#1448).
     struct PipeInput {
         path: Vec<SweepCurve>,
         extent1: f64,
@@ -118,6 +118,7 @@ pub mod ffi {
         section: u8,
         size: f64,
         thickness: f64,
+        corners: u8,
     }
 
     /// `section` 0 circular, 1 square, 2 triangular external, 3 triangular
@@ -218,6 +219,8 @@ use mitcad_model::{
 use mitcad_model::GuideSurface;
 // Sweeps' rail points (mitcad#469).
 use mitcad_model::RailPoint;
+// Pipes' corners (mitcad#1448).
+use mitcad_model::PipeCorners;
 // Frenet and auxiliary frames (mitcad#539).
 use mitcad_model::sweeps::PathFrame;
 // Body faces as profiles (mitcad#543).
@@ -510,6 +513,10 @@ pub fn pipe(spec: &PipeSpec<'_>) -> Result<SharedPtr<Shape>, KernelError> {
         },
         size: spec.size,
         thickness: spec.thickness.unwrap_or(0.0),
+        corners: match spec.corners {
+            PipeCorners::Mitered => 0,
+            PipeCorners::Rounded => 1,
+        },
     };
     ffi::pipe_solid(&spec.feature.to_string(), &input).map_err(failed)
 }

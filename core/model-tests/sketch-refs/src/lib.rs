@@ -30,3 +30,6 @@ mod face_outline_tests;
 // Project Again of a projection that stopped following its source
 // (mitcad#1303).
 mod project_again_tests;
+// A dimension's value that uses its own parameter keeps that parameter as
+// a user parameter (mitcad#1535).
+mod own_parameter_tests;

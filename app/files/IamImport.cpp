@@ -12,7 +12,11 @@ namespace {
 
 const QString kPartsHistory = QStringLiteral("import/iamPartsHistory");
 
-QString tr(const char* text) { return QCoreApplication::translate("IamImport", text); }
+// The file's texts in the context IamImport, where lupdate records them too
+// (mitcad#1472).
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(IamImport)
+};
 
 } // namespace
 
@@ -40,18 +44,20 @@ QString iamPartOutcome(const QJsonObject& part) {
   const QString outcome = part.value(QStringLiteral("outcome")).toString();
   if (outcome == QLatin1String("replayed")) {
     const QJsonObject counts = part.value(QStringLiteral("counts")).toObject();
-    QStringList parts;
-    for (const char* kind : {"parametric", "partial", "fallback", "skipped"}) {
-      parts << QStringLiteral("%1 %2").arg(counts.value(QLatin1String(kind)).toInt()).arg(QLatin1String(kind));
-    }
-    return tr("replayed, %1 items (%2), %3 verified, %4 parameters")
+    const auto count = [&counts](const char* kind) { return counts.value(QLatin1String(kind)).toInt(); };
+    // Each count with its kind in a whole translated text (mitcad#1472).
+    const QStringList parts = {Text::tr("%1 parametric").arg(count("parametric")),
+                               Text::tr("%1 partial").arg(count("partial")),
+                               Text::tr("%1 fallback").arg(count("fallback")),
+                               Text::tr("%1 skipped").arg(count("skipped"))};
+    return Text::tr("replayed, %1 items (%2), %3 verified, %4 parameters")
         .arg(part.value(QStringLiteral("items")).toInt())
         .arg(parts.join(QStringLiteral(", ")))
         .arg(part.value(QStringLiteral("verified")).toInt())
         .arg(part.value(QStringLiteral("parameters")).toInt());
   }
   if (outcome == QLatin1String("bodies")) {
-    return tr("stored bodies: %1").arg(part.value(QStringLiteral("reason")).toString());
+    return Text::tr("stored bodies: %1").arg(part.value(QStringLiteral("reason")).toString());
   }
   return QString();
 }

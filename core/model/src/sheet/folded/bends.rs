@@ -1944,6 +1944,30 @@ fn fold_panel<K: Kernel>(
             }
         }
     }
+    // The moving panel's trim may give the boundaries it keeps other
+    // parameters than the panel's (a line returned running the other way,
+    // as after a join, mitcad#1450): the ports it took are bound to them
+    // again, by position.
+    let mut before = state.clone();
+    if let Some(p) = before.charts.iter_mut().find(|p| p.domain == moving_domain) {
+        p.regions = old.regions.clone();
+    }
+    let rebound: Vec<(usize, bool, ShapePortSide)> = state
+        .joins
+        .iter()
+        .enumerate()
+        .flat_map(|(i, port)| [(i, true, &port.first), (i, false, &port.second)])
+        .filter(|(_, _, side)| side.boundary.domain == moving_domain)
+        .filter_map(|(i, first, side)| Some((i, first, cut::rebind(&before, state, side)?)))
+        .collect();
+    for (i, first, side) in rebound {
+        let port = &mut state.joins[i];
+        *(if first {
+            &mut port.first
+        } else {
+            &mut port.second
+        }) = side;
+    }
     let mut moved = BTreeSet::new();
     for neighbor in moving_neighbors {
         moved.extend(

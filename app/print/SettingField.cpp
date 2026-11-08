@@ -10,6 +10,7 @@
 #include <QBrush>
 #include <QColor>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QEvent>
@@ -105,6 +106,8 @@ std::optional<double> numberOf(const QJsonValue& value) {
 // after it the words, grey as a placeholder while unset. A click opens the
 // colour picker.
 class ColorFieldButton : public QPushButton {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::ColorFieldButton)
+
 public:
   explicit ColorFieldButton(const QString& role) : m_role(role) {
     setAutoDefault(false);
@@ -189,6 +192,8 @@ bool isRectangle(const QJsonArray& points, double minX, double minY, double maxX
 // rectangle as its width, depth and origin, any other shape as a table of
 // points (X, Y), never as raw text. Shape switches between the two.
 class OutlineDialog : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::OutlineDialog)
+
 public:
   OutlineDialog(const PrintKey& key, const QJsonValue& points, QWidget* parent) : QDialog(parent) {
     setWindowTitle(key.name);

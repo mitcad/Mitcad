@@ -3,6 +3,7 @@
 
 #include <vector>
 
+#include <QCoreApplication>
 #include <QFrame>
 #include <QString>
 #include <QStringList>
@@ -38,6 +39,8 @@ class ValueLine;
 // <width>)". A click on a header logs "Panel <command> result group <n>
 // folded|unfolded", Copy "Panel <command> result copied <name>: <value>".
 class ResultRows : public QFrame {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::ResultRows)
+
 public:
   explicit ResultRows(const QString& command, QWidget* parent = nullptr);
   // The rows of an answer; none empties it and hides it. A group folded

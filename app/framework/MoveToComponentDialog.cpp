@@ -4,6 +4,7 @@
 #include <exception>
 
 #include <QCheckBox>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QHash>
@@ -27,6 +28,8 @@ namespace mitcad {
 namespace {
 
 class MoveToComponentDialog final : public QDialog {
+  Q_DECLARE_TR_FUNCTIONS(mitcad::MoveToComponentDialog)
+
 public:
   MoveToComponentDialog(QWidget* parent, const HybridModel& model, const QJsonObject& selection)
       : QDialog(parent), m_model(model), m_selection(selection) {

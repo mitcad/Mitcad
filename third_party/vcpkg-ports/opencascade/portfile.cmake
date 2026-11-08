@@ -296,6 +296,19 @@ vcpkg_from_github(
         1610-chfi3d-standing-ball-section-where-the-normal-planes-pass-forwards.patch
         1611-chfi3d-two-corner-cut-on-a-periodic-pcurve-not-cut-to-its-period.patch
         1620-chfi3d-ball-turned-about-a-crease-at-its-end-vertex-into-the-end-face.patch
+        1640-chfi3d-ride-on-a-contact-line-the-other-way-its-side-on-the-face-and-its-corners.patch
+        1641-chfi3d-rider-ending-where-the-line-ends-on-the-arc-from-its-vertex.patch
+        1642-chfi3d-face-consumed-between-rides-with-corners-at-both-ends.patch
+        1650-chfi3d-rounding-of-an-edge-another-rolls-on-all-along-dropped.patch
+        1651-chfi3d-corner-of-a-rolling-blend-and-a-blend-on-the-face-it-consumes.patch
+        1652-chfi3d-contact-cut-to-one-point-by-the-corners-at-both-ends.patch
+        1653-chfi3d-three-blends-cut-by-each-other-where-one-rolls-on-the-consumed-faces-edge.patch
+        1654-chfi3d-plate-of-a-corner-with-a-rider-oriented-from-a-stripe-riding-on-no-line.patch
+        1655-chfi3d-roundings-consuming-a-face-whose-edges-are-all-rounded-meet-on-one-contact-edge.patch
+        1656-chfi3d-curve-left-by-a-stripe-cut-to-nothing-in-the-period-of-the-corner-surface.patch
+        1657-chfi3d-corner-of-three-curves-marched-the-way-keeping-inside-the-contacts.patch
+        1658-chfi3d-the-rounding-whose-contact-lies-nearer-its-edge-rides-a-ride-of-no-width-drops-the-rider.patch
+        1659-chfi3d-corner-of-three-cut-by-each-other-where-a-stripe-is-cut-at-a-ride-line-at-both-ends.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

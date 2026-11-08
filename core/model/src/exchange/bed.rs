@@ -23,12 +23,15 @@
 //! (a nut placed many times, each turned differently), the bodies of an
 //! occurrence sent whole (`ExportPlacement::whole`) one object as they are
 //! assembled, and the rest the file's own object; each lies on the bed by
-//! the rule above, and those turned are set side by side along X with a
-//! gap of [`GAP`], the row centred on the plate (overlaps with objects
-//! kept as designed are left to the slicer's arrange). A row wider than
-//! the bed wraps into rows along Y ([`wrap_rows`], mitcad#1316), the rows
-//! centred on the plate too; when they are still wider or deeper than the
-//! bed, the export warns.
+//! the rule above, and those turned are set side by side along X, the row
+//! centred on the plate (overlaps with objects kept as designed are left
+//! to the slicer's arrange). Between two neighbours lies the spacing
+//! ([`GAP`] unless the export gives one) plus how far each one's first
+//! layer reaches past it in the slicer, its brim or a skirt of its own by
+//! the settings it prints with ([`first_layer_reach`], mitcad#1491). A row
+//! wider than the bed wraps into rows along Y ([`wrap_rows`],
+//! mitcad#1316), the rows centred on the plate too, as far apart; when
+//! they are still wider or deeper than the bed, the export warns.
 //!
 //! A piece kept as assembled because several bed faces apply to it,
 //! counted per placement, lists them as its choices (mitcad#857,
@@ -93,6 +96,9 @@ pub(super) struct BedRules<'a> {
     pub chosen: &'a [(BodyUid, Vec<OccurrenceUid>)],
     pub auto_orient: bool,
     pub settle: Settle,
+    /// The clearance between two neighbouring pieces' first layers, mm
+    /// (mitcad#1491; [`GAP`] by default).
+    pub spacing: f64,
 }
 
 /// The plate when the design's printer gives no bed shape, mm: the Bambu
@@ -191,22 +197,62 @@ pub(crate) struct Piece {
     pub plan: OnBed,
     /// Whether it is a further copy of the piece before it (a print
     /// plate's item with a count, mitcad#1311): without centring, set
-    /// beside that one along X, [`GAP`] apart.
+    /// beside that one along X, as far apart as neighbours are.
     pub copy: bool,
+    /// How far its first layer reaches past it in the slicer, mm: the
+    /// furthest of its placements' [`first_layer_reach`] (mitcad#1491).
+    pub margin: f64,
+    /// The clearance between its first layer and a neighbour's, mm
+    /// ([`BedRules::spacing`]).
+    pub spacing: f64,
 }
 
-/// The gap between the objects set side by side on the bed, mm.
+/// The clearance between the objects set side by side on the bed, mm,
+/// when the export gives none (mitcad#1491: beyond their brims).
 pub(super) const GAP: f64 = 5.0;
 
 /// How far (mm) a row may pass the bed's size and still fit: the baseline
 /// tolerance of geometric comparisons.
 pub(super) const FIT: f64 = 1e-6;
 
-/// The pieces (`spans`: each one's x and y range) in rows, in order: a
-/// piece goes on the row before while the row, with the gaps, stays
-/// within `width` (mitcad#1316); a piece wider than the bed has a row of
-/// its own. Indices into `spans`; at least one row.
-pub(super) fn wrap_rows(spans: &[[(f64, f64); 2]], width: f64) -> Vec<Vec<usize>> {
+/// A nozzle's width when the printer gives none, mm: a skirt loop's line.
+const LINE: f64 = 0.4;
+
+/// How far (mm) the slicer's first layer reaches past a piece's outline by
+/// the settings `effective` it prints with (mitcad#1491): its brim
+/// (`brim_width` and the brim's gap from the piece) unless `brim_type` is
+/// `no_brim` or `inner_only` (`auto_brim` counts, as the slicer adds it to
+/// tall, narrow pieces), or a skirt of its own (`skirt_per_object`: its
+/// distance and loops, a nozzle's width each), whichever reaches further;
+/// 0 without either.
+pub(crate) fn first_layer_reach(effective: &crate::document::EffectivePrint) -> f64 {
+    let number = |key: &str| match effective.value(key) {
+        Some(print_keys::Value::Number(n)) if n.is_finite() && n > 0.0 => n,
+        Some(print_keys::Value::Integer(i)) if i > 0 => i as f64,
+        _ => 0.0,
+    };
+    let brim = match effective.value("brim_type") {
+        Some(print_keys::Value::Text(kind)) if kind == "no_brim" || kind == "inner_only" => 0.0,
+        _ if number("brim_width") > 0.0 => number("brim_width") + number("brim_separation"),
+        _ => 0.0,
+    };
+    let skirt = match effective.value("skirt_per_object") {
+        Some(print_keys::Value::Bool(true)) if number("skirts") > 0.0 => {
+            let nozzle = number("nozzle_diameter");
+            let line = if nozzle > 0.0 { nozzle } else { LINE };
+            number("skirt_distance") + number("skirts") * line
+        }
+        _ => 0.0,
+    };
+    brim.max(skirt)
+}
+
+/// The pieces (`spans`: each one's x and y range, its first layer's reach
+/// included) in rows, in order: a piece goes on the row before while the
+/// row, with the gaps of `gap`, stays within `width` (mitcad#1316); a
+/// piece wider than the bed has a row of its own. Indices into `spans`;
+/// at least one row.
+pub(super) fn wrap_rows(spans: &[[(f64, f64); 2]], width: f64, gap: f64) -> Vec<Vec<usize>> {
     let mut rows: Vec<Vec<usize>> = vec![Vec::new()];
     let mut used = 0.0;
     for (k, [(lo, hi), _]) in spans.iter().enumerate() {
@@ -215,9 +261,9 @@ pub(super) fn wrap_rows(spans: &[[(f64, f64); 2]], width: f64) -> Vec<Vec<usize>
         if row.is_empty() {
             row.push(k);
             used = size;
-        } else if used + GAP + size <= width + FIT {
+        } else if used + gap + size <= width + FIT {
             row.push(k);
-            used += GAP + size;
+            used += gap + size;
         } else {
             rows.push(vec![k]);
             used = size;
@@ -310,6 +356,29 @@ impl<K: Kernel> Document<K> {
             }
             _ => [DEFAULT_PLATE[0] / 2.0, DEFAULT_PLATE[1] / 2.0],
         }
+    }
+
+    /// How far the first layer of a piece of these placements (each body
+    /// and its occurrence path, None for a body not placed) reaches past
+    /// it, mm (mitcad#1491): the furthest [`first_layer_reach`] of the
+    /// printed ones, by their settings on `plate` (none: each body's own
+    /// plate's).
+    pub(crate) fn piece_margin(
+        &self,
+        placements: impl Iterator<Item = (BodyUid, Option<Vec<OccurrenceUid>>)>,
+        plate: Option<&crate::print_plates::PrintPlate>,
+    ) -> f64 {
+        placements
+            .filter(|(uid, _)| self.printed_body(*uid))
+            .map(|(uid, path)| {
+                let target = PrintTarget::Body(uid, path);
+                let effective = match plate {
+                    Some(on) => self.effective_print_on(&target, Some(on)),
+                    None => self.effective_print(&target),
+                };
+                first_layer_reach(&effective)
+            })
+            .fold(0.0, f64::max)
     }
 
     /// Where the export puts the bodies on the bed: their print bed faces
@@ -595,11 +664,18 @@ impl<K: Kernel> Document<K> {
                         .collect()
                 };
                 let plan = self.bed_plan(&mine, &of_piece, &paths_of_piece, rules)?;
+                let margin = self.piece_margin(
+                    mine.iter()
+                        .flat_map(|&uid| paths_of_piece(uid).into_iter().map(move |p| (uid, p))),
+                    None,
+                );
                 Ok(Piece {
                     name,
                     members,
                     plan,
                     copy: false,
+                    margin,
+                    spacing: rules.spacing,
                 })
             })
             .collect()
