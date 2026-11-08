@@ -217,6 +217,42 @@ impl<K: Kernel> Importer<'_, K> {
         refs::dressup_edge_match(replay, fp)
     }
 
+    /// The replay edges of which two or more of the file's edges `fps` are
+    /// parts ([`refs::dressup_edge_parts`], mitcad#1437), on the bodies of
+    /// the items that made the edges' bodies first, then, for the parts not
+    /// found there, among the edges of all bodies.
+    pub(crate) fn match_dressup_edge_parts(
+        &self,
+        replay: &refs::ReplayEdges,
+        fps: &[&Fingerprint],
+    ) -> Vec<(Vec<usize>, refs::FoundEdge)> {
+        let mut bodies: Vec<BodyUid> = Vec::new();
+        for fp in fps {
+            for b in self.edge_bodies(fp) {
+                if !bodies.contains(&b) {
+                    bodies.push(b);
+                }
+            }
+        }
+        let mut found = if bodies.is_empty() {
+            Vec::new()
+        } else {
+            refs::dressup_edge_parts(&replay.only(&bodies), fps)
+        };
+        let left: Vec<usize> = (0..fps.len())
+            .filter(|i| !found.iter().any(|(parts, _)| parts.contains(i)))
+            .collect();
+        if left.len() >= 2 {
+            let rest: Vec<&Fingerprint> = left.iter().map(|&i| fps[i]).collect();
+            found.extend(
+                refs::dressup_edge_parts(replay, &rest)
+                    .into_iter()
+                    .map(|(parts, edge)| (parts.into_iter().map(|i| left[i]).collect(), edge)),
+            );
+        }
+        found
+    }
+
     /// A body input among the replay's bodies: by the item that made it
     /// first, else by its names or measures.
     pub(crate) fn body_ref(&self, fp: &Fingerprint) -> Option<BodyUid> {

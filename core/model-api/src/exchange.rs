@@ -160,6 +160,10 @@ pub(super) struct ExportSketchCommand {
     /// (mitcad#1408).
     #[serde(default)]
     units: Option<String>,
+    /// Also write the construction curves and center lines, on the layer
+    /// `construction` (mitcad#1445); left out by default.
+    #[serde(default)]
+    construction: bool,
 }
 
 /// The length unit a DXF export writes (mitcad#1408): its `units`, or the
@@ -552,8 +556,13 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
                 .map_err(|_| ApiError(format!("no feature is named {}", command.sketch)))?,
         };
         let unit = dxf_unit(self, command.units.as_deref())?;
-        let entities = self.export_sketch_dxf(sketch, &command.path, unit, &options)?;
-        Ok(json!({"path": command.path, "entities": entities, "units": unit.symbol()}))
+        let entities =
+            self.export_sketch_dxf(sketch, &command.path, unit, command.construction, &options)?;
+        let mut result =
+            json!({"path": command.path, "entities": entities, "units": unit.symbol()});
+        // Whether construction geometry was written (mitcad#1445).
+        result["construction"] = json!(command.construction);
+        Ok(result)
     }
 
     fn body_by_uid_or_name(&self, body: &str) -> Result<BodyUid, ApiError> {

@@ -280,12 +280,68 @@ std::vector<int> EdgeContinuations::next(int e) const {
         if (continues && sharp(o) &&
             (convexity(e) < 0 || convexity(o) < 0 || convexity(e) == convexity(o))) {
           add_once(found, o);
+        } else if (!continues && sharp(o) && convexity(e) >= 0 && convexity(e) == convexity(o) &&
+                   across_fading_crease(e, o, vertex)) {
+          // Through a crease that fades out (mitcad#1435).
+          add_once(found, o);
         }
       }
     } catch (const Standard_Failure&) {
     }
   }
   return found;
+}
+
+bool EdgeContinuations::across_fading_crease(int e, int o, const TopoDS_Vertex& vertex) const {
+  const std::vector<int> fe = m_edgeFaces.at(e);
+  const std::vector<int> fo = m_edgeFaces.at(o);
+  if (fe.size() != 2 || fo.size() != 2) {
+    return false;
+  }
+  // The face both lie on (one only) and each one's other face.
+  int shared = -1;
+  for (const int f : fe) {
+    if (std::find(fo.begin(), fo.end(), f) != fo.end()) {
+      if (shared >= 0) {
+        return false;
+      }
+      shared = f;
+    }
+  }
+  if (shared < 0) {
+    return false;
+  }
+  const int x = fe[0] == shared ? fe[1] : fe[0];
+  const int t = fo[0] == shared ? fo[1] : fo[0];
+  if (x == t) {
+    return false;
+  }
+  // The crease between the other faces from the vertex, tangent at its far
+  // end.
+  const int index = m_edgesOf.FindIndex(vertex);
+  if (index == 0) {
+    return false;
+  }
+  for (const TopoDS_Shape& shape : m_edgesOf(index)) {
+    const int c = m_body.edge_index(shape);
+    if (c < 0 || c == e || c == o || BRep_Tool::Degenerated(TopoDS::Edge(shape))) {
+      continue;
+    }
+    const std::vector<int> fc = m_edgeFaces.at(c);
+    if (fc.size() != 2 || !((fc[0] == x && fc[1] == t) || (fc[0] == t && fc[1] == x))) {
+      continue;
+    }
+    const TopoDS_Edge& crease = m_body.edge(c);
+    // (Relative parameter 0 at its forward vertex.)
+    const double far = TopExp::FirstVertex(crease).IsSame(vertex) ? 1.0 : 0.0;
+    if (TopExp::FirstVertex(crease).IsSame(TopExp::LastVertex(crease))) {
+      continue;
+    }
+    if (normal_angle(crease, m_body.face(x), m_body.face(t), far) <= kSmoothAngle) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::vector<int> tangent_closure(const Shape& body, std::vector<int> faces) {

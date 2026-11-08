@@ -244,7 +244,9 @@
 //   popup <entry>           choose an entry of the open popup menu (a
 //                           context menu), by its text; "Sub/Item" opens
 //                           the submenu Sub and chooses Item in it (also
-//                           for context-menu-logged's entry)
+//                           for context-menu-logged's entry); Item is
+//                           looked for in the submenu Sub opened, not in
+//                           whichever popup Qt reports active
 //   button <regex> [objectName] click a visible button whose text (without
 //                           '&') matches; optional Qt objectName selects an
 //                           exact control in the target window
@@ -753,6 +755,10 @@ private:
   QHash<QString, QPointer<QWidget>> m_documentWindows;
   QPointer<QWidget> m_dialog; // the target of key, type and button; else the main window
   QPointer<QWidget> m_grab;   // the widget a pressed mouse button belongs to
+  // The submenu a popup stage opened ("Sub/Item"), taken by the stage
+  // that chooses in it; set only while that stage is queued.
+  QPointer<QWidget> m_submenu;
+  bool m_inSubmenu = false;
   QPointer<QObject> m_found;  // what a wait found
   mutable QPointer<QWidget> m_viewer;
 

@@ -604,3 +604,152 @@ fn ordered_corner_slots_keep_tombstones_through_reorder_remove_and_reopen() {
     reopened.recompute();
     assert_eq!(slots(&reopened), original);
 }
+
+/// The fixture face's sketch (Sketch1: the 40 x 20 rectangle, `c1` bottom,
+/// `c2` right, `c3` top, `c4` left) and its stored profile key.
+fn face_profile(face: &Value) -> (FeatureUid, String) {
+    (
+        serde_json::from_value(face["profiles"][0]["sketch"].clone()).unwrap(),
+        face["profiles"][0]["region"].as_str().unwrap().to_owned(),
+    )
+}
+
+fn failed_with(doc: &Document<MockKernel>, uid: FeatureUid, part: &str) -> bool {
+    matches!(doc.status(uid), Some(FeatureStatus::Failed(message)) if message.contains(part))
+}
+
+#[test]
+fn sheet_face_follows_a_changed_outline_and_keeps_its_panel() {
+    // mitcad#1444: rounding a corner gives the region a new key; the Face
+    // finds it as Extrude does, warns, and keeps the panel's slot.
+    let (mut doc, _, body, face) = fixture();
+    let (sketch, key) = face_profile(&face);
+    let before = state(&doc, body);
+    doc.command(
+        &json!({"cmd":"sketch.fillet","sketch":sketch,"a":"c3","b":"c4","radius":5}).to_string(),
+    )
+    .unwrap();
+    assert_eq!(doc.status(body.feature), Some(&FeatureStatus::Ok));
+    let warnings = doc.warnings(body.feature);
+    let warning = warnings
+        .iter()
+        .find(|w| w.starts_with(&format!("region {key} found as r{{")))
+        .unwrap_or_else(|| panic!("no warning about {key}: {warnings:?}"));
+    assert!(warning.ends_with(" after a change in Sketch1"), "{warning}");
+    let after = state(&doc, body);
+    assert_eq!(after["status"], "valid");
+    assert_eq!(after["panels"].as_array().unwrap().len(), 1);
+    assert_eq!(after["panels"][0]["id"], before["panels"][0]["id"]);
+    // The rounded outline: four lines and the arc; the walls along the
+    // unchanged bottom and right sides keep their curve segments' names.
+    let segments: Vec<Value> = after["panels"][0]["region"]["loops"][0]["segments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"]["segment"].clone())
+        .collect();
+    assert_eq!(segments.len(), 5, "{segments:?}");
+    assert!(segments.contains(&json!("c1[c4,c2]")), "{segments:?}");
+    assert!(segments.contains(&json!("c2[c1,c3]")), "{segments:?}");
+    // The definition keeps its reference and its slot.
+    let FeatureDef::SheetFace(d) = &doc.feature(body.feature).unwrap().def else {
+        panic!("face definition");
+    };
+    assert_eq!(d.profiles[0].region.to_string(), key);
+    assert_eq!(d.panel_slots.len(), 1);
+    assert_eq!(d.panel_slots[0].slot, 0);
+    // Undone, the stored key is the region's own again: no warning.
+    doc.undo();
+    assert_eq!(doc.status(body.feature), Some(&FeatureStatus::Ok));
+    assert!(doc.warnings(body.feature).is_empty());
+    assert_eq!(state(&doc, body)["panels"], before["panels"]);
+}
+
+#[test]
+fn sheet_face_refuses_a_split_profile_until_its_pieces_are_selected() {
+    // mitcad#1444: a line across the rectangle splits the region in two.
+    let (mut doc, _, body, mut face) = fixture();
+    let (sketch, key) = face_profile(&face);
+    doc.command(
+        &json!({"cmd":"sketch.add_line","sketch":sketch,"start":[10,0],"end":[10,20]}).to_string(),
+    )
+    .unwrap();
+    assert!(
+        failed_with(
+            &doc,
+            body.feature,
+            &format!("region {key} is split into r{{")
+        ),
+        "{:?}",
+        doc.status(body.feature)
+    );
+    assert!(failed_with(
+        &doc,
+        body.feature,
+        " after a change in Sketch1; select the profiles again"
+    ));
+    // The stored reference still selects the main piece; selecting the
+    // other piece too gives it a slot of its own and the main piece keeps
+    // slot 0.
+    let (main, other) = {
+        let output = doc.sketch_output(sketch).unwrap();
+        let found = output.found(&key.parse().unwrap()).unwrap();
+        assert_eq!(found.regions.len(), 2);
+        (
+            found.regions[0].profile.key.to_string(),
+            found.regions[1].profile.key.to_string(),
+        )
+    };
+    face["profiles"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"sketch":sketch,"region":other}));
+    doc.edit_feature(body.feature, &def(face)).unwrap();
+    assert_eq!(doc.status(body.feature), Some(&FeatureStatus::Ok));
+    assert!(
+        doc.warnings(body.feature)
+            .iter()
+            .any(|w| w.contains(&format!("region {key} found as {main} + {other}"))),
+        "{:?}",
+        doc.warnings(body.feature)
+    );
+    let FeatureDef::SheetFace(d) = &doc.feature(body.feature).unwrap().def else {
+        panic!("face definition");
+    };
+    let slot_of = |region: &str| {
+        d.panel_slots
+            .iter()
+            .find(|s| s.profile.region.to_string() == region)
+            .map(|s| s.slot)
+    };
+    assert_eq!(slot_of(&key), Some(0));
+    assert_eq!(slot_of(&other), Some(1));
+    // The mock kernel makes a solid of each panel: slot 0 the main piece.
+    for slot in [0, 1] {
+        let piece = state(&doc, BodyUid::new(body.feature, slot));
+        assert_eq!(piece["status"], "valid");
+        assert_eq!(piece["panels"][0]["id"]["slot"], slot);
+    }
+}
+
+#[test]
+fn sheet_face_whose_profile_is_gone_names_its_sketch() {
+    // mitcad#1444: a circle beside the rectangle, then the rectangle's
+    // curves deleted: no region shares a curve with the stored key. (The
+    // circle is drawn first: drawn into the emptied sketch it would take
+    // the id c1, as ids continue from the highest one in use, and the key
+    // would find its region by that curve, as an extrusion's does.)
+    let (mut doc, _, body, face) = fixture();
+    let (sketch, key) = face_profile(&face);
+    doc.add_circle(sketch, [60.0, 0.0], &num(6.0)).unwrap();
+    doc.command(
+        &json!({"cmd":"sketch.remove","sketch":sketch,"items":["c1","c2","c3","c4"]}).to_string(),
+    )
+    .unwrap();
+    assert!(
+        failed_with(&doc, body.feature, &format!("Sketch1 has no profile {key}")),
+        "{:?}",
+        doc.status(body.feature)
+    );
+    assert_eq!(state(&doc, body)["status"], "unavailable");
+}

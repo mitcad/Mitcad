@@ -1,0 +1,519 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a rounding whose edge ends where a convex crease of its face
+begins: the ball turned on about the crease into the face at the end
+(mitcad#1434).
+
+A tube's outside (a cylinder Fs) meets a plane Fk along a line L at a
+convex crease of 30 degrees; L runs square to the tube's end plane Fop and
+ends on it at the vertex V where Fop's rim (its edge with Fs) ends. The
+rim is rounded with R. The rounding's contact on Fs reaches L at the
+section through V, at P, R from V; its contact on Fop lies inside Fop.
+OCCT ran the rim's torus on past V (the spine prolonged) and cut it by Fk
+(its plane cuts the torus from P to Fop's edge with Fk): the end stood out
+of the body past Fk and the result was invalid. The stored body after the
+rounding ends the torus at V's section and closes the corner with a horn
+torus about L at P (major and minor radius R): the ball rolled on over L,
+touching Fop, until its centre lies in Fk's plane, where Fk's corner at V
+is cut along the ball's circle. Fk is a strip there: the other tube lies
+beyond Fk's plane, and the cut of the torus by Fk would leave Fk. Where
+the cut stays on Fk (the same design's other tube, its rims ending at a
+crease of 70.5 degrees), the stored body has the torus cut by Fk, as OCCT
+makes it.
+
+- PerformPivotAboutCreaseAtEnd (1220's ball turning about a crease at the
+  end) also takes the vertex at L's own end (before: left to the faces
+  beyond L): Fk a plane through L, the face at the end, any convex crease
+  between Fs and Fk short of a right angle (at a right angle the section
+  is Fk's plane), P R from the vertex on L, where the end piece runs on
+  past the section and Fk's cut of it leaves Fk (ChFi3d_CutLeavesFace:
+  points of the cut between its ends, found from the chord by projecting
+  on the blend's surface and on Fk's plane in turn, outside Fk); elsewhere
+  Fk cuts the end as before. The ball turns from the
+  section towards Fk's side of L (tk, the direction in Fk square to L at
+  less than a right angle to the ball's centre from P) by pi / 2 less the
+  crease. Fk's cut is the torus's tube circle in Fk's plane (a section of
+  the torus by a plane through its axis, at its apex, is not found by
+  BRepAlgoAPI_Section), from P to Fop, built as a circle over the
+  parameters 3 pi / 4 to 5 pi / 4 with its curve on the torus a line in
+  one B-spline span over them, so that both reverse alike.
+- That end piece (an analytic blend run on past the section through the
+  vertex and cut by Fk there, its contact on Fop ending on Fop's edge with
+  Fk) is cut back to the section: the other contact's point on the section
+  taken from its curve, its interference's parameter and the piece's spine
+  parameter set there when the end is built.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+index af755114..73b8e75b 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+@@ -1278,8 +1278,14 @@ private:
+   //! plane, at a slight crease between Fs and a face Fk beyond it. The ball
+   //! turns on about L at P while touching the plane (a horn torus, a corner
+   //! stripe, before the stripe at its first end), cut by the faces it meets
+-  //! up to the plane. Returns false, changing nothing, where the end is not
+-  //! such.
++  //! up to the plane. Also where the vertex is L's own end on the plane and
++  //! Fk, a plane through L, the face at the end, at any convex crease short
++  //! of a right angle (P then R from the vertex on L), where the end piece
++  //! runs on past the section and Fk's cut of it there leaves Fk (another
++  //! face of the solid lies beyond Fk's plane): the piece is cut back to the
++  //! section, and the ball turns on past it until its centre lies in Fk's
++  //! plane, Fk cut along its circle there. Returns false, changing nothing,
++  //! where the end is not such.
+   Standard_EXPORT bool PerformPivotAboutCreaseAtEnd(const int Index);
+ 
+   //! Contours of constant radius R whose tangent chain runs round a wall's
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+index bdc1ae86..b233b4bc 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -84,6 +84,10 @@
+ #include <GeomProjLib.hxx>
+ #include <gp_Lin.hxx>
+ #include <GeomAPI_ExtremaCurveCurve.hxx>
++#include <GeomAPI_IntCS.hxx>
++#include <Geom_Plane.hxx>
++#include <BRepBuilderAPI_MakeEdge.hxx>
++#include <BRep_Builder.hxx>
+ #include <BRepBuilderAPI_MakeFace.hxx>
+ #include <BRepAlgoAPI_Section.hxx>
+ #include <gp_Pnt.hxx>
+@@ -4247,6 +4251,66 @@ static bool ChFi3d_OutwardNormalAt(const TopoDS_Face& F, const gp_Pnt& X, const
+   return true;
+ }
+ 
++//=======================================================================
++// function : ChFi3d_CutLeavesFace
++// purpose  : Whether the cut of surface S by face F, a plane, from S's
++//            point A to its point B (both on F's plane) leaves F: points of
++//            that cut between them (from points of the chord, projected on
++//            S and on the plane in turn until they lie on both) outside F.
++//            False where the cut is not found.
++//=======================================================================
++
++static bool ChFi3d_CutLeavesFace(const occ::handle<Geom_Surface>& S,
++                                 const TopoDS_Face&               F,
++                                 const gp_Pnt&                    A,
++                                 const gp_Pnt&                    B,
++                                 const double                     Tol)
++{
++  BRepAdaptor_Surface aF(F, false);
++  const occ::handle<Geom_Surface> SF = BRep_Tool::Surface(F);
++  if (S.IsNull() || SF.IsNull() || aF.GetType() != GeomAbs_Plane)
++  {
++    return false;
++  }
++  const gp_Pln  aPl = aF.Plane();
++  const gp_Dir& aN  = aPl.Axis().Direction();
++  BRepClass_FaceClassifier aCl;
++  for (int q = 1; q <= 9; q++)
++  {
++    gp_Pnt X(A.XYZ() + (B.XYZ() - A.XYZ()) * (q / 10.));
++    bool   aOn = false;
++    for (int it = 0; it < 100 && !aOn; it++)
++    {
++      GeomAPI_ProjectPointOnSurf aPr(X, S);
++      if (aPr.NbPoints() == 0)
++      {
++        return false;
++      }
++      const gp_Pnt Y = aPr.NearestPoint();
++      const double d = gp_Vec(aPl.Location(), Y).Dot(gp_Vec(aN));
++      X              = gp_Pnt(Y.XYZ() - d * aN.XYZ());
++      aOn            = std::abs(d) <= 0.1 * Tol;
++    }
++    if (!aOn)
++    {
++      return false;
++    }
++    GeomAPI_ProjectPointOnSurf aPr(X, SF);
++    if (aPr.NbPoints() == 0)
++    {
++      return false;
++    }
++    double u = 0., v = 0.;
++    aPr.LowerDistanceParameters(u, v);
++    aCl.Perform(F, gp_Pnt2d(u, v), Tol);
++    if (aCl.State() == TopAbs_OUT)
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
+ //=======================================================================
+ // function : PerformPivotAboutCreaseAtEnd
+ // purpose  : See the header.
+@@ -4309,14 +4373,67 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+   {
+     const ChFiDS_CommonPoint& CPs = Fd->Vertex(isfirst, s);
+     const ChFiDS_CommonPoint& CPo = Fd->Vertex(isfirst, 3 - s);
+-    if (CPo.IsOnArc() || CPs.IsVertex() || CPo.IsVertex())
++    if (CPs.IsVertex() || CPo.IsVertex())
+     {
+       continue;
+     }
+     const TopoDS_Face Fs  = TopoDS::Face(DStr.Shape(Fd->Index(s)));
+     const TopoDS_Face Fop = TopoDS::Face(DStr.Shape(Fd->Index(3 - s)));
+     const gp_Pnt      P   = CPs.Point();
+-    const gp_Pnt      Cw  = CPo.Point();
++    gp_Pnt            Cw  = CPo.Point();
++    // An end piece run on past the section through the vertex, both
++    // contacts ending on edges there (an analytic blend cut by the face at
++    // the end): where P lies on that section, the other contact's point on
++    // it (Cw, its parameter aTrimO) is taken, and the piece is cut back to
++    // the section when the end is built (aTrim; only at L's end, below).
++    bool   aTrim  = false;
++    double aTrimO = 0.;
++    if (CPo.IsOnArc())
++    {
++      const double spineV = isfirst ? spine->FirstParameter(1) : spine->LastParameter(spine->NbEdges());
++      gp_Pnt       aOnSpine;
++      gp_Vec       aTan;
++      spine->D1(spineV, aOnSpine, aTan);
++      if (aTan.Magnitude() <= gp::Resolution() || aOnSpine.Distance(BRep_Tool::Pnt(Vtx)) > tolP)
++      {
++        continue;
++      }
++      const gp_Pln                   aSecPl(aOnSpine, gp_Dir(aTan));
++      const ChFiDS_FaceInterference& FIo = Fd->Interference(3 - s);
++      if (aSecPl.Distance(P) > tolP || FIo.LineIndex() <= 0)
++      {
++        continue;
++      }
++      const occ::handle<Geom_Curve>& Co = DStr.Curve(FIo.LineIndex()).Curve();
++      if (Co.IsNull())
++      {
++        continue;
++      }
++      GeomAPI_IntCS aX(Co, new Geom_Plane(aSecPl));
++      const double  aLo = std::min(FIo.FirstParameter(), FIo.LastParameter());
++      const double  aHi = std::max(FIo.FirstParameter(), FIo.LastParameter());
++      const double  aEnd = FIo.Parameter(isfirst);
++      double        aBest = RealLast();
++      for (int i = 1; aX.IsDone() && i <= aX.NbPoints(); i++)
++      {
++        double u = 0., v = 0., w = 0.;
++        aX.Parameters(i, u, v, w);
++        if (w < aLo - Precision::PConfusion() || w > aHi + Precision::PConfusion()
++            || std::abs(w - aEnd) >= aBest)
++        {
++          continue;
++        }
++        aBest  = std::abs(w - aEnd);
++        aTrimO = w;
++      }
++      // (Strictly inside the piece: a section past its end is no cut back.)
++      if (aBest == RealLast() || aBest <= Precision::PConfusion())
++      {
++        continue;
++      }
++      Cw    = Co->Value(aTrimO);
++      aTrim = true;
++    }
+     // The face at the other contact: a plane.
+     BRepAdaptor_Surface aOp(Fop, false);
+     if (aOp.GetType() != GeomAbs_Plane)
+@@ -4373,12 +4490,31 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+     {
+       continue;
+     }
+-    // The end's vertex past L (the edge runs on beyond the crease): where it
+-    // is L's own end, the faces beyond L cut the end as they meet it.
+-    if (BRepAdaptor_Curve(L).Line().Distance(BRep_Tool::Pnt(Vtx)) <= tolP)
++    // The end's vertex past L (the edge runs on beyond the crease), or L's
++    // own end on the plane (aAtLEnd: the stripe's edge ends where L starts,
++    // Fk the face at the end; checked below).
++    const bool aAtLEnd = BRepAdaptor_Curve(L).Line().Distance(BRep_Tool::Pnt(Vtx)) <= tolP;
++    if (aTrim && !aAtLEnd)
+     {
+       continue;
+     }
++    if (aAtLEnd)
++    {
++      TopoDS_Vertex aL1, aL2;
++      TopExp::Vertices(L, aL1, aL2);
++      if (!Vtx.IsSame(aL1) && !Vtx.IsSame(aL2))
++      {
++        continue;
++      }
++      // Only an end piece run on past the section and cut by Fk there,
++      // where that cut leaves Fk (another face of the solid lies beyond
++      // Fk's plane there); elsewhere Fk caps the end as it cuts it.
++      if (!aTrim
++          || !ChFi3d_CutLeavesFace(DStr.Surface(Fd->Surf()).Surface(), Fk, P, CPo.Point(), 10. * tolP))
++      {
++        continue;
++      }
++    }
+     // dIn: L's direction from the plane into the material; C0 the ball's
+     // centre at the end, Xt from P to it.
+     gp_Dir dIn = BRepAdaptor_Curve(L).Line().Direction();
+@@ -4391,20 +4527,50 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+     {
+       continue;
+     }
++    // (At L's end: the contact on the plane a circle about the vertex.)
++    if (aAtLEnd && gp_Pnt(P.XYZ() - R * dIn.XYZ()).Distance(BRep_Tool::Pnt(Vtx)) > tolP)
++    {
++      continue;
++    }
+     const gp_Dir Xt(gp_Vec(P, C0));
+     // The crease: Fs and Fk turn at L by less than a third of a right angle;
+-    // the ball turns from Fs's side towards Fk's.
++    // the ball turns from Fs's side towards Fk's. At L's end, any convex
++    // crease short of a right angle (at a right angle the section is Fk's
++    // plane): the ball turns on past the section until its centre lies in
++    // Fk's plane, on Fk's side of L (tk: the direction in that plane square
++    // to L, at less than a right angle to Xt where the crease is convex).
+     gp_Dir ns, nk;
+     if (!ChFi3d_OutwardNormalAt(Fs, P, tolP, ns) || !ChFi3d_OutwardNormalAt(Fk, P, tolP, nk))
+     {
+       continue;
+     }
+     const double aCrease = ns.Angle(nk);
+-    if (aCrease < 1.e-3 || aCrease > M_PI / 6.)
++    if (aCrease < 1.e-3 || aCrease > (aAtLEnd ? 0.5 * M_PI - 1.e-3 : M_PI / 6.))
+     {
+       continue;
+     }
+-    const gp_Vec aTurn = gp_Vec(Xt).Crossed(gp_Vec(nk).Reversed());
++    gp_Vec aTurn = gp_Vec(Xt).Crossed(gp_Vec(nk).Reversed());
++    gp_Dir aTk   = Xt;
++    if (aAtLEnd)
++    {
++      gp_Vec tk = gp_Vec(dIn).Crossed(gp_Vec(nk));
++      if (tk.Magnitude() <= gp::Resolution())
++      {
++        continue;
++      }
++      if (tk.Dot(gp_Vec(Xt)) < 0.)
++      {
++        tk.Reverse();
++      }
++      // (Convex: Fk runs on below Fs's tangent plane.)
++      if (tk.Dot(gp_Vec(ns)) >= 0.)
++      {
++        continue;
++      }
++      // Yt = Zt x Xt towards tk.
++      aTurn = gp_Vec(Xt).Crossed(tk);
++      aTk   = gp_Dir(tk);
++    }
+     if (aTurn.Magnitude() <= gp::Resolution())
+     {
+       continue;
+@@ -4436,23 +4602,6 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+     {
+       continue;
+     }
+-    BRepAlgoAPI_Section aSec(aPatch, myShape, false);
+-    aSec.ComputePCurveOn1(true);
+-    aSec.ComputePCurveOn2(true);
+-    aSec.Approximation(true);
+-    try
+-    {
+-      OCC_CATCH_SIGNALS
+-      aSec.Build();
+-    }
+-    catch (Standard_Failure const&)
+-    {
+-      continue;
+-    }
+-    if (!aSec.IsDone())
+-    {
+-      continue;
+-    }
+     struct ChainPiece
+     {
+       TopoDS_Edge E;
+@@ -4460,32 +4609,126 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+       gp_Pnt      A, B; // from P's side to the plane
+     };
+     NCollection_Sequence<ChainPiece> aEdges;
+-    for (TopExp_Explorer ex(aSec.Shape(), TopAbs_EDGE); ex.More(); ex.Next())
++    if (aAtLEnd)
+     {
+-      const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
+-      TopoDS_Shape       F2;
+-      if (!aSec.HasAncestorFaceOn2(E, F2) || F2.IsSame(Fop))
++      // At L's end Fk, a plane through L, cuts the torus along its tube's
++      // circle at the pivot angle towards tk (Fk holding it): the one cut,
++      // from P to the plane. (A section of the torus by a plane through its
++      // axis, at its apex, is not found reliably.)
++      BRepAdaptor_Surface aK(Fk, false);
++      if (aK.GetType() != GeomAbs_Plane)
+       {
+         continue;
+       }
+-      double                        f = 0., l = 0.;
+-      const occ::handle<Geom_Curve> C = BRep_Tool::Curve(E, f, l);
+-      if (C.IsNull())
++      const gp_Pln plK = aK.Plane();
++      if (plK.Distance(P) > tolP || plK.Distance(gp_Pnt(P.XYZ() + R * dIn.XYZ())) > tolP)
+       {
+         continue;
+       }
+-      ChainPiece aPiece;
+-      aPiece.E = E;
+-      aPiece.F = TopoDS::Face(F2);
+-      aPiece.A = C->Value(f);
+-      aPiece.B = C->Value(l);
+-      // (Not along the plane: the tube touches it there.)
+-      if (plOp.Distance(C->Value(0.5 * (f + l))) <= tolP)
++      const double aUK = std::atan2(gp_Vec(aTk).Dot(gp_Vec(Yt)), gp_Vec(aTk).Dot(gp_Vec(Xt)));
++      if (aUK <= Precision::Angular() || aUK >= 0.5 * M_PI)
++      {
++        continue;
++      }
++      // The tube's circle there, from P (v = pi) to the plane (vPlane), as
++      // the circle's parameters 3 pi / 4 to 5 pi / 4 and its curve on the
++      // torus a line in one span over them: both reverse as t -> 2 pi - t
++      // where the cut is turned (at a first end).
++      const gp_Dir aDK(std::cos(aUK) * Xt.XYZ() + std::sin(aUK) * Yt.XYZ());
++      const gp_Pnt aCK(P.XYZ() + R * aDK.XYZ());
++      const gp_Dir e1 = aDK.Reversed();
++      const gp_Dir e2 = vPlane > M_PI ? Zt.Reversed() : Zt;
++      const double a0 = 0.75 * M_PI, a1 = 1.25 * M_PI;
++      const gp_Dir aX0(std::cos(a0) * e1.XYZ() - std::sin(a0) * e2.XYZ());
++      const occ::handle<Geom_Circle> aMerid = new Geom_Circle(gp_Ax2(aCK, e1.Crossed(e2), aX0), R);
++      if (aMerid->Value(a0).Distance(P) > tolP || plOp.Distance(aMerid->Value(a1)) > tolP)
++      {
++        continue;
++      }
++      const occ::handle<Geom_Surface> SK = BRep_Tool::Surface(Fk);
++      BRepClass_FaceClassifier        aCl;
++      bool                            aOnK = true;
++      for (int q = 1; q <= 9 && aOnK; q++)
++      {
++        GeomAPI_ProjectPointOnSurf aPr(aMerid->Value(a0 + (a1 - a0) * q / 10.), SK);
++        double                     u = 0., v = 0.;
++        aOnK = aPr.NbPoints() > 0 && aPr.LowerDistance() <= tolP;
++        if (aOnK)
++        {
++          aPr.LowerDistanceParameters(u, v);
++          aCl.Perform(Fk, gp_Pnt2d(u, v), tolP);
++          aOnK = aCl.State() == TopAbs_IN || aCl.State() == TopAbs_ON;
++        }
++      }
++      if (!aOnK)
+       {
+         continue;
+       }
++      NCollection_Array1<gp_Pnt2d> aPoles(1, 2);
++      NCollection_Array1<double>   aKnots(1, 2);
++      NCollection_Array1<int>      aMults(1, 2);
++      aPoles(1) = gp_Pnt2d(aUK, M_PI);
++      aPoles(2) = gp_Pnt2d(aUK, vPlane);
++      aKnots(1) = a0;
++      aKnots(2) = a1;
++      aMults(1) = aMults(2) = 2;
++      ChainPiece aPiece;
++      aPiece.E = BRepBuilderAPI_MakeEdge(aMerid, a0, a1).Edge();
++      BRep_Builder().UpdateEdge(aPiece.E,
++                                new Geom2d_BSplineCurve(aPoles, aKnots, aMults, 1),
++                                aPatch,
++                                Precision::Confusion());
++      aPiece.F = Fk;
++      aPiece.A = aMerid->Value(a0);
++      aPiece.B = aMerid->Value(a1);
+       aEdges.Append(aPiece);
+     }
++    else
++    {
++      BRepAlgoAPI_Section aSec(aPatch, myShape, false);
++      aSec.ComputePCurveOn1(true);
++      aSec.ComputePCurveOn2(true);
++      aSec.Approximation(true);
++      try
++      {
++        OCC_CATCH_SIGNALS
++        aSec.Build();
++      }
++      catch (Standard_Failure const&)
++      {
++        continue;
++      }
++      if (!aSec.IsDone())
++      {
++        continue;
++      }
++      for (TopExp_Explorer ex(aSec.Shape(), TopAbs_EDGE); ex.More(); ex.Next())
++      {
++        const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
++        TopoDS_Shape       F2;
++        if (!aSec.HasAncestorFaceOn2(E, F2) || F2.IsSame(Fop))
++        {
++          continue;
++        }
++        double                        f = 0., l = 0.;
++        const occ::handle<Geom_Curve> C = BRep_Tool::Curve(E, f, l);
++        if (C.IsNull())
++        {
++          continue;
++        }
++        ChainPiece aPiece;
++        aPiece.E = E;
++        aPiece.F = TopoDS::Face(F2);
++        aPiece.A = C->Value(f);
++        aPiece.B = C->Value(l);
++        // (Not along the plane: the tube touches it there.)
++        if (plOp.Distance(C->Value(0.5 * (f + l))) <= tolP)
++        {
++          continue;
++        }
++        aEdges.Append(aPiece);
++      }
++    }
+     // The chain from P to the plane.
+     NCollection_Sequence<ChainPiece> aChain;
+     NCollection_Sequence<bool>       aChainRev;
+@@ -4821,8 +5064,9 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+     {
+       continue;
+     }
++    const double aFi1At = aTrim && s == 2 ? aTrimO : Fi1.Parameter(isfirst);
+     const occ::handle<Geom2d_Curve> PcCut =
+-      ChFi3d_PCurveNear(Ccut, 0., 0.5 * M_PI, Sb, Fi1.PCurveOnSurf()->Value(Fi1.Parameter(isfirst)));
++      ChFi3d_PCurveNear(Ccut, 0., 0.5 * M_PI, Sb, Fi1.PCurveOnSurf()->Value(aFi1At));
+     // On the torus: the tube at u = 0, from vPlane (Cw) to pi (P).
+     const double   vP1 = s == 1 ? M_PI : vPlane;
+     const double   dv1 = s == 1 ? (vPlane - M_PI) : (M_PI - vPlane);
+@@ -4944,6 +5188,13 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+     CPP.SetArc(std::max(CPs.Tolerance(), tolapp3d), L, wP, keptOnArc(L, wP, P, -gp_Vec(dIn)));
+     CPP.SetParameter(spineAt);
+     ChFiDS_CommonPoint CPW = CPo;
++    if (aTrim)
++    {
++      // (Cut back to the section: inside the plane.)
++      CPW.Reset();
++      CPW.SetPoint(Cw);
++      CPW.SetTolerance(std::max(CPo.Tolerance(), tolapp3d));
++    }
+     CPW.SetParameter(spineAt);
+     aPtW.Append(CPW);
+     aPtX.Append(CPP);
+@@ -5001,6 +5252,20 @@ bool ChFi3d_Builder::PerformPivotAboutCreaseAtEnd(const int Index)
+     }
+     Fd->ChangeVertex(isfirst, s)     = CPP;
+     Fd->ChangeVertex(isfirst, 3 - s) = CPW;
++    if (aTrim)
++    {
++      ChFiDS_FaceInterference& FIo = Fd->ChangeInterference(3 - s);
++      if (isfirst)
++      {
++        FIo.SetFirstParameter(aTrimO);
++        Fd->FirstSpineParam(spineAt);
++      }
++      else
++      {
++        FIo.SetLastParameter(aTrimO);
++        Fd->LastSpineParam(spineAt);
++      }
++    }
+     const int Icut = DStr.AddCurve(TopOpeBRepDS_Curve(Ccut, tolapp3d));
+     const int IP   = ChFi3d_IndexPointInDS(CPP, DStr);
+     const int IW   = ChFi3d_IndexPointInDS(CPW, DStr);

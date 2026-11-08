@@ -75,7 +75,10 @@ curvature continuous sets are skipped.
 their vertices first (each surface's kind and radii, `concave` where it
 bends away from the material), which tells a spec's geometry (a concave
 arc tighter than the ball, a rim rounded tighter than the ball) without
-opening the design.
+opening the design. `--chains` prints the edges the dressup's own
+tangent chain adds to the selection and, at each end of the chain and each
+turn in it, the edges there with their angle to the chain's edge and the
+angle between their faces at their start, middle and end (mitcad#1435).
 
 ## The set of mitcad#1398
 
@@ -137,5 +140,5 @@ candidate fall back at another cause first (their first spec's class):
 |---|---|---|
 | `5d6ee474` 88 (also `36f79fb9`, `81beaf7b`, `9cef13ca`: copies of one design) | radius 5 along the side edges of an earlier concave rounding of 3 (a torus) and past B-spline faces; the input is the stored body of an earlier fallback | the corner at the ends: the walk round the vertex does not come back to the rounding; now parametric, verified (1580 and 1581, mitcad#1425, [f3d-rounds-4.md](f3d-rounds-4.md#a-walls-edges-rounded-past-a-concave-corner-into-a-tip-mitcad1425)) |
 | `6eccefc2` 11, `c23a90e7` 12 | radius 1.5 round a rib's foot on a tube whose rims are rounded with 1 (convex tori tighter than the ball) | the computation of the rounding (the rational section's weights, f3d-rounds-2.md); on the stored body (`6eccefc2`) and on the replay's (`c23a90e7`); now parametric, verified (1590, mitcad#1426, [f3d-rounds-4.md](f3d-rounds-4.md#a-cut-faces-outline-rounded-past-a-tubes-rims-tighter-than-the-ball-mitcad1426)) |
-| `c4e070f9` 8 | radius 0.2 round an opening on a plane past earlier roundings of 0.2 (tori) | the corner at the ends: no result; now parametric, verified (1600 and 1601, mitcad#1427, [f3d-rounds-4.md](f3d-rounds-4.md#an-openings-wall-rounded-through-the-corners-of-earlier-roundings-mitcad1427)) |
-| `09c282ac` 22 | radius 0.5 along a concave cylinder of 12.5 past earlier roundings of 2 and 0.5 | the rounding's surface twists: the walk on from the sphere over the corner of 0.5 started from a second section of the ball, where the guide turns back round the rounding of 2; now parametric, verified (1610 and 1611, mitcad#1428, [f3d-rounds-4.md](f3d-rounds-4.md#a-grooves-rim-rounded-past-a-corner-of-the-balls-radius-mitcad1428)) |
+| `c4e070f9` 8 | radius 0.2 round an opening on a plane past earlier roundings of 0.2 (tori) | the corner at the ends: no result; now parametric, verified (1600 and 1601, mitcad#1427, [f3d-rounds-4.md](f3d-rounds-4.md#an-openings-wall-rounded-through-the-corners-of-earlier-roundings-mitcad1427)), its seven named edges read and run on through the turns (mitcad#1435) |
+| `09c282ac` 22 | radius 0.5 along a concave cylinder of 12.5 past earlier roundings of 2 and 0.5 | the rounding's surface twists: the walk on from the sphere over the corner of 0.5 started from a second section of the ball, where the guide turns back round the rounding of 2; now parametric, verified (1610 and 1611, mitcad#1428, [f3d-rounds-4.md](f3d-rounds-4.md#a-grooves-rim-rounded-past-a-corner-of-the-balls-radius-mitcad1428)), its edges read (the file's pieces of an edge split at a seam, mitcad#1437) |

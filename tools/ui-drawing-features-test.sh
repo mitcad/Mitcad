@@ -13,10 +13,12 @@
 #     in place of the value, the measured 60.0 beside the field, undone
 #     and redone, then the field emptied: 60.0 again.
 #   - Center Pattern: one hole clicked, every hole of the pattern marked.
-#   - Edge Extension of one edge; a Line in the view (its pen Extra
-#     Thick, mitcad#1402), an Arc on the sheet
+#   - Edge Extension of one edge; a Line in the view (its Width Extra
+#     Thick, mitcad#1402, its Pattern Continuous), an Arc on the sheet
 #     and a Text in the view; the view dragged: the line drawn in it moves
 #     with it.
+#   - The line's panel (mitcad#1447): Width and Pattern read back as
+#     drawn, Width set to Thick and Pattern to Dashed, each read back.
 #   - The view's Rotation in its panel (90), then Rotate 90° Right from its
 #     menu, undone and redone.
 #   - A section and a detail on the view, then its Orientation changed: no
@@ -292,16 +294,18 @@ ui_mark
 settled "Drawing tool Line"
 ui_step "Line"                             ui_click_logged "Drawing tool Line"
 ui_expect_new "Drawing tool: Line" "the line tool is on"
-# Its pen: Extra Thick (mitcad#1402), right after Thin and Thick.
-settled "Drawing panel drawingOption_pen"
-ui_step "Line: Extra Thick"                ui_click_logged "Drawing panel drawingOption_pen"
+# Its Width: Extra Thick (mitcad#1402), right after Thin and Thick; its
+# Pattern left Continuous (mitcad#1447).
+settled "Drawing panel drawingOption_width"
+ui_step "Width: Extra Thick"               ui_click_logged "Drawing panel drawingOption_width"
 ui_key Down Down Return
-ui_expect_new "Drawing option pen: extra_thick" "the extra thick pen"
+ui_expect_new "Drawing option width: extra_thick" "the extra thick width"
 ui_step "its first end, on the view"       sheet_click 125 175
 ui_expect_new "Drawing point 1 at" "the first end"
 ui_step "its second end"                   sheet_click 175 175
 ui_expect_new '"type":"line"' "a line asked for"
-ui_expect_new '"pen":"extra_thick"' "drawn with the extra thick pen"
+ui_expect_new '"width":"extra_thick"' "drawn extra thick"
+ui_expect_new '"pattern":"continuous"' "and continuous"
 ui_expect_new '"view":1' "in the view"
 ui_expect_new "4 = line" "drawn"
 no_refusal
@@ -353,6 +357,27 @@ after=$(grep -o "Drawing annotation 4 at [0-9]*,[0-9]*" "$UI_LOG" | tail -1)
 [ "$before" != "$after" ] || ui_fail "the line drawn in the view did not move with it ($before)"
 echo "ok   the line moved with its view ($before -> $after)"
 [ -n "$SHOT" ] && ui_capture "$SHOT"
+
+echo "--- The line's Width and Pattern in its panel (mitcad#1447)"
+ui_step "Esc (the drag selected the view)" ui_key Escape
+ui_mark
+ui_step "select the line"                  click_apart "Drawing annotation 4"
+ui_expect_new "Drawing annotation 4 selected" "the line selected"
+ui_expect_new "Drawing panel Width: extra_thick, Pattern: continuous" "its panel shows how it was drawn"
+settled "Drawing panel drawingAnnotationWidth"
+ui_mark
+ui_step "Width: Thick"                     ui_click_logged "Drawing panel drawingAnnotationWidth"
+ui_key Up Return
+ui_expect_new '"width":"thick"' "the thick width asked for"
+ui_expect_new "Drawing panel Width: thick, Pattern: continuous" "read back: thick, still continuous"
+no_refusal
+settled "Drawing panel drawingAnnotationPattern"
+ui_mark
+ui_step "Pattern: Dashed"                  ui_click_logged "Drawing panel drawingAnnotationPattern"
+ui_key Down Return
+ui_expect_new '"pattern":"dashed"' "the dashed pattern asked for"
+ui_expect_new "Drawing panel Width: thick, Pattern: dashed" "read back: thick and dashed"
+no_refusal
 
 echo "--- The view rotated (mitcad#729)"
 ui_step "Esc (the drag selected it)"       ui_key Escape

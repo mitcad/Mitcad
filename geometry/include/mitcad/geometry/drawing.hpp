@@ -16,8 +16,11 @@
 // of copies of the shapes when the exact one is not asked for or fails, or
 // on the quick path (DrawingViewSpec::quick). The polygonal algorithm's
 // segments are joined end to end and drawn as lines and arcs where they
-// follow one within the triangulation's deviation (mitcad#962). The shapes
-// are not modified.
+// follow one within the triangulation's deviation (mitcad#962). Both work
+// on copies of the shapes whose edges between faces that meet tangentially
+// (within 0.001 rad) are marked so, as are seams and edges between faces of
+// one surface (mitcad#1438): the algorithms go by that mark, which edges of
+// later fillets, booleans and imports lack. The shapes are not modified.
 
 #include <array>
 #include <optional>
@@ -47,7 +50,9 @@ struct DrawingViewSpec {
   gp_Dir x_axis{1.0, 0.0, 0.0};
   // Also the hidden edges (DrawnCurve::visible false).
   bool hidden = false;
-  // Also the edges between faces that meet tangentially.
+  // Also the edges between faces that meet tangentially (DrawnKind::Smooth;
+  // without it they are left out). Seams and edges between faces of one
+  // surface are never drawn.
   bool smooth = false;
   // The exact algorithm first; false: the polygonal one only.
   bool exact = true;

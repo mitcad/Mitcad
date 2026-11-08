@@ -147,6 +147,11 @@ pub struct RectangularPatternDef<P = ParamId> {
     pub direction1: PatternDirection<P>,
     #[serde(default = "none", skip_serializing_if = "Option::is_none")]
     pub direction2: Option<PatternDirection<P>>,
+    /// A third direction, for a 3D grid of copies (mitcad#1446): the
+    /// elements are the product of the three quantities, numbered along
+    /// `direction1` first, then `direction2`, then this one.
+    #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+    pub direction3: Option<PatternDirection<P>>,
     pub distance_type: SpacingType,
     #[serde(default, skip_serializing_if = "is_adjust")]
     pub compute: ComputeOption,
@@ -435,6 +440,10 @@ impl<P> RectangularPatternDef<P> {
             direction1: self.direction1.map_params("direction1", f)?,
             direction2: match &self.direction2 {
                 Some(direction) => Some(direction.map_params("direction2", f)?),
+                None => None,
+            },
+            direction3: match &self.direction3 {
+                Some(direction) => Some(direction.map_params("direction3", f)?),
                 None => None,
             },
             distance_type: self.distance_type,
@@ -1608,6 +1617,7 @@ impl RectangularPatternDef {
         for (name, direction) in [
             ("direction1", Some(&self.direction1)),
             ("direction2", self.direction2.as_ref()),
+            ("direction3", self.direction3.as_ref()),
         ] {
             let Some(direction) = direction else {
                 directions.push(([0.0; 3], vec![0.0]));
@@ -1632,19 +1642,22 @@ impl RectangularPatternDef {
         }
         let (offset1, along1) = &directions[0];
         let (offset2, along2) = &directions[1];
-        let count = along1.len() * along2.len();
+        let (offset3, along3) = &directions[2];
+        let count = along1.len() * along2.len() * along3.len();
         if count > MAX_ELEMENTS as usize {
             return Err(format!(
                 "the pattern has {count} elements, at most {MAX_ELEMENTS} are allowed"
             ));
         }
         let mut all = Vec::with_capacity(count);
-        for j in along2 {
-            for i in along1 {
-                all.push(Transform::translation(add(
-                    scaled(*offset1, *i),
-                    scaled(*offset2, *j),
-                )));
+        for k in along3 {
+            for j in along2 {
+                for i in along1 {
+                    all.push(Transform::translation(add(
+                        add(scaled(*offset1, *i), scaled(*offset2, *j)),
+                        scaled(*offset3, *k),
+                    )));
+                }
             }
         }
         let (all, scaling) = scale_elements(ctx, &self.objects, &self.scale_spec(), all)?;
@@ -3705,7 +3718,7 @@ impl FeatureInfo for RectangularPatternDef {
         let mut references = References::default();
         self.objects.add_references(&mut references);
         self.direction1.axis.add_to(&mut references);
-        if let Some(direction) = &self.direction2 {
+        for direction in self.direction2.iter().chain(&self.direction3) {
             direction.axis.add_to(&mut references);
         }
         add_scale_references(&self.scale_spec(), &mut references);
@@ -3715,7 +3728,7 @@ impl FeatureInfo for RectangularPatternDef {
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
         self.objects.check(ctx)?;
         self.direction1.axis.check(ctx, Want::Axis)?;
-        if let Some(direction) = &self.direction2 {
+        for direction in self.direction2.iter().chain(&self.direction3) {
             direction.axis.check(ctx, Want::Axis)?;
         }
         check_combine_any(self.combine, self.combine_any)?;
@@ -3730,7 +3743,10 @@ impl FeatureInfo for RectangularPatternDef {
     }
 
     fn check_values(&self, value: &dyn Fn(ParamId) -> f64) -> Result<(), String> {
-        for direction in std::iter::once(&self.direction1).chain(&self.direction2) {
+        for direction in std::iter::once(&self.direction1)
+            .chain(&self.direction2)
+            .chain(&self.direction3)
+        {
             let q = quantity("pattern quantity", value(direction.quantity))?;
             check_distance("pattern distance", q, value(direction.distance))?;
         }

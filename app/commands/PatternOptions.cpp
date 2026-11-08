@@ -55,7 +55,7 @@ QString patternOptionsText(const QJsonObject& def) {
   const QString type = def.value(QStringLiteral("type")).toString();
   if (type == QStringLiteral("rectangular_pattern")) {
     QStringList directions;
-    for (const char* n : {"1", "2"}) {
+    for (const char* n : {"1", "2", "3"}) {
       const QString suffix = QString::fromLatin1(n);
       const QJsonObject direction = def.value(QStringLiteral("direction") + suffix).toObject();
       if (direction.isEmpty()) {

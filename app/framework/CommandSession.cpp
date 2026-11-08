@@ -3004,6 +3004,12 @@ void CommandSession::acceptFeaturePreview(const QByteArray& key, const Built& bu
     if (!moved.isEmpty()) {
       qDebug().noquote() << QStringLiteral("Preview %1 moves %2").arg(m_def.name, moved.join(QStringLiteral(", ")));
     }
+    // A pattern's elements, the original's included (mitcad#1446), for UI
+    // tests.
+    const QJsonArray elements = preview.report.value(QStringLiteral("elements")).toArray();
+    if (!elements.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Preview %1 elements: %2").arg(m_def.name).arg(elements.size());
+    }
   } else {
     clearPreview();
     const QString problem = preview.report.value(QStringLiteral("error")).toString();

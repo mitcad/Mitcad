@@ -37,6 +37,8 @@
 #include "drawing.hpp"
 // Display meshings compared face by face (mitcad#644).
 #include "mesh_compare.hpp"
+// A mixed installation at start-up (mitcad#1454).
+#include "update/InstallationCheck.hpp"
 
 namespace {
 
@@ -315,9 +317,11 @@ const char* const kUsage = R"(usage:
       writes each body once in its component's coordinates, --occurrence
       (Arm:1/Pin:2) only what that occurrence places.
   mitcad-cli export-sketch <file.mitcad> <sketch> <out.dxf> [--unit mm|cm|m|in|ft] [--r12]
+                           [--construction]
       Writes the geometry of a sketch (uid or name) to a DXF file (R2000,
       or R12 with --r12), in the design's length unit unless --unit says
-      otherwise.
+      otherwise. Construction curves and center lines are left out unless
+      --construction writes them, on the layer construction.
   mitcad-cli export-flat <file.mitcad> <body> <out.dxf> [--unit mm|cm|m|in|ft]
                          [--back] [--tangents] [--r12]
       Writes the Flat Pattern of a sheet-metal body (uid or name) to a DXF
@@ -475,7 +479,9 @@ const char* const kUsage = R"(usage:
 // After the commands of other files (library.cpp).
 const char* const kExitStatus = R"(Exit status: 0 on success, 1 on errors (also of the network, signing in and
 the remote), failed expectations and exceeded limits, 2 on wrong arguments,
-3 when a sync needs a choice for files changed on both sides.
+3 when a sync needs a choice for files changed on both sides, 4 when the installation is
+incomplete (Windows: OCCT DLLs of another build, which an update could not replace while
+they were in use).
 )";
 
 bool read_file(const std::string& path, std::string& text) {
@@ -836,7 +842,7 @@ int export_bodies(const std::vector<std::string>& args) {
 int export_sketch(const std::vector<std::string>& args) {
   Arguments a;
   std::string problem;
-  if (!parse_arguments(args, {"--unit"}, {"--r12", "--json"}, a, problem)) {
+  if (!parse_arguments(args, {"--unit"}, {"--r12", "--construction", "--json"}, a, problem)) {
     return usage(problem);
   }
   if (a.positional.size() != 3) {
@@ -850,6 +856,10 @@ int export_sketch(const std::vector<std::string>& args) {
   }
   if (a.flag("--r12")) {
     command += R"(, "version": "r12")";
+  }
+  // Construction geometry only when asked for (mitcad#1445).
+  if (a.flag("--construction")) {
+    command += R"(, "construction": true)";
   }
   command += "}";
   rust::Box<mitcad::Document> document = open_document(a.positional[0]);
@@ -1380,6 +1390,13 @@ int run(int argc, char* argv[]) {
     return 0;
   }
   const std::string& mode = args[0];
+  // OCCT DLLs of another build beside this program (mitcad#1454): an update
+  // could not replace them while they were in use. Nothing runs with them.
+  if (const std::string problem = mitcad::installation::mixedInstallationProblem(MITCAD_VERSION);
+      !problem.empty()) {
+    std::cerr << "mitcad-cli: " << problem << '\n';
+    return 4;
+  }
   // OCCT's translators print statistics and warnings to stdout.
   mitcad::io::silence_occt_messages();
   // A crash inside OCCT (an access violation in a fillet of an imported

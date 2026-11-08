@@ -739,9 +739,15 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
         if !matches!(format, "dxf" | "svg") {
             return Err("a cut sheet is written as DXF or SVG".to_owned());
         }
-        if let Some(key) = ["drawing", "sketch", "flat_pattern", "bodies"]
-            .into_iter()
-            .find(|k| arguments.get(*k).is_some())
+        if let Some(key) = [
+            "drawing",
+            "sketch",
+            "flat_pattern",
+            "bodies",
+            "construction",
+        ]
+        .into_iter()
+        .find(|k| arguments.get(*k).is_some())
         {
             return Err(format!("cut_sheet does not take {key}"));
         }
@@ -805,6 +811,15 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
         }
         (None, None)
     };
+    // A sketch's construction geometry only when asked for (mitcad#1445).
+    let construction = match arguments.get("construction") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(construction)) => *construction,
+        Some(_) => return Err("construction must be true or false".to_owned()),
+    };
+    if construction && sketch.is_none() {
+        return Err("construction is only accepted with sketch".to_owned());
+    }
     let bodies = arguments.get("bodies");
     if let Some(bodies) = bodies
         && !bodies
@@ -823,7 +838,8 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
         command
     } else if let Some(sketch) = sketch {
         require_extension(path, "dxf")?;
-        json!({"cmd": "export_sketch", "path": text, "sketch": sketch})
+        json!({"cmd": "export_sketch", "path": text, "sketch": sketch,
+               "construction": construction})
     } else if let Some(body) = flat {
         require_extension(path, "dxf")?;
         json!({"cmd": "export_flat_pattern_dxf", "path": text, "body": body})

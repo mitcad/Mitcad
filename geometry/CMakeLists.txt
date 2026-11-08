@@ -1052,3 +1052,14 @@ if(BUILD_TESTING)
   add_test(NAME geometry.fillet_groove_rim_corners COMMAND test_fillet_groove_rim_corners)
   set_tests_properties(geometry.fillet_groove_rim_corners PROPERTIES TIMEOUT 600)
 endif()
+
+if(BUILD_TESTING)
+  # A rounding whose edge ends where a convex crease of its face begins:
+  # the ball rolled on over the crease into the face at the end (a horn
+  # torus), on a synthetic cut cylinder and a case of MITCAD_GEOMETRY_CASES,
+  # with the port's patch 1620 (mitcad#1434).
+  add_executable(test_fillet_crease_end_corner tests/test_fillet_crease_end_corner.cpp)
+  target_link_libraries(test_fillet_crease_end_corner PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_crease_end_corner COMMAND test_fillet_crease_end_corner)
+  set_tests_properties(geometry.fillet_crease_end_corner PROPERTIES TIMEOUT 600)
+endif()

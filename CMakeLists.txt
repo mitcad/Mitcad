@@ -27,7 +27,7 @@ else()
 endif()
 
 project(Mitcad
-  VERSION 0.51.0
+  VERSION 0.52.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 
@@ -232,6 +232,9 @@ if(MITCAD_OCCT_RELEASE_IN_DEBUG AND NOT WIN32)
     endif()
   endforeach()
 endif()
+# The OCCT DLLs' build stamp, which mitcad and mitcad-cli check at start-up
+# for a mixed installation (mitcad#1454).
+include(cmake/OcctBuildStamp.cmake)
 
 # The automatic updates' test hooks (mitcad#921, docs/updates.md#the-test-hooks):
 # only a build with this option reads the tests' environment variables
@@ -346,3 +349,9 @@ if(BUILD_TESTING)
     set_tests_properties(tools.f3d_learn PROPERTIES ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   endif()
 endif()
+
+# Linux debug builds: the links of the programs with the Rust static
+# library a few at a time (mitcad#1441). After every add_subdirectory, so
+# that it sees every target.
+include(cmake/RustLinkPool.cmake)
+mitcad_pool_rust_links()

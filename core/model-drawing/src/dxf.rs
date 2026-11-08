@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! A sheet as a DXF drawing in millimetres of paper: each pen on a layer of
 //! its own (`VISIBLE`, `HIDDEN`, `THIN`, `HATCH`, `SECTION_LINE`, `FRAME`,
-//! `EXTRA_THICK`), texts on `TEXT`, arrowheads as their outlines. The
-//! writer has no dashed line types or line weights, so hidden edges and
-//! extra wide lines are told apart by their layer.
+//! `EXTRA_THICK`; lines and arcs drawn by hand dashed or long dash dotted
+//! and wide or extra wide on `HIDDEN_THICK`, `HIDDEN_EXTRA_THICK`,
+//! `SECTION_LINE_THICK`, `SECTION_LINE_EXTRA_THICK`, mitcad#1447), texts on
+//! `TEXT`, arrowheads as their outlines. The writer has no dashed line
+//! types or line weights, so hidden edges and extra wide lines are told
+//! apart by their layer.
 //! `export_drawing` writes it in the file's length unit
 //! (`mitcad_model::exchange::dxf_in_unit`, mitcad#1408): the sheet in
 //! inches of paper for an inch design, its texts scaled with it.
@@ -12,7 +15,7 @@ use mitcad_dxf::{Drawing, Geometry, Layer, Point2, Text, Units};
 
 use super::sheet::{Anchor, Item, Pen, Sheet, text_width};
 
-const PENS: [Pen; 7] = [
+const PENS: [Pen; 11] = [
     Pen::Thick,
     Pen::Hidden,
     Pen::Thin,
@@ -20,15 +23,19 @@ const PENS: [Pen; 7] = [
     Pen::Chain,
     Pen::Frame,
     Pen::ExtraThick,
+    Pen::DashedThick,
+    Pen::DashedExtraThick,
+    Pen::ChainThick,
+    Pen::ChainExtraThick,
 ];
 
 fn colour(pen: Pen) -> i16 {
     match pen {
         Pen::Thick | Pen::ExtraThick | Pen::Frame => 7,
-        Pen::Hidden => 8,
+        Pen::Hidden | Pen::DashedThick | Pen::DashedExtraThick => 8,
         Pen::Thin => 3,
         Pen::Hatch => 9,
-        Pen::Chain => 1,
+        Pen::Chain | Pen::ChainThick | Pen::ChainExtraThick => 1,
     }
 }
 

@@ -29,7 +29,10 @@
 #include <QTimer>
 
 #ifdef Q_OS_WIN
+#include <QWinEventNotifier>
 #include <qt_windows.h>
+
+#include "update/RunningPrograms.hpp"
 #else
 #include <cerrno>
 #include <unistd.h>
@@ -382,12 +385,34 @@ public:
       }
       goOffline(kNotRunning, kRetryMs);
     });
+#ifdef Q_OS_WIN
+    // An update asks the bridge to end (mitcad#1454): the updater and the
+    // installer set this event of the bridges that run from the
+    // installation (update/RunningPrograms.hpp), whose files they are about
+    // to replace. Manual reset: it stays set until every handle is closed.
+    const HANDLE quitEvent = CreateEventW(nullptr, TRUE, FALSE,
+                                          mitcad::installation::bridgeQuitEventName(GetCurrentProcessId()).c_str());
+    std::unique_ptr<QWinEventNotifier> quitNotifier;
+    if (quitEvent != nullptr) {
+      quitNotifier = std::make_unique<QWinEventNotifier>(quitEvent);
+      QObject::connect(quitNotifier.get(), &QWinEventNotifier::activated, &m_app, [this] {
+        end("MitCad is being updated; the bridge ends so that the update can replace its files "
+            "(reconnect MitCad in the assistant after the update)");
+      });
+    }
+#endif
     std::thread reader(readInput, m_input);
     QTimer pumpTimer;
     QObject::connect(&pumpTimer, &QTimer::timeout, &m_app, [this] { pump(); });
     pumpTimer.start(5);
     m_app.exec();
     pumpTimer.stop();
+#ifdef Q_OS_WIN
+    quitNotifier.reset();
+    if (quitEvent != nullptr) {
+      CloseHandle(quitEvent);
+    }
+#endif
     QObject::disconnect(&m_socket, nullptr, &m_app, nullptr);
     m_online = false;
     m_socket.abort();
@@ -417,6 +442,16 @@ private:
     m_stopping = true;
     m_app.quit();
   }
+
+#ifdef Q_OS_WIN
+  // Ends the bridge without an error (mitcad#1454): an update asked it to.
+  void end(const char* reason) {
+    if (m_stopping) return;
+    std::cerr << "mitcad-cli mcp: " << reason << '\n';
+    m_stopping = true;
+    m_app.quit();
+  }
+#endif
 
   bool emitLine(const QByteArray& line) {
     if (std::fwrite(line.constData(), 1, static_cast<std::size_t>(line.size()), stdout) !=

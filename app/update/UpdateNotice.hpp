@@ -3,7 +3,8 @@
 
 // Automatic updates (mitcad#9): the notice under the toolbar. It never
 // blocks the window: an offer (Release Notes, Install, Skip This Version,
-// Later), a download's progress (Cancel) or a message (Close). Each state
+// Later), a download's progress (Cancel) or a message (Close; Try Again
+// after an update that was not installed, mitcad#1454). Each state
 // is logged ("Update notice: ..."), the UI tests read it.
 
 #include <QString>
@@ -34,7 +35,9 @@ public:
   // Plain text, shown as it is: an error may carry a server's text. Its
   // level gives its icon (mitcad#1040): an error's, a success's check (up
   // to date after Check for Updates), the update icon for information.
-  void showMessage(const QString& plain, NoticeLevel level = NoticeLevel::Information);
+  // `retry`: Try Again beside Close (an update that was not installed,
+  // mitcad#1454).
+  void showMessage(const QString& plain, NoticeLevel level = NoticeLevel::Information, bool retry = false);
   // The notice's text as shown, without markup.
   QString text() const;
 
@@ -44,6 +47,7 @@ signals:
   void skipClicked();
   void laterClicked();
   void cancelClicked();
+  void retryClicked();
   // Close and Later both hide the notice (closed() follows each).
   void closed();
 
@@ -58,6 +62,7 @@ private:
   QPushButton* m_skip = nullptr;
   QPushButton* m_later = nullptr;
   QPushButton* m_cancel = nullptr;
+  QPushButton* m_retry = nullptr;
   QPushButton* m_close = nullptr;
 };
 

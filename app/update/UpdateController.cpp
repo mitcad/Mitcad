@@ -87,6 +87,10 @@ void UpdateController::startUp() {
     hideNotice();
   });
   connect(m_notice, &UpdateNotice::closed, this, &UpdateController::hideNotice);
+  connect(m_notice, &UpdateNotice::retryClicked, this, [this] {
+    qInfo() << "Update: try again";
+    checkNow();
+  });
 
   const UpdateSource source = UpdateSource::fromEnvironment();
   // A test's source never elevates an installation for all users
@@ -116,10 +120,12 @@ void UpdateController::startUp() {
     } else {
       qWarning().noquote() << QStringLiteral("Update not installed: %1 -> %2 (%3)")
                                   .arg(finished->from, finished->to, finished->detail);
+      // Try Again checks and offers the update anew (mitcad#1454: once the
+      // programs that held the installation's files are closed).
       m_notice->showMessage(finished->detail.isEmpty()
                                 ? tr("The update to MitCad %1 was not installed.").arg(finished->to)
                                 : tr("The update to MitCad %1 was not installed: %2").arg(finished->to, finished->detail),
-                            NoticeLevel::Error);
+                            NoticeLevel::Error, true);
     }
     showNotice();
   }

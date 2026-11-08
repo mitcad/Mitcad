@@ -3562,3 +3562,183 @@ states matched 19 of 20 (18), inputs read 17 / 19 of the built features
 `geometry.fillet_groove_rim_corners` (a synthetic leg, and the case
 `groove-rim-corners`, the stored bodies before and after the item; fails
 without 1610 and without 1611).
+
+## A tube's rims rounded up to where its outside is cut at a crease (mitcad#1434)
+
+`6eccefc2` item 8 (Fillet3, radius 1.5, four edges), the follow-up of
+mitcad#1426: parametric and verified, but its check flagged four of the
+file's new faces up to 0.112 mm off, and since item 11 became parametric
+(mitcad#1426) the final body had 69 of the file's 73 faces, 0.26 mm off.
+Traced with OCCT's fillet alone (TKFillet built from the port with
+probes) on the replay's body before the item, which lies on the history's
+stored state 4 within 2.3e-6 mm.
+
+- **The file's construction.** Two tubes joined: one along x (outside 30
+  about the line y = 52, z = 15, end planes x = -15 and 15) whose outside
+  is cut by the plane y = 26.0511 where it meets the other tube; the cut
+  face is a strip there along each line L where it meets the outside
+  (z = -0.0551 and 30.0551), at a convex crease of 30.1 degrees. The item
+  rounds the outside's rims on the end planes with 1.5: four arcs, each
+  ending at a vertex V of L on an end plane. The stored body after the
+  item ends each rim's torus at V's section and closes the corner with a
+  horn torus about L (major and minor radius 1.5, 1.342181 mm²) through
+  P, the torus's contact on L, 1.5 from V: the ball rolled on over L while
+  touching the end plane, its centre turning about L by 59.9 degrees until
+  it lies in the cut face's plane; the cut face's corner at V is cut along
+  the ball's circle there (0.482854 mm² less each, R² (1 - pi / 4)).
+- **First deviation.** Item 8 itself: OCCT ran the rim's torus on past V
+  and cut it by the cut face's plane, from P to the end plane's edge with
+  the cut face; that cut runs into the other tube's material beyond the
+  strip. With OCCT alone the result was invalid (25 faces against the
+  file's 29, the file's horn tori 0.167 mm from it); the import's dressup
+  repaired it to a valid body of 25 faces with the tori cut that way (the
+  check's four faces up to 0.112 mm off), and items 9 to 11 built on it.
+  The same design's other tube has its rims rounded with 1 by item 3 up to
+  the same kind of vertex at a crease of 70.5 degrees, where the cut stays
+  on the cut face: there the stored body has the torus cut by that face,
+  as OCCT makes it.
+- **Port patch 1620**
+  (`third_party/vcpkg-ports/docs/fillet-crease-end-corner-1620.md`): port
+  patch 1220's ball turning about a crease at the end also at the crease's
+  own end vertex, where the face at the end is a plane through the crease
+  and its cut of the analytic end piece run on past the section would
+  leave it: the piece is cut back to the section and the ball turns on to
+  the face's plane.
+
+On the stored body before the item: valid, the file's 29 faces, every
+face of the result on the stored body after the item and every face of it
+on the result within 1e-6 mm, the material taken 80.030374 against the
+file's 80.030203 mm³; before, invalid with 25 faces.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `6eccefc2` 8 Fillet3 | 1 / 1 parametric, verified, edges read by their names in the file; new faces within 1e-6 mm of the file's (target 0.01); the check flags nothing (before: 4 faces up to 0.112 mm off) | |
+| `6eccefc2` body before item 11 | 49 / 49 faces (45 before) | |
+| `6eccefc2` Body1 | 73 / 73 faces (69 before); volume 8.9e-8 relative above the file's (1.8e-5 below before) | |
+| `c23a90e7` Body1 | 82 / 82 faces, volume 7.2e-7 relative above the file's, as before | |
+
+The designs imported alone (release build, OCCT from the port with its
+patches through 1601 and 1620): `6eccefc2` 8 / 0 / 0 / 1 of 9 features
+(parametric / partial / fallback / skipped, as before), 8 verified, inputs
+7 read and 1 inferred (item 3's edges), sketches 3 / 3; `c23a90e7` 9 / 0
+/ 0 / 1 of 10, 9 verified, 8 read and 1 inferred, as before. Test:
+`geometry.fillet_crease_end_corner` (a cut cylinder whose cut face is a
+strip at the corners, and without the strip; the case
+`tube-end-crease-corners`: the stored bodies before and after the item;
+fails without 1620).
+
+## A groove's rim read where the file splits an edge at a seam (mitcad#1437)
+
+`09c282ac` item 22 (Fillet13, radius 0.5) is parametric and verified since
+mitcad#1428, but its edges came from the history's state 17, not from the
+file's names: the import's lookup by name failed on leg 2's edges with its
+rounding of 2.
+
+- **The file's edges.** The item names 18 edges. Leg 2's edge with its
+  rounding of 2, at each end of the groove, is two edges in the file,
+  split where that cylinder's seam crosses it (1.082 and 4.461 mm long);
+  the replay's cylinder has its seam elsewhere, and one edge there
+  (5.543 mm). Each pair's two inputs have the same names (the groove, the
+  cylinder and a face at one end), and the two pieces of each length, one
+  at each end of the groove, are mirror images.
+- **First deviation: the decoder.** Of the edges between the two faces
+  the names give, the decoder kept those that start at the face the recipe
+  lists first at an end (`NamedState::edges_fitting`); the mirror image
+  runs the other way, so each pair's names fitted the piece at one end
+  only, and both inputs of the pair took it: one input 21.7 mm, the other
+  22.1 mm off the curve it stores (the file's own copy of the edge as the
+  input saw it, mitcad#306), while the piece that is that curve's stored
+  edge lay between the same two faces. The stored curve was consulted only
+  where the names fitted several edges.
+- **Then the lookup.** With the four pieces read, none is a replay edge or
+  made of replay edges: the lookup by name
+  (`dressup_edge_match_within`, `core/import-replay/src/refs.rs`) found
+  a file edge made of several replay edges, not a file edge that is part
+  of one.
+- **Fix.** The decoder (`off_the_names_by_curve`,
+  `core/f3d-design/src/inputs.rs`): where no edge the names fit lies on
+  the input's stored curve, the edge between the same two faces that is
+  that curve's stored edge (else the one piece of it) is the input's. The
+  import (`dressup_edge_parts`, `refs.rs`): the inputs of a set the replay
+  lacks are looked for together; a replay edge whose ends two or more of
+  them join end to end, whose length theirs add up to (within 1e-3 of it or
+  the tolerance) and whose middle lies on one of them is taken once for all
+  of them (the ends within 1e-3 mm, else within the geometric tolerance,
+  noted). A part that fits two edges of one body, or an edge two sets of
+  parts fit, is left out; the same edge in two bodies keeps the first, as a
+  choice.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `09c282ac` 22 Fillet13 inputs | 1 / 1 read (inferred before) | |
+| `09c282ac` 22 Fillet13 | 1 / 1 parametric, verified (its state 17 within 1.4e-6, as before) | |
+| `09c282ac` inputs read | 18 / 19 (17 before) | Extrude5 inferred, as before |
+
+The design imported alone (release build): items as before (25 / 0 / 0 / 1
+of 26 parametric / partial / fallback / skipped), the history's states
+matched 19 of 20 as before. Tests: `refs::dressup_tests::a_file_edge_split_where_the_replays_is_not_is_part_of_it`
+(a quarter circle the file splits at 20 degrees: neither part alone, both
+together in either order, not with a gap, not one part, not an edge with
+the same ends whose middle is elsewhere, the first body of two copies as a
+choice, neither of two edges of one body) and
+`inputs::tests::an_edge_its_end_faces_miss_is_found_by_its_stored_curve`
+(the decoder: the edge between the faces that is the curve's, the names'
+edge where it lies on the curve, the names alone where no edge does).
+
+## An opening's wall read by its named edges, the chain run on through the turn (mitcad#1435)
+
+`c4e070f9` item 8 (Fillet2, radius 0.2, the opening's wall, mitcad#1427)
+is parametric and verified since port patches 1600 and 1601, but its edges
+came from the history's state 7 (`T8-1`): the file names seven of the
+wall's twelve edges (`T8-0`), contour A of mitcad#1427 (X, the top, the
+cylinder of 5, the bottom and the bottom's X), and their rounding failed at
+the two vertices where the wall's boundary turns.
+
+- **The turn.** At each such vertex V the wall W's edge with X meets its
+  edge with the torus of the side's rim rounding at 0.95 rad (54 degrees),
+  and the crease between X and the torus runs from V up to the top, where X
+  and the torus are both tangent to the top: the angle between their
+  normals is 0.56 rad at V and 0 at the crease's other end
+  (`mitcad-rounding-specs --chains`, which prints the edges a chain adds and
+  the edges at its ends and turns with their faces' angles). The dressup's
+  own tangent chain (`detail::follow_tangent_chains`,
+  `geometry/src/face_select.cpp`, mitcad#224) runs on only where edges
+  meet within 0.01 rad, so the seven edges stayed seven, and OCCT's corner
+  at V had nothing to end against. The file's rounding takes the whole
+  loop of twelve (its stored body after the item).
+- **Fix.** The chain also runs on, at a vertex, into a sharp edge of the
+  same convexity that lies on a face the edge lies on, where their other
+  faces meet there along a crease that fades out: tangent at its other end
+  (within the smooth-edge angle, 1e-3 rad). Around the crease the two other
+  faces are one smooth surface, and the edges along them run on into each
+  other. Where the crease stays one along its length the chain stops as
+  before: in another design of the comparison below, edges meeting at 1.06
+  to 1.18 rad between faces creased 0.73 to 0.81 rad along their whole
+  edge, which a first form of the rule (the other faces joined through any
+  smooth faces) took into the chain and so changed that design's item.
+
+Through the dressup (`mitcad-rounding-specs`): `T8-0` (the seven named
+edges) now builds the stored body's 169 faces, the change of volume 1.1e-3
+from the file's (OFF, as `T8-1` and `T8-6`: the difference of the replay's
+input, mitcad#1427); `T8-2` (one edge) builds the same; `T8-7` (fourteen
+edges, X's creases with the tori among them) still fails, as before.
+
+| Item | Achieved / target | Cause of the gap |
+|---|---|---|
+| `c4e070f9` 8 Fillet2 inputs | 1 / 1 read (inferred from state 7 before) | |
+| `c4e070f9` 8 Fillet2 | 1 / 1 parametric, verified (its state 7 within 1.3e-7) | |
+| `c4e070f9` inputs read | 10 / 10 (9 before) | |
+
+The design imported alone (release build): features parametric 12 / 12,
+verified as before. Test: `geometry.suite.tangent_chain`
+(`test_chain_runs_on_across_a_fading_crease`: a bar bent 30 degrees at a
+mitre, its top edge rounded; the bottom's edges with the two roundings are
+one chain where the roundings are tangent to the top, and the fillet and
+chamfer take both; where the top cuts the roundings off, the crease stays
+and the chain stops at the turn).
+
+Both items, the five other designs of the comparison (`0f55ca9e`,
+`648b0272`, `76421ee5`, `852ad5eb`, `7e0036a0`: designs of the specs'
+index with fillets of four or more edges whose inputs are read), imported
+alone before and after: every item's outcome, inputs and history match the
+same (the same deviations), apart from the two items above.

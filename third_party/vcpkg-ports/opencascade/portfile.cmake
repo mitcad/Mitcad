@@ -295,6 +295,7 @@ vcpkg_from_github(
         1601-chfi3d-two-stripes-meet-at-the-section-of-an-earlier-roundings-ball-that-stays-put.patch
         1610-chfi3d-standing-ball-section-where-the-normal-planes-pass-forwards.patch
         1611-chfi3d-two-corner-cut-on-a-periodic-pcurve-not-cut-to-its-period.patch
+        1620-chfi3d-ball-turned-about-a-crease-at-its-end-vertex-into-the-end-face.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

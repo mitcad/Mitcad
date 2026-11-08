@@ -5,7 +5,7 @@
 // it. tools/f3d-rounding-specs-index.py --run drives it, one process per
 // spec; core/import/docs/rounding-specs.md describes the whole.
 //
-//   mitcad-rounding-specs --input SHAPE [--after SHAPE] [--describe] fillet|chamfer
+//   mitcad-rounding-specs --input SHAPE [--after SHAPE] [--describe] [--chains] fillet|chamfer
 //       [--corners rolling|setback|chamfer|miter|blend]
 //       (--set KIND A B [chain|no-chain] [--edge NAME]... [--face NAME]...
 //        [--reference FACE] [--flip])...
@@ -26,6 +26,10 @@
 // --describe first prints the selected edges, their faces and the other
 // faces at their vertices (each surface's kind and radii, `concave` where
 // it bends away from the material), to class a spec by its geometry.
+// --chains prints the edges the dressup's own tangent chain adds and, at
+// each end of the chain and each turn in it (its edges meeting at an
+// angle), the edges there: their angle to the chain's edge and the angle
+// between their faces at their start, middle and end (mitcad#1435).
 
 #include <algorithm>
 #include <array>
@@ -42,22 +46,31 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepLProp_SLProps.hxx>
 #include <BRep_Tool.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
+#include <Geom2d_Curve.hxx>
+#include <NCollection_IndexedDataMap.hxx>
+#include <NCollection_List.hxx>
 #include <TopExp.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Vertex.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Pnt2d.hxx>
+#include <gp_Vec.hxx>
 
 #include "mitcad/geometry/dressup.hpp"
 #include "mitcad/geometry/persist.hpp"
 #include "mitcad/geometry/query.hpp"
+#include "mitcad/geometry/tangent_chain.hpp"
 
 namespace {
 
 namespace g = mitcad::geometry;
 
 constexpr const char* kUsage =
-    "usage: mitcad-rounding-specs --input SHAPE [--after SHAPE] [--describe] fillet|chamfer\n"
+    "usage: mitcad-rounding-specs --input SHAPE [--after SHAPE] [--describe] [--chains] fillet|chamfer\n"
     "         [--corners rolling|setback|chamfer|miter|blend]\n"
     "         (--set KIND A B [chain|no-chain] [--edge NAME]... [--face NAME]...\n"
     "          [--reference FACE] [--flip])...\n";
@@ -112,6 +125,7 @@ struct Spec {
   std::string corners;
   std::vector<Set> sets;
   bool describe = false;
+  bool chains = false;
 };
 
 Spec parse(const std::vector<std::string>& args) {
@@ -155,6 +169,8 @@ Spec parse(const std::vector<std::string>& args) {
       } else {
         set.flip = true;
       }
+    } else if (arg == "--chains") {
+      spec.chains = true;
     } else if (arg == "--describe") {
       spec.describe = true;
     } else if (arg == "fillet" || arg == "chamfer") {
@@ -267,6 +283,124 @@ void describe(const Spec& spec, const g::Shape& body) {
   }
 }
 
+// The unit tangent of an edge at one of its vertices, pointing away from
+// it (zero where the curve has no direction there).
+gp_Vec tangent_away(const TopoDS_Edge& edge, const TopoDS_Vertex& vertex) {
+  const BRepAdaptor_Curve curve(edge);
+  const bool at_first = TopExp::FirstVertex(edge).IsSame(vertex);
+  gp_Pnt point;
+  gp_Vec d;
+  curve.D1(at_first ? curve.FirstParameter() : curve.LastParameter(), point, d);
+  if (d.Magnitude() <= 1e-12) {
+    return gp_Vec();
+  }
+  d.Normalize();
+  return at_first ? d : -d;
+}
+
+// The angle between the faces of an edge (their outward normals) at its
+// start, middle and end, in radians.
+std::string crease(const g::Shape& body, int edge) {
+  const std::array<int, 2> faces = body.edge_faces(edge);
+  if (faces[0] < 0 || faces[1] < 0 || faces[0] == faces[1]) {
+    return "-";
+  }
+  std::string out;
+  for (const double t : {0.0, 0.5, 1.0}) {
+    gp_Vec n[2];
+    for (int k = 0; k < 2; ++k) {
+      const TopoDS_Face& face = body.face(faces[k]);
+      double first = 0.0;
+      double last = 0.0;
+      const occ::handle<Geom2d_Curve> pcurve = BRep_Tool::CurveOnSurface(body.edge(edge), face, first, last);
+      if (pcurve.IsNull()) {
+        return "-";
+      }
+      const gp_Pnt2d uv = pcurve->Value(first + (last - first) * t);
+      BRepLProp_SLProps props(BRepAdaptor_Surface(face, false), uv.X(), uv.Y(), 1, 1e-9);
+      if (!props.IsNormalDefined()) {
+        return "-";
+      }
+      n[k] = gp_Vec(props.Normal());
+      if (face.Orientation() == TopAbs_REVERSED) {
+        n[k].Reverse();
+      }
+    }
+    char text[32];
+    std::snprintf(text, sizeof text, "%s%.4g", out.empty() ? "" : " ", n[0].Angle(n[1]));
+    out += text;
+  }
+  return out;
+}
+
+// The edges the dressup's own tangent chain adds to the selection, and at
+// each end of the chain and each turn in it the edges there: their angle
+// to the chain's edge (0 where one runs straight on from the other) and
+// their faces' crease (crease()).
+void chains(const Spec& spec, const g::Shape& body) {
+  std::vector<int> selected;
+  for (const Set& s : spec.sets) {
+    for (const std::string& name : s.edges) {
+      for (const int e : body.find_edges(name)) {
+        selected.push_back(e);
+      }
+    }
+  }
+  std::vector<int> grown = selected;
+  for (const std::vector<int>& chain : g::edge_tangent_chains(body)) {
+    const bool touches = std::any_of(chain.begin(), chain.end(), [&](int e) {
+      return std::find(selected.begin(), selected.end(), e) != selected.end();
+    });
+    for (const int e : chain) {
+      if (touches && std::find(grown.begin(), grown.end(), e) == grown.end()) {
+        grown.push_back(e);
+        std::printf("chain adds e%d %s\n", e, body.edge_name(e).c_str());
+      }
+    }
+  }
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> edges_at;
+  TopExp::MapShapesAndUniqueAncestors(body.occt(), TopAbs_VERTEX, TopAbs_EDGE, edges_at);
+  const auto in_chain = [&](int i) { return std::find(grown.begin(), grown.end(), i) != grown.end(); };
+  for (const int e : grown) {
+    for (const TopoDS_Vertex& vertex : {TopExp::FirstVertex(body.edge(e)), TopExp::LastVertex(body.edge(e))}) {
+      const NCollection_List<TopoDS_Shape>& at = edges_at.FindFromKey(vertex);
+      const gp_Vec away = tangent_away(body.edge(e), vertex);
+      const auto angle_to = [&](int i) {
+        const gp_Vec other = tangent_away(body.edge(i), vertex);
+        return away.Magnitude() > 0.5 && other.Magnitude() > 0.5 ? away.Angle(-other) : -1.0;
+      };
+      // A chain's end, or a turn within it (an edge of the chain at an
+      // angle there, listed from the lower edge number).
+      bool end = true;
+      bool turn = false;
+      for (const TopoDS_Shape& o : at) {
+        const int i = body.edge_index(o);
+        if (i != e && in_chain(i)) {
+          end = false;
+          turn = turn || (i > e && angle_to(i) > 1e-2);
+        }
+      }
+      if (!end && !turn) {
+        continue;
+      }
+      const gp_Pnt p = BRep_Tool::Pnt(vertex);
+      std::printf("chain %s at e%d v%d (%.5f, %.5f, %.5f)\n", end ? "end" : "turn", e, body.vertex_index(vertex),
+                  p.X(), p.Y(), p.Z());
+      for (const TopoDS_Shape& o : at) {
+        const int i = body.edge_index(o);
+        if (i == e || i < 0 || BRep_Tool::Degenerated(TopoDS::Edge(o))) {
+          continue;
+        }
+        const std::array<int, 2> fe = body.edge_faces(e);
+        const std::array<int, 2> fo = body.edge_faces(i);
+        const bool shares = fe[0] == fo[0] || fe[0] == fo[1] || fe[1] == fo[0] || fe[1] == fo[1];
+        std::printf("  e%d %s: angle %.6g%s%s, faces at %s\n", i, body.edge_name(i).c_str(), angle_to(i),
+                    shares ? ", shares a face" : "", in_chain(i) ? ", in the chain" : "", crease(body, i).c_str());
+      }
+    }
+  }
+}
+
 g::ShapePtr run(const Spec& spec, const g::Shape& body) {
   const std::string feature = "S";
   if (spec.type == "fillet") {
@@ -337,6 +471,9 @@ int main(int argc, char** argv) {
     const g::ShapePtr input = read_shape(spec.input);
     if (spec.describe) {
       describe(spec, *input);
+    }
+    if (spec.chains) {
+      chains(spec, *input);
     }
     g::ShapePtr result;
     try {

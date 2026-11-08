@@ -683,6 +683,38 @@ QString plainText(QString text) {
   return text.trimmed();
 }
 
+// The popups as the popup stage sees them, for its timeout message: the
+// active one and every menu Qt reports visible, with whether its window is
+// really shown (a menu effect shows the menu's window only when it ends).
+QString popupState() {
+  const auto describe = [](const QWidget* widget) {
+    if (widget == nullptr) return QStringLiteral("none");
+    QString text = QStringLiteral("%1 '%2'").arg(QString::fromLatin1(widget->metaObject()->className()),
+                                                  plainText(widget->windowTitle()));
+    const QWindow* handle = widget->windowHandle();
+    text += QStringLiteral(" window shown=%1").arg(handle != nullptr && handle->isVisible());
+    if (const auto* menu = qobject_cast<const QMenu*>(widget)) {
+      QStringList entries;
+      for (const QAction* action : menu->actions()) {
+        if (!action->isSeparator()) entries << plainText(action->text());
+      }
+      text += QStringLiteral(" [%1]").arg(entries.join(QStringLiteral(" | ")));
+    }
+    return text;
+  };
+  QStringList visible;
+  for (QWidget* widget : QApplication::topLevelWidgets()) {
+    if (widget->isVisible() && (qobject_cast<QMenu*>(widget) != nullptr || widget->windowType() == Qt::ToolTip)) {
+      visible << describe(widget);
+    }
+  }
+  return QStringLiteral("menu effects %1, fade %2; active popup: %3; visible: %4")
+      .arg(QApplication::isEffectEnabled(Qt::UI_AnimateMenu))
+      .arg(QApplication::isEffectEnabled(Qt::UI_FadeMenu))
+      .arg(describe(QApplication::activePopupWidget()), visible.isEmpty() ? QStringLiteral("none")
+                                                                       : visible.join(QStringLiteral("; ")));
+}
+
 // Stacked workspaces can reuse object names. Resolve the visible instance
 // inside the existing lookup scope, never a hidden page's first match.
 // Property assertions also inspect disabled controls and, when there is no
@@ -4576,12 +4608,22 @@ void TestDriver::run(const Step& step) {
     // "Sub/Item" opens the submenu Sub and chooses Item in it (Material ▸
     // More…, mitcad#1046); a whole entry with a slash still matches first.
     const auto rest = std::make_shared<QString>();
+    // The rest of "Sub/Item" is chosen in the submenu Sub opened, not in
+    // Qt's active popup: a focus event the platform delivers late (under
+    // load) makes the parent menu Qt's active popup again while Sub stays
+    // open over it (mitcad#1443), and the entry was then never found.
+    const bool inSubmenu = std::exchange(m_inSubmenu, false);
+    const QPointer<QWidget> submenu = std::exchange(m_submenu, nullptr);
+    const auto found = std::make_shared<QPointer<QMenu>>();
     whenReady(
-        [this, entry, rest] {
-          const QMenu* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
-          if (menu == nullptr) {
+        [this, entry, rest, inSubmenu, submenu, found] {
+          QMenu* menu = inSubmenu ? qobject_cast<QMenu*>(submenu.data())
+                                  : qobject_cast<QMenu*>(QApplication::activePopupWidget());
+          m_waitDetail = popupState();
+          if (menu == nullptr || !menu->isVisible()) {
             return false;
           }
+          *found = menu;
           rest->clear();
           for (QAction* action : menu->actions()) {
             if (plainText(action->text()).compare(plainText(entry), Qt::CaseInsensitive) == 0 &&
@@ -4606,31 +4648,41 @@ void TestDriver::run(const Step& step) {
           return false;
         },
         6, QStringLiteral("no entry '%1' in an open menu").arg(entry),
-        [this, rest, line] {
-          QMenu* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+        [this, rest, line, found] {
+          QMenu* menu = found->data();
           QAction* action = qobject_cast<QAction*>(m_found.data());
           if (menu == nullptr || action == nullptr) {
+            fail(line, QStringLiteral("the popup menu closed before its entry was chosen"));
             return;
           }
+          // A key for the menu that has the entry, as the keyboard's would
+          // be for it while it is the open menu that has the input.
+          const auto press = [menu](int key, const QString& text) {
+            if (mac::test::sendKey(key, Qt::NoModifier, text)) return;
+            QKeyEvent offer(QEvent::ShortcutOverride, key, Qt::NoModifier, text);
+            offer.ignore();
+            QCoreApplication::sendEvent(menu, &offer);
+            QKeyEvent down(QEvent::KeyPress, key, Qt::NoModifier, text);
+            QCoreApplication::sendEvent(menu, &down);
+            QKeyEvent up(QEvent::KeyRelease, key, Qt::NoModifier, text);
+            QCoreApplication::sendEvent(menu, &up);
+          };
           if (!rest->isEmpty()) {
             // The submenu current, which opens it (else Right does, as the
             // keyboard opens one), then the rest in it.
             menu->setActiveAction(action);
-            if (QApplication::activePopupWidget() == menu) {
-              KeyPress right;
-              right.key = Qt::Key_Right;
-              sendKey(right);
+            if (!action->menu()->isVisible()) {
+              press(Qt::Key_Right, QString());
             }
+            m_submenu = action->menu();
+            m_inSubmenu = true;
             const QString next = *rest;
             queue([this, line, next] { run(Step{line, {}, QStringLiteral("popup"), {next}}); });
             return;
           }
           // As the keyboard does: the entry current, then Return.
           menu->setActiveAction(action);
-          KeyPress enter;
-          enter.key = Qt::Key_Return;
-          enter.text = QStringLiteral("\r");
-          sendKey(enter);
+          press(Qt::Key_Return, QStringLiteral("\r"));
         });
   } else if (name == QLatin1String("button")) {
     QRegularExpression re;

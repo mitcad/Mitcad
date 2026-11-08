@@ -355,6 +355,46 @@ again under new hashes (`<name>-<hash>` in `deps/`, `.fingerprint/`,
   with full debug information for a debugger (as a second build; the
   sweep removes it after the next normal build).
 
+### Links of the Rust library (Linux debug builds)
+
+The C++ programs link the Rust code as one static library,
+`<build>/core/libmitcad_ffi.a`. In a Linux debug build it is about
+2.1 GB: with split-debuginfo `unpacked` each crate's rlib carries its
+`.dwo` files as members, the static library takes them all (about 4,200
+`.dwo` members, 1.2 GB, which the linker never reads; debuggers read the
+`.dwo` files in cargo's `deps/` folder), and the 4,500 object members are
+about 0.9 GB. Fourteen programs link it (the application, `mitcad-cli` and
+twelve tests), and all of them become ready the moment the library is
+built.
+
+Each of those links with GNU `ld` charges about 1.5 GB to the build's
+cgroup (`test_bridge`: 26-30 s, 1.8 GB peak RSS, of which 1.5 GB charged;
+the application 62 s, 2.9 GB peak RSS). In mitcad#1441 two builds under systemd memory
+limits started 22 such links at once; the memory went past the limits'
+`MemoryHigh` with little swap allowed, and the kernel throttled every
+`ld` in its reclaim instead of failing it: they ran at about 90 % CPU,
+read nothing more and never finished. The same link of `test_bridge` in a
+scope with `MemoryHigh=1200M` and no swap made no progress in 5 minutes;
+with `MemoryHigh=1600M` it finished in 26 s. The library's size was not
+the cause: GNU ld 2.46 links `test_bridge` against a copy of the library
+padded to 3.2 GB (150,000 of its 267,000 symbol-table offsets past 2^31)
+in the same 30 s, and without its `.dwo` members (0.93 GB) with the same
+memory and 4 s faster.
+
+So a Linux Ninja debug build runs these links in a job pool of their own,
+`mitcad_rust_link` (`cmake/RustLinkPool.cmake`; configure prints
+"Links with the Rust library: 14 programs, 3 at once"): three at a time,
+at most about 7 GB together (the application and two tests), whatever
+the build's parallelism, instead of about 25 GB for all fourteen. A fresh
+`dev` build (`CMAKE_BUILD_PARALLEL_LEVEL=8`, in a 10 GB scope) linked all
+fourteen against a 2.143 GB library in about 4 minutes after the library
+was built. The other links and the compiles keep the build's parallelism.
+`-DMITCAD_RUST_LINK_JOBS=<n>` changes the depth (0: no pool, every link at
+once as before). Windows, macOS, the release builds and other generators
+are unchanged. The pool finds the programs by their links (directly or
+through a library that links `mitcad_ffi`), so a new program that links
+the bridge joins it without a change here.
+
 ### macOS allocator experiments
 
 The pinned OCCT 8.0.1 defaults to `USE_MMGR_TYPE=NATIVE`. In this build,
@@ -597,10 +637,38 @@ stays for all users. The installer writes the scope into
 the uninstaller and the [automatic updates](updates.md) read; an
 installation without it is an earlier release's, which was for all users.
 The uninstaller removes the files and the keys of its own scope only;
-for all users it elevates as the installer does. Exit codes: 0 done, 1
-cancelled, 2 aborted (also when the earlier version could not be
-uninstalled), 740 elevated but still without administrator rights, 1223
+for all users it elevates as the installer does.
+
+No file is replaced while a program from the installation runs
+(mitcad#1454). A running program keeps its executable and its DLLs
+locked, and an update that skipped them once left a new `mitcad.exe` with
+the previous release's OCCT DLLs (an MCP bridge, `mitcad-cli mcp
+--connect`, loads all of OCCT and ran for days). Before the earlier
+version is uninstalled, the installer lists the processes whose program
+is in the installation folder (`K32EnumProcesses`,
+`QueryFullProcessImageNameW` through the System plugin), asks the MCP
+bridges among them to end (each waits on the event
+`Local\MitcadBridgeQuit-<pid>`, [app/update/RunningPrograms.hpp](../app/update/RunningPrograms.hpp))
+and gives everything up to five seconds. With pages, what still runs is
+named, with *Retry* and *Cancel* (back to the folder page); a silent
+install ends with exit code 3 and changes no file. `AllowSkipFiles off`:
+a file that cannot be written is never skipped (*Retry* or *Cancel*; a
+silent install aborts). Exit codes: 0 done, 1 cancelled, 2 aborted (also
+when the earlier version could not be uninstalled or a file could not be
+written), 3 programs from the installation are running (silent; nothing
+changed), 740 elevated but still without administrator rights, 1223
 elevation refused.
+
+`mitcad.exe` and `mitcad-cli.exe` check at start-up that the OCCT DLLs
+they loaded are the ones they were built with
+([app/update/InstallationCheck.cpp](../app/update/InstallationCheck.cpp)):
+the build ([cmake/OcctBuildStamp.cmake](../cmake/OcctBuildStamp.cmake))
+records the link time stamp and image size from each OCCT DLL's PE
+header, and the loaded modules' headers must match. On a mismatch MitCad
+names the DLLs and the programs still running from `bin`, asks to close
+them and install again, and starts nothing else (exit code 3);
+`mitcad-cli` prints the same and exits with 4. `MITCAD_SKIP_INSTALLATION_CHECK=1`
+turns the check off, should it ever be wrong about an installation.
 
 Contents: `bin` (executables, Qt, vcpkg DLLs,
 VC++ runtime, `qt.conf`), `plugins` (via `windeployqt`), licences
@@ -622,7 +690,12 @@ other scope). Just for the current user it checks the files, runs
 `mitcad-cli`, `mitcad.exe --version` and the render worker (a test render,
 `--list-devices`; the build's GPU kernels installed) with a system-only `PATH`,
 checks that the installed `mitcad-updater.exe` does not run an installer
-whose SHA-256 is not the given `--sha256`, or without one (mitcad#603), and,
+whose SHA-256 is not the given `--sha256`, or without one (mitcad#603),
+checks files in use (mitcad#1454: with a `mitcad-cli mcp` from `bin`
+running, the silent installer and the updater end with code 3 and no
+file of `bin` changes, the updater's log names `mitcad-cli.exe`; a running
+`mitcad-cli mcp --connect` is asked to end and the install replaces every
+file with the package's), and,
 with `-MesaDir`, renders a screenshot; for all users it reinstalls with
 only `/D=` as an earlier release's updater does. With `-MesaDir` it tests
 the automatic update in both scopes ([updates.md](updates.md#tests);
@@ -1491,6 +1564,14 @@ in the distro only:
   two back plates against their union, also by sampled points
   (mitcad#1278); a synthetic row of blocks with a near miss runs without
   the file.
+  ctest `cli.drawing_tangent_edges_reported`
+  (`tools/cli/drawing-tangent-edges-test.cmake`) writes the drawing of
+  `github-177-…` and its body as a `.brep` file, which
+  `test_drawing --tangent-edges` projects in seven views: no line along a
+  tangent edge or a seam with Tangent Edges off, exact and polygonal, thin
+  ones with it on, every other sharp line still drawn, the body unchanged
+  (mitcad#1438); skipped with a message without it. A synthetic filleted
+  block in `geometry.drawing` runs the same checks without the file.
 
 ### SolidCraft designs
 

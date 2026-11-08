@@ -2823,6 +2823,247 @@ fn chains_by_ends(
     chains
 }
 
+/// A file's open edge as the lookup of [`dressup_edge_parts`] reads its
+/// fingerprint (mm): its ends, middle, length and direction there.
+struct FileEdge {
+    a: Vec3,
+    m: Vec3,
+    b: Vec3,
+    length: f64,
+    direction: Option<Vec3>,
+}
+
+impl FileEdge {
+    fn of(fp: &Fingerprint) -> Option<Self> {
+        let (m, length) = (fp.mid_point.map(mm3)?, fp.length.map(mm)?);
+        let a = fp.start_point.flatten().map(mm3)?;
+        let b = fp.end_point.flatten().map(mm3)?;
+        // (A closed edge has no ends to join the next part at.)
+        if geom::distance(a, b) <= 1e-6 * length.max(1.0) {
+            return None;
+        }
+        let direction = fp
+            .f3d
+            .as_ref()
+            .and_then(|f| f.direction)
+            .and_then(geom::unit);
+        Some(FileEdge {
+            a,
+            m,
+            b,
+            length,
+            direction,
+        })
+    }
+}
+
+/// Most steps of the search in [`dressup_edge_parts_within`] per replay
+/// edge.
+const PARTS_STEPS: usize = 2_000;
+
+/// The replay edges of which two or more of the file's edges are parts
+/// (mitcad#1437): the file splits an edge at a vertex the replay does not
+/// have (where a cylinder's seam crosses it: the replay's seam lies
+/// elsewhere), so that none of the parts is a replay edge or made of
+/// replay edges ([`dressup_edge_match`] finds neither). Of the file's edges
+/// `fps` (those [`dressup_edge_match`] did not find, of one set), each
+/// replay edge whose ends the parts join from one to the other end to
+/// end, whose length theirs add up to and whose middle lies on one of
+/// them; with the indices of the parts (into `fps`, in the order they
+/// follow each other). A part that fits more than one replay edge of one
+/// body, or a replay edge that two sets of parts fit, is left out; the
+/// same edge in several bodies (coincident copies) keeps the first body,
+/// as a choice ([`FoundEdge::chosen_from_multiple`]).
+///
+/// Within [`EXACT`] (the ends), else within the [`geometric_tolerance`]
+/// for the parts not found, its deviation noted.
+pub(crate) fn dressup_edge_parts(
+    edges: &ReplayEdges,
+    fps: &[&Fingerprint],
+) -> Vec<(Vec<usize>, FoundEdge)> {
+    let mut found = dressup_edge_parts_within(edges, fps, &[], EXACT).0;
+    if let Some(tolerance) = widened() {
+        let taken: Vec<usize> = found.iter().flat_map(|(parts, _)| parts.clone()).collect();
+        if taken.len() < fps.len() {
+            let (more, deviation) = dressup_edge_parts_within(edges, fps, &taken, tolerance);
+            if !more.is_empty() {
+                note_deviation(deviation);
+            }
+            found.extend(more);
+        }
+    }
+    found
+}
+
+/// [`dressup_edge_parts`] with the ends within `tolerance`, without the
+/// parts `taken`; with the largest distance between the ends joined.
+fn dressup_edge_parts_within(
+    edges: &ReplayEdges,
+    fps: &[&Fingerprint],
+    taken: &[usize],
+    tolerance: f64,
+) -> (Vec<(Vec<usize>, FoundEdge)>, f64) {
+    let parts: Vec<(usize, FileEdge)> = fps
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !taken.contains(i))
+        .filter_map(|(i, fp)| Some((i, FileEdge::of(fp)?)))
+        .collect();
+    if parts.len() < 2 {
+        return (Vec::new(), 0.0);
+    }
+    let near = |p: Vec3, q: Vec3| geom::distance(p, q) <= tolerance;
+    // Each replay edge with the chains of parts that make it up.
+    struct Walk<'a> {
+        parts: &'a [(usize, FileEdge)],
+        to: Vec3,
+        length: f64,
+        tol: f64,
+        tolerance: f64,
+        steps: usize,
+        chain: Vec<(usize, Vec3, Vec3)>,
+        out: Vec<Vec<(usize, Vec3, Vec3)>>,
+    }
+    impl Walk<'_> {
+        fn follow(&mut self, from: Vec3, sum: f64) {
+            if self.steps == 0 || self.out.len() > 1 {
+                return;
+            }
+            self.steps -= 1;
+            let (parts, tolerance) = (self.parts, self.tolerance);
+            let near = |p: Vec3, q: Vec3| geom::distance(p, q) <= tolerance;
+            for (k, (_, part)) in parts.iter().enumerate() {
+                if self.chain.iter().any(|c| c.0 == k) {
+                    continue;
+                }
+                let (start, end) = if near(part.a, from) {
+                    (part.a, part.b)
+                } else if near(part.b, from) {
+                    (part.b, part.a)
+                } else {
+                    continue;
+                };
+                let total = sum + part.length;
+                // (The rest from there is no shorter than the straight line.)
+                if total > self.length + self.tol
+                    || geom::distance(end, self.to) > self.length - total + self.tol
+                {
+                    continue;
+                }
+                self.chain.push((k, start, end));
+                if near(end, self.to) && (total - self.length).abs() <= self.tol {
+                    if self.chain.len() >= 2 {
+                        self.out.push(self.chain.clone());
+                    }
+                } else {
+                    self.follow(end, total);
+                }
+                self.chain.pop();
+            }
+        }
+    }
+    // (replay edge, the parts in order, the part its middle lies on, how far
+    // apart the ends joined lie)
+    let mut fits: Vec<(usize, Vec<usize>, usize, f64)> = Vec::new();
+    for k in 0..edges.0.len() {
+        let Some([s, e]) = edges.ends(k) else {
+            continue;
+        };
+        let (_, _, p, t, length) = &edges.0[k];
+        if !parts.iter().any(|(_, f)| near(f.a, s) || near(f.b, s)) {
+            continue;
+        }
+        let tol = (1e-3 * length.max(1.0)).max(tolerance);
+        let mut walk = Walk {
+            parts: &parts,
+            to: e,
+            length: *length,
+            tol,
+            tolerance,
+            steps: PARTS_STEPS,
+            chain: Vec::new(),
+            out: Vec::new(),
+        };
+        walk.follow(s, 0.0);
+        let [chain] = &walk.out[..] else {
+            continue;
+        };
+        // The replay edge's middle lies on one of the parts, running along
+        // it (the arc through its ends and middle approximates it).
+        let on = chain.iter().find(|&&(i, start, end)| {
+            let f = &parts[i].1;
+            let off = arc_distance(*p, start, f.m, end);
+            let chord = geom::unit(geom::sub(end, start));
+            off <= CHAIN_MID_OFF * f.length.max(1.0)
+                && chord.is_some_and(|c| geom::dot(c, *t).abs() >= 0.5)
+        });
+        let Some(&(on, _, _)) = on else {
+            continue;
+        };
+        // How far apart the joined ends lie: the replay edge's from the
+        // chain's, and the parts' from each other's.
+        let mut off =
+            geom::distance(chain[0].1, s).max(geom::distance(chain[chain.len() - 1].2, e));
+        for w in chain.windows(2) {
+            off = off.max(geom::distance(w[0].2, w[1].1));
+        }
+        fits.push((k, chain.iter().map(|c| c.0).collect(), on, off));
+    }
+    // A part in fits of different sets of parts, or of two edges of one body,
+    // is left out.
+    let mut out = Vec::new();
+    let mut deviation = 0.0_f64;
+    let mut done: Vec<usize> = Vec::new();
+    for (n, (k, chain, on, off)) in fits.iter().enumerate() {
+        if done.contains(&n) {
+            continue;
+        }
+        let same: Vec<usize> = (n..fits.len())
+            .filter(|&o| fits[o].1.iter().any(|i| chain.contains(i)))
+            .collect();
+        done.extend(&same);
+        let mut sorted = chain.clone();
+        sorted.sort_unstable();
+        let one_set = same.iter().all(|&o| {
+            let mut other = fits[o].1.clone();
+            other.sort_unstable();
+            other == sorted
+        });
+        // (Aliases of one name are one edge.)
+        let mut names: Vec<(BodyUid, &EdgeName)> = same
+            .iter()
+            .map(|&o| (edges.0[fits[o].0].0, &edges.0[fits[o].0].1))
+            .collect();
+        names.sort_by_key(|(b, n)| (b.to_string(), n.to_string()));
+        names.dedup();
+        let mut bodies: Vec<BodyUid> = names.iter().map(|(b, _)| *b).collect();
+        bodies.sort_by_key(|b| b.to_string());
+        bodies.dedup();
+        if !one_set || bodies.len() != names.len() {
+            continue;
+        }
+        let part = &parts[*on].1;
+        let (_, name, mid, _, _) = &edges.0[*k];
+        let direction = part.direction.map(|d| {
+            FileCurve::of(part.a, part.m, part.b, part.length, false, Some(d))
+                .direction_at(part.m, d, *mid)
+        });
+        deviation = deviation.max(*off);
+        out.push((
+            chain.iter().map(|&i| parts[i].0).collect(),
+            FoundEdge {
+                body: edges.0[*k].0,
+                name: name.clone(),
+                mid: *mid,
+                direction,
+                chosen_from_multiple: names.len() > 1,
+                sliver_twin: false,
+            },
+        ));
+    }
+    (out, deviation)
+}
+
 /// A replay edge that may be a piece of a file's edge: its index, length
 /// and where its middle is along the file's edge (mm from its start; none
 /// on a closed edge).
@@ -3926,6 +4167,97 @@ mod dressup_tests {
             dressup_edge_match(&replay([14.5995, 14.6005], apart), &f),
             Err(DressupEdgeFailure::AmbiguousInReplay(_))
         ));
+    }
+
+    /// mitcad#1437: the file splits an edge where a cylinder's seam crosses
+    /// it, the replay (its seam elsewhere) has one edge there. Neither part
+    /// is found alone; together they are the replay's edge.
+    #[test]
+    fn a_file_edge_split_where_the_replays_is_not_is_part_of_it() {
+        use std::f64::consts::FRAC_PI_2;
+        // A quarter circle r = 5 from (5, 0, 0) to (0, 5, 0), the file's
+        // seam at 20 degrees.
+        let r = 5.0;
+        let at = |t: f64| [r * t.cos(), r * t.sin(), 0.0];
+        let along = |t: f64| [-t.sin(), t.cos(), 0.0];
+        let replay_edge = |body: &str, name: &str, mid: f64| {
+            (
+                (
+                    body.parse::<BodyUid>().unwrap(),
+                    name.parse::<EdgeName>().unwrap(),
+                    at(mid),
+                    along(mid),
+                    r * FRAC_PI_2,
+                ),
+                Some([at(0.0), at(FRAC_PI_2)]),
+            )
+        };
+        let replay = |list: Vec<(_, Option<[Vec3; 2]>)>| {
+            let (edges, ends): (Vec<_>, Vec<_>) = list.into_iter().unzip();
+            ReplayEdges(edges, ends)
+        };
+        let part = |from: f64, to: f64| {
+            let mid = 0.5 * (from + to);
+            fp(at(mid), r * (to - from), at(from), at(to), Some(along(mid)))
+        };
+        let seam = 20f64.to_radians();
+        let (first, second) = (part(0.0, seam), part(seam, FRAC_PI_2));
+        let one = replay(vec![replay_edge(
+            "F1.b0",
+            "E{F2:side|F3:side}",
+            FRAC_PI_2 / 2.0,
+        )]);
+        for f in [&first, &second] {
+            assert_eq!(
+                dressup_edge_match(&one, f).unwrap_err(),
+                DressupEdgeFailure::MissingInReplay
+            );
+        }
+        let found = dressup_edge_parts(&one, &[&first, &second]);
+        let [(parts, edge)] = &found[..] else {
+            panic!("{found:?}");
+        };
+        assert_eq!(parts, &[0, 1]);
+        assert_eq!(edge.name.to_string(), "E{F2:side|F3:side}");
+        assert!(!edge.chosen_from_multiple);
+        // The file's direction at the replay edge's middle, from the part it
+        // lies on.
+        let d = edge.direction.unwrap();
+        assert!(geom::distance(d, along(FRAC_PI_2 / 2.0)) < 1e-9, "{d:?}");
+        // Listed the other way round, with an edge of something else among
+        // them: the same edge, the parts in the order they follow it.
+        let other = part(FRAC_PI_2, FRAC_PI_2 + 0.3);
+        let found = dressup_edge_parts(&one, &[&other, &second, &first]);
+        let [(parts, _)] = &found[..] else {
+            panic!("{found:?}");
+        };
+        assert_eq!(parts, &[2, 1]);
+        // Parts with a gap between them, or one part alone, are not it.
+        let short = part(seam + 0.05, FRAC_PI_2);
+        assert!(dressup_edge_parts(&one, &[&first, &short]).is_empty());
+        assert!(dressup_edge_parts(&one, &[&first]).is_empty());
+        // An edge with the same ends and length whose middle is off the
+        // parts is not it.
+        let mut off = replay_edge("F1.b0", "E{F2:side|F3:side}", FRAC_PI_2 / 2.0);
+        off.0.2 = [3.0, 3.0, 1.0];
+        assert!(dressup_edge_parts(&replay(vec![off]), &[&first, &second]).is_empty());
+        // The same edge in two bodies: the first body's, as a choice; two
+        // such edges of one body: neither.
+        let copies = replay(vec![
+            replay_edge("F1.b0", "E{F2:side|F3:side}", FRAC_PI_2 / 2.0),
+            replay_edge("F1.b1", "E{F2:side|F3:side}", FRAC_PI_2 / 2.0),
+        ]);
+        let found = dressup_edge_parts(&copies, &[&first, &second]);
+        let [(_, edge)] = &found[..] else {
+            panic!("{found:?}");
+        };
+        assert_eq!(edge.body.to_string(), "F1.b0");
+        assert!(edge.chosen_from_multiple);
+        let twins = replay(vec![
+            replay_edge("F1.b0", "E{F2:side|F3:side}", FRAC_PI_2 / 2.0),
+            replay_edge("F1.b0", "E{F2:side|F4:side}", FRAC_PI_2 / 2.0),
+        ]);
+        assert!(dressup_edge_parts(&twins, &[&first, &second]).is_empty());
     }
 }
 

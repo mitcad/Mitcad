@@ -9,9 +9,11 @@ ui_init "$1" "$3"
 cli=$2
 frontend=${4:-qt}
 UI_TIMEOUT=240
-# Enough distinct held positions to install useful previews and replace pending
-# motion, without making a software-rendered VM spend minutes painting them.
-drag_steps=48
+# One-pixel held positions also exercise motion within a snap band. The
+# geometry-aware handle step can be finer than the old zoom-only step, so
+# 48 positions over 180 pixels may change the snapped value on every move.
+# Keep the full drag and all continuous/semantic/preview/history assertions.
+drag_steps=180
 export MITCAD_TEST_WORK=$UI_OUT/files
 mkdir -p "$MITCAD_TEST_WORK"
 for fixture in box curved; do

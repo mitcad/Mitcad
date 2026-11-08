@@ -258,13 +258,15 @@ CommandDef rectangularPatternCommand(const CommandContext& context) {
   def.id = QStringLiteral("solid.rectangular_pattern");
   def.name = QObject::tr("Rectangular Pattern");
   def.icon = QStringLiteral("rectangular-pattern");
-  def.tooltip = QObject::tr("Copies in rows and columns along one or two directions");
+  def.tooltip = QObject::tr("Copies in rows, columns and layers along up to three directions");
   def.group = QStringLiteral("CREATE");
   def.section = QStringLiteral("patterns");
   def.subgroup = QStringLiteral("Pattern");
   def.keywords = {QStringLiteral("array"), QStringLiteral("linear pattern"), QStringLiteral("copy")};
   def.featureType = QStringLiteral("rectangular_pattern");
   const auto second = [](const CommandState& s) { return !s.items(QStringLiteral("direction2")).isEmpty(); };
+  // Direction 3 (mitcad#1446): a 3D grid; its rows as Direction 2's.
+  const auto third = [](const CommandState& s) { return !s.items(QStringLiteral("direction3")).isEmpty(); };
   // Flip only for a direction of one way (mitcad#545): a symmetric one has
   // copies on both sides.
   const auto flipShown = [](const char* suffix) {
@@ -298,6 +300,18 @@ CommandDef rectangularPatternCommand(const CommandContext& context) {
       flipInput(QStringLiteral("flip2"), QObject::tr("Flip 2"))
           .withTooltip(QObject::tr("Copies against the second direction"))
           .withVisible([second, shown = flipShown("2")](const CommandState& s) { return second(s) && shown(s); }),
+      lineInput(QStringLiteral("direction3"), QObject::tr("Direction 3"), 0)
+          .withTooltip(QObject::tr("A third direction; none: one layer")),
+      directionTypeInput(QStringLiteral("direction_type3"), QObject::tr("Direction Type 3")).withVisible(third),
+      valueInput(QStringLiteral("quantity3"), QObject::tr("Quantity 3"), ValueKind::Unitless, QStringLiteral("2")).withStepMinimum(1)
+          .withVisible(third),
+      lengthInput(QStringLiteral("distance3"), QStringLiteral("3"))
+          .withVisible(third)
+          .withManipulator(alongAxis(QStringLiteral("direction3"), QStringLiteral("flip3"),
+                                     QStringLiteral("direction_type3"))),
+      flipInput(QStringLiteral("flip3"), QObject::tr("Flip 3"))
+          .withTooltip(QObject::tr("Copies against the third direction"))
+          .withVisible([third, shown = flipShown("3")](const CommandState& s) { return third(s) && shown(s); }),
       suppressedInput(),
   };
   def.enabled = [&context] { return hasBodies(context); };
@@ -331,6 +345,9 @@ CommandDef rectangularPatternCommand(const CommandContext& context) {
     if (!state.items(QStringLiteral("direction2")).isEmpty()) {
       result.def.insert(QStringLiteral("direction2"), direction("2"));
     }
+    if (!state.items(QStringLiteral("direction3")).isEmpty()) {
+      result.def.insert(QStringLiteral("direction3"), direction("3"));
+    }
     addCompute(result.def, state);
     addSuppressed(result.def, state);
     return result;
@@ -342,7 +359,7 @@ CommandDef rectangularPatternCommand(const CommandContext& context) {
     loadObjects(feature, state, context);
     state.setChoice(QStringLiteral("distance_type"),
                     feature.value(QStringLiteral("distance_type")).toString(QStringLiteral("spacing")));
-    for (const char* n : {"1", "2"}) {
+    for (const char* n : {"1", "2", "3"}) {
       const QString suffix = QString::fromLatin1(n);
       const QJsonObject d = feature.value(QStringLiteral("direction") + suffix).toObject();
       if (d.isEmpty()) {
@@ -358,7 +375,7 @@ CommandDef rectangularPatternCommand(const CommandContext& context) {
   };
 
   def.canEdit = [&context](const QJsonObject& feature) {
-    for (const char* key : {"direction1", "direction2"}) {
+    for (const char* key : {"direction1", "direction2", "direction3"}) {
       const QJsonObject d = feature.value(QLatin1String(key)).toObject();
       if (!d.isEmpty() && !isShowable(d.value(QStringLiteral("axis")), context)) {
         return false;

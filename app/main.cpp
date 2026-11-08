@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QIcon>
 #include <QImage>
+#include <QMessageBox>
 #include <QPalette>
 #include <QSettings>
 #include <QString>
@@ -20,6 +21,7 @@
 #include <QtLogging>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 
 #include "MainWindow.hpp"
@@ -54,6 +56,7 @@
 #include "print/MaterialProperties.hpp"
 #include "report/CrashHandler.hpp"
 #include "report/ReportCenter.hpp"
+#include "update/InstallationCheck.hpp"
 #include "update/OpenSslConfiguration.hpp"
 #include "view/SmallCirclesPreference.hpp"
 
@@ -124,6 +127,13 @@ int runApplication(int argc, char* argv[]) {
       mitcad::crash::crashNow();
     }
     mitcad::ReportCenter::notePanics();
+    // No import with OCCT DLLs of another build (mitcad#1454); the
+    // application that started the worker has said so already.
+    if (const std::string problem = mitcad::installation::mixedInstallationProblem(MITCAD_VERSION);
+        !problem.empty()) {
+      std::fprintf(stderr, "%s\n", problem.c_str());
+      return 3;
+    }
     return mitcad::runImportWorker(argc, argv);
   }
   // OCCT's crash handlers on the UI thread too (on Windows they are per
@@ -245,6 +255,19 @@ int runApplication(int argc, char* argv[]) {
   // mitcad#1016).
   mitcad::installShortcutLogIfRequested();
   QApplication::setApplicationVersion(QStringLiteral(MITCAD_VERSION));
+  // A mixed installation (mitcad#1454): an update that could not replace
+  // files in use left OCCT DLLs of another build beside this mitcad.exe.
+  // Said once and nothing else is started: with them the first fillet can
+  // corrupt the heap.
+  if (const std::string problem = mitcad::installation::mixedInstallationProblem(MITCAD_VERSION);
+      !problem.empty()) {
+    const QString text = QString::fromStdString(problem);
+    qCritical().noquote() << "Mixed installation:" << text;
+    if (!mitcad::headlessUiTest()) {
+      QMessageBox::critical(nullptr, QStringLiteral("MitCad"), text);
+    }
+    return 3;
+  }
   // Every rendered size, so that the title bar and the taskbar each get the
   // one drawn for them (the small ones are simplified).
   QIcon appIcon;

@@ -1,0 +1,32 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT. A sheet face whose base sketch's outline is edited after a fold on it (mitcad#1444): the 60 x 20 blank of sheet_fold_geometry (t=2, r=3, K=.3, back; c1 bottom, c2 right, c3 top, c4 left) folded 90 degrees along x=0, the left side stationary: volume 2400+8 pi."},
+  {"cmd":"add_feature","def":{"type":"sheet_rules","thickness":2,"bend_radius":3,"allowance":{"type":"k_factor","k":0.3},"reference_side":"back","bend_relief":{"type":"rectangular","width":2,"depth":3},"corner_relief":{"type":"round","width":2,"depth":3}}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F2","corner":[-30,0],"width":60,"height":20},
+  {"cmd":"add_feature","def":{"type":"sheet_face","rules":"F1","profiles":[{"sketch":"F2","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}]}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_line","sketch":"F4","start":[0,0],"end":[0,20]},
+  {"cmd":"add_feature","def":{"type":"sheet_fold","body":"F3.b0","panel":{"feature":"F3","slot":0},"line":{"sketch":"F4","curve":"c1"},"stationary_side":"left","angle":1.5707963267948966,"position":"bend_line"}},
+  {"expect":{"feature":"F3","status":"ok"}},
+  {"expect":{"feature":"F5","status":"ok","bodies":1}},
+  {"expect":{"body":"F3.b0","volume":2425.1327412287183,"min":[-30,0,-2],"max":[2.172566611769186,20,30.172566611769184],"has_face":"F3:sheet_front(0)"}},
+  {"expect":{"body":"F3.b0","has_face":"F5:sheet_front(0)"}},
+  {"expect":{"query":{"query":"sheet_reference","body":"F3.b0","face":"F5:sheet_bend_front(0)"},"result":{"domain":{"kind":"bend","id":{"feature":"F5","slot":0}}}}},
+  {"expect":{"query":{"query":"sheet_reference","body":"F3.b0","face":"F3:sheet_side0(F2:sheet_curve(c1[c4,c2]))"},"result":{"domain":{"kind":"panel","id":{"feature":"F3","slot":0}},"boundary":{"panel":{"feature":"F3","slot":0},"curve":{"type":"sketch","sketch":"F2","segment":"c1[c4,c2]"}},"straight":true}}},
+
+  {"comment":"The stationary side's far corner (-30, 20) rounded with radius 5, away from the fold: the region's key changes (c3 and c4 now end on the arc). The face finds the region as Extrude does and warns; it keeps the panel's slot, so the fold on it still builds with its names: the volume less 2 * 25 (1 - pi/4), the box unchanged."},
+  {"cmd":"sketch.fillet","sketch":"F2","a":"c3","b":"c4","radius":5},
+  {"expect":{"feature":"F3","status":"warning","error_contains":"region r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]} found as r{"}},
+  {"expect":{"feature":"F3","error_contains":"after a change in Sketch1"}},
+  {"expect":{"feature":"F5","status":"ok","bodies":1}},
+  {"expect":{"body":"F3.b0","volume":2414.4026493985907,"min":[-30,0,-2],"max":[2.172566611769186,20,30.172566611769184],"has_face":"F3:sheet_front(0)"}},
+  {"expect":{"body":"F3.b0","has_face":"F5:sheet_front(0)"}},
+  {"expect":{"query":{"query":"sheet_state","body":"F3.b0"},"result":{"body":"F3.b0","rules":"F1","status":"valid"}}},
+  {"expect":{"query":{"query":"sheet_reference","body":"F3.b0","face":"F5:sheet_bend_front(0)"},"result":{"domain":{"kind":"bend","id":{"feature":"F5","slot":0}}}}},
+  {"expect":{"query":{"query":"sheet_reference","body":"F3.b0","face":"F3:sheet_side0(F2:sheet_curve(c1[c4,c2]))"},"result":{"domain":{"kind":"panel","id":{"feature":"F3","slot":0}},"boundary":{"panel":{"feature":"F3","slot":0},"curve":{"type":"sketch","sketch":"F2","segment":"c1[c4,c2]"}},"straight":true}}},
+
+  {"comment":"Undone, the stored key is the region's own again: no warning."},
+  {"cmd":"undo"},
+  {"expect":{"feature":"F3","status":"ok"}},
+  {"expect":{"feature":"F5","status":"ok","body":"F3.b0","volume":2425.1327412287183}}
+]

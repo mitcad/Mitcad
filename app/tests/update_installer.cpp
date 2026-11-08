@@ -3,11 +3,14 @@
 // folder on Windows as on macOS, the same code path on every platform; the
 // Windows updater's command line carries the SHA-256 of the verified
 // manifest and refuses one without; the updater's check of a file through
-// a reader (hashAll, digestMatches) tells a changed file apart.
+// a reader (hashAll, digestMatches) tells a changed file apart. The
+// start-up check names OCCT DLLs of another build (mitcad#1454).
+#include "update/BuildStamp.hpp"
 #include "update/UpdateInstaller.hpp"
 #include "update/UpdaterChecks.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <initializer_list>
 #include <string>
@@ -352,6 +355,83 @@ void elevationTests() {
 #endif
 }
 
+// mitcad#1454: the start-up check compares the OCCT DLLs a program loaded
+// with the build's stamp; a DLL of another build (another link time or
+// image size) is named, one not loaded is passed over.
+void buildStampTests() {
+  using mitcad::installation::LoadedModule;
+  using mitcad::installation::ModuleStamp;
+  const std::vector<ModuleStamp> expected = {{"TKernel.dll", 0x67a1b2c3u, 0x00a3f000u},
+                                             {"TKFillet.dll", 0x67a1b2d4u, 0x003b6000u},
+                                             {"TKBool.dll", 0x67a1b2e5u, 0x00412000u},
+                                             {nullptr, 0, 0}};
+  const auto loaded = [](std::uint32_t stamp, std::uint32_t size) {
+    LoadedModule module;
+    module.loaded = true;
+    module.timeDateStamp = stamp;
+    module.sizeOfImage = size;
+    return module;
+  };
+
+  // This build's DLLs: nothing to tell.
+  const auto same = [&](const char* name) {
+    for (const ModuleStamp& module : expected) {
+      if (module.name != nullptr && std::string(module.name) == name) {
+        return loaded(module.timeDateStamp, module.sizeOfImage);
+      }
+    }
+    return LoadedModule();
+  };
+  CHECK(mitcad::installation::mismatchedModules(expected, same).empty());
+
+  // An earlier release's TKFillet.dll (another link time, another size)
+  // and TKBool.dll (the same size, another link time); TKernel.dll is this
+  // build's.
+  const auto mixed = [&](const char* name) {
+    const std::string module(name);
+    if (module == "TKFillet.dll") {
+      return loaded(0x66f0a1b2u, 0x003ab000u);
+    }
+    if (module == "TKBool.dll") {
+      return loaded(0x66f0a1c3u, 0x00412000u);
+    }
+    return same(name);
+  };
+  const std::vector<std::string> mismatched = mitcad::installation::mismatchedModules(expected, mixed);
+  CHECK(mismatched == (std::vector<std::string>{"TKFillet.dll", "TKBool.dll"}));
+
+  // Only the image size differs: another build too.
+  const auto resized = [&](const char* name) {
+    return std::string(name) == "TKernel.dll" ? loaded(0x67a1b2c3u, 0x00a40000u) : same(name);
+  };
+  CHECK(mitcad::installation::mismatchedModules(expected, resized) == (std::vector<std::string>{"TKernel.dll"}));
+
+  // A DLL the program has not loaded is not checked.
+  const auto partly = [&](const char* name) {
+    return std::string(name) == "TKBool.dll" ? LoadedModule() : mixed(name);
+  };
+  CHECK(mitcad::installation::mismatchedModules(expected, partly) == (std::vector<std::string>{"TKFillet.dll"}));
+
+  // The message names the DLLs, the programs that still run and the
+  // version to install again.
+  const std::string text =
+      mitcad::installation::mixedInstallationText("1.2.3", mismatched, "mitcad-cli.exe (4 processes)");
+  CHECK(text.find("This installation is incomplete: files from an earlier version are still in use") == 0);
+  CHECK(text.find("TKFillet.dll, TKBool.dll are not the ones MitCad 1.2.3 was built with") != std::string::npos);
+  CHECK(text.find("Programs still running from the installation: mitcad-cli.exe (4 processes).") !=
+        std::string::npos);
+  CHECK(text.find("then install MitCad 1.2.3 again.") != std::string::npos);
+  const std::string one = mitcad::installation::mixedInstallationText("1.2.3", {"TKFillet.dll"}, "");
+  CHECK(one.find("TKFillet.dll is not the one MitCad 1.2.3 was built with") != std::string::npos);
+  CHECK(one.find("Programs still running") == std::string::npos);
+  // Many DLLs: the first five and how many more.
+  std::vector<std::string> many;
+  for (int index = 0; index < 31; ++index) {
+    many.push_back("TK" + std::to_string(index) + ".dll");
+  }
+  CHECK(mitcad::installation::listNames(many) == "TK0.dll, TK1.dll, TK2.dll, TK3.dll, TK4.dll and 26 more");
+}
+
 } // namespace
 
 int updateInstallerTests() {
@@ -370,6 +450,7 @@ int updateInstallerTests() {
   updaterArgumentTests();
   digestTests();
   elevationTests();
+  buildStampTests();
   QSettings::setDefaultFormat(format);
   QCoreApplication::setOrganizationName(organization);
   QCoreApplication::setApplicationName(application);

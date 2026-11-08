@@ -1549,12 +1549,15 @@ impl<K: Kernel> Document<K> {
 
     /// Writes the geometry of an evaluated sketch to a DXF file, in sketch
     /// coordinates and in `unit` (mitcad#1408: the design's unless the
-    /// export names another). Returns the number of entities.
+    /// export names another). Construction curves and center lines are
+    /// written, on the layer `construction`, only with `construction`
+    /// (mitcad#1445). Returns the number of entities.
     pub fn export_sketch_dxf(
         &self,
         sketch: FeatureUid,
         path: &str,
         unit: crate::expr::LengthUnit,
+        construction: bool,
         options: &mitcad_dxf::WriteOptions,
     ) -> Result<usize, ModelError> {
         let entry = self
@@ -1578,16 +1581,28 @@ impl<K: Kernel> Document<K> {
         let output = self
             .sketch_output(sketch)
             .ok_or_else(|| invalid(format!("{} has no result to export", entry.name)))?;
-        // Every curve of the sketch once, in its solved geometry;
-        // construction geometry on its own layer; the lines that stand for
-        // the sketch's axes (mitcad#500) are not drawn.
+        // Every curve of the sketch once, in its solved geometry; the lines
+        // that stand for the sketch's axes (mitcad#500) are not drawn.
+        // Construction curves and center lines, which are not cut, only
+        // when asked for, on their own layer (mitcad#1445).
         let curves: Vec<(&str, String, SegmentGeometry)> = def
             .entities
             .iter()
             .filter(|e| e.axis.is_none())
             .filter_map(|e| {
                 let curve = output.solved.curves.get(&e.id)?;
-                let layer = if e.construction { "construction" } else { "0" };
+                let helper = e.construction
+                    || matches!(
+                        e.kind,
+                        crate::sketch::EntityKind::Line {
+                            centerline: true,
+                            ..
+                        }
+                    );
+                if helper && !construction {
+                    return None;
+                }
+                let layer = if helper { "construction" } else { "0" };
                 Some((layer, e.as_ref().to_string(), curve.whole()))
             })
             .collect();

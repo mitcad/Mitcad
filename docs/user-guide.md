@@ -2004,6 +2004,12 @@ and a Direction Type:
   Direction Type Symmetric: the copies go to the two sides of the
   original. Rectangular Pattern hides Flip for a symmetric direction.
 
+Rectangular Pattern has up to three directions. Direction 2 makes rows
+and columns. Direction 3 makes layers: pick a third axis, edge or sketch
+line, and one pattern makes a 3D grid of copies. The rows of Direction 2
+and Direction 3 show when you pick their direction. The number of copies
+is the product of the three quantities (the original is included).
+
 Circular Pattern has Symmetric. With Symmetric, the total angle is
 centered on the original. A full turn does not change. When you edit a
 pattern, its panel shows the options that the pattern has, also for an
@@ -8216,6 +8222,17 @@ the last one.
 Bend*, it makes two opposite bends of the angle with a straight between
 them. A double bend joins parallel faces of two sheets.
 
+**Fold** bends a sheet along a sketch line on one of its faces. A fold
+cannot bend part of an earlier bend. Suppose an earlier fold's line
+crossed both arms of a U- or V-shaped face, and a new fold line runs
+between the arms. The earlier bend then joins both sides of the new line,
+and MitCad refuses the fold. The message names the earlier feature as the
+browser shows it, for example: "This fold would also have to bend
+SheetFold1, whose bend joins both sides of the fold line." Move the new
+fold before SheetFold1 in the timeline, or make SheetFold1 with a separate
+line on each arm. A Bend whose moving face an earlier bend also joins to
+the stationary face is refused the same way.
+
 **Corner Relief** takes faces of the two bends that meet. When the bends
 leave several flat faces, it also takes the Face they leave. For bends
 on different faces, it takes the face held, that is, a face next to
@@ -9695,12 +9712,17 @@ the exports:
   or text format. USDZ: [USDZ for AR and 3D
   viewers](#usdz-for-ar-and-3d-viewers).
 - A sketch as DXF. Export DXF in the sketch's context menu does the
-  same.
+  same. The file holds the sketch's curves that make its profiles:
+  construction curves and center lines are left out, so that a cutting
+  program cuts only the part. Select **Include construction geometry**
+  to write them too, on the layer *construction*. Export DXF in the
+  context menu always leaves them out.
 - The design as a web page that opens in any browser ([Web
   viewer](#web-viewer)).
 
-The dialog starts with the type, the refinement and the STL format of
-your last export, so repeated exports for 3D printing keep 3MF and High.
+The dialog starts with the type, the refinement, the STL format and
+Include construction geometry of your last export, so repeated exports
+for 3D printing keep 3MF and High.
 When you edit a sketch, or a sketch is selected, it starts with DXF
 instead; a sketch's DXF does not change the type remembered for the
 bodies. The proposed file is in the folder of your last export. Its name
@@ -10768,6 +10790,10 @@ edges 0.35 mm wide; dimensions, tangent edges and thread roots
 0.5 mm. A line or an arc drawn by hand can also be extra thick, 0.7 mm
 (ISO 128's extra wide line: narrow, wide and extra wide at 1:2:4); a
 DXF or DWG file has such lines on a layer of their own, `EXTRA_THICK`.
+Its width and its pattern combine: a thick or extra thick line drawn by
+hand can be dashed or a center line too, on a layer of its own in a DXF
+or DWG file (`HIDDEN_THICK`, `HIDDEN_EXTRA_THICK`, `SECTION_LINE_THICK`,
+`SECTION_LINE_EXTRA_THICK`).
 The sheet on the screen, the PDF and the SVG file use the same widths. Lines closer together than twice the visible line's width
 (0.7 mm on the sheet) would run into a blot, so a view leaves out what
 is smaller than that at its scale. A fillet or chamfer smaller than
@@ -10909,7 +10935,7 @@ tools, as icons:
 | Baseline | Several dimensions at once: from the first point to each of the others (Baseline) or from each to the next (Chain). Click the points, then a free place. |
 | Center Mark | Center lines across a circle, or the centerline of a hole or a shaft seen from the side. Click the circle or the round face. |
 | Centerline | A centerline through two circles, or between two edges. Click the two sides of a curved slot for its center arc, through the centers of its ends. |
-| Line | A line drawn by hand, outside the design. Click its two ends. On a view a click snaps to the end or the middle of an edge, or to the center of a circle or an arc, near it (the point shows under the pointer; hold **Alt** to click freely). *Drawn: In the View Clicked* keeps it in the view under the first click, so that it moves, scales and turns with the view; *On the Sheet* keeps it on the paper. *Line* chooses thin, thick, extra thick (0.7 mm), dashed or a center line. |
+| Line | A line drawn by hand, outside the design. Click its two ends. On a view a click snaps to the end or the middle of an edge, or to the center of a circle or an arc, near it (the point shows under the pointer; hold **Alt** to click freely). *Drawn: In the View Clicked* keeps it in the view under the first click, so that it moves, scales and turns with the view; *On the Sheet* keeps it on the paper. *Width* (Thin, Thick, Extra Thick: 0.7 mm) and *Pattern* (Continuous, Dashed, Center Line) combine freely, a thick dashed line for example; the line's panel changes either later. |
 | Arc | An arc drawn by hand: click its center, its start, then its end, counter-clockwise. Its clicks snap as a line's do, so an arc can run from one center to another. In a view or on the sheet, as a line. |
 | Center Pattern | Center marks on every hole of a pattern in one step. Click one hole seen end on: MitCad finds the holes of the same size of that body the view shows. On a bolt circle it draws the circle through their centers (an arc when they stand on a part of it) and a line through each; in a row, the line through them; else a center mark on each. |
 | Edge Extension | Thin lines that run straight edges on: two edges to where their lines meet (a corner rounded or chamfered away), or one edge beyond both its ends (*Edges: One, Both Ways*; how far, in millimeters of paper, is its *Length* in the panel: 10 unless set). |
@@ -11180,7 +11206,9 @@ view are available on request. Third-angle projection puts the top
 view above the front view and the right view to its right. First-angle
 projection puts them the other way round. *Hidden Edges* draws
 the edges behind faces as dashed lines. *Tangent Edges* draws the
-edges where faces meet smoothly as thin lines. The lines, small
+edges where faces meet smoothly, such as the edges of fillets, as thin
+lines; without it they are left out, however the body was made. The
+seam of a round face is never drawn. The lines, small
 fillets and threads are drawn as in a drawing in the design (see
 *Lines* and *Threads* under Drawings in the design).
 
@@ -11820,9 +11848,10 @@ AppImage, `MitCad.AppImage cli <command>` runs it.
   design. A `.3mf` file holds the solid and mesh bodies as the parts of
   one object. A `.usdz` file holds the shown bodies with their
   appearances, with the textures relative to the design's folder.
-- `export-sketch part.mitcad Sketch1 sketch.dxf [--unit in] [--r12]`:
-  exports a sketch, in the design's length unit unless `--unit` gives
-  another.
+- `export-sketch part.mitcad Sketch1 sketch.dxf [--unit in] [--r12]
+  [--construction]`: exports a sketch, in the design's length unit unless
+  `--unit` gives another. Construction curves and center lines are left
+  out unless `--construction` writes them, on the layer `construction`.
 - `render part.mitcad -o image.png [--view Front] [--size 1920x1080]
   [--samples 128] [--time-limit 60] [--format png|png16|jpeg|exr]
   [--transparent] [--no-denoise]`: renders the visible bodies as Render

@@ -4,15 +4,17 @@
 use super::mapping::map_params;
 use super::{
     BodyChange, CheckContext, EvalContext, Evaluate, FeatureDef, FeatureInfo, FeatureOutput,
-    ProfileRef, References,
+    ProfileRef, References, SketchOutput,
 };
 use crate::ids::{BodyUid, FeatureUid};
 use crate::kernel::Kernel;
 use crate::parameters::ParamId;
+use crate::profile::ProfileRegion;
 use crate::sheet::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -231,28 +233,129 @@ impl FeatureInfo for SheetFaceDef {
     }
 }
 
+/// What a sheet profile reference does with a region a sketch change split
+/// ([`sheet_profile_regions`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SplitProfile {
+    /// Fail, naming the pieces, unless every piece besides the main one is
+    /// selected by a reference of its own (a base Face: each panel's
+    /// identity is the slot settled in the definition for its reference).
+    Refuse,
+    /// Use every piece (a joined Face: its material has no panel identity).
+    Pieces,
+}
+
+/// The evaluated sketch of sheet profile references and the regions they
+/// find, each with the reference whose slot it keeps.
+pub(crate) type SheetProfilesOf<'a> = (Arc<SketchOutput>, Vec<(&'a ProfileRef, ProfileRegion)>);
+
+/// The sketch of sheet profile references (all in one sketch).
+fn sketch_uid_of(profiles: &[ProfileRef]) -> Result<FeatureUid, String> {
+    Ok(profiles.first().ok_or("no profiles selected")?.sketch)
+}
+
+/// The regions sheet profile references find in their evaluated sketch
+/// (mitcad#1444), as Extrude finds its profiles
+/// ([`super::extrude::profile_regions`], [`super::SketchOutput::found`]):
+/// a reference finds its region by its key; when a sketch change altered
+/// the key (a corner rounded, a curve replaced or moved), the region inside
+/// the outline its key traces now, else the one with the most curves in
+/// common, with the warning `region r{…} found as r{…} after a change in
+/// Sketch1`. The region found carries the reference's key, so each region
+/// is returned with the reference whose panel slot and face names it keeps.
+///
+/// A reference whose region the change split into pieces: with `split`
+/// [`SplitProfile::Pieces`] every piece is used, the main one under the
+/// reference's key. With [`SplitProfile::Refuse`] the main piece keeps the
+/// reference's slot only when each other piece is the region another
+/// reference finds (the pieces selected since, each settled with a slot of
+/// its own); else the Face fails, naming the pieces and asking for the
+/// profiles to be selected again, rather than give a piece a slot at
+/// evaluation that a later edit could hand to another region. A reference
+/// that finds no region fails as Extrude does (`Sketch1 has no profile
+/// r{…}`). Two references that find the same region (an old key and the
+/// current one) use it once, under the one that names it exactly.
+pub(crate) fn sheet_profile_regions<'a, K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    profiles: &'a [ProfileRef],
+    split: SplitProfile,
+) -> Result<SheetProfilesOf<'a>, String> {
+    let sketch_uid = sketch_uid_of(profiles)?;
+    let sketch = ctx.sketch(sketch_uid)?;
+    let name = ctx.feature_name(sketch_uid);
+    let mut all = Vec::with_capacity(profiles.len());
+    for profile in profiles {
+        let regions = sketch
+            .found(&profile.region)
+            .ok_or_else(|| format!("{name} has no profile {}", profile.region))?;
+        all.push((profile, regions));
+    }
+    if split == SplitProfile::Refuse {
+        for (profile, regions) in &all {
+            let unselected = regions.regions.iter().skip(1).any(|piece| {
+                !all.iter()
+                    .any(|(_, other)| other.regions[0].profile.loops == piece.profile.loops)
+            });
+            if unselected {
+                return Err(format!(
+                    "region {} is split into {} after a change in {name}; select the profiles again",
+                    profile.region,
+                    regions.keys()
+                ));
+            }
+        }
+    }
+    // Each region with its reference and whether that reference names it
+    // by the region's own key.
+    let mut found: Vec<(&ProfileRef, ProfileRegion, bool)> = Vec::new();
+    for (profile, regions) in all {
+        if let Some(warning) = regions.warning(&profile.region, &name) {
+            let place =
+                crate::notice::NoticePlace::region_of(profile.sketch, profile.region.to_string());
+            ctx.warn_at(warning, vec![place]);
+        }
+        let mut pieces = regions.profiles(&profile.region);
+        if split == SplitProfile::Refuse {
+            // The other pieces are the regions of references of their own
+            // (checked above), whose slots they take.
+            pieces.truncate(1);
+        }
+        for region in pieces {
+            match found.iter_mut().find(|(_, r, _)| r.loops == region.loops) {
+                Some(known) => {
+                    if regions.exact && !known.2 {
+                        *known = (profile, region, true);
+                    }
+                }
+                None => found.push((profile, region, regions.exact)),
+            }
+        }
+    }
+    let found = found
+        .into_iter()
+        .map(|(profile, region, _)| (profile, region))
+        .collect();
+    Ok((sketch, found))
+}
+
 impl<K: Kernel> Evaluate<K> for SheetFaceDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         if let Some(body) = self.body {
             return crate::sheet::folded::join_face(self, body, ctx);
         }
         let rules = ctx.sheet_rules(self.rules)?;
-        let sketch_uid = self.profiles.first().ok_or("no profiles selected")?.sketch;
-        let sketch = ctx.sketch(sketch_uid)?;
+        let (sketch, found) = sheet_profile_regions(ctx, &self.profiles, SplitProfile::Refuse)?;
+        let sketch_uid = sketch_uid_of(&self.profiles)?;
         let mut settled = self.clone();
         settled.settle(None);
         let mut panels = Vec::new();
-        for profile in &self.profiles {
-            // Semantic identity must not silently follow a nearest region.
-            let region = sketch
-                .regions
-                .iter()
-                .find(|r| r.key == profile.region)
-                .ok_or_else(|| format!("sheet profile {} is unavailable", profile.region))?;
+        for (profile, region) in &found {
+            // A region found under another key keeps the panel slot of its
+            // reference, so that the panel's identity and names stay.
             let slot = settled
                 .panel_slots
                 .iter()
-                .find(|s| s.profile == *profile)
+                .find(|s| s.profile == **profile)
                 .expect("settled")
                 .slot;
             panels.push(SheetPlanarPatch {

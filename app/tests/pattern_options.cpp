@@ -84,6 +84,24 @@ void optionsTextTests() {
                                      {QStringLiteral("quantity"), QStringLiteral("d4")},
                                      {QStringLiteral("distance"), -20.5}}}};
   CHECK(patternOptionsText(row) == QStringLiteral("direction 1 one direction, quantity d4, spacing -20.5"));
+  // A 3D grid (mitcad#1446): the third direction after the second.
+  const QJsonObject grid{{QStringLiteral("type"), QStringLiteral("rectangular_pattern")},
+                         {QStringLiteral("direction1"),
+                          QJsonObject{{QStringLiteral("axis"), QStringLiteral("x")},
+                                      {QStringLiteral("quantity"), 2},
+                                      {QStringLiteral("distance"), QStringLiteral("30 mm")}}},
+                         {QStringLiteral("direction2"),
+                          QJsonObject{{QStringLiteral("axis"), QStringLiteral("y")},
+                                      {QStringLiteral("quantity"), 3},
+                                      {QStringLiteral("distance"), QStringLiteral("30 mm")}}},
+                         {QStringLiteral("direction3"),
+                          QJsonObject{{QStringLiteral("axis"), QStringLiteral("z")},
+                                      {QStringLiteral("quantity"), 4},
+                                      {QStringLiteral("distance"), QStringLiteral("30 mm")},
+                                      {QStringLiteral("symmetric"), true}}}};
+  CHECK(patternOptionsText(grid) == QStringLiteral("direction 1 one direction, quantity 2, spacing 30 mm; "
+                                                   "direction 2 one direction, quantity 3, spacing 30 mm; "
+                                                   "direction 3 symmetric, quantity 4, spacing 30 mm"));
 
   const QJsonObject circular{{QStringLiteral("type"), QStringLiteral("circular_pattern")},
                              {QStringLiteral("quantity"), 3},

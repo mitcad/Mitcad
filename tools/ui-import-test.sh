@@ -180,7 +180,8 @@ echo "ok   the page holds the design's data"
 echo "--- DXF"
 ui_mark
 ui_step "File > Export the sketch to DXF"  export_to "$WORK/sketch.dxf"
-ui_expect_new "Exported $WORK/sketch.dxf: dxf, 4 entities" "the rectangle written as DXF"
+ui_expect_new "Exported $WORK/sketch.dxf: dxf, 4 entities, in mm, construction geometry left out" \
+  "the rectangle written as DXF, without construction geometry (mitcad#1445)"
 ui_mark
 ui_step "File > Import it"                 import_from "$WORK/sketch.dxf"
 ui_step "on XY, in mm (Enter)"             type_into_dialog 'Insert DXF' ""

@@ -18,11 +18,15 @@
 // with /S /CurrentUser /D=<dir>, as the user, so without a UAC prompt; one
 // for all users (Program Files) with /S /AllUsers /D=<dir>, elevated (verb
 // runas, UAC asks) unless this process has administrator rights already.
-// Then it starts Mitcad again, also when the check or the installer failed
-// or the elevation was refused: Mitcad then tells so from the log's last
-// line. Win32 only, with the C++ runtime linked statically, so that it runs
-// on its own in the temp folder; never elevated itself, so Mitcad starts
-// again as the user.
+// Before that it asks the MCP bridges that run from the installation to
+// end and waits a few seconds (mitcad#1454); an installer that still finds
+// programs from the installation running replaces nothing and ends with
+// exit code 3, and the log's last line names those programs and asks to
+// close them and try again. Then it starts Mitcad again, also when the
+// check or the installer failed or the elevation was refused: Mitcad then
+// tells so from the log's last line. Win32 only, with the C++ runtime
+// linked statically, so that it runs on its own in the temp folder; never
+// elevated itself, so Mitcad starts again as the user.
 
 #include <windows.h>
 
@@ -35,9 +39,14 @@
 #include <string>
 #include <vector>
 
+#include "RunningPrograms.hpp"
 #include "UpdaterChecks.hpp"
 
 namespace {
+
+// The installer's exit code when programs from the installation still run
+// (mitcad#1454, packaging/windows/NSIS.template.in): it changed no file.
+constexpr DWORD kInstallerFilesInUse = 3;
 
 using Digest = std::array<unsigned char, mitcad::updater::kSha256Size>;
 
@@ -258,10 +267,43 @@ bool runInstaller(const mitcad::updater::Arguments& arguments, std::wstring& out
   GetExitCodeProcess(info.hProcess, &exitCode);
   CloseHandle(info.hProcess);
   CloseHandle(checked);
+  if (exitCode == kInstallerFilesInUse) {
+    // The installer replaced nothing (mitcad#1454): what still runs, by
+    // name, as the next start reports it after "The update to MitCad X.Y.Z
+    // was not installed: ".
+    const std::wstring running =
+        mitcad::installation::describePrograms(mitcad::installation::runningPrograms(arguments.dir));
+    outcome = L"programs from the installation are still running" +
+              (running.empty() ? std::wstring() : L" (" + running + L")") +
+              L", so no file was replaced. Close them (AI assistant sessions connected to MitCad run "
+              L"mitcad-cli.exe; Task Manager can end them), then choose Try Again";
+    note(outcome);
+    return false;
+  }
   outcome = exitCode == 0 ? std::wstring(L"The installer finished")
                           : L"The installer failed (exit code " + std::to_wstring(exitCode) + L")";
   note(outcome);
   return exitCode == 0;
+}
+
+// Asks the MCP bridges that run from the installation to end, and gives
+// them and whatever else runs from it a few seconds (mitcad#1454): the
+// installer replaces no file while a program from the installation runs.
+void askProgramsToEnd(const std::wstring& dir) {
+  std::vector<mitcad::installation::RunningProgram> running = mitcad::installation::runningPrograms(dir);
+  if (running.empty()) {
+    return;
+  }
+  const int asked = mitcad::installation::askBridgesToEnd(running);
+  note(L"Running from the installation: " + mitcad::installation::describePrograms(running) + L"; asked " +
+       std::to_wstring(asked) + L" MCP bridge(s) to end");
+  for (int waited = 0; waited < 20 && !running.empty(); ++waited) {
+    Sleep(250);
+    running = mitcad::installation::runningPrograms(dir);
+  }
+  if (!running.empty()) {
+    note(L"Still running from the installation: " + mitcad::installation::describePrograms(running));
+  }
 }
 
 } // namespace
@@ -297,6 +339,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     }
   }
 
+  // MitCad has quit for the update: the bridges it served end too
+  // (mitcad#1454), so that the installer can replace their files.
+  askProgramsToEnd(arguments.dir);
   std::wstring outcome;
   const bool installed = runInstaller(arguments, outcome);
 

@@ -239,7 +239,7 @@ QJsonObject viewEdit(const QString& drawing, int view, const QString& field, con
 // "tags", "levels" and "title" (empty: its own)); empty for a value the
 // field cannot take. Since mitcad#729 "height" is every annotation's own
 // letters' height (empty: the drawing's again), "pen" a line's or an
-// arc's, and "length" an edge extension's reach beyond its edge (mm,
+// arc's ("width" and "pattern" since mitcad#1447), and "length" an edge extension's reach beyond its edge (mm,
 // its `line_offset`; empty: 10). "replace" (mitcad#1292) is a dimension's
 // text in place of its value and tolerance (empty: `null`, the measured
 // value again).
@@ -252,9 +252,11 @@ QJsonObject annotationEdit(const QString& drawing, int annotation, const QString
 // for a value the field cannot take.
 QJsonObject drawingDefaultsEdit(const QString& drawing, const QString& field, const QString& value);
 
-// The pens a line or an arc drawn outside the model takes, as the model
-// names them, with their labels (mitcad#729).
-QList<QPair<QString, QString>> penChoices();
+// The widths and the patterns a line or an arc drawn outside the model
+// takes, as the model names them, with their labels (mitcad#1447: two
+// choices that combine, one Line pen menu before).
+QList<QPair<QString, QString>> widthChoices();
+QList<QPair<QString, QString>> patternChoices();
 
 // The annotation's name in the panel and the undo history: "Dimension",
 // "Center Mark", "Note", … for the model's type.

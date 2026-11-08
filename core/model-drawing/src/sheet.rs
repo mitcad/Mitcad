@@ -27,11 +27,19 @@ pub enum Pen {
     Chain,
     /// The sheet's frame.
     Frame,
+    /// Lines and arcs drawn by hand (mitcad#1447): dashed wide.
+    DashedThick,
+    /// Dashed extra wide.
+    DashedExtraThick,
+    /// Long dash dotted wide.
+    ChainThick,
+    /// Long dash dotted extra wide.
+    ChainExtraThick,
 }
 
 impl Pen {
     /// Every pen, in the order of the table the drawing query gives.
-    pub const ALL: [Pen; 7] = [
+    pub const ALL: [Pen; 11] = [
         Self::Thick,
         Self::ExtraThick,
         Self::Thin,
@@ -39,6 +47,10 @@ impl Pen {
         Self::Hatch,
         Self::Chain,
         Self::Frame,
+        Self::DashedThick,
+        Self::DashedExtraThick,
+        Self::ChainThick,
+        Self::ChainExtraThick,
     ];
 
     /// The line width, mm: ISO 128's 0.35 series (mitcad#1112), wide
@@ -49,8 +61,8 @@ impl Pen {
     /// (`pens`).
     pub fn width(self) -> f64 {
         match self {
-            Self::Thick => 0.35,
-            Self::ExtraThick => 0.7,
+            Self::Thick | Self::DashedThick | Self::ChainThick => 0.35,
+            Self::ExtraThick | Self::DashedExtraThick | Self::ChainExtraThick => 0.7,
             // ISO 128 draws hidden outlines with the narrow line.
             Self::Thin | Self::Chain | Self::Hidden => 0.18,
             Self::Hatch => 0.13,
@@ -68,19 +80,26 @@ impl Pen {
             Self::Hatch => "hatch",
             Self::Chain => "chain",
             Self::Frame => "frame",
+            Self::DashedThick => "dashed_thick",
+            Self::DashedExtraThick => "dashed_extra_thick",
+            Self::ChainThick => "chain_thick",
+            Self::ChainExtraThick => "chain_extra_thick",
         }
     }
 
-    /// Dash and gap lengths, mm; empty for a continuous line.
+    /// Dash and gap lengths, mm; empty for a continuous line. A pattern
+    /// has the same dashes at every width (mitcad#1447).
     pub fn dashes(self) -> &'static [f64] {
         match self {
-            Self::Hidden => &[3.0, 1.0],
-            Self::Chain => &[12.0, 1.5, 0.5, 1.5],
-            _ => &[],
+            Self::Hidden | Self::DashedThick | Self::DashedExtraThick => &[3.0, 1.0],
+            Self::Chain | Self::ChainThick | Self::ChainExtraThick => &[12.0, 1.5, 0.5, 1.5],
+            Self::Thick | Self::ExtraThick | Self::Thin | Self::Hatch | Self::Frame => &[],
         }
     }
 
-    /// The layer of a DXF file.
+    /// The layer of a DXF file. The pens of lines and arcs drawn by hand
+    /// wider than narrow and not continuous (mitcad#1447) have their own:
+    /// the narrow pattern's layer with the width (`HIDDEN_THICK`).
     pub fn layer(self) -> &'static str {
         match self {
             Self::Thick => "VISIBLE",
@@ -90,6 +109,10 @@ impl Pen {
             Self::Hatch => "HATCH",
             Self::Chain => "SECTION_LINE",
             Self::Frame => "FRAME",
+            Self::DashedThick => "HIDDEN_THICK",
+            Self::DashedExtraThick => "HIDDEN_EXTRA_THICK",
+            Self::ChainThick => "SECTION_LINE_THICK",
+            Self::ChainExtraThick => "SECTION_LINE_EXTRA_THICK",
         }
     }
 }

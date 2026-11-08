@@ -17,6 +17,7 @@ use mitcad_model::internal::profile::dot;
 use mitcad_model::kernel::Kernel;
 use mitcad_model::testing::MockKernel;
 use mitcad_model_api::DocumentApi;
+use mitcad_model_drawing::annotate::{PenPattern, PenWidth, SketchItem, SketchPen};
 use mitcad_model_drawing::def::{Drawing, ViewKind};
 
 const R: &str = "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}";
@@ -958,4 +959,277 @@ fn files_without_the_new_fields_read_as_before() {
             "{field}: {again}"
         );
     }
+}
+
+/// The sheet's pen a drawn line of this width and pattern is drawn with
+/// (mitcad#1447): the five pens of before by their names.
+fn sheet_pen(width: &str, pattern: &str) -> String {
+    match (width, pattern) {
+        (w, "continuous") => w.to_owned(),
+        ("thin", "dashed") => "hidden".to_owned(),
+        ("thin", _) => "chain".to_owned(),
+        (w, "dashed") => format!("dashed_{w}"),
+        (w, _) => format!("chain_{w}"),
+    }
+}
+
+#[test]
+fn a_drawn_lines_width_and_pattern_combine_and_old_pens_read_as_before() {
+    // mitcad#1447: Width and Pattern as two fields, any width with any
+    // pattern.
+    let (mut doc, _) = drawn();
+    let widths = [("thin", 0.18), ("thick", 0.35), ("extra_thick", 0.7)];
+    let patterns = [
+        ("continuous", "thin"),
+        ("dashed", "hidden"),
+        ("chain", "chain"),
+    ];
+    let mut lines = Vec::new();
+    for (i, (width, _)) in widths.iter().enumerate() {
+        for (j, (pattern, _)) in patterns.iter().enumerate() {
+            let y = 20.0 + 8.0 * (3 * i + j) as f64;
+            let id = command(
+                &mut doc,
+                json!({"cmd": "add_drawing_annotation", "drawing": "D1", "type": "line",
+                       "sheet": 0, "points": [[20.0, y], [60.0, y]], "width": *width,
+                       "pattern": *pattern}),
+            )["annotation"]
+                .as_u64()
+                .unwrap();
+            lines.push((id, *width, *pattern));
+        }
+    }
+    // An arc in a view takes them too.
+    let arc = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1, "type": "arc",
+               "points": [[65, 110], [75, 110], [65, 120]], "width": "thick",
+               "pattern": "chain"}),
+    )["annotation"]
+        .as_u64()
+        .unwrap();
+    let pens = sheet(&doc)["pens"].clone();
+    let check = |doc: &Document<MockKernel>, id: u64, width: &str, pattern: &str| {
+        let entry = annotation(doc, id);
+        assert_eq!(entry["width"], width, "{entry}");
+        assert_eq!(entry["pattern"], pattern, "{entry}");
+        let pen = sheet_pen(width, pattern);
+        assert_eq!(group(doc, id)["items"][0]["pen"], pen.as_str(), "{id}");
+        // Its width's line width and its pattern's dashes.
+        let wide = widths.iter().find(|w| w.0 == width).unwrap().1;
+        let like = patterns.iter().find(|p| p.0 == pattern).unwrap().1;
+        assert!(
+            near(pens[pen.as_str()]["width"].as_f64().unwrap(), wide),
+            "{pen}: {pens}"
+        );
+        assert_eq!(pens[pen.as_str()]["dashes"], pens[like]["dashes"], "{pen}");
+    };
+    for (id, width, pattern) in &lines {
+        check(&doc, *id, width, pattern);
+    }
+    check(&doc, arc, "thick", "chain");
+    assert_eq!(pens["dashed_thick"]["dashes"], json!([3.0, 1.0]), "{pens}");
+
+    // The `pen` input as before: hidden is thin and dashed.
+    let hidden = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "type": "line", "sheet": 0,
+               "points": [[80, 20], [120, 20]], "pen": "hidden"}),
+    )["annotation"]
+        .as_u64()
+        .unwrap();
+    check(&doc, hidden, "thin", "dashed");
+    assert_eq!(annotation(&doc, hidden)["pen"], "hidden");
+
+    // Edited: each part alone keeps the other; a pen name sets both.
+    let edited = lines[0].0;
+    for (change, width, pattern) in [
+        (json!({"width": "thick"}), "thick", "continuous"),
+        (json!({"pattern": "dashed"}), "thick", "dashed"),
+        (json!({"pen": "hidden"}), "thin", "dashed"),
+        (
+            json!({"pen": "chain", "width": "extra_thick"}),
+            "extra_thick",
+            "chain",
+        ),
+        (json!({"pen": "thick"}), "thick", "continuous"),
+    ] {
+        let mut edit = json!({"cmd": "edit_drawing_annotation", "drawing": "D1",
+                              "annotation": edited});
+        for (key, value) in change.as_object().unwrap() {
+            edit[key] = value.clone();
+        }
+        command(&mut doc, edit);
+        assert_eq!(undo_label(&doc), format!("Edit line {edited} of Drawing1"));
+        check(&doc, edited, width, pattern);
+    }
+    command(
+        &mut doc,
+        json!({"cmd": "edit_drawing_annotation", "drawing": "D1", "annotation": edited,
+               "pen": "thin"}),
+    );
+
+    // Saved: a pen of before by its name (thin left out), the others by
+    // their two parts; read again the same.
+    let saved = doc.to_json();
+    let file: Value = serde_json::from_str(&saved).unwrap();
+    let items = file["drawings"][0]["sheets"][0]["sketch"]
+        .as_array()
+        .unwrap();
+    for (id, width, pattern) in &lines {
+        let item = items.iter().find(|i| i["id"] == *id).unwrap();
+        let pen = sheet_pen(width, pattern);
+        match pen.as_str() {
+            "thin" => assert!(
+                item.get("pen").is_none() && item.get("width").is_none(),
+                "{item}"
+            ),
+            "thick" | "extra_thick" | "hidden" | "chain" => {
+                assert_eq!(item["pen"], pen.as_str(), "{item}");
+                assert!(
+                    item.get("width").is_none() && item.get("pattern").is_none(),
+                    "{item}"
+                );
+            }
+            _ => {
+                assert!(item.get("pen").is_none(), "{item}");
+                assert_eq!(item["width"], *width, "{item}");
+                assert_eq!(item["pattern"], *pattern, "{item}");
+            }
+        }
+    }
+    let loaded = Document::from_json(&saved, MockKernel::default()).unwrap();
+    assert_eq!(loaded.to_json(), saved);
+    for (id, width, pattern) in &lines {
+        check(&loaded, *id, width, pattern);
+    }
+    check(&loaded, arc, "thick", "chain");
+
+    // Refused: a width or a pattern for a text or another annotation, a
+    // width of no such name.
+    for (cmd, message) in [
+        (
+            json!({"cmd": "add_drawing_annotation", "drawing": "D1", "type": "text", "view": 1,
+                   "at": [5, 5], "text": "X", "width": "thick"}),
+            "no pen",
+        ),
+        (
+            json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1, "type": "linear",
+                   "picks": [[65, 120], [105, 121]], "pattern": "dashed"}),
+            "no points or pen",
+        ),
+        (
+            json!({"cmd": "add_drawing_annotation", "drawing": "D1", "type": "line", "sheet": 0,
+                   "points": [[0, 0], [1, 0]], "width": "wide"}),
+            "wide",
+        ),
+    ] {
+        let error = refused(&mut doc, cmd);
+        assert!(error.contains(message), "{error}");
+    }
+
+    // A file of before: its hidden and chain lines and arcs read as thin
+    // dashed and thin chain, and are written again as they were.
+    let old = json!({
+        "uid": "D1",
+        "name": "Drawing1",
+        "sheets": [{"name": "Sheet1", "size": "A3", "sketch": [
+            {"type": "line", "id": 1, "from": [0.0, 0.0], "to": [10.0, 0.0], "pen": "hidden"},
+            {"type": "arc", "id": 2, "center": [0.0, 0.0], "radius": 5.0, "start": 0.0,
+             "end": 1.0, "pen": "chain"},
+            {"type": "line", "id": 3, "from": [0.0, 5.0], "to": [10.0, 5.0], "pen": "thick"},
+            {"type": "line", "id": 4, "from": [0.0, 9.0], "to": [10.0, 9.0]}
+        ]}]
+    });
+    let drawing: Drawing = serde_json::from_value(old.clone()).unwrap();
+    let pens: Vec<SketchPen> = drawing.sheets[0]
+        .sketch
+        .iter()
+        .filter_map(|item| match item {
+            SketchItem::Line { pen, .. } | SketchItem::Arc { pen, .. } => Some(*pen),
+            SketchItem::Text { .. } => None,
+        })
+        .collect();
+    assert_eq!(
+        pens,
+        [
+            SketchPen::new(PenWidth::Thin, PenPattern::Dashed),
+            SketchPen::new(PenWidth::Thin, PenPattern::Chain),
+            SketchPen::new(PenWidth::Thick, PenPattern::Continuous),
+            SketchPen::new(PenWidth::Thin, PenPattern::Continuous),
+        ]
+    );
+    let again = serde_json::to_value(&drawing).unwrap();
+    assert_eq!(again["sheets"][0]["sketch"], old["sheets"][0]["sketch"]);
+}
+
+#[test]
+fn a_thick_dashed_line_is_drawn_wide_and_dashed_in_the_pdf_svg_and_dxf_files() {
+    // mitcad#1447: the writers draw a combination no pen of before had
+    // with its width's line width and its pattern's dashes; DXF (and DWG,
+    // which takes the DXF drawing's layers) on a layer of its own.
+    let (mut doc, _) = drawn();
+    let line = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "type": "line", "sheet": 0,
+               "points": [[20, 20], [60, 20]], "width": "thick", "pattern": "dashed"}),
+    )["annotation"]
+        .as_u64()
+        .unwrap();
+    let chain = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "type": "line", "sheet": 0,
+               "points": [[20, 30], [60, 30]], "width": "extra_thick", "pattern": "chain"}),
+    )["annotation"]
+        .as_u64()
+        .unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("thick-dashed");
+    let svg = dir.join("pens.svg");
+    let pdf = dir.join("pens.pdf");
+    let dxf = dir.join("pens.dxf");
+    for path in [&svg, &pdf, &dxf] {
+        command(
+            &mut doc,
+            json!({"cmd": "export_drawing", "drawing": "D1", "path": path.to_string_lossy()}),
+        );
+    }
+    let text = std::fs::read_to_string(&svg).unwrap();
+    let g = svg_group(&text, line);
+    assert!(g.contains(r#"stroke-width="0.35""#), "{g}");
+    assert!(g.contains(r#"stroke-dasharray="3 1""#), "{g}");
+    let g = svg_group(&text, chain);
+    assert!(g.contains(r#"stroke-width="0.7""#), "{g}");
+    assert!(g.contains(r#"stroke-dasharray="12 1.5 0.5 1.5""#), "{g}");
+    let bytes = std::fs::read(&pdf).unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        text.contains("0.35 w [3 1] 0 d"),
+        "no 0.35 mm dashed pen in the PDF"
+    );
+    assert!(
+        text.contains("0.7 w [12 1.5 0.5 1.5] 0 d"),
+        "no 0.7 mm chain pen in the PDF"
+    );
+    let text = std::fs::read_to_string(&dxf).unwrap();
+    let entities = text
+        .find("ENTITIES")
+        .map(|at| &text[at..])
+        .expect("the DXF file's entities");
+    let tables = &text[..text.len() - entities.len()];
+    for layer in ["HIDDEN_THICK", "SECTION_LINE_EXTRA_THICK"] {
+        assert!(
+            tables.contains(&format!("  2\n{layer}\n")),
+            "no {layer} layer"
+        );
+        assert_eq!(
+            entities.matches(&format!("  8\n{layer}\n")).count(),
+            1,
+            "entities on {layer}"
+        );
+    }
+    // Today's layers keep today's lines: nothing else on the new ones.
+    for layer in ["HIDDEN_EXTRA_THICK", "SECTION_LINE_THICK"] {
+        assert_eq!(entities.matches(&format!("  8\n{layer}\n")).count(), 0);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

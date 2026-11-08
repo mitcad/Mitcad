@@ -303,7 +303,8 @@ QJsonObject sketchLine(const QString& drawing, int sheet, const ToolPicks& picks
   QJsonObject command =
       drawnOutside(drawing, sheet, picks, QStringLiteral("line"), toolOption("drawing.line", options, "attach"));
   command.insert(QStringLiteral("points"), QJsonArray{point(picks.points[0]), point(picks.points[1])});
-  command.insert(QStringLiteral("pen"), toolOption("drawing.line", options, "pen"));
+  command.insert(QStringLiteral("width"), toolOption("drawing.line", options, "width"));
+  command.insert(QStringLiteral("pattern"), toolOption("drawing.line", options, "pattern"));
   return command;
 }
 
@@ -316,7 +317,8 @@ QJsonObject sketchArc(const QString& drawing, int sheet, const ToolPicks& picks,
       drawnOutside(drawing, sheet, picks, QStringLiteral("arc"), toolOption("drawing.arc", options, "attach"));
   command.insert(QStringLiteral("points"),
                  QJsonArray{point(picks.points[0]), point(picks.points[1]), point(picks.points[2])});
-  command.insert(QStringLiteral("pen"), toolOption("drawing.arc", options, "pen"));
+  command.insert(QStringLiteral("width"), toolOption("drawing.arc", options, "width"));
+  command.insert(QStringLiteral("pattern"), toolOption("drawing.arc", options, "pattern"));
   return command;
 }
 
@@ -535,13 +537,15 @@ void addAnnotationTools(QVector<DrawingToolDef>& tools) {
                 tr("Draws a line on the sheet or in a view, outside the design"), SheetPick::Segment,
                 tr("Click the line's two ends"),
                 {attach(QStringLiteral("view")),
-                 choice(QStringLiteral("pen"), tr("Line"), penChoices(), QStringLiteral("thin"))},
+                 choice(QStringLiteral("width"), tr("Width"), widthChoices(), QStringLiteral("thin")),
+                 choice(QStringLiteral("pattern"), tr("Pattern"), patternChoices(), QStringLiteral("continuous"))},
                 &sketchLine, false, QString(), nullptr, nullptr, true});
   tools.append({QStringLiteral("drawing.arc"), tr("Arc"), QStringLiteral("arc-center"),
                 tr("Draws an arc on the sheet or in a view, outside the design"), SheetPick::ArcPoints,
                 tr("Click the arc's center, its start, then its end (counter-clockwise)"),
                 {attach(QStringLiteral("view")),
-                 choice(QStringLiteral("pen"), tr("Line"), penChoices(), QStringLiteral("thin"))},
+                 choice(QStringLiteral("width"), tr("Width"), widthChoices(), QStringLiteral("thin")),
+                 choice(QStringLiteral("pattern"), tr("Pattern"), patternChoices(), QStringLiteral("continuous"))},
                 &sketchArc, false, QString(), nullptr, nullptr, true});
   tools.append({QStringLiteral("drawing.center_pattern"), tr("Center Pattern"), QStringLiteral("circular-pattern"),
                 tr("Marks every hole of a pattern from one of them"), SheetPick::Picks,
@@ -1111,8 +1115,10 @@ QJsonObject annotationEdit(const QString& drawing, int annotation, const QString
       return {};
     }
     command.insert(field, height);
-  } else if (field == QStringLiteral("pen") || field == QStringLiteral("terminator")) {
-    // A line's pen; a datum label's terminator (mitcad#1296).
+  } else if (field == QStringLiteral("pen") || field == QStringLiteral("width") || field == QStringLiteral("pattern") ||
+             field == QStringLiteral("terminator")) {
+    // A line's pen, its width or its pattern (mitcad#1447); a datum
+    // label's terminator (mitcad#1296).
     command.insert(field, value);
   } else if (field == QStringLiteral("length")) {
     // An edge extension's reach beyond its edge's ends, mm (mitcad#729);
@@ -1232,11 +1238,15 @@ QJsonObject drawingDefaultsEdit(const QString& drawing, const QString& field, co
   return {};
 }
 
-QList<QPair<QString, QString>> penChoices() {
+QList<QPair<QString, QString>> widthChoices() {
   return {{QStringLiteral("thin"), tr("Thin")},
           {QStringLiteral("thick"), tr("Thick")},
-          {QStringLiteral("extra_thick"), tr("Extra Thick")},
-          {QStringLiteral("hidden"), tr("Dashed")},
+          {QStringLiteral("extra_thick"), tr("Extra Thick")}};
+}
+
+QList<QPair<QString, QString>> patternChoices() {
+  return {{QStringLiteral("continuous"), tr("Continuous")},
+          {QStringLiteral("dashed"), tr("Dashed")},
           {QStringLiteral("chain"), tr("Center Line")}};
 }
 

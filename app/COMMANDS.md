@@ -8521,7 +8521,15 @@ vertices stand for their bodies), and a sketch to DXF (`export_sketch`).
 STEP and IGES are written in millimetres unless the Unit row says
 otherwise; a sketch's DXF in the design's length unit unless the DXF unit
 row says otherwise (mitcad#1408: the design's unit first, then mm, cm, m,
-in, ft; `units` of `export_sketch`, and the log line ends `…, in in`).
+in, ft; `units` of `export_sketch`, and the log line adds `…, in in`).
+A sketch's DXF leaves its construction curves and center lines out unless
+**Include construction geometry** is checked (mitcad#1445: a check below
+the DXF unit row, shown for DXF only, off unless chosen and remembered as
+`export/dxfConstruction`; `construction` of `export_sketch`, written on the
+layer `construction`); the log line ends `…, construction geometry left
+out` or `…, construction geometry included`. The sketch's context-menu
+Export DXF leaves them out (`Exported <path>: dxf, 4 entities, in mm,
+construction geometry left out`).
 Bodies are where the design shows them (the model's default;
 a STEP of moved bodies is an assembly); with occurrences, Coordinates can
 give `coordinates: component`. USDZ (mitcad#123) takes the Refinement
@@ -11503,6 +11511,26 @@ SVG at several sizes (`themeIcon`).
   `tools/ui-pattern-options-test.sh`, `tools/ui-windows-pattern-options-test.ps1`
   (ctest `app.ui-windows-pattern-options`), `app/tests/pattern_options.cpp`
   (`app.unit`).
+- **Rectangular Pattern's Direction 3** (mitcad#1446, `PatternCommands.cpp`;
+  commands.md, *Patterns*, `direction3`): below Direction 2 the panel
+  offers Direction 3 (an axis, a straight edge or a sketch line; none: one
+  layer), for a 3D grid of copies in one feature. Its rows are Direction
+  2's: Direction Type 3, Quantity 3 (default 2), Spacing 3 or Extent 3
+  (following the Distance Type) with its arrow in the view, and Flip 3
+  (hidden while symmetric); they stay hidden until a direction is
+  picked, as Direction 2's do. The elements are the product of the three
+  quantities, numbered along Direction 1 first, then 2, then 3 (the
+  dots of Suppressed too). The definition gets `direction3` only when a
+  direction is picked, so a pattern without it saves as before; `load`
+  shows a saved one's third direction and `canEdit` checks its axis as
+  the others'. The added line names it (`…; direction 3 one direction,
+  quantity 4, spacing 30 mm`), and a pattern's preview logs its element
+  count, the original's included (`Preview Rectangular Pattern elements:
+  24`, `CommandSession::acceptFeaturePreview`, for every pattern whose
+  preview lists `elements`). Tests: `tools/ui-pattern-grid-test.sh`
+  (Direction 3 set in the panel, the preview's 24 elements, the saved
+  copies' places), `app/tests/pattern_options.cpp` (the options text of
+  three directions).
 - **Extrude** chooses the operation of a new extrusion until the user
   picks one (mitcad#289, `CommandDef::autoOperation`,
   `framework/CommandSessionAuto.cpp`, `framework/AutoOperationPolicy.hpp`):
@@ -12509,7 +12537,7 @@ next screenshot.
 | `Sketch hover: edge E{…} of F1.b0` / `nothing`, `Sketch pick places:` then `Sketch pick edge F1.b0/E{…} visible at x,y` (`occluded`) | with `MITCAD_LOG_PICKS`: what a click would take under the pointer in sketch mode and Project; with `MITCAD_LOG_EDGE_PLACES` (`tools/ui-sketch-select-test.sh`; every edge is tried) where a click hits each body edge in sight and behind faces once the camera rests in sketch mode |
 | `Sketch Sketch1: 2 DOF`, `… 0 DOF, fully constrained`, `…, conflicts k3+k5` | the sketch's status changed |
 | `Sketch entities recoloured for a dark background: 8 fully constrained, 1 centre lines` (`light`) | the view's background turned dark or light while sketch entities are shown: fully constrained geometry and centre lines take the background's colours (mitcad#253), their halos too (mitcad#302) |
-| `Sketch halos: 5 dark` (`light`) | the halos shown changed in number or tone: fully constrained curves and centre lines are drawn over a wider line in the background's tone (`OcctViewer::styleSketchHalo`), dark on a dark background and light on a light one, so that they stay readable over a body's face; points, construction and projected geometry and unconstrained curves have none (mitcad#302) |
+| `Sketch halos: 5 dark` (`light`) | the halos shown changed in number or tone: fully constrained curves and center lines are drawn over a wider line in the background's tone (`OcctViewer::styleSketchHalo`), dark on a dark background and light on a light one, so that they stay readable over a body's face; points, construction and projected geometry and unconstrained curves have none (mitcad#302) |
 | `Sketch layers: halos < curves and highlights < points and point highlights; points keep the scene's depth; point highlights over the markers` | the order OCCT draws the sketch layers in, read from the viewer when sketch entities are shown and it changed (`OcctViewer::logSketchLayers`: the layers that are not immediate first, then the immediate ones, each in its place in the list); whether the points' layer still tests the depth drawn before it (`lose` if it cleared it), and whether a selected point's ball is drawn after the plain markers in it (mitcad#897; `tools/ui-sketch-spline-test.sh`, `app.ui-windows-sketch-spline`) |
 | `Sketch highlights: 1 curve, 0 points` | the selection's highlights of sketch curves (in the top layer) and sketch points (in the points' layer) changed in number (mitcad#897) |
 | `Sketch dimension halos: 3 dark` (`light`) | the dimensions shown in sketch mode changed in number or the halo's tone: every dimension (normal, driven, hovered, selected, and the tool preview's) is painted over a halo under its dimension and extension lines, angle arcs and arrowheads (`SketchOverlay::paintDimensionHalo`: 3 px strokes under the 1 px lines, a 2 px outline round the arrowheads, all halos before any line; the values' boxes unchanged), in the same tone as the geometry's halo (`OcctViewer::sketchHaloColor`, the background's tone, the opposite of the lines'), so that the lines stay readable over a body's face of their own tone (mitcad#633). The lines and arrow tips are moved by less than a device pixel onto whole device pixels, so that a level or upright line is one sharp row in its own tone between whole rows of its halo instead of two half-tone rows blurred into it; `tools/ui-sketch-view-test.sh` also reads the pixels |
@@ -12627,9 +12655,9 @@ next screenshot.
 | `Section caps: 3 colour(s) [#e0892a hatch #4b2d0b at 135 deg, 12 lines; …] in Shaded, bodies in appearance colours` | the viewer's caps (mitcad#382): per colour group the cap colour (the component's timeline colour, the default orange for the root), the hatch's colour, direction and line count; again when the visual style or Component Colors change |
 | `Hide Above Sketch on`/`off`, `In front of the sketch plane: F2.b0 5.0, F5.b0 10.0` | the sketch palette's option; in sketch mode (also while a sketch command's panel is open), how far each shown body reaches in front of the sketch plane (mm, when it changes; 0 or less once cut, a body cut away entirely is left out) |
 | `Exported <path>: dxf flat pattern of Body1, 5 entities (CUT_OUTER 4, BEND_DOWN 1), in mm` (the unit written, mitcad#1408), `Export Flat Pattern dialog: unit in (in \| mm \| cm \| m \| ft)`, `Export of the flat pattern of Body1 refused: <reasons>`, `Flat pattern of Body1 shown` (`folded`), `Flat pattern of Body1: valid, area 1086.39 mm2, 1 bend(s)`, `Deleted the flat pattern of Body1`, `Added sheet face of 1 profile(s), new rules, thickness 2`, `Added flange, length 15 (tangent), angle 90 deg`, `Sheet rules: thickness …` | sheet metal (mitcad#210): the Flat Pattern's export, display and item, the commands' describe lines |
-| `Export dialog: STEP AP214 (*.step) to <path>` (a mesh type adds `, refinement high`), `Exported <path>: step, 1 body(ies), mm` (with occurrences `…, mm, design coordinates` or `component coordinates`), `Exported <path>: usdz, 1 body(ies), 1 material(s)`, `Exported <path>: dxf, 4 entities, in mm` (the unit written, mitcad#1408) | export |
+| `Export dialog: STEP AP214 (*.step) to <path>` (a mesh type adds `, refinement high`), `Exported <path>: step, 1 body(ies), mm` (with occurrences `…, mm, design coordinates` or `component coordinates`), `Exported <path>: usdz, 1 body(ies), 1 material(s)`, `Exported <path>: dxf, 4 entities, in mm, construction geometry left out` (the unit written, mitcad#1408; `included` with Include construction geometry, mitcad#1445) | export |
 | `3D Print panel: 3 visible: Plate, Cube, Pin; format stl, refinement high, slicer Fake slicer (/path <files>); slicers None \| …` (`1 selected: Cube`), `3D Print Bodies: 2 bodies [body F1.b0; body F2.b0]` (the input, as every selection input logs), `3D Print: Format = 3MF`, `3D Print: left out Surface1 (a surface body)`, `3D Print: no solid or mesh bodies`, `3D Print: 3 bodies as stl (high) to <folder>: Plate.stl, Cube.stl, Pin.stl` (a body shown twice: `Pin (Pin_1).stl, Pin (Pin_2).stl`; 3MF: `parts.3mf`… per body `Plate 12 triangles, 1000.000 mm3`), `3D Print: started <program> <arguments>`, `3D Print: <slicer> did not start`, `3D Print: opened <folder>`, `Done 3D Print`, `Command 3D Print cancelled`, `Preferences: slicer <slicer>` (or `automatic`) | 3D Print (mitcad#234: the panel replaced the dialog, whose `3D Print dialog: …` and `3D Print cancelled` lines are gone) |
-| `Export dialog opened: unit mm (mm \| cm \| m \| in \| ft)` (with occurrences also `, coordinates design (design \| component)`; then `, type step-ap214, refinement medium, file <path>`: the type, refinement and file it starts with, mitcad#1164; then `, dxf unit in (in \| mm \| cm \| m \| ft)`: a DXF file's unit, the design's first, mitcad#1408), `Insert Mesh dialog opened: unit …`, `Insert DXF dialog opened: unit …`, `Units dialog opened: mm (…)`, `Add User Parameter dialog opened: unit mm`, `Grid settings dialog opened: automatic, fixed spacing 10 mm` (the fixed spacing in the design's unit, `0.5 in`, mitcad#1210) | a dialog that offers units opened, with its default first |
+| `Export dialog opened: unit mm (mm \| cm \| m \| in \| ft)` (with occurrences also `, coordinates design (design \| component)`; then `, type step-ap214, refinement medium, file <path>`: the type, refinement and file it starts with, mitcad#1164; then `, dxf unit in (in \| mm \| cm \| m \| ft)`: a DXF file's unit, the design's first, mitcad#1408; then `, dxf construction off` or `on`: Include construction geometry as it starts, mitcad#1445), `Insert Mesh dialog opened: unit …`, `Insert DXF dialog opened: unit …`, `Units dialog opened: mm (…)`, `Add User Parameter dialog opened: unit mm`, `Grid settings dialog opened: automatic, fixed spacing 10 mm` (the fixed spacing in the design's unit, `0.5 in`, mitcad#1210) | a dialog that offers units opened, with its default first |
 | `Panel Hole choices: placement=face, …, standard=iso_metric, size=6, designation=M6x1, class=6H`, `Panel Hole options size: 1 \| 1.1 \| …`, `Panel Circular Pattern checks: symmetric=on`, `Panel Rectangular Pattern label distance1: Extent` | a panel's choices and check boxes when it starts; the options of a `withChoices` input when they change; a `withLabel` input's label when it changes (mitcad#545) |
 | `Imported block.step as Base1: 1 body(ies)`, `Inserted drawing.dxf into Sketch2: 4 curves, 4 points, 0 texts, 1 profiles, 0 warnings`, `Inserted component block (linked) from block.mitcad` | import |
 | `Insert SVG dialog opened: 100 x 60 mm, 2 filled, 1 stroked, 1 texts`, `Insert SVG scale at x,y` (`x`, `y`, `bands`, `OK`), `Insert SVG: scale 1, lower left at (0, 0), bands on`, `Inserted logo.svg into Sketch1: 16 curves, 17 points, 1 texts, 8 profiles, 0 warnings, 3 filled, 1 bands` | the Insert SVG dialog (places in the main window's coordinates), what it chose and what came in (mitcad#473) |
@@ -13739,8 +13767,8 @@ drawing commands; it computes no geometry of its own.
   | Model Items (`drawing.model_items`, mitcad#1406) | none: the views selected on the sheet (none: all the sheet's), then its panel's **Apply** (`drawingToolApply`; the panel's Views row names them); logged `Drawing Model Items on all views` (`on views 1, 3`), then the selection again | Sketch Dimensions, Model Annotations (check boxes, both on; both off: the status bar asks for one) | `drawing_model_items` with `sheet`, `views` when some are selected, `sketch_dimensions` and `model_annotations`: one undo step for all the views |
   | Center Mark (`drawing.center_mark`) | a circle, or a round face seen from the side | | `center_mark` |
   | Centerline (`drawing.centerline`) | two circles, two parallel edges, or a curved slot's two sides (its centre arc, mitcad#1272) | | `centerline` |
-  | Line (`drawing.line`, mitcad#729) | two clicks anywhere: its ends; on a view each snaps to an edge's end, a straight edge's middle or a circle's or an arc's centre near it (mitcad#1272: `drawing_pick` with `"want": "snap"`, shown under the pointer, logged `Drawing point snapped to {…}` and `Drawing point 1 at x,y (snapped)`), else onto a centre line near it, a round face's axis seen from the side or a centre mark's line, at the click's foot on it (mitcad#1362; the hover logged `Drawing hover: center line`); Shift (mitcad#1362), or Alt where the desktop leaves it to MitCad: as clicked | Drawn (In the View Clicked: the view under the first click, if any; On the Sheet), Line (Thin, Thick, Extra Thick (mitcad#1402), Dashed, Center Line: `penChoices`) | `"type": "line"` with `points`, `pen`, and `view` or `sheet`; the tool stays |
-  | Arc (`drawing.arc`, mitcad#729) | three clicks anywhere: its centre, start and end (a dashed line from the centre and the circle through the start follow the pointer), snapping as Line's | as Line's | `"type": "arc"` with `points`, `pen`, `view` or `sheet` |
+  | Line (`drawing.line`, mitcad#729) | two clicks anywhere: its ends; on a view each snaps to an edge's end, a straight edge's middle or a circle's or an arc's centre near it (mitcad#1272: `drawing_pick` with `"want": "snap"`, shown under the pointer, logged `Drawing point snapped to {…}` and `Drawing point 1 at x,y (snapped)`), else onto a centre line near it, a round face's axis seen from the side or a centre mark's line, at the click's foot on it (mitcad#1362; the hover logged `Drawing hover: center line`); Shift (mitcad#1362), or Alt where the desktop leaves it to MitCad: as clicked | Drawn (In the View Clicked: the view under the first click, if any; On the Sheet), Width (Thin, Thick, Extra Thick (mitcad#1402): `widthChoices`) and Pattern (Continuous, Dashed, Center Line: `patternChoices`), two choices that combine (mitcad#1447; one Line pen menu before), defaults Thin and Continuous | `"type": "line"` with `points`, `width`, `pattern`, and `view` or `sheet`; the tool stays |
+  | Arc (`drawing.arc`, mitcad#729) | three clicks anywhere: its centre, start and end (a dashed line from the centre and the circle through the start follow the pointer), snapping as Line's | as Line's | `"type": "arc"` with `points`, `width`, `pattern`, `view` or `sheet` |
   | Center Pattern (`drawing.center_pattern`, mitcad#729) | one circle seen end on | | `center_pattern`: the model finds the pattern's other holes |
   | Edge Extension (`drawing.edge_extension`, mitcad#729) | two straight edges, or one | Edges (Two, to Their Corner; One, Both Ways) | `edge_extension` |
   | Text (`drawing.text`) | a click on the sheet | Text (empty: the annotations' Note dialog asks), Drawn (On the Sheet, In the View Clicked; mitcad#729) | `"type": "text"` with `sheet` (or `view`), `at`, `text` |
@@ -13832,7 +13860,7 @@ drawing commands; it computes no geometry of its own.
   Letter, a frame's Tolerance… (`askFeatureControlFrame`, its datums the
   model's and the drawings'), a finish's Surface and Requirement; the
   Text Height of what writes (`drawingAnnotationHeight`, empty: the
-  drawing's), a line's or an arc's Line (`drawingAnnotationPen`), an
+  drawing's), a line's or an arc's Width and Pattern (`drawingAnnotationWidth`, `drawingAnnotationPattern`, mitcad#1447; logged `Drawing panel Width: thick, Pattern: dashed`), an
   edge extension of one edge's Length (`drawingAnnotationLength`)
   (mitcad#729); Delete.
   What a pick shows in orange includes an arc where it is
@@ -14028,7 +14056,7 @@ drawing commands; it computes no geometry of its own.
   `drawingAnnotationMeasured`, `drawingAnnotationText`,
   `drawingAnnotationLetter`, `drawingAnnotationFrame`,
   `drawingAnnotationProcess`, `drawingAnnotationRequirement`,
-  `drawingAnnotationPen`, `drawingAnnotationLength`,
+  `drawingAnnotationWidth`, `drawingAnnotationPattern`, `drawingAnnotationLength`,
   `drawingAnnotationHeight`, `drawingAnnotationDelete`; a table's
   `drawingTableColumn_<column>`,
   `drawingTableMoreColumns`, `drawingTableSort`, `drawingTableDescending`,
@@ -14089,8 +14117,9 @@ drawing commands; it computes no geometry of its own.
   sent and shown as 1:1.5), `tools/ui-drawing-features-test.sh` (mitcad#729:
   the drawing's decimals and text height in the sheet's panel and a
   dimension's own; a line and an arc drawn in a view and on the sheet,
-  a text in a view, the view moved with them; a centre pattern from one
-  hole; an edge extension; a view rotated in its panel and from its
+  a text in a view, the view moved with them; mitcad#1447: the line's
+  Width and Pattern read back from its panel, set to Thick and Dashed;
+  a centre pattern from one hole; an edge extension; a view rotated in its panel and from its
   menu, its dimension following, undone; a base view's orientation
   changed under its section and detail; mitcad#1169: its Scale typed, abc
   refused and not sent, 2:3 sent, the model's 0.667 shown as 1:1.5).

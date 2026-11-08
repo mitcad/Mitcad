@@ -56,8 +56,9 @@ use mitcad_model::{
     AnnotationFormat, Document, GeometricTolerance, MeasureKind, MeasurePick, Tolerance,
 };
 use mitcad_model_drawing::annotate::{
-    self, Along, AnnotationType, BodyGeometry, FlatFace, Frame, PickPoint, RoundFace, Seen,
-    SheetNote, SketchItem, SketchPen, SurfaceFinish, Terminator, ViewAnnotation, ViewPick, Want,
+    self, Along, AnnotationType, BodyGeometry, FlatFace, Frame, PenPattern, PenWidth, PickPoint,
+    RoundFace, Seen, SheetNote, SketchItem, SketchPen, SketchPenName, SurfaceFinish, Terminator,
+    ViewAnnotation, ViewPick, Want,
 };
 use mitcad_model_drawing::clip::ViewMap;
 use mitcad_model_drawing::compose::{Bounds, PlacedView, SketchDimension, ViewRole, view_bounds};
@@ -162,12 +163,26 @@ pub(super) struct AddAnnotationCommand {
     /// (mm; mitcad#729).
     #[serde(default)]
     points: Vec<P2>,
-    /// A line's or an arc's pen.
+    /// A line's or an arc's pen by its name of before mitcad#1447 (its
+    /// width and pattern).
     #[serde(default)]
-    pen: Option<SketchPen>,
+    pen: Option<SketchPenName>,
+    /// A line's or an arc's width and pattern (mitcad#1447), over `pen`.
+    #[serde(default)]
+    width: Option<PenWidth>,
+    #[serde(default)]
+    pattern: Option<PenPattern>,
     /// A datum label's terminator (mitcad#1296); left out: by its pick.
     #[serde(default)]
     terminator: Option<Terminator>,
+}
+
+impl AddAnnotationCommand {
+    /// Whether a line's or an arc's pen is given: `pen`, `width` or
+    /// `pattern`.
+    fn has_pen(&self) -> bool {
+        self.pen.is_some() || self.width.is_some() || self.pattern.is_some()
+    }
 }
 
 /// `edit_drawing_annotation`: what is given changes; `null` sets a field
@@ -219,10 +234,24 @@ pub(super) struct EditAnnotationCommand {
     #[serde(default)]
     points: Option<Vec<P2>>,
     #[serde(default)]
-    pen: Option<SketchPen>,
+    pen: Option<SketchPenName>,
+    /// A line's or an arc's width and pattern (mitcad#1447): each changes
+    /// alone, over `pen`.
+    #[serde(default)]
+    width: Option<PenWidth>,
+    #[serde(default)]
+    pattern: Option<PenPattern>,
     /// A datum label's terminator (mitcad#1296); `null`: by its pick.
     #[serde(default, deserialize_with = "present")]
     terminator: Option<Option<Terminator>>,
+}
+
+impl EditAnnotationCommand {
+    /// Whether a line's or an arc's pen is given: `pen`, `width` or
+    /// `pattern`.
+    fn has_pen(&self) -> bool {
+        self.pen.is_some() || self.width.is_some() || self.pattern.is_some()
+    }
 }
 
 /// The `drawing_pick` query: what a click at a sheet point (mm) picks on
@@ -1617,7 +1646,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             ))
         })?;
         let kind = asked.kind();
-        if !c.points.is_empty() || c.pen.is_some() {
+        if !c.points.is_empty() || c.has_pen() {
             return Err(ApiError(format!(
                 "a {} is drawn from its picks: it takes no points or pen",
                 noun(kind)
@@ -1852,7 +1881,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         let (si, view_id) = old
             .find_annotation(id)
             .ok_or_else(|| ApiError(format!("{} has no annotation {id}", old.name)))?;
-        if c.points.is_some() || c.pen.is_some() {
+        if c.points.is_some() || c.has_pen() {
             return Err(ApiError(format!(
                 "annotation {id} is drawn from its picks: it has no points or pen"
             )));
@@ -3886,7 +3915,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         c: AddAnnotationCommand,
         id: u32,
     ) -> Result<Value, ApiError> {
-        if c.view.is_some() || !c.picks.is_empty() || !c.points.is_empty() || c.pen.is_some() {
+        if c.view.is_some() || !c.picks.is_empty() || !c.points.is_empty() || c.has_pen() {
             return Err(ApiError(
                 "a text note is on the sheet: give its `sheet` and `at`, no picks, points or pen"
                     .to_owned(),
@@ -3948,7 +3977,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 (c.sheet, ViewMap::new(1.0, [0.0, 0.0], [0.0, 0.0]))
             }
         };
-        if c.kind == "text" && c.pen.is_some() {
+        if c.kind == "text" && c.has_pen() {
             return Err(ApiError("a text has no pen".to_owned()));
         }
         let item = sketch_item(
@@ -3958,7 +3987,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             c.at,
             c.text.as_deref(),
             c.height,
-            c.pen.unwrap_or_default(),
+            SketchPen::default().chosen(c.pen, c.width, c.pattern),
             &map,
         )?;
         item.check().map_err(ApiError)?;
@@ -4033,9 +4062,13 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             };
             *item = sketch_item(kind, id, points, None, None, None, pen, &map)?;
         }
-        if let Some(chosen) = c.pen {
+        // Its pen: a name sets its width and pattern, `width` and `pattern`
+        // each their own (mitcad#1447).
+        if c.has_pen() {
             match item {
-                SketchItem::Line { pen, .. } | SketchItem::Arc { pen, .. } => *pen = chosen,
+                SketchItem::Line { pen, .. } | SketchItem::Arc { pen, .. } => {
+                    *pen = pen.chosen(c.pen, c.width, c.pattern);
+                }
                 SketchItem::Text { .. } => return Err(ApiError("a text has no pen".to_owned())),
             }
         }
@@ -4073,7 +4106,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         }
         item.check().map_err(ApiError)?;
         let moved_only = c.points.is_none()
-            && c.pen.is_none()
+            && !c.has_pen()
             && c.text.is_none()
             && c.height.is_none()
             && (c.at.is_some() || c.shift.is_some());
@@ -4413,9 +4446,14 @@ pub(crate) fn add_annotation_notice(
 
 /// A line's, an arc's or a text's entry in the `drawing` query
 /// (mitcad#729): its file form with its view (null on the sheet), its
-/// words and its box.
+/// words and its box; a line's or an arc's `width` and `pattern` always
+/// (mitcad#1447: the file form leaves them out or gives the pen's name).
 fn sketch_entry(item: &SketchItem, view: Option<u32>, laid: &annotate::Laid) -> Value {
     let mut entry = serde_json::to_value(item).unwrap_or(Value::Null);
+    if let SketchItem::Line { pen, .. } | SketchItem::Arc { pen, .. } = item {
+        entry["width"] = json!(pen.width);
+        entry["pattern"] = json!(pen.pattern);
+    }
     entry["view"] = json!(view);
     entry["broken"] = json!(false);
     entry["label"] = json!(item.label());

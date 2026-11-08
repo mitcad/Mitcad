@@ -569,14 +569,19 @@ int drawingToolsTests() {
   CHECK(drawn.value(QStringLiteral("type")).toString() == QStringLiteral("line"));
   CHECK(drawn.value(QStringLiteral("view")).toInt() == 2 && !drawn.contains(QStringLiteral("sheet")));
   CHECK(drawn.value(QStringLiteral("points")).toArray().size() == 2);
-  CHECK(drawn.value(QStringLiteral("pen")).toString() == QStringLiteral("thin"));
+  // Its width and pattern (mitcad#1447): Thin and Continuous by default.
+  CHECK(drawn.value(QStringLiteral("width")).toString() == QStringLiteral("thin"));
+  CHECK(drawn.value(QStringLiteral("pattern")).toString() == QStringLiteral("continuous"));
+  CHECK(!drawn.contains(QStringLiteral("pen")));
   drawn = line->command(QStringLiteral("D1"), 1, picks(0, {QPointF(1, 2), QPointF(3, 4)}),
-                        {{QStringLiteral("pen"), QStringLiteral("thick")}});
+                        {{QStringLiteral("width"), QStringLiteral("thick")}});
   CHECK(drawn.value(QStringLiteral("sheet")).toInt() == 1 && !drawn.contains(QStringLiteral("view")));
-  CHECK(drawn.value(QStringLiteral("pen")).toString() == QStringLiteral("thick"));
+  CHECK(drawn.value(QStringLiteral("width")).toString() == QStringLiteral("thick"));
   drawn = line->command(QStringLiteral("D1"), 1, picks(0, {QPointF(1, 2), QPointF(3, 4)}),
-                        {{QStringLiteral("pen"), QStringLiteral("extra_thick")}});
-  CHECK(drawn.value(QStringLiteral("pen")).toString() == QStringLiteral("extra_thick"));
+                        {{QStringLiteral("width"), QStringLiteral("extra_thick")},
+                         {QStringLiteral("pattern"), QStringLiteral("dashed")}});
+  CHECK(drawn.value(QStringLiteral("width")).toString() == QStringLiteral("extra_thick"));
+  CHECK(drawn.value(QStringLiteral("pattern")).toString() == QStringLiteral("dashed"));
   drawn = line->command(QStringLiteral("D1"), 1, picks(2, {QPointF(1, 2), QPointF(3, 4)}),
                         {{QStringLiteral("attach"), QStringLiteral("sheet")}});
   CHECK(drawn.value(QStringLiteral("sheet")).toInt() == 1);
@@ -621,11 +626,21 @@ int drawingToolsTests() {
   command = drawingDefaultsEdit(QStringLiteral("D1"), QStringLiteral("text_height"), QString());
   CHECK(command.value(QStringLiteral("text_height")).isNull());
   CHECK(drawingDefaultsEdit(QStringLiteral("D1"), QStringLiteral("text_height"), QStringLiteral("0")).isEmpty());
-  CHECK(penChoices().size() == 5 && penChoices().first().first == QStringLiteral("thin"));
-  // Extra Thick right after Thick (mitcad#1402).
-  CHECK(penChoices().at(1).first == QStringLiteral("thick") &&
-        penChoices().at(2).first == QStringLiteral("extra_thick") &&
-        penChoices().at(2).second == QStringLiteral("Extra Thick"));
+  // Width and Pattern, two choices that combine (mitcad#1447); Extra Thick
+  // right after Thick (mitcad#1402).
+  CHECK(widthChoices().size() == 3 && widthChoices().first().first == QStringLiteral("thin"));
+  CHECK(widthChoices().at(1).first == QStringLiteral("thick") &&
+        widthChoices().at(2).first == QStringLiteral("extra_thick") &&
+        widthChoices().at(2).second == QStringLiteral("Extra Thick"));
+  CHECK(patternChoices().size() == 3 && patternChoices().first().first == QStringLiteral("continuous"));
+  CHECK(patternChoices().at(1).first == QStringLiteral("dashed") &&
+        patternChoices().at(1).second == QStringLiteral("Dashed") &&
+        patternChoices().at(2).first == QStringLiteral("chain") &&
+        patternChoices().at(2).second == QStringLiteral("Center Line"));
+  command = annotationEdit(QStringLiteral("D1"), 3, QStringLiteral("width"), QStringLiteral("thick"));
+  CHECK(command.value(QStringLiteral("width")).toString() == QStringLiteral("thick"));
+  command = annotationEdit(QStringLiteral("D1"), 3, QStringLiteral("pattern"), QStringLiteral("dashed"));
+  CHECK(command.value(QStringLiteral("pattern")).toString() == QStringLiteral("dashed"));
   // Sheet templates (mitcad#707 phase 4): the query's built-in ones by id, a
   // library's as its data, then the simple title block.
   const QJsonObject templates{

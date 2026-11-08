@@ -318,8 +318,18 @@ the bridge's own (`mitcad-bridge-N`), whose answers stay in the bridge.
 So an assistant such as Claude Desktop never sees the server stop while
 MitCad runs. A window that refuses the client at `initialize` (its
 assistant was disconnected there, below) answers the calls with its reason
-and is asked again every 10 s. Only end of input ends the bridge; with
+and is asked again every 10 s. End of input ends the bridge; with
 `--instance` it ends with its window's connection, as before.
+
+The bridge loads MitCad's libraries from the installation, so a running
+bridge keeps an update from replacing them (mitcad#1454). On Windows the
+updater (once MitCad has quit for the update) and the installer therefore
+set the event `Local\MitcadBridgeQuit-<pid>` of each bridge that runs from
+the installation, and the bridge then ends without an error. It does not
+end on its own while it waits for MitCad to start.
+
+It says so on stderr. Reconnect MitCad in the assistant after the update
+(Claude Code: `/mcp`).
 
 An instance is live only when the token of its record authenticates on
 its port. A port that another program reuses is not sufficient. If the

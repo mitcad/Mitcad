@@ -25,9 +25,23 @@
 ; (app/update/UpdateInstaller.cpp) read; an installation without it is an
 ; earlier release's, which was always for all users.
 ; An earlier version installed in the same scope is uninstalled first (its
-; own uninstaller, silently). Exit codes: 0 done, 1 cancelled, 2 aborted
-; (also: the earlier version could not be uninstalled), 740 elevated but
-; still no administrator rights, 1223 the elevation was refused.
+; own uninstaller, silently).
+; No file is replaced while a program from the installation runs
+; (mitcad#1454): a program from bin keeps its DLLs locked, and an update
+; that skipped them once left the new mitcad.exe with the old OCCT. Before
+; the earlier version is uninstalled, the installer finds the processes
+; whose program is in the installation folder and asks the MCP bridges
+; among them (mitcad-cli mcp --connect, which an AI assistant keeps
+; running) to end, through the event each one waits on
+; (app/update/RunningPrograms.hpp), and gives them a few seconds. With
+; pages, what still runs is named with Retry and Cancel; silently the
+; installer ends with exit code 3 and changes nothing. AllowSkipFiles is
+; off: a file that cannot be written is never skipped (silently: aborted).
+; Exit codes: 0 done, 1 cancelled, 2 aborted (also: the earlier version
+; could not be uninstalled, or a file could not be written), 3 programs
+; from the installation are running (silent; nothing was changed), 740
+; elevated but still no administrator rights, 1223 the elevation was
+; refused.
 
   Unicode true
 
@@ -41,6 +55,12 @@
   !define MITCAD_SCOPE_FILE "installation.ini"
   ; Button_SetElevationRequiredState: the shield on the Next button.
   !define MITCAD_BCM_SETSHIELD 0x160C
+  ; The exit code when programs from the installation run (mitcad#1454;
+  ; app/update/UpdaterWindows.cpp reads it).
+  !define MITCAD_FILES_IN_USE 3
+  ; PROCESS_QUERY_LIMITED_INFORMATION, EVENT_MODIFY_STATE.
+  !define MITCAD_QUERY_LIMITED 0x1000
+  !define MITCAD_EVENT_MODIFY 0x0002
 
 ;--------------------------------
 ; Variables. CPack's generated shortcut commands use STARTMENU_FOLDER and
@@ -62,6 +82,11 @@
   Var MitcadTemp
   Var MitcadJustMeButton
   Var MitcadAllUsersButton
+  ; The programs running from the installation, one per line; empty: none.
+  Var MitcadRunning
+  ; 1: MitcadFindRunning also asks the MCP bridges among them to end.
+  Var MitcadAskBridges
+  Var MitcadWaited
 
 ;--------------------------------
 ; General
@@ -78,6 +103,10 @@
 
   ; Runs as the user; elevation only for an installation for all users.
   RequestExecutionLevel user
+  ; A file that cannot be written is never skipped (mitcad#1454): Retry or
+  ; Cancel with pages, an abort when silent; a skipped DLL would leave a
+  ; mixed installation.
+  AllowSkipFiles off
 
 @CPACK_NSIS_DEFINES@
 @CPACK_NSIS_MANIFEST_DPI_AWARE_CODE@
@@ -278,6 +307,102 @@ Function MitcadElevate
   ${EndIf}
 FunctionEnd
 
+; The processes whose program is in $INSTDIR or below it (mitcad#1454):
+; $MitcadRunning gets one line for each ("bin\mitcad-cli.exe (process
+; 1234)"), empty when none. With $MitcadAskBridges 1 it also sets each
+; one's quit event: an MCP bridge (mitcad-cli mcp --connect) waits on
+; Local\MitcadBridgeQuit-<pid> and ends (app/update/RunningPrograms.hpp);
+; other programs have no such event. A process this installer may not
+; query (another user's, without administrator rights) is not seen.
+Function MitcadFindRunning
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $8
+  Push $9
+  StrCpy $MitcadRunning ""
+  StrCpy $0 "$INSTDIR\"
+  StrLen $1 $0
+  ; The ids of up to 4096 processes (K32EnumProcesses: kernel32 since
+  ; Windows 7).
+  System::Alloc 16384
+  Pop $2
+  StrCpy $3 0
+  System::Call 'kernel32::K32EnumProcesses(p r2, i 16384, *i 0 r3) i .r4'
+  ${If} $4 == 0
+    StrCpy $3 0
+  ${EndIf}
+  IntOp $3 $3 / 4
+  StrCpy $5 0
+  ${While} $5 < $3
+    IntOp $6 $5 * 4
+    IntPtrOp $6 $2 + $6
+    System::Call '*$6(i .r7)'
+    System::Call 'kernel32::OpenProcess(i ${MITCAD_QUERY_LIMITED}, i 0, i r7) p .r8'
+    ${If} $8 != 0
+      System::Call 'kernel32::QueryFullProcessImageNameW(p r8, i 0, w .r6, *i ${NSIS_MAX_STRLEN} r9) i .r4'
+      System::Call 'kernel32::CloseHandle(p r8)'
+      ${If} $4 != 0
+        ; NSIS compares strings ignoring case, as the file system does.
+        StrCpy $4 $6 $1
+        ${If} $4 == $0
+          StrCpy $4 $6 "" $1
+          ${If} $MitcadRunning != ""
+            StrCpy $MitcadRunning "$MitcadRunning$\r$\n"
+          ${EndIf}
+          StrCpy $MitcadRunning "$MitcadRunning$4 (process $7)"
+          ${If} $MitcadAskBridges == 1
+            System::Call 'kernel32::OpenEventW(i ${MITCAD_EVENT_MODIFY}, i 0, w "Local\MitcadBridgeQuit-$7") p .r4'
+            ${If} $4 != 0
+              System::Call 'kernel32::SetEvent(p r4)'
+              System::Call 'kernel32::CloseHandle(p r4)'
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+    IntOp $5 $5 + 1
+  ${EndWhile}
+  System::Free $2
+  Pop $9
+  Pop $8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; Asks the MCP bridges running from the installation to end and gives
+; everything that runs from it up to five seconds to end (mitcad#1454).
+; $MitcadRunning: what still runs, empty when nothing does.
+Function MitcadWaitForPrograms
+  StrCpy $MitcadRunning ""
+  ${IfNot} ${FileExists} "$INSTDIR\*.*"
+    Return
+  ${EndIf}
+  StrCpy $MitcadAskBridges 1
+  Call MitcadFindRunning
+  StrCpy $MitcadAskBridges 0
+  StrCpy $MitcadWaited 0
+  ${DoWhile} $MitcadRunning != ""
+    ${If} $MitcadWaited >= 20
+      ${Break}
+    ${EndIf}
+    Sleep 250
+    IntOp $MitcadWaited $MitcadWaited + 1
+    Call MitcadFindRunning
+  ${Loop}
+FunctionEnd
+
 ; Uninstalls an earlier version registered in the chosen scope with its own
 ; uninstaller, silently and in place. $MitcadResult: "ok", "failed" or
 ; "cancel". A registration whose uninstaller is gone (an installation
@@ -368,6 +493,13 @@ Function .onInit
   ${EndIf}
 
   ${If} ${Silent}
+    ; Nothing is touched while a program from the installation runs
+    ; (mitcad#1454): neither the earlier version's files nor this one's.
+    Call MitcadWaitForPrograms
+    ${If} $MitcadRunning != ""
+      SetErrorLevel ${MITCAD_FILES_IN_USE}
+      Quit
+    ${EndIf}
     Call MitcadUninstallPrevious
     ${If} $MitcadResult != "ok"
       SetErrorLevel 2
@@ -498,6 +630,17 @@ Function MitcadScopePageLeave
 FunctionEnd
 
 Function MitcadDirectoryLeave
+  ; Programs from the installation keep its files (mitcad#1454): named, with
+  ; Retry; Cancel stays on this page.
+  ${Do}
+    Call MitcadWaitForPrograms
+    ${If} $MitcadRunning == ""
+      ${Break}
+    ${EndIf}
+    ${IfNot} ${Cmd} `MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "@CPACK_NSIS_PACKAGE_NAME@ cannot be installed while programs from $INSTDIR are running:$\r$\n$\r$\n$MitcadRunning$\r$\n$\r$\nClose them, then choose Retry. AI assistant sessions connected to @CPACK_NSIS_PACKAGE_NAME@ run bin\mitcad-cli.exe; Task Manager can end it." IDRETRY`
+      Abort
+    ${EndIf}
+  ${Loop}
   Call MitcadUninstallPrevious
   ${If} $MitcadResult == "cancel"
     Quit

@@ -15,6 +15,11 @@
 #      licences; no Mesa, no PDB files. The installed mitcad-updater does
 #      not run an installer whose SHA-256 is not the one it is given, or
 #      without one, and logs the reason as its last line (mitcad#603).
+#      Files in use (mitcad#1454): while `mitcad-cli mcp` runs from bin,
+#      the silent installer ends with exit code 3 and changes no file, and
+#      the updater names mitcad-cli.exe; a running bridge (`mitcad-cli mcp
+#      --connect`) is asked to end, and the install then puts every file of
+#      the package in place.
 #   2. mitcad-cli runs a script of the repository; with the toolchain (Qt,
 #      vcpkg, Rust, Visual Studio) removed from PATH from here on.
 #   3. mitcad.exe --version loads Qt with its plugins. The render worker
@@ -367,6 +372,151 @@ function Test-UpdaterCheck([string]$Install, [string]$Work) {
   else { Fail "the log's last line is '$last'" }
 }
 
+# 1c. Files in use (mitcad#1454): a program from bin keeps its DLLs locked,
+# and an update that skipped them once left a new mitcad.exe with the old
+# OCCT. With `mitcad-cli mcp` from bin running (the headless MCP server:
+# it loads TKernel.dll and the rest of OCCT and, unlike a bridge, has no
+# quit event), the silent installer ends with exit code 3 and changes no
+# file (not even the uninstaller's, nor a file the old uninstall would
+# delete), and the installed updater ends with 1 and names mitcad-cli.exe
+# in its log's last line. With it ended and a bridge (`mitcad-cli mcp
+# --connect`) running instead, the installer asks the bridge to end and
+# installs, and every file is the package's again.
+function Start-FromBin([string]$Bin, [string]$Arguments, [string]$Discovery) {
+  $info = New-Object Diagnostics.ProcessStartInfo
+  $info.FileName = Join-Path $Bin 'mitcad-cli.exe'
+  $info.Arguments = $Arguments
+  $info.UseShellExecute = $false
+  # stdin stays open: both servers wait for their client's messages.
+  $info.RedirectStandardInput = $true
+  $info.CreateNoWindow = $true
+  # An empty discovery folder of its own: a bridge must not find the MitCad
+  # windows of the UI tests running beside this one (a window that refuses
+  # its authentication ends it).
+  $info.EnvironmentVariables['MITCAD_MCP_DISCOVERY_DIR'] = $Discovery
+  return [Diagnostics.Process]::Start($info)
+}
+
+# The files below $Folder: relative path -> length, write time, content hash.
+function Get-Files([string]$Folder) {
+  $files = @{}
+  Get-ChildItem $Folder -Recurse -File | ForEach-Object {
+    $files[$_.FullName.Substring($Folder.Length)] =
+      "$($_.Length) $($_.LastWriteTimeUtc.Ticks) $((Get-FileHash -Algorithm SHA256 $_.FullName).Hash)"
+  }
+  return $files
+}
+
+function Test-FilesInUse([string]$Install, [string]$Work) {
+  New-Item -ItemType Directory -Force $Work | Out-Null
+  $bin = Join-Path $Install 'bin'
+  $workspace = Join-Path $Work 'workspace'
+  New-Item -ItemType Directory -Force $workspace | Out-Null
+  # Not made here: mitcad-cli makes it private to the user, as it must be.
+  $discovery = Join-Path $Work 'mcp-discovery'
+  if (Test-Path $discovery) { Remove-Item -Recurse -Force $discovery }
+  $holder = Start-FromBin $bin "mcp --workspace `"$workspace`"" $discovery
+  $bridge = $null
+  try {
+    Start-Sleep -Seconds 2
+    $kernel = @(try { (Get-Process -Id $holder.Id).Modules } catch { }) | Where-Object { $_.ModuleName -eq 'TKernel.dll' }
+    if (-not $holder.HasExited -and $kernel -and $kernel[0].FileName -eq (Join-Path $bin 'TKernel.dll')) {
+      Pass "mitcad-cli mcp runs from bin with bin\TKernel.dll loaded"
+    } else {
+      Fail "mitcad-cli mcp did not run from bin with bin\TKernel.dll (exited: $($holder.HasExited))"
+      return
+    }
+    # A file the old uninstall would delete and the install write again,
+    # changed here: it stays changed only if nothing was touched.
+    $license = Join-Path $Install 'LICENSE'
+    $packageLicense = Get-Content $license -Raw
+    Set-Content -Encoding ascii $license 'files in use test'
+    $before = Get-Files $Install
+
+    # The installed updater, as an update runs it (a stand-in restarts).
+    $updater = Join-Path $Work 'mitcad-updater.exe'
+    $copy = Join-Path $Work $installer.Name
+    Copy-Item (Join-Path $bin 'mitcad-updater.exe') $updater
+    Copy-Item $installer.FullName $copy
+    $hash = (Get-FileHash -Algorithm SHA256 $copy).Hash.ToLowerInvariant()
+    $log = Join-Path $Work 'updater.log'
+    $stand = Join-Path $env:SystemRoot 'System32\hostname.exe'
+    $proc = Start-Process -FilePath $updater -Wait -PassThru -ArgumentList (
+      @('--installer', "`"$copy`"", '--sha256', $hash, '--dir', "`"$Install`"", '--scope', 'user',
+        '--restart', "`"$stand`"", '--log', "`"$log`""))
+    $last = @(Get-Content $log -ErrorAction SilentlyContinue) | Where-Object { $_.Trim() } | Select-Object -Last 1
+    if ($proc.ExitCode -eq 1 -and $last -and $last.StartsWith('programs from the installation are still running') -and
+        $last.Contains('mitcad-cli.exe')) {
+      Pass "mitcad-updater reports the program in use: $last"
+    } else {
+      Fail "mitcad-updater with mitcad-cli running: exit code $($proc.ExitCode), last line '$last'"
+    }
+
+    # The installer on its own, silently, as the updater runs it.
+    $proc = Start-Process -FilePath $installer.FullName -ArgumentList '/S', '/CurrentUser', "/D=$Install" -Wait -PassThru
+    if ($proc.ExitCode -eq 3) { Pass 'the silent installer ends with exit code 3 while mitcad-cli runs from bin' }
+    else { Fail "the silent installer with mitcad-cli running: exit code $($proc.ExitCode), expected 3" }
+    $after = Get-Files $Install
+    $changed = @($before.Keys + $after.Keys | Sort-Object -Unique | Where-Object { $before[$_] -ne $after[$_] })
+    if ($changed.Count -eq 0) { Pass "no file of the installation changed ($($before.Count) files)" }
+    else { Fail "files changed while mitcad-cli ran: $(($changed | Select-Object -First 10) -join ', ')" }
+    if ($holder.HasExited) { Fail 'mitcad-cli mcp was ended: only bridges are asked to end' }
+    else { Pass 'mitcad-cli mcp (not a bridge) still runs' }
+    $holder.Kill()
+    $holder.WaitForExit(10000) | Out-Null
+
+    # A bridge instead: it is asked to end, and the install goes through.
+    $bridge = Start-FromBin $bin 'mcp --connect' $discovery
+    $quitEvent = $null
+    for ($i = 0; $i -lt 60 -and -not $bridge.HasExited; $i++) {
+      if ([Threading.EventWaitHandle]::TryOpenExisting("Local\MitcadBridgeQuit-$($bridge.Id)", [ref]$quitEvent)) { break }
+      Start-Sleep -Milliseconds 250
+    }
+    if ($quitEvent) {
+      $quitEvent.Dispose()
+      Pass 'the bridge waits on its quit event'
+    } else { Fail "the bridge made no quit event (exited: $($bridge.HasExited))" }
+    $proc = Start-Process -FilePath $installer.FullName -ArgumentList '/S', '/CurrentUser', "/D=$Install" -Wait -PassThru
+    if ($proc.ExitCode -eq 0) { Pass 'the silent installer asks the bridge to end and installs' }
+    else { Fail "the silent installer with a bridge running: exit code $($proc.ExitCode)" }
+    if ($bridge.WaitForExit(10000)) { Pass "the bridge ended (exit code $($bridge.ExitCode))" }
+    else { Fail 'the bridge still runs after the install' }
+    if ((Get-Content $license -Raw) -eq $packageLicense) { Pass 'LICENSE is the package''s again' }
+    else { Fail 'LICENSE was not installed again' }
+
+    # Every file of the package is installed as the package has it: CPack's
+    # staging folder of the installer, else the .zip's files.
+    $package = Join-Path $Build "_CPack_Packages\win64\NSIS\$($installer.BaseName)"
+    if (-not (Test-Path (Join-Path $package 'bin\mitcad.exe'))) {
+      $zip = Join-Path $Build "$($installer.BaseName).zip"
+      $package = $null
+      if (Test-Path $zip) {
+        $unpacked = Join-Path $Work 'package'
+        Expand-Archive -Path $zip -DestinationPath $unpacked -Force
+        $package = Get-ChildItem $unpacked -Recurse -Filter 'mitcad.exe' | Where-Object { $_.Directory.Name -eq 'bin' } |
+          Select-Object -First 1 | ForEach-Object { $_.Directory.Parent.FullName }
+      }
+    }
+    if (-not $package) { Fail "no package files to compare with (neither CPack's staging folder nor $zip)"; return }
+    $mismatched = @()
+    $count = 0
+    Get-ChildItem $package -Recurse -File | ForEach-Object {
+      $count++
+      $installed = Join-Path $Install $_.FullName.Substring($package.Length + 1)
+      if (-not (Test-Path $installed) -or
+          (Get-FileHash -Algorithm SHA256 $installed).Hash -ne (Get-FileHash -Algorithm SHA256 $_.FullName).Hash) {
+        $mismatched += $_.FullName.Substring($package.Length + 1)
+      }
+    }
+    if ($count -gt 0 -and $mismatched.Count -eq 0) { Pass "every file of the package is installed ($count files)" }
+    else { Fail "installed files that differ from the package's: $(($mismatched | Select-Object -First 10) -join ', ')" }
+  } finally {
+    foreach ($process in $holder, $bridge) {
+      if ($process -and -not $process.HasExited) { $process.Kill() }
+    }
+  }
+}
+
 # 5. The automatic update of the installation in $Install, installed in
 # scope $In (the app's window is driven with tools/ui-windows-lib.ps1).
 # -Full adds the administrator's policy and a tampered download.
@@ -621,6 +771,7 @@ function Test-Scope([string]$In) {
   if ($In -eq 'user') {
     Test-Programs $install
     Test-UpdaterCheck $install (Join-Path $root 'updater-check')
+    Test-FilesInUse $install (Join-Path $root 'in-use')
   } else {
     # What an earlier release's updater runs: /S /D=<its folder>, no scope.
     $proc = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$install" -Wait -PassThru

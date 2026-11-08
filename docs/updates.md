@@ -47,6 +47,19 @@ starts MitCad again, and MitCad reports the reason from the last line
 of the updater's log. The next start of MitCad removes the folder
 (`updates/downloadFolders` lists it until then).
 
+Programs from the installation keep its files locked (mitcad#1454). Once
+MitCad has quit, the updater asks the MCP bridges that run from the
+installation (`mitcad-cli mcp --connect`, started by AI assistants) to
+end and waits a few seconds; the installer does the same. If a program
+from the installation still runs, the installer replaces no file and
+ends with exit code 3. MitCad starts again and says that the update was
+not installed, naming the programs that still run (AI assistant sessions
+connected to MitCad run `mitcad-cli.exe`; Task Manager can end them).
+*Try Again* in that notice checks for the update again and offers it.
+Should an installation still be left with files of another build, MitCad
+says so at start-up and does nothing else
+([development.md](development.md#windows-installer)).
+
 The scope comes from the `installation.ini` of the installation (refer
 to [development.md](development.md#windows-installer)). An installation
 just for the current user updates as the user, without a UAC prompt. An
@@ -519,7 +532,11 @@ MitCad at their own server only in a test build
   runs once `package` has made the installer of the build, and is
   skipped otherwise. The installed `mitcad-updater.exe` does not run an
   installer with a SHA-256 that is not the given one, or without one,
-  and it logs the reason as its last line. An installation just for the
+  and it logs the reason as its last line. With a `mitcad-cli mcp` from
+  the installation running, the silent installer and the updater end with
+  code 3 and change no file, and the updater's last line names
+  `mitcad-cli.exe`; a `mitcad-cli mcp --connect` is asked to end, and the
+  install then replaces every file (mitcad#1454). An installation just for the
   current user refuses a tampered download. The download goes to a
   private folder. Then the installation updates itself from a local manifest
   served over HTTPS, as an installation for all users also does. It

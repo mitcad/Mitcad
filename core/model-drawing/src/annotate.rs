@@ -74,14 +74,20 @@ pub const POINT_REACH: f64 = 2.0;
 /// has no length of its own, paper mm (mitcad#729).
 pub const EXTENSION_LENGTH: f64 = 10.0;
 
-/// The pen a line or an arc drawn outside the model is drawn with.
+/// The pen a line or an arc drawn outside the model is drawn with: its
+/// width's line width and its pattern's dashes (mitcad#1447); the pens of
+/// before (thin, thick, extra thick, hidden, chain) as before.
 pub fn sketch_pen(pen: SketchPen) -> Pen {
-    match pen {
-        SketchPen::Thin => Pen::Thin,
-        SketchPen::Thick => Pen::Thick,
-        SketchPen::ExtraThick => Pen::ExtraThick,
-        SketchPen::Hidden => Pen::Hidden,
-        SketchPen::Chain => Pen::Chain,
+    match (pen.width, pen.pattern) {
+        (PenWidth::Thin, PenPattern::Continuous) => Pen::Thin,
+        (PenWidth::Thick, PenPattern::Continuous) => Pen::Thick,
+        (PenWidth::ExtraThick, PenPattern::Continuous) => Pen::ExtraThick,
+        (PenWidth::Thin, PenPattern::Dashed) => Pen::Hidden,
+        (PenWidth::Thick, PenPattern::Dashed) => Pen::DashedThick,
+        (PenWidth::ExtraThick, PenPattern::Dashed) => Pen::DashedExtraThick,
+        (PenWidth::Thin, PenPattern::Chain) => Pen::Chain,
+        (PenWidth::Thick, PenPattern::Chain) => Pen::ChainThick,
+        (PenWidth::ExtraThick, PenPattern::Chain) => Pen::ChainExtraThick,
     }
 }
 
@@ -3327,7 +3333,7 @@ mod tests {
             id: 1,
             from: [0.0, 0.0],
             to: [10.0, 0.0],
-            pen: SketchPen::Thick,
+            pen: SketchPen::from(SketchPenName::Thick),
         };
         line.check().unwrap();
         // In a view at 2:1 placed at (100, 50).
@@ -3345,7 +3351,7 @@ mod tests {
             radius: 4.0,
             start: 0.0,
             end: PI,
-            pen: SketchPen::Thin,
+            pen: SketchPen::default(),
         };
         arc.check().unwrap();
         let laid = lay_out_sketch(&arc, &map, DIMENSION_TEXT);
@@ -3376,7 +3382,7 @@ mod tests {
             id: 4,
             from: [1.0, 1.0],
             to: [1.0, 1.0],
-            pen: SketchPen::Thin,
+            pen: SketchPen::default(),
         };
         assert!(short.check().unwrap_err().contains("length"));
         let backwards = SketchItem::Arc {
@@ -3385,7 +3391,7 @@ mod tests {
             radius: 1.0,
             start: 1.0,
             end: 0.5,
-            pen: SketchPen::Thin,
+            pen: SketchPen::default(),
         };
         assert!(backwards.check().is_err());
         // Its file form: the pen left out when thin.
@@ -3394,6 +3400,90 @@ mod tests {
         assert!(value.get("pen").is_none());
         let back: SketchItem = serde_json::from_value(value).unwrap();
         assert_eq!(back, arc);
+    }
+
+    #[test]
+    fn a_drawn_lines_width_and_pattern_combine_into_one_sheet_pen() {
+        // mitcad#1447: every width with every pattern, the pens of before
+        // as before.
+        let widths = [PenWidth::Thin, PenWidth::Thick, PenWidth::ExtraThick];
+        let patterns = [
+            PenPattern::Continuous,
+            PenPattern::Dashed,
+            PenPattern::Chain,
+        ];
+        let mut seen = Vec::new();
+        for width in widths {
+            for pattern in patterns {
+                let pen = sketch_pen(SketchPen::new(width, pattern));
+                let wide = match width {
+                    PenWidth::Thin => Pen::Thin.width(),
+                    PenWidth::Thick => Pen::Thick.width(),
+                    PenWidth::ExtraThick => Pen::ExtraThick.width(),
+                };
+                let dashes = match pattern {
+                    PenPattern::Continuous => Pen::Thin.dashes(),
+                    PenPattern::Dashed => Pen::Hidden.dashes(),
+                    PenPattern::Chain => Pen::Chain.dashes(),
+                };
+                assert!((pen.width() - wide).abs() < 1e-12, "{pen:?}");
+                assert_eq!(pen.dashes(), dashes, "{pen:?}");
+                assert!(!seen.contains(&pen.layer()), "{pen:?}");
+                seen.push(pen.layer());
+            }
+        }
+        for (name, pen) in [
+            (SketchPenName::Thin, Pen::Thin),
+            (SketchPenName::Thick, Pen::Thick),
+            (SketchPenName::ExtraThick, Pen::ExtraThick),
+            (SketchPenName::Hidden, Pen::Hidden),
+            (SketchPenName::Chain, Pen::Chain),
+        ] {
+            assert_eq!(sketch_pen(SketchPen::from(name)), pen, "{name:?}");
+            assert_eq!(SketchPen::from(name).name(), Some(name));
+        }
+        // The file form: a pen of before by its name, another by its two
+        // parts; both read back.
+        let hidden = SketchItem::Line {
+            id: 1,
+            from: [0.0, 0.0],
+            to: [10.0, 0.0],
+            pen: SketchPen::new(PenWidth::Thin, PenPattern::Dashed),
+        };
+        let value = serde_json::to_value(&hidden).unwrap();
+        assert_eq!(value["pen"], "hidden", "{value}");
+        assert!(value.get("width").is_none() && value.get("pattern").is_none());
+        assert_eq!(serde_json::from_value::<SketchItem>(value).unwrap(), hidden);
+        let thick_dashed = SketchItem::Line {
+            id: 2,
+            from: [0.0, 0.0],
+            to: [10.0, 0.0],
+            pen: SketchPen::new(PenWidth::Thick, PenPattern::Dashed),
+        };
+        let value = serde_json::to_value(&thick_dashed).unwrap();
+        assert!(value.get("pen").is_none(), "{value}");
+        assert_eq!(value["width"], "thick", "{value}");
+        assert_eq!(value["pattern"], "dashed", "{value}");
+        assert_eq!(
+            serde_json::from_value::<SketchItem>(value).unwrap(),
+            thick_dashed
+        );
+        // Read: `pen` sets both parts, `width` and `pattern` their own.
+        let read: SketchItem = serde_json::from_value(serde_json::json!(
+            {"type": "line", "id": 3, "from": [0, 0], "to": [1, 0], "pen": "chain",
+             "width": "extra_thick"}
+        ))
+        .unwrap();
+        let SketchItem::Line { pen, .. } = read else {
+            panic!("a line");
+        };
+        assert_eq!(pen, SketchPen::new(PenWidth::ExtraThick, PenPattern::Chain));
+        assert!(
+            serde_json::from_value::<SketchItem>(serde_json::json!(
+                {"type": "line", "id": 3, "from": [0, 0], "to": [1, 0], "width": "wide"}
+            ))
+            .is_err()
+        );
     }
 
     #[test]

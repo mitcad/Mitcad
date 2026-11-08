@@ -96,6 +96,21 @@ private:
 // angles between edges of one selection (0.012 rad and up) were between
 // edges the file had selected itself. 1e-2 rad lies between, and is also
 // OCCT's own angular tolerance of its fillets.
+//
+// Through a turn (mitcad#1435): an edge also continues into a sharp edge
+// of its convexity that meets it at an angle on a face they share, where
+// their other faces meet at that vertex along a crease that fades out:
+// the two faces are tangent at the crease's other end. The faces beside
+// the shared one are then one smooth surface but for that crease, and the
+// edges along them run on into each other. An opening's wall meets the
+// top of a plate, a face X tangent to the top and the torus of a rim's
+// rounding, also tangent to the top; X and the torus meet along a crease
+// from the top (tangent there) down to the wall, so the wall's edges with
+// X and with the torus meet there at 0.95 rad. The file's tangent chain
+// from the wall's edges with the top and X took the torus's edges on,
+// round the whole wall. Where the other faces meet along a crease that
+// stays one along its length (0.73 to 0.81 rad in another design), the
+// chain stops there as before.
 constexpr double kTangentChainAngle = 1.0e-2;
 int follow_tangent_chains(const Shape& body, std::vector<int>& owner, const std::vector<char>& follows);
 
@@ -110,10 +125,17 @@ public:
   bool sharp(int edge) const;
   // The sharp edges that meet the edge end to end in the same direction
   // (within kTangentChainAngle), the edge itself left out, except those
-  // convex where the edge is concave or concave where it is convex.
+  // convex where the edge is concave or concave where it is convex; and
+  // those of the edge's convexity that meet it at an angle on a face they
+  // share across a crease that fades out (follow_tangent_chains).
   std::vector<int> next(int edge) const;
 
 private:
+  // Whether the edges `e` and `o`, at the vertex, lie on one face and their
+  // other faces meet there along an edge whose faces are tangent at its
+  // other end.
+  bool across_fading_crease(int e, int o, const TopoDS_Vertex& vertex) const;
+
   // 1 for a convex edge, 0 for a concave one, -2 for neither (a seam, a
   // free edge, one of mixed or unknown convexity); worked out once per
   // edge.

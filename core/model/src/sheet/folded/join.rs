@@ -8,7 +8,7 @@
 use mitcad_vec3::sub;
 
 use super::*;
-use crate::features::sheet::SheetFaceDef;
+use crate::features::sheet::{SheetFaceDef, SplitProfile, sheet_profile_regions};
 use mitcad_vec3::dot;
 
 pub(crate) fn join_face<K: Kernel>(
@@ -59,13 +59,12 @@ pub(crate) fn join_face<K: Kernel>(
             "the joined face's sketch {sketch_uid} is not on a surface of a panel of sheet {body}"
         ));
     }
+    // The regions found as a base Face finds them (mitcad#1444); the pieces
+    // of a region a sketch change split are all added, as the material has
+    // no panel identity of its own.
+    let (_, found) = sheet_profile_regions(ctx, &d.profiles, SplitProfile::Pieces)?;
     let mut regions = Vec::new();
-    for profile in &d.profiles {
-        let region = sketch
-            .regions
-            .iter()
-            .find(|r| r.key == profile.region)
-            .ok_or_else(|| format!("sheet profile {} is unavailable", profile.region))?;
+    for (_, region) in &found {
         regions.push(MaterialRegion::from_legacy(&SheetRegion {
             loops: region
                 .loops

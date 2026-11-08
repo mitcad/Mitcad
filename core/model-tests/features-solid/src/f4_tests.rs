@@ -259,6 +259,184 @@ fn two_directions_number_the_elements_direction_one_first() {
     assert_bounds(&b.doc, "F3.b4", [200.0, 50.0, 0.0], [260.0, 90.0, 20.0]);
 }
 
+/// A 2 x 3 x 4 grid (mitcad#1446): 2 along X, 3 along Y and 4 along Z at
+/// `spacings`, element e = i + 2 j + 6 k at (i, j, k) times the spacings.
+fn grid(objects: Value, spacings: [f64; 3], extra: Value) -> Value {
+    let mut value = json!({"type": "rectangular_pattern", "objects": objects,
+        "direction1": {"axis": {"type": "origin", "axis": "x"}, "quantity": 2,
+                       "distance": spacings[0]},
+        "direction2": {"axis": {"type": "origin", "axis": "y"}, "quantity": 3,
+                       "distance": spacings[1]},
+        "direction3": {"axis": {"type": "origin", "axis": "z"}, "quantity": 4,
+                       "distance": spacings[2]},
+        "distance_type": "spacing"});
+    for (key, item) in extra.as_object().unwrap() {
+        value[key] = item.clone();
+    }
+    value
+}
+
+/// The grid's element e at (i, j, k) times the spacings.
+fn grid_offset(e: usize, spacings: [f64; 3]) -> [f64; 3] {
+    let (i, j, k) = (e % 2, (e / 2) % 3, e / 6);
+    [
+        i as f64 * spacings[0],
+        j as f64 * spacings[1],
+        k as f64 * spacings[2],
+    ]
+}
+
+fn assert_near(actual: [f64; 3], expected: [f64; 3], what: &str) {
+    assert!(
+        (0..3).all(|i| (actual[i] - expected[i]).abs() < 1e-6),
+        "{what}: {actual:?}, expected {expected:?}"
+    );
+}
+
+#[test]
+fn a_third_direction_makes_a_grid_of_bodies() {
+    // mitcad#1446: the block (60 x 40 x 20 at the origin) 2 x 3 x 4 times,
+    // 24 elements, numbered along direction 1 first, then 2, then 3.
+    let spacings = [100.0, 50.0, 30.0];
+    let mut b = block();
+    let pattern = add(
+        &mut b.doc,
+        grid(
+            json!({"type": "bodies", "bodies": ["F2.b0"]}),
+            spacings,
+            json!({}),
+        ),
+    );
+    assert_eq!(status(&b.doc, pattern), FeatureStatus::Ok);
+    let bodies = uids(&b.doc);
+    assert_eq!(bodies.len(), 24, "{bodies:?}");
+    for e in 1..24 {
+        let body = format!("{pattern}.b{}", e - 1);
+        let offset = grid_offset(e, spacings);
+        let found = bounds(&b.doc, &body);
+        assert_near(found.min, offset, &body);
+        assert_near(
+            found.max,
+            [offset[0] + 60.0, offset[1] + 40.0, offset[2] + 20.0],
+            &body,
+        );
+    }
+    // The saved pattern keeps its third direction.
+    let file: Value = serde_json::from_str(&b.doc.to_json()).unwrap();
+    let saved = file["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["type"] == "rectangular_pattern")
+        .expect("the pattern");
+    assert_eq!(saved["direction3"]["quantity"], "d8", "{saved}");
+    // A quantity of the third direction is a parameter as the others.
+    b.doc.set_parameter("d8", 2.0).unwrap();
+    assert_eq!(uids(&b.doc).len(), 12);
+    b.doc.undo();
+    assert_eq!(uids(&b.doc).len(), 24);
+    // Zero spacing along the third direction is refused.
+    let error = b
+        .doc
+        .edit_feature(
+            pattern,
+            &def(grid(
+                json!({"type": "bodies", "bodies": ["F2.b0"]}),
+                [100.0, 50.0, 0.0],
+                json!({}),
+            )),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("must not be zero"), "{error}");
+}
+
+#[test]
+fn a_third_direction_counts_in_the_scale_runs() {
+    // The scale runs over all 24 elements (mitcad#1446, as mitcad#59):
+    // the last element, at (100, 100, 90), twice the size about the
+    // block's centre (30, 20, 10) carried there.
+    let mut b = block();
+    b.doc.kernel().measures.set(true);
+    let pattern = add(
+        &mut b.doc,
+        grid(
+            json!({"type": "bodies", "bodies": ["F2.b0"]}),
+            [100.0, 50.0, 30.0],
+            json!({"scale": 2}),
+        ),
+    );
+    assert_eq!(status(&b.doc, pattern), FeatureStatus::Ok);
+    let last = bounds(&b.doc, &format!("{pattern}.b22"));
+    assert_near(last.min, [70.0, 80.0, 80.0], "the last element");
+    assert_near(last.max, [190.0, 160.0, 120.0], "the last element");
+}
+
+#[test]
+fn a_third_direction_makes_a_grid_of_features() {
+    // mitcad#1446: the hole (5 mm at (10, 10), through all) 2 x 3 x 4
+    // times inside the block; 24 elements in the preview and on the body.
+    let spacings = [20.0, 10.0, 5.0];
+    let mut b = block();
+    let (cut, _) = hole(&mut b.doc);
+    let value = grid(
+        json!({"type": "features", "features": [cut]}),
+        spacings,
+        json!({"compute": "identical"}),
+    );
+    let preview: Value = serde_json::from_str(
+        &b.doc
+            .preview(&json!({"cmd": "add_feature", "def": value}).to_string())
+            .unwrap(),
+    )
+    .unwrap();
+    let elements = preview["elements"].as_array().expect("the elements");
+    assert_eq!(elements.len(), 24, "{preview}");
+    for (e, element) in elements.iter().enumerate() {
+        let at = |row: usize| element[row][3].as_f64().unwrap();
+        assert_near(
+            [at(0), at(1), at(2)],
+            grid_offset(e, spacings),
+            &format!("element {e}"),
+        );
+    }
+    let pattern = add(&mut b.doc, value);
+    assert_eq!(status(&b.doc, pattern), FeatureStatus::Ok);
+    let faces = shape(&b.doc, "F2.b0").faces;
+    for e in 1..24 {
+        let wall: FaceName = format!("{pattern}:inst{e}({cut}:side(c1))")
+            .parse()
+            .unwrap();
+        assert!(faces.contains(&wall), "{wall}");
+    }
+}
+
+#[test]
+fn an_old_document_without_a_third_direction_loads_unchanged() {
+    // mitcad#1446: a pattern without `direction3` saves without it, and
+    // the file opens and saves again as it was.
+    let mut b = block();
+    let mut value = x_pattern(3.0, 100.0, json!({}));
+    value["direction2"] =
+        json!({"axis": {"type": "origin", "axis": "y"}, "quantity": 2, "distance": 50});
+    add(&mut b.doc, value);
+    let saved = b.doc.to_json();
+    let file: Value = serde_json::from_str(&saved).unwrap();
+    let pattern = file["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["type"] == "rectangular_pattern")
+        .expect("the pattern");
+    assert!(pattern.get("direction3").is_none(), "{pattern}");
+    assert!(pattern.get("direction2").is_some(), "{pattern}");
+    let mut opened = Document::from_json(&saved, MockKernel::default()).unwrap();
+    assert_eq!(opened.to_json(), saved);
+    // A loaded document has its bodies once it is recomputed.
+    opened.recompute();
+    assert_eq!(uids(&opened), uids(&b.doc));
+    assert_bounds(&opened, "F3.b4", [200.0, 50.0, 0.0], [260.0, 90.0, 20.0]);
+}
+
 #[test]
 fn a_circle_of_a_sketch_is_an_axis_through_its_centre() {
     let mut b = block();

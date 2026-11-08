@@ -1200,6 +1200,28 @@ the joint sets the wall's end from the thickness `t`:
   `app.ui-windows-sheet-corner` (the corner loaded and kept by an edit,
   Half Open chosen, saved and read back, None showing Measured).
 
+### Implementation notes (mitcad#1442)
+
+- **A second path names the feature that closes it.** A Fold (or a
+  virtual-sharp Bend) whose moving side reaches its stationary panel
+  another way too, through an earlier bend, is refused (no rigid fold can
+  turn one half of that bend and keep the other). `branch()` in
+  `sheet/folded/bends.rs` returns the path it found (`SecondPath`: the
+  domains from the moving branch's start to the stationary panel); the
+  refusal names the features of the bends on it (with none, of its panels
+  besides the stationary one; never the feature being made) as the
+  browser shows them, and says what to do instead: "This fold would also
+  have to bend SheetFold1, whose bend joins both sides of the fold line.
+  Fold here before SheetFold1, or make SheetFold1 with a separate line on
+  each side." A feature that is not a fold is to be changed so that it
+  does not join both sides; a Bend's refusal says to bend before it or to
+  choose panels it does not join. The sheet's internal graph is no longer
+  named.
+- **Tests.** Model: the refusal's unit test in `bends.rs` (the path, the
+  features on it, the messages). CLI `sheet_fold_loop`: a U-shaped panel
+  (`3600`), a first fold across both arms (`3600 + 2 pi`) and a second
+  fold between the arms, refused naming the first.
+
 ## Kernel seam
 
 Add one sheet-metal family to `core/model-base/src/kernel.rs`, using default

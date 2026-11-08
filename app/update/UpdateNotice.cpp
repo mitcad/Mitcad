@@ -46,6 +46,8 @@ UpdateNotice::UpdateNotice(QWidget* parent) : QWidget(parent) {
   m_skip = button(tr("S&kip This Version"), tr("No more notices of this version"), &UpdateNotice::skipClicked);
   m_later = button(tr("&Later"), tr("Hides the notice until the next check"), &UpdateNotice::laterClicked);
   m_cancel = button(tr("&Cancel"), QString(), &UpdateNotice::cancelClicked);
+  m_retry = button(tr("&Try Again"), tr("Checks for the update again and offers to install it"),
+                   &UpdateNotice::retryClicked);
   m_close = button(tr("Cl&ose"), QString(), &UpdateNotice::closed);
   connect(m_later, &QPushButton::clicked, this, &UpdateNotice::closed);
 }
@@ -56,7 +58,7 @@ void UpdateNotice::present(const QString& state, const QString& html) {
   }
   m_text->setText(html);
   QStringList buttons;
-  for (QPushButton* b : {m_notes, m_install, m_skip, m_later, m_cancel, m_close}) {
+  for (QPushButton* b : {m_notes, m_install, m_skip, m_later, m_cancel, m_retry, m_close}) {
     if (!b->isHidden()) {
       buttons << b->text().remove(QLatin1Char('&'));
     }
@@ -67,7 +69,7 @@ void UpdateNotice::present(const QString& state, const QString& html) {
   // their keys (Alt+I) do not reach the bar's buttons there in session 0.
   TestSync::singleShot(50, this, [this] {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
-    for (const QPushButton* b : {m_notes, m_install, m_skip, m_later, m_cancel, m_close}) {
+    for (const QPushButton* b : {m_notes, m_install, m_skip, m_later, m_cancel, m_retry, m_close}) {
       if (!b->isHidden()) {
         const QPoint center = b->mapTo(window(), b->rect().center());
         qDebug().noquote() << QStringLiteral("Update notice %1 at %2,%3")
@@ -88,6 +90,7 @@ void UpdateNotice::showOffer(const QString& html, bool installable, bool skippab
   m_skip->setVisible(skippable);
   m_later->show();
   m_cancel->hide();
+  m_retry->hide();
   m_close->hide();
   present(QStringLiteral("offer"), html);
 }
@@ -103,7 +106,7 @@ void UpdateNotice::showProgress(const QString& plain, qint64 received, qint64 to
     m_progress->setRange(0, 0);
   }
   const bool changed = !m_cancel->isVisible() || m_text->text() != html;
-  for (QPushButton* b : {m_notes, m_install, m_skip, m_later, m_close}) {
+  for (QPushButton* b : {m_notes, m_install, m_skip, m_later, m_retry, m_close}) {
     b->hide();
   }
   m_cancel->show();
@@ -112,11 +115,12 @@ void UpdateNotice::showProgress(const QString& plain, qint64 received, qint64 to
   }
 }
 
-void UpdateNotice::showMessage(const QString& plain, NoticeLevel level) {
+void UpdateNotice::showMessage(const QString& plain, NoticeLevel level, bool retry) {
   m_progress->hide();
   for (QPushButton* b : {m_notes, m_install, m_skip, m_later, m_cancel}) {
     b->hide();
   }
+  m_retry->setVisible(retry);
   m_close->show();
   // An error does not look like a success (mitcad#1040): the level's icon
   // and colour; information keeps the update icon.

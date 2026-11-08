@@ -633,40 +633,130 @@ pub fn check_height(height: f64) -> Result<(), String> {
 
 // --- Lines, arcs and texts drawn outside the model (mitcad#729) ------------
 
-/// The pen of a line or an arc drawn on a sheet or in a view.
+/// How wide a line or an arc drawn outside the model is (mitcad#1447):
+/// ISO 128's narrow, wide and extra wide lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SketchPen {
-    /// Continuous narrow, as dimension lines.
+pub enum PenWidth {
+    /// Narrow, as dimension lines.
     #[default]
     Thin,
-    /// Continuous wide, as visible edges.
+    /// Wide, as visible edges.
     Thick,
-    /// Continuous extra wide, twice the wide line (mitcad#1402).
+    /// Extra wide, twice the wide line (mitcad#1402).
     ExtraThick,
+}
+
+/// How a line or an arc drawn outside the model is broken (mitcad#1447).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PenPattern {
+    /// Unbroken.
+    #[default]
+    Continuous,
     /// Dashed, as hidden edges.
-    Hidden,
+    Dashed,
     /// Long dash dotted, as centre lines.
     Chain,
 }
 
-fn is_thin(pen: &SketchPen) -> bool {
-    *pen == SketchPen::Thin
+/// The pen of a line or an arc drawn on a sheet or in a view: any width
+/// with any pattern (mitcad#1447; one pen of five before).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SketchPen {
+    pub width: PenWidth,
+    pub pattern: PenPattern,
+}
+
+/// A pen by the one name commands and files gave it before mitcad#1447
+/// (`pen`), still taken, and still written where it says exactly what the
+/// pen is: `thin`, `thick` and `extra_thick` continuous, `hidden` thin and
+/// dashed, `chain` thin and long dash dotted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SketchPenName {
+    Thin,
+    Thick,
+    ExtraThick,
+    Hidden,
+    Chain,
+}
+
+impl From<SketchPenName> for SketchPen {
+    fn from(name: SketchPenName) -> Self {
+        let (width, pattern) = match name {
+            SketchPenName::Thin => (PenWidth::Thin, PenPattern::Continuous),
+            SketchPenName::Thick => (PenWidth::Thick, PenPattern::Continuous),
+            SketchPenName::ExtraThick => (PenWidth::ExtraThick, PenPattern::Continuous),
+            SketchPenName::Hidden => (PenWidth::Thin, PenPattern::Dashed),
+            SketchPenName::Chain => (PenWidth::Thin, PenPattern::Chain),
+        };
+        Self { width, pattern }
+    }
+}
+
+impl SketchPen {
+    pub const fn new(width: PenWidth, pattern: PenPattern) -> Self {
+        Self { width, pattern }
+    }
+
+    /// Its name from before mitcad#1447, when one says exactly what it is.
+    pub fn name(self) -> Option<SketchPenName> {
+        match (self.width, self.pattern) {
+            (PenWidth::Thin, PenPattern::Continuous) => Some(SketchPenName::Thin),
+            (PenWidth::Thick, PenPattern::Continuous) => Some(SketchPenName::Thick),
+            (PenWidth::ExtraThick, PenPattern::Continuous) => Some(SketchPenName::ExtraThick),
+            (PenWidth::Thin, PenPattern::Dashed) => Some(SketchPenName::Hidden),
+            (PenWidth::Thin, PenPattern::Chain) => Some(SketchPenName::Chain),
+            (PenWidth::Thick | PenWidth::ExtraThick, PenPattern::Dashed | PenPattern::Chain) => {
+                None
+            }
+        }
+    }
+
+    /// This pen changed as a command or a file gives it: a `pen` name sets
+    /// both parts, then `width` and `pattern` set their own.
+    pub fn chosen(
+        self,
+        name: Option<SketchPenName>,
+        width: Option<PenWidth>,
+        pattern: Option<PenPattern>,
+    ) -> Self {
+        let mut pen = name.map_or(self, Self::from);
+        if let Some(width) = width {
+            pen.width = width;
+        }
+        if let Some(pattern) = pattern {
+            pen.pattern = pattern;
+        }
+        pen
+    }
+
+    /// Its fields in a file: none for the default thin continuous pen, its
+    /// old `pen` name where one says exactly what it is (so that a file of
+    /// those pens is written as before mitcad#1447), else `width` and
+    /// `pattern`.
+    fn file_fields(self) -> (Option<SketchPenName>, Option<PenWidth>, Option<PenPattern>) {
+        match self.name() {
+            Some(SketchPenName::Thin) => (None, None, None),
+            Some(name) => (Some(name), None, None),
+            None => (None, Some(self.width), Some(self.pattern)),
+        }
+    }
 }
 
 /// A line, an arc or a text drawn on a sheet (sheet mm) or in a view (the
 /// view's coordinates, model mm, so that it moves, scales and turns with
 /// the view), outside the model: nothing of the model is picked, and it
 /// follows nothing but its view. A text on a sheet is a [`SheetNote`].
-/// Its id is one of the drawing's annotation ids.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+/// Its id is one of the drawing's annotation ids. Its file form:
+/// `SketchItemFile` below.
+#[derive(Debug, Clone, PartialEq)]
 pub enum SketchItem {
     Line {
         id: u32,
         from: P2,
         to: P2,
-        #[serde(default, skip_serializing_if = "is_thin")]
         pen: SketchPen,
     },
     /// Counter-clockwise from `start` to `end` (radians; `end` - `start`
@@ -677,7 +767,6 @@ pub enum SketchItem {
         radius: f64,
         start: f64,
         end: f64,
-        #[serde(default, skip_serializing_if = "is_thin")]
         pen: SketchPen,
     },
     /// Lines split at `\n`, the first one starting at `at`.
@@ -686,9 +775,158 @@ pub enum SketchItem {
         text: String,
         at: P2,
         /// Its letters' height, paper mm; the drawing's when left out.
+        height: Option<f64>,
+    },
+}
+
+/// A [`SketchItem`] as files and the `drawing` query hold it: a line's or
+/// an arc's pen left out when thin and continuous, by its old `pen` name
+/// where one says exactly what it is (files of those pens are written as
+/// before mitcad#1447), else as `width` and `pattern`. Read: `pen` sets
+/// both, then `width` and `pattern` their own.
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum SketchItemFile {
+    Line {
+        id: u32,
+        from: P2,
+        to: P2,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pen: Option<SketchPenName>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<PenWidth>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pattern: Option<PenPattern>,
+    },
+    Arc {
+        id: u32,
+        center: P2,
+        radius: f64,
+        start: f64,
+        end: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pen: Option<SketchPenName>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<PenWidth>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pattern: Option<PenPattern>,
+    },
+    Text {
+        id: u32,
+        text: String,
+        at: P2,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         height: Option<f64>,
     },
+}
+
+impl From<&SketchItem> for SketchItemFile {
+    fn from(item: &SketchItem) -> Self {
+        match item {
+            SketchItem::Line { id, from, to, pen } => {
+                let (name, width, pattern) = pen.file_fields();
+                Self::Line {
+                    id: *id,
+                    from: *from,
+                    to: *to,
+                    pen: name,
+                    width,
+                    pattern,
+                }
+            }
+            SketchItem::Arc {
+                id,
+                center,
+                radius,
+                start,
+                end,
+                pen,
+            } => {
+                let (name, width, pattern) = pen.file_fields();
+                Self::Arc {
+                    id: *id,
+                    center: *center,
+                    radius: *radius,
+                    start: *start,
+                    end: *end,
+                    pen: name,
+                    width,
+                    pattern,
+                }
+            }
+            SketchItem::Text {
+                id,
+                text,
+                at,
+                height,
+            } => Self::Text {
+                id: *id,
+                text: text.clone(),
+                at: *at,
+                height: *height,
+            },
+        }
+    }
+}
+
+impl From<SketchItemFile> for SketchItem {
+    fn from(file: SketchItemFile) -> Self {
+        match file {
+            SketchItemFile::Line {
+                id,
+                from,
+                to,
+                pen,
+                width,
+                pattern,
+            } => Self::Line {
+                id,
+                from,
+                to,
+                pen: SketchPen::default().chosen(pen, width, pattern),
+            },
+            SketchItemFile::Arc {
+                id,
+                center,
+                radius,
+                start,
+                end,
+                pen,
+                width,
+                pattern,
+            } => Self::Arc {
+                id,
+                center,
+                radius,
+                start,
+                end,
+                pen: SketchPen::default().chosen(pen, width, pattern),
+            },
+            SketchItemFile::Text {
+                id,
+                text,
+                at,
+                height,
+            } => Self::Text {
+                id,
+                text,
+                at,
+                height,
+            },
+        }
+    }
+}
+
+impl Serialize for SketchItem {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        SketchItemFile::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SketchItem {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        SketchItemFile::deserialize(deserializer).map(Self::from)
+    }
 }
 
 impl SketchItem {

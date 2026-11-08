@@ -1403,7 +1403,8 @@ void MainWindow::exportFile() {
   if (choice->format == QStringLiteral("dxf")) {
     command = cmd("export_sketch", {{QStringLiteral("sketch"), choice->sketch},
                                     {QStringLiteral("path"), choice->path},
-                                    {QStringLiteral("units"), choice->dxfUnit}});
+                                    {QStringLiteral("units"), choice->dxfUnit},
+                                    {QStringLiteral("construction"), choice->dxfConstruction}});
   } else {
     command = cmd("export", {{QStringLiteral("path"), choice->path}, {QStringLiteral("format"), choice->format}});
     if (choice->selectedOnly) {
@@ -1451,6 +1452,10 @@ void MainWindow::exportFile() {
   if (choice->format == QStringLiteral("dxf")) {
     // The unit written (mitcad#1408).
     what += tr(", in %1").arg(result.value(QStringLiteral("units")).toString(choice->dxfUnit));
+    // Whether construction geometry was written (mitcad#1445).
+    what += result.value(QStringLiteral("construction")).toBool(choice->dxfConstruction)
+                ? tr(", construction geometry included")
+                : tr(", construction geometry left out");
   }
   if (choice->format != QStringLiteral("dxf") && !choice->coordinates.isEmpty()) {
     what += QStringLiteral(", %1 coordinates").arg(choice->coordinates);
@@ -1483,10 +1488,15 @@ void MainWindow::exportSketch(const QString& sketch) {
     sheetCritical(this, tr("Export DXF"), tr("Could not export:\n%1").arg(m_lastError));
     return;
   }
-  qInfo().noquote() << QStringLiteral("Exported %1: dxf, %2 entities, in %3")
+  // Construction geometry is left out here (mitcad#1445); File > Export
+  // offers to include it.
+  qInfo().noquote() << QStringLiteral("Exported %1: dxf, %2 entities, in %3, construction geometry %4")
                            .arg(path)
                            .arg(result.value(QStringLiteral("entities")).toInt())
-                           .arg(result.value(QStringLiteral("units")).toString(unit));
+                           .arg(result.value(QStringLiteral("units")).toString(unit),
+                                result.value(QStringLiteral("construction")).toBool()
+                                    ? QStringLiteral("included")
+                                    : QStringLiteral("left out"));
 }
 
 // The top-level fields a newer MitCad wrote that this one did not read

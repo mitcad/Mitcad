@@ -1475,20 +1475,34 @@ pub(crate) fn fold<K: Kernel>(
 // Implementations below preserve semantic chart identity while moving only
 // the graph branch on the moving side of the selected seam.
 
+/// The domains of the moving branch reached from `start`, or the path by
+/// which it reaches the stationary panel `fixed` too: a second path, which
+/// no rigid fold or bend can keep (mitcad#1442).
 fn branch(
     state: &SheetState,
     start: SheetDomainRef,
     fixed: SheetDomainRef,
     skip_pair: bool,
-) -> Result<BTreeSet<SheetDomainRef>, String> {
+) -> Result<BTreeSet<SheetDomainRef>, SecondPath> {
     let mut reached = BTreeSet::new();
-    let mut pending = vec![start];
-    while let Some(domain) = pending.pop() {
+    let mut parents = std::collections::BTreeMap::new();
+    let mut pending = vec![(start, None)];
+    while let Some((domain, parent)) = pending.pop() {
         if !reached.insert(domain) {
             continue;
         }
+        if let Some(parent) = parent {
+            parents.insert(domain, parent);
+        }
         if domain == fixed {
-            return Err("sheet graph has a second path to the stationary panel".into());
+            let mut path = vec![domain];
+            let mut at = domain;
+            while let Some(&before) = parents.get(&at) {
+                path.push(before);
+                at = before;
+            }
+            path.reverse();
+            return Err(SecondPath(path));
         }
         for port in &state.joins {
             let a = port.first.boundary.domain;
@@ -1497,13 +1511,139 @@ fn branch(
                 continue;
             }
             if a == domain {
-                pending.push(b);
+                pending.push((b, Some(domain)));
             } else if b == domain {
-                pending.push(a);
+                pending.push((a, Some(domain)));
             }
         }
     }
     Ok(reached)
+}
+
+/// A second path from a moving branch to its stationary panel: its
+/// domains, from the branch's start to the stationary panel (mitcad#1442).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SecondPath(Vec<SheetDomainRef>);
+
+impl SecondPath {
+    /// The earlier features whose material on the path joins the two
+    /// sides: those of its bends, or, with no bend on it, those of its
+    /// panels besides the stationary one; never `own`, the feature being
+    /// made. In the path's order, each once.
+    fn features(&self, own: FeatureUid) -> Vec<FeatureUid> {
+        let Some((_, joining)) = self.0.split_last() else {
+            return Vec::new();
+        };
+        let mut bends = Vec::new();
+        let mut panels = Vec::new();
+        for domain in joining {
+            let list = match domain {
+                SheetDomainRef::Bend(_) => &mut bends,
+                SheetDomainRef::Panel(_) => &mut panels,
+            };
+            let feature = domain.feature();
+            if feature != own && !list.contains(&feature) {
+                list.push(feature);
+            }
+        }
+        if bends.is_empty() { panels } else { bends }
+    }
+}
+
+/// The operation a second path refuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Bending {
+    Fold,
+    Bend,
+}
+
+/// "A", "A and B", "A, B and C".
+fn listed(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => only.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// The refusal of a fold or bend whose moving side is also joined to its
+/// stationary side another way (mitcad#1442), in the user's terms: the
+/// features `joining` (by their names as the browser shows them, and
+/// whether each is a fold) whose bends join both sides, and what to do
+/// instead.
+fn second_path_message(bending: Bending, joining: &[(String, bool)]) -> String {
+    let names: Vec<String> = joining.iter().map(|(name, _)| name.clone()).collect();
+    let all_folds = joining.iter().all(|(_, fold)| *fold);
+    // The features as the subject, the object and the subject again of
+    // the sentences, and the verb forms that agree with them.
+    let (all, them, they, joins, does) = match names.as_slice() {
+        [] => {
+            return match bending {
+                Bending::Fold => "Both sides of the fold line are also joined elsewhere, \
+                     so the fold cannot turn one side and keep the other."
+                    .to_owned(),
+                Bending::Bend => "The moving panel is also joined to the stationary one \
+                     elsewhere, so the bend cannot turn it alone."
+                    .to_owned(),
+            };
+        }
+        [only] => (
+            only.clone(),
+            only.clone(),
+            only.clone(),
+            "whose bend joins",
+            "does",
+        ),
+        _ => (
+            listed(&names),
+            "them".to_owned(),
+            "they".to_owned(),
+            "whose bends join",
+            "do",
+        ),
+    };
+    match bending {
+        Bending::Fold => {
+            let instead = if !all_folds {
+                let pronoun = if names.len() == 1 { "it" } else { "they" };
+                format!("change {them} so that {pronoun} {does} not join both sides")
+            } else if names.len() == 1 {
+                format!("make {them} with a separate line on each side")
+            } else {
+                "make each of them with a separate line on each side".to_owned()
+            };
+            format!(
+                "This fold would also have to bend {all}, {joins} both sides of the \
+                 fold line. Fold here before {them}, or {instead}."
+            )
+        }
+        Bending::Bend => format!(
+            "This bend would also have to bend {all}, {joins} the moving panel to \
+             the stationary one too. Bend here before {them}, or choose panels that \
+             {they} {does} not join."
+        ),
+    }
+}
+
+/// [`second_path_message`] for a second path found while `ctx` makes its
+/// feature.
+fn second_path_refusal<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    bending: Bending,
+    path: &SecondPath,
+) -> String {
+    let joining: Vec<(String, bool)> = path
+        .features(ctx.uid)
+        .into_iter()
+        .map(|uid| {
+            let fold = ctx
+                .env
+                .feature(uid)
+                .is_some_and(|f| matches!(f.def, crate::features::FeatureDef::SheetFold(_)));
+            (ctx.feature_name(uid), fold)
+        })
+        .collect();
+    second_path_message(bending, &joining)
 }
 
 fn move_branch(state: &mut SheetState, domains: &BTreeSet<SheetDomainRef>, transform: &Transform) {
@@ -1806,7 +1946,10 @@ fn fold_panel<K: Kernel>(
     }
     let mut moved = BTreeSet::new();
     for neighbor in moving_neighbors {
-        moved.extend(branch(state, neighbor, stationary_domain, false)?);
+        moved.extend(
+            branch(state, neighbor, stationary_domain, false)
+                .map_err(|path| second_path_refusal(ctx, Bending::Fold, &path))?,
+        );
     }
     moved.insert(moving_domain);
     move_branch(state, &moved, &transform);
@@ -1888,7 +2031,8 @@ fn virtual_bend<K: Kernel>(
     {
         return Err("sheet graph has multiple seams between the selected panels".into());
     }
-    let moved = branch(state, moving_domain, fixed, true)?;
+    let moved = branch(state, moving_domain, fixed, true)
+        .map_err(|path| second_path_refusal(ctx, Bending::Bend, &path))?;
     state.joins.retain(|p| {
         !((p.first.boundary.domain == fixed && p.second.boundary.domain == moving_domain)
             || (p.second.boundary.domain == fixed && p.first.boundary.domain == moving_domain))
@@ -2471,12 +2615,59 @@ mod tests {
             branch(&state, domain(1), domain(0), true).unwrap(),
             BTreeSet::from([domain(1), domain(2)])
         );
-        state.joins.push(link(domain(2), domain(0), 2));
-        assert!(
-            branch(&state, domain(1), domain(0), true)
-                .unwrap_err()
-                .contains("second path")
+        // A second path through an earlier fold's bend: refused, naming
+        // the fold whose bend joins both sides (mitcad#1442).
+        let earlier = SheetDomainRef::Bend(BendId {
+            feature: FeatureUid(5),
+            slot: 0,
+        });
+        state.joins.push(link(domain(2), earlier, 2));
+        state.joins.push(link(earlier, domain(0), 3));
+        let path = branch(&state, domain(1), domain(0), true).unwrap_err();
+        assert_eq!(
+            path,
+            SecondPath(vec![domain(1), domain(2), earlier, domain(0)])
         );
+        assert_eq!(path.features(FeatureUid(7)), vec![FeatureUid(5)]);
+        assert_eq!(
+            second_path_message(Bending::Fold, &[("SheetFold1".to_owned(), true)]),
+            "This fold would also have to bend SheetFold1, whose bend joins both sides of the \
+             fold line. Fold here before SheetFold1, or make SheetFold1 with a separate line \
+             on each side."
+        );
+        assert_eq!(
+            second_path_message(Bending::Bend, &[("SheetFold1".to_owned(), true)]),
+            "This bend would also have to bend SheetFold1, whose bend joins the moving panel \
+             to the stationary one too. Bend here before SheetFold1, or choose panels that \
+             SheetFold1 does not join."
+        );
+        assert_eq!(
+            second_path_message(
+                Bending::Fold,
+                &[
+                    ("SheetFold1".to_owned(), true),
+                    ("SheetFlange2".to_owned(), false),
+                    ("SheetFold3".to_owned(), true)
+                ]
+            ),
+            "This fold would also have to bend SheetFold1, SheetFlange2 and SheetFold3, whose \
+             bends join both sides of the fold line. Fold here before them, or change them so \
+             that they do not join both sides."
+        );
+        // A path with no earlier bend on it names the earlier panels; with
+        // none either, it still says what is wrong without the graph.
+        let mut state = empty_state();
+        state.joins = vec![
+            link(domain(0), domain(1), 0),
+            link(domain(1), domain(2), 1),
+            link(domain(2), domain(0), 2),
+        ];
+        let path = branch(&state, domain(1), domain(0), true).unwrap_err();
+        assert_eq!(path.features(FeatureUid(7)), vec![FeatureUid(2)]);
+        assert!(path.features(FeatureUid(2)).is_empty());
+        let message = second_path_message(Bending::Fold, &[]);
+        assert!(message.contains("Both sides of the fold line are also joined elsewhere"));
+        assert!(!message.contains("graph"));
     }
 
     #[test]

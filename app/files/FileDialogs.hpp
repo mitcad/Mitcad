@@ -26,6 +26,9 @@ struct ExportChoice {
   bool selectedOnly = false;
   QString sketch;  // DXF: the sketch's uid
   QString dxfUnit; // DXF: the file's length unit, the design's unless chosen (mitcad#1408)
+  // DXF: also the sketch's construction curves and center lines, on the
+  // layer construction (mitcad#1445); off unless chosen, remembered.
+  bool dxfConstruction = false;
   // Bodies (mitcad#19): design (where the design shows them, the
   // default) or component (each in its component's coordinates); empty
   // when the design has no occurrences to choose by.
@@ -36,8 +39,9 @@ struct ExportChoice {
 // the unit of a STEP or IGES file (millimetres unless chosen otherwise,
 // P11), the mesh refinement or the sketch, and the file. `stem`: the file
 // proposed, without its extension (the folder and the name); the type's
-// extension is added. The type, the refinement and the STL format start as
-// the last export chose them (mitcad#1164, settings `export/*`); a sketch's
+// extension is added. The type, the refinement, the STL format and the DXF
+// file's "Include construction geometry" (mitcad#1445) start as the last
+// export chose them (mitcad#1164, settings `export/*`); a sketch's
 // DXF does not replace the type remembered for the bodies. `selectedBodies`:
 // how many bodies the selection stands for; `sketches`: (uid, name);
 // `sketch` the one to offer first, which starts the dialog as DXF (a sketch

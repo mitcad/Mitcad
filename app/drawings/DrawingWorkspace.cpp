@@ -2270,12 +2270,21 @@ void DrawingWorkspace::fillAnnotationPanel(int id) {
   if (type == QStringLiteral("hole_table") || type == QStringLiteral("parts_list")) {
     fillTablePanel(id, json);
   }
-  // A line's or an arc's pen (mitcad#729).
+  // A line's or an arc's width and pattern (mitcad#1447; one Line pen
+  // since mitcad#729): the query gives both for every line and arc.
   if (type == QStringLiteral("line") || type == QStringLiteral("arc")) {
-    QComboBox* pen = comboOf(penChoices(), json.value(QStringLiteral("pen")).toString(QStringLiteral("thin")));
-    connect(pen, &QComboBox::currentIndexChanged, this,
-            [field, pen] { field(QStringLiteral("pen"), pen->currentData().toString(), QJsonObject()); });
-    m_form->addRow(tr("Line"), named(pen, "drawingAnnotationPen"));
+    const QString shownWidth = json.value(QStringLiteral("width")).toString(QStringLiteral("thin"));
+    const QString shownPattern = json.value(QStringLiteral("pattern")).toString(QStringLiteral("continuous"));
+    qDebug().noquote() << QStringLiteral("Drawing panel Width: %1, Pattern: %2").arg(shownWidth, shownPattern);
+    QComboBox* width = comboOf(widthChoices(), shownWidth);
+    connect(width, &QComboBox::currentIndexChanged, this,
+            [field, width] { field(QStringLiteral("width"), width->currentData().toString(), QJsonObject()); });
+    m_form->addRow(tr("Width"), named(width, "drawingAnnotationWidth"));
+    QComboBox* pattern = comboOf(patternChoices(), shownPattern);
+    connect(pattern, &QComboBox::currentIndexChanged, this, [field, pattern] {
+      field(QStringLiteral("pattern"), pattern->currentData().toString(), QJsonObject());
+    });
+    m_form->addRow(tr("Pattern"), named(pattern, "drawingAnnotationPattern"));
   }
   // An edge extension of one edge: how far it runs on (mitcad#729).
   if (type == QStringLiteral("edge_extension") && json.value(QStringLiteral("picks")).toArray().size() == 1) {

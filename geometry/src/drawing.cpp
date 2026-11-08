@@ -21,6 +21,7 @@
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
+#include <BRepLib.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRepTools.hxx>
 #include <BRepTools_WireExplorer.hxx>
@@ -857,12 +858,39 @@ void collect(Output& out, const std::vector<TopoDS_Shape>& loaded, const std::ve
   trace.note("lines=" + std::to_string(view.curves.size()));
 }
 
+// The largest angle between the faces at an edge, in radians, at which
+// the hidden-line removal takes the edge for one where they meet smoothly
+// (mitcad#1438): about 0.06 degrees, a kink no drawing can show.
+constexpr double kTangentAngle = 1e-3;
+
+// The continuity of the edges between two faces encoded on `copy`, a copy
+// of a shape to project, never on the shape itself (mitcad#1438). The
+// hidden-line removal sorts an edge by the continuity stored on it: one
+// between faces meeting tangentially (a fillet's boundary) or on one
+// surface (a face split in two, a seam) is drawn only with the view's
+// tangent edges, or not at all, but edges made by fillets, booleans or
+// imports mostly carry none and were drawn as sharp edges. Edges already
+// encoded keep theirs. Mesh bodies (faces without surfaces) stay as they
+// are.
+void encode_regularity(TopoDS_Shape& copy) {
+  if (detail::has_mesh_faces(copy)) {
+    return;
+  }
+  BRepLib::EncodeRegularity(copy, kTangentAngle);
+}
+
 void project_exact(const std::vector<TopoDS_Shape>& parts, const std::vector<std::size_t>& sources,
                    const HLRAlgo_Projector& projector, const DrawingViewSpec& spec, DrawnView& view,
                    ViewTrace& trace) {
   occ::handle<HLRBRep_Algo> algo = new HLRBRep_Algo();
+  // Copies of the shapes' topology (their geometry shared) with the edges'
+  // continuity encoded: each shape's lines are asked for by its copy.
+  std::vector<TopoDS_Shape> loaded;
   for (const TopoDS_Shape& part : parts) {
-    algo->Add(part);
+    TopoDS_Shape copy = BRepBuilderAPI_Copy(part, false, false).Shape();
+    encode_regularity(copy);
+    algo->Add(copy);
+    loaded.push_back(copy);
   }
   algo->Projector(projector);
   trace.mark("load");
@@ -871,7 +899,7 @@ void project_exact(const std::vector<TopoDS_Shape>& parts, const std::vector<std
   algo->Hide();
   trace.mark("hide");
   HLRBRep_HLRToShape out(algo);
-  collect(out, parts, sources, spec, view, trace);
+  collect(out, loaded, sources, spec, view, trace);
 }
 
 // The polygonal algorithm works on triangles: of copies of the shapes, so
@@ -890,6 +918,7 @@ void project_polygonal(const std::vector<TopoDS_Shape>& parts, const std::vector
     const bool mesh = detail::has_mesh_faces(part);
     TopoDS_Shape copy = BRepBuilderAPI_Copy(part, true, mesh).Shape();
     if (!mesh) {
+      encode_regularity(copy);
       BRepMesh_IncrementalMesh mesher(copy, deflection, false, 0.2, true);
     }
     algo->Load(copy);

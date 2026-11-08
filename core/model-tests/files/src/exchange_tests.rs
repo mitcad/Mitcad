@@ -593,6 +593,91 @@ fn sketches_export_to_dxf() {
     assert!(error.contains("has no result"), "{error}");
 }
 
+/// Construction geometry is left out of a sketch's DXF unless asked for
+/// (mitcad#1445): a CAM program would cut it.
+#[test]
+fn sketch_dxf_leaves_construction_geometry_out_unless_asked_for() {
+    use mitcad_dxf::{Geometry, Point2};
+
+    let mut b = block();
+    b.doc
+        .add_circle(b.sketch, [30.0, 20.0], &num(10.0))
+        .unwrap();
+    // A horizontal construction line through the circle's centre, and a
+    // center line beside the rectangle (not cut either).
+    for line in [
+        json!({"cmd": "sketch.add_line", "sketch": "F1", "start": [20, 20], "end": [40, 20],
+               "construction": true}),
+        json!({"cmd": "sketch.add_line", "sketch": "F1", "start": [70, 0], "end": [70, 40],
+               "centerline": true}),
+    ] {
+        command(&mut b.doc, line).unwrap();
+    }
+    let dir = mitcad_model::testing::unique_temp_dir("sketch-dxf-construction");
+    let path = dir.join("sketch.dxf").to_str().unwrap().to_owned();
+    let p = Point2::new;
+
+    // By default: the rectangle's four lines and the circle only.
+    let result = command(
+        &mut b.doc,
+        json!({"cmd": "export_sketch", "sketch": "Sketch1", "path": path}),
+    )
+    .unwrap();
+    assert_eq!(result["entities"], 5, "{result}");
+    assert_eq!(result["construction"], false, "{result}");
+    let drawing = mitcad_dxf::read_file(&path).unwrap();
+    assert_eq!(drawing.entities.len(), 5);
+    assert!(drawing.entities.iter().all(|e| e.layer == "0"));
+    let lines = drawing
+        .entities
+        .iter()
+        .filter(|e| matches!(e.geometry, Geometry::Line { .. }))
+        .count();
+    assert_eq!(lines, 4);
+    let circle = Geometry::Circle {
+        center: p(30.0, 20.0),
+        radius: 5.0,
+    };
+    assert!(drawing.entities.iter().any(|e| e.geometry == circle));
+
+    // With construction: the construction line and the center line too, on
+    // the layer construction.
+    let result = command(
+        &mut b.doc,
+        json!({"cmd": "export_sketch", "sketch": "Sketch1", "path": path,
+               "construction": true}),
+    )
+    .unwrap();
+    assert_eq!(result["entities"], 7, "{result}");
+    assert_eq!(result["construction"], true, "{result}");
+    let drawing = mitcad_dxf::read_file(&path).unwrap();
+    mitcad_model::testing::remove_temp(&dir);
+    assert_eq!(drawing.entities.len(), 7);
+    let on_construction: Vec<&Geometry> = drawing
+        .entities
+        .iter()
+        .filter(|e| e.layer == "construction")
+        .map(|e| &e.geometry)
+        .collect();
+    assert_eq!(
+        on_construction,
+        [
+            &Geometry::Line {
+                start: p(20.0, 20.0),
+                end: p(40.0, 20.0)
+            },
+            &Geometry::Line {
+                start: p(70.0, 0.0),
+                end: p(70.0, 40.0)
+            },
+        ]
+    );
+    assert_eq!(
+        drawing.entities.iter().filter(|e| e.layer == "0").count(),
+        5
+    );
+}
+
 #[test]
 fn sketch_geometry_maps_to_dxf_entities_once() {
     use mitcad_dxf::{Geometry, Point2};

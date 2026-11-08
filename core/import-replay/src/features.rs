@@ -5846,11 +5846,15 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
             .then(|| refs::ReplayEdges::of(self.doc));
         // The edges found for each input, by set.
         let mut found_by_set: Vec<(usize, Vec<refs::FoundEdge>)> = Vec::new();
+        // The inputs the replay lacks (their place in `found_by_set`, the
+        // input and the error): parts of a replay edge, looked for together
+        // below (mitcad#1437).
+        let mut missing: Vec<(usize, &Fingerprint, String)> = Vec::new();
         for (i, fps) in fingerprints.iter().enumerate() {
             for (j, fp) in fps.iter().enumerate() {
                 let edges = match &replay {
                     Some(replay) if fp.f3d.is_some() => {
-                        self.match_dressup_edge(replay, fp).map_err(|e| {
+                        let error = |e: refs::DressupEdgeFailure| {
                             let context = fp
                                 .f3d
                                 .as_ref()
@@ -5858,7 +5862,15 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                                 .map(|found| format!(" (decoder: {found})"))
                                 .unwrap_or_default();
                             format!("edge set {i}, input {j}: {e}{context}")
-                        })?
+                        };
+                        match self.match_dressup_edge(replay, fp) {
+                            Ok(edges) => edges,
+                            Err(e @ refs::DressupEdgeFailure::MissingInReplay) => {
+                                missing.push((found_by_set.len(), *fp, error(e)));
+                                Vec::new()
+                            }
+                            Err(e) => return Err(error(e)),
+                        }
                     }
                     _ => refs::resolve_edge(self.doc, fp)
                         .map(|(body, name)| {
@@ -5873,8 +5885,40 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                         })
                         .ok_or("an edge was not found in the replay")?,
                 };
+                if crate::tracing() {
+                    let names: Vec<String> = edges.iter().map(|e| e.name.to_string()).collect();
+                    eprintln!(
+                        "import: edge set {i}, input {j}: middle {:.3?} length {:.3?}: {names:?}",
+                        fp.mid_point.map(crate::geom::mm3),
+                        fp.length.map(crate::geom::mm)
+                    );
+                }
                 found_by_set.push((i, edges));
             }
+        }
+        // The inputs that are parts of one replay edge, by set: the edge
+        // with the first of them (mitcad#1437).
+        if let (Some(replay), false) = (&replay, missing.is_empty()) {
+            let mut found_parts: Vec<usize> = Vec::new();
+            for i in 0..fingerprints.len() {
+                let (at, fps): (Vec<usize>, Vec<&Fingerprint>) = missing
+                    .iter()
+                    .filter(|(at, _, _)| found_by_set[*at].0 == i)
+                    .map(|(at, fp, _)| (*at, *fp))
+                    .unzip();
+                if fps.len() < 2 {
+                    continue;
+                }
+                for (parts, edge) in self.match_dressup_edge_parts(replay, &fps) {
+                    // (The others have no edge of their own.)
+                    found_by_set[at[parts[0]]].1.push(edge);
+                    found_parts.extend(parts.iter().map(|&k| at[k]));
+                }
+            }
+            missing.retain(|(at, _, _)| !found_parts.contains(at));
+        }
+        if let Some((_, _, e)) = missing.into_iter().next() {
+            return Err(e);
         }
         let alone = self.dressup_of_found(
             fingerprints.len(),

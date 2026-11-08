@@ -868,6 +868,12 @@ fn pick_edge(
         pieces: Vec::new(),
         how,
     };
+    if let Some(i) = off_the_names_by_curve(state, entities, curves) {
+        return Ok(one(
+            i,
+            " (by its stored curve, among the edges between its faces)",
+        ));
+    }
     if !curves.is_empty()
         && let Ok(all) = state.edges_fitting_ordered(entities, None)
         && all.len() > 1
@@ -911,6 +917,40 @@ fn pick_edge(
         fits.len(),
         describe_fits(state, &fits, curves)
     ))
+}
+
+/// The edge an input's stored curve gives among all the edges between the
+/// two faces its names give, where no edge its names fit lies on that curve
+/// (mitcad#1437). The faces at the edge's ends single out the edges that
+/// start at the face the recipe lists first ([`NamedState::edges_fitting`]),
+/// which tells mirror-image edges apart only where the state runs them the
+/// way the file did: the file's pieces of an edge split at a cylinder's
+/// seam, two at each end of a groove, named alike, each fitted the piece at
+/// the other end, 22 mm off the curve the input stores, while the piece the
+/// curve is (the stored edge itself) lay between the same two faces. The
+/// curve is the edge as the input saw it, read from the file: the one edge
+/// that is that curve's stored edge, else the one piece of it. `None` where
+/// the names' own edges lie on the curve, the input stores no curve, or the
+/// curve does not single one out.
+fn off_the_names_by_curve(
+    state: &NamedState,
+    entities: &[Vec<EntityName>],
+    curves: &[super::curve::StoredCurve],
+) -> Option<usize> {
+    if curves.is_empty() {
+        return None;
+    }
+    let named = state.edges_fitting_ordered(entities, None).ok()?;
+    if named.iter().any(|&i| curve_rank(state, i, curves) <= 1) {
+        return None;
+    }
+    // The two faces (after the edge's own name, where the recipe gives one).
+    let own = entities
+        .first()
+        .is_some_and(|e| e.iter().any(|n| n.tag.starts_with('-')));
+    let faces = &entities[..entities.len().min(if own { 3 } else { 2 })];
+    let between = state.edges_fitting_ordered(faces, None).ok()?;
+    by_stored_curve(state, &between, curves)
 }
 
 /// The edge [`pick_edge`] found, how, and the other edges that are the
@@ -3111,6 +3151,59 @@ mod tests {
             "{why}"
         );
         assert_eq!(why.matches("off the stored curve").count(), 2, "{why}");
+    }
+
+    /// mitcad#1437: where the faces at its ends leave an input's names one
+    /// edge, off the curve the input stores, the edge between the same two
+    /// faces that is that curve's is the input's. Where the names' edge lies
+    /// on the curve, or no edge does, the names decide as before.
+    #[test]
+    fn an_edge_its_end_faces_miss_is_found_by_its_stored_curve() {
+        use super::super::curve::StoredCurve;
+        let data = testdata::named_cube_blob();
+        let file = AsmFile::parse(&data).unwrap();
+        let state = NamedState::new(&file, None);
+        let faces = vec![vec![n("1"), n("2")], vec![n("3")]];
+        let between = state.edges_fitting(&faces).unwrap();
+        assert!(between.len() > 1, "{between:?}");
+        // A face at an end that singles one of them out.
+        let (entities, named) = (1..=9)
+            .map(|k| {
+                let mut e = faces.clone();
+                e.push(vec![n(&k.to_string())]);
+                e
+            })
+            .find_map(|e| match state.edges_fitting(&e).ok()?[..] {
+                [i] => Some((e, i)),
+                _ => None,
+            })
+            .expect("an end face singles out one edge");
+        let other = *between.iter().find(|&&i| i != named).unwrap();
+        let line = |e: usize| {
+            let g = state.edge(e).unwrap();
+            StoredCurve::Line {
+                start: g.start,
+                vector: brep::sub(g.end, g.start),
+            }
+        };
+        for twin in [(0, 1), (1, 2)] {
+            let picked = pick_edge(&state, &entities, None, twin, &[line(other)], true).unwrap();
+            assert_eq!(
+                (picked.edge, picked.how),
+                (
+                    other,
+                    " (by its stored curve, among the edges between its faces)"
+                )
+            );
+        }
+        let picked = pick_edge(&state, &entities, None, (0, 1), &[line(named)], true).unwrap();
+        assert_eq!(picked.edge, named);
+        let elsewhere = StoredCurve::Line {
+            start: [100.0, 100.0, 100.0],
+            vector: [1.0, 0.0, 0.0],
+        };
+        let picked = pick_edge(&state, &entities, None, (0, 1), &[elsewhere], true).unwrap();
+        assert_eq!((picked.edge, picked.how), (named, ""));
     }
 
     /// An input that stores a curve per piece of the edge it saw is every

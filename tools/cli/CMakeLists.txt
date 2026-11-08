@@ -25,6 +25,12 @@ target_link_libraries(mitcad-cli PRIVATE Qt6::Gui TKMesh TKFillet TKPrim TKTopAl
 if(APPLE)
   target_link_libraries(mitcad-cli PRIVATE mitcad_mac_work)
 endif()
+# A mixed installation at start-up (mitcad#1454): the OCCT DLLs loaded
+# against this build's stamp (cmake/OcctBuildStamp.cmake), as mitcad.exe
+# checks them.
+target_sources(mitcad-cli PRIVATE "${app}/update/BuildStamp.hpp" "${app}/update/InstallationCheck.cpp"
+               "${app}/update/InstallationCheck.hpp" "${app}/update/RunningPrograms.hpp")
+mitcad_occt_build_stamp(mitcad-cli)
 
 # The imports, which the import corpus tests run, apart from the other
 # commands (tools/check-all.sh runs the corpus again when they change).
@@ -1179,6 +1185,8 @@ if(BUILD_TESTING)
   # Folds across edges oblique to their lines (mitcad#1424).
   add_test(NAME cli.sheet_fold_oblique COMMAND mitcad-cli run "${scripts}/sheet_fold_oblique.json")
   add_test(NAME cli.sheet_fold_oblique_polygon COMMAND mitcad-cli run "${scripts}/sheet_fold_oblique_polygon.json")
+  # A fold whose sides an earlier fold's bend joins too, refused naming it (mitcad#1442).
+  add_test(NAME cli.sheet_fold_loop COMMAND mitcad-cli run "${scripts}/sheet_fold_loop.json")
   # A pattern of a straight sheet cut with many copies, cut at once (mitcad#288).
   add_test(NAME cli.sheet_pattern_holes COMMAND mitcad-cli run "${scripts}/sheet_pattern_holes.json")
   # Contour Flange, Convert to Sheet Metal and Perforate (mitcad#461).
@@ -1590,5 +1598,43 @@ if(BUILD_TESTING)
   if(WIN32)
     set_property(TEST cli.linked_design_update_reported APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# A drawing's views without the tangent edges of fillets while their
+# Tangent Edges is off (mitcad#1438), on the reported design of GitHub #177
+# under MITCAD_MITCAD_REPORTED: its drawing written, its body projected by
+# test_drawing; skipped without the report's file.
+if(BUILD_TESTING)
+  add_test(NAME cli.drawing_tangent_edges_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DTEST=$<TARGET_FILE:test_drawing>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/drawing/tangent-edges"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/drawing-tangent-edges-test.cmake")
+  set_tests_properties(cli.drawing_tangent_edges_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "drawing tangent edges: skipped" TIMEOUT 600)
+  if(WIN32)
+    set_property(TEST cli.drawing_tangent_edges_reported APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Sheet faces whose base sketch's outline was edited (mitcad#1444): a face
+# with a fold on it finds its changed profile as Extrude does, warns and
+# keeps its panel's slot, so the fold and its face names stay; a joined
+# face likewise, and fails naming its sketch when its profile is gone. The
+# reported design of GitHub #183 under MITCAD_MITCAD_REPORTED opens without
+# a failed feature; skipped without the report's file.
+if(BUILD_TESTING)
+  add_test(NAME cli.sheet_profile_found COMMAND mitcad-cli run "${scripts}/sheet_profile_found.json")
+  add_test(NAME cli.sheet_profile_found_join COMMAND mitcad-cli run "${scripts}/sheet_profile_found_join.json")
+  add_test(NAME cli.sheet_profile_found_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/sheet-profile-found"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/sheet-profile-found-test.cmake")
+  set_tests_properties(cli.sheet_profile_found_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "sheet profile found: skipped" TIMEOUT 600)
+  if(WIN32)
+    set_property(TEST cli.sheet_profile_found cli.sheet_profile_found_join cli.sheet_profile_found_reported
+      APPEND PROPERTY ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
 endif()

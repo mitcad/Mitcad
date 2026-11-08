@@ -161,8 +161,9 @@ expression (`"d1 / 2 + 5 mm"`, `"30 deg"`; syntax and unit rules in
 - **Unitless slots** (counts, factors, fractions; mitcad#662): a number or
   an expression there makes a unitless parameter (`3`, never `3 mm`), in
   every document unit:
-  - counts: a pattern's `quantity` (rectangular `direction1.quantity`
-    and `direction2.quantity`, circular, path and scale patterns), a
+  - counts: a pattern's `quantity` (rectangular `direction1.quantity`,
+    `direction2.quantity` and `direction3.quantity`, circular, path and
+    scale patterns), a
     pattern's or mirror's `scale_groups` and `scale_copies` and
     `scales[i].groups` and `scales[i].copies`, a gear's `teeth` and
     `mate_teeth`, a pulley's `teeth` and `set_screws.count`, a printable
@@ -3204,6 +3205,20 @@ Patterns, mirrors, combine, moves and primitives: modules `pattern.rs`,
   FreeCAD's MultiTransform of the whole body, each copy of the body
   scaled and skipped on its own. Such patterns cannot be mixed with
   features. Patterns of faces cannot be patterned again.
+- `direction3` (optional, rectangular patterns; mitcad#1446): a third
+  direction as `direction2` (`axis`, `quantity`, `distance`, `symmetric`),
+  for a 3D grid of copies in one feature: the elements are the product
+  of the three quantities, numbered along direction 1 first, then 2,
+  then 3 (*Elements* below), and `scale`, `scale_groups`, `scale_copies`,
+  `scales`, `combine`, `skipped_copies` and `suppressed_elements` count
+  them as they count the elements of two directions. Without it a
+  pattern reads and saves as before (the key is left out). The
+  Rectangular Pattern panel's Direction 3 sets it (app/COMMANDS.md).
+  Tests: `core.model.features-solid`'s
+  `a_third_direction_makes_a_grid_of_bodies`,
+  `a_third_direction_makes_a_grid_of_features`,
+  `a_third_direction_counts_in_the_scale_runs` and
+  `an_old_document_without_a_third_direction_loads_unchanged`.
 - Quantities include the original. `distance_type`: `spacing` between
   neighbours or `extent` from the first element to the last. A negative
   distance or angle goes the other way. A full turn spaces a circular
@@ -3320,7 +3335,8 @@ Patterns, mirrors, combine, moves and primitives: modules `pattern.rs`,
 - Elements: element 0 is the original. Along a direction the positions
   are 0, 1, …, q − 1; when symmetric 0, 1, …, q − 1 − ⌊q / 2⌋, then −1,
   …, −⌊q / 2⌋ (q elements again); a rectangular pattern numbers
-  direction 1 first, element = k1 + n1 · k2.
+  direction 1 first, element = k1 + n1 · k2 (+ n1 · n2 · k3 with a third
+  direction).
   `suppressed_elements` leaves elements out (not 0).
 - `compute` (features and faces): `adjust` (default) applies the elements
   one after another, rebuilding a feature's tool in place where the
@@ -6427,7 +6443,7 @@ constraints.
 |---|---|---|
 | `import_file` | `path` (.step/.stp, .iges/.igs, .brep/.brp, .stl, .obj), `name` (of the feature, optional), `unit_mm` (STL and OBJ: mm per file unit, default 1), `structure` (STEP: `components` default, `base`; [STEP assemblies as components](#step-assemblies-as-components-mitcad1274)) | `uid`, `name`, `bodies`: `uid`, `name`, `kind`; `warnings` when empty bodies were left out; a STEP assembly kept also `structure`, `components`, `occurrences` |
 | `export` | `path`, `bodies` (uids or names; all at the marker when left out), `format` (by extension when left out: `step`, `iges`, `stl`, `obj`, `brep`, `3mf`, `usdz`), `schema` (`ap214` default, `ap242`), `unit` (STEP, IGES, STL, OBJ, 3MF: `mm` default, `cm`, `m`, `in`, `ft`; [Mesh files](#mesh-files-in-a-unit-with-a-longest-edge)), `refinement` (STL, OBJ, 3MF, USDZ: `low`, `medium` default, `high` or `{"deviation": mm, "angle": radians, "face_triangles": n, "max_edge": mm}`; see [Mesh refinement](#mesh-refinement)), `ascii` (STL), `colors` (body uid or name: sRGB in [0, 1]), `coordinates` (`design` default, `component`), `occurrence` (a path), `design_folder` (USDZ: the folder relative texture paths are relative to, the design file's), `dialect` (3MF: the slicer whose print settings go with the bodies, [Print profiles](#print-profiles)), `on_bed` (3MF, STL, OBJ: on the print bed faces, [Print bed faces](#print-bed-faces)), `center`, `drop` and `auto_orient` (on the bed, each true by default: [Centered, dropped and oriented on the bed](#centered-dropped-and-oriented-on-the-bed)), `occurrences` and `whole` (3MF: the placements written and the occurrences sent whole, [Export by occurrences](#export-by-occurrences)) | `path`, `format`, `bodies` (uids); 3MF also `meshes`, `skipped`, and with `dialect` `dialect`, `filaments`, `warnings`, `printed` ([Print profiles](#print-profiles), mitcad#1052); USDZ also `materials`, `skipped`, `warnings` |
-| `export_sketch` | `sketch` (uid or name; of a shared name the only sketch, [Feature names are not unique](#feature-names-are-not-unique-mitcad1107)), `path` (.dxf), `version` (`r2000` default, `r12`), `units` (the file's length unit, `mm`, `in`, … as `set_units` reads them; the design's when left out, [DXF units](#the-length-unit-of-dxf-exports-mitcad1408)) | `path`, `entities`, `units` (the unit written) |
+| `export_sketch` | `sketch` (uid or name; of a shared name the only sketch, [Feature names are not unique](#feature-names-are-not-unique-mitcad1107)), `path` (.dxf), `version` (`r2000` default, `r12`), `units` (the file's length unit, `mm`, `in`, … as `set_units` reads them; the design's when left out, [DXF units](#the-length-unit-of-dxf-exports-mitcad1408)), `construction` (bool, default false: also the construction curves and center lines, on the layer `construction`; [construction geometry](#construction-geometry-in-a-sketchs-dxf-mitcad1445)) | `path`, `entities`, `units` (the unit written), `construction` (whether construction geometry was written) |
 
 - `import_file` adds one base feature: a body per STEP part or solid,
   IGES solid, BRep compound member or OBJ object, one mesh body for STL;
@@ -6466,6 +6482,26 @@ constraints.
   the design's length unit (`$INSUNITS` set to it; `units` names another,
   [DXF units](#the-length-unit-of-dxf-exports-mitcad1408)), each curve
   segment of its profiles once. Periodic splines are not written.
+  Construction curves and center lines only with `construction`
+  ([construction geometry](#construction-geometry-in-a-sketchs-dxf-mitcad1445)).
+
+### Construction geometry in a sketch's DXF (mitcad#1445)
+
+`export_sketch` writes the curves a cutting program is to cut: the
+sketch's curves on the layer `0`. Its construction curves and center
+lines (lines with `centerline`, which are not cut either) are left out
+unless the command has `"construction": true`; then they are written too,
+on the layer `construction`. The lines that stand for the sketch's axes
+are never written. The result's `construction` says which was done:
+
+```json
+{"cmd": "export_sketch", "sketch": "Sketch1", "path": "plate.dxf", "construction": true}
+```
+
+The Export dialog's **Include construction geometry** (off unless chosen,
+remembered as `export/dxfConstruction`), the CLI's `export-sketch
+--construction` and MCP `model_export`'s `construction` (with `sketch`)
+set it; the sketch's context-menu Export DXF leaves it out.
 
 ### The length unit of DXF exports (mitcad#1408)
 
@@ -10737,12 +10773,43 @@ new bodies; it does not join existing solids.
 Face retains exact line, arc, ellipse and spline boundaries, holes and separate
 islands. Adjacent selected regions form one solid while keeping their semantic
 panel identities, also after later folded features, whatever curve they meet
-along (an arc or a spline as well as a line; mitcad#242). Missing exact region references fail; Face does not bind to
-the nearest profile. Initial panel slots follow canonical profile-key order.
+along (an arc or a spline as well as a line; mitcad#242). Initial panel slots follow canonical profile-key order.
 Settled `panel_slots` in saved definitions retain removed references as
 tombstones, so editing selection order does not reassign a panel. A solid's
 body index is its smallest contributing panel slot. Semantic face names include
 `F3:sheet_front(0)` and `F3:sheet_back(0)`; source curve aliases remain on walls.
+
+A changed profile is followed as Extrude follows its profiles (mitcad#1444,
+see `SketchOutput::found`): a region key is built from the curves around the
+region, so an edit of the outline (a corner rounded, a curve replaced, moved
+or added) gives the same region a new key. Each profile reference then finds
+the region inside the outline its stored key traces on the changed curves,
+else the region with the most curves in common, and the Face warns
+`region r{…} found as r{…} after a change in Sketch1` (the notice points at
+the region). The region found keeps the reference's panel slot, so the
+panel's identity, its face names and the later folds, flanges and other
+sheet features that name it keep working; the walls are named by the
+region's current curve segments, so a wall along an unchanged curve keeps
+its name. A reference that finds no region (its curves deleted) fails with
+`Sketch1 has no profile r{…}`. Curves are known by their ids, which continue
+from the highest one in use: a curve drawn into a sketch emptied of its
+curves and points takes the id `c1` again, and a reference with a `c1` then finds that
+curve's region, as an extrusion's profile does. A reference whose region the edit split into
+pieces fails with `region r{…} is split into r{…} + r{…} after a change in
+Sketch1; select the profiles again`, unless each piece other than the main
+one (the one with the most curves in common) is selected by a reference of
+its own: then the main piece keeps the reference's slot and each other piece
+the slot settled for its own reference. The pieces get no slots made up at
+evaluation: panel slots are settled in the definition when the Face is
+edited, and a slot given at evaluation could be handed to another region by
+a later edit, renaming panels and bodies without notice. So the Face fails
+until the pieces are selected, and selecting the other pieces (the stored
+reference still selects the main piece) keeps the existing panel's slot and
+names. Two references that find the same region (an old key and the current
+one) make one panel, under the reference that names it by its own key. A
+joined Face (`body` below) finds its profiles in the same way, but adds every
+piece of a split region (with the warning naming them), since its material
+has no panel identity of its own.
 
 A Face with `"body": "F3.b0"` is joined to that sheet in a panel's plane
 (mitcad#242): its sketch lies on the front or back surface of a planar panel
@@ -11051,6 +11118,15 @@ the whole side folds and its edges stay straight across the strip. The
 flat pattern of such a fold is the outline it was folded from. A seam that
 still cannot pair is refused with the bend's name and the boundary curve
 where the two sides of the seam part.
+A fold whose two sides an earlier bend also joins (a first fold whose line
+crossed both arms of a U- or V-shaped panel, then a fold between the
+arms) cannot turn one half of that bend and keep the other: it is refused
+naming the earlier feature as the browser shows it and what to do instead
+(mitcad#1442), e.g. "This fold would also have to bend SheetFold1, whose
+bend joins both sides of the fold line. Fold here before SheetFold1, or
+make SheetFold1 with a separate line on each side." A `sheet_bend` whose
+moving panel such a bend joins to the stationary one is refused the same
+way.
 
 ```json
 {"type":"sheet_corner_chamfer","body":"F3.b0",
@@ -14691,6 +14767,13 @@ holes, a hole table with their threads and a title block, as a PDF, SVG, DXF or
 DWG file. The views come from the kernel (`Kernel::project_view`: OCCT's
 hidden line removal, `geometry/include/mitcad/geometry/drawing.hpp`), the
 holes from `Kernel::round_holes`, their threads from the `threads` query.
+A tangent edge is an edge between faces that meet smoothly (normals within
+0.001 rad all along it, a fillet's edges) however the body was made: the
+projection finds them on a copy of each body before it projects
+(mitcad#1438; OCCT's hidden line removal goes by the continuity stored on
+an edge, which edges made by later fillets, booleans and imports lack, so
+such edges were drawn as visible edges with `tangent_edges` false). Seams
+and edges between faces of one surface are not drawn at all.
 
 ```json
 {"cmd":"export_drawing","path":"plate.pdf","bodies":["F2.b0"],
@@ -14823,7 +14906,13 @@ of the file's length unit (`units`, else the sheet's, else the design's:
 an inch design's sheet in inches of paper, its texts scaled with it,
 mitcad#1408), a layer per kind of line: `VISIBLE`, `HIDDEN`, `THIN`, `HATCH`,
 `SECTION_LINE`, `FRAME`, `EXTRA_THICK` (lines and arcs drawn with the
-`extra_thick` pen, mitcad#1402), and `TEXT` (the writer has no dashed line types:
+`extra_thick` pen, mitcad#1402), lines and arcs drawn by hand with a width
+and a pattern no pen of before had (mitcad#1447) on `HIDDEN_THICK`
+(`thick` and `dashed`), `HIDDEN_EXTRA_THICK` (`extra_thick` and
+`dashed`), `SECTION_LINE_THICK` (`thick` and `chain`) and
+`SECTION_LINE_EXTRA_THICK` (`extra_thick` and `chain`; a thin dashed one
+stays on `HIDDEN`, a thin chain one on `SECTION_LINE`, a continuous one on
+`THIN`, `VISIBLE` or `EXTRA_THICK`), and `TEXT` (the writer has no dashed line types:
 hidden edges are told apart by their layer; arrowheads are outlines). DWG
 (R2000, `AC1015`, mitcad#728; `core/model-drawing/src/dwg.rs`) holds what the DXF file
 holds in paper millimetres, on the same layers, written by MitCad's own writer
@@ -15684,7 +15773,8 @@ the first time something refers to them:
   dimension.
 - Sketches saved before have no `axis` flags and read and save as they
   were. Copies (move, mirror, patterns) do not copy the flag. The DXF
-  export (`export_sketch`) leaves the axes' lines out.
+  export (`export_sketch`) leaves the axes' lines out, also with
+  `construction` (mitcad#1445).
 - **Mirror about an axis** (mitcad#876): `sketch.mirror` takes `"axis":
   "x"` or `"y"` as well as a line; the axis is made (as `sketch.axis`
   makes it) in the mirror's own undo step `Mirror in Sketch1`, and the
@@ -18541,7 +18631,9 @@ with `geometry` its `groups` as the export writes them (`class`, `id`,
 "start", "end"}, "pen"}`, `{"polyline": points, "closed", "pen"}`,
 `{"fill": points}`, `{"shade": points, "grey"}`, `{"text", "at",
 "height", "angle", "anchor"}`; pens `thick`, `extra_thick`, `thin`,
-`hidden`, `hatch`, `chain`, `frame`) and `pens`, the writers' widths and
+`hidden`, `hatch`, `chain`, `frame`, and for lines and arcs drawn by
+hand `dashed_thick`, `dashed_extra_thick`, `chain_thick`,
+`chain_extra_thick`, mitcad#1447) and `pens`, the writers' widths and
 dashes of those pens in sheet millimetres (`{"thick": {"width": 0.35,
 "dashes": []}, "extra_thick": {"width": 0.7, …}, …}`, mitcad#1112 and
 mitcad#1402: the application draws the sheet with them). Groups: `view` (`id` `view-front`, … by its direction,
@@ -19167,6 +19259,33 @@ sheet's `annotations` in their file form (`type`, `id`, `from` and `to`;
 them, a line of no length, an arc of no size or turning backwards, a
 text without its text or place, a pen for a text, `points` or `pen` for
 other annotations, a text in a sheet's `sketch` in a file.
+
+**A drawn line's width and pattern (mitcad#1447).** A line's or an arc's
+pen is a `width` (`thin` (default, 0.18 mm), `thick` (0.35 mm),
+`extra_thick` (0.7 mm)) and a `pattern` (`continuous` (default),
+`dashed` (3 mm dashes, 1 mm gaps), `chain` (long dash dotted, 12, 1.5,
+0.5, 1.5 mm)), any width with any pattern; the dashes are the same at
+every width. `add_drawing_annotation` and `edit_drawing_annotation` take
+both (an edit changes the one given and keeps the other), and still take
+`pen`: `thin`, `thick` and `extra_thick` are that width and continuous,
+`hidden` thin and dashed, `chain` thin and chain; given with `width` or
+`pattern`, `pen` sets both first and those change their part. Refused
+where `pen` is (a text, other annotations: "no points or pen"), and an
+unknown width or pattern. The `drawing` query gives every line and arc
+its `width` and `pattern` beside its file form. Files: a pen one of the
+five names says exactly is written as before, as `pen` (left out when
+thin and continuous), so that a file of those pens is the same as before
+and older versions read it; the four other combinations are written as
+`width` and `pattern` (older versions do not read a file that has one). Old files'
+`pen` is read as above: nothing an existing drawing draws changes. The
+sheet draws a combination with its width's line width and its pattern's
+dashes (the drawing query's pens `thin`, `thick`, `extra_thick`,
+`hidden`, `chain` as before, and `dashed_thick`, `dashed_extra_thick`,
+`chain_thick`, `chain_extra_thick`), and so do the PDF and SVG files; DXF
+and DWG put each new combination on a layer of its own (`HIDDEN_THICK`,
+`HIDDEN_EXTRA_THICK`, `SECTION_LINE_THICK`, `SECTION_LINE_EXTRA_THICK`;
+`export_drawing`'s layers). Model edges, hatching, section lines and the frame keep their
+fixed pens.
 
 **Centre patterns and edge extensions.** Two annotation types:
 

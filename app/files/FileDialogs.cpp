@@ -191,6 +191,7 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
   const int refined = std::max(0, static_cast<int>(kRefinements.indexOf(
                                       settings.value(QStringLiteral("refinement"), QStringLiteral("medium")).toString())));
   const bool stlText = settings.value(QStringLiteral("stlText"), false).toBool();
+  const bool dxfConstruction = settings.value(QStringLiteral("dxfConstruction"), false).toBool();
   settings.endGroup();
   const QString path = stem + QLatin1Char('.') + QLatin1String(kTypes[start].suffix);
 
@@ -254,6 +255,13 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
   dxfUnit->setCurrentIndex(0);
   dxfUnit->setToolTip(QObject::tr("The length unit of the DXF file; the sketch keeps its size"));
   form->addRow(QObject::tr("DXF unit:"), dxfUnit);
+  // Construction geometry (mitcad#1445): left out unless chosen, so that a
+  // CAM program cuts only the sketch's real curves.
+  auto* construction = new QCheckBox(QObject::tr("Include construction geometry"));
+  construction->setChecked(dxfConstruction);
+  construction->setToolTip(
+      QObject::tr("Also write the sketch's construction curves and center lines, on the layer construction"));
+  form->addRow(QString(), construction);
   auto* message = new QLabel;
   setErrorStyleSheet(message);
   layout->addWidget(message);
@@ -274,6 +282,7 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
     form->setRowVisible(stlFormat, format == QStringLiteral("stl"));
     form->setRowVisible(sketchBox, format == QStringLiteral("dxf"));
     form->setRowVisible(dxfUnit, format == QStringLiteral("dxf"));
+    form->setRowVisible(construction, format == QStringLiteral("dxf"));
   };
   QObject::connect(type, &QComboBox::currentIndexChanged, &dialog, [=](int index) {
     QFileInfo info(file->text());
@@ -303,10 +312,13 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
   file->setFocus();
   file->selectAll();
   dialog.resize(480, dialog.sizeHint().height());
-  qDebug().noquote() << QStringLiteral("Export dialog opened: unit %1%2, type %3, refinement %4, file %5, dxf unit %6")
+  qDebug().noquote() << QStringLiteral(
+                            "Export dialog opened: unit %1%2, type %3, refinement %4, file %5, dxf unit %6, "
+                            "dxf construction %7")
                             .arg(unitOffer(unit),
                                  occurrences ? QStringLiteral(", coordinates design (design | component)") : QString(),
-                                 exportTypeKey(start), kRefinements[refined], path, unitOffer(dxfUnit));
+                                 exportTypeKey(start), kRefinements[refined], path, unitOffer(dxfUnit),
+                                 dxfConstruction ? QStringLiteral("on") : QStringLiteral("off"));
 
   prepareModal(&dialog);
   while (execDialog(&dialog) == QDialog::Accepted) {
@@ -321,6 +333,7 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
     choice.selectedOnly = bodies->currentIndex() == 1;
     choice.sketch = sketchBox->currentData().toString();
     choice.dxfUnit = dxfUnit->currentText();
+    choice.dxfConstruction = construction->isChecked();
     if (occurrences) {
       choice.coordinates = coordinates->currentData().toString();
     }
@@ -354,6 +367,7 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
     }
     settings.setValue(QStringLiteral("refinement"), choice.refinement);
     settings.setValue(QStringLiteral("stlText"), choice.ascii);
+    settings.setValue(QStringLiteral("dxfConstruction"), choice.dxfConstruction);
     settings.endGroup();
     settings.sync();
     return choice;

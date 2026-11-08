@@ -566,9 +566,10 @@ ui_browser_reveal() {
   return 0
 }
 
-# ui_panel_reveal "Panel <command> input <id>": a long panel scrolled, by
-# wheel notches over its scroll bar, until the input's logged place is in
-# its view (the Linux counterpart of Ui-PanelReveal in ui-windows-lib.ps1).
+# ui_panel_reveal "Panel <command> input <id>": after a sync, a long panel
+# scrolled, by wheel notches over its scroll bar, until the input's logged
+# place is in its view (the Linux counterpart of Ui-PanelReveal in
+# ui-windows-lib.ps1).
 # A panel can be higher than its page (Timber's frame with its Corner and
 # its fasteners), and a click on a place scrolled away hits whatever is
 # there instead. The panel logs its view with its places ("Panel <command>
@@ -581,25 +582,29 @@ ui_panel_reveal() {
   # mitcad#1010) and the places of the Measure panel's own section
   # ("Measure history"), logged with the panel's; not its
   # buttons, which stay in view under the page.
-  if [[ $1 =~ ^Panel\ (.+)\ input\ [^\ ]+$ ]] || [[ $1 =~ ^Panel\ (.+)\ result\  ]]; then
+  # A row's note action and value mark too ("Panel <command> action
+  # purge.0", "Panel <command> mark <id>", mitcad#1440): they move with
+  # their row when a row above it is laid out again.
+  if [[ $1 =~ ^Panel\ (.+)\ (input|action|mark)\ [^\ ]+$ ]] || [[ $1 =~ ^Panel\ (.+)\ result\  ]]; then
     panel=${BASH_REMATCH[1]}
   elif [[ $1 == "Measure "* ]]; then
     panel=Measure
   else
     return 0
   fi
-  local view="Panel $panel view y " line place top bottom bx by y count synced=0 margin=12 i j
+  local view="Panel $panel view y " line place top bottom bx by y count margin=12 i j
+  # The places and the view of one settled layout, logged whole: the panel
+  # logs its places again 50 ms after a row of it moved (CommandPanel's
+  # moved check, which the sync waits for), and a place read before that
+  # is where the input was (mitcad#1440: the pencil of a row under a note
+  # that wrapped again, clicked 34 px too low on a loaded machine). Also
+  # for a panel that does not scroll.
+  ui_sync >&2
   for i in $(seq 1 30); do
     line=$(grep -F -- "$view" "$UI_LOG" | tail -1)
     [[ $line =~ \ view\ y\ (-?[0-9]+)\ to\ (-?[0-9]+),\ scrolled\ [0-9]+\ of\ [0-9]+,\ bar\ at\ ([0-9]+),([0-9]+)$ ]] ||
       return 0
     top=${BASH_REMATCH[1]} bottom=${BASH_REMATCH[2]} bx=${BASH_REMATCH[3]} by=${BASH_REMATCH[4]}
-    if [ $synced = 0 ]; then
-      # The places and the view of one layout, logged whole.
-      ui_sync >&2
-      synced=1
-      continue
-    fi
     place=$(grep -F -- "$1 at " "$UI_LOG" | tail -1)
     [[ $place =~ \ at\ ([0-9]+),([0-9]+) ]] && [[ $place != *"(hidden)" ]] || return 0
     y=${BASH_REMATCH[2]}
@@ -619,15 +624,16 @@ ui_panel_reveal() {
 
 # ui_logged_at "text": screen position of the last "<text> at x,y" line. A
 # row of the browser that is not in sight is scrolled into sight first
-# (ui_browser_reveal), and so is an input of a long panel scrolled away
-# (ui_panel_reveal); the place of anything else that "<text> out of sight"
+# (ui_browser_reveal), and so is an input, a note action or a mark of a
+# long panel scrolled away, after a sync (ui_panel_reveal); the place of anything else that "<text> out of sight"
 # says has gone is not given: the test fails instead of clicking where it
 # was.
 ui_logged_at() {
   local last at px py
   case $1 in
     "Browser "*) ui_browser_reveal "$1" ;;
-    "Panel "*" input "*|"Panel "*" result "*|"Measure "*) ui_panel_reveal "$1" ;;
+    "Panel "*" input "*|"Panel "*" action "*|"Panel "*" mark "*|"Panel "*" result "*|"Measure "*)
+      ui_panel_reveal "$1" ;;
   esac
   # (A single ellipsis and three dots match each other, mitcad#645.)
   last=$(sed "s/…/.../g" "$UI_LOG" | grep -F -e "${1//…/...} at " -e "${1//…/...} out of sight" | tail -1)

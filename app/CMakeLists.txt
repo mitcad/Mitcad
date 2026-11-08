@@ -718,7 +718,18 @@ if(WIN32)
   set_target_properties(mitcad-updater PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
   target_link_libraries(mitcad-updater PRIVATE shell32 advapi32 bcrypt mitcad_warnings)
   add_dependencies(mitcad mitcad-updater)
+  # The programs still running from the installation (mitcad#1454): the
+  # updater asks the MCP bridges to end and names what runs when the
+  # installer refuses to replace files in use.
+  target_sources(mitcad-updater PRIVATE update/RunningPrograms.hpp)
 endif()
+
+# A mixed installation at start-up (mitcad#1454): the OCCT DLLs loaded
+# against this build's stamp (cmake/OcctBuildStamp.cmake), with the
+# programs still running from bin; Windows only, nothing elsewhere.
+target_sources(mitcad PRIVATE update/BuildStamp.hpp update/InstallationCheck.cpp update/InstallationCheck.hpp
+               update/RunningPrograms.hpp)
+mitcad_occt_build_stamp(mitcad)
 
 if(APPLE)
   # The helper is copied out of the signed bundle before that bundle is replaced.
@@ -1740,6 +1751,9 @@ endif()
 if(BUILD_TESTING)
   target_sources(test_app PRIVATE tests/update_installer.cpp update/UpdateInstaller.cpp update/UpdateInstaller.hpp
                  update/UpdaterChecks.hpp)
+  # The start-up check's comparison of the OCCT build stamp (mitcad#1454):
+  # plain C++.
+  target_sources(test_app PRIVATE update/BuildStamp.hpp)
   if(WIN32)
     # processHasAdministratorRights (mitcad#921).
     target_link_libraries(test_app PRIVATE advapi32)

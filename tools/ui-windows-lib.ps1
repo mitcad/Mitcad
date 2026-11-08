@@ -894,20 +894,22 @@ function Ui-LoggedAt([string]$Text) {
 # Dimension", "Measure history row 2"), which it logs with its own; not
 # its buttons, which stay in view under the page.
 function Ui-PanelReveal([string]$Text) {
-  if ($Text -match '^Panel (.+) input \S+$' -or $Text -match '^Panel (.+?) result ') { $panel = $Matches[1] }
+  # A row's note action and value mark too ("Panel <command> action
+  # purge.0", "Panel <command> mark <id>", mitcad#1440): they move with
+  # their row when a row above it is laid out again.
+  if ($Text -match '^Panel (.+) (input|action|mark) \S+$' -or $Text -match '^Panel (.+?) result ') { $panel = $Matches[1] }
   elseif ($Text.StartsWith('Measure ')) { $panel = 'Measure' }
   else { return }
   $view = "Panel $panel view y "
-  $synced = $false
+  # The places and the view of one settled layout, logged whole: the panel
+  # logs its places again 50 ms after a row of it moved (CommandPanel's
+  # moved check, which the sync waits for), and a place read before that
+  # is where the input was (mitcad#1440). Also for a panel that does not
+  # scroll.
+  Ui-Sync
   for ($i = 0; $i -lt 30; $i++) {
     $line = Ui-LastLineWith $view -Start
     if ("$line" -notmatch ' view y (-?\d+) to (-?\d+), scrolled \d+ of \d+, bar at (\d+),(\d+)$') { return }
-    if (-not $synced) {
-      # The places and the view of one layout, logged whole.
-      Ui-Sync
-      $synced = $true
-      continue
-    }
     $top = [int]$Matches[1]
     $bottom = [int]$Matches[2]
     $bar = @([int]$Matches[3], [int]$Matches[4])
