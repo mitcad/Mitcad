@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: MIT
+# Sketch Dimension's right-click menu (mitcad#1540, GitHub #203): Center or
+# Tangent for each circle or arc picked, and Driving or Driven, on
+# sketch-tangent-dimension.json (Sketch1: a circle of diameter 20 about the
+# fixed origin, a free circle of radius 5 about (30, 0)):
+#   1. A right-click on the first circle's rim, Tangent: it is picked by its
+#      tangent side; a click on the second circle picks it by its centre;
+#      the menu's Driving shows the preview, a tangent_point_distance of
+#      30 - 10 = 20; 18 typed adds it and moves the free centre to 28.
+#   2. Both circles by their tangent sides from the menu, then Driven: the
+#      preview is the tangent_circle_distance 28 - 10 - 5 = 13 in
+#      parentheses, and the click that places it adds it driven, measuring
+#      13 (which also shows the first dimension held its 18).
+# Run by tools/ui-sketch-tangent-dimension-test.sh (Linux) and
+# tools/ui-windows-sketch-tangent-dimension-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+
+# 1. Tangent to center.
+mark
+command sketch.dimension
+wait-log '^Sketch tool Sketch Dimension$'
+sketch-click -10 0 right
+wait-log '^Sketch Dimension menu for c[0-9]+ \(to pick\)$'
+wait-log '^Context menu: Center [|] Tangent [|] Driving \(current\) [|] Driven [|] Cancel$'
+popup 'Tangent'
+wait-log '^Sketch Dimension: c[0-9]+ by its tangent side$'
+sketch-click 35 0
+sketch-click 15 15 right
+wait-log '^Sketch Dimension menu for c[0-9]+ \(picked\)$'
+wait-log '^Context menu: Center \(current\) [|] Tangent [|] Driving \(current\) [|] Driven [|] Cancel$'
+popup 'Driving'
+wait-log '^Sketch Dimension preview: tangent_point_distance 20[.]00$'
+sketch-click 15 15
+wait-log '^Sketch value editor at .* with 20[.]00'
+key ctrl+a
+type 18
+key Return
+wait-log '^Added dimension k[0-9]+ tangent_point_distance d[0-9]+ = 18 mm$'
+expect-never 'Sketch right-click: Esc of the tool'
+
+# 2. Tangent to tangent, driven.
+mark
+sketch-click -10 0 right
+wait-log '^Sketch Dimension menu for c[0-9]+ \(to pick\)$'
+popup 'Tangent'
+wait-log '^Sketch Dimension: c[0-9]+ by its tangent side$'
+mark
+sketch-click 33 0 right
+wait-log '^Sketch Dimension menu for c[0-9]+ \(to pick\)$'
+popup 'Tangent'
+wait-log '^Sketch Dimension preview: tangent_circle_distance 13[.]00$'
+mark
+sketch-click 15 -15 right
+wait-log '^Sketch Dimension menu for c[0-9]+ \(picked\)$'
+popup 'Driven'
+wait-log '^Sketch Dimension: driven$'
+wait-log '^Sketch Dimension preview: tangent_circle_distance [(]13[.]00[)]$'
+sketch-click 15 -15
+wait-log '^Added driven dimension k[0-9]+ tangent_circle_distance = 13[.]00$'
+
+key Escape
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

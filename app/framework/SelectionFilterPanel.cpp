@@ -17,11 +17,13 @@
 #include <QtLogging>
 
 #include "TestSync.hpp"
+#include "UiSizes.hpp"
 
 namespace mitcad {
 namespace {
 
-constexpr int kSymbolSize = 16;
+// A filter's symbol at Icon size (mitcad#1556).
+int symbolSize() { return uiIconSize(16); }
 
 QString stateSymbolName(FilterState state) {
   switch (state) {
@@ -40,7 +42,7 @@ QString stateSymbolName(FilterState state) {
 QIcon filterStateIcon(FilterState state, const QColor& color) {
   QIcon icon;
   for (const int scale : {1, 2}) {
-    QPixmap pixmap(kSymbolSize * scale, kSymbolSize * scale);
+    QPixmap pixmap(symbolSize() * scale, symbolSize() * scale);
     pixmap.setDevicePixelRatio(scale);
     pixmap.fill(Qt::transparent);
     QPainter painter(&pixmap);
@@ -48,7 +50,7 @@ QIcon filterStateIcon(FilterState state, const QColor& color) {
     QPen pen(color);
     pen.setWidthF(1.5);
     painter.setPen(pen);
-    const QRectF box(3.0, 3.0, kSymbolSize - 6.0, kSymbolSize - 6.0);
+    const QRectF box(3.0, 3.0, symbolSize() - 6.0, symbolSize() - 6.0);
     if (state == FilterState::Click) {
       painter.setBrush(color);
     }
@@ -88,7 +90,7 @@ SelectionFilterPanel::SelectionFilterPanel(std::function<SelectionScope*()> scop
        {std::pair{FilterState::Off, tr("none")}, std::pair{FilterState::Click, tr("click")},
         std::pair{FilterState::Window, tr("click and window")}}) {
     auto* symbol = new QLabel;
-    symbol->setPixmap(filterStateIcon(state, text).pixmap(kSymbolSize, kSymbolSize));
+    symbol->setPixmap(filterStateIcon(state, text).pixmap(symbolSize(), symbolSize()));
     symbol->setAccessibleName(stateSymbolName(state));
     legendRow->addWidget(symbol);
     auto* label = new QLabel(meaning);
@@ -112,7 +114,7 @@ SelectionFilterPanel::SelectionFilterPanel(std::function<SelectionScope*()> scop
     button->setDefaultAction(action);
     button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     button->setAutoRaise(true);
-    button->setIconSize(QSize(kSymbolSize, kSymbolSize));
+    button->setIconSize(QSize(symbolSize(), symbolSize()));
     button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     column->addWidget(button);
     m_actions[static_cast<std::size_t>(i)] = action;

@@ -377,6 +377,8 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     // (mitcad#1406, `drawing_annotations.rs`).
     ("drawing_model_items", Model),
     ("keep_drawing_model_items", Model),
+    // Line styles in drawing views (mitcad#1546, `drawing_lines.rs`).
+    ("edit_drawing_line", Model),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -587,6 +589,8 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("links", FileIo),
     // The curves of Intersection Curves as polylines (mitcad#1405).
     ("feature_curves", Model),
+    // The closed loop of a sketch curve (mitcad#1541).
+    ("sketch_loop", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

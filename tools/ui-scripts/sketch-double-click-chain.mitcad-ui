@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: MIT
+# A double-click on a sketch curve selects its closed loop, else its open
+# chain (mitcad#1541). The wrapper replaces ENTER_SKETCH with the
+# frontend's ordinary timeline activation on the fixture's Sketch1
+# (sketch-double-click-chain.json): two framing points at (-40, -30) and
+# (40, 30); a rectangle from (-20, -10) to (10, 10), c3 bottom, c6 right,
+# c8 top, c10 left; c11 from its corner (-20, -10) to (-30, -20); an open
+# polyline c13, c16, c18 from (15, -15) through (25, -15) and (25, 5) to
+# (15, 15). The clicks stay within x -30..30 mm, y -25..25 mm: the free
+# part of the view after the fit also in session 0's 1024x768 window on
+# Windows.
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+
+# A side of the rectangle: its four lines, past the corner c11 leaves, and
+# not c11.
+mark
+sketch-dblclick -5 -10
+wait-log '^Double-click on c3: loop c3, c6, c8, c10$'
+expect-selection 4 0
+
+# The line leaving the corner bounds no loop and stops at the corner,
+# where three lines meet: only it.
+mark
+sketch-dblclick -25 -15
+wait-log '^Double-click on c11: chain c11$'
+expect-selection 1 0
+
+# The middle line of the open polyline: the polyline whole.
+mark
+sketch-dblclick 25 -5
+wait-log '^Double-click on c16: chain c13, c16, c18$'
+expect-selection 3 0
+
+# Ctrl+double-click on a rectangle side adds the rectangle to the
+# polyline.
+mark
+sketch-dblclick 10 0 ctrl
+wait-log '^Double-click on c6: loop c3, c6, c8, c10 \(added\)$'
+expect-selection 7 0
+screenshot '${MITCAD_TEST_WORK}/sketch-double-click-chain.png'
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'Recompute failed|TestDriver: FAIL'

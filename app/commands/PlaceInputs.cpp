@@ -27,6 +27,8 @@
 #include <QStringList>
 #include <QtLogging>
 
+#include "mitcad/geometry/datum.hpp"
+
 #include "../framework/HandleStep.hpp"
 #include "../framework/ModelShapes.hpp"
 #include "../framework/Theme.hpp"
@@ -287,17 +289,15 @@ QJsonObject linkOf(const CommandState& state, const CommandContext& context, con
 // --- Geometry of faces and lines (the feature's component's coordinates)
 
 // A face's plane as the model frames it: the origin projected onto it, x
-// along +X projected (+Y when it faces X), the outward normal.
+// along +X projected (+Y when it faces X), the outward normal. A flat
+// spline face too (a sheet body's wall, mitcad#1554), as the model reads it.
 std::optional<PlaneFrame> framed(const TopoDS_Face& face) {
-  const BRepAdaptor_Surface surface(face);
-  if (surface.GetType() != GeomAbs_Plane) {
+  const std::optional<gp_Pln> planar = geometry::face_plane(face);
+  if (!planar) {
     return std::nullopt;
   }
-  const gp_Pln plane = surface.Plane();
-  gp_Dir normal = plane.Axis().Direction();
-  if (face.Orientation() == TopAbs_REVERSED) {
-    normal.Reverse();
-  }
+  const gp_Pln plane = *planar;
+  const gp_Dir normal = plane.Axis().Direction();
   PlaneFrame frame;
   const gp_Pnt on = plane.Location();
   frame.origin = gp_Pnt(normal.XYZ() * gp_Vec(gp_Pnt(0, 0, 0), on).Dot(gp_Vec(normal)));

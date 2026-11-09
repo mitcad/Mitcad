@@ -404,7 +404,7 @@ echo "--- 8. The Sketch Palette's Create section, the constraints on two rows (m
 create_line() { grep "^Palette create tools: " "$UI_LOG" | sed -n "$1p"; }
 # create_has line tool: the line names the tool (ids without "sketch.").
 create_has() { grep -qE "(: |, )$2(,| \()" <<< "$1"; }
-DEFAULTS="line, rectangle, circle, arc, polygon, slot, spline, point, mirror, dimension, fillet, trim, extend, offset"
+DEFAULTS="line, point, rectangle, circle, arc, polygon, slot, spline, mirror, dimension, fillet, trim, extend, offset"
 # Sketch1 opened (step 1) before any tool started: the defaults, in the
 # ribbon's order (Create, then Modify).
 [ "$(create_line 1)" = "Palette create tools: $DEFAULTS (defaults)" ] ||

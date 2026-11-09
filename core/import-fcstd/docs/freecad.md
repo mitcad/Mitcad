@@ -37,9 +37,10 @@ process, like the `.f3d` import.
 Part workbench's leaf objects → base features of the stored shapes (one
 per component); App::Link → occurrences (arrays, links of links, links to
 other files read next to it); visibility, colours and the document's unit
-system. Placements come from the file, not from attachments. Datums and
-joints are left out; features inside Bodies and consumed operands are part
-of their results. A binder's `Context` (the Body or Assembly it is in)
+system. Placements come from the file, not from attachments. Datums are
+left out, and assembly joints come after the history (mitcad#1557, below);
+features inside Bodies and consumed operands are part of their results (a
+Body a clone's base feature names is not consumed: it stays a body). A binder's `Context` (the Body or Assembly it is in)
 consumes nothing (mitcad#952): only its `Support` is what it binds, so a
 Body with binders stays a body. The report says why for each object.
 `--bodies-only` stops here.
@@ -576,6 +577,65 @@ cells.
   join loses volume and is tried again with a fuzzy value
   (commands.md, "Joins that lose volume").
 
+## Clones, a hole at a face, binders of features, joints (mitcad#1557)
+
+A reported assembly's last fallbacks and partial sketches.
+
+- A Body's base feature (`PartDesign::FeatureBase`, FreeCAD's PartDesign
+  clone of another Body, `bases.rs`): FreeCAD takes the base's shape
+  without the base's own placement and places it by the FeatureBase's
+  `Placement`. It is a `derive` of the MitCad bodies of the base (a Body
+  or Part object the replay rebuilt, or a body of a stored shape), linked
+  through the occurrences where the document places the two components
+  first, then a `move` to where FreeCAD's placement puts it (none when the
+  copy is there already). An expression on the placement drives the move
+  (the placement plus the fixed difference the occurrences make, `Off -
+  40 mm`). A base the import does not rebuild (a union of scripted
+  objects) leaves the Body on FreeCAD's stored shape, a fallback without a
+  parametric counterpart that names the base and its objects.
+- A Hole whose `Profile` is a planar face of a body (`(Revolution,
+  Face1)`): FreeCAD drills at the centres of the face's circles and arcs
+  (a ring's two circles are one centre), along the face's normal. The
+  hole's placement is that face (found as a pad's face profile is) at
+  those centres (`{"type": "face"}`). A modelled thread or several faces
+  are not translated.
+- External geometry whose `ExternalGeometry` link has no mapped name
+  (1.1's link to a binder's face, `ReferenceMirrored.Face1`, one external
+  geometry per edge of the face) is that link's (before, it read as a
+  link missing in the file and was fixed in place). Concentric circles
+  (a ring face's) are told apart by their radii, so a constraint on the
+  outer one stays on it.
+- A binder of a feature's result whose geometry a sketch projects (the
+  feature's face or edge, found by its geometry), or whose face an extent
+  goes up to, is carried and `included` with how; a binder nothing uses
+  for its geometry, or one with a use that is not carried, is `skipped`
+  with that reason.
+- Expressions: a reference `<<Label>>.Width` to an `App::Link` reads the
+  property of the object the link shows (a VarSet, a spreadsheet). A
+  sketch without a support is placed by its `Placement`: an expression
+  that moves it along its normal makes it lie on an offset plane from the
+  origin plane, by that expression; its attachment offset FreeCAD does not
+  apply (kept as a number, with that reason). Expressions that stay
+  unused say why: a scripted object's, a placement of a Body or part (its
+  occurrence's placement, numbers), a placement FreeCAD computes from the
+  attachment.
+- Assembly joints (`joints.rs`): Fixed, Revolute, Cylindrical, Slider and
+  Ball joints are MitCad joints of the same free motions (rigid,
+  revolute, cylindrical, slider along z, ball) in the assembly's
+  component. Each side is the occurrence path of the referenced object
+  (the object a reference starts from may be a sub-assembly's part:
+  the path goes down to it) with FreeCAD's connector as the frame
+  override of the component's origin: `Placement<k>` is in the
+  coordinates of the object the reference's path ends in, after the
+  placements along the path that are not occurrences. Where the file
+  places the parts, opposed z axes are the joint's `flip`, and what the
+  kind holds fixed its `angle` and `offset`; a joint that would move a part
+  is not added. The connectors are fixed in the parts (not linked to the
+  picked elements); limits are left out with a note. Distance, Angle,
+  Parallel, Perpendicular, gear, belt, rack and screw joints have no MitCad
+  kind and are skipped with that reason. Grounded joints ground their
+  occurrences, as before, and count as `included`.
+
 ## Not translated (fallback)
 
 Part sweeps (mitcad#548) through several sections of which one is an
@@ -843,7 +903,8 @@ for the `.f3d` corpus; `MITCAD_CORPUS_JOBS=1` checks them one after
 another), and the lines come in the documents' order. The ctest
 `freecad.corpus_designs` (`tools/cli/fcstd-designs.cmake`, mitcad#997)
 checks single documents found by their content ids under those folders
-and the folders beside them (reported documents): no fallback, and the
+and the folders beside them (reported documents): no fallback (or as many
+as a document's entry allows, each with its reason, mitcad#1557), and the
 Body's volume within the bounds it gives (FreeCAD's within 1e-6
 relative). A full run for
 numbers before and after a change:

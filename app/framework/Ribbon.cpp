@@ -14,6 +14,7 @@
 #include <QCoreApplication>
 #include <QCursor>
 #include <QEvent>
+#include <QFontMetrics>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QHideEvent>
@@ -44,6 +45,7 @@
 #include "Theme.hpp"
 #include "WindowStyle.hpp"
 #include "platform/MacChrome.hpp"
+#include "UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -97,9 +99,20 @@ constexpr int kIconSize = 28;
 QString key(const QString& tab, const QString& group) { return tab + QLatin1Char('/') + group; }
 
 constexpr int kMacIconSize = 26;
-constexpr int kMacButtonSize = kMacIconSize + 10;
 constexpr int kMacCaptionHeight = 20;
 constexpr int kHeight = 30;
+// The buttons at Icon size (mitcad#1556): the icon with 5 pixels around it.
+int macButtonSize() { return uiIconSize(kMacIconSize) + 10; }
+int classicButtonSize() { return uiIconSize(kIconSize) + 10; }
+// A Mac group's caption, in its font 0.92 of the ribbon's: at least 20
+// pixels, higher where Text size makes the font taller (mitcad#1556).
+int macCaptionHeight(const QFont& font) {
+  QFont small = font;
+  small.setPointSizeF(small.pointSizeF() * 0.92);
+  return std::max(kMacCaptionHeight, QFontMetrics(small).height() + 4);
+}
+// The segmented tabs: 30 pixels, higher for a taller font.
+int tabHeight(const QFont& font) { return std::max(kHeight, QFontMetrics(font).height() + 12); }
 // The arrow part of a split button (mitcad#222) in the Mac presentation; the
 // logged arrow position of the classic one is as far in from its right edge.
 constexpr int kSplitArrowWidth = 14;
@@ -163,7 +176,7 @@ public:
   QSize sizeHint() const override {
     QFont small = font();
     small.setPointSizeF(small.pointSizeF() * 0.92);
-    return QSize(QFontMetrics(small).horizontalAdvance(text()) + 34, kMacCaptionHeight);
+    return QSize(QFontMetrics(small).horizontalAdvance(text()) + 34, macCaptionHeight(font()));
   }
 
 protected:
@@ -233,7 +246,7 @@ public:
     setUsesScrollButtons(false);
     setMouseTracking(true);
     setAttribute(Qt::WA_Hover);
-    setFixedHeight(kHeight);
+    setFixedHeight(tabHeight(font()));
   }
 
 protected:
@@ -241,7 +254,7 @@ protected:
     // 11 px each side of the name (15 before the Start tab, mitcad#1258):
     // four tabs take about the room three took, so that the title row keeps
     // the quick-access group unfolded beside the name at 1280 px.
-    return QSize(fontMetrics().horizontalAdvance(tabText(index)) + 22, kHeight);
+    return QSize(fontMetrics().horizontalAdvance(tabText(index)) + 22, tabHeight(font()));
   }
   QSize minimumTabSizeHint(int index) const override { return tabSizeHint(index); }
 
@@ -510,11 +523,11 @@ private:
 QToolButton* commandButton(QAction* action, bool mac) {
   QToolButton* button = nullptr;
   if (mac) {
-    button = new RibbonButton(action, kMacIconSize);
+    button = new RibbonButton(action, uiIconSize(kMacIconSize));
   } else {
     button = new QToolButton;
     button->setDefaultAction(action);
-    button->setIconSize(QSize(kIconSize, kIconSize));
+    button->setIconSize(uiIconSize(kIconSize, kIconSize));
     button->setToolButtonStyle(Qt::ToolButtonIconOnly);
     button->setAutoRaise(true);
   }
@@ -1182,12 +1195,12 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
   if (mac) {
     // Every capsule is as tall as one with buttons, so that a group of names
     // only (or a collapsed one) keeps the row aligned.
-    widget->setMinimumHeight(6 + kMacButtonSize + kMacCaptionHeight + 5);
+    widget->setMinimumHeight(6 + macButtonSize() + macCaptionHeight(widget->font()) + 5);
   }
 
   auto* row = new QWidget;
   // The same height in every group, so that the group names line up.
-  row->setFixedHeight(mac ? kMacButtonSize : kIconSize + 10);
+  row->setFixedHeight(mac ? macButtonSize() : classicButtonSize());
   auto* buttons = new QHBoxLayout(row);
   buttons->setContentsMargins(0, 0, 0, 0);
   buttons->setSpacing(0);
@@ -1364,7 +1377,7 @@ void Ribbon::sizeGroup(GroupInfo* info, int buttonCount) {
   const bool mac = m_presentation == Presentation::Mac;
   QWidget* row = info->buttons;
   // A row without buttons keeps a button's room (Classic; hidden in Mac).
-  row->setMinimumWidth(buttonCount == 0 ? kIconSize + 8 : 0);
+  row->setMinimumWidth(buttonCount == 0 ? uiIconSize(kIconSize) + 8 : 0);
   info->collapsible = buttonCount > 0;
   // The user's pinned buttons, which fold first (mitcad#1111). They are
   // all shown here (new ones), so the row's width counts them.

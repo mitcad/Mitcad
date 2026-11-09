@@ -272,6 +272,96 @@ pub struct PlacedView {
     /// The holes of the bodies it shows (indices into the sheet's holes);
     /// all of them when None.
     pub holes: Option<Vec<usize>>,
+    /// The pens chosen in it for edges and bodies (mitcad#1546).
+    pub pens: LinePens,
+}
+
+/// A model edge as a view sees it, to find its lines among the projected
+/// ones (mitcad#1546): a line or a circle as a pick sees it, or a curve of
+/// another kind by its two ends.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EdgeSeen {
+    Seen(super::annotate::Seen),
+    Ends(P2, P2),
+}
+
+/// The pens a view's own choices give its visible lines (mitcad#1546,
+/// `DrawingView::lines`): an edge's lines (those of its body that lie on
+/// it) its pen, else a body's lines its body's pen, else the view's
+/// (wide; tangent edges and threads' roots narrow). The hidden lines keep
+/// the view's dashes. Bodies by their index among those the view
+/// projected (an edge's `source`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LinePens {
+    pub bodies: Vec<(usize, Pen)>,
+    pub edges: Vec<(usize, EdgeSeen, Pen)>,
+    /// How far (view mm) a projected line may lie from an edge and be one
+    /// of its lines.
+    pub tolerance: f64,
+}
+
+/// Points that stand for a projected line: its ends and its middle, a
+/// polyline's points.
+fn line_points(curve: &ViewCurve) -> Vec<P2> {
+    match curve {
+        ViewCurve::Line(a, b) => vec![*a, *b, [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]],
+        ViewCurve::Arc {
+            center,
+            radius,
+            start,
+            end,
+        } => [*start, *end, (start + end) / 2.0]
+            .iter()
+            .map(|t| [center[0] + radius * t.cos(), center[1] + radius * t.sin()])
+            .collect(),
+        ViewCurve::Polyline(points) | ViewCurve::Spline(ViewSpline { points, .. }) => {
+            points.clone()
+        }
+    }
+}
+
+impl EdgeSeen {
+    /// Whether a projected line lies on this edge, within `tolerance`.
+    pub fn holds(&self, curve: &ViewCurve, tolerance: f64) -> bool {
+        let points = line_points(curve);
+        if points.is_empty() {
+            return false;
+        }
+        match self {
+            // An edge seen end on draws no line of its own.
+            Self::Seen(super::annotate::Seen::Point(_)) => false,
+            Self::Seen(seen) => points.iter().all(|p| seen.distance(*p) <= tolerance),
+            Self::Ends(a, b) => {
+                let (first, last) = match curve {
+                    ViewCurve::Arc { .. } => (points[0], points[1]),
+                    _ => (points[0], points[points.len() - 1]),
+                };
+                let near = |p: P2, q: P2| len2(sub2(p, q)) <= tolerance;
+                (near(first, *a) && near(last, *b)) || (near(first, *b) && near(last, *a))
+            }
+        }
+    }
+}
+
+impl LinePens {
+    /// The pen of a projected line of the view.
+    pub fn pen(&self, edge: &super::ViewEdge) -> Pen {
+        let plain = edge_pen(edge.visible, edge.kind);
+        let Some(source) = edge.source.filter(|_| edge.visible) else {
+            return plain;
+        };
+        self.edges
+            .iter()
+            .find(|(s, seen, _)| *s == source && seen.holds(&edge.curve, self.tolerance))
+            .map(|(.., pen)| *pen)
+            .or_else(|| {
+                self.bodies
+                    .iter()
+                    .find(|(s, _)| *s == source)
+                    .map(|(_, pen)| *pen)
+            })
+            .unwrap_or(plain)
+    }
 }
 
 impl PlacedView {
@@ -1068,6 +1158,7 @@ pub fn compose(options: &DrawingOptions, units: Units, input: &SheetInput) -> Co
             hatch: true,
             shading: Vec::new(),
             holes: None,
+            pens: LinePens::default(),
         });
     }
     // The section's cutting plane in a view that sees it edge on.
@@ -1183,7 +1274,8 @@ pub fn render(
         }
         // Details smaller than the pen as sharp corners (mitcad#1112).
         for edge in &super::convention::simplified(&view.projection.edges, place.scale) {
-            let pen = edge_pen(edge.visible, edge.kind);
+            // The view's own pens of edges and bodies (mitcad#1546).
+            let pen = view.pens.pen(edge);
             g.items.push(match &edge.curve {
                 ViewCurve::Line(p, q) => Item::Line {
                     pen,

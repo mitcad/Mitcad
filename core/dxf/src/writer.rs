@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::error::Error;
 use crate::text;
-use crate::types::{Drawing, Entity, Geometry, Layer, Point2, Spline};
+use crate::types::{Drawing, Entity, Geometry, Layer, Linetype, Point2, Spline};
 
 /// The DXF version to write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -188,7 +188,7 @@ impl Writer {
         // The body first: $HANDSEED in the header needs the last handle.
         self.model_space = 0x11;
         self.section("TABLES");
-        self.tables(&layers);
+        self.tables(&layers, &drawing.linetypes);
         self.pair(0, "ENDSEC");
         self.section("BLOCKS");
         if self.r2000() {
@@ -275,7 +275,7 @@ impl Writer {
         }
     }
 
-    fn tables(&mut self, layers: &[Layer]) {
+    fn tables(&mut self, layers: &[Layer], own: &[Linetype]) {
         let r2000 = self.r2000();
         // Fixed table handles; entries get handles from 0x20.
         if r2000 {
@@ -288,7 +288,13 @@ impl Writer {
         } else {
             &["CONTINUOUS"]
         };
-        self.table("LTYPE", 0x5, linetypes.len());
+        // The drawing's own line types after the standard ones, each name
+        // once (mitcad#1546).
+        let own: Vec<&Linetype> = own
+            .iter()
+            .filter(|l| !linetypes.iter().any(|n| n.eq_ignore_ascii_case(&l.name)))
+            .collect();
+        self.table("LTYPE", 0x5, linetypes.len() + own.len());
         for &name in linetypes {
             self.entry("LTYPE", 0x5, "AcDbLinetypeTableRecord");
             self.pair(2, name);
@@ -304,6 +310,22 @@ impl Writer {
             self.int(72, 65);
             self.int(73, 0);
             self.real(40, 0.0);
+        }
+        for linetype in own {
+            self.entry("LTYPE", 0x5, "AcDbLinetypeTableRecord");
+            self.pair(2, &text::encode(&linetype.name));
+            self.int(70, 0);
+            self.pair(3, &text::encode(&linetype.description));
+            self.int(72, 65);
+            self.int(73, linetype.elements.len() as i64);
+            self.real(40, linetype.length());
+            for &element in &linetype.elements {
+                self.real(49, element);
+                if r2000 {
+                    // A plain dash: no shape or text in it.
+                    self.int(74, 0);
+                }
+            }
         }
         self.pair(0, "ENDTAB");
 
@@ -321,7 +343,7 @@ impl Writer {
             };
             self.pair(6, &linetype);
             if r2000 {
-                self.int(370, -3);
+                self.int(370, layer.lineweight.map_or(-3, i64::from));
             }
         }
         self.pair(0, "ENDTAB");

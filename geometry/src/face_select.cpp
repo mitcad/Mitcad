@@ -29,6 +29,8 @@
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
 
+#include "mitcad/geometry/datum.hpp"
+
 namespace mitcad::geometry::detail {
 namespace {
 
@@ -389,6 +391,13 @@ std::optional<gp_Pln> face_plane(const TopoDS_Face& face) {
   }
   const gp_Pln plane = surface.Plane();
   return gp_Pln(gp_Ax3(plane.Location(), planar_normal(face, plane), plane.XAxis().Direction()));
+}
+
+std::optional<gp_Pln> reference_plane(const TopoDS_Face& face) {
+  if (std::optional<gp_Pln> plane = face_plane(face)) {
+    return plane;
+  }
+  return geometry::face_plane(face);
 }
 
 Bnd_Box box_of(const TopoDS_Shape& shape) {

@@ -326,6 +326,9 @@ pub struct Layer {
     pub visible: bool,
     pub frozen: bool,
     pub linetype: String,
+    /// Its lines' weight, hundredths of a millimetre (group 370 of an
+    /// R2000 file: 13, 18, 35, 50, 70, …); None: the default (-3).
+    pub lineweight: Option<i16>,
 }
 
 impl Layer {
@@ -336,7 +339,43 @@ impl Layer {
             visible: true,
             frozen: false,
             linetype: "CONTINUOUS".into(),
+            lineweight: None,
         }
+    }
+}
+
+/// A line type of the drawing (`LTYPE` table entry) other than the
+/// standard ones (`ByBlock`, `ByLayer`, `Continuous`): its dashes in
+/// drawing units, a dash positive, a gap negative, a dot 0.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Linetype {
+    pub name: String,
+    pub description: String,
+    pub elements: Vec<f64>,
+}
+
+impl Linetype {
+    /// A line type of dashes and gaps in turn (both positive lengths, the
+    /// first a dash), as a writer's pen gives them.
+    pub fn of_dashes(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        dashes: &[f64],
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            elements: dashes
+                .iter()
+                .enumerate()
+                .map(|(i, d)| if i % 2 == 0 { d.abs() } else { -d.abs() })
+                .collect(),
+        }
+    }
+
+    /// The length of its pattern once through.
+    pub fn length(&self) -> f64 {
+        self.elements.iter().map(|e| e.abs()).sum()
     }
 }
 
@@ -351,6 +390,10 @@ pub struct Drawing {
     pub entities: Vec<Entity>,
     /// Things the reader skipped or approximated, for an import report.
     pub warnings: Vec<String>,
+    /// Its own line types, which its layers name (mitcad#1546: a
+    /// drawing's dashed, long dash dotted and long dash double dotted
+    /// pens); the standard ones are always written.
+    pub linetypes: Vec<Linetype>,
 }
 
 impl Drawing {
@@ -423,6 +466,17 @@ impl Drawing {
 
     /// A copy with every entity mapped by `transform`.
     pub fn transformed(&self, transform: &Affine) -> Self {
+        // Line types' dashes are lengths of the drawing: scaled with it
+        // (by the transform's mean scale), as the entities are.
+        let scale = transform.determinant().abs().sqrt();
+        let linetypes = self
+            .linetypes
+            .iter()
+            .map(|l| Linetype {
+                elements: l.elements.iter().map(|e| e * scale).collect(),
+                ..l.clone()
+            })
+            .collect();
         Self {
             entities: self
                 .entities
@@ -431,6 +485,7 @@ impl Drawing {
                     Entity::new(entity.layer.clone(), entity.geometry.transformed(transform))
                 })
                 .collect(),
+            linetypes,
             ..self.without_entities()
         }
     }
@@ -444,6 +499,7 @@ impl Drawing {
             layers: self.layers.clone(),
             entities: Vec::new(),
             warnings: self.warnings.clone(),
+            linetypes: self.linetypes.clone(),
         }
     }
 

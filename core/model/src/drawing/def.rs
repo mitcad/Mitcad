@@ -31,12 +31,13 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::annotate_def::{SheetNote, SketchItem, ViewAnnotation};
+use super::annotate_def::{PenPattern, PenWidth, SheetNote, SketchItem, ViewAnnotation};
 use super::template_def::{Revision, SheetTemplate};
 use super::{Orientation, P2, Projection, SheetSize, ViewSpec, cross, dot, section_axes, unit};
 use crate::datum::Vec3;
 use crate::features::OccurrencePath;
-use crate::ids::{BodyUid, ComponentUid};
+use crate::ids::{BodyUid, ComponentUid, OccurrenceUid};
+use crate::topo::EdgeName;
 
 /// A drawing, written `D<n>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -325,6 +326,89 @@ pub struct DrawingView {
     /// in its coordinates: they move, scale and turn with it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sketch: Vec<SketchItem>,
+    /// The widths and patterns chosen in it for the lines of a projected
+    /// edge, of a body or of the bodies an occurrence places (mitcad#1546):
+    /// its own, not its parent's or its children's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<LineStyle>,
+}
+
+/// A width and a pattern chosen in a view (mitcad#1546) for the visible
+/// lines of one model edge (`body` and its `edge`, by the edge's
+/// topological name, so it follows the model), of one body (`body`), or of
+/// every body an occurrence places (`occurrence` alone: a component and
+/// its components). A body is where `occurrence` places it (a path from
+/// the drawing's component; its own placement when left out), as a pick's
+/// is. An edge's style wins over its body's, a body's over its
+/// occurrence's, and a deeper occurrence's over the one it lies in. The
+/// hidden lines keep the view's dashes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LineStyle {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<BodyUid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<OccurrencePath>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge: Option<EdgeName>,
+    pub width: PenWidth,
+    pub pattern: PenPattern,
+}
+
+impl LineStyle {
+    /// The occurrence path it names, empty for none.
+    pub fn path(&self) -> &[OccurrenceUid] {
+        self.occurrence.as_ref().map_or(&[], |p| p.0.as_slice())
+    }
+
+    /// Whether another names the same edge, body or occurrence.
+    pub fn same_target(&self, other: &Self) -> bool {
+        self.body == other.body && self.path() == other.path() && self.edge == other.edge
+    }
+
+    /// What it names in words: `the edge E… of F2.b0 in O1`, `the body
+    /// F2.b0`, `the occurrence O1`.
+    pub fn target_text(&self) -> String {
+        let at = self
+            .occurrence
+            .as_ref()
+            .filter(|p| !p.is_empty())
+            .map_or(String::new(), |p| format!(" in {p}"));
+        match (&self.body, &self.edge) {
+            (Some(body), Some(edge)) => format!("the edge {edge} of {body}{at}"),
+            (Some(body), None) => format!("the body {body}{at}"),
+            (None, _) => match &self.occurrence {
+                Some(p) => format!("the occurrence {p}"),
+                None => "nothing".to_owned(),
+            },
+        }
+    }
+
+    /// How closely it names a body placed at `path` (lower first): 0 the
+    /// body itself, then its occurrences from the deepest; None when it
+    /// does not name the body. An edge's style is matched by its edge.
+    pub fn rank(&self, body: BodyUid, path: &[OccurrenceUid]) -> Option<usize> {
+        match self.body {
+            Some(own) => (own == body && self.path() == path).then_some(0),
+            None => {
+                let own = self.path();
+                (!own.is_empty() && path.starts_with(own)).then(|| 1 + path.len() - own.len())
+            }
+        }
+    }
+
+    /// Why it cannot be kept, if it cannot: it names nothing, or an edge
+    /// without its body.
+    pub fn check(&self) -> Result<(), String> {
+        // An edge without its body says so first, whatever else it names.
+        if self.edge.is_some() && self.body.is_none() {
+            return Err("an edge's line style names its body".to_owned());
+        }
+        if self.body.is_none() && self.path().is_empty() {
+            return Err("a line's style names a body, an edge of one, or an occurrence".to_owned());
+        }
+        Ok(())
+    }
 }
 
 fn is_zero(value: &f64) -> bool {
@@ -945,6 +1029,8 @@ impl Drawing {
                     .flat_map(|a| a.picks.iter_mut())
                     .filter_map(|p| p.occurrence.as_mut()),
             );
+            // The lines' styles (mitcad#1546).
+            out.extend(view.lines.iter_mut().filter_map(|l| l.occurrence.as_mut()));
         }
         out
     }
@@ -1419,6 +1505,12 @@ impl DrawingSheet {
             }
             for item in &view.sketch {
                 item.check().map_err(|e| format!("{at}: {e}"))?;
+            }
+            for (k, line) in view.lines.iter().enumerate() {
+                line.check().map_err(|e| format!("{at}: {e}"))?;
+                if view.lines[..k].iter().any(|l| l.same_target(line)) {
+                    return Err(format!("{at}: {} has two line styles", line.target_text()));
+                }
             }
             let mut along: Vec<&ViewBreak> = view.breaks.iter().collect();
             along.sort_by(|a, b| {

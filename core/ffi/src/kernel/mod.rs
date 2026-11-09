@@ -1846,6 +1846,7 @@ impl Kernel for OcctKernel {
             radius: spec.radius,
             to_radius: spec.to_radius,
             half_angle: spec.half_angle,
+            taper: spec.taper,
         };
         emboss::ffi::wrapped_emboss(
             &spec.feature.to_string(),
@@ -2615,6 +2616,7 @@ impl Kernel for OcctKernel {
         let projection = emboss::ffi::EmbossProjection {
             direction: spec.direction,
             depth: spec.depth,
+            taper: spec.taper,
         };
         emboss::ffi::projected_emboss(
             &spec.feature.to_string(),

@@ -594,6 +594,31 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 }
             }
         }
+        // A sketch without a support that its placement's expression moves
+        // along its normal (mitcad#1557): the origin plane it is parallel
+        // to, offset by that expression. FreeCAD applies no attachment
+        // offset without a support.
+        if let Some((def, path, note)) = self.placement_offset_def(object, frame, component) {
+            for axis in ["x", "y", "z"] {
+                self.kept_value(
+                    object,
+                    &format!("AttachmentOffset.Base.{axis}"),
+                    "FreeCAD applies no attachment offset to a sketch without a support (its \
+                     placement places it)",
+                );
+            }
+            match self.added_plane(&def, frame, component, &format!("{label} plane")) {
+                Ok((uid, made)) => {
+                    return Ok((
+                        json!(uid.to_string()),
+                        made,
+                        vec![format!("on {uid}, {note}")],
+                        format!("on {uid}"),
+                    ));
+                }
+                Err(why) => self.left_out(object, &path, &format!("its plane: {why}")),
+            }
+        }
         // Side offsets an expression drives move the sketch within its
         // plane: MitCad's sketch frame keeps its place as numbers.
         for axis in ["x", "y"] {
@@ -954,6 +979,73 @@ impl<K: Kernel> Importer<'_, '_, K> {
                    "definition": {"type": "offset", "plane": plane_name, "distance": q.json()}}),
             k,
             note,
+        ))
+    }
+
+    /// A sketch without a support whose `Placement` an expression moves
+    /// along its normal (mitcad#1557: FreeCAD places such a sketch by its
+    /// placement, `Placement.Base.y = -Width / 2`): an offset plane from the
+    /// origin plane it is parallel to, by that expression; the bound path
+    /// and a note. None when it has a support, its normal is along no
+    /// model axis, or no expression drives the offset.
+    fn placement_offset_def(
+        &mut self,
+        object: &Object,
+        frame: &SketchFrame,
+        component: ComponentUid,
+    ) -> Option<(Value, String, String)> {
+        let supported = ["AttachmentSupport", "Support"]
+            .iter()
+            .any(|p| !object.links(p).is_empty());
+        if supported {
+            return None;
+        }
+        let place = self.place_of(&object.name, false)?;
+        if place.component != component {
+            return None;
+        }
+        let (plane, plane_name) = origin_plane(frame, false)?;
+        let n = plane.origin_frame().expect("an origin plane").normal();
+        // The component's axis along the normal, and FreeCAD's placement
+        // moving the sketch along it (the frame into the component turns
+        // nothing).
+        let k = (0..3).find(|&k| (n[k].abs() - 1.0).abs() < 1e-9)?;
+        let into = &place.transform;
+        let turns = (0..3).any(|r| {
+            (0..3).any(|c| (into.linear[r][c] - if r == c { 1.0 } else { 0.0 }).abs() > 1e-12)
+        });
+        if turns {
+            return None;
+        }
+        let path = format!("Placement.Base.{}", ["x", "y", "z"][k]);
+        if !self.is_bound(object, &path) {
+            return None;
+        }
+        let along = placement_of(object).position[k];
+        let s = n[k].signum();
+        let distance = dot(frame.origin, n);
+        if (s * (along + into.translation[k]) - distance).abs() > SKETCH_TOLERANCE {
+            return None;
+        }
+        let q = self
+            .quantity(
+                super::params::Source::property(&object.name, &path),
+                super::params::Kind::Length,
+                along,
+            )
+            .signed(s);
+        let text = q.text.clone()?;
+        let shift = s * into.translation[k];
+        let distance = if shift.abs() > SKETCH_TOLERANCE {
+            json!(format!("{text} + ({shift} mm)"))
+        } else {
+            q.json()
+        };
+        Some((
+            json!({"type": "construction_plane",
+                   "definition": {"type": "offset", "plane": plane_name, "distance": distance}}),
+            path,
+            format!("offset from {plane_name} by its placement ({text})"),
         ))
     }
 
@@ -1712,10 +1804,22 @@ impl<K: Kernel> Importer<'_, '_, K> {
                                 .object(&link.object)
                                 .is_some_and(|object| is_binder(&object.type_name))
                             {
+                                // A bound sketch's curves, or the element of
+                                // a body a binder of a feature's result
+                                // binds (mitcad#1557).
                                 let sources: BTreeSet<String> = pieces
                                     .iter()
-                                    .filter_map(|(record, _)| record["source"]["sketch"].as_str())
-                                    .map(str::to_owned)
+                                    .filter_map(|(record, _)| {
+                                        let source = &record["source"];
+                                        match (source["sketch"].as_str(), source.as_str()) {
+                                            (Some(sketch), _) => Some(sketch.to_owned()),
+                                            (None, Some(element)) => Some(format!(
+                                                "{element} of {}",
+                                                record["body"].as_str().unwrap_or("a body")
+                                            )),
+                                            _ => None,
+                                        }
+                                    })
                                     .collect();
                                 if !sources.is_empty() {
                                     out.binders
@@ -2577,6 +2681,16 @@ fn map_external(
                         .filter_map(|pos| Some((pos, curve.point(pos)?)))
                         .collect();
                 let found = curves.iter().find_map(|e| {
+                    // Concentric circles share their only point: their
+                    // radii tell them apart (mitcad#1557: a ring face's two
+                    // circles, an equal constraint on the outer one).
+                    if let Curve::Circle { radius, .. } = curve {
+                        match e.kind {
+                            mitcad_model::sketch::EntityKind::Circle { radius: r, .. }
+                                if (r - radius).abs() <= tol => {}
+                            _ => return None,
+                        }
+                    }
                     let points = e.kind.points();
                     let mut pairs = Vec::new();
                     for (pos, q) in &wanted {
@@ -2841,4 +2955,57 @@ fn curve_moment(c: &Curve2) -> (f64, [f64; 2]) {
 
 fn curve_length(c: &Curve2) -> f64 {
     curve_moment(c).0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concentric_external_circles_map_by_their_radii() {
+        // (mitcad#1557) A ring face's two circles share their only point,
+        // the centre: each of FreeCAD's circles is the projected circle of
+        // its own radius, whatever order the projection lists them in.
+        let circle = |radius: f64| fc::Geometry {
+            curve: Curve::Circle {
+                center: [0.0, 0.0],
+                radius,
+            },
+            construction: true,
+            blocked: false,
+            internal: 0,
+            id: None,
+            reference: Some("Binder.Face1".to_owned()),
+            defining: false,
+        };
+        let sketch = fc::Sketch {
+            external: vec![Some(circle(25.4)), Some(circle(67.5))],
+            external_links: vec![Some(0), Some(0)],
+            ..fc::Sketch::default()
+        };
+        let projected: Vec<Projected> = [67.5, 25.4]
+            .into_iter()
+            .map(|radius| {
+                Projected::Curve(Curve2::Circle {
+                    center: [0.0, 0.0],
+                    radius,
+                    start: 0.0,
+                })
+            })
+            .collect();
+        let (made, maps) = map_external(&sketch, &[0, 1], &projected, 1).unwrap();
+        let radius_of = |id: u32| {
+            made.iter()
+                .find_map(|e| match e.kind {
+                    mitcad_model::sketch::EntityKind::Circle { radius, .. } if e.id.0 == id => {
+                        Some(radius)
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let curve = |k: usize| maps[k].curve.unwrap().0;
+        assert_eq!(radius_of(curve(0)), 25.4);
+        assert_eq!(radius_of(curve(1)), 67.5);
+    }
 }

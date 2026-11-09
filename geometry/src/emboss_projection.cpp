@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <numeric>
 #include <optional>
 #include <stdexcept>
@@ -27,6 +28,14 @@
 #include <vector>
 
 #include <BOPTools_AlgoTools3D.hxx>
+#include <TopoDS_Wire.hxx>
+#include <TopoDS_Solid.hxx>
+#include <ShapeAnalysis_FreeBounds.hxx>
+#include <NCollection_Sequence.hxx>
+#include <NCollection_HSequence.hxx>
+#include <BRepOffsetAPI_ThruSections.hxx>
+#include <BRepLib.hxx>
+#include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Common.hxx>
@@ -62,6 +71,7 @@
 #include <gp_Trsf.hxx>
 
 #include "emboss_projection.hpp"
+#include "emboss_taper.hpp"
 #include "history.hpp"
 #include "sweep.hpp"
 #include "util.hpp"
@@ -377,6 +387,38 @@ int place_of(const TopoDS_Face& face, const std::vector<TopoDS_Face>& piece, dou
   return std::abs(nearest - std::abs(depth)) <= tolerance ? 1 : 2;
 }
 
+// The free edges of the faces: those only one of them holds, not seams
+// and not degenerate.
+std::vector<TopoDS_Edge> boundary_of(const std::vector<TopoDS_Face>& faces) {
+  BRep_Builder builder;
+  TopoDS_Compound all;
+  builder.MakeCompound(all);
+  for (const TopoDS_Face& face : faces) {
+    builder.Add(all, face);
+  }
+  Ancestors ancestors;
+  TopExp::MapShapesAndAncestors(all, TopAbs_EDGE, TopAbs_FACE, ancestors);
+  std::vector<TopoDS_Edge> result;
+  for (int e = 1; e <= ancestors.Extent(); ++e) {
+    const TopoDS_Edge& edge = TopoDS::Edge(ancestors.FindKey(e));
+    if (BRep_Tool::Degenerated(edge)) {
+      continue;
+    }
+    std::vector<TopoDS_Shape> holders;
+    bool seam = false;
+    for (const TopoDS_Shape& face : ancestors.FindFromIndex(e)) {
+      seam = seam || BRep_Tool::IsClosed(edge, TopoDS::Face(face));
+      if (std::none_of(holders.begin(), holders.end(), [&](const TopoDS_Shape& f) { return f.IsSame(face); })) {
+        holders.push_back(face);
+      }
+    }
+    if (!seam && holders.size() == 1) {
+      result.push_back(edge);
+    }
+  }
+  return result;
+}
+
 // The piece grown by `depth` along its faces' normals into a solid named
 // after `feature`: start(<region>) on the piece, end(<region>) its offset,
 // side(<segment>) the walls on its free edges.
@@ -394,27 +436,9 @@ ShapePtr grown(const std::string& feature, const detail::SweepFace& profile, con
     }
     input = shell;
   }
-  // The free edges of the piece (not seams, not degenerate) and the walls'
-  // names over them.
-  Ancestors ancestors;
-  TopExp::MapShapesAndAncestors(input, TopAbs_EDGE, TopAbs_FACE, ancestors);
+  // The free edges of the piece and the walls' names over them.
   std::vector<std::pair<TopoDS_Edge, std::string>> free_edges;
-  for (int e = 1; e <= ancestors.Extent(); ++e) {
-    const TopoDS_Edge& edge = TopoDS::Edge(ancestors.FindKey(e));
-    if (BRep_Tool::Degenerated(edge)) {
-      continue;
-    }
-    std::vector<TopoDS_Shape> faces;
-    bool seam = false;
-    for (const TopoDS_Shape& face : ancestors.FindFromIndex(e)) {
-      seam = seam || BRep_Tool::IsClosed(edge, TopoDS::Face(face));
-      if (std::none_of(faces.begin(), faces.end(), [&](const TopoDS_Shape& f) { return f.IsSame(face); })) {
-        faces.push_back(face);
-      }
-    }
-    if (seam || faces.size() != 1) {
-      continue;
-    }
+  for (const TopoDS_Edge& edge : boundary_of(piece)) {
     const BRepAdaptor_Curve curve(edge);
     const gp_Pnt middle = curve.Value((curve.FirstParameter() + curve.LastParameter()) / 2.0);
     free_edges.emplace_back(edge, segments.segment_at(middle));
@@ -567,6 +591,200 @@ ShapePtr grown(const std::string& feature, const detail::SweepFace& profile, con
                            " projected onto the face could not be grown to the side asked for");
 }
 
+
+// The piece grown by `depth` with its walls tilted by the taper
+// (mitcad#1547; EmbossProjectSpec::taper): the region moved in the sketch
+// plane by |depth| tan(taper), projected onto the face and grown along its
+// normals gives the top (that solid's far faces); the piece is the foot;
+// each segment's wall is ruled between its edges on the foot and on the
+// top, and the faces are sewn into the solid.
+ShapePtr tapered(const std::string& feature, const detail::SweepFace& profile, const std::vector<TopoDS_Face>& piece,
+                 const TopoDS_Shape& target, const Frame& frame, const gp_Vec& along, double reach,
+                 const std::string& face_ref, double depth, double taper) {
+  const std::string regions = regions_of(profile);
+  const detail::MovedLoops loops =
+      detail::moved_loops(profile.face, std::abs(depth) * std::tan(taper), regions);
+  detail::SweepFace moved;
+  moved.face = loops.face;
+  moved.regions = profile.regions;
+  // The segments whose edges the move shrank to nothing: their walls end
+  // in a corner of the top.
+  std::vector<std::string> vanished;
+  for (const auto& [edge, name] : profile.edges) {
+    if (loops.vanished.IsBound(edge)) {
+      vanished.push_back(name);
+    } else {
+      moved.edges.emplace_back(loops.moved.Find(edge), name);
+    }
+  }
+  const Segments foot_segments(profile, frame, along);
+  const Segments top_segments(moved, frame, along);
+  const std::vector<TopoDS_Face> top_piece = projected_piece(target, moved, frame, along, reach, face_ref);
+  const ShapePtr top_solid = grown(feature, moved, top_piece, depth, top_segments);
+  const NameList start = detail::cap_names(feature, "start", profile);
+  const NameList end = detail::cap_names(feature, "end", profile);
+  std::vector<TopoDS_Face> top;
+  for (const std::string& name : end) {
+    for (const int i : top_solid->find_faces(name)) {
+      const TopoDS_Face& face = top_solid->face(i);
+      if (std::none_of(top.begin(), top.end(), [&](const TopoDS_Face& f) { return f.IsSame(face); })) {
+        top.push_back(face);
+      }
+    }
+  }
+  if (top.empty()) {
+    throw std::runtime_error("the tapered top of the profile " + regions + " could not be built");
+  }
+  // The boundaries of foot and top by the segment over them.
+  std::map<std::string, NCollection_Sequence<TopoDS_Shape>> foot_edges;
+  std::map<std::string, NCollection_Sequence<TopoDS_Shape>> top_edges;
+  const auto middle_of = [](const TopoDS_Edge& edge) {
+    const BRepAdaptor_Curve curve(edge);
+    return curve.Value((curve.FirstParameter() + curve.LastParameter()) / 2.0);
+  };
+  for (const TopoDS_Edge& edge : boundary_of(piece)) {
+    foot_edges[foot_segments.segment_at(middle_of(edge))].Append(edge);
+  }
+  for (const TopoDS_Edge& edge : boundary_of(top)) {
+    // The top lies over the moved region's projection: its segment there.
+    const gp_Pnt middle = middle_of(edge);
+    double nearest = std::numeric_limits<double>::infinity();
+    gp_Pnt below = middle;
+    for (const TopoDS_Face& reference : top_piece) {
+      gp_Pnt own;
+      const double d = distance_to(reference, middle, own);
+      if (d < nearest) {
+        nearest = d;
+        below = own;
+      }
+    }
+    top_edges[top_segments.segment_at(below)].Append(edge);
+  }
+  // The tolerance the faces are sewn with.
+  const double tolerance = 1.0e-5 * std::max(1.0, std::abs(depth));
+  // One wire of a segment's edges, from foot or top.
+  const auto chain = [&](const NCollection_Sequence<TopoDS_Shape>& edges, const std::string& name) {
+    occ::handle<NCollection_HSequence<TopoDS_Shape>> sequence = new NCollection_HSequence<TopoDS_Shape>();
+    for (const TopoDS_Shape& edge : edges) {
+      sequence->Append(edge);
+    }
+    const occ::handle<NCollection_HSequence<TopoDS_Shape>> wires =
+        ShapeAnalysis_FreeBounds::ConnectEdgesToWires(sequence, tolerance, false);
+    if (wires.IsNull() || wires->Length() != 1) {
+      throw std::runtime_error("the tapered wall " + name + " of the profile " + regions + " could not be built");
+    }
+    return TopoDS::Wire(wires->Value(1));
+  };
+  BRepBuilderAPI_Sewing sewing(tolerance);
+  for (const TopoDS_Face& face : piece) {
+    sewing.Add(face);
+  }
+  for (const TopoDS_Face& face : top) {
+    sewing.Add(face);
+  }
+  std::vector<std::pair<TopoDS_Face, std::string>> walls;
+  for (const auto& [name, edges] : top_edges) {
+    if (name.empty() || foot_edges.count(name) == 0) {
+      throw std::invalid_argument("the taper collapses the profile " + regions + ": its top has other edges than its foot");
+    }
+  }
+  // The corners of the top, for walls whose top edge is gone.
+  ShapeMap corners;
+  for (const TopoDS_Face& face : top) {
+    TopExp::MapShapes(face, TopAbs_VERTEX, corners);
+  }
+  for (const auto& [name, edges] : foot_edges) {
+    const auto found = top_edges.find(name);
+    const bool gone = std::find(vanished.begin(), vanished.end(), name) != vanished.end();
+    if (name.empty() || (found == top_edges.end()) != gone) {
+      throw std::invalid_argument("the taper collapses the profile " + regions + ": its top has other edges than its foot");
+    }
+    const TopoDS_Wire foot_wire = chain(edges, name);
+    if (gone) {
+      // The wall from the foot's edge to the corner of the top nearest
+      // both its ends.
+      TopoDS_Vertex f0, f1;
+      TopExp::Vertices(foot_wire, f0, f1);
+      const gp_Pnt a = BRep_Tool::Pnt(f0);
+      const gp_Pnt b = BRep_Tool::Pnt(f1);
+      double nearest = std::numeric_limits<double>::infinity();
+      TopoDS_Vertex apex;
+      for (int i = 1; i <= corners.Extent(); ++i) {
+        const gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(corners(i)));
+        if (p.Distance(a) + p.Distance(b) < nearest) {
+          nearest = p.Distance(a) + p.Distance(b);
+          apex = TopoDS::Vertex(corners(i));
+        }
+      }
+      BRepOffsetAPI_ThruSections sections(false, true, 1.0e-7);
+      sections.AddWire(foot_wire);
+      sections.AddVertex(apex);
+      detail::build(sections);
+      if (apex.IsNull() || !sections.IsDone()) {
+        throw std::runtime_error("the tapered wall " + name + " of the profile " + regions + " could not be built");
+      }
+      for (TopExp_Explorer f(sections.Shape(), TopAbs_FACE); f.More(); f.Next()) {
+        sewing.Add(f.Current());
+        walls.emplace_back(TopoDS::Face(f.Current()), name);
+      }
+      continue;
+    }
+    TopoDS_Wire top_wire = chain(found->second, name);
+    if (!BRep_Tool::IsClosed(foot_wire)) {
+      // The top's wire runs as the foot's: their starts meet.
+      TopoDS_Vertex f0, f1, t0, t1;
+      TopExp::Vertices(foot_wire, f0, f1);
+      TopExp::Vertices(top_wire, t0, t1);
+      const auto at = [](const TopoDS_Vertex& v) { return BRep_Tool::Pnt(v); };
+      if (at(f0).Distance(at(t0)) + at(f1).Distance(at(t1)) > at(f0).Distance(at(t1)) + at(f1).Distance(at(t0))) {
+        top_wire = TopoDS::Wire(top_wire.Reversed());
+      }
+    }
+    BRepOffsetAPI_ThruSections sections(false, true, 1.0e-7);
+    sections.AddWire(foot_wire);
+    sections.AddWire(top_wire);
+    detail::build(sections);
+    if (!sections.IsDone()) {
+      throw std::runtime_error("the tapered wall " + name + " of the profile " + regions + " could not be built");
+    }
+    for (TopExp_Explorer f(sections.Shape(), TopAbs_FACE); f.More(); f.Next()) {
+      sewing.Add(f.Current());
+      walls.emplace_back(TopoDS::Face(f.Current()), name);
+    }
+  }
+  sewing.Perform();
+  TopoDS_Shell shell;
+  for (TopExp_Explorer e(sewing.SewedShape(), TopAbs_SHELL); e.More(); e.Next()) {
+    if (!shell.IsNull()) {
+      shell.Nullify();
+      break;
+    }
+    shell = TopoDS::Shell(e.Current());
+  }
+  if (shell.IsNull() || sewing.NbFreeEdges() != 0) {
+    throw std::runtime_error("the tapered walls of the profile " + regions + " do not close up with its top and foot");
+  }
+  BRep_Builder builder;
+  TopoDS_Solid solid;
+  builder.MakeSolid(solid);
+  shell.Closed(true);
+  builder.Add(solid, shell);
+  BRepLib::OrientClosedSolid(solid);
+  detail::FaceNamer namer(solid);
+  const auto image = [&sewing](const TopoDS_Face& face) {
+    return sewing.IsModified(face) ? sewing.Modified(face) : TopoDS_Shape(face);
+  };
+  for (const TopoDS_Face& face : piece) {
+    namer.add(image(face), start, -1);
+  }
+  for (const TopoDS_Face& face : top) {
+    namer.add(image(face), end, -1);
+  }
+  for (const auto& [wall, name] : walls) {
+    namer.add(image(wall), name);
+  }
+  return namer.shape();
+}
 } // namespace
 
 ShapePtr projected_emboss(const Shape& body, const EmbossProjectSpec& spec) {
@@ -584,6 +802,9 @@ ShapePtr projected_emboss(const Shape& body, const EmbossProjectSpec& spec) {
   const gp_Vec along = spec.direction / length;
   if (std::abs(along.Dot(gp_Vec(spec.frame.normal()))) < 1.0e-6) {
     throw std::invalid_argument("the projection direction lies in the sketch plane");
+  }
+  if (!(std::abs(spec.taper) < 2.0 * std::atan(1.0) - 1.0e-9)) {
+    throw std::invalid_argument("the emboss's taper angle must lie between -90 and 90 degrees");
   }
   return detail::run("emboss", [&] {
     BRep_Builder builder;
@@ -611,7 +832,12 @@ ShapePtr projected_emboss(const Shape& body, const EmbossProjectSpec& spec) {
     std::vector<ShapePtr> parts;
     for (const detail::SweepFace& profile : profiles) {
       const std::vector<TopoDS_Face> piece = projected_piece(target, profile, spec.frame, along, reach, spec.face);
-      parts.push_back(grown(spec.feature, profile, piece, spec.depth, Segments(profile, spec.frame, along)));
+      if (spec.taper == 0.0) {
+        parts.push_back(grown(spec.feature, profile, piece, spec.depth, Segments(profile, spec.frame, along)));
+      } else {
+        parts.push_back(tapered(spec.feature, profile, piece, target, spec.frame, along, reach, spec.face, spec.depth,
+                                spec.taper));
+      }
     }
     return detail::finished(*detail::fused(parts, "the emboss"), "the emboss");
   });

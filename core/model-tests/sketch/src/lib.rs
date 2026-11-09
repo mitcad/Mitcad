@@ -60,3 +60,8 @@ mod sketch_point_ids_1269_tests;
 mod sketch_trim_arc_1314_tests;
 // The line tool's normal arcs and the Midpoint Line (mitcad#1393).
 mod sketch_line_arcs_1393_tests;
+// Tangent dimensions between circles and from a circle to a point
+// (mitcad#1540).
+mod sketch_tangent_dimensions_1540_tests;
+// The closed loop a double-click on a sketch curve selects (mitcad#1541).
+mod sketch_loop_1541_tests;

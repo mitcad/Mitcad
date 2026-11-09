@@ -544,8 +544,8 @@ pub fn slot_unit(slot: &str) -> Unit {
 /// (`transform.angle`), a revolve's angles, a draft's, a chamfer's angle, an
 /// extrusion's tapers, a hole's taper, countersink and tip angles, a
 /// construction plane's angle, a sketch's rotation on its plane and an
-/// emboss's Around and Rotation. Helices, coils, sweeps' twists and other
-/// slots that take several turns are not such slots.
+/// emboss's Around, Rotation and Taper Angle. Helices, coils, sweeps'
+/// twists and other slots that take several turns are not such slots.
 #[doc(hidden)]
 pub fn one_turn_slot(feature: &str, slot: &str) -> bool {
     let field = slot.rsplit('.').next().unwrap_or(slot);
@@ -559,8 +559,9 @@ pub fn one_turn_slot(feature: &str, slot: &str) -> bool {
         "construction_plane" => slot == "definition.angle",
         // A sketch's rotation on its plane (mitcad#787).
         "sketch" => slot == "placement.angle",
-        // An emboss's wrap turned about the axis and on the face (mitcad#1259).
-        "emboss" => matches!(slot, "around_angle" | "rotation_angle"),
+        // An emboss's wrap turned about the axis and on the face (mitcad#1259)
+        // and its taper (mitcad#1547).
+        "emboss" => matches!(slot, "around_angle" | "rotation_angle" | "taper_angle"),
         _ => false,
     }
 }

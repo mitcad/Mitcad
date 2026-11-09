@@ -2,7 +2,7 @@
 //! Emboss (mitcad#458) with the mock kernel: what reaches the kernel for a
 //! planar face, the sketch plane and a cylindrical face, raised and sunk;
 //! the participants; the faces of the result; refusals; the definition's
-//! form.
+//! form; the taper (mitcad#1547).
 
 use serde_json::json;
 
@@ -171,6 +171,7 @@ fn without_a_face_the_sketch_plane_is_the_start() {
         along_axis: None,
         around_angle: None,
         rotation_angle: None,
+        taper_angle: None,
     }))
     .unwrap();
     assert_eq!(
@@ -778,4 +779,75 @@ fn reorient_design_negates_a_wraps_offsets_it_reverses() {
     let value = |id| doc.parameters().get(id).unwrap().value();
     assert!((value(along) + 10.0).abs() < 1e-9, "{}", value(along));
     assert!((value(around) + 0.3).abs() < 1e-9, "{}", value(around));
+}
+
+/// mitcad#1547: Taper Angle reaches the kernel as the extrusion's taper on
+/// a plane and without a face, and as the wrap's and the projection's
+/// taper; it is written only when given and refused at a right angle.
+#[test]
+fn a_taper_reaches_every_kind_of_emboss() {
+    let mut b = block();
+    let top = format!("F2:end({})", b.region);
+    let (sketch, region) = rectangle(&mut b.doc, SketchPlane::Xy, [10.0, 10.0], [10.0, 5.0]);
+    let mut value = emboss(sketch, &region, Some((b.body, &top)), 2.0, "raise");
+    value["taper_angle"] = json!(0.25);
+    let uid = b.doc.add_feature(&def(value.clone()), None).unwrap().uid;
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&b.doc),
+        "extrude F4 along [0.0, 0.0, 1.0] from offset 20: distance 2 taper 0.25"
+    );
+    let FeatureDef::Emboss(made) = &b.doc.feature(uid).unwrap().def else {
+        panic!("an emboss");
+    };
+    assert!(made.taper_angle.is_some());
+    // Without a face, sunk: the same taper (positive widens the floor).
+    let mut sunk = emboss(sketch, &region, None, 4.0, "sink");
+    sunk["taper_angle"] = json!("-5 deg");
+    b.doc.edit_feature(uid, &def(sunk)).unwrap();
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    assert!(
+        last_spec(&b.doc).ends_with("distance 4 taper -0.08726646259971647"),
+        "{}",
+        last_spec(&b.doc)
+    );
+    // Projected along a direction onto the plane: the projection's.
+    let mut projected = value.clone();
+    projected["projection"] = json!(true);
+    b.doc.edit_feature(uid, &def(projected)).unwrap();
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    assert!(
+        last_spec(&b.doc).ends_with("by 2 taper 0.25"),
+        "{}",
+        last_spec(&b.doc)
+    );
+    // A right angle or more is refused.
+    let mut steep = value.clone();
+    steep["taper_angle"] = json!("90 deg");
+    let refused = b
+        .doc
+        .edit_feature(uid, &def(steep))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("taper angle must lie between -90 and 90 degrees"),
+        "{refused}"
+    );
+
+    // Wrapped onto a rod.
+    let (mut doc, rod) = rod();
+    let (sketch, region) = rectangle(&mut doc, SketchPlane::Xz, [-5.0, 10.0], [10.0, 6.0]);
+    let mut wrapped = emboss(sketch, &region, Some((rod, "F2:side(c1)")), 1.5, "raise");
+    wrapped["taper_angle"] = json!(-0.125);
+    let uid = doc.add_feature(&def(wrapped), None).unwrap().uid;
+    assert_eq!(status(&doc, uid), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&doc),
+        "wrap F4 about 0 0 0 along 0 0 1 radius 10 to 11.5 taper -0.125"
+    );
+    // Kept as given; absent, it is left out (the sketch plane's test).
+    let FeatureDef::Emboss(made) = &doc.feature(uid).unwrap().def else {
+        panic!("an emboss");
+    };
+    assert!(made.taper_angle.is_some());
 }

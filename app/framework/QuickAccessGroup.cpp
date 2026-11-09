@@ -19,6 +19,7 @@
 #include "Dialogs.hpp"
 #include "TestSync.hpp"
 #include "Theme.hpp"
+#include "UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -58,7 +59,7 @@ public:
     setAutoRaise(true);
     setFocusPolicy(Qt::NoFocus);
     setAttribute(Qt::WA_Hover);
-    setFixedSize(20, 28);
+    setFixedSize(20, uiIconSize(18) + 10); // as high as the buttons at Icon size (mitcad#1556)
   }
 
 protected:
@@ -125,7 +126,10 @@ QuickAccessGroup::QuickAccessGroup(CommandRegistry& registry, Hooks hooks, QWidg
     openMenu(m_menuButton->mapToGlobal(QPoint(0, m_menuButton->height())));
   });
   m_row->addWidget(dots);
-  setFixedHeight(34);
+  // The buttons at Icon size (mitcad#1556): the icon, 10 px of the button
+  // and 6 of the capsule.
+  m_iconSize = uiIconSize(18);
+  setFixedHeight(m_iconSize + 16);
   m_placesTimer = new QTimer(this);
   m_placesTimer->setSingleShot(true);
   m_placesTimer->setInterval(0);
@@ -269,7 +273,7 @@ void QuickAccessGroup::setFolded(bool folded) {
 
 void QuickAccessGroup::setCompact(int height) {
   // The buttons' own room is their icon and 10 px; the capsule's 2 px.
-  m_iconSize = qBound(12, height - 12, 18);
+  m_iconSize = qBound(uiIconSize(12), height - 12, uiIconSize(18));
   m_row->setContentsMargins(3, 1, 3, 1);
   m_menuButton->setFixedSize(18, m_iconSize + 10);
   setFixedHeight(m_iconSize + 12);

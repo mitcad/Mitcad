@@ -32,6 +32,7 @@
 #include "RemoteDialogs.hpp"
 #include "RemoteTask.hpp"
 #include "VersionDialogs.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -131,7 +132,7 @@ public:
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(8, 2, 8, 2);
     auto* icon = new QLabel;
-    icon->setPixmap(themeIcon(QStringLiteral("sync")).pixmap(20, 20));
+    icon->setPixmap(themeIcon(QStringLiteral("sync")).pixmap(uiIconSize(20, 20)));
     layout->addWidget(icon);
     m_text = new QLabel;
     m_text->setWordWrap(true);

@@ -71,12 +71,14 @@
 #include "MaterialVariantsPage.hpp"
 #include "SettingsForm.hpp"
 #include "SlicerImport.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
 
 constexpr int kKeyRole = Qt::UserRole; // a row's key; empty on a group's heading
-constexpr int kSwatchSize = 20; // a material's list of appearances (mitcad#1055)
+// The swatches of a material's list of appearances (mitcad#1055) at Icon size (mitcad#1556).
+int swatchSize() { return uiIconSize(20); }
 constexpr int kAppearanceRowsShown = 8; // the appearance list grows to this many rows, then scrolls
 constexpr int kAppearanceRowsMin = 3;   // ... and is never shorter than this many
 constexpr int kAppearanceButtonSpacing = 4; // between Add…, Remove and Make Default
@@ -325,7 +327,7 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   m_list->setAccessibleName(tr("Materials by place and class"));
   m_list->setColumnCount(2);
   m_list->setHeaderHidden(true);
-  m_list->setIconSize(QSize(18, 18));
+  m_list->setIconSize(uiIconSize(18, 18));
   m_list->setSelectionMode(QAbstractItemView::SingleSelection);
   // Shallow (mitcad#1083): the groups' headings flush left, their
   // materials one small step in, always shown. The names take the width
@@ -417,7 +419,7 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   m_appearanceList->setRootIsDecorated(false);
   m_appearanceList->setItemsExpandable(false);
   m_appearanceList->setUniformRowHeights(true);
-  m_appearanceList->setIconSize(QSize(kSwatchSize, kSwatchSize));
+  m_appearanceList->setIconSize(uiIconSize(swatchSize(), swatchSize()));
   m_appearanceList->setSelectionMode(QAbstractItemView::SingleSelection);
   m_appearanceList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   m_appearanceList->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -1361,9 +1363,9 @@ void MaterialsPanel::showAppearances(const QJsonObject& fields, bool editable) {
       const bool isDefault = id == defaultId;
       const QString name = appearanceName(id);
       // One not known here by the material's colour when it is the default.
-      const QIcon icon = look != nullptr ? appearanceIcon(*look, kSwatchSize)
+      const QIcon icon = look != nullptr ? appearanceIcon(*look, swatchSize())
                                          : colorIcon(isDefault && item != nullptr ? item->displayColor : QColor(),
-                                                     kSwatchSize);
+                                                     swatchSize());
       auto* row = new QTreeWidgetItem(m_appearanceList, {name, isDefault ? tr("Default") : QString()});
       row->setIcon(0, icon);
       row->setData(0, kKeyRole, id);
@@ -1431,7 +1433,7 @@ void MaterialsPanel::fitAppearanceList() {
   }
   if (rowHeight <= 0) {
     // No rows: the height one would have.
-    rowHeight = std::max(kSwatchSize + 6, m_appearanceList->fontMetrics().height() + 8);
+    rowHeight = std::max(swatchSize() + 6, m_appearanceList->fontMetrics().height() + 8);
   }
   const int frame = 2 * m_appearanceList->frameWidth();
   const int shown = std::clamp(rows, kAppearanceRowsMin, kAppearanceRowsShown);
@@ -2134,7 +2136,7 @@ void MaterialsPanel::logPlaces() {
           m_appearanceList->viewport()->rect().contains(rect.center())) {
         lines << QStringLiteral("%1 appearance row %2 at %3")
                      .arg(m_log, look->text(0),
-                          at(m_appearanceList->viewport(), QPoint(kSwatchSize + 40, rect.center().y())));
+                          at(m_appearanceList->viewport(), QPoint(swatchSize() + 40, rect.center().y())));
       }
     }
   }

@@ -18,6 +18,8 @@
 #include <QHash>
 #include <QRegularExpression>
 
+#include "mitcad/geometry/datum.hpp"
+
 #include "../framework/HandleStep.hpp"
 #include "../framework/ModelShapes.hpp"
 #include "../framework/Numbers.hpp"
@@ -30,6 +32,8 @@ namespace {
 const QString kNewBody = QStringLiteral("new_body");
 constexpr double kDegreesPerRadian = 57.29577951308232;
 
+// A face's surface as a pick names it; a planar spline (a sheet body's
+// wall, an imported face) is a plane, as the model reads it (mitcad#1537).
 QString surfaceType(const TopoDS_Face& face) {
   switch (BRepAdaptor_Surface(face).GetType()) {
   case GeomAbs_Plane:
@@ -43,10 +47,12 @@ QString surfaceType(const TopoDS_Face& face) {
   case GeomAbs_Torus:
     return QStringLiteral("torus");
   default:
-    return QStringLiteral("other");
+    return geometry::face_plane(face) ? QStringLiteral("plane") : QStringLiteral("other");
   }
 }
 
+// An edge's curve as a pick names it; a straight spline (a sheet body's
+// edge, an imported line) is a line, as the model reads it (mitcad#1537).
 QString curveType(const TopoDS_Edge& edge) {
   switch (BRepAdaptor_Curve(edge).GetType()) {
   case GeomAbs_Line:
@@ -56,7 +62,7 @@ QString curveType(const TopoDS_Edge& edge) {
   case GeomAbs_Ellipse:
     return QStringLiteral("ellipse");
   default:
-    return QStringLiteral("other");
+    return geometry::is_straight(edge) ? QStringLiteral("line") : QStringLiteral("other");
   }
 }
 
@@ -962,15 +968,14 @@ std::optional<PlaneFrame> frameOf(const SelectionItem& item, const CommandContex
     return std::nullopt;
   }
   const TopoDS_Face face = TopoDS::Face(faces.Current());
-  const BRepAdaptor_Surface surface(face);
-  if (surface.GetType() != GeomAbs_Plane) {
+  // A planar spline too (a sheet body's wall, mitcad#1537); the normal
+  // outward.
+  const std::optional<gp_Pln> planar = geometry::face_plane(face);
+  if (!planar) {
     return std::nullopt;
   }
-  const gp_Pln plane = surface.Plane();
-  gp_Dir normal = plane.Axis().Direction();
-  if (face.Orientation() == TopAbs_REVERSED) {
-    normal.Reverse();
-  }
+  const gp_Pln plane = *planar;
+  const gp_Dir normal = plane.Axis().Direction();
   // As the model frames a face: the origin projected onto it, x along +X
   // projected (+Y when it faces X).
   const gp_Pnt on = plane.Location();
@@ -1005,7 +1010,8 @@ std::optional<std::pair<gp_Pnt, gp_Dir>> axisOf(const SelectionItem& item,
   TopExp_Explorer edges(shape, TopAbs_EDGE);
   if (item.kind != SelectKind::Face && edges.More()) {
     const BRepAdaptor_Curve curve(TopoDS::Edge(edges.Current()));
-    if (curve.GetType() == GeomAbs_Line) {
+    // A straight spline too (a sheet body's edge, mitcad#1537).
+    if (curve.GetType() == GeomAbs_Line || geometry::is_straight(TopoDS::Edge(edges.Current()))) {
       const gp_Pnt a = curve.Value(curve.FirstParameter());
       const gp_Pnt b = curve.Value(curve.LastParameter());
       if (a.Distance(b) > 1e-9) {

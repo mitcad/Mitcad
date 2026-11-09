@@ -516,7 +516,7 @@ fn side(cut: &CutPlane, p: Vec3) -> f64 {
 
 /// A curve of a body moved by its placement into the drawing's
 /// coordinates.
-fn placed_curve(curve: &CurveGeometry, t: &Transform) -> CurveGeometry {
+pub(super) fn placed_curve(curve: &CurveGeometry, t: &Transform) -> CurveGeometry {
     match curve {
         CurveGeometry::Line { start, end } => CurveGeometry::Line {
             start: t.apply_point(*start),
@@ -1392,6 +1392,10 @@ pub(super) trait DrawingAnnotationsOps<K: Kernel> {
     /// `keep_drawing_model_items`: the model's annotations a view draws,
     /// kept as the drawing's own annotations of the view.
     fn keep_drawing_model_items(&mut self, c: KeepModelItemsCommand) -> Result<Value, ApiError>;
+
+    /// The model edge a click at a sheet point picks on a view, whole
+    /// (mitcad#1546: the edge whose line `edit_drawing_line` changes).
+    fn edge_pick_at(&self, view: &ViewAt<'_>, at: P2) -> Option<ViewPick>;
 }
 
 impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
@@ -2858,6 +2862,10 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         self.set_drawing(old.uid, label, changed)?;
         Ok(json!({"drawing": old.uid, "annotations": ids, "kept": names}))
     }
+
+    fn edge_pick_at(&self, view: &ViewAt<'_>, at: P2) -> Option<ViewPick> {
+        self.pick_at(view, at, Want::Edge).map(|c| c.pick)
+    }
 }
 
 /// The picks of the drawing's own annotation a model annotation is kept as
@@ -3467,6 +3475,12 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             Want::Datum => nearest(&is_point, point_reach)
                 .or_else(|| nearest(&|c: &Candidate| c.pick.point.is_none(), reach))
                 .or_else(|| self.face_on_at(view, q)),
+            // The edge whose line Edit Line changes (mitcad#1546): an edge,
+            // whole, whatever its curve.
+            Want::Edge => nearest(
+                &|c: &Candidate| c.pick.point.is_none() && c.pick.edge.is_some(),
+                reach,
+            ),
         }
     }
 

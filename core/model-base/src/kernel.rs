@@ -2851,6 +2851,17 @@ pub struct EmbossWrapSpec<'a> {
     pub to_radius: f64,
     /// Radians: 0 for a cylinder.
     pub half_angle: f64,
+    /// The walls tilted from the normals (mitcad#1547), radians strictly
+    /// between -90 and 90 degrees: positive widens the profiles away from
+    /// the face (the top, or a sink's floor, larger than the foot), negative
+    /// narrows them, as an extrusion's taper. The top's boundary is the
+    /// foot's moved within the top surface by `|to_radius - radius|
+    /// tan(taper)` along its normal there (the planar offset on the top's
+    /// development, the corners where the moved edges meet); each wall is
+    /// ruled between its edge on the foot and on the top. A taper that
+    /// collapses a region is an error that names it. 0: walls along the
+    /// normals.
+    pub taper: f64,
 }
 
 // Boundary Fill (mitcad#457).
@@ -3061,6 +3072,12 @@ pub struct EmbossProjectSpec<'a, S> {
     pub face: &'a FaceName,
     pub direction: [f64; 3],
     pub depth: f64,
+    /// The walls tilted from the normals (mitcad#1547), radians, signed as
+    /// [`EmbossWrapSpec::taper`]. Measured as the projection sees the
+    /// profiles: the top is the region moved in the sketch plane by `|depth|
+    /// tan(taper)`, projected and grown along the normals; the walls are
+    /// ruled between foot and top. 0: walls along the normals.
+    pub taper: f64,
 }
 
 // Topology counts (mitcad#1095).

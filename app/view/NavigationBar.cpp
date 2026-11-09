@@ -17,6 +17,7 @@
 #include "../framework/Icons.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 
@@ -126,10 +127,10 @@ QToolButton* NavigationBar::addCommand(const QString& id) {
 void NavigationBar::styleButton(QToolButton* button) const {
   if (m_presentation == Presentation::StatusBar) {
     button->setAutoRaise(true);
-    button->setIconSize(QSize(16, 16));
+    button->setIconSize(uiIconSize(16, 16));
     return;
   }
-  button->setIconSize(QSize(18, 18));
+  button->setIconSize(uiIconSize(18, 18));
   setFlatCardButton(button);
 #ifndef MITCAD_MAC_UI
   // Checked as the Sketch Palette's buttons are: tinted and outlined in the

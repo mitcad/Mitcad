@@ -1,0 +1,15 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY for a double-click's chain selection (mitcad#1541): two free points that frame the view's fit (p1, p2); a 30 x 20 rectangle from (-20, -10) to (10, 10) (c3 bottom from p4 to p5, c6 right to p7, c8 top to p9, c10 left back to p4); a line c11 from its corner p4 to (-30, -20); and an open polyline of three lines from (15, -15) (c13 to p15, c16 to p17, c18 to (15, 15))."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-40,-30]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[40,30]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-20,-10],"end":[10,-10]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":"p5","end":[10,10]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":"p7","end":[-20,10]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":"p9","end":"p4"},
+  {"cmd":"sketch.add_line","sketch":"F1","start":"p4","end":[-30,-20]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[15,-15],"end":[25,-15]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":"p15","end":[25,5]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":"p17","end":[15,15]}
+]

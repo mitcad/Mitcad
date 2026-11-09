@@ -133,7 +133,7 @@ bool TestDriver::runWalkStep(const QString& name, const QStringList& a, int line
       for (const QModelIndex& index : std::as_const(rows)) {
         const QPersistentModelIndex kept(index);
         ++count;
-        queue([this, guard, kept] {
+        queue([guard, kept] {
           if (!guard || !kept.isValid()) {
             return;
           }
@@ -184,7 +184,7 @@ bool TestDriver::runWalkStep(const QString& name, const QStringList& a, int line
   for (QAction* action : std::as_const(actions)) {
     const QPointer<QAction> guard(action);
     const QString id = action->objectName().mid(8);
-    queue([this, guard, id] {
+    queue([guard, id] {
       if (!guard) {
         return;
       }

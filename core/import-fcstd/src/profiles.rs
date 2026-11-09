@@ -216,7 +216,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
     }
 
     /// One planar face of a body as a profile (`object.Face<n>`).
-    fn profile_face_of(
+    pub(super) fn profile_face_of(
         &mut self,
         object: &str,
         name: &str,

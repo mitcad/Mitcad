@@ -972,6 +972,15 @@ fn number(value: f64) -> String {
     format!("{value}")
 }
 
+/// ` taper <t>` for an emboss's tapered walls (mitcad#1547), empty for 0.
+fn taper_text(taper: f64) -> String {
+    if taper == 0.0 {
+        String::new()
+    } else {
+        format!(" taper {}", number(taper))
+    }
+}
+
 /// The body's faces the references match.
 fn faces_matching(body: &MockShape, references: &[FaceName]) -> Vec<FaceName> {
     body.faces
@@ -3793,7 +3802,8 @@ impl Kernel for MockKernel {
 
     /// The profiles' prism one unit along the sketch normal, faces named
     /// as the wrapped tool's, with the history `wrap(<feature>:<radius>..
-    /// <to_radius>)`; the spec described in `specs`.
+    /// <to_radius>)`; the spec described in `specs` (with ` taper <t>` when
+    /// the walls are tapered, mitcad#1547).
     fn wrapped_emboss(
         &self,
         spec: &mitcad_model_base::kernel::EmbossWrapSpec<'_>,
@@ -3801,12 +3811,13 @@ impl Kernel for MockKernel {
         self.call("wrapped_emboss")?;
         let axis = |v: [f64; 3]| v.map(number).join(" ");
         self.specs.borrow_mut().push(format!(
-            "wrap {} about {} along {} radius {} to {}",
+            "wrap {} about {} along {} radius {} to {}{}",
             spec.feature,
             axis(spec.axis.origin),
             axis(spec.axis.direction),
             number(spec.radius),
-            number(spec.to_radius)
+            number(spec.to_radius),
+            taper_text(spec.taper)
         ));
         let mut shape = self.extrude(&ExtrudeSpec {
             feature: spec.feature,
@@ -5498,8 +5509,8 @@ impl Kernel for MockKernel {
     /// The profiles' prism one unit along the sketch normal, faces named
     /// as the projected tool's, with the history `project(<feature>:<face>
     /// by <depth>)`; the call in `specs` (`project F4 onto F2:side0 along
-    /// 0 0 1 by 1`). The face must be the body's; "projected_emboss" in
-    /// `fail` fails it.
+    /// 0 0 1 by 1`, with ` taper <t>` when the walls are tapered). The face
+    /// must be the body's; "projected_emboss" in `fail` fails it.
     fn projected_emboss(
         &self,
         spec: &mitcad_model_base::kernel::EmbossProjectSpec<'_, MockShape>,
@@ -5512,11 +5523,12 @@ impl Kernel for MockKernel {
             )));
         }
         self.specs.borrow_mut().push(format!(
-            "project {} onto {} along {} by {}",
+            "project {} onto {} along {} by {}{}",
             spec.feature,
             spec.face,
             spec.direction.map(|v| number(round(v))).join(" "),
-            number(spec.depth)
+            number(spec.depth),
+            taper_text(spec.taper)
         ));
         let mut shape = self.extrude(&ExtrudeSpec {
             feature: spec.feature,

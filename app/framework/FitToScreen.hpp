@@ -54,6 +54,13 @@ void fitWindowToContents(QWidget* window, FitMode mode = FitMode::Fit, const QSi
 // a window that fits keeps its size and place. Never makes it larger.
 void capWindowToScreen(QWidget* window);
 
+// A design window just shown for the first time: capWindowToScreen when it
+// is in its normal state (not maximized, full screen or minimized). Its
+// frame is known only once it is shown: a start size as large as the
+// screen's available area put the title bar's height below the bottom of a
+// 1024 x 768 screen on Windows (mitcad#1556).
+void capNewWindowToScreen(QWidget* window);
+
 // Keeps a shown top-level window on its screen: when the screen's
 // available area changes (another resolution, the Dock shown) or the
 // window moves to another screen, capWindowToScreen. Call it once the

@@ -194,7 +194,24 @@ Modifiers:
   unit](#length-defaults-in-the-designs-unit)).
 - `withAccepts(test)`: narrows a selection beyond its kinds (only straight
   edges and sketch lines: `item.geometry == "line"`); the view then
-  highlights and picks only what the input takes.
+  highlights and picks only what the input takes. A pick's `geometry`
+  says what the edge or face is, not how the kernel stores it
+  (mitcad#1537, `curveType` and `surfaceType` in `OcctViewer.cpp` and
+  `CommandSupport.cpp`): a straight B-spline or Bezier edge is a `line`
+  and a planar spline face a `plane` (`geometry::is_straight`,
+  `geometry::face_plane`, within 1e-6 mm), as the model reads them
+  (commands.md, *construction_plane, construction_axis,
+  construction_point*). A sheet body's straight edges and planar walls
+  are such splines once a bend is in it (a Fold, a Convert to Sheet Metal
+  with bends), so the Line and Plane inputs of the Construct commands take
+  them as a solid's; `frameOf` and `axisOf` (the manipulators' frames)
+  read them alike. Test: `tools/ui-sheet-datums-test.sh`. Every Plane
+  input takes such a wall (mitcad#1554): Mirror Plane, Create Sketch, the
+  construction planes, Split's tool; so do the frames of Place's face
+  inputs (`framed` in `PlaceInputs.cpp`), Look At on a face, and the
+  Inspect groups' titles ("planar face", "straight edge"). Test:
+  `tools/ui-sheet-face-mirror-test.sh` (Mirror about a converted plate's
+  front and about a folded sheet's B-spline wall).
 - `withoutMeshes()` (mitcad#399): a selection that hands bodies or faces to
   a surface operation takes no mesh body and no face of one (triangles
   without surfaces; `item.geometry == "mesh"`: the view sets it on mesh
@@ -2580,6 +2597,43 @@ grabbed point to the cursor; a press on an unselected one drags only it,
 and the press does not change the selection
 (`SketchController::selectionDraggedWith`).
 
+A single point dragged (a free point, a curve's end, a center; not a
+curve or a selection, which move as above) snaps as the drawing tools'
+points do and is held where it is dropped (mitcad#1538, GitHub
+mitcad/Mitcad#198; `SketchController::snapDrag`, `holdAtDrop`). Each move
+snaps the cursor (`SketchSnap::snap`) to points, curve ends, centers,
+midpoints, quadrants, intersections, the origin and onto curves, with the
+Line tool's snap marker, and drags the point there; not to the grid and
+not onto the axes drawn across the view, so a drop away from the sketch's
+geometry stays where it is dropped and a point dragged across an axis
+does not stick to it. The point's own curves, their other points (a
+line's end onto its other end) and what an active coincident already
+holds it to are left out. On the release the drop snaps again with the
+modifiers held then, and when it snapped onto geometry the point is held
+there as a drawing tool holds a new point (`SketchOp::constrain`: a
+`coincident` with the point, a point on the curve, a `midpoint`, the
+quadrant's holds, the origin), in an undo step that is merged with the
+drag's steps: one Undo takes back both. A coincident of two curve ends
+merges them into one point (commands.md, "Points that become one"), so
+dragging an open chain's last end onto its first closes the profile. A
+hold the model refuses (it would conflict with the sketch's constraints)
+adds nothing: the drag stays, and the status bar says why (`Coincident
+not added: …`, as for the drawing tools, mitcad#287). **Shift**, or Alt
+where the desktop leaves Alt-drags to MitCad (as on the drawing sheet,
+mitcad#1362), held during a move or at the release, turns the snapping
+off: the point goes where the pointer is and nothing is added; the drag's
+hint says so. Logs: `Drag snap of p7: point p1` when the snap changes
+(`free`, `on c3`, `midpoint of c2`, …, `off (Shift or Alt)`), `Drag of p7
+dropped on point p1: held there` (or `nothing added`, after `Constraint
+coincident on … not added: <reason>`). Tests:
+`tools/ui-sketch-drag-join-test.sh` and `app.ui-windows-sketch-drag-join`
+(the shared script `tools/ui-scripts/sketch-drag-join.mitcad-ui`): an open
+polyline drawn with the Line tool, its last point dragged onto its first
+with Shift held at the drop (nothing added, one undo step) and without
+(held there, the profile closed, one undo step with the drag). The test
+driver's `sketch-pointer press|move|release <x> <y> [mods]` holds the
+modifiers on that event only.
+
 ### The Sketch Palette's Create section
 
 The Sketch Palette (`sketch::SketchPalette`) has a **Create** section
@@ -2642,9 +2696,9 @@ the palette without the scroll area, keeps it as the palette's last row.
   when the palette changes). A click on a Create button starts its tool
   as the ribbon's does.
 
-Logs, for UI tests: `Palette create tools: line, rectangle, circle, arc,
-polygon, slot, spline, point, mirror, dimension, fillet, trim, extend,
-offset (defaults)` (`(counts)` once a candidate has been counted; the ids
+Logs, for UI tests: `Palette create tools: line, point, rectangle, circle,
+arc, polygon, slot, spline, mirror, dimension, fillet, trim, extend,
+offset (defaults)` (Point after Line, as in the ribbon since mitcad#1545) (`(counts)` once a candidate has been counted; the ids
 without `sketch.`) each time the palette opens; with the palette's other
 places (`SketchPalette::logLayout`, also when it scrolls) `Palette
 paletteCreate_sketch.line at x,y` (`out of sight` when the palette has
@@ -2671,16 +2725,22 @@ add({"sketch.line", QObject::tr("Line"), "line", "CREATE/Lines",
 ```
 
 The sketch CREATE group's subgroups (mitcad#222), in this order: Lines
-(default Line; also Midpoint Line, mitcad#1393, below), Rectangles (default 2-Point Rectangle; also the rounded ones, below), Circles (default Center
+(default Line; also Midpoint Line, mitcad#1393, below), Point (an entry
+of its own, group `"CREATE"`, pinned, no shortcut; mitcad#1545),
+Rectangles (default 2-Point Rectangle; also the rounded ones, below), Circles (default Center
 Diameter Circle), Arcs (default 3-Point Arc), Other Geometry (Ellipse, the
-polygons, the slots, the splines, Point; no default), Text, Patterns
+polygons, the slots, the splines; no default), Text, Patterns
 (Rectangular Pattern, Circular Pattern, Mirror; no default), References
 (Project, Intersect, Clean Up Projections, Clean Up Stale Projections,
 Project Again);
 Sketch Dimension follows on its own. Offset, Edit Pattern, Edit
-Offset and Edit Text are in MODIFY. The toolbar row has the four split
-buttons (Lines, Rectangles, Circles, Arcs) and Sketch Dimension
-(`tools/ui-sketch-create-menu-test.sh`).
+Offset and Edit Text are in MODIFY. The toolbar row has the Lines split
+button, the Point button, the other three split buttons (Rectangles,
+Circles, Arcs) and Sketch Dimension
+(`tools/ui-sketch-create-menu-test.sh`; Point in the menu and from its
+button also on Windows: `tools/ui-sketch-point-top-level-test.sh` and
+`app.ui-windows-sketch-point-top-level`, the shared script
+`tools/ui-scripts/sketch-point-top-level.mitcad-ui`).
 
 Closed splines and tangents at an end (mitcad#783): Fit Point Spline
 (`SplineTool` in `DrawTools.cpp`) closes on a click on its first point
@@ -2719,6 +2779,40 @@ refusal shows `Insert Point: <reason>`. Logged `Inserted point p12 into
 c3 at 20.000,5.000` and, for the double-click, `Double-click on c3:
 Insert Point`. No UI test script of its own; the model tests are
 `core/model-tests/sketch/src/sketch_spline_point_836_tests.rs`.
+
+Chain selection by a double-click (mitcad#1541, GitHub
+mitcad/Mitcad#204): with no tool running, a double-click on any other
+curve of the edited sketch (not a text, a pattern's or an offset's curve,
+a spline that takes a point as above, or an axis; those keep their own
+double-click) selects
+(`SketchController::selectChainAt`, `sketch/SketchReveal.cpp`):
+
+- the smallest closed loop of the sketch's curves that the curve bounds,
+  as a profile's boundary: the model's `sketch_loop` query
+  ([commands.md](../core/model-api/src/commands.md#the-closed-loop-of-a-sketch-curve))
+  arranges the curves of the picked one's kind as profiles are found, so
+  the loop passes points where more than two curves meet and crossings,
+  and of two loops on one curve the one with the smaller outline wins. On
+  a rectangle with a line leaving one corner, a side selects the four
+  sides and not that line;
+- else (a curve that bounds no loop: the line leaving the corner, an
+  open polyline) the open chain through points where exactly two curves
+  meet, as Offset's Chain Selection grows it (`doubleClickChain`,
+  `chainOf`).
+
+Construction and normal curves are never mixed: the loop and the chain
+take only curves of the double-clicked curve's kind. The double-click
+replaces the selection; with Ctrl or Shift it adds the curves to it. A
+selection filter that leaves sketch curves out leaves the double-click
+to the view. Logged `Double-click on c3: loop c3, c6, c8, c10` or
+`Double-click on c11: chain c11` (the curves by their numbers, with
+` (added)` for Ctrl or Shift). `tools/ui-sketch-double-click-chain-test.sh`
+and `app.ui-windows-sketch-double-click-chain` (the shared script
+`tools/ui-scripts/sketch-double-click-chain.mitcad-ui`) double-click a
+rectangle's side, the line leaving its corner, an open polyline's middle
+line and, with Ctrl, another side; the model tests are
+`core/sketch/src/loops.rs` and
+`core/model-tests/sketch/src/sketch_loop_1541_tests.rs`.
 
 Rounded rectangles (mitcad#867): the Rectangles submenu ends with
 **2-Point Rounded Rectangle** (`sketch.rectangle_rounded`, icon
@@ -2858,7 +2952,10 @@ show the Lines split button and Midpoint Line without code of their own.
   (mitcad#1085, GitHub #91): `MainWindow::showContextMenu` calls
   `SketchController::cancel()` instead of opening a menu, so the first
   right click ends the chain or shape in progress (the Line's
-  `endChain`) and one with nothing in progress ends the tool. Outside a
+  `endChain`) and one with nothing in progress ends the tool. A tool with
+  its own menu there (`SketchTool::menu`, Sketch Dimension's Center or
+  Tangent and Driving or Driven, mitcad#1540) shows that menu instead,
+  whose Cancel is the Esc. Outside a
   command panel only; with no tool the sketch's context menu stays. A
   right drag is not a click: `OcctViewer::mouseReleaseEvent` asks for the
   menu only when the button moved at most `kDragPixels` (4 px) since its
@@ -3105,6 +3202,42 @@ one undo step, named after what the action makes.
   unsigned: fx: 25.98 (-(r * sin(a)))`, and `Dimension texts: …` as a
   sketch with dimensions opens; `tools/ui-sketch-signed-test.sh` steps `a`
   through the four quadrants.
+- **Center or Tangent, Driving or Driven** (mitcad#1540, GitHub #203;
+  commands.md, "Tangent dimensions between circles"): a right-click while
+  Sketch Dimension picks opens its own menu instead of the tool's Esc
+  (`SketchTool::menu`, asked by `SketchController::toolMenu`, shown by
+  `MainWindow::showContextMenu`). For the circle or arc under the pointer
+  (one picked, or one a left click would pick there, which the choice then
+  picks) or else the last one picked it offers **Center** and **Tangent**:
+  whether the dimension goes to its center (as a left click picks it, the
+  default) or to its nearest tangent side; then **Driving** and **Driven**
+  for the dimension being made, and **Cancel** (the tool's Esc). The
+  current choices have a check mark. With nothing picked and no circle or
+  arc under the pointer there is no menu and the right-click stays the
+  tool's Esc. `decide()` makes from the choices: two circles by their
+  tangent sides `tangent_circle_distance` (with `"side": "inside"` when one
+  holds the other's center); one by its tangent side and a point, or the
+  other circle by its center, `tangent_point_distance` (`inside` when the
+  point is within the circle); one by its tangent side and a line
+  `tangent_distance`; by their centers as before (`distance`,
+  `point_line_distance`; two concentric ones stay `concentric_distance`).
+  The preview draws the chosen dimension between the tangent points on
+  the line of the centers (`SketchOverlay.cpp`, `linearOf`), a driven one
+  with its value in parentheses. Driven adds the dimension with
+  `"driven": true` at the placing click, without a value editor and
+  without the over-constraint warning. The choices are reset with the
+  picks after each dimension. Logged `Sketch Dimension menu for c5 (to
+  pick)` (`(picked)`, or `for the dimension`), `Context menu: Center |
+  Tangent | Driving (current) | Driven | Cancel`, `Sketch Dimension: c5 by
+  its tangent side` (`by its center`), `Sketch Dimension: driven`
+  (`driving`), `Sketch Dimension preview: tangent_point_distance 20.00`
+  (`tangent_circle_distance inside 3.00`, a driven one's `(13.00)`),
+  `Added dimension k7 tangent_point_distance d3 = 18` and `Added driven
+  dimension k8 tangent_circle_distance = 13.00`. Tests:
+  `tools/ui-sketch-tangent-dimension-test.sh` and
+  `tools/ui-windows-sketch-tangent-dimension-test.ps1` (ctest
+  `app.ui-windows-sketch-tangent-dimension`), one input script
+  `tools/ui-scripts/sketch-tangent-dimension.mitcad-ui`.
 - **Inactive constraints and dimensions** (mitcad#721; commands.md,
   "Inactive constraints and dimensions"): the overlay draws an inactive
   constraint's symbol pink with a dashed frame (a symbol of its own beside
@@ -3427,7 +3560,7 @@ get the axes. `tools/ui-sketch-axes-test.sh` and
 `tools/ui-windows-sketch-axes-test.ps1` mirror a circle about the y
 axis.
 
-Offset's Chain Selection (`chainOf` in `SketchCommands.cpp`) grows the
+Offset's Chain Selection (`chainOf` in `sketch/SketchChains.cpp`) grows the
 picked curves through points where exactly two joinable curves of the
 same construction kind meet. A picked curve that joins nothing while a
 curve it lies on does (`chainStart`, mitcad#741: an edge an earlier
@@ -11844,6 +11977,21 @@ SVG at several sizes (`themeIcon`).
     logged `Preview tool at`; the Along Axis arrow dragged; OK's volume;
     loaded again) and `app.ui-windows-emboss` (the same on
     Windows).
+  - **Taper Angle** (mitcad#1547): an angle after Depth, default 0,
+    shown for every kind of emboss; written as `taper_angle` (its
+    expression) when not a plain 0, loaded with `loadValue`. Positive
+    widens the profiles away from the face, as Extrude's Taper Angle
+    (commands.md, *emboss*). Its handle is a ring at the profiles' middle
+    in the sketch plane (`profileNormal`), about a line in that plane,
+    angle 0 along the sketch normal on the side the profiles rise to
+    (against it for Sink), its value box hidden at 0; dragging sets the
+    field and previews. The log line gains `, taper 10 deg` after the
+    depth when it is given. Tests: `tools/ui-emboss-taper-test.sh` (the
+    shared steps `tools/ui-scripts/emboss-taper.mitcad-ui` on
+    `tools/ui-scripts/emboss-taper.json`: a square wrapped onto a rod 45
+    deep with Taper Angle 10 typed, its ring shown, previewed, OK's line
+    and volume) and `app.ui-windows-emboss-taper`
+    (`tools/ui-windows-emboss-taper-test.ps1`, the same steps on Windows).
 - **Extrude's Wrap Onto** (`wrap`, mitcad#473): a face input (0 or 1, a
   cylindrical or conical face, `withAccepts`), shown for a solid
   extrusion to one side from the profile plane; with a face the
@@ -12788,7 +12936,7 @@ next screenshot.
 | `Sketch value length: 40 = 40 mm`, `Sketch value editor at x,y with 40.00` (`with d1 = 40` for a dimension's, its name first), `Sketch value editor tooltip: d1 = 40.00 mm (Sketch1 width)`, `Sketch value editor: inserted d2, now d2 * 2`, `Sketch value editor kept open with d2 = 30` | typed values, a dimension's value editor, a dimension clicked while it is open, a refused name (mitcad#231) |
 | `Sketch plane geometry: 4 edge(s), 4 vertex(es)` (`Sketch plane geometry not read: <reason>`), `Sketch Dimension picked the body edge E{…} of F2.b0 (body:3)`, `Projected the body vertex V{…} of F2.b0: p8`, `Reused the projection of the body edge E{…} of F2.b0: c9`, `Point p9 coincident with p8, the projected corner V{…}`, `Point p9 at the midpoint of c7, the projected edge E{…}`, `Sketch Sketch2: 1 linked projection(s)` | body edges and vertices in the sketch plane (mitcad#256, mitcad#258): what the tools can pick and snap to, read for a tool session or after a change; a body pick; what a dimension or a point projected or reused; the sketch's linked projections, when their number changes |
 | `Made the sketch x axis for a pick: c3` (`y axis`, `origin`) | Sketch Dimension or a constraint tool made the entity of an axis or origin pick for its dimension or constraint (mitcad#500), in the same undo step |
-| `Added dimension k5 length d1 = 40 mm`, `Added driven dimension k7 length`, `Editing dimension k5 (40 mm)`, `Dimension k5 = 50 mm (d1)`, `Moved dimension k5 to (x, y)`, `Dimension k5 text at x,y` (with each `Sketch view`), `Dimension tooltip k5: d1 = 40.00 mm (Sketch1 width)`, `Dimension text name`, `Dimension texts: k5 d1, k6 d2`, `Palette paletteDimensionText at x,y`, `Panel Extrude label: Distance (d3)` | dimensions; their tooltip, the palette's Dimension text option and what each shows, a feature panel's field with its parameter's name (mitcad#231) |
+| `Added dimension k5 length d1 = 40 mm`, `Added driven dimension k7 length`, `Added driven dimension k8 tangent_circle_distance = 13.00` (Driven chosen in the right-click menu, mitcad#1540), `Sketch Dimension preview: tangent_point_distance 20.00`, `Editing dimension k5 (40 mm)`, `Dimension k5 = 50 mm (d1)`, `Moved dimension k5 to (x, y)`, `Dimension k5 text at x,y` (with each `Sketch view`), `Dimension tooltip k5: d1 = 40.00 mm (Sketch1 width)`, `Dimension text name`, `Dimension texts: k5 d1, k6 d2`, `Palette paletteDimensionText at x,y`, `Panel Extrude label: Distance (d3)` | dimensions; their tooltip, the palette's Dimension text option and what each shows, a feature panel's field with its parameter's name (mitcad#231) |
 | `Signed distances on` (`off`), `Added dimension k5 horizontal_distance signed d3 = r * cos(a)`, `Dimension k5 shows fx: +25.98`, `Dimension k6 unsigned: fx: 25.98 (-(r * sin(a)))` (`signed: …`), `Dimension texts: k5 fx: +25.98, k6 fx: +15.00` (as a sketch with dimensions opens), `Palette paletteSignedDistances at x,y` | signed horizontal and vertical distances (mitcad#409): the palette option, a signed one added and the text it shows, a switch from the context menu with the text and expression after it |
 | `Panel Extrude tooltip distance: d5 = 2*d1 → 80 mm (Extrude2 distance)`, `Parameter labels for Extrude: Sketch1 k5 d1, Sketch1 k7 d3` (or `none`), `Parameter label Sketch1 k5 d1 at x,y`, `Parameter label Sketch1 k5 d1 drawn at x,y`, `Parameter label picked: d1 (Sketch1 k5)`, `Panel Extrude input distance: inserted d1, now 2*d1`, `Parameter labels for Extrude hidden`, `Native inline editor sketchValueEditor name: d3 =` (macOS) | a feature panel's value field whose parameter the feature owns: its tooltip; while a value field has the keyboard (when the keyboard went there by itself as the panel opened, only once the field is clicked or typed in, mitcad#587; after a pick when the selection takes more items, only once something is typed in it, mitcad#467), the labels of the shown sketches' dimensions, only those (mitcad#587 took out the earlier features' values; `framework/ParameterPicker.hpp`), where each is for the camera now and where a paint drew it (`drawn at`, not where nothing is painted, as in a Windows test session; both follow the camera, mitcad#1179), the one clicked and the name it put into the field, the labels gone a moment after the field lost the keyboard; the dimension's name beside the native inline editor (mitcad#250) |
 | `Added constraint perpendicular k6 on c1, c2` (a tangent's point after it: `Added constraint tangent k7 on c1, c5 at p2`, mitcad#783), `Constraint perpendicular refused: <reason>`, `Symmetry takes the selection as its picks: c1, c3`, `Symmetry does not take the selection: <reason>`, `Symmetry pick c7 refused: <reason>` (mitcad#865), `Fixed …`, `Construction on: [...]`, `Merged points p5 into p3 (coincident on p3, p5)` (two curve ends made one, mitcad#260), `Converted to sketch geometry: c9, p7; kept projected: p8` (mitcad#257), `Deleted c4, k2` | constraints and modify commands |
@@ -12800,6 +12948,7 @@ next screenshot.
 | `Palette create tools: line, rectangle, … (defaults)` (`(counts)`), `Palette paletteCreate_sketch.line at x,y` (`out of sight`), `Palette palette_sketch.constraint.coincident at x,y`, `Palette Create: 14 buttons in 2 rows of 7`, `Palette Constraints: 13 buttons in 2 rows of 7`, `Palette buttons clipped: none (palette 266 wide in 266)`, `Palette create checked: line` | the Sketch Palette's Create section and its constraint buttons (mitcad#1027, [The Sketch Palette's Create section](#the-sketch-palettes-create-section)): the tools chosen as the palette opens, the buttons' places with the palette's other places, their rows, whether any is clipped, the Create button that turned checked |
 | `Palette Look At at x,y` | the Sketch Palette's Look At button, where a UI test clicks it, when the palette is laid out and the button shows (mitcad#1060; `tools/ui-sketch-view-test.sh`, `tools/ui-windows-sketch-view-test.ps1`) |
 | `Dragged p5 to (x, y)`, `Dragged c7 to (x, y)`, `Drag of p5 did not move it` | a drag ended: where the point is, or the curve's point nearest the cursor |
+| `Drag snap of p7: point p1` (`free`, `on c3`, …, `off (Shift or Alt)`), `Drag of p7 dropped on point p1: held there` (`nothing added`) | a single point's drag (mitcad#1538): where it snaps when that changes, and whether the drop held it there |
 | `Double-click on t26: sketch.edit_text`, `Edited text t26: "MIT", Droid Sans, center`, `Edited pattern k8: 4 in all`, `Edited offset k13: 3 mm` | the edit panels of texts, patterns and offsets |
 | `Edited text t1: "MIT", Liberation Sans (LiberationSans-Regular.ttf), left`, `Edit Text font file <path>`, `Preferences font folder add at x,y` (Add…, answered in Qt's own folder dialog **Font Folder**), `Preferences: font folders <folders>` (`none`) | a text in a font file, the file chosen with File..., Preferences › Fonts (mitcad#473, `tools/ui-text-fonts-test.sh`) |
 | `Equal spacing k4 horizontal: p1, c2, c5 (spacing k6 = 12.00)` (`… along c9`; without the spacing when it is free), `Equal spacing k4 removed`, `Equal spacing preview: p1, c5, c2` (the panel's objects in its order), `Sketch Dimension on 3 objects: Equal Spacing Dimension`, `Double-click on k4: sketch.edit_equal_spacing`, `Equal spacing of 3 object(s), horizontal, spacing 12 mm`, `Edited equal spacing k4 of 4 object(s), vertical` | equal spacings (mitcad#221): each chain in the order the model keeps, when it changes (also during a preview), the panels |
@@ -13968,7 +14117,8 @@ drawing commands; it computes no geometry of its own.
   logged `Drawing selection
   dragged by 5.0,0.0`), Delete deletes them (annotations, then views, the
   later ones first). The right button opens the sheet's menu (logged
-  `Context menu: …`): a view's Projected View, Section View, Detail View,
+  `Context menu: …`): a view's Edit Line… first when a projected edge is
+  under the pointer (below), Projected View, Section View, Detail View,
   Break, Rotate 90° Left and Rotate 90° Right (not a detail's;
   mitcad#729), its panel's Hidden Edges, Tangent Edges, Shaded, Center Marks (a
   section's Hatching) and Delete View; an annotation's Edit Text… (a note
@@ -13981,6 +14131,36 @@ drawing commands; it computes no geometry of its own.
   dragged by 4.0,4.0`). A view the model could not
   draw keeps a red dashed box at its place with why, so that it can be
   selected and deleted (the query's `broken` and `box`).
+- **Edit Line** (mitcad#1546, `DrawingWorkspace::editLine`): the view's
+  menu asks the model which edge the right click picks (`drawing_pick`
+  with `"want": "edge"`, logged `Drawing edge under the pointer: {…}`);
+  over one it starts with Edit Line…, which opens the dialog Edit Line:
+  Applies To (This Edge, Its Body, and Its Component when an occurrence
+  places the body; `drawingLineTarget`), Width (Thin, Thick, Extra Thick;
+  `drawingLineWidth`) and Pattern (Continuous, Dashed, Center Line, Long
+  Dash Double Dot; `drawingLinePattern`), set to the view's choice for
+  what it applies to, else to the view's own visible line (Thick,
+  Continuous); OK, Cancel and Reset to View Style (`drawingLineReset`,
+  only where the view has a choice). Logged `Drawing line dialog opened:
+  edge <name> of F2.b0 in view 1 (thick continuous)`. OK runs
+  `edit_drawing_line` with the pick's `body`, `occurrence` and `edge` (the
+  edge's alone; the body's without `edge`; the component's `occurrence`
+  alone), `width` and `pattern`; Reset to View Style the same with
+  `"reset": true` (`lineStyleEdit`, `lineStyleOf` in `DrawingTools`). The
+  choice is the view's only: an edge's wins over its body's, a body's over
+  its component's, and the hidden lines keep their dashes (commands.md,
+  "Line styles in drawing views"). The sheet logs the views' choices when
+  they change, `Drawing lines: view 1: edge E{…} of F2.b0 thick phantom`
+  (or `none`, `lineStylesText`), and the pens its views' lines take,
+  `Drawing view pens: phantom_thick, thick, thin`. The Line and Arc tools'
+  Pattern and a drawn line's panel offer Long Dash Double Dot too
+  (`phantom`, ISO 128 type 05). Tests: `app/tests/drawing_tools.cpp`;
+  `tools/ui-drawing-edge-line-test.sh` (Linux) and
+  `tools/ui-windows-drawing-edge-line-test.ps1`
+  (`app.ui-windows-drawing-edge-line`) on the shared steps
+  `tools/ui-scripts/drawing-edge-line.mitcad-ui`: a right click on a
+  step's edge in its top view, Thick and Long Dash Double Dot, the pen
+  `phantom_thick` on the sheet; then Reset to View Style.
 - **The tools** are declarative (`drawings/DrawingTools`): each a
   `DrawingToolDef` with its id, name, icon, tooltip, what the sheet waits
   for (`SheetPick`: a point, a drag out of a view, a line on a view, a
@@ -14011,7 +14191,7 @@ drawing commands; it computes no geometry of its own.
   | Model Items (`drawing.model_items`, mitcad#1406) | none: the views selected on the sheet (none: all the sheet's), then its panel's **Apply** (`drawingToolApply`; the panel's Views row names them); logged `Drawing Model Items on all views` (`on views 1, 3`), then the selection again | Sketch Dimensions, Model Annotations (check boxes, both on; both off: the status bar asks for one) | `drawing_model_items` with `sheet`, `views` when some are selected, `sketch_dimensions` and `model_annotations`: one undo step for all the views |
   | Center Mark (`drawing.center_mark`) | a circle, or a round face seen from the side | | `center_mark` |
   | Centerline (`drawing.centerline`) | two circles, two parallel edges, or a curved slot's two sides (its center arc, mitcad#1272) | | `centerline` |
-  | Line (`drawing.line`, mitcad#729) | two clicks anywhere: its ends; on a view each snaps to an edge's end, a straight edge's middle or a circle's or an arc's center near it (mitcad#1272: `drawing_pick` with `"want": "snap"`, shown under the pointer, logged `Drawing point snapped to {…}` and `Drawing point 1 at x,y (snapped)`), else onto a center line near it, a round face's axis seen from the side or a center mark's line, at the click's foot on it (mitcad#1362; the hover logged `Drawing hover: center line`); Shift (mitcad#1362), or Alt where the desktop leaves it to MitCad: as clicked | Drawn (In the View Clicked: the view under the first click, if any; On the Sheet), Width (Thin, Thick, Extra Thick (mitcad#1402): `widthChoices`) and Pattern (Continuous, Dashed, Center Line: `patternChoices`), two choices that combine (mitcad#1447; one Line pen menu before), defaults Thin and Continuous | `"type": "line"` with `points`, `width`, `pattern`, and `view` or `sheet`; the tool stays |
+  | Line (`drawing.line`, mitcad#729) | two clicks anywhere: its ends; on a view each snaps to an edge's end, a straight edge's middle or a circle's or an arc's center near it (mitcad#1272: `drawing_pick` with `"want": "snap"`, shown under the pointer, logged `Drawing point snapped to {…}` and `Drawing point 1 at x,y (snapped)`), else onto a center line near it, a round face's axis seen from the side or a center mark's line, at the click's foot on it (mitcad#1362; the hover logged `Drawing hover: center line`); Shift (mitcad#1362), or Alt where the desktop leaves it to MitCad: as clicked | Drawn (In the View Clicked: the view under the first click, if any; On the Sheet), Width (Thin, Thick, Extra Thick (mitcad#1402): `widthChoices`) and Pattern (Continuous, Dashed, Center Line, Long Dash Double Dot (mitcad#1546): `patternChoices`), two choices that combine (mitcad#1447; one Line pen menu before), defaults Thin and Continuous | `"type": "line"` with `points`, `width`, `pattern`, and `view` or `sheet`; the tool stays |
   | Arc (`drawing.arc`, mitcad#729) | three clicks anywhere: its center, start and end (a dashed line from the center and the circle through the start follow the pointer), snapping as Line's | as Line's | `"type": "arc"` with `points`, `width`, `pattern`, `view` or `sheet` |
   | Center Pattern (`drawing.center_pattern`, mitcad#729) | one circle seen end on | | `center_pattern`: the model finds the pattern's other holes |
   | Edge Extension (`drawing.edge_extension`, mitcad#729) | two straight edges, or one | Edges (Two, to Their Corner; One, Both Ways) | `edge_extension` |
@@ -16550,7 +16730,8 @@ or any other value: 100; `framework/InterfaceSize`).
   device pixel ratio, the window within the screen's available area, the
   ribbon's captions complete and its buttons at least as large as their
   icons, the Browser's first row as high as its icon, and a command
-  panel's OK whole and its fields as high as their text needs; it logs
+  panel's OK whole and its fields as high as their text needs (a long
+  panel scrolls: its scroll area's view within the window); it logs
   `Interface size layout: docked, device pixel ratio 1.5, window 1067x720
   within the screen; ribbon … (n captions, n buttons); browser … (rows h
   high); command panel … (n fields, OK whole)`.
@@ -16563,3 +16744,88 @@ or any other value: 100; `framework/InterfaceSize`).
   (`tests/interface_size.cpp`): the kept choice and its fallbacks, the
   factor over the user's own, and the environment a restart inherits
   (150 % again gives 1.5, not 2.25; 100 % puts the user's value back).
+
+## Text size, Icon size and Font (mitcad#1556)
+
+Preferences › Display, under Interface size (GitHub mitcad/Mitcad#207):
+
+- **Text size** and **Icon size**: a slider each with its value after it,
+  side by side in one row (so that the page fits a 1366 x 768 screen),
+  80% to 200% in steps of 5% (100% by default), saved as
+  `appearance/textSize` and `appearance/iconSize` (the percent; absent, off
+  the steps or outside the range: 100). They multiply on top of Interface
+  size: Interface size 125% with Text size 80% draws the texts at 100% of
+  their size at Interface size 100%, and the icons at 125%.
+- **Font**: **System** (checked by default: the platform's font, as
+  before) or a family from the installed fonts (a font list,
+  `QFontComboBox`), saved as `appearance/fontFamily` (absent: the
+  system's). A family that is no longer installed leaves the system's.
+- A note in the Font row says that they take effect when MitCad starts
+  again.
+  Saved when Preferences is accepted (OK), at once in macOS's Settings
+  window (`framework/UiSizes`).
+- **How they are applied:** `main()` calls `applyTextAndIconSize` after
+  the application object and the theme exist and before the first window:
+  the application font gets the chosen family and the platform's point
+  size times Text size (at 100% with the system's font it is not touched).
+  The code's own fonts are derived from the widgets' fonts (a caption
+  0.85 of it, a heading bold), so they follow the family and the size; the
+  few that set a size of their own (the 3D view's sketch and parameter
+  labels, 9 pt) and the lower limits under derived sizes are multiplied by
+  Text size (`uiTextScale`). Lettering that belongs to the design (sketch
+  texts, drawings, measurements, prints) keeps its size. On Windows 11 a
+  chosen family is kept instead of Segoe UI Variable (`WindowStyle`).
+- **Icons:** the code's fixed icon sizes go through `uiIconSize(px)`
+  (`framework/UiSizes.hpp`), the size times Icon size rounded to whole
+  pixels: the Browser's 18-pixel icons, the ribbon's buttons (28 pixels
+  Docked, 26 Floating), the quick-access group (18 pixels) and the title
+  row's Undo and Redo, the timeline's
+  cells, a command panel's icons and choice buttons, the Sketch Palette,
+  the navigation bar, the selection filter, the glass cards' chevrons, the
+  notices' icons and the swatches of the material and appearance lists.
+  Icons are drawn from their SVG sources (or rendered swatches) at that
+  size, so they stay sharp. The icons Qt's style sizes itself (menus, the
+  default tool buttons) and the 3D view's own overlays (the orientation
+  cube and its arrows, comment pins) keep their sizes.
+- **Layouts that follow:** rows are as high as their icon and text need
+  (the Browser, the lists); the ribbon's button rows, its Floating group
+  captions and segmented tabs, the title row and its search field, the
+  glass cards' header and chevron, and a command panel's toggles,
+  selection buttons and card buttons grow with `uiRoomSize(px)`: the
+  larger of Text size and Icon size, never smaller than at 100%, so that
+  nothing is clipped at 80%. A command panel's field goes under its label
+  where the two do not fit side by side, in the Docked layout as in the
+  Floating one, so that no label is cut in a narrow dock.
+- **Logs:** `Text and icon size: Text size 80%, Icon size 150%, Font the
+  system's` at start, after the `Style:` line (`Font DejaVu Sans`, or
+  `Font X (not installed; the system's)`); once the window shows,
+  `Application font: DejaVu Sans, 12 pt (Text size 120% of 10 pt)` (the
+  family as drawn, its point size and the platform's) and `Icon sizes:
+  150% (the Browser's 18-pixel icons at 27 px)`; `Preferences: text size
+  85% (at the next start)`, `Preferences: icon size 155% (at the next
+  start)` and `Preferences: font DejaVu Sans (at the next start)` (or `the
+  system's`) when another choice is saved.
+- **Test steps** (`framework/TestDriverChrome.cpp`):
+  `expect-text-icon-size <text%> <icon%> <family|system>`: the run's
+  sizes, the application font in that family (`system`: none chosen) at
+  the platform's point size times Text size, the Browser's icons at 18 and
+  each shown ribbon command button's at 28 (Floating: 26) pixels times
+  Icon size, the quick-access buttons in the tabs' row at 18 pixels times
+  Icon size or, where the row is compact (Docked: as high as the tabs),
+  down to 12 times it, and each button at least as large as its icon; it
+  logs `Text and icon size layout: font F, P pt; browser icons WxH; ribbon
+  n buttons, icons WxH; quick access n buttons`.
+  `expect-interface-size any` checks the layout of Interface size's step
+  at the screen's own device pixel ratio.
+- **Tests:** `tools/ui-text-icon-size-test.sh` and
+  `tools/ui-windows-text-icon-size-test.ps1` (ctest
+  `app.ui-windows-text-icon-size`), the shared script
+  `tools/ui-scripts/text-icon-size.mitcad-ui`: started with Text size 80%
+  and Icon size 150% (Floating), 200% and 80% (Floating and Docked), and
+  120% and 120% in a chosen family (DejaVu Sans on Linux, Arial on
+  Windows); each time the start-up's log lines, the step above, the layout
+  with Box's panel open, Preferences showing the sizes and System, and
+  Icon size one step up (Right) saved for the next start. `app.unit`
+  (`tests/ui_sizes.cpp`): the kept sizes and family and their fallbacks,
+  `uiIconSize` and `uiRoomSize`, and the application font
+  `applyTextAndIconSize` gives.

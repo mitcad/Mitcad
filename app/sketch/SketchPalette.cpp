@@ -38,6 +38,7 @@
 #include "PaletteCreateTools.hpp"
 #include "PaletteWarnings.hpp"
 #include "SketchController.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad::sketch {
 namespace {
@@ -374,7 +375,7 @@ QToolButton* SketchPalette::commandButton(const QString& id, const QString& name
   // The action's icon, tooltip (with its shortcut, as the ribbon's) and
   // enabled and checked states (the tool on, mitcad#1027).
   button->setDefaultAction(action);
-  button->setIconSize(QSize(22, 22));
+  button->setIconSize(uiIconSize(22, 22));
   button->setAutoRaise(true);
   button->setFocusPolicy(Qt::NoFocus);
   if (chromeStyle() == ChromeStyle::Floating) {

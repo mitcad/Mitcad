@@ -47,6 +47,7 @@
 #include "ProjectBrowserData.hpp"
 #include "ProjectRowText.hpp"
 #include "ProjectsTree.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -224,7 +225,7 @@ BrowserDialog::BrowserDialog(QWidget* parent, ProjectBrowserOptions options)
   panel::setCompactIndentation(m_folders, panel::Indent::Tree);
   m_folders->setHeaderHidden(true);
   m_folders->setColumnCount(1);
-  m_folders->setIconSize(QSize(16, 16));
+  m_folders->setIconSize(uiIconSize(16, 16));
   m_folders->setUniformRowHeights(true);
   m_folders->setSelectionMode(QAbstractItemView::SingleSelection);
   m_folders->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -234,7 +235,7 @@ BrowserDialog::BrowserDialog(QWidget* parent, ProjectBrowserOptions options)
   m_contents->setHeaderLabels({Text::tr("Name"), Text::tr("Version"), Text::tr("Edit lock"), Text::tr("Last change"), Text::tr("By"),
                                Text::tr("Project and folder")});
   m_contents->setRootIsDecorated(false);
-  m_contents->setIconSize(QSize(16, 16));
+  m_contents->setIconSize(uiIconSize(16, 16));
   m_contents->setUniformRowHeights(true);
   m_contents->setSelectionMode(QAbstractItemView::SingleSelection);
   m_contents->setEditTriggers(QAbstractItemView::NoEditTriggers);

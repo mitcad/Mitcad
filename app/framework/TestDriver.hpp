@@ -125,7 +125,21 @@
 //                           ratio 1.5, window wxh within the screen; ribbon
 //                           x,y wxh (n captions, n buttons); browser x,y
 //                           wxh (rows h high); command panel x,y wxh (n
-//                           fields, OK whole)"
+//                           fields, OK whole)"; with `any` the device
+//                           pixel ratio is not checked
+//   expect-text-icon-size <text%> <icon%> <family|system>  Preferences'
+//                           Text size, Icon size and Font as this run
+//                           applied them (mitcad#1556): the application
+//                           font in that family (system: the platform's)
+//                           at the platform's point size times Text size,
+//                           the Browser's icons at 18 and the ribbon's
+//                           command buttons at 28 (Floating: 26) pixels
+//                           times Icon size, the quick-access buttons in
+//                           the tabs' row at 12 to 18 pixels times it,
+//                           each button as large as its icon; logs "Text
+//                           and icon size layout: font F, P pt; browser
+//                           icons WxH; ribbon n buttons, icons WxH; quick
+//                           access n buttons"
 //   collapse-card <object-name> true|false  use the card's chevron button
 //   expect-setting <key> <value>     the current saved QSettings value
 //   set-setting <key> <value>        saves a QSettings value (text)
@@ -219,7 +233,9 @@
 //   expect-sketch-dimension-clear <text regex>   visible text clear of all
 //                           shown glyph bounds, with ordinary pick targets
 //   sketch-drag <x1> <y1> <x2> <y2>
-//   sketch-pointer press|move|release <x> <y>  separate held left-drag events
+//   sketch-pointer press|move|release <x> <y> [mods]  separate held left-drag
+//                           events; mods (shift, alt, ...) held on that event
+//                           only, e.g. Shift during a drag (mitcad#1538)
 //   expect-profiles <count> inspect the actual displayed profile objects
 //   type-in <regex> <text>  reveal/focus the identified panel field, select
 //                           all and type through its actual frontend editor
@@ -765,6 +781,7 @@ private:
   void testRibbonLabels(const QStringList& expected);
   void testDesignChrome();
   void testInterfaceSize(double ratio);
+  void testTextIconSize(int textPercent, int iconPercent, const QString& family);
   void testNavigationRuntime();
   void testNavigationRelease();
   void testNavigationControls(const QString& mode);

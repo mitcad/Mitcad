@@ -284,4 +284,23 @@ struct LineAngleSnap {
 constexpr double kLineAngleSnap = 4.0;
 std::optional<LineAngleSnap> snapLineAngle(const QPointF& from, const QPointF& to, double within = kLineAngleSnap);
 
+// Edit Line in a projected edge's menu (mitcad#1546): a view's own width
+// and pattern for the lines of the edge a `drawing_pick` (`"want":
+// "edge"`) found (`pick`), of its body, or of its component (`of`:
+// "edge", "body", "component").
+// The edit_drawing_line command that sets them, or with `reset` takes the
+// choice away (the view's own lines again; no width or pattern); empty for
+// "component" when the pick lies in no component, or for a pick without
+// an edge.
+QJsonObject lineStyleEdit(const QString& drawing, int view, const QJsonObject& pick, const QString& of,
+                          const QString& width, const QString& pattern, bool reset = false);
+// The view's choice for that, from its `lines` in the `drawing` query: its
+// width and pattern; none when the view has none.
+std::optional<QPair<QString, QString>> lineStyleOf(const QJsonArray& lines, const QJsonObject& pick,
+                                                  const QString& of);
+// A view's choices in one line of the log: "edge E{…} of F2.b0 thick
+// phantom; body F4.b0 in O1 thin chain; occurrence O2 thin dashed", or
+// "none".
+QString lineStylesText(const QJsonArray& lines);
+
 } // namespace mitcad::drawings

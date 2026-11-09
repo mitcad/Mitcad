@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "mitcad/geometry/datum.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -22,9 +23,12 @@
 #include <GProp_GProps.hxx>
 #include <GeomAPI_ProjectPointOnCurve.hxx>
 #include <GeomLib_IsPlanarSurface.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <Geom_BezierCurve.hxx>
 #include <Geom_Curve.hxx>
 #include <Geom_Surface.hxx>
 #include <ShapeAnalysis_Surface.hxx>
+#include <Standard_Failure.hxx>
 #include <TopoDS.hxx>
 #include <gp_Ax3.hxx>
 #include <gp_Circ.hxx>
@@ -257,12 +261,39 @@ TopoDS_Edge forward(const TopoDS_Edge& edge) {
   return TopoDS::Edge(edge.Oriented(TopAbs_FORWARD));
 }
 
-// The curve of an edge, in the direction of its parameter.
-CurveDescription describe_edge(const TopoDS_Edge& forward_edge) {
+// Whether every pole lies within kLinear of the line from `start` to `end`
+// and between them: the curve, inside its poles' hull, runs on that
+// segment.
+template <class Curve>
+bool poles_on_segment(const Curve& curve, const gp_Pnt& start, const gp_Pnt& end) {
+  const gp_Vec along(start, end);
+  const double length = along.Magnitude();
+  if (length <= kLinear) {
+    return false;
+  }
+  const gp_Dir direction(along);
+  const gp_Lin line(start, direction);
+  for (int i = 1; i <= curve->NbPoles(); ++i) {
+    const gp_Pnt pole = curve->Pole(i);
+    const double at = gp_Vec(start, pole).Dot(gp_Vec(direction));
+    if (line.Distance(pole) > kLinear || at < -kLinear || at > length + kLinear) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The curve of an edge, in the direction of its parameter; with
+// `straight_splines`, a straight spline or Bezier curve is a line.
+CurveDescription describe_edge(const TopoDS_Edge& forward_edge, bool straight_splines = false) {
   const BRepAdaptor_Curve curve(forward_edge);
   CurveDescription result;
   result.start = curve.Value(curve.FirstParameter());
   result.end = curve.Value(curve.LastParameter());
+  if (straight_splines && curve.GetType() != GeomAbs_Line && is_straight(forward_edge)) {
+    result.type = "line";
+    return result;
+  }
   switch (curve.GetType()) {
   case GeomAbs_Line:
     result.type = "line";
@@ -361,7 +392,92 @@ SurfaceDescription face_geometry(const Shape& shape, const std::string& face) {
 
 CurveDescription edge_geometry(const Shape& shape, const std::string& edge) {
   return detail::run("edge geometry",
-                     [&] { return describe_edge(forward(require_edge(shape, edge))); });
+                     [&] { return describe_edge(forward(require_edge(shape, edge)), true); });
+}
+
+bool is_straight(const TopoDS_Edge& edge) {
+  if (edge.IsNull() || BRep_Tool::Degenerated(edge)) {
+    return false;
+  }
+  try {
+    const BRepAdaptor_Curve curve(edge);
+    const double first = curve.FirstParameter();
+    const double last = curve.LastParameter();
+    const gp_Pnt start = curve.Value(first);
+    const gp_Pnt end = curve.Value(last);
+    switch (curve.GetType()) {
+    case GeomAbs_Line:
+      return start.Distance(end) > kLinear;
+    case GeomAbs_BSplineCurve: {
+      // The edge's own part of the spline, in the edge's location.
+      Handle(Geom_BSplineCurve) spline = curve.BSpline();
+      if (spline.IsNull()) {
+        return false;
+      }
+      const double low = std::max(first, spline->FirstParameter());
+      const double high = std::min(last, spline->LastParameter());
+      if (!spline->IsPeriodic() && high > low &&
+          (low > spline->FirstParameter() || high < spline->LastParameter())) {
+        spline = Handle(Geom_BSplineCurve)::DownCast(spline->Copy());
+        spline->Segment(low, high);
+      }
+      return poles_on_segment(spline, start, end);
+    }
+    case GeomAbs_BezierCurve: {
+      Handle(Geom_BezierCurve) bezier = curve.Bezier();
+      if (bezier.IsNull()) {
+        return false;
+      }
+      const double low = std::max(first, bezier->FirstParameter());
+      const double high = std::min(last, bezier->LastParameter());
+      if (high > low && (low > bezier->FirstParameter() || high < bezier->LastParameter())) {
+        bezier = Handle(Geom_BezierCurve)::DownCast(bezier->Copy());
+        bezier->Segment(low, high);
+      }
+      return poles_on_segment(bezier, start, end);
+    }
+    default:
+      return false;
+    }
+  } catch (const Standard_Failure&) {
+    return false;
+  }
+}
+
+std::optional<gp_Pln> face_plane(const TopoDS_Face& face) {
+  TopLoc_Location location;
+  if (face.IsNull() || BRep_Tool::Surface(face, location).IsNull()) {
+    return std::nullopt; // a mesh body's triangles
+  }
+  try {
+    const BRepAdaptor_Surface surface(face, false);
+    gp_Pnt on;
+    switch (surface.GetType()) {
+    case GeomAbs_Plane:
+      on = surface.Plane().Location();
+      break;
+    case GeomAbs_Cylinder:
+    case GeomAbs_Cone:
+    case GeomAbs_Sphere:
+    case GeomAbs_Torus:
+      return std::nullopt;
+    default: {
+      // As describe() reads it: imported faces and the walls of sheet
+      // bodies may be planes stored as splines.
+      GeomLib_IsPlanarSurface planar(BRep_Tool::Surface(face), kLinear);
+      if (!planar.IsPlanar()) {
+        return std::nullopt;
+      }
+      on = planar.Plan().Location();
+    }
+    }
+    // The outward normal (a spline's plane may point either way).
+    return gp_Pln(on, plane_normal(face));
+  } catch (const Standard_Failure&) {
+    return std::nullopt;
+  } catch (const std::runtime_error&) {
+    return std::nullopt; // no normal
+  }
 }
 
 std::vector<SurfaceDescription> face_geometries(const Shape& shape) {

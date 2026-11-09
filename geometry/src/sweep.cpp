@@ -1982,11 +1982,12 @@ gp_Pln target_plane(const Target& target, const gp_Dir& along) {
   gp_Pln plane = target.plane;
   if (target.kind == Target::Kind::Face) {
     const std::vector<TopoDS_Face> faces = target_faces(target);
-    const BRepAdaptor_Surface surface(faces.front());
-    if (surface.GetType() != GeomAbs_Plane) {
+    // A plane, or a flat spline face (a sheet body's wall, mitcad#1554).
+    const std::optional<gp_Pln> found = reference_plane(faces.front());
+    if (!found) {
       throw std::invalid_argument("face " + target.face + " is not planar");
     }
-    plane = surface.Plane();
+    plane = *found;
   } else if (target.kind == Target::Kind::Body) {
     throw std::invalid_argument("a body is not a plane");
   }
@@ -2007,7 +2008,7 @@ bool is_planar_target(const Target& target) {
   if (target.kind != Target::Kind::Face || !target.extend) {
     return false;
   }
-  return BRepAdaptor_Surface(target_faces(target).front()).GetType() == GeomAbs_Plane;
+  return reference_plane(target_faces(target).front()).has_value();
 }
 
 } // namespace

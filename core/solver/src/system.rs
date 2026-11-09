@@ -797,6 +797,8 @@ fn check_value(c: &Constraint) -> Result<(), Error> {
         | LineDistance { value, .. }
         | TangentDistance { value, .. }
         | RadiusGap { value, .. }
+        | TangentCircleDistance { value, .. }
+        | TangentPointDistance { value, .. }
         | HorizontalDistance { value, .. }
         | VerticalDistance { value, .. } => value == 0.0 || positive(value),
         Angle { value, .. } => (0.0..=PI).contains(&value),
@@ -815,6 +817,8 @@ fn check_value(c: &Constraint) -> Result<(), Error> {
             | LineDistance { .. }
             | TangentDistance { .. }
             | RadiusGap { .. }
+            | TangentCircleDistance { .. }
+            | TangentPointDistance { .. }
             | HorizontalDistance { .. }
             | VerticalDistance { .. } => "the distance must not be negative",
             _ => "the dimension must be positive",
@@ -838,7 +842,8 @@ pub(crate) fn constraint_entities(c: &Constraint) -> Vec<EntityId> {
         | ArcLength { arc: e, .. }
         | MajorRadius { ellipse: e, .. }
         | MinorRadius { ellipse: e, .. }
-        | SymmetricPoints { axis: e, .. } => vec![e],
+        | SymmetricPoints { axis: e, .. }
+        | TangentPointDistance { circle: e, .. } => vec![e],
         Parallel(a, b)
         | Perpendicular(a, b)
         | Tangent(a, b)
@@ -851,6 +856,7 @@ pub(crate) fn constraint_entities(c: &Constraint) -> Vec<EntityId> {
             circle: a, line: b, ..
         }
         | RadiusGap { a, b, .. }
+        | TangentCircleDistance { a, b, .. }
         | Angle { a, b, .. }
         | EqualSize(a, b)
         | TangentAt { a, b, .. }
@@ -884,6 +890,7 @@ pub(crate) fn constraint_points(c: &Constraint) -> Vec<PointId> {
         | FixPoint(p)
         | Midpoint(p, _)
         | PointLineDistance { point: p, .. }
+        | TangentPointDistance { point: p, .. }
         | TangentAt { at: p, .. }
         | SmoothAt { at: p, .. } => vec![p],
         Rotated { center, a, b, .. } => vec![center, a, b],
@@ -1107,6 +1114,15 @@ impl System {
                 let (_, ra) = self.round(a)?;
                 let (_, rb) = self.round(b)?;
                 rec.side = sign(rb - ra);
+            }
+            // Inside: which one holds the other, the larger one now.
+            TangentCircleDistance { a, b, .. } => {
+                let (_, ra) = self.round(a)?;
+                let (_, rb) = self.round(b)?;
+                rec.side = sign(ra - rb);
+            }
+            TangentPointDistance { circle, .. } => {
+                self.round(circle)?;
             }
             // A signed one keeps side 1: its value carries the side.
             HorizontalDistance { a, b, signed, .. } => {
@@ -1443,6 +1459,26 @@ impl System {
                 rec.side * self.signed_dist(self.xy(c), a, b) - radius
             }
             RadiusGap { a, b, .. } => rec.side * (self.round(b).ok()?.1 - self.round(a).ok()?.1),
+            TangentCircleDistance { a, b, inside, .. } => {
+                let (ca, ra) = self.round(a).ok()?;
+                let (cb, rb) = self.round(b).ok()?;
+                let d = self.xy(cb).sub(self.xy(ca)).norm();
+                if inside {
+                    rec.side * (ra - rb) - d
+                } else {
+                    d - ra - rb
+                }
+            }
+            TangentPointDistance {
+                circle,
+                point,
+                inside,
+                ..
+            } => {
+                let (c, r) = self.round(circle).ok()?;
+                let d = pt(point).sub(self.xy(c)).norm();
+                if inside { r - d } else { d - r }
+            }
             HorizontalDistance { a, b, .. } => rec.side * (pt(b).x - pt(a).x),
             VerticalDistance { a, b, .. } => rec.side * (pt(b).y - pt(a).y),
             Angle { a, b, .. } => {

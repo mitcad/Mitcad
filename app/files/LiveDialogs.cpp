@@ -21,6 +21,7 @@
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
 #include "LiveBrokers.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -151,7 +152,7 @@ LiveNotice::LiveNotice(QWidget* parent) : QWidget(parent) {
   auto* layout = new QHBoxLayout(this);
   layout->setContentsMargins(8, 2, 8, 2);
   auto* icon = new QLabel;
-  icon->setPixmap(themeIcon(QStringLiteral("sync")).pixmap(20, 20));
+  icon->setPixmap(themeIcon(QStringLiteral("sync")).pixmap(uiIconSize(20, 20)));
   layout->addWidget(icon);
   m_text = plainLabel();
   layout->addWidget(m_text, 1);

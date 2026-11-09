@@ -24,6 +24,7 @@
 #include <QVariant>
 
 #include "Theme.hpp"
+#include "UiSizes.hpp"
 
 namespace mitcad {
 
@@ -90,7 +91,7 @@ protected:
 private:
   QFont labelFont() const {
     QFont f = font();
-    f.setPointSizeF(std::max(9.0, f.pointSizeF() - 1.0));
+    f.setPointSizeF(std::max(9.0 * uiTextScale(), f.pointSizeF() - 1.0));
     return f;
   }
 };

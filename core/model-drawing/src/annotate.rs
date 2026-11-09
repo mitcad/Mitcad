@@ -88,6 +88,10 @@ pub fn sketch_pen(pen: SketchPen) -> Pen {
         (PenWidth::Thin, PenPattern::Chain) => Pen::Chain,
         (PenWidth::Thick, PenPattern::Chain) => Pen::ChainThick,
         (PenWidth::ExtraThick, PenPattern::Chain) => Pen::ChainExtraThick,
+        // Long dash double dotted (mitcad#1546).
+        (PenWidth::Thin, PenPattern::Phantom) => Pen::Phantom,
+        (PenWidth::Thick, PenPattern::Phantom) => Pen::PhantomThick,
+        (PenWidth::ExtraThick, PenPattern::Phantom) => Pen::PhantomExtraThick,
     }
 }
 
@@ -3411,6 +3415,7 @@ mod tests {
             PenPattern::Continuous,
             PenPattern::Dashed,
             PenPattern::Chain,
+            PenPattern::Phantom,
         ];
         let mut seen = Vec::new();
         for width in widths {
@@ -3425,6 +3430,7 @@ mod tests {
                     PenPattern::Continuous => Pen::Thin.dashes(),
                     PenPattern::Dashed => Pen::Hidden.dashes(),
                     PenPattern::Chain => Pen::Chain.dashes(),
+                    PenPattern::Phantom => Pen::Phantom.dashes(),
                 };
                 assert!((pen.width() - wide).abs() < 1e-12, "{pen:?}");
                 assert_eq!(pen.dashes(), dashes, "{pen:?}");

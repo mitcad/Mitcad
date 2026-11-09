@@ -41,6 +41,12 @@ namespace {
 
 // A press that moves further than this starts a drag.
 constexpr double kDragPixels = 4.0;
+// A point dragged with these held goes where it is dropped, without
+// snapping (mitcad#1538): Shift, or Alt where the desktop leaves Alt-drags
+// to the application, as the drawing sheet's tools.
+bool dragsFreely(Qt::KeyboardModifiers modifiers) {
+  return modifiers.testFlag(Qt::ShiftModifier) || modifiers.testFlag(Qt::AltModifier);
+}
 // Sketch geometry this near the cursor is under it.
 constexpr double kPointPixels = 8.0;
 constexpr double kCurvePixels = 6.0;
@@ -2448,6 +2454,9 @@ bool SketchController::viewerEvent(QEvent* event) {
     }
     if (m_dragging) {
       if (m_cursorValid) {
+        if (m_dragSnaps) {
+          snapDrag(e->position(), e->modifiers()); // mitcad#1538
+        }
         m_dragTarget = m_snap.at;
         m_dragPending = true;
         if (!m_dragTimer.isActive()) {
@@ -2583,6 +2592,19 @@ bool SketchController::viewerEvent(QEvent* event) {
       return true;
     }
     if (m_dragging) {
+      if (m_dragSnaps) {
+        // The drop snaps as the moves did, with the modifiers held at the
+        // release (mitcad#1538); endDrag holds the point there.
+        updateCursor(e->position());
+        if (m_cursorValid) {
+          snapDrag(e->position(), e->modifiers());
+          if (m_dragPending || dist(m_snap.at, m_dragLast) > 0.0) {
+            m_dragTarget = m_snap.at;
+            m_dragPending = true;
+          }
+          m_dropSnap = m_snap;
+        }
+      }
       endDrag();
       return true;
     }
@@ -2669,6 +2691,15 @@ bool SketchController::viewerEvent(QEvent* event) {
         return true;
       }
     }
+    // Any other curve selects its closed loop, else its open chain;
+    // Ctrl or Shift adds them (mitcad#1541, SketchReveal.cpp).
+    if (selectChainAt(e->position(), e->modifiers())) {
+      m_pressed = false;
+      m_dragEntity.clear();
+      m_viewer.cancelPointerInteraction();
+      m_overlay->update();
+      return true;
+    }
     return false;
   }
   default:
@@ -2708,6 +2739,30 @@ bool SketchController::annotationAt(const QPointF& position) const {
   return hit.valid() && m_host.sketchClickable(annotationItem(m_uid, hit), false);
 }
 
+std::vector<ToolMenuEntry> SketchController::toolMenu(const QPointF& position) {
+  if (!isActive() || !m_tool || m_editor) {
+    return {};
+  }
+  updateCursor(position);
+  if (!m_cursorValid) {
+    return {};
+  }
+  std::vector<ToolMenuEntry> entries = m_tool->menu(m_snap);
+  const SketchTool* asked = m_tool.get();
+  for (ToolMenuEntry& entry : entries) {
+    entry.run = [this, asked, run = std::move(entry.run)] {
+      // The menu is modal; a tool another one replaced meanwhile is gone.
+      if (m_tool.get() != asked || !run) {
+        return;
+      }
+      run();
+      placeFields();
+      m_overlay->update();
+    };
+  }
+  return entries;
+}
+
 Selection SketchController::annotationsIn(const QRectF& area, bool crossing) const {
   Selection items;
   if (!isActive()) {
@@ -2739,9 +2794,100 @@ void SketchController::startDrag() {
   if (m_dragDimension.isEmpty()) {
     emit geometryDragStarted();
   }
-  hint(m_dragSelection.isEmpty()
-           ? tr("Drag: the geometry follows as far as its constraints let it.")
-           : tr("Drag: the selection moves together as far as its constraints let it."));
+  // A single point (a curve's end included) snaps as the Line tool's
+  // points do (mitcad#1538); a curve or a selection moves as before.
+  m_dropSnap = Snap();
+  m_loggedDragSnap.clear();
+  m_dragSkipPoints.clear();
+  m_dragSkipCurves.clear();
+  m_dragSnaps =
+      m_dragDimension.isEmpty() && m_dragSelection.isEmpty() && m_model.point(m_dragEntity) != nullptr;
+  if (m_dragSnaps) {
+    // Not onto itself, its own curves (it is their end, centre or control
+    // point) and their other points (a line's end onto its other end
+    // would leave nothing of the line), or what holds it already: the
+    // points and curves of its active coincident constraints.
+    m_dragSkipPoints.insert(m_dragEntity);
+    for (const CurveData& c : m_model.curves) {
+      if (c.points.contains(m_dragEntity) || c.start == m_dragEntity || c.end == m_dragEntity ||
+          c.center == m_dragEntity) {
+        m_dragSkipCurves.insert(c.id);
+        for (const QString& own : c.points) {
+          m_dragSkipPoints.insert(own);
+        }
+        for (const QString& own : {c.start, c.end, c.center}) {
+          if (!own.isEmpty()) {
+            m_dragSkipPoints.insert(own);
+          }
+        }
+      }
+    }
+    for (const ConstraintData& k : m_model.constraints) {
+      if (!k.active || k.type != QStringLiteral("coincident") || !k.refs.contains(m_dragEntity)) {
+        continue;
+      }
+      for (const QString& ref : k.refs) {
+        if (m_model.point(ref) != nullptr) {
+          m_dragSkipPoints.insert(ref);
+        } else if (m_model.curve(ref) != nullptr) {
+          m_dragSkipCurves.insert(ref);
+        }
+      }
+    }
+  }
+  if (m_dragSnaps) {
+    hint(tr("Drag: the point snaps to points and curves and is held where it is dropped "
+            "(Shift or Alt: no snap)."));
+  } else {
+    hint(m_dragSelection.isEmpty()
+             ? tr("Drag: the geometry follows as far as its constraints let it.")
+             : tr("Drag: the selection moves together as far as its constraints let it."));
+  }
+}
+
+void SketchController::snapDrag(const QPointF& position, Qt::KeyboardModifiers modifiers) {
+  const auto raw = sketchAt(position);
+  if (!raw) {
+    return;
+  }
+  const bool unsnapped = dragsFreely(modifiers);
+  if (unsnapped) {
+    m_snap = Snap();
+    m_snap.at = *raw;
+    m_snap.screen = position;
+  } else {
+    SnapSettings settings;
+    settings.model = &m_model;
+    settings.toScreen = [this](const V2& p) { return toScreen(p); };
+    // Not to the grid, nor onto the axes across the view: a drop away from
+    // the sketch's points and curves stays where it is dropped, and a
+    // point dragged across an axis does not stick to it. The origin is a
+    // point to snap to, as for the drawing tools.
+    settings.grid = false;
+    settings.skipPoints = m_dragSkipPoints;
+    settings.skipCurves = m_dragSkipCurves;
+    settings.axes = false;
+    m_snap = snap(settings, *raw, position);
+  }
+  // For UI tests: where the dragged point snaps, when that changes.
+  const QString snapped = unsnapped ? QStringLiteral("off (Shift or Alt)") : m_snap.describe();
+  if (snapped != m_loggedDragSnap) {
+    m_loggedDragSnap = snapped;
+    qDebug().noquote() << QStringLiteral("Drag snap of %1: %2").arg(m_dragEntity, snapped);
+  }
+  m_overlay->update();
+}
+
+bool SketchController::holdAtDrop(const QString& point, const Snap& snap) {
+  SketchOp op(*this);
+  op.constrain(point, snap);
+  const bool held = op.commit();
+  // For UI tests; a refusal's reason is the action's notice and logged as
+  // "Constraint coincident on … not added: …".
+  qDebug().noquote() << QStringLiteral("Drag of %1 dropped on %2: %3")
+                            .arg(point, snap.describe(),
+                                 held ? QStringLiteral("held there") : QStringLiteral("nothing added"));
+  return held;
 }
 
 QStringList SketchController::selectionDraggedWith(const QString& entity) const {
@@ -2877,12 +3023,22 @@ void SketchController::endDrag() {
   }
   const QString entity = m_dragEntity;
   const QStringList together = m_dragSelection;
+  // Where a single point was dropped (mitcad#1538): none when it was not
+  // released (a dialog ended the drag), with Shift or Alt, or away from
+  // the sketch's points and curves.
+  const Snap dropped = m_dropSnap;
+  m_dropSnap = Snap();
+  m_dragSnaps = false;
+  m_snap = Snap();
+  m_snap.at = m_dragLast;
   m_dragEntity.clear();
   m_dragSelection.clear();
   if (!together.isEmpty()) {
     qDebug().noquote() << QStringLiteral("Drag of the selection: %1").arg(together.join(QLatin1Char(' ')));
   }
-  if (m_dragSteps > 1) {
+  // Held where it was dropped, in the drag's undo step (merged below).
+  const bool held = m_dragSteps > 0 && dropped.onGeometry() && holdAtDrop(entity, dropped);
+  if (m_dragSteps > 1 || held) {
     try {
       runModel({{QStringLiteral("cmd"), QStringLiteral("merge_undo")},
                 {QStringLiteral("depth"), m_dragDepth},

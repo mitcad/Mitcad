@@ -19,6 +19,7 @@
 #include "Command.hpp"
 #include "Icons.hpp"
 #include "Theme.hpp"
+#include "UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -234,7 +235,7 @@ bool NoteRow::setNote(const QString& text, const QStringList& actions, const QSt
       } else {
         // A small icon on the text's line, the action its tooltip.
         button->setIcon(themeIcon(icon));
-        button->setIconSize(QSize(16, 16));
+        button->setIconSize(uiIconSize(16, 16));
         button->setFlat(true);
         button->setToolTip(actions.at(i));
         button->setAccessibleName(actions.at(i));

@@ -3,12 +3,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_Sewing.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepLib.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepTools.hxx>
@@ -36,6 +40,7 @@
 #include <TopExp_Explorer.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Iterator.hxx>
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Solid.hxx>
 #include <TopoDS_Wire.hxx>
@@ -44,6 +49,7 @@
 #include <gp_Lin.hxx>
 #include <gp_Pln.hxx>
 
+#include "emboss_taper.hpp"
 #include "history.hpp"
 #include "sweep.hpp"
 #include "util.hpp"
@@ -66,6 +72,11 @@ struct Wrap {
   bool cone = false;
   double rho0 = 0.0;
   double sin_angle = 0.0;
+  // The taper (mitcad#1547): how far the top's boundary moves within the
+  // top surface, outwards when positive; on a cone, the top's distance
+  // from its apex along a generator at the reference circle's parameters.
+  double shift = 0.0;
+  double top_rho = 0.0;
 };
 
 // A flat point (s, t) as the cone's parameters: the angle about the axis
@@ -139,6 +150,44 @@ UvCurve uv_curve(const TopoDS_Edge& edge, double radius) {
   return {occ::handle<Geom2d_Curve>(spline), spline->FirstParameter(), spline->LastParameter()};
 }
 
+// A 2D curve through `exact` over [first, last]: a B-spline through its
+// points at evenly spaced parameters, more of them until it is within 1e-8
+// mm of it, as `error` measures the difference of two points.
+occ::handle<Geom2d_BSplineCurve> fitted(const std::function<gp_Pnt2d(double)>& exact, double first, double last,
+                                        const std::function<double(const gp_Pnt2d&, const gp_Pnt2d&)>& error,
+                                        const char* what) {
+  for (int n = 16; n <= 4096; n *= 2) {
+    occ::handle<NCollection_HArray1<gp_Pnt2d>> points = new NCollection_HArray1<gp_Pnt2d>(1, n + 1);
+    occ::handle<NCollection_HArray1<double>> params = new NCollection_HArray1<double>(1, n + 1);
+    for (int i = 0; i <= n; ++i) {
+      const double t = first + (last - first) * i / n;
+      points->SetValue(i + 1, exact(t));
+      params->SetValue(i + 1, t);
+    }
+    Geom2dAPI_Interpolate interpolate(points, params, false, 1.0e-12);
+    interpolate.Perform();
+    if (!interpolate.IsDone()) {
+      throw std::runtime_error(what);
+    }
+    const occ::handle<Geom2d_BSplineCurve> curve = interpolate.Curve();
+    double worst = 0.0;
+    for (int i = 0; i < n; ++i) {
+      const double t = first + (last - first) * (i + 0.5) / n;
+      worst = std::max(worst, error(curve->Value(t), exact(t)));
+    }
+    if (worst <= 1.0e-8 || n == 4096) {
+      return curve;
+    }
+  }
+  throw std::runtime_error(what);
+}
+
+// How far apart two points of a cone's parameters are on it, near enough.
+double cone_error(const Wrap& wrap, const gp_Pnt2d& a, const gp_Pnt2d& b) {
+  const double radius = wrap.rho0 * wrap.sin_angle;
+  return std::abs(a.X() - b.X()) * (radius + std::abs(a.Y())) + std::abs(a.Y() - b.Y());
+}
+
 // The edge of a flat profile face wrapped onto a cone: its curve in the
 // cone's parameters, through points of the exact development at the
 // edge's own parameters, more of them until it is within 1e-8 mm of it.
@@ -154,35 +203,11 @@ UvCurve cone_uv_curve(const TopoDS_Edge& edge, const Wrap& wrap) {
     curve = occ::down_cast<Geom_Curve>(curve->Transformed(location.Transformation()));
   }
   const occ::handle<Geom2d_Curve> flat = GeomAPI::To2d(curve, gp_Pln(gp::XOY()));
-  const auto exact = [&](double t) { return cone_uv(wrap, flat->Value(t)); };
-  // Lengths on the cone per unit of the parameters, for the error.
-  const double radius = wrap.rho0 * wrap.sin_angle;
-  for (int n = 16; n <= 4096; n *= 2) {
-    occ::handle<NCollection_HArray1<gp_Pnt2d>> points = new NCollection_HArray1<gp_Pnt2d>(1, n + 1);
-    occ::handle<NCollection_HArray1<double>> params = new NCollection_HArray1<double>(1, n + 1);
-    for (int i = 0; i <= n; ++i) {
-      const double t = first + (last - first) * i / n;
-      points->SetValue(i + 1, exact(t));
-      params->SetValue(i + 1, t);
-    }
-    Geom2dAPI_Interpolate interpolate(points, params, false, 1.0e-12);
-    interpolate.Perform();
-    if (!interpolate.IsDone()) {
-      throw std::runtime_error("an edge of the profile could not be developed onto the cone");
-    }
-    const occ::handle<Geom2d_BSplineCurve> uv = interpolate.Curve();
-    double error = 0.0;
-    for (int i = 0; i < n; ++i) {
-      const double t = first + (last - first) * (i + 0.5) / n;
-      const gp_Pnt2d a = uv->Value(t);
-      const gp_Pnt2d b = exact(t);
-      error = std::max(error, std::abs(a.X() - b.X()) * (radius + std::abs(a.Y())) + std::abs(a.Y() - b.Y()));
-    }
-    if (error <= 1.0e-8 || n == 4096) {
-      return {occ::handle<Geom2d_Curve>(uv), first, last};
-    }
-  }
-  throw std::runtime_error("an edge of the profile could not be developed onto the cone");
+  const occ::handle<Geom2d_BSplineCurve> uv = fitted(
+      [&](double t) { return cone_uv(wrap, flat->Value(t)); }, first, last,
+      [&](const gp_Pnt2d& a, const gp_Pnt2d& b) { return cone_error(wrap, a, b); },
+      "an edge of the profile could not be developed onto the cone");
+  return {occ::handle<Geom2d_Curve>(uv), first, last};
 }
 
 // The point moved radially from the axis by the factor k.
@@ -218,6 +243,9 @@ struct WrappedEdge {
   TopoDS_Edge base;
   TopoDS_Edge top;
   UvCurve uv;
+  // A taper's top shrank the edge to nothing (mitcad#1547): no top edge,
+  // the corner its neighbours meet at instead.
+  TopoDS_Vertex apex;
 };
 
 WrappedEdge wrapped_edge(const Wrap& wrap, const UvCurve& uv, const TopoDS_Vertex (&base)[2],
@@ -327,6 +355,249 @@ TopAbs_Orientation orientation_in(const TopoDS_Face& face, const TopoDS_Edge& ed
   throw std::runtime_error("a wall of the emboss does not meet its profile's face");
 }
 
+// A point of the top surface's parameters laid out flat on its development
+// (mitcad#1547): a cylinder's unrolled, a cone's about its apex. Lengths
+// and angles on the top surface are the development's.
+gp_Pnt2d top_development(const Wrap& wrap, const gp_Pnt2d& uv) {
+  if (!wrap.cone) {
+    return gp_Pnt2d(uv.X() * wrap.to, uv.Y());
+  }
+  const double rho = wrap.top_rho + uv.Y();
+  const double phi = uv.X() * wrap.sin_angle;
+  return gp_Pnt2d(rho * std::sin(phi), rho * std::cos(phi));
+}
+
+// A point of the top's development as the top surface's parameters.
+gp_Pnt2d top_parameters(const Wrap& wrap, const gp_Pnt2d& flat) {
+  if (!wrap.cone) {
+    return gp_Pnt2d(flat.X() / wrap.to, flat.Y());
+  }
+  return gp_Pnt2d(std::atan2(flat.X(), flat.Y()) / wrap.sin_angle,
+                  std::hypot(flat.X(), flat.Y()) - wrap.top_rho);
+}
+
+// The top's edges of a tapered emboss (mitcad#1547): the profile face laid
+// out on the top surface's development, its loops moved there by the
+// taper's shift with OCCT's offset (exact on the development, whose lengths
+// are the surface's), and the moved edges laid onto the top surface. Each
+// wrapped edge's top is replaced by its moved edge, with the same
+// parameters' direction as its base; the base edges stay.
+void tapered_tops(const Wrap& wrap, const detail::SweepFace& profile, EdgeMap& edges) {
+  const TopoDS_Face& planar = profile.face;
+  BRep_Builder builder;
+  const occ::handle<Geom_Surface> plane = BRep_Tool::Surface(planar);
+  const auto in_plane = [](const gp_Pnt2d& p) { return gp_Pnt(p.X(), p.Y(), 0.0); };
+  // The profile face on the development, edge for edge.
+  NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher> laid;
+  NCollection_DataMap<TopoDS_Shape, TopoDS_Vertex, TopTools_ShapeMapHasher> laid_vertices;
+  const auto laid_vertex = [&](const TopoDS_Vertex& flat) {
+    if (!laid_vertices.IsBound(flat)) {
+      const gp_Pnt p = BRep_Tool::Pnt(flat);
+      const gp_Pnt2d uv =
+          wrap.cone ? cone_uv(wrap, gp_Pnt2d(p.X(), p.Y())) : uv_of(gp_Pnt2d(p.X(), p.Y()), wrap.radius);
+      TopoDS_Vertex vertex;
+      builder.MakeVertex(vertex, in_plane(top_development(wrap, uv)), wrap.tolerance);
+      laid_vertices.Bind(flat, vertex);
+    }
+    return laid_vertices.Find(flat);
+  };
+  for (TopExp_Explorer e(planar, TopAbs_EDGE); e.More(); e.Next()) {
+    if (laid.IsBound(e.Current())) {
+      continue;
+    }
+    const UvCurve& uv = edges.Find(e.Current()).uv;
+    occ::handle<Geom2d_Curve> flat;
+    double first = uv.first;
+    double last = uv.last;
+    if (!wrap.cone && uv.curve->IsKind(STANDARD_TYPE(Geom2d_Line))) {
+      const gp_Pnt2d a = top_development(wrap, uv.curve->Value(uv.first));
+      const gp_Pnt2d b = top_development(wrap, uv.curve->Value(uv.last));
+      flat = new Geom2d_Line(a, gp_Dir2d(gp_Vec2d(a, b)));
+      first = 0.0;
+      last = a.Distance(b);
+    } else if (!wrap.cone) {
+      // An affine map of a B-spline moves its poles.
+      const occ::handle<Geom2d_BSplineCurve> spline =
+          occ::down_cast<Geom2d_BSplineCurve>(Geom2dConvert::CurveToBSplineCurve(
+              new Geom2d_TrimmedCurve(uv.curve, uv.first, uv.last)));
+      for (int i = 1; i <= spline->NbPoles(); ++i) {
+        spline->SetPole(i, top_development(wrap, spline->Pole(i)));
+      }
+      flat = spline;
+      first = spline->FirstParameter();
+      last = spline->LastParameter();
+    } else {
+      flat = fitted([&](double t) { return top_development(wrap, uv.curve->Value(t)); }, uv.first, uv.last,
+                    [](const gp_Pnt2d& a, const gp_Pnt2d& b) { return a.Distance(b); },
+                    "an edge of the profile could not be laid out on the top's development");
+    }
+    TopoDS_Vertex v0;
+    TopoDS_Vertex v1;
+    TopExp::Vertices(TopoDS::Edge(e.Current()), v0, v1);
+    TopoDS_Edge edge;
+    builder.MakeEdge(edge, GeomAPI::To3d(flat, gp_Pln(gp::XOY())), wrap.tolerance);
+    builder.Add(edge, laid_vertex(v0).Oriented(TopAbs_FORWARD));
+    builder.Add(edge, laid_vertex(v1).Oriented(TopAbs_REVERSED));
+    builder.Range(edge, first, last);
+    laid.Bind(e.Current(), edge);
+  }
+  // Its loops as the profile face's, on the same plane: the development
+  // keeps the plane's orientation (a stretch across the axis, or along the
+  // cone's generators).
+  TopoDS_Face face;
+  builder.MakeFace(face, plane, wrap.tolerance);
+  for (TopoDS_Iterator w(planar, false, false); w.More(); w.Next()) {
+    TopoDS_Wire wire;
+    builder.MakeWire(wire);
+    for (TopoDS_Iterator e(w.Value(), false, false); e.More(); e.Next()) {
+      builder.Add(wire, laid.Find(e.Value()).Oriented(e.Value().Orientation()));
+    }
+    wire.Closed(true);
+    wire.Orientation(w.Value().Orientation());
+    builder.Add(face, wire);
+  }
+  face.Orientation(planar.Orientation());
+  const detail::MovedLoops loops = detail::moved_loops(face, wrap.shift, detail::region_list(profile.regions));
+
+  // The moved edges on the top surface; corners shared where they meet.
+  std::vector<std::pair<gp_Pnt2d, TopoDS_Vertex>> corners;
+  const double tolerance = wrap.tolerance * std::max(1.0, wrap.to / wrap.radius);
+  const auto corner = [&](const gp_Pnt2d& uv) {
+    const gp_Pnt2d at = top_development(wrap, uv);
+    for (const auto& [place, vertex] : corners) {
+      if (place.Distance(at) <= 1.0e-6 * std::max(1.0, wrap.to)) {
+        return vertex;
+      }
+    }
+    TopoDS_Vertex vertex;
+    builder.MakeVertex(vertex, wrap.top->Value(uv.X(), uv.Y()), tolerance);
+    corners.emplace_back(at, vertex);
+    return vertex;
+  };
+  for (EdgeMap::Iterator it(edges); it.More(); it.Next()) {
+    const TopoDS_Shape& on_development = laid.Find(it.Key());
+    if (loops.vanished.IsBound(on_development)) {
+      const gp_Pnt p = BRep_Tool::Pnt(loops.vanished.Find(on_development));
+      WrappedEdge& wrapped = edges.ChangeFind(it.Key());
+      wrapped.top.Nullify();
+      wrapped.apex = corner(top_parameters(wrap, gp_Pnt2d(p.X(), p.Y())));
+      continue;
+    }
+    // The moved edge's curve runs as the base edge's.
+    const BRepAdaptor_Curve curve(loops.moved.Find(on_development));
+    const double f = curve.FirstParameter();
+    const double l = curve.LastParameter();
+    const auto at = [&](double t) {
+      const gp_Pnt p = curve.Value(t);
+      return gp_Pnt2d(p.X(), p.Y());
+    };
+    UvCurve top;
+    occ::handle<Geom_Curve> exact;
+    if (!wrap.cone && curve.GetType() == GeomAbs_Line) {
+      const gp_Pnt2d a = top_parameters(wrap, at(f));
+      const gp_Pnt2d b = top_parameters(wrap, at(l));
+      const gp_Dir2d along(gp_Vec2d(a, b));
+      top = {new Geom2d_Line(a, along), 0.0, a.Distance(b)};
+      // Around the axis or along it: an arc or a line, exactly.
+      const gp_Dir axis = wrap.frame.Direction();
+      if (std::abs(along.Y()) < 1.0e-12) {
+        const gp_Pnt centre = wrap.frame.Location().Translated(gp_Vec(axis) * a.Y());
+        const gp_Dir start = wrap.frame.XDirection().Rotated(gp_Ax1(wrap.frame.Location(), axis), a.X());
+        exact = new Geom_Circle(gp_Ax2(centre, along.X() > 0.0 ? axis : axis.Reversed(), start), wrap.to);
+      } else if (std::abs(along.X()) < 1.0e-12) {
+        exact = new Geom_Line(wrap.top->Value(a.X(), a.Y()), along.Y() > 0.0 ? axis : axis.Reversed());
+      }
+    } else {
+      const occ::handle<Geom2d_BSplineCurve> uv = fitted(
+          [&](double t) { return top_parameters(wrap, at(t)); }, f, l,
+          [&](const gp_Pnt2d& a, const gp_Pnt2d& b) {
+            return wrap.cone ? cone_error(wrap, a, b)
+                             : std::abs(a.X() - b.X()) * wrap.to + std::abs(a.Y() - b.Y());
+          },
+          "a tapered edge of the profile could not be laid onto the top");
+      top = {occ::handle<Geom2d_Curve>(uv), f, l};
+    }
+    WrappedEdge& wrapped = edges.ChangeFind(it.Key());
+    TopoDS_Edge edge;
+    builder.MakeEdge(edge);
+    builder.UpdateEdge(edge, top.curve, wrap.top, TopLoc_Location(), tolerance);
+    builder.Add(edge, corner(top.curve->Value(top.first)).Oriented(TopAbs_FORWARD));
+    builder.Add(edge, corner(top.curve->Value(top.last)).Oriented(TopAbs_REVERSED));
+    builder.Range(edge, top.first, top.last);
+    if (!exact.IsNull()) {
+      builder.UpdateEdge(edge, exact, tolerance);
+    } else if (!BRepLib::BuildCurve3d(edge, std::min(tolerance, 1.0e-8), GeomAbs_C1, 14, 10000)) {
+      throw std::runtime_error("a tapered edge of the profile could not be laid onto the top");
+    }
+    wrapped.top = edge;
+  }
+}
+
+// The solid of a tapered profile (mitcad#1547) from its foot and top faces
+// on the two surfaces: each wall ruled between its edge on the foot and
+// its edge on the top (or the top's corner where the taper shrank the edge
+// to nothing), and the faces sewn into one closed shell.
+ShapePtr tapered_solid(const std::string& feature, const Wrap& wrap, const detail::SweepFace& profile,
+                       const EdgeMap& edges, const TopoDS_Face& base, const TopoDS_Face& top) {
+  BRepBuilderAPI_Sewing sewing(std::max(10.0 * wrap.tolerance, 1.0e-6));
+  sewing.Add(base);
+  sewing.Add(top);
+  std::vector<std::pair<TopoDS_Face, std::string>> walls;
+  for (EdgeMap::Iterator it(edges); it.More(); it.Next()) {
+    const WrappedEdge& wrapped = it.Value();
+    BRepOffsetAPI_ThruSections sections(false, true, wrap.tolerance);
+    sections.AddWire(BRepBuilderAPI_MakeWire(wrapped.base).Wire());
+    if (wrapped.top.IsNull()) {
+      sections.AddVertex(wrapped.apex);
+    } else {
+      sections.AddWire(BRepBuilderAPI_MakeWire(wrapped.top).Wire());
+    }
+    detail::build(sections);
+    if (!sections.IsDone()) {
+      throw std::runtime_error("the tapered walls of the emboss could not be built");
+    }
+    for (TopExp_Explorer f(sections.Shape(), TopAbs_FACE); f.More(); f.Next()) {
+      sewing.Add(f.Current());
+      for (const auto& [source, name] : profile.edges) {
+        if (source.IsSame(it.Key())) {
+          walls.emplace_back(TopoDS::Face(f.Current()), name);
+        }
+      }
+    }
+  }
+  sewing.Perform();
+  TopoDS_Shell shell;
+  int shells = 0;
+  for (TopExp_Explorer e(sewing.SewedShape(), TopAbs_SHELL); e.More(); e.Next()) {
+    shell = TopoDS::Shell(e.Current());
+    ++shells;
+  }
+  if (shells != 1 || sewing.NbFreeEdges() != 0) {
+    throw std::runtime_error("the tapered walls of the profile " + detail::region_list(profile.regions) +
+                             " do not close up with its top and foot");
+  }
+  BRep_Builder builder;
+  shell.Closed(true);
+  TopoDS_Solid solid;
+  builder.MakeSolid(solid);
+  builder.Add(solid, shell);
+  BRepLib::OrientClosedSolid(solid);
+  const auto image = [&sewing](const TopoDS_Shape& face) {
+    return sewing.IsModified(face) ? sewing.Modified(face) : face;
+  };
+  detail::FaceNamer namer(solid);
+  for (const std::string& name : detail::cap_names(feature, "start", profile)) {
+    namer.add(image(base), name);
+  }
+  for (const std::string& name : detail::cap_names(feature, "end", profile)) {
+    namer.add(image(top), name);
+  }
+  for (const auto& [wall, name] : walls) {
+    namer.add(image(wall), name);
+  }
+  return namer.shape();
+}
+
 // The solid of one profile face wrapped and grown.
 ShapePtr wrapped_solid(const std::string& feature, const Wrap& wrap, const detail::SweepFace& profile) {
   const TopoDS_Face& planar = profile.face;
@@ -361,6 +632,9 @@ ShapePtr wrapped_solid(const std::string& feature, const Wrap& wrap, const detai
     edges.Bind(edge, wrapped_edge(wrap, wrap.cone ? cone_uv_curve(edge, wrap) : uv_curve(edge, wrap.radius), base,
                                   top));
   }
+  if (wrap.shift != 0.0) {
+    tapered_tops(wrap, profile, edges);
+  }
 
   // The loops on both cylinders, edge for edge in the same order.
   std::vector<std::pair<TopoDS_Wire, TopoDS_Wire>> loops;
@@ -375,7 +649,9 @@ ShapePtr wrapped_solid(const std::string& feature, const Wrap& wrap, const detai
     for (BRepTools_WireExplorer e(wire, planar); e.More(); e.Next()) {
       const WrappedEdge& wrapped = edges.Find(e.Current());
       builder.Add(base, wrapped.base.Oriented(e.Current().Orientation()));
-      builder.Add(top, wrapped.top.Oriented(e.Current().Orientation()));
+      if (!wrapped.top.IsNull()) {
+        builder.Add(top, wrapped.top.Oriented(e.Current().Orientation()));
+      }
     }
     base.Closed(true);
     top.Closed(true);
@@ -401,6 +677,9 @@ ShapePtr wrapped_solid(const std::string& feature, const Wrap& wrap, const detai
     top.Reverse();
   }
 
+  if (wrap.shift != 0.0) {
+    return tapered_solid(feature, wrap, profile, edges, base, top);
+  }
   TopoDS_Shell shell;
   builder.MakeShell(shell);
   builder.Add(shell, base);
@@ -458,6 +737,13 @@ ShapePtr wrapped_solid(const std::string& feature, const Wrap& wrap, const detai
 
 namespace {
 
+// A taper's angle: finite and less than a right angle either way.
+void require_taper(double taper) {
+  if (!(std::abs(taper) < kTwoPi / 4.0 - 1.0e-9)) {
+    throw std::invalid_argument("the emboss's taper angle must lie between -90 and 90 degrees");
+  }
+}
+
 // The profiles developed onto a cone (EmbossWrapSpec, mitcad#473).
 ShapePtr wrapped_cone(const EmbossWrapSpec& spec) {
   const double angle = spec.half_angle;
@@ -494,6 +780,8 @@ ShapePtr wrapped_cone(const EmbossWrapSpec& spec) {
     wrap.cone = true;
     wrap.sin_angle = std::sin(angle);
     wrap.rho0 = spec.radius / wrap.sin_angle;
+    wrap.top_rho = wrap.rho0 + offset * std::cos(angle) / wrap.sin_angle;
+    wrap.shift = std::abs(offset) * std::tan(spec.taper);
     wrap.base = new Geom_ConicalSurface(wrap.frame, angle, spec.radius);
     // The cone moved along its normals by the offset: the same angle, the
     // radius and the place along the axis it has at the same parameters.
@@ -535,6 +823,7 @@ ShapePtr wrapped_emboss(const EmbossWrapSpec& spec) {
   if (spec.regions.empty()) {
     throw std::invalid_argument("no profiles to emboss");
   }
+  require_taper(spec.taper);
   if (spec.half_angle != 0.0) {
     return wrapped_cone(spec);
   }
@@ -561,6 +850,7 @@ ShapePtr wrapped_emboss(const EmbossWrapSpec& spec) {
     wrap.tolerance = 1.0e-7 * std::max(1.0, std::max(spec.radius, spec.to_radius));
     wrap.base = new Geom_CylindricalSurface(wrap.frame, spec.radius);
     wrap.top = new Geom_CylindricalSurface(wrap.frame, spec.to_radius);
+    wrap.shift = std::abs(spec.to_radius - spec.radius) * std::tan(spec.taper);
 
     const Frame flat = flat_frame(spec.frame, wrap.frame);
     std::vector<ShapePtr> parts;

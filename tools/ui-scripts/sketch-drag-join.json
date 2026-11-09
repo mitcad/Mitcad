@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Sketch1 on XY for tools/ui-scripts/sketch-drag-join.mitcad-ui (mitcad#1538): only two free points that frame the view's fit, at (-40, -30) and (40, 30); the test draws its open polyline itself."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_point", "sketch": "F1", "at": [-40, -30]},
+  {"cmd": "sketch.add_point", "sketch": "F1", "at": [40, 30]}
+]

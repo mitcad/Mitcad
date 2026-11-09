@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: MIT
+# The sketch Point at the top level of the Create menu and as a button of
+# its own in the ribbon's Create group (mitcad#1545, GitHub
+# mitcad/Mitcad#200: it was the last entry of Create > Other Geometry,
+# where users did not find it). In a sketch on XY of a new design:
+#   1. The Create menu, opened from the ribbon: Point is its second entry,
+#      right after Lines and not in a submenu; Other Geometry no longer has
+#      it. Point chosen there starts the Point tool, which adds a point.
+#   2. The ribbon's Point button (a plain button, not a split button)
+#      starts the Point tool, which adds a point.
+# Run by tools/ui-sketch-point-top-level-test.sh (Linux) and
+# tools/ui-windows-sketch-point-top-level-test.ps1 (Windows).
+expect-ever 'View area' 30
+wait-idle
+command sketch.create
+expect-log 'Datum xy at '
+click-logged '^Datum xy at '
+expect-log 'Sketch started on xy'
+command view.fit
+wait-idle
+expect-log '^Ribbon button sketch\.point at '
+expect-never '^Ribbon split SKETCH/CREATE/Point '
+
+# 1. The Create menu: Point at its top level, after Lines.
+mark
+click-logged '^Ribbon SKETCH/CREATE at '
+expect-popup-entries '^Lines \| Point \| Rectangles \| Circles \| Arcs \| Other Geometry \| Text \| Patterns \| References \| Sketch Dimension$'
+expect-log '^Ribbon menu SKETCH/CREATE: Lines > \[Line \| Midpoint Line\] \| Point \| Rectangles > '
+expect-log '^Ribbon menu SKETCH/CREATE: .* \| Other Geometry > \[Ellipse \| [^]]* \| Control Point Spline\] \| Text > '
+popup Point
+wait-log '^Sketch tool Point$'
+mark
+sketch-click 10 5
+wait-log '^Added point p[0-9]+ at '
+key Escape
+wait-idle
+
+# 2. The ribbon's Point button.
+mark
+click-logged '^Ribbon button sketch\.point at '
+wait-log '^Sketch tool Point$'
+expect-no-log '^Ribbon menu SKETCH/CREATE'
+mark
+sketch-click -10 5
+wait-log '^Added point p[0-9]+ at '
+key Escape
+wait-idle
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'Recompute failed|TestDriver: FAIL'

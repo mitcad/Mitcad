@@ -185,6 +185,9 @@ pub enum Want {
     /// What a datum label goes on (mitcad#1296): as `Any`, else a planar
     /// face the view sees face on with the click inside its outline.
     Datum,
+    /// A model edge, whole, whatever its curve (mitcad#1546: the edge whose
+    /// line Edit Line changes): no point and no face.
+    Edge,
 }
 
 /// The direction a linear or an ordinate dimension measures along: the
@@ -658,6 +661,9 @@ pub enum PenPattern {
     Dashed,
     /// Long dash dotted, as centre lines.
     Chain,
+    /// Long dash double dotted (ISO 128 type 05, the phantom line,
+    /// mitcad#1546), as adjacent parts and other positions.
+    Phantom,
 }
 
 /// The pen of a line or an arc drawn on a sheet or in a view: any width
@@ -708,9 +714,8 @@ impl SketchPen {
             (PenWidth::ExtraThick, PenPattern::Continuous) => Some(SketchPenName::ExtraThick),
             (PenWidth::Thin, PenPattern::Dashed) => Some(SketchPenName::Hidden),
             (PenWidth::Thin, PenPattern::Chain) => Some(SketchPenName::Chain),
-            (PenWidth::Thick | PenWidth::ExtraThick, PenPattern::Dashed | PenPattern::Chain) => {
-                None
-            }
+            (PenWidth::Thick | PenWidth::ExtraThick, PenPattern::Dashed | PenPattern::Chain)
+            | (_, PenPattern::Phantom) => None,
         }
     }
 

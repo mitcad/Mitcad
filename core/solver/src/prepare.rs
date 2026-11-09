@@ -1167,6 +1167,26 @@ fn constraint_equations(
             b: x.rad(v, q.index()),
             side: rec.side,
         }),
+        TangentCircleDistance {
+            a, b: q, inside, ..
+        } => b.push(dim, |v, x| EqKind::CircleGap {
+            c1: x.p(v, x.centre(a.index())),
+            r1: x.rad(v, a.index()),
+            c2: x.p(v, x.centre(q.index())),
+            r2: x.rad(v, q.index()),
+            inside: if inside { rec.side } else { 0.0 },
+        }),
+        TangentPointDistance {
+            circle,
+            point,
+            inside,
+            ..
+        } => b.push(dim, |v, x| EqKind::CirclePointGap {
+            c: x.p(v, x.centre(circle.index())),
+            r: x.rad(v, circle.index()),
+            p: x.p(v, point.index()),
+            side: if inside { -1.0 } else { 1.0 },
+        }),
         LineDistance { a, b: l2, .. } => b.push(dim, |v, x| {
             let (a1, a2) = x.line(a.index());
             let (b1, b2) = x.line(l2.index());

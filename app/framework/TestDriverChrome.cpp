@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "TestDriver.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include <QAbstractButton>
@@ -9,7 +10,9 @@
 #include <QAction>
 #include <QAccessible>
 #include <QComboBox>
+#include <QApplication>
 #include <QDebug>
+#include <QFontInfo>
 #include <QLayout>
 #include <QLineEdit>
 #include <QMenu>
@@ -25,6 +28,7 @@
 #include "ChromeStyle.hpp"
 #include "Ribbon.hpp"
 #include "TitleBar.hpp"
+#include "UiSizes.hpp"
 
 namespace mitcad {
 
@@ -163,8 +167,10 @@ void TestDriver::testInterfaceSize(double ratio) {
       return false;
     }
     const auto sameRatio = [](double a, double b) { return std::abs(a - b) < 0.01; };
-    // The window and the 3D view draw at the ratio the Interface size gives.
-    if (!sameRatio(top->devicePixelRatioF(), ratio) || !sameRatio(view->devicePixelRatioF(), ratio)) {
+    // The window and the 3D view draw at the ratio the Interface size gives
+    // (0: any ratio, mitcad#1556).
+    if (ratio > 0.0 &&
+        (!sameRatio(top->devicePixelRatioF(), ratio) || !sameRatio(view->devicePixelRatioF(), ratio))) {
       m_waitDetail = QStringLiteral("device pixel ratio %1 (view %2), expected %3")
                          .arg(top->devicePixelRatioF())
                          .arg(view->devicePixelRatioF())
@@ -258,7 +264,17 @@ void TestDriver::testInterfaceSize(double ratio) {
     for (QWidget* candidate : main->findChildren<QWidget*>(QStringLiteral("commandPanel"))) {
       if (candidate->isVisible()) panel = candidate;
     }
-    if (!shown(panel)) {
+    // A panel longer than its card scrolls in its page's scroll area (Text
+    // size 200 % in a 1024 x 768 window): the view it shows through is
+    // inside the window, not the whole panel.
+    const QWidget* panelView = panel;
+    if (panel != nullptr && panel->parentWidget() != nullptr) {
+      const auto* area = qobject_cast<const QAbstractScrollArea*>(panel->parentWidget()->parentWidget());
+      if (area != nullptr && area->viewport() == panel->parentWidget()) {
+        panelView = area;
+      }
+    }
+    if (!shown(panelView) || panel->visibleRegion().isEmpty()) {
       m_waitDetail = QStringLiteral("no command panel shown");
       return false;
     }
@@ -312,10 +328,120 @@ void TestDriver::testInterfaceSize(double ratio) {
                              .arg(buttons)
                              .arg(text(place(browser)))
                              .arg(row.height())
-                             .arg(text(place(panel)))
+                             .arg(text(place(panelView)))
                              .arg(fields);
     return true;
   }, 10, QStringLiteral("the window, ribbon, Browser or command panel does not fit at the Interface size"));
+}
+
+void TestDriver::testTextIconSize(int textPercent, int iconPercent, const QString& family) {
+  whenReady([this, textPercent, iconPercent, family] {
+    QWidget* main = m_main.data();
+    auto* ribbon = main != nullptr ? main->findChild<Ribbon*>() : nullptr;
+    auto* tree = main != nullptr ? main->findChild<QAbstractItemView*>(QStringLiteral("modelBrowserTree")) : nullptr;
+    if (main == nullptr || ribbon == nullptr || tree == nullptr) {
+      m_waitDetail = QStringLiteral("no design window, ribbon or Browser");
+      return false;
+    }
+    // As the start applied them.
+    if (ui_sizes_detail::textPercent != textPercent || ui_sizes_detail::iconPercent != iconPercent) {
+      m_waitDetail = QStringLiteral("the run's Text size %1% and Icon size %2%, expected %3% and %4%")
+                         .arg(ui_sizes_detail::textPercent)
+                         .arg(ui_sizes_detail::iconPercent)
+                         .arg(textPercent)
+                         .arg(iconPercent);
+      return false;
+    }
+    // The application font: its family as drawn, its size the platform's
+    // times Text size.
+    const QFont font = QApplication::font();
+    const QString drawn = QFontInfo(font).family();
+    const bool systemFont = family == QLatin1String("system");
+    if (systemFont ? ui_sizes_detail::fontChosen
+               : (!ui_sizes_detail::fontChosen || drawn.compare(family, Qt::CaseInsensitive) != 0)) {
+      m_waitDetail = QStringLiteral("the application font is %1 (%2), expected %3")
+                         .arg(drawn, font.family(), family);
+      return false;
+    }
+    const double platform = ui_sizes_detail::platformPointSize;
+    if (platform > 0.0 && std::abs(font.pointSizeF() - platform * textPercent / 100.0) > 0.01) {
+      m_waitDetail = QStringLiteral("the application font is %1 pt, expected %2% of %3 pt")
+                         .arg(font.pointSizeF())
+                         .arg(textPercent)
+                         .arg(platform);
+      return false;
+    }
+    // The fixed sizes times Icon size, rounded to whole pixels; counted
+    // here, not by uiIconSize.
+    const auto scaled = [iconPercent](int pixels) { return std::max(1, (pixels * iconPercent + 50) / 100); };
+    const QSize browserIcon(scaled(18), scaled(18));
+    if (tree->iconSize() != browserIcon) {
+      m_waitDetail = QStringLiteral("the Browser's icons %1x%2, expected %3x%4")
+                         .arg(tree->iconSize().width())
+                         .arg(tree->iconSize().height())
+                         .arg(browserIcon.width())
+                         .arg(browserIcon.height());
+      return false;
+    }
+    const int ribbonSide = scaled(chromeStyle() == ChromeStyle::Floating ? 26 : 28);
+    const QSize ribbonIcon(ribbonSide, ribbonSide);
+    int buttons = 0;
+    int quick = 0;
+    for (QToolButton* button : ribbon->findChildren<QToolButton*>()) {
+      // The command buttons: shown, with an icon, not a group's caption nor
+      // the overflow's arrows.
+      if (!button->isVisible() || button->icon().isNull() || button->toolButtonStyle() == Qt::ToolButtonTextOnly ||
+          button->objectName().startsWith(QLatin1String("ribbonMenu_")) ||
+          button->objectName().startsWith(QLatin1String("ribbonScroll"))) {
+        continue;
+      }
+      // The quick-access group's buttons in the tabs' row: 18 pixels times
+      // Icon size, smaller (down to 12 times it) where the row is compact,
+      // not the 28-pixel command buttons.
+      if (button->objectName().startsWith(QLatin1String("quickAccess_"))) {
+        const QSize icon = button->iconSize();
+        if (icon.width() != icon.height() || icon.width() < scaled(12) || icon.width() > scaled(18) ||
+            button->width() < icon.width() || button->height() < icon.height()) {
+          m_waitDetail = QStringLiteral("quick-access button %1 %2x%3 with icons %4x%5, expected icons %6 to %7")
+                             .arg(button->objectName())
+                             .arg(button->width())
+                             .arg(button->height())
+                             .arg(icon.width())
+                             .arg(icon.height())
+                             .arg(scaled(12))
+                             .arg(scaled(18));
+          return false;
+        }
+        ++quick;
+        continue;
+      }
+      if (button->iconSize() != ribbonIcon || button->width() < ribbonSide || button->height() < ribbonSide) {
+        m_waitDetail = QStringLiteral("ribbon button %1 %2x%3 with icons %4x%5, expected icons %6x%6")
+                           .arg(button->objectName())
+                           .arg(button->width())
+                           .arg(button->height())
+                           .arg(button->iconSize().width())
+                           .arg(button->iconSize().height())
+                           .arg(ribbonSide);
+        return false;
+      }
+      ++buttons;
+    }
+    if (buttons == 0) {
+      m_waitDetail = QStringLiteral("no ribbon command button shown");
+      return false;
+    }
+    qInfo().noquote() << QStringLiteral("Text and icon size layout: font %1, %2 pt; browser icons %3x%4; ribbon %5 "
+                                        "buttons, icons %6x%6; quick access %7 buttons")
+                             .arg(drawn)
+                             .arg(font.pointSizeF())
+                             .arg(browserIcon.width())
+                             .arg(browserIcon.height())
+                             .arg(buttons)
+                             .arg(ribbonSide)
+                             .arg(quick);
+    return true;
+  }, 10, QStringLiteral("the application font, the Browser's or the ribbon's icons are not at Text and Icon size"));
 }
 
 void TestDriver::testSketchFinishLayout() {

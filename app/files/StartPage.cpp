@@ -55,6 +55,7 @@
 #include "../projects/ProjectBrowserData.hpp"
 #include "../projects/ProjectsTree.hpp"
 #include "RemoteTask.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -616,7 +617,7 @@ QToolButton* iconChoice(const QString& icon, const QString& tooltip, const QStri
   auto* button = new QToolButton;
   button->setObjectName(name);
   button->setIcon(themeIcon(icon));
-  button->setIconSize(QSize(18, 18));
+  button->setIconSize(uiIconSize(18, 18));
   button->setToolTip(tooltip);
   button->setAccessibleName(tooltip);
   button->setCheckable(true);
@@ -1215,7 +1216,7 @@ void StartPage::rebuildPlace(const ProjectRow* project, const QVector<BrowserEnt
     button->setObjectName(QStringLiteral("startPageFolder"));
     button->setText(entry.name);
     button->setIcon(themeIcon(QStringLiteral("folder")));
-    button->setIconSize(QSize(18, 18));
+    button->setIconSize(uiIconSize(18, 18));
     button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     button->setCursor(Qt::PointingHandCursor);
     button->setFocusPolicy(Qt::StrongFocus);

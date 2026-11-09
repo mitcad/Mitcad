@@ -205,6 +205,25 @@ pub enum Constraint {
         b: EntityId,
         value: f64,
     },
+    /// The gap between two circles or arcs at their nearest sides
+    /// (mitcad#1540): for circles outside each other `|c_b - c_a| - r_a -
+    /// r_b`; with `inside`, one within the other, the larger radius (when
+    /// the dimension is added) minus the smaller one minus `|c_b - c_a|`.
+    TangentCircleDistance {
+        a: EntityId,
+        b: EntityId,
+        value: f64,
+        inside: bool,
+    },
+    /// The gap between a circle or arc and a point at the circle's nearest
+    /// side (mitcad#1540): `|p - c| - r` for a point outside it; with
+    /// `inside`, `r - |p - c|`.
+    TangentPointDistance {
+        circle: EntityId,
+        point: PointId,
+        value: f64,
+        inside: bool,
+    },
     /// Horizontal distance between two points: `|b.x - a.x|`, on the side
     /// `b` is when the dimension is added; with `signed` (mitcad#404),
     /// `b.x - a.x` itself, which may be negative.
@@ -343,6 +362,8 @@ impl Constraint {
             | LineDistance { value, .. }
             | TangentDistance { value, .. }
             | RadiusGap { value, .. }
+            | TangentCircleDistance { value, .. }
+            | TangentPointDistance { value, .. }
             | HorizontalDistance { value, .. }
             | VerticalDistance { value, .. }
             | Length { value, .. }
@@ -369,6 +390,8 @@ impl Constraint {
             | LineDistance { value, .. }
             | TangentDistance { value, .. }
             | RadiusGap { value, .. }
+            | TangentCircleDistance { value, .. }
+            | TangentPointDistance { value, .. }
             | HorizontalDistance { value, .. }
             | VerticalDistance { value, .. }
             | Length { value, .. }

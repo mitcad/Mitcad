@@ -9,7 +9,7 @@ use mitcad_vec3::{cross, norm};
 use crate::error::Error;
 use crate::math::{Affine, bulge_arc, ellipse_from_conjugate};
 use crate::text;
-use crate::types::{Drawing, Entity, Geometry, Layer, Point2, Spline, Text};
+use crate::types::{Drawing, Entity, Geometry, Layer, Linetype, Point2, Spline, Text};
 use crate::units::Units;
 
 /// Reads a DXF file.
@@ -52,7 +52,10 @@ pub fn read_within(bytes: &[u8], limit: u64) -> Result<Drawing, Error> {
     for section in sections(&pairs) {
         match section.name.as_str() {
             "HEADER" => read_header(section.pairs, &mut drawing),
-            "TABLES" => drawing.layers = read_layers(section.pairs),
+            "TABLES" => {
+                drawing.layers = read_layers(section.pairs);
+                drawing.linetypes = read_linetypes(section.pairs);
+            }
             "BLOCKS" => reader.read_blocks(section.pairs),
             "ENTITIES" => model = reader.read_items(&records(section.pairs)),
             _ => {}
@@ -311,9 +314,45 @@ fn read_layers(pairs: &[Pair]) -> Vec<Layer> {
         if let Some(linetype) = record.string(6) {
             layer.linetype = linetype.trim().to_owned();
         }
+        // A weight of its own (mitcad#1546); the defaults (-1 by layer, -2
+        // by block, -3 default) are none.
+        layer.lineweight = record
+            .int_or(370, -3)
+            .ok()
+            .filter(|w| *w >= 0)
+            .and_then(|w| i16::try_from(w).ok());
         layers.push(layer);
     }
     layers
+}
+
+/// The line types other than the standard ones (`ByBlock`, `ByLayer`,
+/// `Continuous`), with their dashes (mitcad#1546).
+fn read_linetypes(pairs: &[Pair]) -> Vec<Linetype> {
+    let mut out = Vec::new();
+    for record in records(pairs).iter().filter(|r| r.kind == "LTYPE") {
+        let Some(name) = record.string(2).map(str::trim) else {
+            continue;
+        };
+        if ["BYBLOCK", "BYLAYER", "CONTINUOUS"]
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(name))
+        {
+            continue;
+        }
+        let elements: Vec<f64> = record
+            .pairs
+            .iter()
+            .filter(|p| p.code == 49)
+            .filter_map(|p| p.f64().ok())
+            .collect();
+        out.push(Linetype {
+            name: name.to_owned(),
+            description: record.string(3).unwrap_or_default().trim().to_owned(),
+            elements,
+        });
+    }
+    out
 }
 
 /// The object coordinate system of an entity with extrusion direction `n`

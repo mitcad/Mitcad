@@ -138,6 +138,18 @@ void capWindowToScreen(QWidget* window) {
   moveInside(window, available);
 }
 
+void capNewWindowToScreen(QWidget* window) {
+  if (window == nullptr || !window->isWindow()) {
+    return;
+  }
+  const Qt::WindowStates state = window->windowState();
+  if (state.testFlag(Qt::WindowMaximized) || state.testFlag(Qt::WindowFullScreen) ||
+      state.testFlag(Qt::WindowMinimized)) {
+    return;
+  }
+  capWindowToScreen(window);
+}
+
 void keepWindowOnScreen(QWidget* window) {
   if (window == nullptr || !window->isWindow() || window->windowHandle() == nullptr ||
       window->findChild<QObject*>(QLatin1String(kKeptOnScreen), Qt::FindDirectChildrenOnly) != nullptr) {

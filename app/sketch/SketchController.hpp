@@ -90,6 +90,7 @@ namespace sketch {
 
 class SketchOverlay;
 class SketchTool;
+struct ToolMenuEntry;
 
 // A value typed in the view while drawing (heads-up input).
 struct FieldSpec {
@@ -404,6 +405,11 @@ public:
   // (view pixels): a right click there is for it, not for the geometry
   // under it.
   bool annotationAt(const QPointF& position) const;
+  // The running tool's own right-click menu at a place in the view (view
+  // pixels), mitcad#1540; empty when it has none, and the right-click is
+  // then the tool's Esc. Each entry runs on the tool only while it is
+  // still the running one, and shows its change in the view.
+  std::vector<ToolMenuEntry> toolMenu(const QPointF& position);
   // A dimension's text being dragged.
   std::optional<std::pair<QString, V2>> textOverride() const { return m_textOverride; }
   void refreshView();
@@ -479,6 +485,14 @@ public:
   // warnings, mitcad#264; live MCP's ui_select, mitcad#265). Returns how
   // many it selected.
   int selectEntities(const QStringList& ids, bool reveal, bool fit = false);
+  // A double-click on a curve of this sketch with no tool running
+  // (mitcad#1541, SketchReveal.cpp): selects the smallest closed loop of
+  // curves of its construction kind it bounds (the model's `sketch_loop`
+  // query), else its open chain through points where exactly two curves
+  // meet; Ctrl or Shift adds them to the selection. False, selecting
+  // nothing, for no curve there, a text, a pattern's or an offset's curve
+  // or a spline (their double-click is their own) and the axes.
+  bool selectChainAt(const QPointF& screen, Qt::KeyboardModifiers modifiers);
   // Body edges and vertices in the sketch plane (mitcad#256, mitcad#258), for
   // the tool that picks or snaps to them: the model's plane_geometry query,
   // read once per tool session and again after the document changed. With
@@ -541,6 +555,18 @@ private:
   // several of them (mitcad#837): a press on it drags them together.
   // Empty otherwise.
   QStringList selectionDraggedWith(const QString& entity) const;
+  // A single point dragged (mitcad#1538): where the pointer at `position`
+  // snaps it to, as the Line tool snaps (points, curve ends, centres,
+  // midpoints, quadrants, intersections, curves and the origin; not to the
+  // grid or onto the axes across the view), into m_snap; with Shift or Alt
+  // held, where the pointer is. Its own curves and what holds it already
+  // are left out.
+  void snapDrag(const QPointF& position, Qt::KeyboardModifiers modifiers);
+  // The dropped point held where it snapped (SketchOp::constrain: point
+  // on point, on curve, ...), in an undo step of its own that endDrag
+  // merges into the drag's; false when the model refused it (the action's
+  // notice says why).
+  bool holdAtDrop(const QString& point, const Snap& snap);
   // A modal dialog took the input mid-drag (a long computation's progress,
   // P7), and with it the release: the drag ends when the model is free.
   void interruptDrag();
@@ -642,6 +668,14 @@ private:
   int m_dragDepth = 0;
   int m_dragSteps = 0;
   bool m_dragPending = false;
+  // A single point dragged snaps (snapDrag, mitcad#1538): the points and
+  // curves it does not snap to, the snap at the release (none when the
+  // drag ended otherwise) and the snap last logged.
+  bool m_dragSnaps = false;
+  QSet<QString> m_dragSkipPoints;
+  QSet<QString> m_dragSkipCurves;
+  Snap m_dropSnap;
+  QString m_loggedDragSnap;
   std::optional<std::pair<QString, V2>> m_textOverride;
   QTimer m_dragTimer;
 

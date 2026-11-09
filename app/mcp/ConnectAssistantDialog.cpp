@@ -60,6 +60,7 @@
 #include "../framework/Theme.hpp"
 #include "../platform/MacChrome.hpp"
 #include "mitcad_bridge/lib.h"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad::mcp {
 namespace {
@@ -371,7 +372,7 @@ ConnectAssistantDialog::ConnectAssistantDialog(Host host, QWidget* parent)
     button->setText(assistantName(choice.client));
     button->setToolTip(choiceTip(choice.client));
     button->setIcon(themeIcon(QString::fromLatin1(choice.icon)));
-    button->setIconSize(QSize(32, 32));
+    button->setIconSize(uiIconSize(32, 32));
     button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     button->setCheckable(true);
     button->setAutoRaise(true);

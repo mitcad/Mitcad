@@ -36,6 +36,7 @@
 #include "../framework/Icons.hpp"
 #include "../framework/Theme.hpp"
 #include "PrintKeys.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -456,7 +457,7 @@ QHBoxLayout* itemHeader(QLineEdit** name, QLabel** used, QWidget** builtIn, QPus
   builtInRow->setContentsMargins(0, 0, 0, 0);
   builtInRow->setSpacing(4);
   auto* lock = new QLabel;
-  lock->setPixmap(themeIcon(QStringLiteral("lock")).pixmap(16, 16));
+  lock->setPixmap(themeIcon(QStringLiteral("lock")).pixmap(uiIconSize(16, 16)));
   auto* words = new QLabel(QObject::tr("Built-in"));
   setRoleStyleSheet(words, ColorRole::TextSecondary);
   // The way on beside it (mitcad#655): the user's own copy.

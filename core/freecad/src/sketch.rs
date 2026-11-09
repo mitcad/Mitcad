@@ -785,11 +785,14 @@ impl Sketch {
                 // The two axes first.
                 let all = geometry_list(list, &mut problems);
                 for g in all.into_iter().skip(2) {
+                    // The reference is the link's mapped name, or its plain
+                    // element where the link has none (1.1 keeps a link to a
+                    // binder's face so, `ReferenceMirrored.Face1`, and makes
+                    // one external geometry per edge of the face).
                     let link = g.reference.as_deref().and_then(|r| {
-                        sketch.links.iter().position(|l| {
-                            l.mapped
-                                .as_deref()
-                                .is_some_and(|m| r == format!("{}.{}", l.object, mapped_element(m)))
+                        sketch.links.iter().position(|l| match l.mapped.as_deref() {
+                            Some(m) => r == format!("{}.{}", l.object, mapped_element(m)),
+                            None => r == format!("{}.{}", l.object, l.element),
                         })
                     });
                     sketch.external.push(Some(g));

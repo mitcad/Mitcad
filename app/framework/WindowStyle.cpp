@@ -32,6 +32,7 @@
 #include "ChromeStyle.hpp"
 #include "SelectionCreate.hpp"
 #include "Theme.hpp"
+#include "UiSizes.hpp"
 #include "../platform/WindowsFrame.hpp"
 
 namespace mitcad {
@@ -351,15 +352,17 @@ QSize PanelTitleBar::sizeHint() const {
     return QSize(panel::kStripWidth, 2 * kButton + 2 + 2 * panel::kGap);
   }
   const QFontMetrics metrics(panelTitleFont(font()));
+  // Higher where Text size makes the title's font taller (mitcad#1556).
   return QSize(kTitleLeft + metrics.horizontalAdvance(m_dock->windowTitle()) + 8 + 2 * kButton + 2 + m_extraWidth + kTitleRight,
-               panel::kTitleHeight);
+               std::max(panel::kTitleHeight, metrics.height() + 8));
 }
 
 QSize PanelTitleBar::minimumSizeHint() const {
   if (vertical()) {
     return QSize(panel::kStripWidth, kButton + 2 * panel::kGap);
   }
-  return QSize(kTitleLeft + 2 * kButton + 2 + m_extraWidth + kTitleRight, panel::kTitleHeight);
+  return QSize(kTitleLeft + 2 * kButton + 2 + m_extraWidth + kTitleRight,
+               std::max(panel::kTitleHeight, QFontMetrics(panelTitleFont(font())).height() + 8));
 }
 
 void PanelTitleBar::updateButtons() {
@@ -416,8 +419,9 @@ void WindowStyle::install(QMainWindow* window) {
 WindowStyle::WindowStyle(QMainWindow* window) : QObject(window), m_window(window) {
   setObjectName(QStringLiteral("windowStyle"));
   // Segoe UI Variable on Windows 11; elsewhere the platform's font stays.
-  m_font = win::uiFontFamily();
-  if (!m_font.isEmpty()) {
+  // A family chosen in Preferences (Font, mitcad#1556) stays instead.
+  m_font = ui_sizes_detail::fontChosen ? QApplication::font().family() : win::uiFontFamily();
+  if (!m_font.isEmpty() && !ui_sizes_detail::fontChosen) {
     QFont font = QApplication::font();
     font.setFamilies({m_font});
     QApplication::setFont(font);

@@ -547,6 +547,7 @@ impl<K: Kernel> DrawingOps<K> for Document<K> {
                     annotations: Vec::new(),
                     rotation: 0.0,
                     sketch: Vec::new(),
+                    lines: Vec::new(),
                 };
                 sheet.views.push(view.clone());
                 let spec = sheet.spec(view.id).map_err(ApiError)?;

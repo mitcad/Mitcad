@@ -117,6 +117,21 @@ pub(crate) enum EqKind {
     CircleLine { c: P, r: Rad, a: P, b: P, side: f64 },
     /// `r_b - r_a - side * value`: the gap between two concentric circles.
     RadGap { a: Rad, b: Rad, side: f64 },
+    /// The gap between two circles at their nearest sides minus `value`
+    /// (mitcad#1540): outside each other (`inside == 0`) `|c2 - c1| - r1 -
+    /// r2`; one in the other `inside * (r1 - r2) - |c2 - c1|`, `inside`
+    /// +1 when the first holds the second and -1 the other way round.
+    CircleGap {
+        c1: P,
+        r1: Rad,
+        c2: P,
+        r2: Rad,
+        inside: f64,
+    },
+    /// `side * (|p - c| - r) - value`: the gap between a circle and a point
+    /// at its nearest side, `side` +1 for a point outside it and -1 for one
+    /// inside (mitcad#1540).
+    CirclePointGap { c: P, r: Rad, p: P, side: f64 },
     /// Signed distance of the midpoint of `b1 b2` from the line `a1 a2`
     /// minus `side * value`.
     LineLine {
@@ -339,6 +354,24 @@ impl EqKind {
             }
             RadDiff { a, b } => rad(x, a) - rad(x, b),
             RadGap { a, b, side } => rad(x, b) - rad(x, a) - T::cst(side * value),
+            CircleGap {
+                c1,
+                r1,
+                c2,
+                r2,
+                inside,
+            } => {
+                let d = pt(x, *c2).sub(pt(x, *c1)).norm();
+                let gap = if *inside == 0.0 {
+                    d - rad(x, r1) - rad(x, r2)
+                } else {
+                    (rad(x, r1) - rad(x, r2)).mulf(*inside) - d
+                };
+                gap - T::cst(value)
+            }
+            CirclePointGap { c, r, p, side } => {
+                (pt(x, *p).sub(pt(x, *c)).norm() - rad(x, r)).mulf(*side) - T::cst(value)
+            }
             Radius { r, factor } => rad(x, r).mulf(*factor) - T::cst(value),
             OnCircle { p, c, r } => pt(x, *p).sub(pt(x, *c)).norm() - rad(x, r),
             Angle {
@@ -594,6 +627,26 @@ mod tests {
             EqKind::RadGap {
                 a: Rad::Dist([0, 1], [2, 3]),
                 b: Rad::Param(8),
+                side: -1.0,
+            },
+            EqKind::CircleGap {
+                c1: [0, 1],
+                r1: Rad::Param(8),
+                c2: [2, 3],
+                r2: Rad::Dist([2, 3], [4, 5]),
+                inside: 0.0,
+            },
+            EqKind::CircleGap {
+                c1: [0, 1],
+                r1: Rad::Param(12),
+                c2: [2, 3],
+                r2: Rad::Param(9),
+                inside: -1.0,
+            },
+            EqKind::CirclePointGap {
+                c: [0, 1],
+                r: Rad::Param(9),
+                p: [4, 5],
                 side: -1.0,
             },
             EqKind::OnCircle {

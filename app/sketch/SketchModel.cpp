@@ -14,7 +14,7 @@ namespace {
 // Fields that refer to entities, in the order constraints and dimensions
 // list their entities.
 const char* const kRefFields[] = {"point", "entity", "line", "curve", "arc",
-                                  "ellipse", "a", "b", "axis"};
+                                  "ellipse", "a", "b", "axis", "circle"};
 
 V2 v2(const QJsonValue& value) {
   const QJsonArray xy = value.toArray();

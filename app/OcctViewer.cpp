@@ -27,6 +27,7 @@
 #include "platform/MacChrome.hpp"
 #include "framework/Diagnostics.hpp"
 #include "framework/TestSync.hpp"
+#include "mitcad/geometry/datum.hpp"
 #include "mitcad/geometry/import.hpp"
 #include "view/CameraHeight.hpp"
 #include "view/CameraTurn.hpp"
@@ -575,7 +576,9 @@ QString surfaceType(const TopoDS_Shape& face) {
   case GeomAbs_Torus:
     return QStringLiteral("torus");
   default:
-    return QStringLiteral("other");
+    // A planar spline (a sheet body's wall, an imported face) is a plane,
+    // as the model reads it (mitcad#1537).
+    return geometry::face_plane(TopoDS::Face(face)) ? QStringLiteral("plane") : QStringLiteral("other");
   }
 }
 
@@ -588,7 +591,9 @@ QString curveType(const TopoDS_Shape& edge) {
   case GeomAbs_Ellipse:
     return QStringLiteral("ellipse");
   default:
-    return QStringLiteral("other");
+    // A straight spline (a sheet body's edge, an imported line) is a line,
+    // as the model reads it (mitcad#1537).
+    return geometry::is_straight(TopoDS::Edge(edge)) ? QStringLiteral("line") : QStringLiteral("other");
   }
 }
 

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -53,11 +54,12 @@ gp_Dir outward_normal(const TopoDS_Face& face, gp_Pnt& point) {
 gp_Pln face_plane(const Shape& shape, const std::string& face) {
   return detail::run("face plane", [&] {
     const std::vector<TopoDS_Face> faces = faces_named(shape, face);
-    const BRepAdaptor_Surface surface(faces.front());
-    if (surface.GetType() != GeomAbs_Plane) {
+    // A plane, or a flat spline face (a sheet body's wall, mitcad#1554).
+    const std::optional<gp_Pln> found = detail::reference_plane(faces.front());
+    if (!found) {
       throw std::invalid_argument("face " + face + " is not planar");
     }
-    const gp_Dir normal = detail::planar_normal(faces.front(), surface.Plane());
+    const gp_Dir normal = found->Axis().Direction();
     GProp_GProps props;
     for (const TopoDS_Face& piece : faces) {
       GProp_GProps own;
@@ -65,7 +67,7 @@ gp_Pln face_plane(const Shape& shape, const std::string& face) {
       props.Add(own);
     }
     // The centre of mass of the pieces, put on the plane.
-    const gp_Pln plane = surface.Plane();
+    const gp_Pln& plane = *found;
     const gp_Pnt centre = props.CentreOfMass();
     const double height = gp_Vec(plane.Location(), centre).Dot(gp_Vec(plane.Axis().Direction()));
     return gp_Pln(centre.Translated(gp_Vec(plane.Axis().Direction()) * -height), normal);

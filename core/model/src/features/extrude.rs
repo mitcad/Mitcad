@@ -932,6 +932,7 @@ impl<K: Kernel> Evaluate<K> for ExtrudeDef {
                 d.abs(),
                 raise,
                 super::emboss::WrapOffsets::default(),
+                0.0,
             )?
             .ok_or_else(|| {
                 format!(

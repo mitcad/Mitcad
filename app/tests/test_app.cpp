@@ -2880,6 +2880,7 @@ int previewHoldTests();
 int handleStepTests();
 int languageTests();
 int interfaceSizeTests();
+int uiSizesTests();
 
 int main(int argc, char* argv[]) {
   // The application's own class: its notify() is tested (busy_input.cpp).
@@ -3035,6 +3036,7 @@ int main(int argc, char* argv[]) {
     failures += handleStepTests();
     failures += languageTests();
     failures += interfaceSizeTests();
+    failures += uiSizesTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

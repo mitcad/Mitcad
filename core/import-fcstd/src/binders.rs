@@ -2,6 +2,8 @@
 //! Binder reporting follows the uses that survived the replay, not the
 //! support's type or a candidate that was subsequently rolled back.
 
+use std::collections::BTreeMap;
+
 use mitcad_freecad::Object;
 use mitcad_model::{Document, FeatureDef, FeatureUid, Kernel};
 use serde_json::{Value, json};
@@ -32,6 +34,22 @@ impl BinderUse {
                     })
                 })
         })
+    }
+}
+
+/// Whether an extrusion's extent goes up to a face of a body (not up to a
+/// fixed plane in its place).
+fn names_face(def: &FeatureDef) -> bool {
+    use mitcad_model::features::{Extent, ExtentObject, Side};
+    let face = |o: &ExtentObject| matches!(o, ExtentObject::Face { .. });
+    let side = |s: &Side| matches!(s, Side::ToObject { object, .. } if face(object));
+    match def {
+        FeatureDef::Extrude(d) => match &d.extent {
+            Extent::ToObject { object, .. } => face(object),
+            Extent::TwoSides { side1, side2, .. } => side(side1) || side(side2),
+            _ => false,
+        },
+        _ => false,
     }
 }
 
@@ -85,6 +103,35 @@ impl<K: Kernel> Importer<'_, '_, K> {
             ObjectOutcome::Parametric | ObjectOutcome::Partial
         ) {
             return;
+        }
+        // An extent up to a binder's face (mitcad#952): the face of the
+        // feature the binder binds, found by its geometry, which the
+        // replayed feature's extent names (mitcad#1557).
+        for property in ["UpToFace", "UpToFace2"] {
+            let Some(link) = object.link(property).filter(|l| l.file.is_none()) else {
+                continue;
+            };
+            let Some(binder) = self.sources[0].object(&link.object) else {
+                continue;
+            };
+            if !is_binder(&binder.type_name) {
+                continue;
+            }
+            let Some(&kept) = self.replay.main.get(&object.name) else {
+                continue;
+            };
+            // Up to a face of a body, not up to a fixed plane in its place.
+            let to_face = self.doc.feature(kept).is_some_and(|f| names_face(&f.def));
+            if !to_face {
+                continue;
+            }
+            let how = format!(
+                "its face carried as the face of what it binds, in the extent of {} ({})",
+                object.label(),
+                report.features.join(", ")
+            );
+            let binder = binder.name.clone();
+            self.carried_binder_use(&binder, &object.name, property, kept, how);
         }
         let Some(link) = object.link("Profile") else {
             return;
@@ -154,12 +201,18 @@ impl<K: Kernel> Importer<'_, '_, K> {
             if !is_binder(&report.object_type) || report.outcome != ObjectOutcome::Skipped {
                 continue;
             }
-            let Some(carried) = self.replay.binder_uses.get(&report.object) else {
-                continue;
-            };
+            let empty = BTreeMap::new();
+            let carried = self
+                .replay
+                .binder_uses
+                .get(&report.object)
+                .unwrap_or(&empty);
+            // Every geometric use, and those not carried (mitcad#1557: the
+            // reason names them).
             let mut uses = 0;
-            let complete = self.sources[0].file.document.objects.iter().all(|object| {
-                object.references().all(|(property, link)| {
+            let mut lost: Vec<String> = Vec::new();
+            for object in &self.sources[0].file.document.objects {
+                for (property, link) in object.references() {
                     if link.file.is_some()
                         || link.object != report.object
                         || matches!(property, "Tip" | "Context" | "OriginFeatures")
@@ -173,15 +226,35 @@ impl<K: Kernel> Importer<'_, '_, K> {
                         || (is_sketch(&object.type_name)
                             && matches!(property, "AttachmentSupport" | "Support"))
                     {
-                        return true;
+                        continue;
                     }
                     uses += 1;
-                    carried
+                    let kept = carried
                         .get(&(object.name.clone(), property.to_owned()))
-                        .is_some_and(|carried| carried.retained(self.doc))
-                })
-            });
-            if !complete || uses == 0 {
+                        .is_some_and(|carried| carried.retained(self.doc));
+                    if !kept {
+                        lost.push(format!("{}.{property}", object.label()));
+                    }
+                }
+            }
+            if uses == 0 || !lost.is_empty() {
+                let why = if uses == 0 {
+                    "a binder nothing uses for its geometry (a sketch attached to it takes \
+                     only its plane; no link to its edges or faces is left in the file): \
+                     reference geometry, nothing to carry"
+                        .to_owned()
+                } else {
+                    format!(
+                        "a binder: MitCad has none; its use by {} is not carried (sketches \
+                         project its geometry linked to what it binds, features take the face \
+                         or sketch it binds, mitcad#955)",
+                        lost.join(", ")
+                    )
+                };
+                let name = report.object.clone();
+                self.roles
+                    .insert(name, (ObjectOutcome::Skipped, Some(why.clone())));
+                self.report.features[index].notes = vec![why];
                 continue;
             }
             let notes: Vec<String> = carried.values().map(|use_| use_.how.clone()).collect();

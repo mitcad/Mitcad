@@ -61,7 +61,7 @@ function Create-Has([string]$Line, [string]$Tool) {
   return $Line -match "(: |, )$([regex]::Escape($Tool))(,| \()"
 }
 
-$defaults = 'line, rectangle, circle, arc, polygon, slot, spline, point, mirror, dimension, fillet, trim, extend, offset'
+$defaults = 'line, point, rectangle, circle, arc, polygon, slot, spline, mirror, dimension, fillet, trim, extend, offset'
 
 Ui-StartApp 'sketch-palette-create' @('--open', $design)
 Ui-ExpectLog 'palette.mitcad' 'the design opened'

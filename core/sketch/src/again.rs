@@ -465,6 +465,8 @@ fn round_dimension(kind: &DimensionKind) -> bool {
             | DimensionKind::Diameter { .. }
             | DimensionKind::ConcentricDistance { .. }
             | DimensionKind::TangentDistance { .. }
+            | DimensionKind::TangentCircleDistance { .. }
+            | DimensionKind::TangentPointDistance { .. }
     )
 }
 

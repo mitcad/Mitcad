@@ -4,8 +4,8 @@
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use mitcad_dxf::{
-    Drawing, DxfVersion, Geometry, Layer, Point2, Spline, Text, Units, WriteOptions, read_str,
-    write_file, write_string,
+    Drawing, DxfVersion, Geometry, Layer, Linetype, Point2, Spline, Text, Units, WriteOptions,
+    read_str, write_file, write_string,
 };
 
 fn p(x: f64, y: f64) -> Point2 {
@@ -516,4 +516,59 @@ fn r12_reports_an_unreachable_spline_tolerance() {
         )
         .is_ok()
     );
+}
+
+#[test]
+fn line_types_and_line_weights_are_written_and_read_back() {
+    // mitcad#1546: a drawing's own line types with their dashes, and its
+    // layers' line types and weights.
+    let mut drawing = Drawing::new(Units::Millimeters);
+    let mut phantom = Layer::new("PHANTOM_THICK");
+    phantom.linetype = "PHANTOM".to_owned();
+    phantom.lineweight = Some(35);
+    drawing.layers.push(phantom);
+    drawing.layers.push(Layer::new("PLAIN"));
+    drawing.linetypes.push(Linetype::of_dashes(
+        "PHANTOM",
+        "Long dash double dotted",
+        &[12.0, 1.5, 0.5, 1.5, 0.5, 1.5],
+    ));
+    drawing.push(
+        "PHANTOM_THICK",
+        Geometry::Line {
+            start: p(0.0, 0.0),
+            end: p(40.0, 0.0),
+        },
+    );
+    let text = write_string(&drawing, &WriteOptions::default()).unwrap();
+    let back = read_str(&text).unwrap();
+    assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+    let layer = back.layer("PHANTOM_THICK").unwrap();
+    assert_eq!(layer.linetype, "PHANTOM");
+    assert_eq!(layer.lineweight, Some(35));
+    assert_eq!(back.layer("PLAIN").unwrap().lineweight, None);
+    assert_eq!(back.linetypes.len(), 1, "{:?}", back.linetypes);
+    assert_eq!(back.linetypes[0].name, "PHANTOM");
+    assert_eq!(back.linetypes[0].description, "Long dash double dotted");
+    assert_eq!(
+        back.linetypes[0].elements,
+        [12.0, -1.5, 0.5, -1.5, 0.5, -1.5]
+    );
+    assert!((back.linetypes[0].length() - 17.5).abs() < 1e-12);
+    // Scaled with the drawing (an inch file of a millimetre sheet).
+    let inch = drawing.transformed(&mitcad_dxf::Affine::scale(0.5, 0.5));
+    assert_eq!(
+        inch.linetypes[0].elements,
+        [6.0, -0.75, 0.25, -0.75, 0.25, -0.75]
+    );
+    assert_eq!(inch.layers[0].lineweight, Some(35));
+    // R12 has the line type too, without weights.
+    let options = WriteOptions {
+        version: DxfVersion::R12,
+        ..WriteOptions::default()
+    };
+    let back = read_str(&write_string(&drawing, &options).unwrap()).unwrap();
+    assert_eq!(back.layer("PHANTOM_THICK").unwrap().linetype, "PHANTOM");
+    assert_eq!(back.layer("PHANTOM_THICK").unwrap().lineweight, None);
+    assert_eq!(back.linetypes.len(), 1);
 }

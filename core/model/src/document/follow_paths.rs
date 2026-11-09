@@ -120,6 +120,18 @@ impl DocState {
                                 pick.occurrence = Some(path);
                             }
                         }
+                        // A body's or an edge's line style (mitcad#1546) as
+                        // a pick.
+                        for line in &mut view.lines {
+                            if !line.body.is_some_and(|b| bodies.contains(&b)) {
+                                continue;
+                            }
+                            let mut path = line.occurrence.clone().unwrap_or_default();
+                            if ends_in_source(from, &path.0) {
+                                path.0.push(*occurrence);
+                                line.occurrence = Some(path);
+                            }
+                        }
                     }
                 }
             }
@@ -149,6 +161,9 @@ impl DocState {
                         let picks = view.annotations.iter_mut().flat_map(|a| a.picks.iter_mut());
                         for pick in picks {
                             renamed(pick, *rename);
+                        }
+                        for line in &mut view.lines {
+                            renamed(line, *rename);
                         }
                     }
                 }

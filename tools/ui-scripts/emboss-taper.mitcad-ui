@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# Emboss's Taper Angle (mitcad#1547) on emboss-taper.json (a rod of
+# diameter 50 and a 10 x 10 square on XZ through its axis):
+#   Emboss takes the square; the rod's side picked, Depth 45 and Taper
+#   Angle 10 typed: Taper Angle's ring is shown and the preview builds; OK
+#   logs the taper and the rod grows by the tapered emboss, 23766.269 mm3
+#   (tools/cli/tests/emboss_taper.json: the top widened 2 * 45 tan(10 deg)
+#   around the axis and along it).
+# Run by tools/ui-emboss-taper-test.sh (Linux) and
+# tools/ui-windows-emboss-taper-test.ps1 (Windows).
+wait-idle
+command view.fit
+mark
+command solid.emboss
+wait-log '^Command Emboss started'
+wait-log '^Emboss Profiles: 1 profile '
+mark
+click-logged '^Panel Emboss input face at '
+click-pick 'face F2[.]b0/F2:side[(]c1[)]'
+wait-log '^Emboss Face: 1 face'
+mark
+type-in '^Panel Emboss input depth at ' '45'
+wait-log '^Emboss Depth: 45 = 45 mm'
+mark
+type-in '^Panel Emboss input taper_angle at ' '10'
+wait-log '^Emboss Taper Angle: 10 = 10 deg'
+wait-log '^Manipulator Emboss taper_angle at '
+wait-log '^Preview Emboss: ok' 60
+mark
+key Return
+wait-log '^Added emboss \(Raise\) of 1 profile\(s\) on a cylindrical face, wrapped, depth 45, taper 10 deg$' 60
+expect-model-bodies 1 102306.0849111428
+expect-never 'Recompute failed|TestDriver: FAIL'

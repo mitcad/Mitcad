@@ -24,6 +24,7 @@
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../sketch/FontFiles.hpp"
+#include "../sketch/SketchChains.hpp"
 #include "../sketch/SketchController.hpp"
 #include "../sketch/SketchModel.hpp"
 #include "../sketch/SketchTool.hpp"
@@ -85,107 +86,6 @@ QJsonObject base(SketchController& c, const char* command) {
   return {{QStringLiteral("cmd"), QString::fromLatin1(command)}, {QStringLiteral("sketch"), c.uid()}};
 }
 
-// Lines, arcs, elliptical arcs and open splines chain; a closed curve is
-// offset on its own.
-bool joinable(const sketch::CurveData& c) {
-  return c.isLine() || c.isArc() || c.type == QStringLiteral("elliptical_arc") ||
-         (c.isSpline() && c.start != c.end);
-}
-
-// Whether two open curves lie on each other (an edge projected twice,
-// mitcad#741): of one kind, through the same places, a line or a spline
-// either way round.
-bool sameCurve(const sketch::CurveData& a, const sketch::CurveData& b) {
-  if (a.id == b.id || a.type != b.type || a.curve.isClosed() || b.curve.isClosed()) {
-    return false;
-  }
-  const sketch::Curve2& p = a.curve;
-  const sketch::Curve2& q = b.curve;
-  const double size = std::max({1.0, sketch::norm(p.startPoint()), sketch::norm(p.endPoint())});
-  const double tolerance = 1e-7 * size;
-  const auto along = [](const sketch::Curve2& c, double f) { return c.at(c.t0() + f * (c.t1() - c.t0())); };
-  const std::array<double, 5> fractions = {0.0, 0.25, 0.5, 0.75, 1.0};
-  bool ahead = true;
-  bool back = a.isLine() || a.isSpline();
-  for (const double f : fractions) {
-    ahead = ahead && sketch::dist(along(p, f), along(q, f)) <= tolerance;
-    back = back && sketch::dist(along(p, f), along(q, 1.0 - f)) <= tolerance;
-  }
-  return ahead || back;
-}
-
-// Whether a curve shares an end point with another curve a chain selection
-// would join to it.
-bool joinsOthers(const sketch::SketchModel& model, const sketch::CurveData& c) {
-  for (const sketch::CurveData& other : model.curves) {
-    if (other.id != c.id && joinable(other) && other.construction == c.construction &&
-        (other.start == c.start || other.end == c.start || other.start == c.end || other.end == c.end)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// A picked curve, or the curve it lies on when it joins nothing and that
-// one does (mitcad#741: a face projected and one of its edges again, the
-// edge with points of its own): the chain grows through the face's curve.
-QString chainStart(const sketch::SketchModel& model, const QString& picked) {
-  const sketch::CurveData* c = model.curve(picked);
-  if (c == nullptr || !joinable(*c) || joinsOthers(model, *c)) {
-    return picked;
-  }
-  for (const sketch::CurveData& other : model.curves) {
-    if (joinable(other) && other.construction == c->construction && sameCurve(*c, other) &&
-        joinsOthers(model, other)) {
-      return other.id;
-    }
-  }
-  return picked;
-}
-
-// The curves joined to the picked ones end to end, as a chain
-// selection takes them: through points where exactly two such curves meet.
-QStringList chainOf(const sketch::SketchModel& model, const QStringList& picked) {
-  QStringList chain;
-  for (const QString& id : picked) {
-    const QString start = chainStart(model, id);
-    if (!chain.contains(start)) {
-      chain << start;
-    }
-  }
-  QSet<QString> in(chain.begin(), chain.end());
-  bool grew = true;
-  while (grew) {
-    grew = false;
-    for (const QString& id : QStringList(chain)) {
-      const sketch::CurveData* c = model.curve(id);
-      if (c == nullptr || !joinable(*c)) {
-        continue;
-      }
-      for (const QString& end : {c->start, c->end}) {
-        QStringList at;
-        for (const sketch::CurveData& other : model.curves) {
-          if (joinable(other) && other.construction == c->construction &&
-              (other.start == end || other.end == end)) {
-            at << other.id;
-          }
-        }
-        if (at.size() != 2) {
-          continue;
-        }
-        for (const QString& next : at) {
-          if (!in.contains(next)) {
-            in.insert(next);
-            chain << next;
-            grew = true;
-          }
-        }
-      }
-    }
-  }
-  return chain;
-}
-
 void addOffset(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.offset", QObject::tr("Offset"), "offset", "MODIFY",
                                  CommandDef::Kind::Feature);
@@ -208,7 +108,7 @@ void addOffset(CommandRegistry& registry, SketchController& c) {
       curves << item.name;
     }
     if (s.checked(QStringLiteral("chain"))) {
-      curves = chainOf(c.model(), curves);
+      curves = sketch::chainOf(c.model(), curves);
     }
     QString distance = s.expression(QStringLiteral("distance"));
     if (s.checked(QStringLiteral("flip"))) {
@@ -1418,9 +1318,10 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   };
   const QKeySequence none;
 
-  // --- CREATE, in submenus (mitcad#222): Lines, Rectangles, Circles,
-  // Arcs, Other Geometry, Text, Patterns, References; a pinned command is
-  // its submenu's split button default. Offset is in MODIFY.
+  // --- CREATE, in submenus (mitcad#222): Lines, Point (an entry of its
+  // own, mitcad#1545), Rectangles, Circles, Arcs, Other Geometry, Text,
+  // Patterns, References; a pinned command is its submenu's split button
+  // default. Offset is in MODIFY.
   add({"sketch.line", QObject::tr("Line"), "line", "CREATE/Lines", [&c] { c.startTool(sketch::lineTool(c)); },
        QKeySequence(Qt::Key_L), true,
        QObject::tr("Lines end to end; drag from an end for an arc, tangent along the curve or normal across it")});
@@ -1428,6 +1329,10 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   add({"sketch.line_midpoint", QObject::tr("Midpoint Line"), "line-midpoint", "CREATE/Lines",
        [&c] { c.startTool(sketch::midpointLineTool(c)); }, none, false,
        QObject::tr("A line from its midpoint and an end, symmetric about the midpoint")});
+  // Point on its own after Lines, in the menu and as a button (mitcad#1545:
+  // users did not find it at the end of Other Geometry). No shortcut.
+  add({"sketch.point", QObject::tr("Point"), "point", "CREATE", [&c] { c.startTool(sketch::pointTool(c)); }, none,
+       true, QObject::tr("A sketch point")});
   add({"sketch.rectangle", QObject::tr("2-Point Rectangle"), "rectangle", "CREATE/Rectangles",
        draw(sketch::rectangleTool, "two_point"), QKeySequence(Qt::Key_R), true,
        QObject::tr("A rectangle from two opposite corners")});
@@ -1491,8 +1396,6 @@ void registerSketchCommands(CommandRegistry& registry, SketchController& c) {
   add({"sketch.spline_control", QObject::tr("Control Point Spline"), "spline-control", "CREATE/Other Geometry",
        [&c] { c.startTool(sketch::splineTool(c, true)); }, none, false,
        QObject::tr("A smooth curve shaped by control points; Enter or a double-click ends it")});
-  add({"sketch.point", QObject::tr("Point"), "point", "CREATE/Other Geometry",
-       [&c] { c.startTool(sketch::pointTool(c)); }, none, false, QObject::tr("A sketch point")});
   add({"sketch.text", QObject::tr("Text"), "text", "CREATE/Text", [&c] { c.startTool(sketch::textTool(c)); }, none,
        false, QObject::tr("Text: click where it starts, type it and its height")});
   addRectangularPattern(registry, c);

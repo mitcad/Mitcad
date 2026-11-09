@@ -94,6 +94,8 @@ pub mod driven;
 pub mod again;
 // Sketch Fillet at corners of arcs (mitcad#1192).
 mod fillet;
+// The closed loop a double-click on a curve selects (mitcad#1541).
+pub mod loops;
 
 #[cfg(test)]
 mod tests;
@@ -1070,6 +1072,54 @@ pub enum DimensionKind {
     /// interval of it, measured as the constraint measures them. One per
     /// constraint; it goes with the constraint.
     Spacing { constraint: ConstraintUid },
+    /// The gap between two circles or arcs at their nearest sides
+    /// (mitcad#1540): outside each other (`side` outside, the default) the
+    /// distance of their centres minus both radii; one within the other
+    /// (`side` inside) the larger radius minus the smaller one minus the
+    /// distance of the centres.
+    TangentCircleDistance {
+        #[serde(with = "curve_serde")]
+        a: EntityUid,
+        #[serde(with = "curve_serde")]
+        b: EntityUid,
+        #[serde(default, skip_serializing_if = "TangentSide::is_outside")]
+        side: TangentSide,
+    },
+    /// The gap between a circle or arc and a point at the circle's nearest
+    /// side (mitcad#1540): for a point outside it (`side` outside, the
+    /// default) its distance from the centre minus the radius; for one
+    /// inside (`side` inside) the radius minus that distance. With the
+    /// centre of another circle as the point, the distance from one
+    /// circle's side to the other's centre.
+    TangentPointDistance {
+        #[serde(with = "curve_serde")]
+        circle: EntityUid,
+        #[serde(with = "point_serde")]
+        point: EntityUid,
+        #[serde(default, skip_serializing_if = "TangentSide::is_outside")]
+        side: TangentSide,
+    },
+}
+
+/// Which gap a tangent dimension between a circle and a circle or a point
+/// measures (mitcad#1540): between things outside each other, or with one
+/// inside the circle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TangentSide {
+    #[default]
+    Outside,
+    Inside,
+}
+
+impl TangentSide {
+    pub fn is_outside(&self) -> bool {
+        *self == Self::Outside
+    }
+
+    pub fn inside(self) -> bool {
+        self == Self::Inside
+    }
 }
 
 /// How a dimension value must be: positive, not negative, an angle, or any
@@ -1103,6 +1153,8 @@ impl DimensionKind {
             LinearDiameter { axis, entity } => vec![c(*axis), *entity],
             // Its entities are its constraint's.
             Spacing { .. } => Vec::new(),
+            TangentCircleDistance { a, b, .. } => vec![c(*a), c(*b)],
+            TangentPointDistance { circle, point, .. } => vec![c(*circle), p(*point)],
         }
     }
 
@@ -1127,6 +1179,8 @@ impl DimensionKind {
             MinorRadius { .. } => "minor_radius",
             LinearDiameter { .. } => "linear_diameter",
             Spacing { .. } => "spacing",
+            TangentCircleDistance { .. } => "tangent_circle_distance",
+            TangentPointDistance { .. } => "tangent_point_distance",
         }
     }
 
@@ -1158,7 +1212,9 @@ impl DimensionKind {
             | PointLineDistance { .. }
             | LineDistance { .. }
             | TangentDistance { .. }
-            | ConcentricDistance { .. } => ValueRange::NotNegative,
+            | ConcentricDistance { .. }
+            | TangentCircleDistance { .. }
+            | TangentPointDistance { .. } => ValueRange::NotNegative,
             Angle { .. } => ValueRange::Angle,
             _ => ValueRange::Positive,
         }

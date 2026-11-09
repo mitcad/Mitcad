@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: MIT
+# A dragged sketch point snaps to points and curves and is held where it is
+# dropped, in the drag's undo step (mitcad#1538, GitHub mitcad/Mitcad#198),
+# on sketch-drag-join.json (Sketch1: two free points that frame the view's
+# fit at (-40, -30) and (40, 30)):
+#   1. The Line tool draws an open polyline (-20, -10), (20, -10),
+#      (20, 10), (-10, 20): no profile.
+#   2. Its last point dragged onto its first with Shift held at the drop:
+#      no snap and nothing added; one undo step, which Undo takes back.
+#   3. The same drag without Shift: the point snaps to the first point and
+#      is held there (the two line ends become one point), the profile is
+#      closed, and drag and hold are one undo step: Undo opens it again.
+# The clicks stay within x -30..30 mm, y -25..25 mm: the free part of the
+# view after the fit also in session 0's 1024x768 window on Windows.
+# Run by tools/ui-sketch-drag-join-test.sh (Linux) and
+# tools/ui-windows-sketch-drag-join-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+
+# 1. An open polyline of three lines.
+mark
+command sketch.line
+sketch-click -20 -10
+sketch-click 20 -10
+wait-log '^Added line c[0-9]+ from '
+sketch-click 20 10
+sketch-click -10 20
+wait-log '^Added line c[0-9]+ from \([^)]*\) to \(-'
+key Escape
+key Escape
+wait-log '^Sketch tool ended: Line'
+wait-idle
+expect-profiles 0
+capture-undo-depth baseline
+
+# 2. With Shift held at the drop: no snap, nothing added.
+mark
+sketch-pointer press -10 20
+sketch-pointer move -13 10
+sketch-pointer move -17 0
+sketch-pointer move -20 -10 shift
+sketch-pointer release -20 -10 shift
+wait-log '^Dragged p[0-9]+ to '
+expect-log '^Drag snap of p[0-9]+: off \(Shift or Alt\)$'
+expect-no-log '^Drag of p[0-9]+ dropped on '
+expect-undo-depth ${baseline} 1
+mark
+key ctrl+z
+expect-undo-depth ${baseline} 0
+wait-idle
+expect-profiles 0
+
+# 3. Without Shift: snapped to the first point and held there.
+mark
+sketch-pointer press -10 20
+sketch-pointer move -13 10
+sketch-pointer move -17 0
+sketch-pointer move -20 -10
+wait-log '^Drag snap of p[0-9]+: point p[0-9]+$'
+screenshot '${MITCAD_TEST_WORK}/sketch-drag-join-held.png'
+sketch-pointer release -20 -10
+wait-log '^Drag of p[0-9]+ dropped on point p[0-9]+: held there$'
+wait-log '^Dragged p[0-9]+ to '
+expect-no-log 'not added: '
+expect-profiles 1
+expect-undo-depth ${baseline} 1
+screenshot '${MITCAD_TEST_WORK}/sketch-drag-join-closed.png'
+key ctrl+z
+expect-undo-depth ${baseline} 0
+wait-idle
+expect-profiles 0
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

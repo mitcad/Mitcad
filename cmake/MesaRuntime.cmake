@@ -1827,6 +1827,38 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-own-parameter"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-sketch-own-parameter PROPERTIES TIMEOUT 180)
+    # A dragged sketch point snaps to points and curves and is held where
+    # it is dropped, in the drag's undo step; not with Shift (mitcad#1538).
+    # The Linux test's shared input script (tools/ui-sketch-drag-join-test.sh).
+    add_test(NAME app.ui-windows-sketch-drag-join
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-drag-join-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-drag-join"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-drag-join PROPERTIES TIMEOUT 240)
+    # Sketch Dimension's right-click menu (mitcad#1540): Center or Tangent
+    # for a circle and Driving or Driven, a tangent-to-center and a driven
+    # tangent-to-tangent dimension between two circles. The Linux test's
+    # shared input script (tools/ui-sketch-tangent-dimension-test.sh).
+    add_test(NAME app.ui-windows-sketch-tangent-dimension
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-tangent-dimension-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-tangent-dimension"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-tangent-dimension PROPERTIES TIMEOUT 180)
+    # A double-click on a sketch curve selects its closed loop past a
+    # corner a line leaves, else its open chain; Ctrl adds (mitcad#1541,
+    # GitHub mitcad/Mitcad#204). The Linux test's shared input script
+    # (tools/ui-sketch-double-click-chain-test.sh).
+    add_test(NAME app.ui-windows-sketch-double-click-chain
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-double-click-chain-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-double-click-chain"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-double-click-chain PROPERTIES TIMEOUT 180)
     # A command panel value that uses the field's own parameter keeps that
     # parameter as a user parameter (mitcad#1536): depth * 2 in Edit
     # Extrude's Distance of depth. The Linux test's shared input script
@@ -1838,6 +1870,49 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-feature-own-parameter"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-feature-own-parameter PROPERTIES TIMEOUT 180)
+    # The sketch Point at the top level of the Create menu, after Lines,
+    # and as a button of its own in the ribbon's Create group (mitcad#1545,
+    # GitHub mitcad/Mitcad#200). The Linux test's shared input script
+    # (tools/ui-sketch-point-top-level-test.sh).
+    add_test(NAME app.ui-windows-sketch-point-top-level
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-point-top-level-test.ps1"
+              -App "$<TARGET_FILE:mitcad>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-point-top-level"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-point-top-level PROPERTIES TIMEOUT 180)
+    # Edit Line on a projected edge of a drawing's view sets the edge's
+    # width and pattern, and Reset to View Style takes them away
+    # (mitcad#1546). The Linux test's shared input script
+    # (tools/ui-drawing-edge-line-test.sh).
+    add_test(NAME app.ui-windows-drawing-edge-line
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-drawing-edge-line-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-drawing-edge-line"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-drawing-edge-line PROPERTIES TIMEOUT 180)
+    # Emboss's Taper Angle (mitcad#1547): a square wrapped onto a rod with
+    # Taper Angle 10 typed in the panel, previewed and kept by OK. The Linux
+    # test's shared input script (tools/ui-emboss-taper-test.sh).
+    add_test(NAME app.ui-windows-emboss-taper
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-emboss-taper-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-emboss-taper"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-emboss-taper PROPERTIES TIMEOUT 240)
+    # Preferences' Text size, Icon size and Font (mitcad#1556, GitHub
+    # mitcad/Mitcad#207): four starts at other sizes and in another font,
+    # the font, the icons and the layout checked. The Linux test's shared
+    # input script (tools/ui-text-icon-size-test.sh).
+    add_test(NAME app.ui-windows-text-icon-size
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-text-icon-size-test.ps1"
+              -App "$<TARGET_FILE:mitcad>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-text-icon-size"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-text-icon-size PROPERTIES TIMEOUT 600)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

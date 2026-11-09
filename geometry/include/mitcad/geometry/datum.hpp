@@ -5,10 +5,14 @@
 // vertices, points on paths and faces, and display shapes of datums
 // (planes, axes, points). Mirrors core/model-base/src/datum.rs.
 
+#include <optional>
 #include <string>
 #include <vector>
 
+#include <TopoDS_Edge.hxx>
+#include <TopoDS_Face.hxx>
 #include <gp_Dir.hxx>
+#include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
 
 #include "mitcad/geometry/shape.hpp"
@@ -50,7 +54,21 @@ struct CurveDescription {
   double radius = 0.0;
 };
 
+// A straight edge that is stored as a spline or a Bezier curve (the walls
+// of sheet bodies, mitcad#1537; imported lines) is a line here, as a planar
+// spline face is a plane to face_geometry.
 CurveDescription edge_geometry(const Shape& shape, const std::string& edge);
+
+// Whether an edge runs straight: a line, or a spline or Bezier curve whose
+// poles lie within 1e-6 mm of the line through its ends (mitcad#1537). What
+// the application's picks call a line, as edge_geometry does.
+bool is_straight(const TopoDS_Edge& edge);
+
+// The plane of a planar face, its normal outward (the face's orientation
+// applied): a plane, or another surface within 1e-6 mm of one, as
+// face_geometry reads it (mitcad#1537: the walls of sheet bodies are planar
+// splines). Null for other faces and a mesh body's triangles.
+std::optional<gp_Pln> face_plane(const TopoDS_Face& face);
 
 // The surfaces of every face and the curves of every edge in one pass, in
 // the shape's face and edge order (Shape::face_names, Shape::edge_name name

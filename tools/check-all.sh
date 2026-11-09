@@ -3,7 +3,9 @@
 # The checks before a commit, in the Linux build environment (run from any
 # directory; it works in the checkout it belongs to): configure and build
 # with the dev preset, cargo fmt and clippy, the dependency check, the
-# user guide's table of contents (tools/check-guide-contents.py), ctest,
+# user guide's table of contents (tools/check-guide-contents.py), on a
+# host newer than the Linux release's build root the changed C++ files
+# compiled with the root's older GCC (tools/check-root-compile.py), ctest,
 # the ctests, the corpus tests and the UI tests (tools/ui-*-test.sh) whose
 # sources changed, several at once.
 #
@@ -147,7 +149,8 @@
 #                   memory, ballooning), "auto" is the fixed 12G as before.
 #                   The run's first lines say which applied.
 #   --overlap MODE  "auto" (default, $MITCAD_CHECK_OVERLAP) or "off": with
-#                   "auto" the lint steps (fmt, clippy, deps, guide) run
+#                   "auto" the lint steps (fmt, clippy, deps, guide,
+#                   root-compile) run
 #                   beside the ctest step and the corpus step beside the UI
 #                   tests (the UI tests run alone again only after the corpus
 #                   step),
@@ -157,7 +160,8 @@
 #   --fresh         configure from scratch (cmake --fresh), as after
 #                   changes of CMake files.
 #   --only STEPS    only these steps: configure, build, fmt, clippy, deps,
-#                   guide, ctest, corpus, ui, fuzz (with --full), or single UI
+#                   guide, root-compile, ctest, corpus, ui, fuzz (with
+#                   --full), or single UI
 #                   tests (ui-sketch) or ctests (ctest:core.model).
 #   --dry-run       builds and runs nothing: lists the ctests, the corpus
 #                   and the UI tests that would run for the working tree as
@@ -455,7 +459,7 @@ unset MITCAD_UI_VISIBLE
 
 wanted() {
   if [ "$DRY" = 1 ]; then
-    case $1 in configure | build | fmt | clippy | deps | guide) return 1 ;; esac
+    case $1 in configure | build | fmt | clippy | deps | guide | root-compile) return 1 ;; esac
   fi
   [ -z "$ONLY" ] || [[ ",$ONLY," == *",$1,"* ]]
 }
@@ -900,11 +904,43 @@ lint() {
   if wanted guide; then
     step guide guide_contents
   fi
+  if wanted root-compile; then
+    root_compile
+  fi
 }
 guide_contents() { python3 tools/check-guide-contents.py --self-test && python3 tools/check-guide-contents.py; }
+# root_compile: the C++ files the change touches (with --full every source
+# file of geometry/, core/cpp/ and app/) compiled with the Linux release's
+# build root's older GCC, -fsyntax-only (tools/check-root-compile.py,
+# mitcad#1551): code the host's newer compiler accepts and the release's
+# refuses fails here, not in the release. A skipped row, with the reason
+# printed, where it cannot tell (no MITCAD_LINUX_BUILD_ROOT, a build
+# compiler that is not GCC or not newer than the root's, as inside the
+# root itself).
+root_compile() {
+  local start status result all=()
+  start=$(now_us)
+  echo "== root-compile"
+  [ "$FULL" = 0 ] || all=(--all)
+  python3 tools/check-root-compile.py --build "$BUILD" ${all[@]+"${all[@]}"} \
+    > "$LOGS/root-compile.log" 2>&1 9>&-
+  status=$?
+  case $status in
+    0) result=ok ;;
+    77)
+      result=skipped
+      echo "   $(tail -n 1 "$LOGS/root-compile.log")"
+      ;;
+    *)
+      result=FAIL
+      tail -n 60 "$LOGS/root-compile.log"
+      ;;
+  esac
+  record root-compile "$(seconds_since "$start")" "$result"
+}
 # Beside the ctest step when it runs (--overlap auto), else before it.
 if overlapping && { wanted ctest || [ -n "$(ctest_named)" ]; } &&
-  { wanted fmt || wanted clippy || wanted deps || wanted guide; }; then
+  { wanted fmt || wanted clippy || wanted deps || wanted guide || wanted root-compile; }; then
   bg_start lint lint
 else
   lint

@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/sketch-tangent-dimension.mitcad-ui (mitcad#1540): Sketch1 on XY holds a circle of diameter 20 about the fixed origin and a free circle of radius 5 about (30, 0): a dimension to its centre moves only the centre, and its radius stays 5."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F1", "center": [0, 0], "diameter": 20},
+  {"cmd": "sketch.circle", "sketch": "F1", "mode": "center", "center": [30, 0], "radius": 5}
+]

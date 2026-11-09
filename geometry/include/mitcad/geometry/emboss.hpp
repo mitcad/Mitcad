@@ -54,6 +54,21 @@ struct EmbossWrapSpec {
   double radius = 0.0;
   double to_radius = 0.0;
   double half_angle = 0.0; // radians: 0 for a cylinder
+  // The walls tilted from the normals (mitcad#1547), radians in (-90, 90)
+  // degrees: positive widens the profiles away from the face (the top, or
+  // a sink's floor, larger than the foot), negative narrows them, as an
+  // extrusion's taper. The top region is the foot's moved within the top
+  // surface by d tan(taper) (d = |to_radius - radius|) along the boundary's
+  // normal in that surface: on the top surface's development (exact on a
+  // cylinder and a cone) each edge's curve is offset by OCCT, outwards for
+  // a positive taper, the corners where neighbouring offsets meet, and an
+  // edge whose corners pass each other drops out (its neighbours meet).
+  // Each wall is ruled between its edge on the foot and its moved edge (or
+  // that corner) on the top, and the faces are sewn into the solid. A
+  // taper that collapses a region (a loop keeps fewer than two edges,
+  // neighbours do not meet, the moved edges cross) throws
+  // std::invalid_argument naming the region.
+  double taper = 0.0;
 };
 
 // Throws std::invalid_argument for a sketch plane across the axis, sizes
@@ -91,6 +106,17 @@ struct EmbossProjectSpec {
   std::string face;
   gp_Vec direction;
   double depth = 0.0;
+  // The walls tilted from the normals (mitcad#1547), radians in (-90, 90)
+  // degrees, positive widening as on a wrap (EmbossWrapSpec::taper). The
+  // move is measured as the projection sees the profiles: the region is
+  // moved in the sketch plane by |depth| tan(taper) (as on a wrap: each
+  // edge offset, the corners where the offsets meet), projected onto the
+  // face and grown along its normals, and that solid's far face is the
+  // top. The foot is the region's own projection, each wall is ruled
+  // between a segment's edges on the foot and on the top (or the top's
+  // corner where its edge dropped out), and the faces are sewn. A taper
+  // that collapses a region throws std::invalid_argument naming it.
+  double taper = 0.0;
 };
 
 // Throws std::invalid_argument for a face the body lacks, a direction in

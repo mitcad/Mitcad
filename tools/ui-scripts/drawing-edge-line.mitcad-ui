@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+# Edit Line on a projected edge (mitcad#1546) on drawing-edge-line.json: a
+# step (F2.b0) whose edge at y 20 runs through the middle of its top view
+# (view 1 of Drawing1).
+#   1. A right click there: the menu has Edit Line… for the step's edge;
+#      its dialog shows the view's own line (Thick, Continuous); Thick and
+#      Long Dash Double Dot make the edge's line wide and long dash double
+#      dotted in this view: the command, the view's choice and the sheet's
+#      pen phantom_thick logged.
+#   2. Edit Line… again shows the choice; Reset to View Style takes it
+#      away: no choice, no phantom pen.
+# Run by tools/ui-drawing-edge-line-test.sh (Linux) and
+# tools/ui-windows-drawing-edge-line-test.ps1 (Windows).
+wait-idle
+mark
+dblclick-logged '^Browser Root/Drawings/Drawing1 at '
+wait-log '^Drawing opened: D1 Drawing1, sheet 1 of 1'
+wait-log '^Drawing view 1 at '
+wait-log '^Drawing lines: none$'
+wait-log '^Drawing view pens: .*thick'
+wait-idle
+
+# 1. The edge's line: wide, long dash double dotted.
+mark
+context-menu-logged '^Drawing view 1 at ' 'Edit Line…'
+focus-dialog '^Edit Line$'
+expect-log '^Drawing edge under the pointer: .*"body":"F2[.]b0"'
+expect-log '^Drawing line dialog opened: edge .* of F2[.]b0 in view 1 [(]thick continuous[)]'
+qt-choice drawingLineWidth Thick
+qt-choice drawingLinePattern 'Long Dash Double Dot'
+button '^OK$'
+focus-main
+wait-log '^Drawing command: (?=.*"cmd":"edit_drawing_line")(?=.*"width":"thick")(?=.*"pattern":"phantom")'
+wait-log '^Drawing lines: view 1: edge .* of F2[.]b0 thick phantom$'
+wait-log '^Drawing view pens: .*phantom_thick'
+expect-no-log '^Drawing command refused'
+
+# 2. Reset to View Style: the view's own line again.
+mark
+context-menu-logged '^Drawing view 1 at ' 'Edit Line…'
+focus-dialog '^Edit Line$'
+expect-log '^Drawing line dialog opened: edge .* of F2[.]b0 in view 1 [(]thick phantom[)]'
+button '^Reset to View Style$'
+focus-main
+wait-log '^Drawing command: (?=.*"cmd":"edit_drawing_line")(?=.*"reset":true)'
+wait-log '^Drawing lines: none$'
+wait-log '^Drawing view pens: (?!.*phantom)'
+expect-no-log '^Drawing command refused'
+expect-never 'TestDriver: FAIL'

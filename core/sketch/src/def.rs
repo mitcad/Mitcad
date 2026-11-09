@@ -1449,6 +1449,15 @@ impl<P> SketchDef<P> {
                     }
                     Vec::new()
                 }
+                D::TangentCircleDistance { a, b, .. } => {
+                    if a == b {
+                        return Err(format!("{what}: two different circles or arcs"));
+                    }
+                    vec![(cv(*a), ROUND), (cv(*b), ROUND)]
+                }
+                D::TangentPointDistance { circle, point, .. } => {
+                    vec![(cv(*circle), ROUND), (p(*point), ANY)]
+                }
             };
             check_kinds(&index, &what, &refs)?;
             if let Some(text) = d.text

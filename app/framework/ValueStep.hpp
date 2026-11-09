@@ -71,7 +71,8 @@ std::optional<QString> steppedValue(const QString& text, ParameterKind kind, dou
 // vertical distance and an angle have none; the distances between points,
 // lines and curves (horizontal_distance, vertical_distance,
 // point_line_distance, line_distance, tangent_distance,
-// concentric_distance) stop at 0; every other one (a distance between two
+// concentric_distance, tangent_circle_distance, tangent_point_distance)
+// stop at 0; every other one (a distance between two
 // points, a length, a radius, a diameter, an arc length) stays above 0.
 ValueStepLimit sketchDimensionStepLimit(const QString& type, bool signedOffset);
 

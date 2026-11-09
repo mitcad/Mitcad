@@ -582,7 +582,10 @@ millimetres, angles radians. Build sketches with the
   dimensions](#signed-point-dimensions)), `point_line_distance` (`point`, `line`),
   `line_distance` (`a`, `b` parallel lines), `tangent_distance` (`circle`
   or arc, `line`: the gap between them, the centre's distance from the
-  line minus the radius),
+  line minus the radius), `tangent_circle_distance` (`a`, `b` circles or
+  arcs) and `tangent_point_distance` (`circle` or arc, `point`): gaps
+  from a circle's tangent side, with an optional `side` (see [Tangent
+  dimensions between circles](#tangent-dimensions-between-circles)),
   `concentric_distance` (`a`, `b` circles or arcs about one centre: the gap
   between them, the difference of their radii; mitcad#445), `length` (`line`), `angle`
   (`a`, `b` lines, and optional `reverse_a`, `reverse_b`; see [Angle
@@ -3267,6 +3270,42 @@ with `"mode": "sink"` sunk into it and cut (mitcad#458,
 - `participants`: the bodies joined or cut; empty for the face's body,
   or all bodies without a face. A raise that touches none, or a sink that
   cuts into none, fails.
+- `taper_angle` (mitcad#1547): the walls tilted from where they stand
+  without it (along the face's normals), an angle (a number in radians,
+  or an expression such as `"10 deg"` or a parameter's name) strictly
+  between -90 and 90 degrees, signed as an extrusion's taper: positive
+  widens the profiles away from the face (the top, or a sink's floor,
+  larger than the foot), negative narrows them. Left out when absent
+  (0: walls along the normals; older files read as before) and written
+  when given. Every kind of emboss takes it:
+  - a planar face or no face: the extrusion's taper (`ExtrudeSide::taper`;
+    a sketch plane not parallel to the face takes none, as an
+    extrusion's start plane);
+  - wrapped onto a cylinder or a cone (`EmbossWrapSpec::taper`): the
+    top's boundary is the foot's moved within the top surface by `depth
+    tan(taper)` along its normal there. On the top surface's development
+    (its lengths the surface's) each edge's curve is offset by OCCT, the
+    corners where neighbouring offsets meet (continued past their ends
+    as far as needed), and an edge whose corners pass each other drops
+    out, its neighbours meeting instead (short edges of letters). Each
+    wall is ruled between its edge on the foot and its moved edge (or
+    that corner) on the top. A 10 x 10 square on a cylinder of radius 25
+    raised 45 is 28 around the axis and 10 along it at the top; at 10
+    degrees `28 + 2 * 45 tan(10 deg)` and `10 + 2 * 45 tan(10 deg)`;
+  - projected (`EmbossProjectSpec::taper`): measured as the projection
+    sees the profiles, the region moved so in the sketch plane by `depth
+    tan(taper)`, projected onto the face and grown along its normals,
+    the top that solid's far faces; the walls ruled between foot and top.
+  A taper that collapses a region (a loop keeps fewer than two edges,
+  neighbouring edges no longer meet, the moved edges cross) fails the
+  feature with an error that names it: `the taper collapses the profile
+  r{…}: neighbouring edges of its top do not meet` (the square above
+  at -10 degrees: 10 - 2 * 45 tan(10 deg) < 0 along the axis).
+
+```json
+{"type": "emboss", "profiles": [{"sketch": "F3", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+ "face": {"body": "F2.b0", "face": "F2:side(c1)"}, "depth": 45, "taper_angle": "10 deg"}
+```
 
 Faces are named as an extrusion's: `side(<segment>)` the walls,
 `end(<region>)` the top of a raised profile or the floor of a sunk one,
@@ -3281,7 +3320,15 @@ rectangle on a rod moved along the axis by a parameter, around it and
 turned, its volume kept and its centre of mass where the offsets put
 it; refused on a planar face), `core.model`'s
 `a_wrap_moves_along_the_axis_around_it_and_turns_on_the_face` and
-`features::emboss::tests` (the moved frame and regions).
+`features::emboss::tests` (the moved frame and regions). The taper
+(mitcad#1547): `cli.emboss_taper` (the square above at 0, 10 and -5
+degrees, its top's edge lengths and the volumes, -10 degrees refused,
+and on a block's top 5 degrees as an extrusion of the square with that
+taper), `geometry.emboss` (`test_emboss.cpp`: the square's top within
+1e-6 mm and its volume by the divergence theorem over its faces, sunk
+too; a cone; a circle, a holed rectangle and letters; a square projected
+onto a plane as the frustum and onto a ball; letters projected; the
+refusals) and `core.model`'s `a_taper_reaches_every_kind_of_emboss`.
 The `.solidcraft` import maps SolidCraft's emboss onto it (a deboss
 sinks), and the `.f3d` import the file's embosses (a negative depth
 sinks; `core/import/docs/f3d-components.md`).
@@ -3976,6 +4023,35 @@ commands send a link for each sketch of another component.
 | point | `edge_and_plane` | `line`, `plane` | where the line meets the plane |
 | point | `along_path` | `path`, `distance`, `physical` | as the plane along a path |
 | point | `fixed` | `point` | a non-parametric point |
+
+An edge is a line where it runs straight, whatever curve the kernel
+stores it as (mitcad#1537): a B-spline or Bezier edge whose poles lie
+within 1e-6 mm of the segment between its ends is a line to `line`,
+`line1`, `line2` and `edge` (the kernel's `edge_geometry`), as a planar
+spline face is a plane to `plane`. The straight edges and planar walls of
+a sheet body with a bend (a Fold, a Convert to Sheet Metal with bends) are
+such splines, so datums on them work as on a solid's and follow the sheet
+when it changes (`tools/cli/tests/sheet_datums.json`: each datum on a
+converted plate, a converted channel and a folded sheet, within 1e-6 mm,
+after the plate's length and the fold's angle change too).
+
+Every reference that takes a plane reads a flat face alike, whatever
+surface the kernel stores (mitcad#1554): a face within 1e-6 mm of a plane
+is that plane (its normal out of the material) as Mirror's `plane`, a
+construction feature's plane, a sketch plane (with the face's edges as the
+sketch's references), Split Body's and Split Face's `tool` (extended along
+its plane), Draft's fixed plane, Align's `plane`, an
+extrusion's `start` or `to_object` face, a hole's end face and the faces
+whose middle `Kernel::face_plane` gives (holes and joints on a face)
+(`face_geometry`, and `detail::reference_plane` in
+`geometry/src/face_select.cpp`). A face that
+is not flat (a bend's surfaces, the side of a bend whose boundary is not
+square to the bend line) stays refused: `face … is not planar (bspline)`.
+`tools/cli/tests/sheet_face_planes.json` mirrors a block about the flat
+faces of a converted plate, a converted channel and a folded sheet (its
+B-spline walls among them), splits, aligns, sketches and extrudes on a wall,
+and checks that the images follow the sheets when the channel's height and
+the fold's angle change, within 1e-6 mm.
 
 Fractions and lengths beyond a path's ends continue straight along the
 end tangent. A plane's frame (`x_axis`, `y_axis`) is what a sketch on it
@@ -23563,3 +23639,164 @@ two pieces on a plate whose values have `brim_width` 8 written 21 mm
 apart, 5 mm with `brim_type` `no_brim`; the copies of an item with a count
 not centred as far apart; `spacing` 12 without a brim 12 mm apart; the
 refusals).
+
+## Tangent dimensions between circles
+
+A sketch dimension can measure from a circle's or arc's tangent side
+instead of its centre (mitcad#1540, GitHub #203): the gap between two
+circles, or from one circle's side to a point. Each is the nearest gap,
+measured along the line through the centres; its value is a length that
+must not be negative.
+
+- `tangent_circle_distance` (`a`, `b`: circles or arcs, two different
+  ones; optional `side`): with `side` `outside` (the default, not
+  written) the gap between two circles outside each other, the distance
+  of their centres minus both radii; with `inside`, one within the other,
+  the gap between the inner circle's far side and the outer circle: the
+  larger radius minus the smaller one minus the distance of the centres.
+  Which one is the outer is taken from the radii when the dimension is
+  added; `a` and `b` may come in either order.
+- `tangent_point_distance` (`circle`: a circle or arc, `point`; optional
+  `side`): with `outside` (the default) the point's distance from the
+  centre minus the radius, for a point outside the circle; with `inside`
+  the radius minus that distance. The point may be another circle's
+  centre: the distance from one circle's tangent side to the other's
+  centre.
+- From a circle's side to a line stays `tangent_distance`; between
+  centres, the usual `distance` and `point_line_distance` of the centre
+  points.
+
+Driving ones move the geometry to the value (the solver's
+`TangentCircleDistance` and `TangentPointDistance` constraints, equations
+`CircleGap` and `CirclePointGap` in `core/solver/src/equations.rs`, with
+their derivatives by forward differentiation); a driven one (`"driven":
+true`) only measures, and the `sketch` query gives its `measured` value.
+
+```json
+{"cmd": "sketch.add_dimension", "sketch": "F1",
+ "dimension": {"type": "tangent_circle_distance", "a": "c3", "b": "c5"}, "value": 12}
+{"cmd": "sketch.add_dimension", "sketch": "F1",
+ "dimension": {"type": "tangent_point_distance", "circle": "c3", "point": "p4", "side": "inside"},
+ "driven": true}
+```
+
+The Sketch Dimension tool makes them from its right-click menu: Center
+or Tangent for each circle or arc picked, and Driving or Driven for the
+dimension (`app/COMMANDS.md`, Sketch Dimension).
+
+Tests: `core/solver/tests/constraints.rs`
+(`tangent_circle_distance_is_the_gap_between_two_circles`,
+`tangent_point_distance_is_the_gap_between_a_circle_and_a_point`),
+`core/model-tests/sketch/src/sketch_tangent_dimensions_1540_tests.rs`
+(tangent to tangent and tangent to centre between two circles solve to
+the typed value within 1e-6 mm, the gaps inside a circle, and driven ones
+that only measure); the UI test `tools/ui-sketch-tangent-dimension-test.sh`.
+
+## The closed loop of a sketch curve
+
+`{"query": "sketch_loop", "sketch": "F1", "curve": "c3"}` (mitcad#1541,
+`sketch_loop.rs`, `mitcad_model::sketch::loops`) answers `{"curves":
+["c3", "c6", "c8", "c10"]}`: the curves of the smallest closed loop the
+curve bounds, each once, in the loop's order; what a double-click on the
+curve selects in the app (app/COMMANDS.md, "Chain selection by a
+double-click"). The curves of the picked one's kind (construction or
+not; never both, the sketch's axes and texts left out) are arranged as
+profile regions are (`core/sketch/src/regions.rs`): cut at their
+crossings, dangling and bridging pieces dropped. Of the regions whose
+outer loop runs along the curve, the one whose outer loop encloses the
+least area (its holes counted in) gives the loop, so it passes points
+where more than two curves meet: on a rectangle with a line leaving one
+corner, a side gives the four sides. `curves` is empty when the curve
+bounds no loop (that line, an open polyline), and for a point or an id
+the sketch's curves lack. The geometry is the `sketch` query's: the last
+evaluation's solve, else solved by the query, linked projections where
+their sources are now; a sketch that does not solve is an error.
+
+Tests: `core/sketch/src/loops.rs` (a rectangle with a line leaving a
+corner, an open polyline, a side two rectangles share, a loop with a
+large hole beside a smaller one, a lone circle) and
+`core/model-tests/sketch/src/sketch_loop_1541_tests.rs` (the query, with
+a construction line that closes a triangle with normal sides).
+
+## Line styles in drawing views (mitcad#1546)
+
+A view of a drawing can draw the visible lines of one projected edge, of
+one body, or of every body a component's occurrence places with a width
+and a pattern of its own (ISO 128-3: an adjacent part as a long dash
+double dotted line, an edge to stand out), in that view only
+(`core/model/src/drawing/def.rs` `LineStyle`, `api/drawing_lines.rs`,
+`core/model-drawing/src/compose.rs` `LinePens`).
+
+**The long dash double dotted pattern.** Every pattern takes `phantom`
+now (ISO 128 type 05, the phantom line: 12, 1.5, 0.5, 1.5, 0.5, 1.5 mm),
+the lines and arcs drawn by hand too (`add_drawing_annotation`,
+`edit_drawing_annotation`; *Drawing defaults, sketches, patterns and
+turned views*), written as `width` and `pattern` in files. Pens of the
+`drawing` query: `phantom`, `phantom_thick`, `phantom_extra_thick`.
+
+| Command | Fields | Result |
+|---|---|---|
+| `edit_drawing_line` | `drawing`, `view`; what: `body`, `occurrence`, `edge` (as a pick names them: an edge of a body by its topological name, a body alone, or an `occurrence` alone: every body it and its occurrences place), or `at` (a sheet point on the view: the edge a click there picks, `drawing_pick`'s `"want": "edge"`) with `of` (`edge` (default), `body`, `component`: the occurrence that places the picked body); `width` (`thin`, `thick`, `extra_thick`) and `pattern` (`continuous`, `dashed`, `chain`, `phantom`), one or both (a new choice starts wide and continuous, an existing one keeps the part not given); or `reset: true` | `drawing`, `view`, `line` (the choice as kept, null after a reset); undo step `Edit line in view 1 of Drawing1` or `Reset line in view 1 of Drawing1`; a reset of what has no choice changes nothing |
+
+**What wins.** An edge's choice wins over its body's, a body's over its
+occurrence's, and a deeper occurrence's over the one it lies in. A body
+is named where `occurrence` places it (a path from the drawing's
+component; its own placement when left out), as a pick's is. Only the
+visible lines change: hidden lines keep the view's dashes. A view's
+choices are its own: its projected, section and detail views do not take
+them.
+
+**Following the model.** An edge is kept by its body and its topological
+name. When the view is drawn the edge is found again by its name
+(`Kernel::edge_geometry`), seen as the view sees it (a line, or a circle
+or an arc end on or from the side; another curve by its two ends), and
+its body's projected lines that lie on it (within 0.001 mm, or the
+view's deflection when it is projected from a triangulation) take its
+pen: the kernel's hidden-line removal keeps no edge names. So the choice
+follows the edge when the model changes. A choice whose edge is gone, or
+whose body or occurrence the view no longer shows, is kept and is a
+warning of the view (`the edge E{…} of F2.b0 is gone: its line style is
+kept`, `the view no longer shows the body F4.b0: its line style is
+kept`; the sheet's `view 1: …`).
+
+**The query, files and exports.** The `drawing` query's view gives
+`lines`, its choices in their file form (`body`, `occurrence`, `edge`,
+`width`, `pattern`); `drawing_pick` takes `"want": "edge"` (an edge,
+whole, whatever its curve). Files: a view's `lines`, left out when empty;
+a component's copied drawing maps their bodies, occurrences and edges,
+and an occurrence moved to another parent takes their paths along, as
+annotations' picks. The sheet, the PDF and SVG files and print draw a
+chosen line with its width's line width and its pattern's dashes. Since
+mitcad#1546 a DXF file's pen layers carry their line types and weights:
+`DASHED`, `CHAIN` and `PHANTOM` defined in the `LTYPE` table with their
+dashes (scaled with an inch file) on the dashed, long dash dotted and long
+dash double dotted layers (`PHANTOM`, `PHANTOM_THICK`,
+`PHANTOM_EXTRA_THICK` the new ones), `CONTINUOUS` on the others, and each
+layer's weight the pen's width in hundredths of a millimetre (group 370:
+13, 18, 35, 50, 70); `mitcad_dxf` writes and reads `Linetype` and
+`Layer::lineweight`. DWG keeps the layers only.
+
+Refused: `at` together with `body`, `occurrence` or `edge`; `of` without
+`at`; no edge at `at`; `of` `component` for a body in no component of
+the view; an edge without its body; neither a body nor an occurrence; a
+body, occurrence or edge the view does not show or the body has not; no
+width or pattern (and no reset); a width or pattern with `reset`; a cut
+sheet.
+
+```json
+{"cmd": "edit_drawing_line", "drawing": "D1", "view": 1, "body": "F2.b0",
+ "edge": "E{F2:end(r{…})|F2:side(c1[c4,c2])}", "width": "thick", "pattern": "phantom"}
+```
+
+The application: Edit Line… in a projected edge's menu (app/COMMANDS.md,
+"Drawings"). Tests: `core/model-tests/drawing-views/src/line_style_tests.rs`
+(mock kernel: an edge's lines following its edge when the model changes;
+a body's lines and the edge's choice winning; a click's edge, its body,
+the refusals; the ranks of occurrences; the file and undo; the SVG, PDF
+and DXF exports with the DXF line types and weights),
+`core/dxf/tests/write.rs` (line types and weights written and read back,
+scaled, R12), `app/tests/drawing_tools.cpp` (the patterns, the command
+and the log line), `tools/ui-drawing-edge-line-test.sh` and
+`tools/ui-windows-drawing-edge-line-test.ps1`
+(`app.ui-windows-drawing-edge-line`) on the shared steps
+`tools/ui-scripts/drawing-edge-line.mitcad-ui`.

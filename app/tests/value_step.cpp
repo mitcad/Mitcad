@@ -137,7 +137,8 @@ void sketchDimensionTests() {
     CHECK(limit.minimum == 0.0 && limit.above);
   }
   for (const char* type : {"horizontal_distance", "vertical_distance", "point_line_distance", "line_distance",
-                           "tangent_distance", "concentric_distance"}) {
+                           "tangent_distance", "concentric_distance", "tangent_circle_distance",
+                           "tangent_point_distance"}) {
     const ValueStepLimit limit = sketchDimensionStepLimit(QString::fromLatin1(type), false);
     CHECK(limit.minimum == 0.0 && !limit.above);
   }

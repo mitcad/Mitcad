@@ -17,3 +17,5 @@ mod spacing_tests;
 mod chosen_dimension_tests;
 // The model's items in views, Model Items and kept ones (mitcad#1406).
 mod model_items_tests;
+// Widths and patterns of edges and bodies in a view (mitcad#1546).
+mod line_style_tests;

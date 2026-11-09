@@ -632,11 +632,57 @@ int drawingToolsTests() {
   CHECK(widthChoices().at(1).first == QStringLiteral("thick") &&
         widthChoices().at(2).first == QStringLiteral("extra_thick") &&
         widthChoices().at(2).second == QStringLiteral("Extra Thick"));
-  CHECK(patternChoices().size() == 3 && patternChoices().first().first == QStringLiteral("continuous"));
+  CHECK(patternChoices().size() == 4 && patternChoices().first().first == QStringLiteral("continuous"));
   CHECK(patternChoices().at(1).first == QStringLiteral("dashed") &&
         patternChoices().at(1).second == QStringLiteral("Dashed") &&
         patternChoices().at(2).first == QStringLiteral("chain") &&
         patternChoices().at(2).second == QStringLiteral("Center Line"));
+  // The long dash double dot (mitcad#1546).
+  CHECK(patternChoices().at(3).first == QStringLiteral("phantom") &&
+        patternChoices().at(3).second == QStringLiteral("Long Dash Double Dot"));
+  // Edit Line of a projected edge (mitcad#1546): the edge, its body or its
+  // component, as the model's `lines` name them.
+  {
+    const QJsonObject pick{{QStringLiteral("body"), QStringLiteral("F2.b0")},
+                           {QStringLiteral("occurrence"), QStringLiteral("O1")},
+                           {QStringLiteral("edge"), QStringLiteral("E{a|b}")}};
+    QJsonObject edit = lineStyleEdit(QStringLiteral("D1"), 2, pick, QStringLiteral("edge"), QStringLiteral("thick"),
+                                     QStringLiteral("phantom"));
+    CHECK(edit.value(QStringLiteral("cmd")).toString() == QStringLiteral("edit_drawing_line"));
+    CHECK(edit.value(QStringLiteral("view")).toInt() == 2);
+    CHECK(edit.value(QStringLiteral("body")).toString() == QStringLiteral("F2.b0"));
+    CHECK(edit.value(QStringLiteral("occurrence")).toString() == QStringLiteral("O1"));
+    CHECK(edit.value(QStringLiteral("edge")).toString() == QStringLiteral("E{a|b}"));
+    CHECK(edit.value(QStringLiteral("width")).toString() == QStringLiteral("thick"));
+    CHECK(edit.value(QStringLiteral("pattern")).toString() == QStringLiteral("phantom"));
+    edit = lineStyleEdit(QStringLiteral("D1"), 2, pick, QStringLiteral("body"), QString(), QString(), true);
+    CHECK(!edit.contains(QStringLiteral("edge")) && !edit.contains(QStringLiteral("width")));
+    CHECK(edit.value(QStringLiteral("reset")).toBool());
+    edit = lineStyleEdit(QStringLiteral("D1"), 2, pick, QStringLiteral("component"), QStringLiteral("thin"),
+                         QStringLiteral("dashed"));
+    CHECK(!edit.contains(QStringLiteral("body")) && edit.value(QStringLiteral("occurrence")).toString() == QStringLiteral("O1"));
+    QJsonObject alone = pick;
+    alone.remove(QStringLiteral("occurrence"));
+    CHECK(lineStyleEdit(QStringLiteral("D1"), 2, alone, QStringLiteral("component"), QStringLiteral("thin"),
+                        QStringLiteral("dashed"))
+              .isEmpty());
+    const QJsonArray lines{QJsonObject{{QStringLiteral("body"), QStringLiteral("F2.b0")},
+                                       {QStringLiteral("occurrence"), QStringLiteral("O1")},
+                                       {QStringLiteral("edge"), QStringLiteral("E{a|b}")},
+                                       {QStringLiteral("width"), QStringLiteral("thick")},
+                                       {QStringLiteral("pattern"), QStringLiteral("phantom")}},
+                           QJsonObject{{QStringLiteral("occurrence"), QStringLiteral("O1")},
+                                       {QStringLiteral("width"), QStringLiteral("thin")},
+                                       {QStringLiteral("pattern"), QStringLiteral("chain")}}};
+    const auto own = lineStyleOf(lines, pick, QStringLiteral("edge"));
+    CHECK(own && own->first == QStringLiteral("thick") && own->second == QStringLiteral("phantom"));
+    CHECK(!lineStyleOf(lines, pick, QStringLiteral("body")));
+    const auto component = lineStyleOf(lines, pick, QStringLiteral("component"));
+    CHECK(component && component->second == QStringLiteral("chain"));
+    CHECK(lineStylesText(lines) ==
+          QStringLiteral("edge E{a|b} of F2.b0 in O1 thick phantom; occurrence O1 thin chain"));
+    CHECK(lineStylesText(QJsonArray()) == QStringLiteral("none"));
+  }
   command = annotationEdit(QStringLiteral("D1"), 3, QStringLiteral("width"), QStringLiteral("thick"));
   CHECK(command.value(QStringLiteral("width")).toString() == QStringLiteral("thick"));
   command = annotationEdit(QStringLiteral("D1"), 3, QStringLiteral("pattern"), QStringLiteral("dashed"));

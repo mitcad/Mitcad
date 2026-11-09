@@ -57,6 +57,7 @@
 #include "../framework/Theme.hpp"
 #include "CommandSupport.hpp"
 #include "PrintAnalysis.hpp"
+#include "mitcad/geometry/datum.hpp"
 #include "mitcad/geometry/import.hpp"
 #include "mitcad/geometry/shape.hpp"
 
@@ -220,7 +221,9 @@ QString pickKind(const SelectionItem& item, const CommandContext& context) {
     case GeomAbs_Torus:
       return QObject::tr("toroidal face");
     default:
-      return kind;
+      // A flat spline face (a sheet body's wall) is planar, as its pick
+      // says (mitcad#1537, mitcad#1554).
+      return geometry::face_plane(TopoDS::Face(faces.Current())) ? QObject::tr("planar face") : kind;
     }
   }
   TopExp_Explorer edges(shape, TopAbs_EDGE);
@@ -240,6 +243,11 @@ QString pickKind(const SelectionItem& item, const CommandContext& context) {
   case GeomAbs_Ellipse:
     return sketch ? QObject::tr("sketch ellipse") : QObject::tr("elliptical edge");
   default:
+    // A straight spline edge (a sheet body's edge) is straight, as its
+    // pick says (mitcad#1537).
+    if (!sketch && geometry::is_straight(TopoDS::Edge(edges.Current()))) {
+      return QObject::tr("straight edge");
+    }
     return kind;
   }
 }

@@ -48,6 +48,7 @@
 #include "../platform/NativeDialogs.hpp"
 #include "ProjectRowText.hpp"
 #include "ProjectRowDrag.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -408,7 +409,7 @@ ProjectsPanel::ProjectsPanel(Host host, QWidget* parent) : QWidget(parent), m_ho
   layout->setSpacing(2);
   m_toolbar = new QToolBar(this);
   m_toolbar->setObjectName(QStringLiteral("projectsToolbar"));
-  m_toolbar->setIconSize(QSize(16, 16));
+  m_toolbar->setIconSize(uiIconSize(16, 16));
   m_toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
   layout->addWidget(m_toolbar);
   m_tree = new ProjectsTreeWidget(*this);
@@ -426,7 +427,7 @@ ProjectsPanel::ProjectsPanel(Host host, QWidget* parent) : QWidget(parent), m_ho
   m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
   m_tree->setUniformRowHeights(true);
-  m_tree->setIconSize(QSize(16, 16));
+  m_tree->setIconSize(uiIconSize(16, 16));
   // The Browser's indentation per level, so that a narrow panel's nested
   // rows do not drift to the right (mitcad#393).
   panel::setCompactIndentation(m_tree, panel::Indent::Tree);

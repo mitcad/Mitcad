@@ -401,6 +401,44 @@ fn an_empty_sub_element_links_the_whole_object() {
 }
 
 #[test]
+fn external_geometry_names_a_link_without_a_mapped_name_by_its_element() {
+    // (mitcad#1557) FreeCAD 1.1 keeps a link to a binder's face without a
+    // mapped name and makes one external geometry per edge of the face,
+    // each referring to the link as `Binder.Face1`.
+    let circle = |id: i64, radius: f64| {
+        format!(
+            r#"<Geometry type="Part::GeomCircle" id="{id}" ref="Binder.Face1" migrated="1">
+              <GeoExtensions count="1"><GeoExtension type="Sketcher::ExternalGeometryExtension" Ref="Binder.Face1" Flags="0"/></GeoExtensions>
+              <Circle CenterX="0" CenterY="0" CenterZ="0" NormalX="0" NormalY="0" NormalZ="1" AngleXU="0" Radius="{radius}"/></Geometry>"#
+        )
+    };
+    let axis = |id: i64, x: f64, y: f64| {
+        format!(
+            r#"<Geometry type="Part::GeomLineSegment" id="{id}"><LineSegment StartX="0" StartY="0" StartZ="0" EndX="{x}" EndY="{y}" EndZ="0"/></Geometry>"#
+        )
+    };
+    let xml = format!(
+        r#"<Document SchemaVersion="4" ProgramVersion="1.1R1">
+      <Objects><Object type="Sketcher::SketchObject" name="Sketch"/></Objects>
+      <ObjectData><Object name="Sketch"><Properties>
+        <Property name="ExternalGeometry" type="App::PropertyLinkSubList">
+          <LinkSubList count="1"><Link obj="Binder" sub="Face1"/></LinkSubList></Property>
+        <Property name="ExternalGeo" type="Part::PropertyGeometryList">
+          <GeometryList count="4">{}{}{}{}</GeometryList></Property>
+      </Properties></Object></ObjectData></Document>"#,
+        axis(-1, 1.0, 0.0),
+        axis(-2, 0.0, 1.0),
+        circle(1, 25.4),
+        circle(2, 67.5)
+    );
+    let doc = Document::parse(&xml).unwrap();
+    let sketch = mitcad_freecad::sketch::Sketch::of(doc.object("Sketch").unwrap());
+    assert_eq!(sketch.links.len(), 1);
+    assert_eq!(sketch.external.len(), 2);
+    assert_eq!(sketch.external_links, [Some(0), Some(0)]);
+}
+
+#[test]
 fn reads_spreadsheet_cells_and_expressions() {
     use mitcad_freecad::expression::Expr;
     use mitcad_freecad::spreadsheet::{Content, Sheet};

@@ -3,6 +3,7 @@
 #include "MainWindow.hpp"
 #include "WindowManager.hpp"
 #include "framework/Dialogs.hpp"
+#include "framework/FitToScreen.hpp"
 #include "framework/InterfaceSize.hpp"
 
 #include <QApplication>
@@ -209,7 +210,10 @@ void DocumentFrame::install(WindowManager& manager) {
   manager.setPresenter([](MainWindow* document) {
     if (auto* frame = containing(document)) {
       frame->activateDocument(document);
+      const bool shownBefore = frame->isVisible();
       frame->show();
+      // Its frame within the screen once it is known (mitcad#1556).
+      if (!shownBefore) capNewWindowToScreen(frame);
       frame->raise();
       frame->activateWindow();
     } else document->present();

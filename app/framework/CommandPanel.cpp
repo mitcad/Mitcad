@@ -62,6 +62,7 @@
 
 #include "../browser/LibraryPicker.hpp"
 #include "../platform/MacDialogs.hpp"
+#include "UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -342,7 +343,7 @@ QToolButton* smallButton(const QString& text, const QString& tip) {
   button->setAccessibleName(tip);
   if (chromeStyle() == ChromeStyle::Floating) {
     setFlatCardButton(button);
-    button->setFixedSize(24, 24);
+    button->setFixedSize(uiRoomSize(24), uiRoomSize(24));
   }
   return button;
 }
@@ -353,7 +354,8 @@ QToolButton* smallButton(const QString& text, const QString& tip) {
 // set again when the palette changes (CommandPanel::applyControlStyles).
 void styleToggle(QToolButton* button, const QColor& accent) {
   button->setAutoRaise(true);
-  button->setFixedSize(30, 26);
+  // Room for a 20-pixel icon and its padding at Text and Icon size (mitcad#1556).
+  button->setFixedSize(uiRoomSize(30), uiRoomSize(26));
 #ifdef MITCAD_MAC_UI
   Q_UNUSED(accent);
   setFlatCardButton(button);
@@ -371,13 +373,14 @@ void styleToggle(QToolButton* button, const QColor& accent) {
 // The selection button: a capsule that is filled with the accent colour
 // while its input is the one that takes the picks.
 void styleSelect(QPushButton* button, const QColor& accent, const QColor& accentText) {
-  button->setFixedHeight(26);
+  button->setFixedHeight(uiRoomSize(26));
   button->setStyleSheet(QStringLiteral(
       "QPushButton { border: 1px solid rgba(128, 128, 128, 70); background: rgba(128, 128, 128, 25);"
-      " border-radius: 13px; padding: 0 12px; }"
+      " border-radius: %3px; padding: 0 12px; }"
       "QPushButton:hover { background: rgba(128, 128, 128, 55); }"
       "QPushButton:checked { border: 1px solid %1; background: %1; color: %2; }")
-                            .arg(accent.name(), accentText.name()));
+                            .arg(accent.name(), accentText.name())
+                            .arg(uiRoomSize(26) / 2));
 }
 
 // The text fields: rounded with a subtle fill like the combo boxes next to
@@ -611,7 +614,7 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
 
   auto* header = new QHBoxLayout;
   auto* icon = new QLabel;
-  icon->setPixmap(themeIcon(def.icon).pixmap(QSize(24, 24), devicePixelRatioF()));
+  icon->setPixmap(themeIcon(def.icon).pixmap(uiIconSize(24, 24), devicePixelRatioF()));
   auto* title = new QLabel(QStringLiteral("<b>%1</b>%2").arg(
       def.name.toHtmlEscaped(),
       editing ? QStringLiteral(" <span style='color:%1'>%2</span>")
@@ -623,10 +626,13 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
 
   m_form = new QFormLayout;
   m_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+  // A field goes under its label where the two do not fit side by side, so
+  // that a label is never cut (a larger Text size in a narrow dock,
+  // mitcad#1556).
+  m_form->setRowWrapPolicy(QFormLayout::WrapLongRows);
   if (chromeStyle() == ChromeStyle::Floating) {
     m_form->setVerticalSpacing(8);
     m_form->setHorizontalSpacing(10);
-    m_form->setRowWrapPolicy(QFormLayout::WrapLongRows);
     m_form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
   }
   int selectionIndex = 0;
@@ -1025,7 +1031,7 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
         const QString label = choiceLabel(option.second);
         auto* button = new QToolButton;
         button->setIcon(themeIcon(input.choiceIcons.value(value)));
-        button->setIconSize(QSize(20, 20));
+        button->setIconSize(uiIconSize(20, 20));
         button->setCheckable(true);
         button->setAutoRaise(true);
         button->setFocusPolicy(Qt::NoFocus);
@@ -1055,7 +1061,7 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
     row.combo->setToolTip(input.tooltip);
     if (input.choiceImage) {
       // The options' pictures (a material's swatch smaller, mitcad#1059).
-      row.combo->setIconSize(QSize(input.choiceImageSize, input.choiceImageSize));
+      row.combo->setIconSize(uiIconSize(input.choiceImageSize, input.choiceImageSize));
     }
     // Options that follow other inputs are filled by refreshRow.
     if (!input.choicesFor) {
@@ -1079,7 +1085,7 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       } else {
         // A small icon (mitcad#655): the text is its accessible name.
         row.button->setIcon(themeIcon(input.buttonIcon));
-        row.button->setIconSize(QSize(16, 16));
+        row.button->setIconSize(uiIconSize(16, 16));
         row.button->setAutoRaise(true);
         row.button->setAccessibleName(input.buttonText);
       }
@@ -1149,7 +1155,7 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
   case InputDef::Type::Flip: {
     auto* flip = new QToolButton;
     flip->setIcon(themeIcon(QStringLiteral("flip")));
-    flip->setIconSize(QSize(20, 20));
+    flip->setIconSize(uiIconSize(20, 20));
     flip->setCheckable(true);
     flip->setFocusPolicy(Qt::NoFocus);
     flip->setToolTip(input.tooltip.isEmpty() ? tr("Flip the direction") : input.tooltip);

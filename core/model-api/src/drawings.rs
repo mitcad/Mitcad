@@ -340,6 +340,8 @@ named_enum! {
         // (mitcad#1406, `drawing_annotations.rs`).
         "drawing_model_items" => ModelItems(Box<ModelItemsCommand>),
         "keep_drawing_model_items" => KeepModelItems(Box<KeepModelItemsCommand>),
+        // Line styles in views (mitcad#1546, `drawing_lines.rs`).
+        "edit_drawing_line" => EditLine(Box<super::drawing_lines::EditLineCommand>),
     }
 }
 
@@ -1269,6 +1271,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             DrawingCommand::SaveTemplate(c) => self.save_drawing_template(*c),
             DrawingCommand::ModelItems(c) => self.drawing_model_items(*c),
             DrawingCommand::KeepModelItems(c) => self.keep_drawing_model_items(*c),
+            DrawingCommand::EditLine(c) => self.edit_drawing_line(*c),
         }
     }
 
@@ -1626,6 +1629,12 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                         _ => None,
                     })
                     .unwrap_or(true);
+                // Its own widths and patterns of edges and bodies
+                // (mitcad#1546); what of them it cannot find, a warning.
+                let (pens, lost) = self.line_pens(view, &shown, &spec, projection.polygonal);
+                if !lost.is_empty() {
+                    out.missing.entry(view.id).or_default().extend(lost);
+                }
                 Ok((
                     PlacedView {
                         id,
@@ -1638,6 +1647,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                         hatch,
                         shading: shading_shown,
                         holes: None,
+                        pens,
                     },
                     own,
                 ))
@@ -2307,6 +2317,7 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
             annotations: Vec::new(),
             rotation: 0.0,
             sketch: Vec::new(),
+            lines: Vec::new(),
         });
         changed.check().map_err(ApiError)?;
         phases.mark("define");
@@ -2856,6 +2867,9 @@ fn view_json(sheet: &DrawingSheet, view: &DrawingView) -> Value {
         // Turned on the sheet, and what is drawn in it (mitcad#729).
         "rotation": view.rotation,
         "sketch": view.sketch.iter().map(|k| k.id()).collect::<Vec<_>>(),
+        // Its own widths and patterns of edges, bodies and occurrences
+        // (mitcad#1546).
+        "lines": view.lines,
     });
     match &view.kind {
         ViewKind::Base { direction } => {

@@ -26,6 +26,7 @@
 #include <QFormLayout>
 #include <QFrame>
 #include <QFont>
+#include <QFontComboBox>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -44,6 +45,7 @@
 #include <QScrollArea>
 #include <QSettings>
 #include <QSignalBlocker>
+#include <QSlider>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QStyle>
@@ -66,6 +68,7 @@
 #include "../print/MaterialProperties.hpp"
 #include "../framework/CachePreferences.hpp"
 #include "../framework/InterfaceSize.hpp"
+#include "../framework/UiSizes.hpp"
 #include "../framework/ChromeStyle.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/DebugLog.hpp"
@@ -1710,14 +1713,25 @@ void ViewController::showPreferences(const QString& page) {
   camera->setObjectName(QStringLiteral("preferencesCamera"));
   camera->addItems({tr("Orthographic"), tr("Perspective")});
   camera->setCurrentIndex(m_settings.perspective ? 1 : 0);
-  display->addRow(tr("C&amera:"), camera);
   // The orientation cube's projection (mitcad#774), in CubeProjection's
-  // order.
+  // order, beside the camera's in one row (Preferences fits a 1366 x 768
+  // screen with Text size, Icon size and Font, mitcad#1556); Alt+O still
+  // reaches it through its label.
   auto* cubeProjection = new QComboBox;
   cubeProjection->setObjectName(QStringLiteral("preferencesCubeProjection"));
   cubeProjection->addItems({tr("Follow the View"), tr("Orthographic"), tr("Perspective")});
   cubeProjection->setCurrentIndex(int(m_settings.cubeProjection));
-  display->addRow(tr("&Orientation cube:"), cubeProjection);
+  auto* cubeProjectionLabel = new QLabel(tr("&Orientation cube:"));
+  cubeProjectionLabel->setBuddy(cubeProjection);
+  auto* cameraRow = new QHBoxLayout;
+  cameraRow->addWidget(camera);
+  cameraRow->addSpacing(12);
+  cameraRow->addWidget(cubeProjectionLabel);
+  cameraRow->addWidget(cubeProjection);
+  cameraRow->addStretch(1);
+  auto* cameraLabel = new QLabel(tr("C&amera:"));
+  cameraLabel->setBuddy(camera);
+  display->addRow(cameraLabel, cameraRow);
   // Anaglyph 3D's stereo depth and convergence (mitcad#1449), in percent,
   // side by side in one row (Preferences fits a 1366 x 768 screen): the
   // view takes a change at once (put back when the dialog is cancelled);
@@ -1985,6 +1999,95 @@ void ViewController::showPreferences(const QString& page) {
   } else {
     connect(dialog.get(), &QDialog::accepted, interfaceSize, saveInterfaceSizeChoice);
   }
+  // Text size and Icon size on top of Interface size, and the application
+  // font's family (mitcad#1556, GitHub mitcad/Mitcad#207): 80 to 200 % in
+  // steps of 5 %, at the next start (framework/UiSizes). Saved when the
+  // dialog is accepted, at once in the Settings window.
+  const QString nextStart = tr("Takes effect when MitCad starts again.");
+  // A slider in steps of 5 % with its value after it, in the row. Text size
+  // and Icon size share one row, so that the page stays low enough for a
+  // 1366 x 768 screen (tools/ui-preferences-test.sh).
+  auto* sizesRow = new QHBoxLayout;
+  const auto addSize = [sizesRow](const QString& sliderName, const QString& tipText, int startPercent) {
+    auto* sizeSlider = new QSlider(Qt::Horizontal);
+    sizeSlider->setObjectName(sliderName);
+    sizeSlider->setRange(kUiSizeMinimum / kUiSizeStep, kUiSizeMaximum / kUiSizeStep);
+    sizeSlider->setSingleStep(1);
+    sizeSlider->setPageStep(25 / kUiSizeStep);
+    sizeSlider->setValue(startPercent / kUiSizeStep);
+    sizeSlider->setToolTip(tipText);
+    auto* sizeValue = new QLabel;
+    sizeValue->setObjectName(sliderName + QStringLiteral("Value"));
+    sizeValue->setMinimumWidth(sizeValue->fontMetrics().horizontalAdvance(tr("%1%").arg(kUiSizeMaximum)) + 4);
+    const auto showSize = [sizeValue](int sizeSteps) { sizeValue->setText(tr("%1%").arg(sizeSteps * kUiSizeStep)); };
+    showSize(sizeSlider->value());
+    QObject::connect(sizeSlider, &QSlider::valueChanged, sizeValue, showSize);
+    sizesRow->addWidget(sizeSlider, 1);
+    sizesRow->addWidget(sizeValue);
+    return sizeSlider;
+  };
+  QSlider* textSize = addSize(QStringLiteral("preferencesTextSize"),
+                              tr("Makes texts smaller or larger, on top of the Interface size"), savedTextSize());
+  sizesRow->addSpacing(12);
+  auto* iconSizeLabel = new QLabel(tr("Ico&n size:"));
+  sizesRow->addWidget(iconSizeLabel);
+  QSlider* iconSize = addSize(QStringLiteral("preferencesIconSize"),
+                              tr("Makes icons smaller or larger, on top of the Interface size"), savedIconSize());
+  iconSizeLabel->setBuddy(iconSize);
+  auto* textSizeLabel = new QLabel(tr("Te&xt size:"));
+  textSizeLabel->setBuddy(textSize);
+  display->addRow(textSizeLabel, sizesRow);
+  // The font: the system's, or an installed family.
+  const QString savedFamily = savedFontFamily();
+  auto* systemFont = new QCheckBox(tr("System"));
+  systemFont->setObjectName(QStringLiteral("preferencesSystemFont"));
+  systemFont->setChecked(savedFamily.isEmpty());
+  systemFont->setToolTip(tr("Uses the system's font for the interface"));
+  auto* fontFamily = new QFontComboBox;
+  fontFamily->setObjectName(QStringLiteral("preferencesFontFamily"));
+  fontFamily->setCurrentFont(QFont(savedFamily.isEmpty() ? QApplication::font().family() : savedFamily));
+  fontFamily->setEnabled(!systemFont->isChecked());
+  fontFamily->setToolTip(tr("The font of MitCad's texts, at the Text size"));
+  connect(systemFont, &QCheckBox::toggled, fontFamily,
+          [fontFamily](bool useSystem) { fontFamily->setEnabled(!useSystem); });
+  auto* fontNote = new QLabel(nextStart);
+  fontNote->setEnabled(false);
+  auto* fontRow = new QHBoxLayout;
+  fontRow->addWidget(systemFont);
+  fontRow->addWidget(fontFamily, 1);
+  fontRow->addWidget(fontNote);
+  auto* fontLabel = new QLabel(tr("&Font:"));
+  fontLabel->setBuddy(fontFamily);
+  display->addRow(fontLabel, fontRow);
+  const auto saveTextSizeChoice = [textSize] {
+    const int percent = textSize->value() * kUiSizeStep;
+    if (saveTextSize(percent)) {
+      qDebug().noquote() << QStringLiteral("Preferences: text size %1% (at the next start)").arg(percent);
+    }
+  };
+  const auto saveIconSizeChoice = [iconSize] {
+    const int percent = iconSize->value() * kUiSizeStep;
+    if (saveIconSize(percent)) {
+      qDebug().noquote() << QStringLiteral("Preferences: icon size %1% (at the next start)").arg(percent);
+    }
+  };
+  const auto saveFontChoice = [systemFont, fontFamily] {
+    const QString family = systemFont->isChecked() ? QString() : fontFamily->currentFont().family();
+    if (saveFontFamily(family)) {
+      qDebug().noquote() << QStringLiteral("Preferences: font %1 (at the next start)")
+                                .arg(family.isEmpty() ? QStringLiteral("the system's") : family);
+    }
+  };
+  if (window != nullptr) {
+    connect(textSize, &QSlider::valueChanged, host, saving(saveTextSizeChoice));
+    connect(iconSize, &QSlider::valueChanged, host, saving(saveIconSizeChoice));
+    connect(systemFont, &QCheckBox::toggled, host, saving(saveFontChoice));
+    connect(fontFamily, &QFontComboBox::currentFontChanged, host, saving(saveFontChoice));
+  } else {
+    connect(dialog.get(), &QDialog::accepted, textSize, saveTextSizeChoice);
+    connect(dialog.get(), &QDialog::accepted, iconSize, saveIconSizeChoice);
+    connect(dialog.get(), &QDialog::accepted, fontFamily, saveFontChoice);
+  }
   // The window's layout (mitcad#419), for the next starts: Docked or
   // Floating, the platform's until one is chosen. Not in the native macOS
   // frontend, which has its own.
@@ -2080,7 +2183,6 @@ void ViewController::showPreferences(const QString& page) {
   ghostInactive->setObjectName(QStringLiteral("ghostInactive"));
   ghostInactive->setChecked(m_settings.ghostInactive);
   ghostInactive->setToolTip(tr("Draws everything outside the active component faded"));
-  control(display, ghostInactive);
   const auto applyGhostInactive = [this, ghostInactive] {
     if (ghostInactive->isChecked() == m_settings.ghostInactive) {
       return;
@@ -2097,7 +2199,21 @@ void ViewController::showPreferences(const QString& page) {
   activePickPriority->setChecked(m_settings.activePickPriority);
   activePickPriority->setToolTip(
       tr("A click takes the active component's items before nearer ones of other components"));
-  control(display, activePickPriority);
+  // Both choices about the active component in one row (Preferences fits a
+  // 1366 x 768 screen with Text size, Icon size and Font, mitcad#1556).
+  auto* activeComponentRow = new QHBoxLayout;
+  activeComponentRow->addWidget(ghostInactive);
+  activeComponentRow->addSpacing(12);
+  activeComponentRow->addWidget(activePickPriority);
+  activeComponentRow->addStretch(1);
+  if (window != nullptr) {
+    // macOS sizes a check box a few pixels short of its text (as control()).
+    for (QCheckBox* box : {ghostInactive, activePickPriority}) {
+      box->ensurePolished();
+      box->setMinimumWidth(box->sizeHint().width() + 8);
+    }
+  }
+  control(display, activeComponentRow);
   const auto applyActivePickPriority = [this, activePickPriority] {
     if (activePickPriority->isChecked() == m_settings.activePickPriority) {
       return;

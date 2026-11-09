@@ -36,6 +36,7 @@
 #include "RemoteController.hpp"
 #include "RemoteTask.hpp"
 #include "mitcad_bridge/lib.h"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -171,7 +172,7 @@ public:
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(8, 2, 8, 2);
     auto* icon = new QLabel;
-    icon->setPixmap(themeIcon(QStringLiteral("project")).pixmap(20, 20));
+    icon->setPixmap(themeIcon(QStringLiteral("project")).pixmap(uiIconSize(20, 20)));
     layout->addWidget(icon);
     m_text = new QLabel;
     m_text->setWordWrap(true);

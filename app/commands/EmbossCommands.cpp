@@ -3,7 +3,8 @@
 // raised from or sunk into a planar face, wrapped onto a cylindrical or
 // conical one, or projected onto any face (mitcad#1091). A wrap can be moved
 // from where the sketch puts it (mitcad#1259): Along Axis, Around and
-// Rotation, each with a handle in the view.
+// Rotation, each with a handle in the view. Taper Angle (mitcad#1547) tilts
+// the walls from the face's normals, with a ring in the view.
 #include <cmath>
 #include <optional>
 
@@ -14,6 +15,7 @@
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <gp_Ax1.hxx>
+#include <gp_Ax2.hxx>
 #include <gp_Cone.hxx>
 #include <gp_Cylinder.hxx>
 #include <gp_Vec.hxx>
@@ -77,6 +79,8 @@ QString placement(const CommandState& state) {
 const QString kAlong = QStringLiteral("along_axis");
 const QString kAround = QStringLiteral("around_angle");
 const QString kRotation = QStringLiteral("rotation_angle");
+// Taper Angle (mitcad#1547): its input and the definition's slot.
+const QString kTaper = QStringLiteral("taper_angle");
 
 // An offset's value, 0 while it is not a number.
 double offsetOf(const CommandState& state, const QString& key) {
@@ -260,6 +264,34 @@ std::optional<Manipulator> rotationHandle(const CommandState& state, const Comma
   return m;
 }
 
+// Taper Angle's ring (mitcad#1547): at the middle of the profiles in the
+// sketch plane, about a line in the plane, angle 0 along the sketch normal,
+// the side the profiles rise to (a sink's, against it): a positive angle
+// leans that direction outwards as the walls lean.
+std::optional<Manipulator> taperHandle(const CommandState& state, const CommandContext& context) {
+  const auto normal = profileNormal(state.items(QStringLiteral("profiles")), context);
+  if (!normal) {
+    return std::nullopt;
+  }
+  gp_Dir up = normal->second;
+  if (state.choice(QStringLiteral("mode")) == QStringLiteral("sink")) {
+    up.Reverse();
+  }
+  Manipulator m = ring(normal->first, gp_Ax2(normal->first, up).XDirection());
+  m.reference = up;
+  m.valueBox = true;
+  m.boxAtZero = false;
+  return m;
+}
+
+// The taper for the log: ", taper 10 deg"; empty without one.
+QString taperText(const CommandState& state) {
+  if (!offsetGiven(state, kTaper)) {
+    return QString();
+  }
+  return QStringLiteral(", taper %1 deg").arg(degrees(offsetOf(state, kTaper)));
+}
+
 // The offsets for the log: ", along axis 10, around 90 deg, rotation 0
 // deg"; empty without any.
 QString offsetsText(const CommandState& state) {
@@ -302,6 +334,9 @@ CommandDef embossCommand(const CommandContext& context) {
           .withAccepts([](const SelectionItem& item) { return isAxial(item) || isPlanar(item); })
           .withVisible([](const CommandState& s) { return !s.items(QStringLiteral("face")).isEmpty() && !wraps(s); }),
       valueInput(QStringLiteral("depth"), QObject::tr("Depth"), ValueKind::Length, QStringLiteral("1 mm")).withStepMinimum(0.0, true),
+      valueInput(kTaper, QObject::tr("Taper Angle"), ValueKind::Angle, QStringLiteral("0 deg"))
+          .withTooltip(QObject::tr("Tilts the walls from the face's normals; positive widens the profiles away from the face"))
+          .withManipulator(taperHandle),
       choiceInput(QStringLiteral("mode"), QObject::tr("Raise or Sink"), kModes, QStringLiteral("raise"))
           .withTooltip(QObject::tr("Out of the material (joined) or into it (cut)")),
       valueInput(kAlong, QObject::tr("Along Axis"), ValueKind::Length, QStringLiteral("0 mm"))
@@ -332,6 +367,10 @@ CommandDef embossCommand(const CommandContext& context) {
     result.def = {{QStringLiteral("type"), QStringLiteral("emboss")},
                   {QStringLiteral("profiles"), refsOf(profiles)},
                   {QStringLiteral("depth"), state.expression(QStringLiteral("depth"))}};
+    // Taper Angle (mitcad#1547), only when it tilts the walls.
+    if (offsetGiven(state, kTaper)) {
+      result.def.insert(kTaper, state.expression(kTaper));
+    }
     const Selection& face = state.items(QStringLiteral("face"));
     if (!face.isEmpty()) {
       result.def.insert(QStringLiteral("face"), face.first().reference());
@@ -377,7 +416,7 @@ CommandDef embossCommand(const CommandContext& context) {
       state.setItems(QStringLiteral("direction"), {direction});
     }
     loadValue(state, QStringLiteral("depth"), feature.value(QStringLiteral("depth")), feature, context);
-    for (const QString& key : {kAlong, kAround, kRotation}) {
+    for (const QString& key : {kTaper, kAlong, kAround, kRotation}) {
       loadValue(state, key, feature.value(key), feature, context);
     }
     state.setChoice(QStringLiteral("mode"), feature.value(QStringLiteral("mode")).toString(QStringLiteral("raise")));
@@ -397,11 +436,12 @@ CommandDef embossCommand(const CommandContext& context) {
   };
 
   def.describe = [](const CommandState& state, const CommandContext&) {
-    return QStringLiteral("Added emboss (%1) of %2 profile(s) on %3, depth %4%5")
+    return QStringLiteral("Added emboss (%1) of %2 profile(s) on %3, depth %4%5%6")
         .arg(label(kModes, state.choice(QStringLiteral("mode"))))
         .arg(state.items(QStringLiteral("profiles")).size())
         .arg(placement(state))
         .arg(number(state.value(QStringLiteral("depth"))))
+        .arg(taperText(state))
         .arg(offsetsText(state));
   };
   return def;

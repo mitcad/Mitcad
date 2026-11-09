@@ -4,6 +4,7 @@
 #include "Navigation.hpp"
 #include "../framework/PreferencesPageLayout.hpp"
 #include "../framework/TestSync.hpp"
+#include "../framework/UiSizes.hpp"
 #include "../platform/MacDialogs.hpp"
 
 #include <algorithm>
@@ -100,7 +101,7 @@ inline void paintNavigationGuide(QPainter& p, const QSizeF& size, const Navigati
   }
   scroll << QObject::tr("Pinch: Zoom") << QObject::tr("Modifiers: see bindings below");
   QFont smaller = p.font();
-  smaller.setPointSizeF(std::max(8.0, smaller.pointSizeF() - 1.0));
+  smaller.setPointSizeF(std::max(8.0 * uiTextScale(), smaller.pointSizeF() - 1.0));
   p.setFont(smaller);
   const auto drawBindings = [&p](double x, double width, const QStringList& labels) {
     const int available = std::max(1, int(width));

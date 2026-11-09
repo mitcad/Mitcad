@@ -41,6 +41,7 @@
 #include "framework/Diagnostics.hpp"
 #include "framework/DisplayMeshes.hpp"
 #include "framework/InterfaceSize.hpp"
+#include "framework/UiSizes.hpp"
 #include "framework/Language.hpp"
 #include "framework/Numbers.hpp"
 #include "framework/ProcessEnd.hpp"
@@ -484,6 +485,12 @@ int runApplication(int argc, char* argv[]) {
   // first window too; after Windows 10's path, which reacts first to the
   // scheme it asks for.
   mitcad::startThemePreference();
+  // Preferences › Display › Text size, Icon size and Font (mitcad#1556): the
+  // application font and the code's icon sizes on top of Interface size,
+  // before the first window takes its fonts and icons.
+  const mitcad::TextAndIconSize textAndIconSize = mitcad::applyTextAndIconSize();
+  qInfo().noquote() << QStringLiteral("Text and icon size: %1")
+                           .arg(mitcad::textAndIconSizeDescription(textAndIconSize));
   // What a restart keeps of this run's arguments (framework/Restart.hpp): its
   // settings, not its start actions nor --chrome.
   {
@@ -650,6 +657,12 @@ int runApplication(int argc, char* argv[]) {
                              .arg(window.devicePixelRatioF())
                              .arg(logical.width())
                              .arg(logical.height());
+    // The application font as the window took it (Text size and Font,
+    // mitcad#1556), and the code's icon sizes at Icon size.
+    qInfo().noquote() << QStringLiteral("Application font: %1").arg(mitcad::applicationFontDescription());
+    qInfo().noquote() << QStringLiteral("Icon sizes: %1% (the Browser's 18-pixel icons at %2 px)")
+                             .arg(mitcad::ui_sizes_detail::iconPercent)
+                             .arg(mitcad::uiIconSize(18));
   });
 
   mitcad::mcp::LiveServer mcpServer(&manager);

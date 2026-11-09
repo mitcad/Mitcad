@@ -53,6 +53,7 @@
 #include "PanelTree.hpp"
 #include "Theme.hpp"
 #include "ValueStep.hpp"
+#include "UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -100,8 +101,9 @@ public:
 // "fx" in the field's text colour, for the button in the field.
 QIcon fxIcon(const QWidget& field) {
   const qreal ratio = std::max<qreal>(1.0, field.devicePixelRatioF());
-  constexpr int kSize = 16;
-  QPixmap pixmap(QSize(kSize, kSize) * ratio);
+  // An icon: at Icon size (mitcad#1556).
+  const int side = uiIconSize(16);
+  QPixmap pixmap(QSize(side, side) * ratio);
   pixmap.setDevicePixelRatio(ratio);
   pixmap.fill(Qt::transparent);
   QPainter painter(&pixmap);
@@ -110,12 +112,12 @@ QIcon fxIcon(const QWidget& field) {
   QFont font = field.font();
   font.setItalic(true);
   font.setBold(true);
-  font.setPixelSize(11);
+  font.setPixelSize(uiIconSize(11));
   painter.setFont(font);
   QColor color = field.palette().color(QPalette::Text);
   color.setAlphaF(0.7f);
   painter.setPen(color);
-  painter.drawText(QRectF(0, 0, kSize, kSize), Qt::AlignCenter, QStringLiteral("fx"));
+  painter.drawText(QRectF(0, 0, side, side), Qt::AlignCenter, QStringLiteral("fx"));
   painter.end();
   return QIcon(pixmap);
 }

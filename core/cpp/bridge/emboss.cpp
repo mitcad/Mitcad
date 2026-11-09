@@ -21,6 +21,7 @@ std::shared_ptr<geometry::Shape> wrapped_emboss(rust::Str feature, const Frame& 
   spec.radius = wrap.radius;
   spec.to_radius = wrap.to_radius;
   spec.half_angle = wrap.half_angle;
+  spec.taper = wrap.taper;
   return geometry::wrapped_emboss(spec);
 }
 
@@ -44,6 +45,7 @@ std::shared_ptr<geometry::Shape> projected_emboss(rust::Str feature, const Frame
   spec.face = std::string(face);
   spec.direction = gp_Vec(projection.direction[0], projection.direction[1], projection.direction[2]);
   spec.depth = projection.depth;
+  spec.taper = projection.taper;
   return geometry::projected_emboss(body, spec);
 }
 

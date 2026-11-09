@@ -6,6 +6,7 @@
 // sketch geometry (trim, extend, dimensions, constraints). A tool turns
 // clicks into `sketch.*` commands through SketchOp, one undo step each.
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -67,6 +68,16 @@ struct ToolPreview {
   }
 };
 
+// An entry of a tool's own right-click menu (mitcad#1540): its text as the
+// menu shows it, whether it is the current choice (a check mark), and what
+// choosing it does.
+struct ToolMenuEntry {
+  QString text;
+  bool checked = false;
+  std::function<void()> run;
+  bool separatorBefore = false;
+};
+
 class SketchTool {
 public:
   explicit SketchTool(SketchController& controller) : m_c(controller) {}
@@ -100,6 +111,14 @@ public:
   // What the tool makes, for the sketch palette's Auto constraint section
   // (mitcad#189); None: the tool takes no auto constraints.
   virtual AutoKind autoKind() const { return AutoKind::None; }
+  // The tool's own right-click menu where the right button was clicked
+  // (`snap`, unsnapped), mitcad#1540: Sketch Dimension's Center or
+  // Tangent for a circle or arc and Driving or Driven. Empty: the
+  // right-click is the tool's Esc (mitcad#1085).
+  virtual std::vector<ToolMenuEntry> menu(const Snap& snap) {
+    (void)snap;
+    return {};
+  }
 
 protected:
   SketchController& m_c;

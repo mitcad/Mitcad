@@ -1251,7 +1251,9 @@ QList<QPair<QString, QString>> widthChoices() {
 QList<QPair<QString, QString>> patternChoices() {
   return {{QStringLiteral("continuous"), Text::tr("Continuous")},
           {QStringLiteral("dashed"), Text::tr("Dashed")},
-          {QStringLiteral("chain"), Text::tr("Center Line")}};
+          {QStringLiteral("chain"), Text::tr("Center Line")},
+          // ISO 128 type 05, the phantom line (mitcad#1546).
+          {QStringLiteral("phantom"), Text::tr("Long Dash Double Dot")}};
 }
 
 QStringList projectionLines(const QJsonArray& projections) {
@@ -1294,6 +1296,111 @@ std::optional<LineAngleSnap> snapLineAngle(const QPointF& from, const QPointF& t
   // 0 to 315, no -0 along the x axis.
   out.angle = std::fmod(snapped + 360.0, 360.0) + 0.0;
   return out;
+}
+
+namespace {
+
+// What a line style names for a pick (mitcad#1546): its body, occurrence
+// and edge as the model's `lines` hold them ("" for none); false when the
+// pick cannot name it.
+struct LineTarget {
+  QString body;
+  QString occurrence;
+  QString edge;
+};
+
+std::optional<LineTarget> lineTarget(const QJsonObject& pick, const QString& of) {
+  const QString edge = pick.value(QStringLiteral("edge")).toString();
+  const QString occurrence = pick.value(QStringLiteral("occurrence")).toString();
+  if (edge.isEmpty()) {
+    return std::nullopt;
+  }
+  LineTarget target;
+  target.occurrence = occurrence;
+  if (of == QStringLiteral("component")) {
+    if (occurrence.isEmpty()) {
+      return std::nullopt;
+    }
+    return target;
+  }
+  target.body = pick.value(QStringLiteral("body")).toString();
+  if (of == QStringLiteral("edge")) {
+    target.edge = edge;
+  } else if (of != QStringLiteral("body")) {
+    return std::nullopt;
+  }
+  return target;
+}
+
+} // namespace
+
+QJsonObject lineStyleEdit(const QString& drawing, int view, const QJsonObject& pick, const QString& of,
+                          const QString& width, const QString& pattern, bool reset) {
+  const std::optional<LineTarget> target = lineTarget(pick, of);
+  if (!target) {
+    return {};
+  }
+  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("edit_drawing_line")},
+                      {QStringLiteral("drawing"), drawing},
+                      {QStringLiteral("view"), view}};
+  if (!target->body.isEmpty()) {
+    command.insert(QStringLiteral("body"), target->body);
+  }
+  if (!target->occurrence.isEmpty()) {
+    command.insert(QStringLiteral("occurrence"), target->occurrence);
+  }
+  if (!target->edge.isEmpty()) {
+    command.insert(QStringLiteral("edge"), target->edge);
+  }
+  if (reset) {
+    command.insert(QStringLiteral("reset"), true);
+  } else {
+    command.insert(QStringLiteral("width"), width);
+    command.insert(QStringLiteral("pattern"), pattern);
+  }
+  return command;
+}
+
+std::optional<QPair<QString, QString>> lineStyleOf(const QJsonArray& lines, const QJsonObject& pick,
+                                                  const QString& of) {
+  const std::optional<LineTarget> target = lineTarget(pick, of);
+  if (!target) {
+    return std::nullopt;
+  }
+  for (const QJsonValue& value : lines) {
+    const QJsonObject line = value.toObject();
+    if (line.value(QStringLiteral("body")).toString() == target->body &&
+        line.value(QStringLiteral("occurrence")).toString() == target->occurrence &&
+        line.value(QStringLiteral("edge")).toString() == target->edge) {
+      return QPair<QString, QString>(line.value(QStringLiteral("width")).toString(),
+                                     line.value(QStringLiteral("pattern")).toString());
+    }
+  }
+  return std::nullopt;
+}
+
+QString lineStylesText(const QJsonArray& lines) {
+  QStringList parts;
+  for (const QJsonValue& value : lines) {
+    const QJsonObject line = value.toObject();
+    const QString body = line.value(QStringLiteral("body")).toString();
+    const QString occurrence = line.value(QStringLiteral("occurrence")).toString();
+    const QString edge = line.value(QStringLiteral("edge")).toString();
+    QString what;
+    if (!edge.isEmpty()) {
+      what = QStringLiteral("edge %1 of %2").arg(edge, body);
+    } else if (!body.isEmpty()) {
+      what = QStringLiteral("body %1").arg(body);
+    } else {
+      what = QStringLiteral("occurrence %1").arg(occurrence);
+    }
+    if (!body.isEmpty() && !occurrence.isEmpty()) {
+      what += QStringLiteral(" in %1").arg(occurrence);
+    }
+    parts << QStringLiteral("%1 %2 %3").arg(what, line.value(QStringLiteral("width")).toString(),
+                                            line.value(QStringLiteral("pattern")).toString());
+  }
+  return parts.isEmpty() ? QStringLiteral("none") : parts.join(QStringLiteral("; "));
 }
 
 } // namespace mitcad::drawings

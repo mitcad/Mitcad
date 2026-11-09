@@ -287,8 +287,27 @@ private:
   // 60 ms (mitcad#725).
   void hoverRequested(int view, QPointF at);
   void hoverPick();
-  // The sheet's menu (mitcad#725) for what is selected, or the sheet.
+  // The sheet's menu (mitcad#725) for what is selected, or the sheet; on
+  // a view, Edit Line… first when a projected edge is under the pointer
+  // (mitcad#1546).
   void contextMenu(QPointF at, const QPoint& global);
+  // The model edge a click at `at` (sheet mm) picks on a view, whole (the
+  // `drawing_pick` query's `"want": "edge"`), logged "Drawing edge under
+  // the pointer: {…}"; empty for none, on a cut sheet and while a job
+  // computes the model.
+  QJsonObject edgeAt(int view, QPointF at);
+  // Edit Line (mitcad#1546): the dialog "Edit Line" with Applies To (This
+  // Edge, Its Body, Its Component when an occurrence places it), Width and
+  // Pattern as the view has them for it (else wide and continuous), OK and
+  // Reset to View Style (only where the view has a choice); runs
+  // edit_drawing_line. Logs "Drawing line dialog opened: edge <name> of
+  // <body> in view <n> (<width> <pattern>)".
+  void editLine(int view, const QJsonObject& pick);
+  // The views' own line styles ("Drawing lines: view 1: edge … of F2.b0
+  // thick phantom", or "none") and the pens the views' lines are drawn with
+  // ("Drawing view pens: phantom_thick, thick, thin"), logged when they
+  // change (the UI tests read them).
+  void logLines(const QJsonObject& sheet);
   // A note's or a text's text in the note dialog (its panel's Text…, a
   // double-click, the menu's Edit Text…).
   void editNoteText(int annotation);
@@ -420,6 +439,10 @@ private:
   QString m_loggedTitle;
   QString m_loggedRevisions;
   QString m_loggedModelItems;
+  // The views' own line styles and the pens their lines take, as logged
+  // last (mitcad#1546).
+  QString m_loggedLines;
+  QString m_loggedPens;
   bool m_updatingTabs = false;
   // A cut sheet is open (mitcad#853): its row instead of the tools'.
   bool m_cutSheet = false;

@@ -571,6 +571,12 @@ handles) grow together, and the 3D view draws at the higher resolution.
 The size takes effect when MitCad starts again. It comes on top of the
 display scaling set in your system.
 
+To make only the texts or only the icons smaller or larger, move the
+**Text size** and **Icon size** sliders under it: 80% to 200% in steps of
+5%, on top of the Interface size. **Font** chooses the interface's font:
+**System** (the default) or any font installed on the computer, at the
+Text size. These too take effect when MitCad starts again.
+
 On macOS, the keys that say Ctrl in this guide are Cmd keys (Cmd+N,
 Cmd+S, Cmd+Z and so on). Refer to [Shortcuts](#shortcuts) for the
 other keys that differ on macOS.
@@ -1734,6 +1740,18 @@ as they do in the sketch from the direction of the projection, as for a
 logo seen from the front on a curved panel. On a planar face, select a
 Direction to project the profiles along it. Without a Direction they go
 straight out of the face.
+
+**Taper Angle** tilts the walls of every emboss. At 0 the walls stand
+along the normals of the face, so on a cylinder they spread out as the
+emboss rises. A positive angle widens the profiles as they rise, as the
+Taper Angle of Extrude does. A negative angle narrows them, so the top
+is smaller than the foot. For Sink, a negative angle narrows the pocket
+towards its floor. On a cylinder or a cone the top moves by the depth
+times the tangent of the angle along the face. For a projection the
+move is measured as the direction sees the profiles. If the angle closes
+a profile (its walls meet before the full depth), the feature stops and
+the message names that profile. Drag the ring in the view to change the
+angle.
 
 The **Wrap Onto** option of Extrude does the same from the Extrude
 panel. Select a cylindrical or conical face. Extrude wraps the profiles
@@ -2904,6 +2922,17 @@ selection moves together and keeps its shape, as far as fixed geometry
 and constraints to other geometry permit. A drag that starts on geometry that is not selected moves only
 that geometry. The drag is one undo step.
 
+When you drag a single point, such as the end of a line, it snaps to
+points, curve ends, midpoints and curves as a point you draw does, and
+the snap marker shows where. Drop it there and it stays joined: dropped
+on a point it becomes coincident with it, dropped on a curve it stays on
+that curve. So you can close an open chain of lines by dragging its last
+end onto its first. Undo takes back the drag and the join in one step.
+When the join would conflict with the sketch's other constraints, the
+point is not joined, and the status bar says why. Hold Shift (or Alt,
+where your desktop leaves Alt-drags to MitCad) to drag without
+snapping.
+
 While a tool is active, the pointer is a slim cross with the tool's
 icon. A small square in the center gap of the cross shows that the
 point snaps to geometry.
@@ -2972,16 +3001,18 @@ The Create menu of the Sketch tab groups the sketch curve tools:
 | Entry | Tools |
 | --- | --- |
 | Lines | Line (lines end to end, with tangent and normal arcs) and Midpoint Line |
+| Point | Point (a sketch point; an entry of its own, not a submenu) |
 | Rectangles | 2-Point, 3-Point and Center Rectangle, 2-Point and Center Rounded Rectangle |
 | Circles | Center Diameter, 2-Point, 3-Point, 2-Tangent and 3-Tangent Circle |
 | Arcs | 3-Point, Center Point and Tangent Arc |
-| Other Geometry | Ellipse, the polygons, the slots, the splines and Point |
+| Other Geometry | Ellipse, the polygons, the slots and the splines |
 | Text | Text, QR Code |
 | Patterns | Rectangular Pattern, Circular Pattern and Mirror |
 | References | Project, Intersect, Clean Up Projections, Clean Up Stale Projections and Project Again (references from the bodies) |
 | Sketch Dimension | Sketch Dimension |
 
-On the toolbar, Sketch Dimension is a button. Lines, Rectangles,
+On the toolbar, Point and Sketch Dimension are buttons. Point has no
+keyboard shortcut; the command search finds it. Lines, Rectangles,
 Circles and Arcs are split buttons. The button starts the default tool.
 The arrow of the button opens the other variants.
 
@@ -3385,6 +3416,19 @@ makes it signed. The point goes to that side. The context menu of an
 existing distance offers *Make Distance Signed* or *Make Distance
 Unsigned*. The point stays where it is. A value on the negative side is
 negated: `-30`, or `-(r * 0.6)` for an expression.
+
+**Center or tangent:** a circle or an arc normally counts by its center.
+While Sketch Dimension selects, right-click a circle or an arc and
+choose *Tangent* to measure from its nearest side instead, or *Center*
+to measure from its center. If the circle is not selected yet, the
+choice also selects it. Between two circles by their sides, the
+dimension is the gap between them; when one circle is inside the other,
+it is the gap inside. From one side to the center of another circle or
+to a point, it is the gap from that side.
+
+The same menu has *Driving* and *Driven*. A driven dimension only
+measures: a click places it, without a value to type, and its value is
+shown in parentheses. *Cancel* steps back, as Esc does.
 
 **Dimensions to bodies:** Sketch Dimension (D) also selects the edges of
 visible bodies that lie in the sketch plane: lines, arcs, circles,
@@ -11063,6 +11107,18 @@ a text), Tolerance… (a dimension or a frame) and Delete; the sheet
 itself for Sheet…, Add Revision… and Add Sheet. Double-click a note or
 a text to change its text.
 
+**A line of its own.** Right-click an edge of a view and choose *Edit
+Line…* to draw that edge with another *Width* (Thin, Thick, Extra Thick)
+and *Pattern* (Continuous, Dashed, Center Line, Long Dash Double Dot) in
+that view. *Applies To* chooses This Edge, Its Body (every line of the
+body, for example an adjacent part drawn long dash double dotted as
+ISO 128-3 shows it) or Its Component (every body of the component). An
+edge's own choice wins over its body's, and a body's over its
+component's; hidden lines stay dashed. The choice follows the edge when
+the design changes, and the PDF, SVG and DXF exports and print draw it
+too (DXF with line types and line weights). *Reset to View Style* draws
+the lines as the view draws its others again.
+
 A view shows the visible bodies of the design or of its component. A
 view whose bodies are gone keeps a red box where it was, with the
 reason, and the status bar says it too. Select the box to delete the
@@ -11080,7 +11136,7 @@ tools, as icons:
 | Baseline | Several dimensions at once: from the first point to each of the others (Baseline) or from each to the next (Chain). Click the points, then a free place. |
 | Center Mark | Center lines across a circle, or the centerline of a hole or a shaft seen from the side. Click the circle or the round face. |
 | Centerline | A centerline through two circles, or between two edges. Click the two sides of a curved slot for its center arc, through the centers of its ends. |
-| Line | A line drawn by hand, outside the design. Click its two ends. On a view a click snaps to the end or the middle of an edge, or to the center of a circle or an arc, near it (the point shows under the pointer; hold **Alt** to click freely). *Drawn: In the View Clicked* keeps it in the view under the first click, so that it moves, scales and turns with the view; *On the Sheet* keeps it on the paper. *Width* (Thin, Thick, Extra Thick: 0.7 mm) and *Pattern* (Continuous, Dashed, Center Line) combine freely, a thick dashed line for example; the line's panel changes either later. |
+| Line | A line drawn by hand, outside the design. Click its two ends. On a view a click snaps to the end or the middle of an edge, or to the center of a circle or an arc, near it (the point shows under the pointer; hold **Alt** to click freely). *Drawn: In the View Clicked* keeps it in the view under the first click, so that it moves, scales and turns with the view; *On the Sheet* keeps it on the paper. *Width* (Thin, Thick, Extra Thick: 0.7 mm) and *Pattern* (Continuous, Dashed, Center Line, Long Dash Double Dot) combine freely, a thick dashed line for example; the line's panel changes either later. |
 | Arc | An arc drawn by hand: click its center, its start, then its end, counter-clockwise. Its clicks snap as a line's do, so an arc can run from one center to another. In a view or on the sheet, as a line. |
 | Center Pattern | Center marks on every hole of a pattern in one step. Click one hole seen end on: MitCad finds the holes of the same size of that body the view shows. On a bolt circle it draws the circle through their centers (an arc when they stand on a part of it) and a line through each; in a row, the line through them; else a center mark on each. |
 | Edge Extension | Thin lines that run straight edges on: two edges to where their lines meet (a corner rounded or chamfered away), or one edge beyond both its ends (*Edges: One, Both Ways*; how far, in millimeters of paper, is its *Length* in the panel: 10 unless set). |
@@ -11601,7 +11657,7 @@ guide that explains its settings.
 |---|---|---|
 | **General** | The **Language** of the interface. The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts) |
 | **Navigation** | The mouse scheme for orbit, pan and zoom | [View and navigation](#view-and-navigation) |
-| **Display** | **Camera**, **Orientation cube**, **Interface size**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Layout**, **Browser background**, **Ghost inactive components**, **Pick the active component first**, **Small circles** | [The window](#the-window), [View and navigation](#view-and-navigation), [Layouts](#layouts), [Components](#components) |
+| **Display** | **Camera**, **Orientation cube**, **Interface size**, **Text size**, **Icon size**, **Font**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Layout**, **Browser background**, **Ghost inactive components**, **Pick the active component first**, **Small circles** | [The window](#the-window), [View and navigation](#view-and-navigation), [Layouts](#layouts), [Components](#components) |
 | **Cache** | The cache of computed results: on or off, the size, the folder, **Clear**, the memory limit | [Cache of computed results](#cache-of-computed-results) |
 | **Cloud** | The git program, the default author, the defaults of projects, live updates, the broker, **Known brokers** | [Sharing a project](#sharing-a-project), [Live updates](#live-updates) |
 | **Updates** | The automatic check for updates: on or off. Pre-releases: offered or not | [Updates](#updates) |

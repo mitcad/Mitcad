@@ -19,6 +19,14 @@
 //! along the face's axis), `around_angle` (about the axis) and
 //! `rotation_angle` (turned on the face about their middle). Absent, they
 //! are 0 and the wrap is the sketch's.
+//!
+//! Taper (mitcad#1547): `taper_angle` tilts the walls from the normals,
+//! signed as an extrusion's taper: positive widens the profiles away from
+//! the face (the top, or a sink's floor, larger than the foot), negative
+//! narrows them. On a plane or the sketch plane it is the extrusion's
+//! taper; wrapped, the top's boundary moves within the top surface by
+//! `depth tan(taper)`; projected, the region moves so in the sketch plane
+//! before it is projected onto the face and grown (the kernel's specs).
 
 use std::borrow::Cow;
 
@@ -112,6 +120,11 @@ pub struct EmbossDef<P = ParamId> {
     /// bounds, counter-clockwise in the sketch (radians); absent: 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_angle: Option<P>,
+    /// The walls tilted from the face's normals (mitcad#1547), radians:
+    /// positive widens the profiles away from the face, as an extrusion's
+    /// taper; absent: 0, the walls along the normals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taper_angle: Option<P>,
 }
 
 impl<P> EmbossDef<P> {
@@ -130,6 +143,7 @@ impl<P> EmbossDef<P> {
             along_axis: option,
             around_angle: option,
             rotation_angle: option,
+            taper_angle: option,
         }
     }
 
@@ -201,6 +215,9 @@ impl FeatureInfo for EmbossDef {
                 return Err(format!("the wrap's offset {name} is not a number"));
             }
         }
+        if let Some(id) = self.taper_angle {
+            check_taper(value(id))?;
+        }
         Ok(())
     }
 
@@ -237,10 +254,12 @@ impl<K: Kernel> Evaluate<K> for EmbossDef {
         if !offsets.is_finite() {
             return Err("the wrap's offsets must be numbers".to_owned());
         }
+        let taper = optional_param(ctx, self.taper_angle)?;
+        check_taper(taper)?;
         let (sketch, regions) = profile_regions(ctx, &self.profiles)?;
         let operation = self.mode.operation();
         let participants = participant_bodies(ctx, operation, &self.default_participants())?;
-        let tool = self.tool(ctx, sketch.frame, &regions, depth, offsets)?;
+        let tool = self.tool(ctx, sketch.frame, &regions, depth, offsets, taper)?;
         apply_operation(ctx, operation, participants, tool, "emboss")
     }
 }
@@ -249,6 +268,19 @@ impl<K: Kernel> Evaluate<K> for EmbossDef {
 /// within this of right angles to a cylinder's axis as along it.
 const PARALLEL: f64 = 1e-9;
 const ALONG_AXIS: f64 = 1e-6;
+
+/// A taper angle (mitcad#1547): a number strictly between -90 and 90
+/// degrees.
+fn check_taper(taper: f64) -> Result<(), String> {
+    if taper.is_finite() && taper.abs() < std::f64::consts::FRAC_PI_2 - 1e-9 {
+        Ok(())
+    } else {
+        Err(format!(
+            "the emboss's taper angle must lie between -90 and 90 degrees, got {} deg",
+            taper.to_degrees()
+        ))
+    }
+}
 
 /// The value of an optional slot, 0 without one.
 fn optional_param<K: Kernel>(
@@ -362,7 +394,9 @@ fn middle(regions: &[ProfileRegion]) -> [f64; 2] {
 /// onto a conical one by its development (mitcad#473), raised out of the
 /// material by `depth` or sunk into it; None for a face of another kind.
 /// Emboss and Extrude's `wrap` build it alike; Emboss moves the profiles
-/// by its `offsets` (mitcad#1259; Extrude passes none).
+/// by its `offsets` (mitcad#1259) and tilts the walls by its `taper`
+/// (mitcad#1547, radians); Extrude passes neither.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn wrapped_tool<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     frame: SketchFrame,
@@ -371,6 +405,7 @@ pub(crate) fn wrapped_tool<K: Kernel>(
     depth: f64,
     raise: bool,
     offsets: WrapOffsets,
+    taper: f64,
 ) -> Result<Option<K::Shape>, String> {
     let normal = frame.normal();
     let shape = ctx.surface_body(face.body)?;
@@ -404,6 +439,7 @@ pub(crate) fn wrapped_tool<K: Kernel>(
             radius: cylinder.radius,
             to_radius,
             half_angle: 0.0,
+            taper,
         };
         return ctx
             .kernel
@@ -450,6 +486,7 @@ pub(crate) fn wrapped_tool<K: Kernel>(
             radius,
             to_radius: radius + offset,
             half_angle: cone.half_angle,
+            taper,
         };
         return ctx
             .kernel
@@ -463,7 +500,8 @@ pub(crate) fn wrapped_tool<K: Kernel>(
 impl EmbossDef {
     /// The tool body: the profiles extruded from a plane, wrapped onto a
     /// cylinder and grown radially, or projected onto the face and grown
-    /// along its normals; faces named after the feature.
+    /// along its normals; faces named after the feature. The walls tilt by
+    /// `taper` (radians, mitcad#1547).
     fn tool<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
@@ -471,6 +509,7 @@ impl EmbossDef {
         regions: &[ProfileRegion],
         depth: f64,
         offsets: WrapOffsets,
+        taper: f64,
     ) -> Result<K::Shape, String> {
         let normal = frame.normal();
         let raise = self.mode == EmbossMode::Raise;
@@ -497,13 +536,14 @@ impl EmbossDef {
                 direction,
                 ExtrudeStart::Offset(0.0),
                 depth,
+                taper,
             );
         };
         if self.projects() {
             unwrapped()?;
-            return self.projected(ctx, frame, regions, face, depth, raise);
+            return self.projected(ctx, frame, regions, face, depth, raise, taper);
         }
-        if let Some(tool) = wrapped_tool(ctx, frame, regions, face, depth, raise, offsets)? {
+        if let Some(tool) = wrapped_tool(ctx, frame, regions, face, depth, raise, offsets, taper)? {
             return Ok(tool);
         }
         unwrapped()?;
@@ -511,7 +551,7 @@ impl EmbossDef {
         let found = ctx.face_on(face.body, &shape, &face.face)?;
         let Ok(plane) = ctx.kernel.face_plane(&shape, &found) else {
             // A sphere, a torus, a free-form face: projected (mitcad#1091).
-            return self.projected(ctx, frame, regions, face, depth, raise);
+            return self.projected(ctx, frame, regions, face, depth, raise, taper);
         };
         // Along the sketch normal, out of the material or into it.
         let facing = dot(normal, plane.normal);
@@ -541,12 +581,13 @@ impl EmbossDef {
                 offset: 0.0,
             })
         };
-        self.extrude(ctx, frame, regions, direction, start, depth)
+        self.extrude(ctx, frame, regions, direction, start, depth, taper)
     }
 
     /// The tool of the profiles projected onto the face along the sketch
     /// normal or the direction and grown along the face's normals
-    /// (mitcad#1091).
+    /// (mitcad#1091), the walls tilted by `taper` (mitcad#1547).
+    #[allow(clippy::too_many_arguments)]
     fn projected<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
@@ -555,6 +596,7 @@ impl EmbossDef {
         face: &FaceRef,
         depth: f64,
         raise: bool,
+        taper: f64,
     ) -> Result<K::Shape, String> {
         let direction = match &self.direction {
             Some(reference) => direction_of(ctx, reference)?,
@@ -575,12 +617,16 @@ impl EmbossDef {
             face: &found,
             direction,
             depth: if raise { depth } else { -depth },
+            taper,
         };
         ctx.kernel
             .projected_emboss(&spec)
             .map_err(|e| format!("to project onto face {}: {e}", face.face))
     }
 
+    /// The profiles extruded `depth` along `direction`, tapered by `taper`
+    /// (radians, positive widening: the extrusion's taper, mitcad#1547).
+    #[allow(clippy::too_many_arguments)]
     fn extrude<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
@@ -589,6 +635,7 @@ impl EmbossDef {
         direction: [f64; 3],
         start: ExtrudeStart<K::Shape>,
         depth: f64,
+        taper: f64,
     ) -> Result<K::Shape, String> {
         let spec = ExtrudeFeatureSpec {
             feature: ctx.uid,
@@ -598,7 +645,7 @@ impl EmbossDef {
             start,
             side1: ExtrudeSide {
                 end: SideEnd::Distance(depth),
-                taper: 0.0,
+                taper,
                 thin: None,
             },
             side2: None,

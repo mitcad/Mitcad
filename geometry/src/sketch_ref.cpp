@@ -28,6 +28,7 @@
 #include <gp_Pln.hxx>
 #include <gp_Vec.hxx>
 
+#include "mitcad/geometry/datum.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry {
@@ -372,7 +373,8 @@ std::vector<NamedBoundaryCurve> face_boundary(const Shape& shape, const std::str
     }
     std::map<int, int> uses;
     for (const int f : shape.find_faces(face)) {
-      if (BRepAdaptor_Surface(shape.face(f)).GetType() != GeomAbs_Plane) {
+      // A flat spline face too (a sheet body's wall, mitcad#1554).
+      if (!geometry::face_plane(shape.face(f))) {
         throw std::invalid_argument("face " + face + " is not planar");
       }
       for (const int e : face_edges(shape, f)) {

@@ -29,6 +29,7 @@
 #include "../framework/Icons.hpp"
 #include "../framework/PickerComboBox.hpp"
 #include "PrintLibrary.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -230,7 +231,7 @@ PickerComboBox* MakeBodyCard::materialPicker() {
   fitToCard(box);
   box->setToolTip(tr("The body's material; another one is set on the body"));
   // The swatches as small as Send to Slicer's material rows'.
-  box->setIconSize(QSize(16, 16));
+  box->setIconSize(uiIconSize(16, 16));
   // Its own or its component's: that one is the body's, tagged Current.
   const bool own =
       m_data.materialLevel == QLatin1String("body") || m_data.materialLevel == QLatin1String("component");

@@ -34,6 +34,7 @@
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
 #include "ProjectsTree.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -151,7 +152,7 @@ std::optional<ProjectPickerResult> pickInProjects(QWidget* parent, const Project
   panel::setCompactIndentation(tree, panel::Indent::Tree);
   tree->setHeaderHidden(true);
   tree->setColumnCount(1);
-  tree->setIconSize(QSize(16, 16));
+  tree->setIconSize(uiIconSize(16, 16));
   tree->setUniformRowHeights(true);
   tree->setSelectionMode(QAbstractItemView::SingleSelection);
   tree->setEditTriggers(QAbstractItemView::NoEditTriggers);

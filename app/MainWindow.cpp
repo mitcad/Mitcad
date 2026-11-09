@@ -107,6 +107,7 @@
 #include "framework/ChromeStyle.hpp"
 #include "framework/CommandSearch.hpp"
 #include "framework/DebugLog.hpp"
+#include "framework/FitToScreen.hpp"
 #include "framework/FloatingLayout.hpp"
 #include "framework/GlassCard.hpp"
 #include "framework/MacToolButtonStyle.hpp"
@@ -152,7 +153,9 @@
 #include "view/ViewController.hpp"
 #include "view/ViewTessellation.hpp"
 #include "view/VersionWatermark.hpp"
+#include "mitcad/geometry/datum.hpp"
 #include "mitcad/io/mesh.hpp"
+#include "framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -782,7 +785,7 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
     if (auto* dock = findChild<QDockWidget*>(QStringLiteral("browserDock"), Qt::FindDirectChildrenOnly)) {
       if (auto* bar = qobject_cast<PanelTitleBar*>(dock->titleBarWidget())) {
         QToolButton* find = m_controller->findButton();
-        find->setIconSize(QSize(14, 14));
+        find->setIconSize(uiIconSize(14, 14));
         bar->addButton(find);
       }
     }
@@ -925,7 +928,10 @@ void MainWindow::present() {
   }
 #endif
   mac::prepareDocumentWindowPresentation(this, property("mitcadSeparateWindow").toBool());
+  const bool shownBefore = isVisible();
   show();
+  // Its frame within the screen once it is known (mitcad#1556).
+  if (!shownBefore) capNewWindowToScreen(this);
   mac::enableDocumentWindowTabs(this, [this](bool visible) { setDocumentVisible(visible); });
 }
 
@@ -1774,19 +1780,19 @@ void MainWindow::createFloatingPanels() {
   browserCard->setCollapsible(true);
   // The magnifier first (mitcad#350): Find in Design.
   QToolButton* find = m_controller->findButton();
-  find->setIconSize(QSize(14, 14));
+  find->setIconSize(uiIconSize(14, 14));
   browserCard->addHeaderWidget(find);
   find->show();
   // The failed features' badge, in the header: a red capsule (its own
   // style, BrowserController), small.
   QToolButton* failures = m_controller->failures();
-  failures->setIconSize(QSize(12, 12));
+  failures->setIconSize(uiIconSize(12, 12));
   browserCard->addHeaderWidget(failures);
   // The warnings' badge beside it, yellow (mitcad#170): its triangle and
   // count only, so that both fit the header (mitcad#961).
   m_controller->setCompactBadges(true);
   QToolButton* warnings = m_controller->warnings();
-  warnings->setIconSize(QSize(12, 12));
+  warnings->setIconSize(uiIconSize(12, 12));
   browserCard->addHeaderWidget(warnings);
   browserCard->setContent(m_controller->browser(), QMargins(6, 0, 6, 8));
 
@@ -4720,15 +4726,14 @@ void MainWindow::lookAt(const SelectionItem& item) {
         return;
       }
       const TopoDS_Face& face = TopoDS::Face(faces.Current());
-      const BRepAdaptor_Surface surface(face);
-      if (surface.GetType() != GeomAbs_Plane) {
+      // A flat spline face too (a sheet body's wall, mitcad#1554); the
+      // normal outward.
+      const std::optional<gp_Pln> planar = geometry::face_plane(face);
+      if (!planar) {
         return;
       }
-      const gp_Pln plane = surface.Plane();
+      const gp_Pln plane = *planar;
       normal = plane.Axis().Direction();
-      if (face.Orientation() == TopAbs_REVERSED) {
-        normal.Reverse();
-      }
       const gp_Dir viewUp = m_viewer->viewUp();
       const gp_Vec inPlane = gp_Vec(viewUp) - gp_Vec(normal) * viewUp.Dot(normal);
       up = inPlane.Magnitude() > 1e-6 ? gp_Dir(inPlane) : plane.YAxis().Direction();
@@ -5445,6 +5450,26 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
     return; // asked for before a job began; a menu after it would surprise
   }
   if (!m_session && m_mode == Mode::Sketch && m_sketch->tool() != nullptr) {
+    // A tool's own menu (mitcad#1540): Sketch Dimension's Center or
+    // Tangent for a circle or arc and Driving or Driven.
+    const std::vector<sketch::ToolMenuEntry> own = m_sketch->toolMenu(m_viewer->mapFromGlobal(globalPosition));
+    if (!own.empty()) {
+      QMenu toolMenu(this);
+      QStringList shown;
+      for (const sketch::ToolMenuEntry& entry : own) {
+        if (entry.separatorBefore) {
+          toolMenu.addSeparator();
+        }
+        QAction* action = toolMenu.addAction(entry.text);
+        action->setCheckable(entry.checked);
+        action->setChecked(entry.checked);
+        connect(action, &QAction::triggered, &toolMenu, entry.run);
+        shown << (entry.checked ? entry.text + QStringLiteral(" (current)") : entry.text);
+      }
+      qDebug().noquote() << QStringLiteral("Context menu: %1").arg(shown.join(QStringLiteral(" | ")));
+      execMenu(&toolMenu, globalPosition);
+      return;
+    }
     // A right click while a sketch tool runs is the tool's Esc, without a
     // menu (mitcad#1085): it ends the chain or the shape in progress (the
     // Line's chain), or the tool when nothing is in progress. A right drag

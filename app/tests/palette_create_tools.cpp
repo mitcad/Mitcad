@@ -41,16 +41,17 @@ QStringList ids(const QStringList& names) {
 }
 
 // The Sketch tab's Create and Modify tools in the ribbon's order (Create:
-// the Lines, Rectangles, Circles, Arcs, Other Geometry, Text, Patterns and
-// References submenus, then Dimension; Modify: Fillet, Chamfer, Trim, ...).
+// the Lines submenu, Point (mitcad#1545), the Rectangles, Circles, Arcs,
+// Other Geometry, Text, Patterns and References submenus, then Dimension;
+// Modify: Fillet, Chamfer, Trim, ...).
 const QStringList& ribbon() {
   static const QStringList order = ids(
-      {QStringLiteral("line"), QStringLiteral("rectangle"), QStringLiteral("rectangle_3pt"),
-       QStringLiteral("rectangle_center"), QStringLiteral("circle"), QStringLiteral("circle_2pt"),
-       QStringLiteral("circle_3pt"), QStringLiteral("arc"), QStringLiteral("arc_center"),
-       QStringLiteral("arc_tangent"), QStringLiteral("ellipse"), QStringLiteral("polygon"),
-       QStringLiteral("polygon_inscribed"), QStringLiteral("slot"), QStringLiteral("slot_overall"),
-       QStringLiteral("spline"), QStringLiteral("spline_control"), QStringLiteral("point"),
+      {QStringLiteral("line"), QStringLiteral("point"), QStringLiteral("rectangle"),
+       QStringLiteral("rectangle_3pt"), QStringLiteral("rectangle_center"), QStringLiteral("circle"),
+       QStringLiteral("circle_2pt"), QStringLiteral("circle_3pt"), QStringLiteral("arc"),
+       QStringLiteral("arc_center"), QStringLiteral("arc_tangent"), QStringLiteral("ellipse"),
+       QStringLiteral("polygon"), QStringLiteral("polygon_inscribed"), QStringLiteral("slot"),
+       QStringLiteral("slot_overall"), QStringLiteral("spline"), QStringLiteral("spline_control"),
        QStringLiteral("text"), QStringLiteral("rectangular_pattern"), QStringLiteral("circular_pattern"),
        QStringLiteral("mirror"), QStringLiteral("project"), QStringLiteral("intersect"),
        QStringLiteral("dimension"), QStringLiteral("fillet"), QStringLiteral("chamfer"),
@@ -61,8 +62,8 @@ const QStringList& ribbon() {
 // The defaults, in the ribbon's order.
 const QStringList& defaultsInRibbonOrder() {
   static const QStringList order =
-      ids({QStringLiteral("line"), QStringLiteral("rectangle"), QStringLiteral("circle"), QStringLiteral("arc"),
-           QStringLiteral("polygon"), QStringLiteral("slot"), QStringLiteral("spline"), QStringLiteral("point"),
+      ids({QStringLiteral("line"), QStringLiteral("point"), QStringLiteral("rectangle"), QStringLiteral("circle"),
+           QStringLiteral("arc"), QStringLiteral("polygon"), QStringLiteral("slot"), QStringLiteral("spline"),
            QStringLiteral("mirror"), QStringLiteral("dimension"), QStringLiteral("fillet"), QStringLiteral("trim"),
            QStringLiteral("extend"), QStringLiteral("offset")});
   return order;
@@ -119,7 +120,7 @@ void countsTests() {
   CHECK(choice.ids.contains(QStringLiteral("sketch.move")));       // 130
   CHECK(choice.ids.contains(QStringLiteral("sketch.ellipse")));    // 118, before Text in the ribbon
   CHECK(!choice.ids.contains(QStringLiteral("sketch.text")));      // 118
-  CHECK(!choice.ids.contains(QStringLiteral("sketch.rectangle"))); // 101
+  CHECK(!choice.ids.contains(QStringLiteral("sketch.rectangle"))); // 102
   // The 14: Line, Ellipse and the twelve last of the ribbon.
   CHECK(choice.ids.mid(2) == ribbon().mid(ribbon().size() - 12));
 
@@ -156,7 +157,7 @@ void pinnedTests() {
   CHECK(choice.ids.size() == kPaletteCreateCount);
   CHECK(inRibbonOrder(choice.ids));
   CHECK(choice.ids.contains(QStringLiteral("sketch.text")));
-  CHECK(choice.ids.contains(QStringLiteral("sketch.rectangle_3pt"))); // 102: only as pinned
+  CHECK(choice.ids.contains(QStringLiteral("sketch.rectangle_3pt"))); // 103: only as pinned
   CHECK(!choice.ids.contains(QStringLiteral("sketch.constraint.fix")));
   CHECK(!choice.ids.contains(QStringLiteral("sketch.finish")));
   // The 12 most counted beside the two pins.
@@ -168,7 +169,9 @@ void pinnedTests() {
   CHECK(full.ids == many.mid(0, kPaletteCreateCount));
   CHECK(!full.fromCounts);
   // A smaller limit.
-  CHECK(choosePaletteCreateTools(ribbon(), {}, {}, 3).ids == defaultsInRibbonOrder().mid(0, 3));
+  // The first three of the defaults (by priority), in the ribbon's order.
+  CHECK(choosePaletteCreateTools(ribbon(), {}, {}, 3).ids ==
+        ids({QStringLiteral("line"), QStringLiteral("rectangle"), QStringLiteral("circle")}));
 }
 
 void settingsTests() {

@@ -47,6 +47,7 @@
 #include "Bindings.hpp"
 #include "FeatureStatus.hpp"
 #include "../view/CenterOfMass.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -110,7 +111,8 @@ static_assert(rowRolesDistinct(), "two browser row roles share a number (mitcad#
 // The fx badge's font and text (mitcad#862).
 QFont bindingsFont(const QFont& font) {
   QFont badge = font;
-  badge.setPointSizeF(std::max(6.0, font.pointSizeF() > 0 ? font.pointSizeF() * 0.85 : 8.0));
+  badge.setPointSizeF(
+      std::max(6.0 * uiTextScale(), font.pointSizeF() > 0 ? font.pointSizeF() * 0.85 : 8.0 * uiTextScale()));
   badge.setWeight(QFont::DemiBold);
   badge.setItalic(false);
   return badge;
@@ -1093,7 +1095,7 @@ BrowserPanel::BrowserPanel(QWidget* parent) : QWidget(parent), m_tree(new Browse
   m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
   m_tree->setUniformRowHeights(true);
-  m_tree->setIconSize(QSize(18, 18));
+  m_tree->setIconSize(uiIconSize(18, 18));
   panel::setCompactIndentation(m_tree, panel::Indent::Tree);
   m_tree->setExpandsOnDoubleClick(false);
   // Only a click gives the tree the keyboard, so that the view keeps the

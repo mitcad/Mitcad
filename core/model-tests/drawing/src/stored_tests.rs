@@ -204,6 +204,7 @@ fn sample() -> Drawing {
         annotations: Vec::new(),
         rotation: 0.0,
         sketch: Vec::new(),
+        lines: Vec::new(),
     };
     let projected = DrawingView {
         id: 2,
@@ -224,6 +225,7 @@ fn sample() -> Drawing {
         annotations: Vec::new(),
         rotation: 0.0,
         sketch: Vec::new(),
+        lines: Vec::new(),
     };
     let section = DrawingView {
         id: 3,
@@ -248,6 +250,7 @@ fn sample() -> Drawing {
         annotations: Vec::new(),
         rotation: 0.0,
         sketch: Vec::new(),
+        lines: Vec::new(),
     };
     let detail = DrawingView {
         id: 4,
@@ -270,6 +273,7 @@ fn sample() -> Drawing {
         annotations: Vec::new(),
         rotation: 0.0,
         sketch: Vec::new(),
+        lines: Vec::new(),
     };
     let mut sheet = DrawingSheet::new("Sheet1");
     sheet.views = vec![base, projected, section, detail];

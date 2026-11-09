@@ -420,6 +420,61 @@ fn rounded(text: String, value: Quantity, stored: f64, integer: bool) -> (String
     }
 }
 
+/// Why a bound expression drives nothing the import made (mitcad#1557:
+/// the reason by the kind of value).
+fn unused_reason(object: Option<&Object>, path: &str) -> String {
+    let path = path.trim_start_matches('.');
+    let Some(o) = object else {
+        return "not a value the import carries over".to_owned();
+    };
+    if let Some(why) = super::history::no_counterpart(&o.type_name) {
+        return format!("its object has {why}");
+    }
+    if path.starts_with("Placement") {
+        if o.type_name == "PartDesign::Body" || super::is_component(&o.type_name) {
+            return "a placement of a Body or part: its occurrence's placement, which MitCad \
+                    keeps as numbers (a move of the occurrence by an expression is not made)"
+                .to_owned();
+        }
+        if super::is_sketch(&o.type_name) || super::history::is_datum(&o.type_name) {
+            return "FreeCAD computes this placement from the attachment; the attachment and \
+                    its offset are what the import carries over"
+                .to_owned();
+        }
+    }
+    "not a value the import carries over".to_owned()
+}
+
+/// The object a reference's path reads (mitcad#1557): an `App::Link` that
+/// lacks the path's first property stands for the object it links, as
+/// FreeCAD reads `<<Label of a link>>.Width` from the linked VarSet or
+/// spreadsheet (also a link of a link, a few levels deep).
+fn through_links<'d>(
+    doc: &'d mitcad_freecad::Document,
+    object: &'d Object,
+    path: &[Component],
+) -> &'d Object {
+    let first = match path.first() {
+        Some(Component::Name(n)) => n.as_str(),
+        _ => return object,
+    };
+    let mut at = object;
+    for _ in 0..8 {
+        if at.type_name != "App::Link" || at.property(first).is_some() {
+            break;
+        }
+        let Some(next) = at
+            .link("LinkedObject")
+            .filter(|l| l.file.is_none() && l.subs.iter().all(|s| s.name.is_empty()))
+            .and_then(|l| doc.object(&l.object))
+        else {
+            break;
+        };
+        at = next;
+    }
+    at
+}
+
 /// A FreeCAD name as a MitCad parameter name, or None when it cannot be
 /// one as it is.
 fn valid(name: &str) -> Option<String> {
@@ -459,6 +514,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 return Err(format!("{r}: no object or property {first}"));
             }
         };
+        let object = through_links(doc, object, path);
         if is_sheet(&object.type_name) {
             let [Component::Name(cell)] = path else {
                 return Err(format!("{r}: not a cell"));
@@ -1539,7 +1595,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 r.outcome = ExpressionOutcome::Value;
                 r.note = Some(format!("{} was not replayed", r.object));
             } else if r.outcome == ExpressionOutcome::Unused && r.note.is_none() {
-                r.note = Some("not a value the import carries over".to_owned());
+                r.note = Some(unused_reason(self.sources[0].object(&r.object), &r.path));
             }
         }
     }

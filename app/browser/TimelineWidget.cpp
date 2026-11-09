@@ -52,6 +52,7 @@
 #include "../framework/PanelTree.hpp"
 #include "../framework/PlaceWatcher.hpp"
 #include "../framework/Theme.hpp"
+#include "../framework/UiSizes.hpp"
 #include "../platform/MacChrome.hpp"
 #include "../platform/MacDialogs.hpp"
 
@@ -68,14 +69,16 @@ bool isDeleteKey(int key) {
 }
 
 constexpr int kPad = timeline::padding;
-constexpr int kItem = timeline::cell;
-constexpr int kIcon = timeline::icon;
 constexpr int kGap = timeline::gap;
 constexpr int kMarkerSlot = timeline::marker;
 constexpr int kTop = timeline::top;
 constexpr int kBand = 3; // the component colour, in the cell's room under its icon
-constexpr int kBandTop = kTop + kItem - kBand;
-constexpr int kHeight = timeline::height;
+// The icon at Icon size (mitcad#1556) and the cell, strip and band that
+// follow it: the cell keeps its margins around the icon.
+int iconSide() { return uiIconSize(timeline::icon); }
+int itemSide() { return iconSide() + (timeline::cell - timeline::icon); }
+int bandTop() { return kTop + itemSide() - kBand; }
+int stripHeight() { return kTop + itemSide() + (timeline::height - timeline::top - timeline::cell); }
 constexpr int kDragPixels = 6;
 constexpr int kRunMark = 8; // stands for a run of features the filter hides (mitcad#98)
 
@@ -200,7 +203,7 @@ public:
     setObjectName(QStringLiteral("timelineStrip"));
     setMouseTracking(true);
     setFocusPolicy(Qt::ClickFocus);
-    setFixedHeight(kHeight);
+    setFixedHeight(stripHeight());
     m_hoverTimer.setSingleShot(true);
     m_hoverTimer.setInterval(350);
     connect(&m_hoverTimer, &QTimer::timeout, this, [this] {
@@ -258,7 +261,7 @@ public:
         run = -1;
         m_left[static_cast<std::size_t>(i)] = x;
         if (!hidden(i)) {
-          x += kItem + kGap;
+          x += itemSide() + kGap;
         }
       }
     }
@@ -377,7 +380,7 @@ public:
   }
 
   QRect cell(int i) const {
-    return QRect(m_left[static_cast<std::size_t>(i)], kTop, hidden(i) ? 0 : kItem, kItem);
+    return QRect(m_left[static_cast<std::size_t>(i)], kTop, hidden(i) ? 0 : itemSide(), itemSide());
   }
   QRect markerRect() const { return QRect(m_markerX, 0, kMarkerSlot, height()); }
   // The fx badge on the icon of a feature suppressed by a condition
@@ -387,8 +390,9 @@ public:
     if (hidden(i) || isHead(i) || m_items[i].feature.suppressedWhen.isEmpty()) {
       return QRect();
     }
-    const QRect icon(cell(i).left() + (kItem - kIcon) / 2, kTop + (kItem - kIcon) / 2, kIcon, kIcon);
-    const int side = std::max(7, kIcon * 3 / 5);
+    const int margin = (itemSide() - iconSide()) / 2;
+    const QRect icon(cell(i).left() + margin, kTop + margin, iconSide(), iconSide());
+    const int side = std::max(7, iconSide() * 3 / 5);
     return QRect(icon.right() + 1 - side, icon.bottom() + 1 - side, side, side).adjusted(-1, -1, 1, 1);
   }
   // The feature whose fx badge is at a point, or -1.
@@ -625,7 +629,7 @@ protected:
         const QColor colour = componentColor(item.colour);
         painter.setPen(Qt::NoPen);
         painter.setBrush(colour);
-        painter.drawRoundedRect(QRectF(rect.left() + 4, kBandTop, kItem - 8, kBand - 0.5), 1.5, 1.5);
+        painter.drawRoundedRect(QRectF(rect.left() + 4, bandTop(), itemSide() - 8, kBand - 0.5), 1.5, 1.5);
       }
       painter.setOpacity(off ? kStateDimOpacity : 1.0);
       QIcon icon = themeIcon(head ? QStringLiteral("folder") : featureIcon(feature.type));
@@ -633,8 +637,9 @@ protected:
       if (!head && !feature.suppressedWhen.isEmpty()) {
         icon = boundIcon(icon);
       }
-      const QPixmap pixmap = icon.pixmap(QSize(kIcon, kIcon), devicePixelRatioF());
-      painter.drawPixmap(cell(i).left() + (kItem - kIcon) / 2, kTop + (kItem - kIcon) / 2, pixmap);
+      const QPixmap pixmap = icon.pixmap(QSize(iconSide(), iconSide()), devicePixelRatioF());
+      const int margin = (itemSide() - iconSide()) / 2;
+      painter.drawPixmap(cell(i).left() + margin, kTop + margin, pixmap);
       painter.setOpacity(1.0);
       if (!head && feature.suppressed) {
         painter.setPen(QPen(strikeColor(palette()), 1.6));
@@ -660,14 +665,14 @@ protected:
       painter.setBrush(strikeColor(palette()));
       const double middle = at + kRunMark / 2.0;
       for (int dot = 0; dot < 4; ++dot) {
-        painter.drawEllipse(QPointF(middle, kTop + kItem * (dot + 1) / 5.0), 1.3, 1.3);
+        painter.drawEllipse(QPointF(middle, kTop + itemSide() * (dot + 1) / 5.0), 1.3, 1.3);
       }
     }
     // The history marker: a bar with a handle to drag, from the groups'
     // bands down to the cells' bottom.
     const double x = markerRect().center().x() + 1.0; // the 2 px bar on whole pixels
     painter.setPen(QPen(colors.marker, 2.0));
-    painter.drawLine(QPointF(x, 4), QPointF(x, kTop + kItem - 1)); // square caps
+    painter.drawLine(QPointF(x, 4), QPointF(x, kTop + itemSide() - 1)); // square caps
     painter.setPen(QPen(colors.marker, 1.0));
     painter.setBrush(colors.handle);
     painter.drawRoundedRect(QRectF(x - 3.5, 1.5, 7, 8), 1.5, 1.5);
@@ -1116,12 +1121,12 @@ TimelineWidget::TimelineWidget(const CommandContext& model, QWidget* parent)
   m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   // Room for the scroll bar only while the features do not fit, and no
   // more height than that when the dock is made taller.
-  m_scroll->setFixedHeight(kHeight);
+  m_scroll->setFixedHeight(stripHeight());
   setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
   layout->addWidget(m_scroll, 1);
   QScrollBar* scrollBar = m_scroll->horizontalScrollBar();
   connect(scrollBar, &QScrollBar::rangeChanged, this, [this, scrollBar](int, int maximum) {
-    m_scroll->setFixedHeight(kHeight + (maximum > 0 ? scrollBar->sizeHint().height() : 0));
+    m_scroll->setFixedHeight(stripHeight() + (maximum > 0 ? scrollBar->sizeHint().height() : 0));
   });
   connect(scrollBar, &QScrollBar::valueChanged, this,
           [this] { QTimer::singleShot(0, this, &TimelineWidget::logLayout); });
@@ -1460,7 +1465,7 @@ void TimelineWidget::setSelectedFeatures(const QStringList& uids) {
     const int first = after.isEmpty() ? -1 : m_strip->indexOf(after.first());
     if (first >= 0 && !m_strip->hidden(first)) {
       const QRect cell = m_strip->cell(first);
-      m_scroll->ensureVisible(cell.center().x(), cell.center().y(), kItem * 2, 0);
+      m_scroll->ensureVisible(cell.center().x(), cell.center().y(), itemSide() * 2, 0);
     }
   }
 }
@@ -1480,7 +1485,7 @@ void TimelineWidget::selectFeature(const QString& uid) {
   m_strip->select(i >= 0 ? uid : QString());
   if (i >= 0) {
     const QRect cell = m_strip->cell(i);
-    m_scroll->ensureVisible(cell.center().x(), cell.center().y(), kItem * 2, 0);
+    m_scroll->ensureVisible(cell.center().x(), cell.center().y(), itemSide() * 2, 0);
   }
 }
 

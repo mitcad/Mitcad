@@ -250,14 +250,14 @@ occ::handle<Geom_Curve> mapped_curve(const occ::handle<Geom_Curve>& curve, const
     for (int i = 1; i <= copy->NbPoles(); ++i) {
       copy->SetPole(i, map.point(copy->Pole(i)));
     }
-    return copy;
+    return occ::handle<Geom_Curve>(copy);
   }
   if (const occ::handle<Geom_BezierCurve> bezier = occ::down_cast<Geom_BezierCurve>(curve); !bezier.IsNull()) {
     const occ::handle<Geom_BezierCurve> copy = occ::down_cast<Geom_BezierCurve>(bezier->Copy());
     for (int i = 1; i <= copy->NbPoles(); ++i) {
       copy->SetPole(i, map.point(copy->Pole(i)));
     }
-    return copy;
+    return occ::handle<Geom_Curve>(copy);
   }
   if (const occ::handle<Geom_Line> line = occ::down_cast<Geom_Line>(curve); !line.IsNull()) {
     // A line's parameter is its length: the same only where the map keeps

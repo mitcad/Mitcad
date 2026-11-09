@@ -519,7 +519,7 @@ fn link_arrays_scales_and_grounded_assembly_parts() {
     assert_eq!(item(&report, "Assembly").outcome, ObjectOutcome::Component);
     assert_eq!(
         item(&report, "GroundedJoint").outcome,
-        ObjectOutcome::Skipped
+        ObjectOutcome::Included
     );
     assert!(
         item(&report, "GroundedJoint")
@@ -8002,4 +8002,449 @@ fn a_hole_s_modelled_thread_on_its_walls_runs_out() {
     let cosmetic = features::wall_thread(faces, &thread, false);
     assert_eq!(cosmetic["modeled"], false, "{cosmetic}");
     assert!(cosmetic.get("ends").is_none(), "{cosmetic}");
+}
+
+// A reported assembly's remaining fallbacks (mitcad#1557).
+
+/// A placement property of another name (`Placement1`, `Placement2`).
+fn named_placement(name: &str, p: [f64; 3], axis: [f64; 3], degrees: f64) -> String {
+    placement(p, axis, degrees).replacen("name=\"Placement\"", &format!("name=\"{name}\""), 1)
+}
+
+/// A 40 × 20 rectangle sketch whose width (constraint 9) an expression
+/// may drive.
+fn sized_rectangle(width_expression: Option<&str>) -> String {
+    let p = [[0.0, 0.0], [40.0, 0.0], [40.0, 20.0], [0.0, 20.0]];
+    let mut out = format!(
+        "{}{}",
+        geometry(&[
+            segment(p[0], p[1], false),
+            segment(p[1], p[2], false),
+            segment(p[2], p[3], false),
+            segment(p[3], p[0], false),
+        ]),
+        constraints(&[
+            constrain(1, 0.0, &[(0, 2), (1, 1)], "", true),
+            constrain(1, 0.0, &[(1, 2), (2, 1)], "", true),
+            constrain(1, 0.0, &[(2, 2), (3, 1)], "", true),
+            constrain(1, 0.0, &[(3, 2), (0, 1)], "", true),
+            constrain(1, 0.0, &[(0, 1), (-1, 1)], "", true),
+            constrain(2, 0.0, &[(0, 0)], "", true),
+            constrain(2, 0.0, &[(2, 0)], "", true),
+            constrain(3, 0.0, &[(1, 0)], "", true),
+            constrain(3, 0.0, &[(3, 0)], "", true),
+            constrain(7, 40.0, &[(0, 1), (0, 2)], "", true),
+            constrain(8, 20.0, &[(1, 1), (1, 2)], "", true),
+        ])
+    );
+    if let Some(e) = width_expression {
+        out.push_str(&expressions(&[(".Constraints[9]", e)]));
+    }
+    out
+}
+
+#[test]
+fn expressions_read_a_varset_through_a_link_and_move_a_sketch_without_a_support() {
+    // `<<Vars>>` labels an App::Link of the VarSet: FreeCAD reads `Width`
+    // from the VarSet it links. A sketch without a support is placed by its
+    // `Placement`, which an expression moves along the sketch's normal:
+    // an offset plane from the origin plane, by that expression.
+    let xml = document(&[
+        (
+            "App::VarSet",
+            "VarSet",
+            variable("Width", "Length", "<Float value=\"40\"/>"),
+        ),
+        (
+            "App::Link",
+            "Link",
+            format!("{}{}", label("Vars"), xlink("", "VarSet")),
+        ),
+        (
+            "PartDesign::Body",
+            "Body",
+            format!(
+                "{}{}{}",
+                shape("Body.brp"),
+                links("Group", "App::PropertyLinkList", &["Sketch", "Pad"]),
+                link("Tip", "Pad")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Sketch",
+            sized_rectangle(Some("<<Vars>>.Width")),
+        ),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "Sketch", &[]),
+                float("Length", 5.0),
+                shape("Pad.brp")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Loose",
+            format!(
+                "{}{}{}",
+                sized_rectangle(None),
+                placement([0.0, -20.0, 0.0], [1.0, 0.0, 0.0], 90.0),
+                expressions(&[(".Placement.Base.y", "-<<Vars>>.Width / 2")])
+            ),
+        ),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[("Body.brp", b"6 body"), ("Pad.brp", b"6 pad")],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    let row = report
+        .expressions
+        .iter()
+        .find(|e| e.object == "Sketch")
+        .unwrap();
+    assert_eq!(row.outcome, ExpressionOutcome::Expression, "{row:?}");
+    assert_eq!(row.mitcad.as_deref(), Some("Width"), "{row:?}");
+    let row = report
+        .expressions
+        .iter()
+        .find(|e| e.object == "Loose")
+        .unwrap();
+    assert_eq!(row.outcome, ExpressionOutcome::Expression, "{row:?}");
+    // On an offset plane from xz, by the expression.
+    let sketch = sketch_def(&doc, &report, "Loose");
+    let plane = def_json(&doc, sketch["plane"].as_str().unwrap());
+    assert_eq!(plane["type"], "construction_plane", "{plane}");
+    assert_eq!(plane["definition"]["type"], "offset", "{plane}");
+    assert_eq!(plane["definition"]["plane"], "xz", "{plane}");
+    let distance = plane["definition"]["distance"].as_str().unwrap();
+    let id = doc.parameters().find(distance).unwrap();
+    assert!(
+        doc.parameters()
+            .get(id)
+            .unwrap()
+            .expression()
+            .contains("Width"),
+        "{plane}"
+    );
+    assert_eq!(doc.parameters().value(id).map(f64::abs), Some(20.0));
+}
+
+#[test]
+fn a_clone_of_a_body_is_a_linked_copy_placed_as_freecad_places_it() {
+    // Body B's base feature is a clone of Body A (FreeCAD's PartDesign
+    // Clone): A's shape without A's placement, placed by the clone's own
+    // placement, which an expression drives. A stays a body of its own.
+    let xml = document(&[
+        (
+            "App::VarSet",
+            "VarSet",
+            variable("Off", "Length", "<Float value=\"10\"/>"),
+        ),
+        (
+            "App::Part",
+            "Head",
+            links("Group", "App::PropertyLinkList", &["A", "B"]),
+        ),
+        (
+            "PartDesign::Body",
+            "A",
+            format!(
+                "{}{}{}{}",
+                shape("A.brp"),
+                links("Group", "App::PropertyLinkList", &["SketchA", "PadA"]),
+                link("Tip", "PadA"),
+                placement([0.0, 10.0, 0.0], [0.0, 0.0, 1.0], 0.0)
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "SketchA",
+            rectangle_sketch(0.0, 0.0, 40.0, 20.0),
+        ),
+        (
+            "PartDesign::Pad",
+            "PadA",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "SketchA", &[]),
+                float("Length", 5.0),
+                shape("PadA.brp")
+            ),
+        ),
+        (
+            "PartDesign::Body",
+            "B",
+            format!(
+                "{}{}{}{}",
+                shape("B.brp"),
+                links("Group", "App::PropertyLinkList", &["Clone"]),
+                link("Tip", "Clone"),
+                placement([0.0, -30.0, 0.0], [0.0, 0.0, 1.0], 0.0)
+            ),
+        ),
+        (
+            "PartDesign::FeatureBase",
+            "Clone",
+            format!(
+                "{}{}{}{}",
+                link("BaseFeature", "A"),
+                placement([0.0, 10.0, 0.0], [0.0, 0.0, 1.0], 0.0),
+                expressions(&[(".Placement.Base.y", "VarSet.Off")]),
+                shape("Clone.brp")
+            ),
+        ),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[
+            ("A.brp", b"6 a"),
+            ("PadA.brp", b"6 pada"),
+            ("B.brp", b"6 b"),
+            ("Clone.brp", b"6 clone"),
+        ],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    assert_eq!(item(&report, "A").outcome, ObjectOutcome::Body);
+    let clone = feature(&report, "Clone");
+    assert_eq!(clone.outcome, ObjectOutcome::Parametric, "{clone:?}");
+    assert_eq!(clone.mitcad, "derive", "{clone:?}");
+    let defs = defs_of(&doc, &report, "Clone");
+    assert_eq!(defs.len(), 2, "{defs:?}");
+    // A linked copy of A's body, seen from B's component.
+    let derive = &defs[0];
+    assert_eq!(derive["type"], "derive", "{derive}");
+    let a_body = &feature(&report, "PadA").features[0];
+    let copied = derive["bodies"][0].as_str().unwrap();
+    assert!(copied.starts_with(a_body.as_str()), "{derive}");
+    assert!(derive["links"][copied].is_object(), "{derive}");
+    // Moved where FreeCAD puts it: the clone's 10 mm less the 40 mm the
+    // occurrences put between A and B, the clone's expression driving it.
+    let moved = &defs[1];
+    assert_eq!(moved["type"], "move", "{moved}");
+    let y = &moved["transform"]["y"];
+    assert_eq!(number(&doc, y), -30.0, "{moved}");
+    let id = doc.parameters().find(y.as_str().unwrap()).unwrap();
+    assert_eq!(
+        doc.parameters().get(id).unwrap().expression(),
+        "Off - 40 mm"
+    );
+    assert_eq!(number(&doc, &moved["transform"]["x"]), 0.0);
+}
+
+#[test]
+fn a_hole_at_a_face_drills_at_the_centre_of_its_circles() {
+    // FreeCAD 1.x's hole whose profile is a planar face (`Pad.Face2`, the
+    // pad's top) drills at the centres of the face's circles, along its
+    // normal: the hole on that face, at that centre.
+    let xml = document(&[
+        (
+            "PartDesign::Body",
+            "Body",
+            format!(
+                "{}{}{}",
+                shape("Body.brp"),
+                links("Group", "App::PropertyLinkList", &["Sketch", "Pad", "Hole"]),
+                link("Tip", "Hole")
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Sketch",
+            rectangle_sketch(0.0, 0.0, 40.0, 30.0),
+        ),
+        (
+            "PartDesign::Pad",
+            "Pad",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "Sketch", &[]),
+                float("Length", 10.0),
+                shape("Pad.brp")
+            ),
+        ),
+        (
+            "PartDesign::Hole",
+            "Hole",
+            format!(
+                "{}{}{}{}{}{}{}{}",
+                link_sub("Profile", "Pad", &["Face2"]),
+                link("BaseFeature", "Pad"),
+                float("Diameter", 6.0),
+                float("Depth", 5.0),
+                enumeration("DepthType", 0),
+                enumeration("DrillPoint", 1),
+                enumeration("HoleCutType", 0),
+                shape("Hole.brp")
+            ),
+        ),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[
+            ("Body.brp", b"10 body"),
+            ("Pad.brp", b"6 pad"),
+            ("Hole.brp", b"10 hole"),
+        ],
+    );
+    // (The mock gives every face of a body the curves listed: the top's
+    // circle, found on the pad's body by its place among the faces.)
+    let kernel = MockKernel::default();
+    kernel
+        .curves
+        .borrow_mut()
+        .push(mitcad_model::Curve3::Conic {
+            center: [20.0, 15.0, 10.0],
+            normal: [0.0, 0.0, 1.0],
+            x_axis: [1.0, 0.0, 0.0],
+            major: 3.0,
+            minor: 3.0,
+            start: 0.0,
+            end: std::f64::consts::TAU,
+            closed: true,
+        });
+    let (doc, report) = import_with(file, Vec::new(), kernel, false);
+    let hole = feature(&report, "Hole");
+    assert_eq!(hole.outcome, ObjectOutcome::Parametric, "{hole:?}");
+    let def = def_of(&doc, &hole.features[0]);
+    assert_eq!(def["type"], "hole", "{def}");
+    let at = &def["placement"];
+    assert_eq!(at["type"], "face", "{def}");
+    assert!(at["face"].as_str().unwrap().contains(":end("), "{def}");
+    assert_eq!(at["points"], json!([[20.0, 15.0, 10.0]]), "{def}");
+}
+
+#[test]
+fn assembly_joints_become_joints_where_the_parts_are() {
+    // Four links of one block in an assembly, the first grounded: a Fixed
+    // joint whose connectors meet, a Slider whose connectors are 30 mm
+    // apart along their z axes, a Fixed joint whose z axes are opposed
+    // (flipped), and a Distance joint (no MitCad kind).
+    let kinds = [
+        "Fixed",
+        "Revolute",
+        "Cylindrical",
+        "Slider",
+        "Ball",
+        "Distance",
+    ];
+    let joint = |kind: usize, a: &str, pa: [f64; 3], b: &str, pb: [f64; 3], turn: f64| {
+        format!(
+            "{}{}{}{}{}",
+            custom_enum("JointType", kind, &kinds),
+            xlink_sub("Reference1", a, "Face1"),
+            named_placement("Placement1", pa, [0.0, 0.0, 1.0], 0.0),
+            xlink_sub("Reference2", b, "Face2"),
+            named_placement("Placement2", pb, [1.0, 0.0, 0.0], turn)
+        )
+    };
+    let at = |z: f64| placement([0.0, 0.0, z], [0.0, 0.0, 1.0], 0.0);
+    let xml = document(&[
+        ("Part::Box", "Block", shape("Block.brp")),
+        (
+            "Assembly::AssemblyObject",
+            "Assembly",
+            links(
+                "Group",
+                "App::PropertyLinkList",
+                &["L1", "L2", "L3", "L4", "Joints"],
+            ),
+        ),
+        (
+            "App::Link",
+            "L1",
+            format!("{}{}", xlink("", "Block"), at(0.0)),
+        ),
+        (
+            "App::Link",
+            "L2",
+            format!("{}{}", xlink("", "Block"), at(10.0)),
+        ),
+        (
+            "App::Link",
+            "L3",
+            format!("{}{}", xlink("", "Block"), at(30.0)),
+        ),
+        (
+            "App::Link",
+            "L4",
+            format!("{}{}", xlink("", "Block"), at(10.0)),
+        ),
+        (
+            "Assembly::JointGroup",
+            "Joints",
+            links(
+                "Group",
+                "App::PropertyLinkList",
+                &["Ground", "Fixed", "Slide", "Flipped", "Apart"],
+            ),
+        ),
+        ("App::FeaturePython", "Ground", link("ObjectToGround", "L1")),
+        (
+            "App::FeaturePython",
+            "Fixed",
+            joint(0, "L1", [5.0, 5.0, 10.0], "L2", [5.0, 5.0, 0.0], 0.0),
+        ),
+        (
+            "App::FeaturePython",
+            "Slide",
+            joint(3, "L1", [5.0, 5.0, 0.0], "L3", [5.0, 5.0, 0.0], 0.0),
+        ),
+        (
+            "App::FeaturePython",
+            "Flipped",
+            joint(0, "L1", [5.0, 5.0, 10.0], "L4", [5.0, 5.0, 0.0], 180.0),
+        ),
+        (
+            "App::FeaturePython",
+            "Apart",
+            joint(5, "L1", [5.0, 5.0, 10.0], "L2", [5.0, 5.0, 0.0], 0.0),
+        ),
+    ]);
+    let file = fcstd(&xml, None, &[("Block.brp", b"6 block")]);
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    assert_eq!(item(&report, "Ground").outcome, ObjectOutcome::Included);
+    let joint_def = |name: &str| -> serde_json::Value {
+        let it = item(&report, name);
+        assert_eq!(it.outcome, ObjectOutcome::Parametric, "{it:?}");
+        let note = it.note.as_deref().unwrap();
+        let uid = note
+            .split_whitespace()
+            .find(|w| w.starts_with('F') && w.trim_end_matches(':')[1..].parse::<u32>().is_ok())
+            .unwrap()
+            .trim_end_matches(':');
+        def_json(&doc, uid)
+    };
+    let fixed = joint_def("Fixed");
+    assert_eq!(fixed["type"], "joint", "{fixed}");
+    assert_eq!(fixed["kind"], "rigid", "{fixed}");
+    assert!(fixed["flip"].is_null(), "{fixed}");
+    assert_eq!(fixed["a"]["geometry"], "origin", "{fixed}");
+    assert_eq!(
+        fixed["a"]["frame_override"]["origin"],
+        json!([5.0, 5.0, 10.0]),
+        "{fixed}"
+    );
+    let slide = joint_def("Slide");
+    assert_eq!(slide["kind"], "slider", "{slide}");
+    assert!(slide["offset"].is_null(), "{slide}");
+    let flipped = joint_def("Flipped");
+    assert_eq!(flipped["kind"], "rigid", "{flipped}");
+    assert_eq!(flipped["flip"], true, "{flipped}");
+    let apart = item(&report, "Apart");
+    assert_eq!(apart.outcome, ObjectOutcome::Skipped, "{apart:?}");
+    assert!(
+        apart.note.as_deref().unwrap().contains("a Distance joint"),
+        "{apart:?}"
+    );
+    // Nothing moved: the block (at the top) and its four links where the
+    // file places them.
+    let zs: Vec<f64> = centres(&doc, "Block").iter().map(|c| c[2]).collect();
+    assert_eq!(zs, [5.0, 5.0, 15.0, 15.0, 35.0]);
 }

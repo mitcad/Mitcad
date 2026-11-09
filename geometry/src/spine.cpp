@@ -317,9 +317,30 @@ std::optional<gp_Dir> Spine::plane_normal() const {
   if (straight) {
     return std::nullopt;
   }
-  gp_Dir normal = plane->Pln().Axis().Direction();
+  gp_Pln found = plane->Pln();
   if (!find.Location().IsIdentity()) {
-    normal.Transform(find.Location().Transformation());
+    found.Transform(find.Location().Transformation());
+  }
+  const gp_Dir normal = found.Axis().Direction();
+  // (mitcad#1555) The plane is the wire's only when the wire's points lie
+  // in it within 1e-7 mm and its tangents within 1e-6 radians, checked
+  // here: BRepLib_FindSurface widens its tolerance to the edges' own. A
+  // planar path is swept with the plane's normal as a constant binormal,
+  // which keeps the section's angle to that normal, so along a path that
+  // leaves the plane the section would lean from square by the angle its
+  // tangent makes with the plane (0.98 degrees along a path 0.3 mm out of
+  // its plane over 100 mm).
+  constexpr int samples = 64;
+  for (const Piece& piece : m_pieces) {
+    for (int i = 0; i <= samples; ++i) {
+      gp_Pnt p;
+      gp_Vec v;
+      piece.curve->D1(piece.first + (piece.last - piece.first) * i / samples, p, v);
+      if (found.Distance(p) > 1.0e-7 ||
+          (v.Magnitude() > Precision::Confusion() && std::abs(gp_Dir(v).Dot(normal)) > 1.0e-6)) {
+        return std::nullopt;
+      }
+    }
   }
   return normal;
 }
@@ -1047,6 +1068,13 @@ ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeM
   // asked for (mitcad#1448), rounded (the section turns about the corner).
   // Where that cannot be built (a slight kink, whose mitre is a sliver)
   // the other kind is tried, else the section turns through them.
+  // (mitcad#1555) Turning through a corner, the section keeps the frame it
+  // had before it, so along the next edge it leans from square by the
+  // corner's angle. OCCT's mitres and roundings trim the two sides against
+  // each other from where their seams cross, which the sides swept along
+  // B-spline edges seldom do (their seams miss each other by up to tenths
+  // of a millimetre), so B-spline pieces that meet at an angle (an
+  // intersection curve of chains with corners) often end up here.
   const bool rounded = corners == PipeCorners::Rounded;
   const BRepBuilderAPI_TransitionMode asked = rounded ? BRepBuilderAPI_RoundCorner : BRepBuilderAPI_RightCorner;
   const BRepBuilderAPI_TransitionMode instead = rounded ? BRepBuilderAPI_RightCorner : BRepBuilderAPI_RoundCorner;

@@ -35,11 +35,18 @@ pub enum Pen {
     ChainThick,
     /// Long dash dotted extra wide.
     ChainExtraThick,
+    /// Long dash double dotted narrow (ISO 128 type 05, the phantom line,
+    /// mitcad#1546): adjacent parts, other positions.
+    Phantom,
+    /// Long dash double dotted wide.
+    PhantomThick,
+    /// Long dash double dotted extra wide.
+    PhantomExtraThick,
 }
 
 impl Pen {
     /// Every pen, in the order of the table the drawing query gives.
-    pub const ALL: [Pen; 11] = [
+    pub const ALL: [Pen; 14] = [
         Self::Thick,
         Self::ExtraThick,
         Self::Thin,
@@ -51,6 +58,9 @@ impl Pen {
         Self::DashedExtraThick,
         Self::ChainThick,
         Self::ChainExtraThick,
+        Self::Phantom,
+        Self::PhantomThick,
+        Self::PhantomExtraThick,
     ];
 
     /// The line width, mm: ISO 128's 0.35 series (mitcad#1112), wide
@@ -61,10 +71,13 @@ impl Pen {
     /// (`pens`).
     pub fn width(self) -> f64 {
         match self {
-            Self::Thick | Self::DashedThick | Self::ChainThick => 0.35,
-            Self::ExtraThick | Self::DashedExtraThick | Self::ChainExtraThick => 0.7,
+            Self::Thick | Self::DashedThick | Self::ChainThick | Self::PhantomThick => 0.35,
+            Self::ExtraThick
+            | Self::DashedExtraThick
+            | Self::ChainExtraThick
+            | Self::PhantomExtraThick => 0.7,
             // ISO 128 draws hidden outlines with the narrow line.
-            Self::Thin | Self::Chain | Self::Hidden => 0.18,
+            Self::Thin | Self::Chain | Self::Hidden | Self::Phantom => 0.18,
             Self::Hatch => 0.13,
             Self::Frame => 0.5,
         }
@@ -84,6 +97,9 @@ impl Pen {
             Self::DashedExtraThick => "dashed_extra_thick",
             Self::ChainThick => "chain_thick",
             Self::ChainExtraThick => "chain_extra_thick",
+            Self::Phantom => "phantom",
+            Self::PhantomThick => "phantom_thick",
+            Self::PhantomExtraThick => "phantom_extra_thick",
         }
     }
 
@@ -93,7 +109,22 @@ impl Pen {
         match self {
             Self::Hidden | Self::DashedThick | Self::DashedExtraThick => &[3.0, 1.0],
             Self::Chain | Self::ChainThick | Self::ChainExtraThick => &[12.0, 1.5, 0.5, 1.5],
+            Self::Phantom | Self::PhantomThick | Self::PhantomExtraThick => {
+                &[12.0, 1.5, 0.5, 1.5, 0.5, 1.5]
+            }
             Self::Thick | Self::ExtraThick | Self::Thin | Self::Hatch | Self::Frame => &[],
+        }
+    }
+
+    /// The name of its line type in a DXF file (mitcad#1546): `CONTINUOUS`,
+    /// `DASHED`, `CHAIN` (long dash dotted) or `PHANTOM` (long dash double
+    /// dotted), each defined by [`Pen::dashes`].
+    pub fn line_type(self) -> &'static str {
+        match self {
+            Self::Hidden | Self::DashedThick | Self::DashedExtraThick => "DASHED",
+            Self::Chain | Self::ChainThick | Self::ChainExtraThick => "CHAIN",
+            Self::Phantom | Self::PhantomThick | Self::PhantomExtraThick => "PHANTOM",
+            Self::Thick | Self::ExtraThick | Self::Thin | Self::Hatch | Self::Frame => "CONTINUOUS",
         }
     }
 
@@ -113,6 +144,9 @@ impl Pen {
             Self::DashedExtraThick => "HIDDEN_EXTRA_THICK",
             Self::ChainThick => "SECTION_LINE_THICK",
             Self::ChainExtraThick => "SECTION_LINE_EXTRA_THICK",
+            Self::Phantom => "PHANTOM",
+            Self::PhantomThick => "PHANTOM_THICK",
+            Self::PhantomExtraThick => "PHANTOM_EXTRA_THICK",
         }
     }
 }

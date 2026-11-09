@@ -54,6 +54,7 @@
 #include "../view/VersionWatermark.hpp"
 #include "DrawingPreferences.hpp"
 #include "DrawingSheetView.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad::drawings {
 namespace {
@@ -353,7 +354,7 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
   // The tools by their groups, each group's buttons over its caption,
   // separated by lines (mitcad#725).
   QFont captionFont = font();
-  captionFont.setPointSizeF(std::max(6.0, captionFont.pointSizeF() * 0.85));
+  captionFont.setPointSizeF(std::max(6.0 * uiTextScale(), captionFont.pointSizeF() * 0.85));
   const auto group = [&captionFont, toolRow](const QString& caption, const QList<QWidget*>& buttons,
                                        QList<QLabel*>& captions) {
     if (!captions.isEmpty()) {
@@ -682,6 +683,7 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
   m_sheetView->setSheet(sheet);
   showCornerDots();
   logTitleBlock(sheet);
+  logLines(sheet);
   // The views the model could not draw, in the status bar when that
   // changes (their boxes show on the sheet).
   QStringList problems;
@@ -2645,7 +2647,6 @@ void DrawingWorkspace::selectionMoved(QPointF delta) {
 }
 
 void DrawingWorkspace::contextMenu(QPointF at, const QPoint& global) {
-  Q_UNUSED(at);
   QMenu menu(this);
   QStringList entries;
   const auto add = [this, &menu, &entries](const QString& text, std::function<void()> act) {
@@ -2704,6 +2705,13 @@ void DrawingWorkspace::contextMenu(QPointF at, const QPoint& global) {
     add(tr("Delete"), later([this, note] { deleteAnnotation(note); }));
   } else if (viewId != 0) {
     const SheetView* shown = m_sheetView->view(viewId);
+    // The projected edge under the pointer (mitcad#1546): its line's width
+    // and pattern in this view, its body's or its component's.
+    const QJsonObject edgePick = edgeAt(viewId, at);
+    if (!edgePick.isEmpty()) {
+      add(tr("Edit Line…"), later([this, viewId, edgePick] { editLine(viewId, edgePick); }));
+      menu.addSeparator();
+    }
     // The views made from it: their tools, from this view.
     add(tr("Projected View"), later([this, viewId] {
           setTool(drawingTool(QStringLiteral("drawing.projected_view")));
@@ -2753,6 +2761,132 @@ void DrawingWorkspace::contextMenu(QPointF at, const QPoint& global) {
   }
   qDebug().noquote() << QStringLiteral("Context menu: %1").arg(entries.join(QStringLiteral(" | ")));
   execMenu(&menu, global);
+}
+
+QJsonObject DrawingWorkspace::edgeAt(int view, QPointF at) {
+  // A job computes the model: no question now, so no entry.
+  if (m_cutSheet || m_host.modelBusy()) {
+    return {};
+  }
+  const QJsonObject query{{QStringLiteral("query"), QStringLiteral("drawing_pick")},
+                          {QStringLiteral("drawing"), m_drawing},
+                          {QStringLiteral("sheet"), m_sheet},
+                          {QStringLiteral("view"), view},
+                          {QStringLiteral("at"), QJsonArray{at.x(), at.y()}},
+                          {QStringLiteral("want"), QStringLiteral("edge")}};
+  try {
+    const QJsonObject pick = m_host.model().queryObject(query).value(QStringLiteral("pick")).toObject();
+    if (!pick.value(QStringLiteral("edge")).toString().isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Drawing edge under the pointer: %1").arg(compact(pick));
+      return pick;
+    }
+  } catch (const std::exception& e) {
+    qDebug().noquote() << QStringLiteral("Drawing edge not found: %1").arg(QString::fromUtf8(e.what()));
+  }
+  return {};
+}
+
+void DrawingWorkspace::editLine(int view, const QJsonObject& pick) {
+  const SheetView* shown = m_sheetView->view(view);
+  const QJsonArray lines = shown != nullptr ? shown->json.value(QStringLiteral("lines")).toArray() : QJsonArray();
+  QDialog dialog(this);
+  dialog.setWindowTitle(tr("Edit Line"));
+  auto* form = new QFormLayout(&dialog);
+  // The edge, its body, or the component that places the body.
+  QList<QPair<QString, QString>> targets{{QStringLiteral("edge"), tr("This Edge")},
+                                         {QStringLiteral("body"), tr("Its Body")}};
+  if (!pick.value(QStringLiteral("occurrence")).toString().isEmpty()) {
+    targets.append(qMakePair(QStringLiteral("component"), tr("Its Component")));
+  }
+  QComboBox* target = comboOf(targets, QStringLiteral("edge"));
+  target->setObjectName(QStringLiteral("drawingLineTarget"));
+  form->addRow(tr("Applies To"), target);
+  QComboBox* widthBox = comboOf(widthChoices(), QStringLiteral("thick"));
+  widthBox->setObjectName(QStringLiteral("drawingLineWidth"));
+  form->addRow(tr("Width"), widthBox);
+  QComboBox* patternBox = comboOf(patternChoices(), QStringLiteral("continuous"));
+  patternBox->setObjectName(QStringLiteral("drawingLinePattern"));
+  form->addRow(tr("Pattern"), patternBox);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+  QPushButton* resetButton = buttons->addButton(tr("Reset to View Style"), QDialogButtonBox::ResetRole);
+  resetButton->setObjectName(QStringLiteral("drawingLineReset"));
+  resetButton->setToolTip(tr("Draws these lines as the view draws its other lines again"));
+  bool resetChosen = false;
+  // The view's choice for what it applies to, else its own visible lines
+  // (wide, continuous); Reset only where it has a choice.
+  const auto fill = [&lines, &pick, target, widthBox, patternBox, resetButton] {
+    const std::optional<QPair<QString, QString>> own = lineStyleOf(lines, pick, target->currentData().toString());
+    const auto choose = [](QComboBox* combo, const QString& value) {
+      const int index = combo->findData(value);
+      if (index >= 0) {
+        combo->setCurrentIndex(index);
+      }
+    };
+    choose(widthBox, own ? own->first : QStringLiteral("thick"));
+    choose(patternBox, own ? own->second : QStringLiteral("continuous"));
+    resetButton->setEnabled(own.has_value());
+  };
+  fill();
+  connect(target, &QComboBox::currentIndexChanged, &dialog, fill);
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  connect(resetButton, &QPushButton::clicked, &dialog, [&dialog, &resetChosen] {
+    resetChosen = true;
+    dialog.accept();
+  });
+  form->addRow(buttons);
+  qDebug().noquote() << QStringLiteral("Drawing line dialog opened: edge %1 of %2 in view %3 (%4 %5)")
+                            .arg(pick.value(QStringLiteral("edge")).toString(),
+                                 pick.value(QStringLiteral("body")).toString())
+                            .arg(view)
+                            .arg(widthBox->currentData().toString(), patternBox->currentData().toString());
+  if (execDialog(&dialog) != QDialog::Accepted) {
+    return;
+  }
+  const QJsonObject command =
+      lineStyleEdit(m_drawing, view, pick, target->currentData().toString(), widthBox->currentData().toString(),
+                    patternBox->currentData().toString(), resetChosen);
+  if (!command.isEmpty()) {
+    run(command);
+  }
+}
+
+void DrawingWorkspace::logLines(const QJsonObject& sheet) {
+  QStringList views;
+  for (const QJsonValue& value : sheet.value(QStringLiteral("views")).toArray()) {
+    const QJsonObject view = value.toObject();
+    const QJsonArray lines = view.value(QStringLiteral("lines")).toArray();
+    if (!lines.isEmpty()) {
+      views << QStringLiteral("view %1: %2").arg(view.value(QStringLiteral("id")).toInt()).arg(lineStylesText(lines));
+    }
+  }
+  const QString text =
+      QStringLiteral("Drawing lines: %1").arg(views.isEmpty() ? QStringLiteral("none") : views.join(QStringLiteral(" | ")));
+  if (text != m_loggedLines) {
+    m_loggedLines = text;
+    qDebug().noquote() << text;
+  }
+  // The pens the views' lines are drawn with.
+  QStringList pens;
+  for (const QJsonValue& value : sheet.value(QStringLiteral("groups")).toArray()) {
+    const QJsonObject group = value.toObject();
+    if (group.value(QStringLiteral("class")).toString() != QStringLiteral("view")) {
+      continue;
+    }
+    for (const QJsonValue& item : group.value(QStringLiteral("items")).toArray()) {
+      const QString pen = item.toObject().value(QStringLiteral("pen")).toString();
+      if (!pen.isEmpty() && !pens.contains(pen)) {
+        pens << pen;
+      }
+    }
+  }
+  pens.sort();
+  const QString used =
+      QStringLiteral("Drawing view pens: %1").arg(pens.isEmpty() ? QStringLiteral("none") : pens.join(QStringLiteral(", ")));
+  if (used != m_loggedPens) {
+    m_loggedPens = used;
+    qDebug().noquote() << used;
+  }
 }
 
 bool DrawingWorkspace::run(const QJsonObject& command, QJsonObject* result) {

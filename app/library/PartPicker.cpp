@@ -56,6 +56,7 @@
 #include "PartFavourites.hpp"
 #include "PartOptions.hpp"
 #include "PartStar.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -789,7 +790,7 @@ PartGrid::PartGrid(QWidget* parent) : QWidget(parent), m_group(kAll) {
   m_groups->setRootIsDecorated(true);
   panel::setCompactIndentation(m_groups, panel::Indent::Tree);
   m_groups->setUniformRowHeights(true);
-  m_groups->setIconSize(QSize(16, 16));
+  m_groups->setIconSize(uiIconSize(16, 16));
   m_groups->setMinimumWidth(160);
   m_groups->setMaximumWidth(240);
   m_groups->setToolTip(tr("A group lists its subgroups' components; its star stars them all and puts them first (%1)")

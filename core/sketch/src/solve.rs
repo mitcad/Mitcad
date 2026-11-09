@@ -760,6 +760,22 @@ impl Built {
                     value,
                 }
             }
+            D::TangentCircleDistance { a, b, side } => S::TangentCircleDistance {
+                a: c(*a)?,
+                b: c(*b)?,
+                value,
+                inside: side.inside(),
+            },
+            D::TangentPointDistance {
+                circle,
+                point,
+                side,
+            } => S::TangentPointDistance {
+                circle: c(*circle)?,
+                point: p(*point)?,
+                value,
+                inside: side.inside(),
+            },
         })
     }
 
@@ -1019,6 +1035,10 @@ pub fn measure(kind: &DimensionKind, solved: &Solved) -> Option<f64> {
         Curve2::Circle { radius, .. } | Curve2::Arc { radius, .. } => Some(*radius),
         _ => None,
     };
+    let centre = |u: &EntityUid| match solved.curves.get(u)? {
+        Curve2::Circle { center, .. } | Curve2::Arc { center, .. } => Some(*center),
+        _ => None,
+    };
     Some(match kind {
         D::Distance { a, b } => dist(p(a)?, p(b)?),
         D::HorizontalDistance { a, b, signed } => signed_or_abs(p(b)?[0] - p(a)?[0], *signed),
@@ -1073,6 +1093,23 @@ pub fn measure(kind: &DimensionKind, solved: &Solved) -> Option<f64> {
         }
         // Measured on its constraint: see `measure_in`.
         D::Spacing { .. } => return None,
+        D::TangentCircleDistance { a, b, side } => {
+            let gap = dist(centre(a)?, centre(b)?);
+            let (ra, rb) = (radius(a)?, radius(b)?);
+            if side.inside() {
+                (ra - rb).abs() - gap
+            } else {
+                gap - ra - rb
+            }
+        }
+        D::TangentPointDistance {
+            circle,
+            point,
+            side,
+        } => {
+            let gap = dist(centre(circle)?, p(point)?) - radius(circle)?;
+            if side.inside() { -gap } else { gap }
+        }
     })
 }
 

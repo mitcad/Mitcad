@@ -51,6 +51,7 @@
 #include "../print/PrintLibrary.hpp"
 #include "../platform/MacDialogs.hpp"
 #include "DocumentHost.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -67,7 +68,8 @@ constexpr double kDegree = 3.14159265358979323846 / 180.0;
 // The largest image the design file embeds (core/model's
 // MAX_EMBEDDED_IMAGE).
 constexpr qint64 kMaxEmbedded = qint64(32) << 20;
-constexpr int kIconSize = 22;
+// The library's swatches at Icon size (mitcad#1556).
+int swatchIconSize() { return uiIconSize(22); }
 // The size the dialog opens at where the screen has room for it.
 constexpr QSize kPreferredSize(820, 780);
 
@@ -132,7 +134,7 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
 
   m_list = new QListWidget;
   m_list->setObjectName(QStringLiteral("appearanceLibrary"));
-  m_list->setIconSize(QSize(kIconSize, kIconSize));
+  m_list->setIconSize(QSize(swatchIconSize(), swatchIconSize()));
   m_list->setSelectionMode(QAbstractItemView::SingleSelection);
   m_list->setMinimumWidth(300);
   m_list->installEventFilter(this);
@@ -888,7 +890,8 @@ void AppearanceDialog::refresh() {
     QStringList ids;
     for (const Appearance* a : group.appearances) {
       auto* item =
-          new QListWidgetItem(QIcon(QPixmap::fromImage(appearanceSwatch(*a, kIconSize, ratio))), a->name, m_list);
+          new QListWidgetItem(QIcon(QPixmap::fromImage(appearanceSwatch(*a, swatchIconSize(), ratio))), a->name,
+                              m_list);
       item->setData(kIdRole, a->id);
       item->setData(kGroupRole, group.key);
       item->setData(NativeControlIdentifierRole, QStringLiteral("appearance.") + a->id);

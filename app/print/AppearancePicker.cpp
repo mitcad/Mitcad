@@ -29,6 +29,7 @@
 #include "../framework/Theme.hpp"
 #include "../platform/NativePicker.hpp"
 #include "PrintLibrary.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -36,7 +37,8 @@ namespace {
 constexpr int kIdRole = Qt::UserRole; // an entry's appearance id; empty on a heading
 const char* kNoneId = "__none";
 const char* kEditId = "__edit_appearances";
-constexpr int kListIcon = 22;
+// The list's swatches at Icon size (mitcad#1556).
+int listIconSize() { return uiIconSize(22); }
 
 qreal screenRatio() {
   return qGuiApp != nullptr ? qGuiApp->devicePixelRatio() : 1.0;
@@ -106,7 +108,7 @@ AppearancePopover::AppearancePopover(const QString& logName, QWidget* parent)
   layout->addWidget(m_search);
   m_list = new QListWidget;
   m_list->setObjectName(QStringLiteral("appearancePickerList"));
-  m_list->setIconSize(QSize(kListIcon, kListIcon));
+  m_list->setIconSize(QSize(listIconSize(), listIconSize()));
   m_list->setUniformItemSizes(true);
   m_list->installEventFilter(this);
   layout->addWidget(m_list, 1);
@@ -240,7 +242,7 @@ void AppearancePopover::fill(const QString& current, const QStringList& marked, 
   const auto entry = [this, &current, &marked, &selected](const Appearance& a) {
     const QString key = a.id + QLatin1Char('|') + a.baseColor.name() + QString::number(a.transmission);
     if (!m_icons.contains(key)) {
-      m_icons.insert(key, appearanceIcon(a, kListIcon));
+      m_icons.insert(key, appearanceIcon(a, listIconSize()));
     }
     QString label = a.name;
     if (marked.contains(a.id)) {

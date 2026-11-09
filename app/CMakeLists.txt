@@ -1535,6 +1535,11 @@ if(BUILD_TESTING)
   # On the sketch model's data: plain Qt Core.
   target_sources(test_app PRIVATE tests/sketch_text_picks.cpp sketch/SketchTextPicks.cpp)
 endif()
+# Chains of sketch curves: Offset's Chain Selection and a double-click on a
+# curve, its closed loop or open chain (mitcad#1541).
+target_sources(mitcad PRIVATE
+  sketch/SketchChains.cpp
+  sketch/SketchChains.hpp)
 # Mount frames of any part and Place Part (mitcad#525, app/COMMANDS.md
 # "Component libraries"): a library part placed by its frame on a face, a
 # hole or a grid; the frames a manifest lists.
@@ -2833,4 +2838,16 @@ if(BUILD_TESTING)
   # The kept choice, the factor over the user's own QT_SCALE_FACTOR and
   # what a started process inherits: plain Qt Core.
   target_sources(test_app PRIVATE tests/interface_size.cpp framework/InterfaceSize.cpp framework/InterfaceSize.hpp)
+endif()
+
+# Preferences › Display › Text size, Icon size and Font (mitcad#1556, GitHub
+# mitcad/Mitcad#207, app/COMMANDS.md "Text size, Icon size and Font"): the
+# application font at 80 to 200 % and in a chosen family, the fixed icon
+# sizes through uiIconSize, at the next start; the test step
+# expect-text-icon-size (TestDriverChrome.cpp).
+target_sources(mitcad PRIVATE framework/UiSizes.cpp framework/UiSizes.hpp)
+if(BUILD_TESTING)
+  # The kept sizes and family, their fallbacks, uiIconSize and the
+  # application font they give.
+  target_sources(test_app PRIVATE tests/ui_sizes.cpp framework/UiSizes.cpp framework/UiSizes.hpp)
 endif()

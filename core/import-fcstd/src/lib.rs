@@ -21,7 +21,8 @@
 //!   object gets one when it is not a part), an array → one per element;
 //!   links to other files read those files; a scaled link → a copy of the
 //!   body. Assembly parts are links; a grounded joint grounds its part's
-//!   occurrence; other joints are left out.
+//!   occurrence; Fixed, Revolute, Cylindrical, Slider and Ball joints
+//!   become MitCad joints after the history ([`joints`], mitcad#1557).
 //! - Visibility (hidden bodies and occurrences) and colours: FreeCAD's body
 //!   and face colours become document appearances on the bodies and faces,
 //!   also of the bodies the history makes ([`appearances`], mitcad#793).
@@ -59,6 +60,9 @@ mod notes;
 // FreeCAD's colours as document appearances (mitcad#793).
 mod appearances;
 mod binders;
+// Base features and clones of Bodies, assembly joints (mitcad#1557).
+mod bases;
+mod joints;
 #[cfg(test)]
 mod tests;
 
@@ -255,9 +259,17 @@ impl Source {
                 continue;
             }
             for (property, link) in o.references() {
+                // A clone's base (a FeatureBase of another Body) stays a
+                // body of its own, as FreeCAD shows it (mitcad#1557).
+                let clone_of_body = o.type_name == "PartDesign::FeatureBase"
+                    && property == "BaseFeature"
+                    && doc
+                        .object(&link.object)
+                        .is_some_and(|b| b.type_name == "PartDesign::Body");
                 if link.file.is_none()
                     && link.object != o.name
                     && !NOT_CONSUMING.contains(&property)
+                    && !clone_of_body
                 {
                     consumer
                         .entry(link.object.clone())
@@ -347,7 +359,9 @@ impl Source {
         }
         if o.property("ObjectToGround").is_some() || o.property("JointType").is_some() {
             return Role::Skipped(
-                "an assembly joint: MitCad has none; the parts keep their placements".to_owned(),
+                "an assembly joint (with --bodies-only, or not reached): the parts keep their \
+                 placements"
+                    .to_owned(),
             );
         }
         if is_group(o) {
@@ -569,6 +583,8 @@ impl<K: Kernel> Importer<'_, '_, K> {
         if !self.bodies_only {
             self.import_parameters();
             self.import_history();
+            // Assembly joints between the occurrences (mitcad#1557).
+            self.import_joints();
         }
         // FreeCAD's colours on the bodies as the history leaves them
         // (mitcad#793).
@@ -1165,12 +1181,17 @@ impl<K: Kernel> Importer<'_, '_, K> {
             if occurrences.is_empty() {
                 self.warn(format!("{joint}: nothing placed to ground"));
             }
-            for o in occurrences {
+            for &o in &occurrences {
                 if let Err(e) = self.doc.set_occurrence_grounded(o, true) {
                     self.warn(format!("{joint}: {e}"));
                 }
             }
             if let Some(entry) = self.roles.get_mut(&joint) {
+                // Carried as the occurrence's Ground (mitcad#1557: it was
+                // counted as skipped).
+                if !occurrences.is_empty() {
+                    entry.0 = ObjectOutcome::Included;
+                }
                 entry.1 = Some(format!(
                     "a grounded joint: {} is grounded",
                     self.sources[0].label(&key.name)

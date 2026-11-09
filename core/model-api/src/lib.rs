@@ -145,6 +145,12 @@ mod print_plates;
 mod auto_fix;
 // The curves of Intersection Curves as polylines (mitcad#1405).
 mod feature_curves;
+// The closed loop of a sketch curve, which a double-click selects
+// (mitcad#1541).
+mod sketch_loop;
+// Widths and patterns of projected edges, bodies and occurrences in
+// drawing views (mitcad#1546).
+mod drawing_lines;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -242,6 +248,8 @@ pub mod prelude {
     // Print plates (mitcad#1050).
     pub(crate) use super::print_plates::PrintPlatesCrateOps;
     pub(crate) use super::print_plates::PrintPlatesOps;
+    // Line styles in drawing views (mitcad#1546).
+    pub(crate) use super::drawing_lines::DrawingLinesOps;
 }
 
 use std::fmt;
@@ -1065,6 +1073,8 @@ named_enum! {
         // The curves of Intersection Curves as polylines, for the view to draw
         // (mitcad#1405, `feature_curves.rs`).
         "feature_curves" => FeatureCurves,
+        // The closed loop of a sketch curve (mitcad#1541, `sketch_loop.rs`).
+        "sketch_loop" => SketchLoop(sketch_loop::SketchLoopQuery),
     }
 }
 
@@ -1642,6 +1652,8 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             // Linked designs' files that changed (mitcad#1416).
             Query::Links { base } => components::links_json(self, base.as_deref()),
             Query::FeatureCurves => feature_curves::feature_curves_json(self),
+            // The closed loop of a sketch curve (mitcad#1541).
+            Query::SketchLoop(query) => sketch_loop::sketch_loop_json(self, &query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);

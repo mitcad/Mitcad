@@ -192,6 +192,8 @@ target_sources(mitcad_geometry PRIVATE
   src/emboss.cpp
   src/emboss_projection.cpp
   src/emboss_projection.hpp
+  src/emboss_taper.cpp
+  src/emboss_taper.hpp
   include/mitcad/geometry/emboss.hpp)
 # Boundary Fill: the cells tool bodies enclose (mitcad#457).
 target_sources(mitcad_geometry PRIVATE
@@ -1131,4 +1133,15 @@ if(BUILD_TESTING)
   target_link_libraries(test_fillet_rib_full_round PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.fillet_rib_full_round COMMAND test_fillet_rib_full_round)
   set_tests_properties(geometry.fillet_rib_full_round PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+  # A pipe's section stays square to its path (mitcad#1555): an 8 mm circle
+  # along the intersection curves of a sine wave with a plainly bent arc and
+  # with one bending a fraction of a millimetre: cuts across the side square
+  # to the path within 0.01 degrees at 20 points, the volume the circle's
+  # area times the path's length within 0.1 %.
+  add_executable(test_pipe_square_section tests/test_pipe_square_section.cpp)
+  target_link_libraries(test_pipe_square_section PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.pipe_square_section COMMAND test_pipe_square_section)
 endif()

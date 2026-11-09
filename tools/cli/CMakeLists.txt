@@ -1200,6 +1200,13 @@ if(BUILD_TESTING)
       COMMAND mitcad-cli run "${scripts}/${sheet_case}_reopen.json" --open "${sheet_file}")
     set_tests_properties(cli.${sheet_case}_reopen PROPERTIES FIXTURES_REQUIRED cli_${sheet_case})
   endforeach()
+  # Construction planes, axes and points on the edges and vertices of sheet
+  # bodies, whose straight edges are B-spline curves (mitcad#1537).
+  add_test(NAME cli.sheet_datums COMMAND mitcad-cli run "${scripts}/sheet_datums.json")
+  # Flat faces of sheet bodies (planar B-spline walls among them) as the
+  # planes of Mirror, Split Body, Align, sketches and construction planes
+  # (mitcad#1554).
+  add_test(NAME cli.sheet_face_planes COMMAND mitcad-cli run "${scripts}/sheet_face_planes.json")
 endif()
 
 # Sheet Unfold, Refold and Flat Pattern (mitcad#208): actual L, U and Z
@@ -1737,4 +1744,16 @@ if(BUILD_TESTING)
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
   endforeach()
+endif()
+
+# Emboss's Taper Angle (mitcad#1547): a 10 x 10 square wrapped 45 deep onto
+# a rod of diameter 50, untapered, widened 10 degrees and narrowed 5, its
+# top's widths and volumes; -10 degrees collapses it; on a block's top 5
+# degrees as an extrusion with that taper.
+if(BUILD_TESTING)
+  add_test(NAME cli.emboss_taper COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/emboss_taper.json")
+  if(WIN32)
+    set_property(TEST cli.emboss_taper APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
 endif()

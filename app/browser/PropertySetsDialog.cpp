@@ -58,6 +58,7 @@
 #include "../print/ProfilePickerRows.hpp"
 #include "../print/SettingField.hpp"
 #include "DocumentHost.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -964,7 +965,7 @@ void PropertySetsDialog::createNativePrintCells() {
       if (!icon.isNull()) {
         auto* swatch = new QLabel(cell);
         swatch->setObjectName(id + QStringLiteral(".swatch"));
-        swatch->setPixmap(icon.pixmap(QSize(18, 12)));
+        swatch->setPixmap(icon.pixmap(uiIconSize(18, 12)));
         layout->addWidget(swatch);
       }
       auto* caption = new QLabel(row->text(kValue), cell);

@@ -15,6 +15,7 @@
 
 #include "Command.hpp"
 #include "Icons.hpp"
+#include "UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -169,7 +170,7 @@ SelectionCreatePanel::SelectionCreatePanel(QWidget* parent) : QGroupBox(tr("Crea
     auto* button = new QToolButton(this);
     button->setObjectName(QStringLiteral("selectionCreate%1").arg(i));
     button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-    button->setIconSize(QSize(24, 24));
+    button->setIconSize(uiIconSize(24, 24));
     button->setAutoRaise(true);
     button->setFocusPolicy(Qt::NoFocus);
     // The four share the row's width: a long name does not widen the card.

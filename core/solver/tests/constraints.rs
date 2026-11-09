@@ -1332,3 +1332,124 @@ fn spline_tangent_to_itself_where_its_ends_meet() {
     let open = s.add_fitted_spline(&f, [SplineEnd::Natural; 2]).unwrap();
     assert!(s.add_constraint(Tangent(open, open)).is_err());
 }
+
+#[test]
+fn tangent_circle_distance_is_the_gap_between_two_circles() {
+    // mitcad#1540: two circles of fixed radii, the first fixed; the gap
+    // between their nearest sides moves the second along the line of the
+    // centres.
+    let mut s = System::new();
+    let c1 = s.add_point(0.0, 0.0);
+    s.add_constraint(FixPoint(c1)).unwrap();
+    let a = s.add_circle(c1, 5.0).unwrap();
+    let c2 = s.add_point(20.0, 0.0);
+    let b = s.add_circle(c2, 3.0).unwrap();
+    s.add_constraint(Radius {
+        entity: a,
+        value: 5.0,
+    })
+    .unwrap();
+    s.add_constraint(Radius {
+        entity: b,
+        value: 3.0,
+    })
+    .unwrap();
+    let gap = s
+        .add_constraint(TangentCircleDistance {
+            a,
+            b,
+            value: 12.0,
+            inside: false,
+        })
+        .unwrap();
+    assert_near(
+        s.measure(gap).unwrap(),
+        12.0,
+        "measured as drawn: 20 - 5 - 3",
+    );
+    s.set_dimension_value(gap, 7.5).unwrap();
+    solve_ok(&mut s);
+    assert_near(
+        dist(pt(&s, c1), pt(&s, c2)),
+        15.5,
+        "centres 5 + 7.5 + 3 apart",
+    );
+    assert_near(s.measure(gap).unwrap(), 7.5, "the gap");
+    // One inside the other: the gap from the inner circle's far side to
+    // the outer circle, whichever is given first.
+    for outer_first in [true, false] {
+        let mut s = System::new();
+        let c1 = s.add_point(0.0, 0.0);
+        s.add_constraint(FixPoint(c1)).unwrap();
+        let outer = s.add_circle(c1, 20.0).unwrap();
+        let c2 = s.add_point(4.0, 0.0);
+        let inner = s.add_circle(c2, 5.0).unwrap();
+        for (e, r) in [(outer, 20.0), (inner, 5.0)] {
+            s.add_constraint(Radius {
+                entity: e,
+                value: r,
+            })
+            .unwrap();
+        }
+        let (a, b) = if outer_first {
+            (outer, inner)
+        } else {
+            (inner, outer)
+        };
+        let gap = s
+            .add_constraint(TangentCircleDistance {
+                a,
+                b,
+                value: 11.0,
+                inside: true,
+            })
+            .unwrap();
+        assert_near(s.measure(gap).unwrap(), 11.0, "20 - 5 - 4");
+        s.set_dimension_value(gap, 2.0).unwrap();
+        solve_ok(&mut s);
+        assert_near(dist(pt(&s, c1), pt(&s, c2)), 13.0, "20 - 5 - 2");
+        assert_near(s.measure(gap).unwrap(), 2.0, "the gap inside");
+    }
+}
+
+#[test]
+fn tangent_point_distance_is_the_gap_between_a_circle_and_a_point() {
+    // mitcad#1540: a point outside a fixed circle, then one inside it.
+    let mut s = System::new();
+    let c = s.add_point(0.0, 0.0);
+    s.add_constraint(FixPoint(c)).unwrap();
+    let circle = s.add_circle(c, 5.0).unwrap();
+    s.add_constraint(Radius {
+        entity: circle,
+        value: 5.0,
+    })
+    .unwrap();
+    let p = s.add_point(0.0, 9.0);
+    let gap = s
+        .add_constraint(TangentPointDistance {
+            circle,
+            point: p,
+            value: 4.0,
+            inside: false,
+        })
+        .unwrap();
+    assert_near(s.measure(gap).unwrap(), 4.0, "9 - 5");
+    s.set_dimension_value(gap, 6.25).unwrap();
+    solve_ok(&mut s);
+    assert_near(dist(pt(&s, c), pt(&s, p)), 11.25, "5 + 6.25");
+    let q = s.add_point(1.0, 0.0);
+    let inside = s
+        .add_constraint(TangentPointDistance {
+            circle,
+            point: q,
+            value: 4.0,
+            inside: true,
+        })
+        .unwrap();
+    assert_near(s.measure(inside).unwrap(), 4.0, "5 - 1");
+    s.set_dimension_value(inside, 1.5).unwrap();
+    solve_ok(&mut s);
+    assert_near(dist(pt(&s, c), pt(&s, q)), 3.5, "5 - 1.5");
+    // Not negative.
+    assert!(s.set_dimension_value(inside, -1.0).is_err());
+}

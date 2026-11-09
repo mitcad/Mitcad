@@ -3,6 +3,7 @@
 // analytic: a region of area A in the sketch, wrapped onto the cylinder of
 // radius r and grown radially to R, is A |R^2 - r^2| / (2 r). Profiles
 // projected onto a sphere, a B-spline face and a plane (mitcad#1091).
+// Tapers on a cylinder, a cone, a plane and a sphere (mitcad#1547).
 
 #include <algorithm>
 #include <cmath>
@@ -26,6 +27,7 @@
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepTools.hxx>
 #include <BRepTopAdaptor_FClass2d.hxx>
+#include <GCPnts_AbscissaPoint.hxx>
 #include <GProp_GProps.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <Geom_BSplineSurface.hxx>
@@ -697,6 +699,332 @@ void test_projection_refusals() {
       "no face F1:side9"));
 }
 
+
+// Tapers (mitcad#1547). The 10 x 10 square about the sketch's origin on a
+// plane tangent to a cylinder of radius 25 about Z at +Y, raised 45 to the
+// radius 70: at 0 its top is 10 * 70 / 25 = 28 wide around the axis and 10
+// along it; a taper t moves the top's edges d = 45 tan(t) outwards within
+// the top cylinder, so the top is 28 + 2 d by 10 + 2 d (positive widens,
+// as an extrusion's taper).
+EmbossWrapSpec tapered_square(double taper) {
+  EmbossWrapSpec spec;
+  spec.feature = "F5";
+  spec.frame.origin = gp_Pnt(0.0, 25.0, 0.0);
+  spec.frame.x_axis = gp_Dir(-1.0, 0.0, 0.0);
+  spec.frame.y_axis = gp_Dir(0.0, 0.0, 1.0);
+  spec.regions = {rectangle(-5.0, -5.0, 10.0, 10.0)};
+  spec.axis = gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0));
+  spec.radius = 25.0;
+  spec.to_radius = 70.0;
+  spec.taper = taper;
+  return spec;
+}
+
+// The volume between a patch of the cylinder of radius r (half angle a0
+// about the axis, half height h0) and one of the cylinder R > r (a1, h1),
+// joined by the planes through the axis-parallel edges and ruled walls
+// between the arcs by the arcs' angles, by the divergence theorem (V = 1/3
+// of the flux of the position through the faces). A ruled face S = (1 - v)
+// B(s) + v T(s) contributes 1/6 of the integral of det[B, B', T] +
+// det[B, T', T] over s.
+double patch_volume(double r, double a0, double h0, double R, double a1, double h1) {
+  const double top = R * (2.0 * a1 * R) * (2.0 * h1) / 3.0;
+  const double foot = -r * (2.0 * a0 * r) * (2.0 * h0) / 3.0;
+  const double planes = -2.0 / 3.0 * r * R * std::sin(a1 - a0) * (h0 + h1);
+  // Gauss-Legendre on 64 pieces of s in [-1, 1].
+  static constexpr double kNodes[4] = {-0.8611363115940526, -0.3399810435848563, 0.3399810435848563,
+                                       0.8611363115940526};
+  static constexpr double kWeights[4] = {0.3478548451374538, 0.6521451548625461, 0.6521451548625461,
+                                         0.3478548451374538};
+  const auto det = [](const gp_Vec& a, const gp_Vec& b, const gp_Vec& c) { return a.Dot(b.Crossed(c)); };
+  double ruled = 0.0;
+  constexpr int kPieces = 64;
+  for (int i = 0; i < kPieces; ++i) {
+    for (int k = 0; k < 4; ++k) {
+      const double s = -1.0 + 2.0 * (i + (kNodes[k] + 1.0) / 2.0) / kPieces;
+      const gp_Vec b(r * std::cos(a0 * s), r * std::sin(a0 * s), h0);
+      const gp_Vec db(-r * a0 * std::sin(a0 * s), r * a0 * std::cos(a0 * s), 0.0);
+      const gp_Vec t(R * std::cos(a1 * s), R * std::sin(a1 * s), h1);
+      const gp_Vec dt(-R * a1 * std::sin(a1 * s), R * a1 * std::cos(a1 * s), 0.0);
+      ruled += kWeights[k] * (det(b, db, t) + det(b, dt, t)) * (2.0 / kPieces) / 2.0;
+    }
+  }
+  // Two such walls, at the top and the bottom of the square alike.
+  return top + foot + planes + 2.0 * std::abs(ruled) / 6.0;
+}
+
+// The volume of the wrapped 10 x 10 square tapered as above (the foot's
+// half width w and half height h on the cylinder r, the top on R, its edges
+// moved by `shift`).
+double tapered_volume(double r, double R, double w, double h, double shift) {
+  const double a = w / r;
+  const double moved = (w * R / r + shift) / R;
+  return r < R ? patch_volume(r, a, h, R, moved, h + shift) : patch_volume(R, moved, h + shift, r, a, h);
+}
+
+void test_a_tapered_square_on_a_cylinder() {
+  // -10 degrees collapses the square along the axis (10 - 2 * 45 tan(10
+  // deg) < 0): test_taper_refusals; -5 narrows it.
+  for (const double degrees : {0.0, 10.0, -5.0}) {
+    const double taper = degrees * test::kPi / 180.0;
+    const double shift = 45.0 * std::tan(taper);
+    const ShapePtr tool = wrapped_emboss(tapered_square(taper));
+    CHECK(BRepCheck_Analyzer(tool->occt()).IsValid());
+    CHECK(solids(tool->occt()) == 1);
+    CHECK(tool->find_faces("F5:start(r1)").size() == 1);
+    for (int i = 1; i <= 4; ++i) {
+      CHECK(tool->find_faces("F5:side(r1c" + std::to_string(i) + ")").size() == 1);
+    }
+    // The top's edges: two arcs around the axis, two lines along it.
+    double around = 0.0;
+    double along = 0.0;
+    double arc_length = 0.0;
+    double line_length = 0.0;
+    int arcs = 0;
+    int lines = 0;
+    for (TopExp_Explorer e(face_named(*tool, "F5:end(r1)"), TopAbs_EDGE); e.More(); e.Next()) {
+      const BRepAdaptor_Curve curve(TopoDS::Edge(e.Current()));
+      const gp_Pnt a = curve.Value(curve.FirstParameter());
+      const gp_Pnt b = curve.Value(curve.LastParameter());
+      const double length = GCPnts_AbscissaPoint::Length(curve);
+      if (std::abs(a.Z() - b.Z()) < 1e-9) {
+        around = std::max(around, std::abs(length - (28.0 + 2.0 * shift)));
+        arc_length = length;
+        ++arcs;
+      } else {
+        along = std::max(along, std::abs(length - (10.0 + 2.0 * shift)));
+        line_length = length;
+        ++lines;
+      }
+    }
+    std::printf("taper %+.0f deg: top %.9f around (%.9f), %.9f along (%.9f); volume %.9f (%.9f)\n", degrees,
+                arc_length, 28.0 + 2.0 * shift, line_length, 10.0 + 2.0 * shift, volume_of(tool->occt()),
+                tapered_volume(25.0, 70.0, 5.0, 5.0, shift));
+    CHECK(arcs == 2 && lines == 2);
+    CHECK(around < 1e-6);
+    CHECK(along < 1e-6);
+    // At 0 the volume is the untapered one, A (R^2 - r^2) / (2 r).
+    if (degrees == 0.0) {
+      CHECK_NEAR(volume_of(tool->occt()), wrapped_volume(100.0, 25.0, 70.0));
+    }
+    CHECK_NEAR(volume_of(tool->occt()), tapered_volume(25.0, 70.0, 5.0, 5.0, shift));
+    // Sunk 20 into the rod (to the radius 5): the floor 2 + 2 d' by
+    // 10 + 2 d' (d' = 20 tan(t)), a positive taper widening it too; -10
+    // degrees closes it (2 - 2 * 3.5).
+    if (degrees < 0.0) {
+      EmbossWrapSpec closed = tapered_square(taper);
+      closed.to_radius = 5.0;
+      CHECK(test::throws_with([&] { wrapped_emboss(closed); }, "the taper collapses the profile r1"));
+      continue;
+    }
+    EmbossWrapSpec sunk = tapered_square(taper);
+    sunk.to_radius = 5.0;
+    const ShapePtr pocket = wrapped_emboss(sunk);
+    CHECK(BRepCheck_Analyzer(pocket->occt()).IsValid());
+    const double floor_shift = 20.0 * std::tan(taper);
+    CHECK_NEAR(volume_of(pocket->occt()), tapered_volume(25.0, 5.0, 5.0, 5.0, floor_shift));
+  }
+}
+
+// A taper on a cone (half angle 30 degrees): the top's edges lie on the
+// top cone, a widening taper adds volume and a narrowing one takes it.
+void test_a_tapered_rectangle_on_a_cone() {
+  const double angle = test::kPi / 6.0;
+  const double r0 = 20.0 * std::tan(angle);
+  EmbossWrapSpec spec;
+  spec.feature = "F6";
+  spec.frame.origin = gp_Pnt(0.0, r0, 20.0);
+  spec.frame.x_axis = gp_Dir(-1.0, 0.0, 0.0);
+  spec.frame.y_axis = gp_Dir(0.0, 0.0, 1.0);
+  spec.regions = {rectangle(-3.0, -2.0, 6.0, 4.0)};
+  spec.axis = gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0));
+  spec.radius = r0;
+  spec.to_radius = r0 + 2.0;
+  spec.half_angle = angle;
+  const double plain = volume_of(wrapped_emboss(spec)->occt());
+  for (const double degrees : {15.0, -15.0}) {
+    spec.taper = degrees * test::kPi / 180.0;
+    const ShapePtr tool = wrapped_emboss(spec);
+    CHECK(BRepCheck_Analyzer(tool->occt()).IsValid());
+    CHECK(solids(tool->occt()) == 1);
+    const double volume = volume_of(tool->occt());
+    CHECK(degrees > 0.0 ? volume > plain * 1.05 : volume < plain * 0.95);
+    double worst = 0.0;
+    for (TopExp_Explorer e(face_named(*tool, "F6:end(r1)"), TopAbs_EDGE); e.More(); e.Next()) {
+      const BRepAdaptor_Curve curve(TopoDS::Edge(e.Current()));
+      for (int i = 0; i <= 64; ++i) {
+        const gp_Pnt p = curve.Value(curve.FirstParameter() + (curve.LastParameter() - curve.FirstParameter()) * i / 64.0);
+        const double distance = std::hypot(p.X(), p.Y()) * std::cos(angle) - p.Z() * std::sin(angle);
+        worst = std::max(worst, std::abs(distance - 2.0));
+      }
+    }
+    // The top's area: the rectangle stretched around the axis by the top
+    // cone's larger distance from its apex (k = (rho0 + 2 cot(30 deg)) /
+    // rho0, rho0 = 2 r0) and moved by m = 2 tan(t) on the development:
+    // near (6 k + 2 m)(4 + 2 m).
+    const double m = 2.0 * std::tan(spec.taper);
+    const double k = (2.0 * r0 + 2.0 / std::tan(angle)) / (2.0 * r0);
+    const double area = area_of(face_named(*tool, "F6:end(r1)"));
+    std::printf("on the cone %+.0f deg: volume %.6f (untapered %.6f), top %.6f (near %.6f), %.3g off the top cone\n",
+                degrees, volume, plain, area, (6.0 * k + 2.0 * m) * (4.0 + 2.0 * m), worst);
+    CHECK(worst < 1e-6);
+    CHECK(std::abs(area - (6.0 * k + 2.0 * m) * (4.0 + 2.0 * m)) < 0.03 * area);
+  }
+}
+
+// Curves and letters tapered on a cylinder of radius 15 raised to 16: a
+// circle (its top a circle of the moved radius on the development), a
+// rectangle with a hole, and the letters "ABC": valid solids, more volume
+// widened and less narrowed, named as without the taper.
+void test_curves_and_letters_tapered() {
+  std::vector<std::pair<double, double>> extents;
+  std::vector<Region> regions = text_regions("ABC", 10.0, -10.0, 5.0, extents);
+  Region holed = rectangle(-36.0, 5.0, 6.0, 6.0, "r2");
+  Region hole = rectangle(-34.0, 7.0, 2.0, 2.0, "h");
+  holed.loops.push_back(hole.loops.front());
+  Region circle = circle_region(34.0, 8.0, 2.0);
+  circle.name = "r3";
+  circle.loops.front().segments.front().name = "c9";
+  regions.push_back(holed);
+  regions.push_back(circle);
+  EmbossWrapSpec spec;
+  spec.feature = "F5";
+  spec.frame.origin = gp_Pnt(0.0, 15.0, 0.0);
+  spec.frame.x_axis = gp_Dir(-1.0, 0.0, 0.0);
+  spec.frame.y_axis = gp_Dir(0.0, 0.0, 1.0);
+  spec.regions = regions;
+  spec.axis = gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0));
+  spec.radius = 15.0;
+  spec.to_radius = 16.0;
+  const double plain = volume_of(wrapped_emboss(spec)->occt());
+  // Short edges of the letters' outlines drop out where the moved edges'
+  // corners pass each other (the B's at 5 degrees outwards).
+  for (const double degrees : {5.0, -5.0, 20.0, -10.0}) {
+    spec.taper = degrees * test::kPi / 180.0;
+    const ShapePtr tool = wrapped_emboss(spec);
+    CHECK(BRepCheck_Analyzer(tool->occt()).IsValid());
+    CHECK(solids(tool->occt()) == 5);
+    const double volume = volume_of(tool->occt());
+    std::printf("curves and letters %+.0f deg: volume %.6f (untapered %.6f)\n", degrees, volume, plain);
+    CHECK(degrees > 0.0 ? volume > plain : volume < plain);
+    for (const char* name : {"F5:end(r_A)", "F5:end(r_B)", "F5:end(r_C)", "F5:end(r2)", "F5:end(r3)", "F5:side(c9)",
+                             "F5:side(hc1)"}) {
+      CHECK(tool->find_faces(name).size() == 1);
+    }
+    // The circle's top: on the top's development the circle stretched
+    // around the axis to an ellipse of half axes 2 * 16 / 15 and 2, moved
+    // out by d = tan(t): its area pi a b + d P + pi d^2 (P its perimeter,
+    // by Ramanujan's formula, closer than 1e-9 at this shape), within the
+    // 1e-5 the fitted curves and the area's integration keep.
+    const double a = 2.0 * 16.0 / 15.0;
+    const double b = 2.0;
+    const double h = (a - b) * (a - b) / ((a + b) * (a + b));
+    const double perimeter = test::kPi * (a + b) * (1.0 + 3.0 * h / (10.0 + std::sqrt(4.0 - 3.0 * h)));
+    const double d = std::tan(spec.taper);
+    GProp_GProps top;
+    BRepGProp::SurfaceProperties(face_named(*tool, "F5:end(r3)"), top, 1.0e-10);
+    CHECK_NEAR_TOL(top.Mass(), test::kPi * a * b + d * perimeter + test::kPi * d * d, 1e-5);
+  }
+}
+
+// The top face of a 40 x 40 x 10 box about the Z axis, named F1:top.
+Shape box_with_top() {
+  const TopoDS_Shape box = BRepPrimAPI_MakeBox(gp_Pnt(-20.0, -20.0, 0.0), 40.0, 40.0, 10.0).Shape();
+  TopoDS_Face top;
+  for (TopExp_Explorer f(box, TopAbs_FACE); f.More(); f.Next()) {
+    GProp_GProps props;
+    BRepGProp::SurfaceProperties(f.Current(), props);
+    if (std::abs(props.CentreOfMass().Z() - 10.0) < 1e-9) {
+      top = TopoDS::Face(f.Current());
+    }
+  }
+  CHECK(!top.IsNull());
+  return Shape(box, {{top, {"F1:top"}}});
+}
+
+// A 10 x 10 square projected onto a box's top and raised or sunk 5 with a
+// taper of 5 degrees either way: a frustum of the square and the square
+// grown by 5 tan(t) on each side (positive widens), as an extrusion of it
+// with that taper.
+void test_a_tapered_square_projected_onto_a_plane() {
+  const Shape body = box_with_top();
+  for (const double depth : {5.0, -5.0}) {
+    for (const double degrees : {5.0, -5.0}) {
+      EmbossProjectSpec spec = projection_on_xy({rectangle(-5.0, -5.0, 10.0, 10.0)}, "F1:top", depth);
+      spec.taper = degrees * test::kPi / 180.0;
+      const ShapePtr tool = projected_emboss(body, spec);
+      CHECK(BRepCheck_Analyzer(tool->occt()).IsValid());
+      CHECK(solids(tool->occt()) == 1);
+      const double side = 10.0 + 2.0 * 5.0 * std::tan(spec.taper);
+      const double frustum = 5.0 / 3.0 * (100.0 + side * side + 10.0 * side);
+      std::printf("projected %+.0f deg, depth %+.0f: volume %.9f (frustum %.9f)\n", degrees, depth,
+                  volume_of(tool->occt()), frustum);
+      CHECK_NEAR(volume_of(tool->occt()), frustum);
+      CHECK_NEAR(area_of(face_named(*tool, "F3:end(r1)")), side * side);
+      CHECK_NEAR(area_of(face_named(*tool, "F3:start(r1)")), 100.0);
+      for (int i = 1; i <= 4; ++i) {
+        CHECK(!tool->find_faces("F3:side(r1c" + std::to_string(i) + ")").empty());
+      }
+    }
+  }
+}
+
+// Letters projected onto a box's top and raised 1 with a taper either way:
+// valid solids, named as without it, more volume widened and less
+// narrowed (short edges of the outlines drop out where they must).
+void test_letters_projected_and_tapered() {
+  const Shape body = box_with_top();
+  std::vector<std::pair<double, double>> extents;
+  EmbossProjectSpec spec = projection_on_xy(text_regions("ABC", 10.0, -15.0, -5.0, extents), "F1:top", 1.0);
+  const double plain = volume_of(projected_emboss(body, spec)->occt());
+  for (const double degrees : {5.0, -5.0}) {
+    spec.taper = degrees * test::kPi / 180.0;
+    const ShapePtr tool = projected_emboss(body, spec);
+    CHECK(BRepCheck_Analyzer(tool->occt()).IsValid());
+    CHECK(solids(tool->occt()) == 3);
+    const double volume = volume_of(tool->occt());
+    std::printf("letters projected %+.0f deg: volume %.6f (untapered %.6f)\n", degrees, volume, plain);
+    CHECK(degrees > 0.0 ? volume > plain : volume < plain);
+    for (const char* name : {"F3:end(r_A)", "F3:end(r_B)", "F3:end(r_C)", "F3:start(r_B)"}) {
+      CHECK(!tool->find_faces(name).empty());
+    }
+  }
+}
+
+// A square projected onto a ball and raised 1 with a taper: a valid solid
+// on the sphere's normals, more volume with a widening taper.
+void test_a_tapered_square_projected_onto_a_sphere() {
+  const Shape body = ball();
+  EmbossProjectSpec spec = projection_on_xy({rectangle(-3.0, -3.0, 6.0, 6.0)}, "F1:side0", 1.0);
+  const double plain = volume_of(projected_emboss(body, spec)->occt());
+  for (const double degrees : {20.0, -20.0}) {
+    spec.taper = degrees * test::kPi / 180.0;
+    const ShapePtr tool = projected_emboss(body, spec);
+    CHECK(BRepCheck_Analyzer(tool->occt()).IsValid());
+    CHECK(solids(tool->occt()) == 1);
+    const double volume = volume_of(tool->occt());
+    std::printf("on the ball %+.0f deg: volume %.9f (untapered %.9f)\n", degrees, volume, plain);
+    CHECK(degrees > 0.0 ? volume > plain : volume < plain);
+    CHECK(tool->find_faces("F3:end(r1)").size() == 1);
+  }
+}
+
+// A taper that leans the walls in until the top would cross itself fails
+// naming the region; one beyond a right angle is refused.
+void test_taper_refusals() {
+  // 45 tan(10 deg) = 7.9 mm in from each side of the square's 10 mm along
+  // the axis, and 255 mm at 80 degrees.
+  for (const double degrees : {-10.0, -80.0}) {
+    CHECK(test::throws_with([&] { wrapped_emboss(tapered_square(degrees * test::kPi / 180.0)); },
+                            "the taper collapses the profile r1"));
+  }
+  CHECK(test::throws_with([] { wrapped_emboss(tapered_square(test::kPi / 2.0)); }, "taper angle"));
+  // 5 tan(60 deg) = 8.7 mm in from each side of the projected 10 mm square.
+  const Shape body = box_with_top();
+  EmbossProjectSpec spec = projection_on_xy({rectangle(-5.0, -5.0, 10.0, 10.0)}, "F1:top", 5.0);
+  spec.taper = -60.0 * test::kPi / 180.0;
+  CHECK(test::throws_with([&] { projected_emboss(body, spec); }, "the taper collapses the profile r1"));
+}
 } // namespace
 
 int main() {
@@ -713,6 +1041,13 @@ int main() {
   test::guarded("a slanted direction takes the near side of a ball",
                 test_a_slanted_direction_takes_the_near_side_of_a_ball);
   test::guarded("a point inside a sliver", test_a_point_inside_a_sliver);
+  test::guarded("a tapered square on a cylinder", test_a_tapered_square_on_a_cylinder);
+  test::guarded("a tapered rectangle on a cone", test_a_tapered_rectangle_on_a_cone);
+  test::guarded("curves and letters tapered", test_curves_and_letters_tapered);
+  test::guarded("a tapered square projected onto a plane", test_a_tapered_square_projected_onto_a_plane);
+  test::guarded("a tapered square projected onto a sphere", test_a_tapered_square_projected_onto_a_sphere);
+  test::guarded("letters projected and tapered", test_letters_projected_and_tapered);
+  test::guarded("taper refusals", test_taper_refusals);
   if (test::failures == 0) {
     std::puts("test_emboss: all checks passed");
   }

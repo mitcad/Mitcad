@@ -20,6 +20,7 @@
 #include "../OcctViewer.hpp"
 #include "CommandSession.hpp"
 #include "Theme.hpp"
+#include "UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -54,7 +55,7 @@ ParameterPicker::ParameterPicker(OcctViewer& viewer, const QString& command)
   setAttribute(Qt::WA_NoSystemBackground);
   setFocusPolicy(Qt::NoFocus);
   QFont small = font();
-  small.setPointSizeF(9.0);
+  small.setPointSizeF(9.0 * uiTextScale()); // at Text size (mitcad#1556)
   setFont(small);
   resize(viewer.size());
   show();

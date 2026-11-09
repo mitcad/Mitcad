@@ -14,6 +14,8 @@ pub mod ffi {
         radius: f64,
         to_radius: f64,
         half_angle: f64,
+        /// Radians (mitcad#1547, `EmbossWrapSpec::taper`).
+        taper: f64,
     }
 
     /// The direction (a unit vector) profiles are projected along onto a
@@ -22,6 +24,8 @@ pub mod ffi {
     struct EmbossProjection {
         direction: [f64; 3],
         depth: f64,
+        /// Radians (mitcad#1547, `EmbossProjectSpec::taper`).
+        taper: f64,
     }
 
     /// A conical face: its apex, its axis where the radius grows, its half

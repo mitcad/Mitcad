@@ -7,14 +7,16 @@
 # check-all sources: app/framework/ToolbarPins.cpp app/framework/ToolbarPins.hpp app/framework/ShortcutDialog.cpp
 # The sketch CREATE group in submenus (mitcad#222), through the real UI, in
 # the Docked and the Floating layout:
-#   - the CREATE menu: Lines, Rectangles, Circles, Arcs, Other Geometry,
-#     Text, Patterns, References (Project, Intersect, Clean Up
-#     Projections, Clean Up Stale Projections, Project Again) and Sketch
-#     Dimension, every sketch creation command exactly once; Offset (and
-#     Edit Text) in MODIFY, not in CREATE;
+#   - the CREATE menu: Lines, Point (an entry of its own, mitcad#1545),
+#     Rectangles, Circles, Arcs, Other Geometry, Text, Patterns,
+#     References (Project, Intersect, Clean Up Projections, Clean Up Stale
+#     Projections, Project Again) and Sketch Dimension, every sketch
+#     creation command exactly once; Offset (and Edit Text) in MODIFY, not
+#     in CREATE;
 #   - split buttons for Lines (mitcad#1393), Rectangles, Circles and Arcs, none for Other
 #     Geometry and Patterns: the Circles button starts Center Diameter
 #     Circle, its arrow opens the circle variants, which start from there;
+#     a plain Point button starts Point (mitcad#1545);
 #   - the keyboard: the CREATE menu's Circles submenu with the arrow keys,
 #     the shortcut C and the command search;
 #   - in a narrow window the groups stay within it;
@@ -49,10 +51,11 @@ CIRCLES="Center Diameter Circle | 2-Point Circle | 3-Point Circle | 2-Tangent Ci
 ARCS="3-Point Arc | Center Point Arc | Tangent Arc"
 OTHER="Ellipse | Circumscribed Polygon | Inscribed Polygon | Edge Polygon | Center to Center Slot | Overall Slot"
 OTHER="$OTHER | Center Point Slot | Three Point Arc Slot | Center Point Arc Slot | Fit Point Spline"
-OTHER="$OTHER | Control Point Spline | Point"
+OTHER="$OTHER | Control Point Spline"
 PATTERNS="Rectangular Pattern | Circular Pattern | Mirror"
 REFERENCES="Project | Intersect | Clean Up Projections | Clean Up Stale Projections | Project Again"
-CREATE="Lines > [Line | Midpoint Line] | Rectangles > [$RECTANGLES] | Circles > [$CIRCLES] | Arcs > [$ARCS] | Other Geometry > [$OTHER]"
+CREATE="Lines > [Line | Midpoint Line] | Point | Rectangles > [$RECTANGLES] | Circles > [$CIRCLES]"
+CREATE="$CREATE | Arcs > [$ARCS] | Other Geometry > [$OTHER]"
 CREATE="$CREATE | Text > [Text | QR Code] | Patterns > [$PATTERNS] | References > [$REFERENCES] | Sketch Dimension"
 # The SOLID CREATE menu (mitcad#579), up to the Machine Elements submenu's
 # Bearing: later machine elements may follow it in the submenu.
@@ -104,6 +107,9 @@ check_layout() {
       ui_fail "$layout: a split button for $subgroup"
   done
   echo "ok   $layout: no split buttons for the groups without a default"
+  ui_expect_new "Ribbon button sketch.point at" "$layout: a Point button of its own (mitcad#1545)"
+  tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Ribbon split SKETCH/CREATE/Point " &&
+    ui_fail "$layout: Point as a split button"
 
   echo "--- The CREATE menu"
   ui_mark
@@ -112,8 +118,8 @@ check_layout() {
   [ "$(last_line "Ribbon menu SKETCH/CREATE: ")" = "$CREATE" ] ||
     ui_fail "$layout: the CREATE menu is '$(last_line "Ribbon menu SKETCH/CREATE: ")'"
   echo "ok   $layout: the CREATE menu has every tool once, in its groups"
-  # The keyboard: the third entry (Circles), its submenu, its second entry.
-  ui_step "Circles > 2-Point Circle"       ui_key Down Down Down Right Down Return
+  # The keyboard: the fourth entry (Circles), its submenu, its second entry.
+  ui_step "Circles > 2-Point Circle"       ui_key Down Down Down Down Right Down Return
   expect_tool "2-Point Circle" "$layout: 2-Point Circle from the menu by the keyboard"
 
   echo "--- Offset in MODIFY"
@@ -146,6 +152,18 @@ check_layout() {
   ui_step "the Arcs arrow"                 ui_click_logged "Ribbon split SKETCH/CREATE/Arcs arrow"
   ui_expect_new "Ribbon menu SKETCH/CREATE/Arcs: $ARCS" "$layout: the arc variants"
   ui_step "close it (Esc)"                 ui_key Escape
+
+  echo "--- The Point button (mitcad#1545)"
+  ui_mark
+  ui_step "click the Point button"         ui_click_logged "Ribbon button sketch.point"
+  expect_tool "Point" "$layout: the Point button starts Point"
+  tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "Ribbon menu SKETCH/CREATE" &&
+    ui_fail "$layout: the Point button opened a menu"
+  ui_mark
+  ui_step "open the CREATE menu"           ui_click_logged "Ribbon SKETCH/CREATE"
+  ui_expect_new "Ribbon menu SKETCH/CREATE: Lines > [Line | Midpoint Line] | Point | " "$layout: Point after Lines"
+  ui_step "Point, the second entry"        ui_key Down Down Return
+  expect_tool "Point" "$layout: Point from the CREATE menu's top level"
 
   echo "--- Shortcut and search"
   ui_mark

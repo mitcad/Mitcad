@@ -6,7 +6,9 @@
 # the reference models), imported with mitcad-cli import-fcstd. Per
 # document: no fallback, and the volume of the last feature checked (the
 # Body's tip: all the Body's solids together) within the bounds given,
-# FreeCAD's stored volume within 1e-6 of it relative.
+# FreeCAD's stored volume within 1e-6 of it relative. An optional fourth
+# field allows that many fallbacks, each one whose reason the report states
+# (mitcad#1557: no parametric counterpart).
 #
 # Skipped when none of the documents is found.
 #
@@ -14,7 +16,7 @@
 
 cmake_minimum_required(VERSION 3.24)
 
-# <id>|<least volume, mm3>|<greatest volume, mm3>
+# <id>|<least volume, mm3>|<greatest volume, mm3>[|<fallbacks allowed>]
 set(designs
     # A sleeve padded as two halves 4 mm apart (two solids), a threaded
     # hole drilled into one half, a hole through both from a binder's
@@ -30,6 +32,14 @@ set(designs
     # pad's far circles (mitcad#1195). The last feature, the manifold's
     # pocket: FreeCAD's volume 237034.404 mm3.
     "bb41188f|237034.167|237034.641"
+    # A reported assembly of 58 bodies in 32 components (FreeCAD 1.1):
+    # clones of Bodies (linked copies placed by an expression), a threaded
+    # hole at a face's circles mirrored, sketches on binders of features'
+    # faces, Fixed, Slider and Cylindrical joints (mitcad#1557). One base
+    # feature stays a fallback without a parametric counterpart: a Body
+    # starts from a union of scripted profiles. The last feature, a
+    # revolution: FreeCAD's volume 2460698.195 mm3.
+    "c903cbb0|2460695.735|2460700.656|1"
 )
 
 foreach(var CLI WORK)
@@ -93,6 +103,11 @@ foreach(design IN LISTS designs)
   list(GET fields 0 id)
   list(GET fields 1 least)
   list(GET fields 2 greatest)
+  list(LENGTH fields field_count)
+  set(allowed 0)
+  if(field_count GREATER 3)
+    list(GET fields 3 allowed)
+  endif()
   list(FIND found_ids "${id}" at)
   if(at EQUAL -1)
     message("not found ${id}")
@@ -105,11 +120,11 @@ foreach(design IN LISTS designs)
   set(problems "")
   if(NOT status EQUAL 0)
     string(APPEND problems "\n    the import failed (${status}): ${err}")
-  elseif(NOT summary MATCHES ", 0 fallback,")
+  elseif(NOT summary MATCHES ", ${allowed} fallback,")
     string(REGEX MATCHALL "\n  feature [^\n]*: fallback[^\n]*\n    note: [^\n]*" fallbacks "${out}")
     string(REPLACE ";" "" fallbacks "${fallbacks}")
     string(REPLACE "\n  feature" "\n    feature" fallbacks "${fallbacks}")
-    string(APPEND problems "\n    expected no fallback:${fallbacks}")
+    string(APPEND problems "\n    expected ${allowed} fallbacks:${fallbacks}")
   endif()
   # The last feature checked: its volume, all the Body's solids.
   set(volume "")

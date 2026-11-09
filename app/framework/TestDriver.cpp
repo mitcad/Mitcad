@@ -200,7 +200,7 @@ const StepSpec kSpecs[] = {
     {"expect-sketch-field-dimension", 3, 3, kIdle},
     {"expect-sketch-dimension-clear", 1, 1, kIdle},
     {"sketch-drag", 4, 4, kInputOfMain},
-    {"sketch-pointer", 3, 3, kInputOfMain},
+    {"sketch-pointer", 3, 4, kInputOfMain},
     {"expect-profiles", 1, 1, kIdle},
     {"type-in", 2, 2, kInputOfMain},
     {"command", 1, 1, kInputOfMain},
@@ -439,6 +439,9 @@ const StepSpec kSpecs[] = {
     // The window, the ribbon, the Browser and a command panel at the
     // Interface size's device pixel ratio (mitcad#1495).
     {"expect-interface-size", 1, 1, kIdle},
+    // Preferences' Text size, Icon size and Font as the run applied them
+    // (mitcad#1556).
+    {"expect-text-icon-size", 3, 3, kIdle},
 };
 
 // The colour that covers most of a visible widget's area as its window
@@ -4468,20 +4471,23 @@ void TestDriver::run(const Step& step) {
     const QString phase = a.at(0);
     double x = 0;
     double y = 0;
+    // Modifiers held on this event only (mitcad#1538: Shift during a
+    // point's drag turns its snapping off).
+    Qt::KeyboardModifiers held = Qt::NoModifier;
     if ((phase != QLatin1String("press") && phase != QLatin1String("move") && phase != QLatin1String("release")) ||
-        !toNumber(a.at(1), x) || !toNumber(a.at(2), y)) {
-      fail(line, QStringLiteral("sketch-pointer press|move|release <x> <y>")); return;
+        !toNumber(a.at(1), x) || !toNumber(a.at(2), y) || (a.size() > 3 && !parseModifiers(a.at(3), held))) {
+      fail(line, QStringLiteral("sketch-pointer press|move|release <x> <y> [mods]")); return;
     }
     const auto at = std::make_shared<QPoint>();
     whenReady([this, x, y, at] { return sketchPoint(x, y, *at); }, 6,
-              QStringLiteral("the app logged no sketch view"), [this, phase, at] {
+              QStringLiteral("the app logged no sketch view"), [this, phase, at, held] {
       if (phase == QLatin1String("press")) {
-        sendMouse(QEvent::MouseMove, *at, Qt::NoButton, Qt::NoButton, Qt::NoModifier);
-        sendMouse(QEvent::MouseButtonPress, *at, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseMove, *at, Qt::NoButton, Qt::NoButton, held);
+        sendMouse(QEvent::MouseButtonPress, *at, Qt::LeftButton, Qt::LeftButton, held);
       } else if (phase == QLatin1String("move")) {
-        sendMouse(QEvent::MouseMove, *at, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseMove, *at, Qt::NoButton, Qt::LeftButton, held);
       } else {
-        sendMouse(QEvent::MouseButtonRelease, *at, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        sendMouse(QEvent::MouseButtonRelease, *at, Qt::LeftButton, Qt::NoButton, held);
       }
     }, mainWindow);
   } else if (name == QLatin1String("sketch-click") || name == QLatin1String("sketch-dblclick") ||
@@ -5119,12 +5125,22 @@ void TestDriver::run(const Step& step) {
   } else if (name == QLatin1String("expect-design-chrome")) {
     testDesignChrome();
   } else if (name == QLatin1String("expect-interface-size")) {
-    bool ok = false;
-    const double ratio = a.at(0).toDouble(&ok);
-    if (!ok || ratio <= 0.0) {
-      fail(line, QStringLiteral("expect-interface-size <device pixel ratio>")); return;
+    // `any`: the layout at whatever ratio the screen gives (0).
+    bool ok = a.at(0) == QLatin1String("any");
+    const double ratio = ok ? 0.0 : a.at(0).toDouble(&ok);
+    if (!ok || ratio < 0.0 || (ratio == 0.0 && a.at(0) != QLatin1String("any"))) {
+      fail(line, QStringLiteral("expect-interface-size <device pixel ratio|any>")); return;
     }
     testInterfaceSize(ratio);
+  } else if (name == QLatin1String("expect-text-icon-size")) {
+    bool textOk = false;
+    bool iconOk = false;
+    const int textPercent = a.at(0).toInt(&textOk);
+    const int iconPercent = a.at(1).toInt(&iconOk);
+    if (!textOk || !iconOk) {
+      fail(line, QStringLiteral("expect-text-icon-size <text%> <icon%> <family|system>")); return;
+    }
+    testTextIconSize(textPercent, iconPercent, a.at(2));
   } else if (name == QLatin1String("test-dialog-controls")) {
     testDialogControls(a.at(0));
   } else if (name == QLatin1String("expect-dialog-appearance")) {

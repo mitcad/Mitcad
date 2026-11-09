@@ -24,6 +24,7 @@
 #include "../platform/MacChrome.hpp"
 #include "Theme.hpp"
 #include "MacToolButtonStyle.hpp"
+#include "UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -235,7 +236,7 @@ GlassCard::GlassCard(QWidget* parent) : QWidget(parent) {
   m_layout->setSpacing(0);
 
   m_header = new QWidget(this);
-  m_header->setFixedHeight(kHeaderHeight);
+  m_header->setFixedHeight(uiRoomSize(kHeaderHeight));
   m_headerLayout = new QHBoxLayout(m_header);
   m_headerLayout->setContentsMargins(8, 4, 8, 0);
   m_headerLayout->setSpacing(4);
@@ -243,8 +244,8 @@ GlassCard::GlassCard(QWidget* parent) : QWidget(parent) {
   m_chevron->setObjectName(QStringLiteral("cardChevron"));
   setFlatCardButton(m_chevron);
   m_chevron->setFocusPolicy(Qt::NoFocus);
-  m_chevron->setFixedSize(kChevronSize, kChevronSize);
-  m_chevron->setIconSize(QSize(12, 12));
+  m_chevron->setFixedSize(uiRoomSize(kChevronSize), uiRoomSize(kChevronSize));
+  m_chevron->setIconSize(uiIconSize(12, 12));
   m_chevron->setToolTip(tr("Collapse or expand"));
   connect(m_chevron, &QToolButton::clicked, this, [this] { setCollapsed(!m_collapsed); });
   m_titleLabel = new QLabel(m_header);
@@ -566,7 +567,9 @@ void GlassCard::placeGrip() {
 
 QPoint GlassCard::widthGripCenter() const { return m_grip != nullptr ? m_grip->geometry().center() : QPoint(); }
 
-int GlassCard::headerHeight() const { return m_header->isHidden() && !headerWanted() ? 0 : kHeaderHeight; }
+int GlassCard::headerHeight() const {
+  return m_header->isHidden() && !headerWanted() ? 0 : uiRoomSize(kHeaderHeight);
+}
 
 int GlassCard::heightForContent(int contentHeight) const {
   if (m_collapsed) {

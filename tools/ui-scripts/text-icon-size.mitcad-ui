@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: MIT
+# Preferences › Display › Text size, Icon size and Font (mitcad#1556, GitHub
+# mitcad/Mitcad#207), MitCad started with appearance/textSize,
+# appearance/iconSize and appearance/fontFamily set by the runner:
+#   MITCAD_TEST_TEXT_SIZE, MITCAD_TEST_ICON_SIZE  the percents kept;
+#   MITCAD_TEST_FONT        the family kept, or `system` for none;
+#   MITCAD_TEST_SYSTEM_FONT `true` when none is kept, else `false`;
+#   MITCAD_TEST_ICON_NEXT   the Icon size 5 % above the kept one.
+#   1. The start-up logs the sizes and the font it applied, the application
+#      font and the icon sizes.
+#   2. With Box's command panel open: the application font in the family at
+#      the platform's size times Text size, the Browser's and the ribbon's
+#      icons at their sizes times Icon size, each ribbon button as large as
+#      its icon (expect-text-icon-size, which logs "Text and icon size
+#      layout: ..."); the window, the ribbon's captions, the Browser's rows
+#      and the panel's OK and fields whole (expect-interface-size at the
+#      screen's own ratio).
+#   3. Preferences shows the kept sizes and font; Icon size one step up
+#      (Right) is saved for the next start.
+# Run by tools/ui-text-icon-size-test.sh and
+# tools/ui-windows-text-icon-size-test.ps1 with several sizes and fonts.
+expect-ever '^Text and icon size: Text size ${MITCAD_TEST_TEXT_SIZE}%, Icon size ${MITCAD_TEST_ICON_SIZE}%, Font ' 10
+expect-ever '^Application font: .+, [0-9.]+ pt [(]Text size ${MITCAD_TEST_TEXT_SIZE}% of ' 30
+expect-ever '^Icon sizes: ${MITCAD_TEST_ICON_SIZE}% ' 30
+wait-idle
+
+# 2. The fonts and icons, and the window, the ribbon, the Browser and a
+# command panel laid out whole.
+mark
+command solid.box
+expect-log '^Command Box started$' 10
+wait-idle
+sleep 300
+expect-text-icon-size ${MITCAD_TEST_TEXT_SIZE} ${MITCAD_TEST_ICON_SIZE} "${MITCAD_TEST_FONT}"
+expect-interface-size any
+key Escape
+wait-idle
+
+# 3. Preferences: the kept sizes and font shown; Icon size one step up kept
+# for the next start.
+mark
+command tools.preferences.display
+focus-dialog '^Preferences$'
+expect-widget-property preferencesTextSizeValue text '${MITCAD_TEST_TEXT_SIZE}%'
+expect-widget-property preferencesIconSizeValue text '${MITCAD_TEST_ICON_SIZE}%'
+expect-widget-property preferencesSystemFont checked ${MITCAD_TEST_SYSTEM_FONT}
+focus-widget preferencesIconSize
+key Right
+expect-widget-property preferencesIconSizeValue text '${MITCAD_TEST_ICON_NEXT}%'
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+expect-log '^Preferences: icon size ${MITCAD_TEST_ICON_NEXT}% [(]at the next start[)]$' 10
+expect-setting appearance/iconSize ${MITCAD_TEST_ICON_NEXT}
+expect-no-log '^Preferences: text size '
+expect-no-log '^Preferences: font '
+expect-never 'TestDriver: FAIL'

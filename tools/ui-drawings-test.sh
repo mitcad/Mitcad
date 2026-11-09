@@ -660,11 +660,12 @@ ui_double_click_expect "Drawing annotation 4" "Note dialog opened: Note 4" "a do
 ui_focus_dialog '^Note$'
 ui_step "cancel (Esc)"                     ui_key Escape
 ui_focus_main
-# The menu of a view: its tools and its panel's check boxes.
+# The menu of a view: its tools and its panel's check boxes. The view's middle
+# lies on one of its edges, so Edit Line… comes first (mitcad#1546).
 ui_mark
 ui_step "Esc"                              ui_key Escape
 ui_step "right-click the projected view"   ui_click_logged "Drawing view 2" 3
-ui_expect_new "Context menu: Projected View | Section View | Detail View | Break | Rotate 90° Left | Rotate 90° Right | Hidden Edges | Tangent Edges | Shaded | Center Marks | Delete View" "the view's menu"
+ui_expect_new "Context menu: Edit Line… | Projected View | Section View | Detail View | Break | Rotate 90° Left | Rotate 90° Right | Hidden Edges | Tangent Edges | Shaded | Center Marks | Delete View" "the view's menu"
 ui_step "choose Shaded"                    ui_menu_choose "Shaded"
 ui_expect_new '"shaded":true' "the view shaded"
 no_refusal

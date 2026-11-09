@@ -3,19 +3,22 @@
 //! its own (`VISIBLE`, `HIDDEN`, `THIN`, `HATCH`, `SECTION_LINE`, `FRAME`,
 //! `EXTRA_THICK`; lines and arcs drawn by hand dashed or long dash dotted
 //! and wide or extra wide on `HIDDEN_THICK`, `HIDDEN_EXTRA_THICK`,
-//! `SECTION_LINE_THICK`, `SECTION_LINE_EXTRA_THICK`, mitcad#1447), texts on
-//! `TEXT`, arrowheads as their outlines. The writer has no dashed line
-//! types or line weights, so hidden edges and extra wide lines are told
-//! apart by their layer.
+//! `SECTION_LINE_THICK`, `SECTION_LINE_EXTRA_THICK`, mitcad#1447; long dash
+//! double dotted on `PHANTOM`, `PHANTOM_THICK`, `PHANTOM_EXTRA_THICK`,
+//! mitcad#1546), texts on `TEXT`, arrowheads as their outlines. Each pen's
+//! layer has its line type (`DASHED`, `CHAIN`, `PHANTOM` with the pen's
+//! dashes, else `CONTINUOUS`) and its line weight (the pen's width in
+//! hundredths of a millimetre) since mitcad#1546, so that another program
+//! draws the lines as the sheet does.
 //! `export_drawing` writes it in the file's length unit
 //! (`mitcad_model::exchange::dxf_in_unit`, mitcad#1408): the sheet in
-//! inches of paper for an inch design, its texts scaled with it.
+//! inches of paper for an inch design, its texts and dashes scaled with it.
 
-use mitcad_dxf::{Drawing, Geometry, Layer, Point2, Text, Units};
+use mitcad_dxf::{Drawing, Geometry, Layer, Linetype, Point2, Text, Units};
 
 use super::sheet::{Anchor, Item, Pen, Sheet, text_width};
 
-const PENS: [Pen; 11] = [
+const PENS: [Pen; 14] = [
     Pen::Thick,
     Pen::Hidden,
     Pen::Thin,
@@ -27,6 +30,9 @@ const PENS: [Pen; 11] = [
     Pen::DashedExtraThick,
     Pen::ChainThick,
     Pen::ChainExtraThick,
+    Pen::Phantom,
+    Pen::PhantomThick,
+    Pen::PhantomExtraThick,
 ];
 
 fn colour(pen: Pen) -> i16 {
@@ -36,6 +42,17 @@ fn colour(pen: Pen) -> i16 {
         Pen::Thin => 3,
         Pen::Hatch => 9,
         Pen::Chain | Pen::ChainThick | Pen::ChainExtraThick => 1,
+        Pen::Phantom | Pen::PhantomThick | Pen::PhantomExtraThick => 6,
+    }
+}
+
+/// What a line type of a pen's pattern is called in words.
+fn line_type_description(name: &str) -> &'static str {
+    match name {
+        "DASHED" => "Dashed __ __ __",
+        "CHAIN" => "Long dash dotted ____ . ____ .",
+        "PHANTOM" => "Long dash double dotted ____ . . ____ . .",
+        _ => "",
     }
 }
 
@@ -45,7 +62,18 @@ pub fn drawing(sheet: &Sheet) -> Drawing {
     for pen in PENS {
         let mut layer = Layer::new(pen.layer());
         layer.color = colour(pen);
+        layer.linetype = pen.line_type().to_owned();
+        // Hundredths of a millimetre: 13, 18, 35, 50, 70, all of them
+        // standard weights.
+        layer.lineweight = Some((pen.width() * 100.0).round() as i16);
         out.layers.push(layer);
+        if !pen.dashes().is_empty() && !out.linetypes.iter().any(|l| l.name == pen.line_type()) {
+            out.linetypes.push(Linetype::of_dashes(
+                pen.line_type(),
+                line_type_description(pen.line_type()),
+                pen.dashes(),
+            ));
+        }
     }
     out.layers.push(Layer::new("TEXT"));
     let p = |q: [f64; 2]| Point2::new(q[0], q[1]);

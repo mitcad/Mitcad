@@ -165,6 +165,13 @@ gp_Dir planar_normal(const TopoDS_Face& face, const gp_Pln& plane);
 // null for other surfaces.
 std::optional<gp_Pln> face_plane(const TopoDS_Face& face);
 
+// The plane a flat face stands for where an input takes a plane (a tool, a
+// target, a reference): face_plane's, or for another surface within 1e-6 mm
+// of a plane its plane, as geometry::face_plane and face_geometry read it
+// (mitcad#1554: the thickness walls of a sheet body with a bend are planar
+// B-spline surfaces). The normal out of the material; null for other faces.
+std::optional<gp_Pln> reference_plane(const TopoDS_Face& face);
+
 // A rectangular face on the plane that covers the box several times over,
 // so that it cuts through everything inside the box.
 TopoDS_Face plane_face(const gp_Pln& plane, const Bnd_Box& box);

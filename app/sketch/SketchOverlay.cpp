@@ -21,6 +21,7 @@
 #include "PointMarkers.hpp"
 #include "SketchController.hpp"
 #include "SketchTool.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad::sketch {
 namespace {
@@ -262,6 +263,41 @@ std::optional<Linear> linearOf(const DimensionData& d, const SketchModel& model,
     const V2 foot = line->curve.a + dir * dot(centre - line->curve.a, dir);
     const V2 towards = dist(foot, centre) > 1e-9 ? unit(foot - centre) : perp(dir);
     return Linear{centre + towards * circle->curve.radius, foot, towards, lineOf(*line)};
+  }
+  if (t == QStringLiteral("tangent_point_distance")) {
+    // From the circle's side nearest the point (mitcad#1540), along the
+    // line of the centre and the point; inside, from the point outwards.
+    const CurveData* circle = r.curve(d.json, "circle");
+    const auto p = r.point(d.json, "point");
+    if (circle == nullptr || !circle->isCircular() || !p) {
+      return std::nullopt;
+    }
+    const V2 centre = circle->curve.center;
+    const V2 u = dist(*p, centre) > 1e-9 ? unit(*p - centre) : V2{1, 0};
+    return Linear{centre + u * circle->curve.radius, *p, u};
+  }
+  if (t == QStringLiteral("tangent_circle_distance")) {
+    // Between the nearest sides along the line of the centres (mitcad#1540):
+    // outside, each side facing the other circle; inside, the inner
+    // circle's far side and the outer circle beyond it.
+    const CurveData* a = r.curve(d.json, "a");
+    const CurveData* b = r.curve(d.json, "b");
+    if (a == nullptr || b == nullptr || !a->isCircular() || !b->isCircular()) {
+      return std::nullopt;
+    }
+    if (d.json.value(QStringLiteral("side")).toString() == QStringLiteral("inside")) {
+      const CurveData* outer = a->curve.radius >= b->curve.radius ? a : b;
+      const CurveData* inner = outer == a ? b : a;
+      const V2 apart = inner->curve.center - outer->curve.center;
+      const V2 u = norm(apart) > 1e-9 ? unit(apart)
+                   : dist(text, outer->curve.center) > 1e-9 ? unit(text - outer->curve.center)
+                                                             : V2{1, 0};
+      return Linear{inner->curve.center + u * inner->curve.radius, outer->curve.center + u * outer->curve.radius,
+                    u};
+    }
+    const V2 apart = b->curve.center - a->curve.center;
+    const V2 u = norm(apart) > 1e-9 ? unit(apart) : V2{1, 0};
+    return Linear{a->curve.center + u * a->curve.radius, b->curve.center - u * b->curve.radius, u};
   }
   if (t == QStringLiteral("concentric_distance")) {
     // Between the rims along the radius toward the value (mitcad#445).
@@ -630,7 +666,7 @@ SketchOverlay::SketchOverlay(SketchController& controller, QWidget* view)
   setAttribute(Qt::WA_NoSystemBackground);
   setFocusPolicy(Qt::NoFocus);
   QFont small = font();
-  small.setPointSizeF(9.0);
+  small.setPointSizeF(9.0 * uiTextScale()); // at Text size (mitcad#1556)
   setFont(small);
   connect(&m_c.viewer(), &OcctViewer::backgroundToneChanged, this, &SketchOverlay::logDimensionHalos);
 }
@@ -1616,6 +1652,10 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
     ToolPreview preview;
     tool->paint(preview);
     paintPreview(painter, preview);
+    paintSnap(painter);
+  } else if (m_c.draggingGeometry()) {
+    // A single point dragged snaps as the tools' points do (mitcad#1538),
+    // with the same marker.
     paintSnap(painter);
   }
   // What a Clean Up Stale Projections preview removes and trims

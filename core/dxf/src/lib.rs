@@ -41,6 +41,6 @@ mod writer;
 pub use error::Error;
 pub use math::{Affine, bulge_arc};
 pub use reader::{MAX_ARRAY_CELLS, READ_BUDGET, read, read_file, read_str, read_within};
-pub use types::{Drawing, Entity, Geometry, Layer, Point2, Spline, Text};
+pub use types::{Drawing, Entity, Geometry, Layer, Linetype, Point2, Spline, Text};
 pub use units::Units;
 pub use writer::{DxfVersion, WriteOptions, write_file, write_string};

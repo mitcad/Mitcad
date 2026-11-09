@@ -78,9 +78,10 @@ std::vector<gp_Pnt> box_corners(const Bnd_Box& box) {
 }
 
 // The face's surface grown until it passes the box, where the surface type
-// allows; other faces stay as they are.
+// allows; other faces stay as they are. A flat spline face (a sheet body's
+// wall, mitcad#1554) grows as its plane.
 TopoDS_Face extended_face(const TopoDS_Face& face, const Bnd_Box& around) {
-  if (const auto plane = face_plane(face)) {
+  if (const auto plane = reference_plane(face)) {
     return plane_face(*plane, around);
   }
   const BRepAdaptor_Surface adaptor(face, false);
@@ -140,7 +141,7 @@ gp_Pln tool_plane(const Tool& tool, const char* what) {
       throw std::invalid_argument(std::string(what) + " has no body");
     }
     const std::vector<int> faces = resolve_faces(*tool.shape, {tool.face}, what);
-    const auto plane = face_plane(tool.shape->face(faces.front()));
+    const auto plane = reference_plane(tool.shape->face(faces.front()));
     if (!plane) {
       throw std::invalid_argument(std::string("unsupported: ") + what + " " + tool.face +
                                   " is not planar");
@@ -179,7 +180,7 @@ Cutter make_cutter(const Tool& tool, const Bnd_Box& around, bool extend) {
     for (int f : resolve_faces(*tool.shape, {tool.face}, "splitting faces")) {
       const TopoDS_Face& face = tool.shape->face(f);
       if (!cutter.normal) {
-        if (const auto plane = face_plane(face)) {
+        if (const auto plane = reference_plane(face)) {
           cutter.normal = plane->Axis().Direction();
         }
       }

@@ -149,8 +149,10 @@ ValueStepLimit sketchDimensionStepLimit(const QString& type, bool signedOffset) 
   if (signedOffset || type == QLatin1String("angle")) {
     return limit; // ValueRange::Signed; an angle is left as typed
   }
-  static const char* const kNotNegative[] = {"horizontal_distance", "vertical_distance", "point_line_distance",
-                                             "line_distance",       "tangent_distance",  "concentric_distance"};
+  static const char* const kNotNegative[] = {"horizontal_distance",    "vertical_distance",
+                                             "point_line_distance",    "line_distance",
+                                             "tangent_distance",       "concentric_distance",
+                                             "tangent_circle_distance", "tangent_point_distance"};
   limit.minimum = 0.0;
   limit.above = true; // ValueRange::Positive
   for (const char* name : kNotNegative) {

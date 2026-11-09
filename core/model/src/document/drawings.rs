@@ -180,6 +180,19 @@ impl DocState {
                         pick.face = Some(mapped);
                     }
                 }
+                // The lines' styles (mitcad#1546): their bodies, occurrences
+                // and edges.
+                for line in &mut view.lines {
+                    line.body = line.body.map(body);
+                    if let Some(p) = &mut line.occurrence {
+                        *p = path(p);
+                    }
+                    if let Some(edge) = &line.edge
+                        && let Ok(mapped) = renamed(edge.to_string()).parse()
+                    {
+                        line.edge = Some(mapped);
+                    }
+                }
             }
             // A cut sheet's parts (mitcad#853): their bodies, occurrences
             // and faces.

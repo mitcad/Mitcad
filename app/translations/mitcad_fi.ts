@@ -2207,6 +2207,10 @@
         <source>Center Line</source>
         <translation>Pistekatkoviiva</translation>
     </message>
+    <message>
+        <source>Long Dash Double Dot</source>
+        <translation>Kaksoispistekatkoviiva</translation>
+    </message>
 </context>
 <context>
     <name>Export</name>
@@ -6218,6 +6222,10 @@
     <message>
         <source>The projection&apos;s direction: an axis, a line or a plane&apos;s normal; none: sketch normal</source>
         <translation>Projisoinnin suunta: akseli, viiva tai tason normaali; ei mitään: luonnoksen normaali</translation>
+    </message>
+    <message>
+        <source>Tilts the walls from the face&apos;s normals; positive widens the profiles away from the face</source>
+        <translation>Kallistaa seinämiä tahkon normaaleista; positiivinen leventää profiileja tahkosta poispäin</translation>
     </message>
     <message>
         <source>Raise or Sink</source>
@@ -31525,6 +31533,34 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
         <translation>Käyttöl&amp;iittymän koko:</translation>
     </message>
     <message>
+        <source>Makes texts smaller or larger, on top of the Interface size</source>
+        <translation>Pienentää tai suurentaa tekstejä käyttöliittymän koon lisäksi</translation>
+    </message>
+    <message>
+        <source>Te&amp;xt size:</source>
+        <translation>Te&amp;kstin koko:</translation>
+    </message>
+    <message>
+        <source>Makes icons smaller or larger, on top of the Interface size</source>
+        <translation>Pienentää tai suurentaa kuvakkeita käyttöliittymän koon lisäksi</translation>
+    </message>
+    <message>
+        <source>Ico&amp;n size:</source>
+        <translation>K&amp;uvakkeiden koko:</translation>
+    </message>
+    <message>
+        <source>Uses the system&apos;s font for the interface</source>
+        <translation>Käyttää käyttöliittymässä järjestelmän fonttia</translation>
+    </message>
+    <message>
+        <source>The font of MitCad&apos;s texts, at the Text size</source>
+        <translation>MitCadin tekstien fontti tekstin koon mukaisena</translation>
+    </message>
+    <message>
+        <source>&amp;Font:</source>
+        <translation>&amp;Fontti:</translation>
+    </message>
+    <message>
         <source>Docked</source>
         <translation>Telakoitu</translation>
     </message>
@@ -33621,6 +33657,38 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     <message>
         <source>It overlaps component %1.</source>
         <translation>Se on päällekkäin komponentin %1 kanssa.</translation>
+    </message>
+    <message>
+        <source>Edit Line…</source>
+        <translation>Muokkaa viivaa…</translation>
+    </message>
+    <message>
+        <source>Edit Line</source>
+        <translation>Muokkaa viivaa</translation>
+    </message>
+    <message>
+        <source>This Edge</source>
+        <translation>Tämä särmä</translation>
+    </message>
+    <message>
+        <source>Its Body</source>
+        <translation>Sen kappale</translation>
+    </message>
+    <message>
+        <source>Its Component</source>
+        <translation>Sen komponentti</translation>
+    </message>
+    <message>
+        <source>Applies To</source>
+        <translation>Koskee</translation>
+    </message>
+    <message>
+        <source>Reset to View Style</source>
+        <translation>Palauta kuvannon tyyli</translation>
+    </message>
+    <message>
+        <source>Draws these lines as the view draws its other lines again</source>
+        <translation>Piirtää nämä viivat jälleen kuten kuvanto piirtää muut viivansa</translation>
     </message>
 </context>
 <context>

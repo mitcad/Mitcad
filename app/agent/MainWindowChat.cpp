@@ -37,6 +37,7 @@
 #endif
 #include "ChatController.hpp"
 #include "ChatPanel.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 
@@ -233,7 +234,7 @@ void MainWindow::createChat() {
     button->setObjectName(QStringLiteral("titleChat"));
     auto* row = new QHBoxLayout(button);
     row->setContentsMargins(4, 2, 4, 3);
-    row->addWidget(new RibbonButton(action, 18));
+    row->addWidget(new RibbonButton(action, uiIconSize(18)));
     button->setCardMaterial(titleBar->isFloatingRow());
     titleBar->setChatButton(button);
   }

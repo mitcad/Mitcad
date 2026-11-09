@@ -38,6 +38,7 @@
 #include "../framework/Theme.hpp"
 #include "../platform/MacDialogs.hpp"
 #include "../platform/NativePicker.hpp"
+#include "../framework/UiSizes.hpp"
 
 namespace mitcad {
 namespace {
@@ -153,7 +154,7 @@ LibraryPicker::LibraryPicker(QWidget* parent, const QString& log, std::function<
   layout->addWidget(m_search);
   m_list = new QListWidget;
   m_list->setObjectName(QStringLiteral("libraryPickerList"));
-  m_list->setIconSize(QSize(kSwatchSize, kSwatchSize));
+  m_list->setIconSize(uiIconSize(kSwatchSize, kSwatchSize));
   m_list->setSelectionMode(QAbstractItemView::SingleSelection);
   m_list->setUniformItemSizes(false);
   m_list->setItemDelegate(new EntryDelegate(m_list));

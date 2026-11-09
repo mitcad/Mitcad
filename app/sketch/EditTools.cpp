@@ -251,7 +251,104 @@ public:
 
   void press(const Snap& snap) override {
     m_cursor = snap.at;
-    const QString entity = entityAt(snap.screen);    switch (m_state) {
+    takePick(entityAt(snap.screen));
+  }
+
+  // The right-click menu (mitcad#1540): for the circle or arc under the
+  // pointer (picked, or one a left click would pick there, which choosing
+  // picks) or else the last one picked, Center or Tangent: whether the
+  // dimension goes to its centre or to its tangent side; and Driving or
+  // Driven for the dimension being made; Cancel steps back as Esc does.
+  // None before anything is picked unless a circle or arc is under the
+  // pointer: the right-click is then the tool's Esc, as in other tools.
+  std::vector<ToolMenuEntry> menu(const Snap& snap) override {
+    if (m_state == State::Edit) {
+      return {};
+    }
+    m_cursor = snap.at;
+    const SketchModel& model = view();
+    const auto isRound = [&model](const QString& id) {
+      const CurveData* c = model.curve(id);
+      return c != nullptr && c->isCircular();
+    };
+    const QString under = entityAt(snap.screen);
+    QString target;
+    bool picks = false;
+    if (isRound(under) && m_picks.contains(under)) {
+      target = under;
+    } else if (isRound(under) && canPick(under)) {
+      target = under;
+      picks = true;
+    } else {
+      for (auto it = m_picks.crbegin(); it != m_picks.crend(); ++it) {
+        if (isRound(*it)) {
+          target = *it;
+          break;
+        }
+      }
+    }
+    if (target.isEmpty() && m_state == State::Pick) {
+      return {};
+    }
+    std::vector<ToolMenuEntry> entries;
+    if (!target.isEmpty()) {
+      const bool current = m_tangent.value(target, false);
+      for (const bool tangent : {false, true}) {
+        ToolMenuEntry entry;
+        entry.text = tangent ? QObject::tr("Tangent") : QObject::tr("Center");
+        entry.checked = !picks && tangent == current;
+        entry.run = [this, target, tangent, picks] { choose(target, tangent, picks); };
+        entries.push_back(entry);
+      }
+    }
+    for (const bool driven : {false, true}) {
+      ToolMenuEntry entry;
+      entry.text = driven ? QObject::tr("Driven") : QObject::tr("Driving");
+      entry.checked = driven == m_driven;
+      entry.separatorBefore = !driven && !entries.empty();
+      entry.run = [this, driven] { setDriven(driven); };
+      entries.push_back(entry);
+    }
+    ToolMenuEntry back;
+    back.text = QObject::tr("Cancel");
+    back.separatorBefore = true;
+    SketchController* controller = &m_c;
+    // The controller's Esc, which may end this tool: nothing of the tool is
+    // touched after it.
+    back.run = [controller] { controller->cancel(); };
+    entries.push_back(back);
+    qDebug().noquote() << QStringLiteral("Sketch Dimension menu for %1")
+                              .arg(target.isEmpty() ? QStringLiteral("the dimension")
+                                                    : QStringLiteral("%1 (%2)").arg(
+                                                          target, picks ? QStringLiteral("to pick")
+                                                                        : QStringLiteral("picked")));
+    return entries;
+  }
+
+  bool cancel() override {
+    if (m_state == State::Pick) {
+      return false;
+    }
+    reset();
+    return true;
+  }
+
+  void paint(ToolPreview& preview) const override {
+    if (m_state == State::Place || m_state == State::Edit) {
+      if (auto d = decide()) {
+        d->text = m_state == State::Edit ? m_placed : m_cursor;
+        preview.dimension = *d;
+        preview.model = &view();
+      }
+    }
+  }
+
+private:
+  enum class State { Pick, Pick2, Place, Edit };
+
+  // A pick, by a left click or a choice of the right-click menu.
+  void takePick(const QString& entity) {
+    switch (m_state) {
     case State::Pick:
       if (entity.isEmpty()) {
         return;
@@ -294,26 +391,65 @@ public:
     prompt();
   }
 
-  bool cancel() override {
-    if (m_state == State::Pick) {
+  // Whether a click on `entity` would pick it now.
+  bool canPick(const QString& entity) const {
+    if (entity.isEmpty() || m_picks.contains(entity)) {
       return false;
     }
-    reset();
-    return true;
-  }
-
-  void paint(ToolPreview& preview) const override {
-    if (m_state == State::Place || m_state == State::Edit) {
-      if (auto d = decide()) {
-        d->text = m_state == State::Edit ? m_placed : m_cursor;
-        preview.dimension = *d;
-        preview.model = &view();
-      }
+    if (m_state == State::Place) {
+      return secondPick(entity);
     }
+    return m_state == State::Pick || m_state == State::Pick2;
   }
 
-private:
-  enum class State { Pick, Pick2, Place, Edit };
+  // A circle or arc to its centre or its tangent side (mitcad#1540),
+  // picked now when `picks`.
+  void choose(const QString& entity, bool tangent, bool picks) {
+    m_tangent.insert(entity, tangent);
+    qDebug().noquote() << QStringLiteral("Sketch Dimension: %1 by its %2")
+                              .arg(entity, tangent ? QStringLiteral("tangent side") : QStringLiteral("center"));
+    if (picks) {
+      takePick(entity);
+    }
+    logPreview();
+  }
+
+  void setDriven(bool driven) {
+    m_driven = driven;
+    qDebug().noquote() << QStringLiteral("Sketch Dimension: %1")
+                              .arg(driven ? QStringLiteral("driven") : QStringLiteral("driving"));
+    logPreview();
+  }
+
+  // For UI tests: what the preview shows after a menu choice, a driven
+  // one's value in parentheses as the view shows it.
+  void logPreview() const {
+    if (m_state != State::Place) {
+      return;
+    }
+    const auto d = decide();
+    if (!d) {
+      return;
+    }
+    const QString value = d->type == QStringLiteral("angle")
+                              ? QString::number(d->measured * 180.0 / kPi, 'f', 2)
+                              : QString::number(d->measured / m_c.lengthScale(), 'f', 2);
+    qDebug().noquote() << QStringLiteral("Sketch Dimension preview: %1 %2")
+                              .arg(kindOf(d->json), d->driven ? QStringLiteral("(%1)").arg(value) : value);
+  }
+
+  // A dimension's type for the log, with its side or sign: "horizontal_distance
+  // signed" (mitcad#409), "tangent_circle_distance inside" (mitcad#1540).
+  static QString kindOf(const QJsonObject& dimension) {
+    QString kind = dimension.value(QStringLiteral("type")).toString();
+    if (dimension.value(QStringLiteral("signed")).toBool()) {
+      kind += QStringLiteral(" signed");
+    }
+    if (dimension.value(QStringLiteral("side")).toString() == QStringLiteral("inside")) {
+      kind += QStringLiteral(" inside");
+    }
+    return kind;
+  }
 
   // The point or curve under the cursor: the sketch's, a body edge or vertex
   // in the sketch plane (mitcad#256) or out of it where the view shows it
@@ -404,6 +540,9 @@ private:
   void reset() {
     m_state = State::Pick;
     m_picks.clear();
+    // The menu's choices go with the dimension being made (mitcad#1540).
+    m_tangent.clear();
+    m_driven = false;
     m_c.setPicked({});
     m_c.setHover(QString());
     prompt();
@@ -523,15 +662,46 @@ private:
       // (mitcad#445); other circles count by their centres.
       const bool concentric = ca != nullptr && cb != nullptr && ca->isCircular() && cb->isCircular() &&
                               dist(ca->curve.center, cb->curve.center) < 1e-9;
-      if (!concentric && ca != nullptr && ca->isCircular()) {
+      // A circle or arc the right-click menu set to its tangent side
+      // (mitcad#1540) is measured from there.
+      const bool tangentA = !concentric && ca != nullptr && ca->isCircular() && m_tangent.value(a, false);
+      const bool tangentB = !concentric && cb != nullptr && cb->isCircular() && m_tangent.value(b, false);
+      if (!concentric && !tangentA && ca != nullptr && ca->isCircular()) {
         a = ca->center;
         ca = nullptr;
       }
-      if (!concentric && cb != nullptr && cb->isCircular()) {
+      if (!concentric && !tangentB && cb != nullptr && cb->isCircular()) {
         b = cb->center;
         cb = nullptr;
       }
-      if (concentric) {
+      if (tangentA && tangentB) {
+        // The gap between the nearest sides: inside when one circle holds
+        // the other's centre.
+        set(QStringLiteral("tangent_circle_distance"), {{"a", a}, {"b", b}});
+        if (dist(ca->curve.center, cb->curve.center) < std::max(ca->curve.radius, cb->curve.radius)) {
+          d.json.insert(QStringLiteral("side"), QStringLiteral("inside"));
+        }
+      } else if (tangentA || tangentB) {
+        const CurveData* circle = tangentA ? ca : cb;
+        const QString other = tangentA ? b : a;
+        const CurveData* otherCurve = tangentA ? cb : ca;
+        if (otherCurve != nullptr) {
+          if (!otherCurve->isLine()) {
+            return std::nullopt;
+          }
+          set(QStringLiteral("tangent_distance"), {{"circle", circle->id}, {"line", otherCurve->id}});
+        } else {
+          // A point, or another circle's centre.
+          const auto at = model.pointAt(other);
+          if (!at || other == circle->center) {
+            return std::nullopt;
+          }
+          set(QStringLiteral("tangent_point_distance"), {{"circle", circle->id}, {"point", other}});
+          if (dist(*at, circle->curve.center) < circle->curve.radius) {
+            d.json.insert(QStringLiteral("side"), QStringLiteral("inside"));
+          }
+        }
+      } else if (concentric) {
         if (std::abs(ca->curve.radius - cb->curve.radius) < 1e-9) {
           return std::nullopt;
         }
@@ -593,6 +763,9 @@ private:
     } else {
       return std::nullopt;
     }
+    // Driven as chosen in the menu (mitcad#1540): the preview shows the
+    // value in parentheses.
+    d.driven = m_driven;
     return d;
   }
 
@@ -600,6 +773,11 @@ private:
     const auto d = decide();
     if (!d) {
       reset();
+      return;
+    }
+    if (m_driven) {
+      // A driven one has no value to type: added where it is placed.
+      add(d->json, m_cursor, QString());
       return;
     }
     m_state = State::Edit;
@@ -643,15 +821,21 @@ private:
       reset();
       return;
     }
+    // Driven chosen in the menu (mitcad#1540): it only measures.
+    const bool chosenDriven = m_driven;
     QJsonObject cmd = op.command(QStringLiteral("sketch.add_dimension"));
     cmd.insert(QStringLiteral("dimension"), dimension);
-    cmd.insert(QStringLiteral("value"), expression);
+    if (chosenDriven) {
+      cmd.insert(QStringLiteral("driven"), true);
+    } else {
+      cmd.insert(QStringLiteral("value"), expression);
+    }
     cmd.insert(QStringLiteral("text"), xy(at));
     QJsonObject result;
-    bool driven = false;
+    bool driven = chosenDriven;
     bool ok = op.run(cmd, &result);
     const QString type = definition.value(QStringLiteral("type")).toString();
-    if (!ok && op.error().contains(QStringLiteral("must not be negative")) &&
+    if (!ok && !chosenDriven && op.error().contains(QStringLiteral("must not be negative")) &&
         (type == QStringLiteral("horizontal_distance") || type == QStringLiteral("vertical_distance")) &&
         !dimension.value(QStringLiteral("signed")).toBool()) {
       // A negative value typed for a horizontal or vertical distance makes
@@ -661,7 +845,7 @@ private:
       ok = op.run(cmd, &result);
     }
     if (!ok) {
-      if (!op.error().contains(QStringLiteral("over-constrain"))) {
+      if (chosenDriven || !op.error().contains(QStringLiteral("over-constrain"))) {
         const QString reason = op.error();
         op.rollback();
         m_c.error(QObject::tr("Dimension not added: %1").arg(reason));
@@ -683,9 +867,19 @@ private:
     op.commit();
     const QString id = result.value(QStringLiteral("dimensions")).toArray().first().toString();
     const DimensionData* d = m_c.model().dimension(id);
-    // "horizontal_distance signed" for a signed one (mitcad#409).
-    const QString kind = d != nullptr && d->signedOffset ? type + QStringLiteral(" signed") : type;
-    if (driven) {
+    // "horizontal_distance signed" for a signed one (mitcad#409),
+    // "tangent_circle_distance inside" for a gap inside a circle (mitcad#1540).
+    QString kind = kindOf(dimension);
+    if (d != nullptr && d->signedOffset && !kind.contains(QStringLiteral(" signed"))) {
+      kind = type + QStringLiteral(" signed");
+    }
+    if (chosenDriven) {
+      // As asked in the menu: what it measures, as the view shows it.
+      qDebug().noquote() << QStringLiteral("Added driven dimension %1 %2 = %3")
+                                .arg(id, kind,
+                                     d != nullptr ? QString::number(d->measured / m_c.lengthScale(), 'f', 2)
+                                                  : QString());
+    } else if (driven) {
       // Not what was asked: a warning (mitcad#1051), kept in front of the
       // next prompt, which reset() shows below.
       m_c.notice(QObject::tr("The dimension would over-constrain the sketch: added as a driven dimension."),
@@ -717,6 +911,10 @@ private:
   State m_state = State::Pick;
   Selection m_selection;
   QStringList m_picks;
+  // The circles and arcs picked by their tangent side, not their centre
+  // (mitcad#1540), and whether the dimension is to be driven.
+  QHash<QString, bool> m_tangent;
+  bool m_driven = false;
   V2 m_cursor;
   V2 m_placed;
   // view(): the sketch with the body geometry, and when it was made.

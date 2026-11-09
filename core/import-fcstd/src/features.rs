@@ -29,7 +29,8 @@
 //!   tried.
 //! - Hole → `hole` at the profile sketch's circles' centres (of a profile
 //!   of a feature's circular edges, the circles of the sketch they came
-//!   from, mitcad#1087): depth or
+//!   from, mitcad#1087; of a body's planar face, on that face at its
+//!   circles' centres, mitcad#1557): depth or
 //!   through all, flat or angled point, counterbore, countersink,
 //!   counterdrill, tapered; an ISO metric, Unified, Whitworth or NPT thread
 //!   is a `thread` on the walls (the hole has FreeCAD's diameter), a
@@ -107,6 +108,20 @@ impl Dressed {
             set["faces"] = json!(self.faces);
         }
     }
+}
+
+/// Where a hole drills: a sketch's circles and points (`points` the
+/// placement's references, `offset` the distance of a feature's circles
+/// from the sketch's plane, `object` the profile's object), or the centres
+/// of a body face's circles (mitcad#1557).
+enum HoleAt {
+    Sketch {
+        sketch: Box<SketchMade>,
+        points: Vec<String>,
+        offset: f64,
+        object: String,
+    },
+    Face(super::profiles::FaceProfile, Vec<[f64; 3]>),
 }
 
 fn uids(bodies: &[BodyUid]) -> Vec<String> {
@@ -283,6 +298,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             "PartDesign::AdditiveHelix" | "PartDesign::SubtractiveHelix" => {
                 (self.helix_candidates(o, target), "helix")
             }
+            "PartDesign::FeatureBase" => (self.feature_base_candidates(o, target), "derive"),
             _ => match super::primitives::primitive_kind(t) {
                 // The type is the main definition's.
                 Some((kind, additive)) => (
@@ -1400,6 +1416,60 @@ impl<K: Kernel> Importer<'_, '_, K> {
         ))
     }
 
+    /// A hole's profile of a planar face of a body (`(Revolution, Face1)`,
+    /// mitcad#1557): FreeCAD 1.x drills at the centres of the face's
+    /// circles and arcs (a ring's two circles are one centre), along the
+    /// face's normal. The face as the hole's face (found by geometry in the
+    /// body holding the object's result, as a pad's face profile is), and
+    /// the centres from its stored edges. Only one face (FreeCAD takes the
+    /// first without `AllowMultiFace`; several faces are not translated).
+    fn hole_face_centres(
+        &mut self,
+        link: &LinkRef,
+        component: ComponentUid,
+    ) -> Result<(super::profiles::FaceProfile, Vec<[f64; 3]>), String> {
+        let [first, rest @ ..] = link.subs.as_slice() else {
+            return Err("a hole's profile names no face".to_owned());
+        };
+        if !rest.is_empty() {
+            return Err(format!(
+                "a hole's profile of {} faces of {} is not translated",
+                link.subs.len(),
+                link.object
+            ));
+        }
+        let name = sub_name(first);
+        let index = element_index(name, "Face")
+            .ok_or_else(|| format!("{}.{name} is not a face", link.object))?;
+        let face = self.profile_face_of(&link.object, name, component)?;
+        let curves = self
+            .stored_element(&link.object, ElementKind::Face, index, component)
+            .ok_or_else(|| format!("{}.{name}: not in its stored shape", link.object))?;
+        let mut centres: Vec<[f64; 3]> = Vec::new();
+        for c in &curves {
+            if let Curve3::Conic {
+                center,
+                major,
+                minor,
+                ..
+            } = c
+                && (major - minor).abs() <= SAME_GEOMETRY * major.max(1.0)
+                && !centres
+                    .iter()
+                    .any(|p| norm(sub(*p, *center)) <= SAME_GEOMETRY * (1.0 + norm(*center)))
+            {
+                centres.push(*center);
+            }
+        }
+        if centres.is_empty() {
+            return Err(format!(
+                "{}.{name} has no circles or arcs to drill at",
+                link.object
+            ));
+        }
+        Ok((face, centres))
+    }
+
     /// A hole's profile of chosen edges of its sketch (`(Sketch003, [Edge2,
     /// Edge3])` with `AllowMultiFace`, mitcad#1195): FreeCAD drills at those
     /// circles and arcs only, not at the sketch's others (another feature
@@ -1490,6 +1560,15 @@ impl<K: Kernel> Importer<'_, '_, K> {
             .object(&link.object)
             .cloned()
             .ok_or("no sketch")?;
+        // A planar face of a body (FreeCAD 1.x drills at the centres of the
+        // face's circles and arcs, along its normal, mitcad#1557).
+        if !link.subs.is_empty()
+            && link.subs.iter().all(|s| sub_name(s).starts_with("Face"))
+            && !super::is_sketch(&profile_object.type_name)
+        {
+            let (face, centres) = self.hole_face_centres(&link, component)?;
+            return self.hole_definitions(o, target, HoleAt::Face(face, centres));
+        }
         // A binder of a whole sketch (mitcad#955): that sketch's circles
         // and points, projected. Circular edges of a body (FreeCAD 1.x's
         // hole at a feature's circles, mitcad#1087): the circles of the
@@ -1516,34 +1595,65 @@ impl<K: Kernel> Importer<'_, '_, K> {
         if points.is_empty() {
             return Err("the profile sketch has no circles or points".to_owned());
         }
+        self.hole_definitions(
+            o,
+            target,
+            HoleAt::Sketch {
+                sketch: Box::new(sketch),
+                points,
+                offset,
+                object: link.object.clone(),
+            },
+        )
+    }
+
+    /// A hole's definitions at its places: a sketch's circles and points,
+    /// or a body face's circles (mitcad#1557).
+    fn hole_definitions(
+        &mut self,
+        o: &Object,
+        target: &Target,
+        at: HoleAt,
+    ) -> Result<Vec<Candidate>, String> {
         // Which holes reach the body (a sketch bound into another Body may
         // hold centres where that Body has no material; FreeCAD drills
         // there too, cutting nothing, mitcad#955): the axis meets the
         // body's box, and FreeCAD's result has edges about it.
-        let normal = sketch.frame.normal();
-        let positions: Vec<Option<[f64; 3]>> = {
-            let output = self.doc.sketch_output(sketch.uid);
-            let frame = sketch.frame;
-            points
-                .iter()
-                .map(|r| {
-                    let at = output.and_then(|o| {
-                        let id = mitcad_model::EntityUid(r.get(1..)?.parse().ok()?);
-                        if r.starts_with('c') {
-                            match o.solved.curves.get(&id)? {
-                                Curve2::Circle { center, .. } | Curve2::Arc { center, .. } => {
-                                    Some(*center)
+        let (normal, positions): ([f64; 3], Vec<Option<[f64; 3]>>) = match &at {
+            HoleAt::Sketch {
+                sketch,
+                points,
+                offset,
+                ..
+            } => {
+                let normal = sketch.frame.normal();
+                let output = self.doc.sketch_output(sketch.uid);
+                let frame = sketch.frame;
+                let positions = points
+                    .iter()
+                    .map(|r| {
+                        let at = output.and_then(|o| {
+                            let id = mitcad_model::EntityUid(r.get(1..)?.parse().ok()?);
+                            if r.starts_with('c') {
+                                match o.solved.curves.get(&id)? {
+                                    Curve2::Circle { center, .. } | Curve2::Arc { center, .. } => {
+                                        Some(*center)
+                                    }
+                                    _ => None,
                                 }
-                                _ => None,
+                            } else {
+                                o.solved.points.get(&id).copied()
                             }
-                        } else {
-                            o.solved.points.get(&id).copied()
-                        }
-                    });
-                    // At the edges' distance from the plane (mitcad#1195).
-                    at.map(|p| add(frame.point(p), scale(normal, offset)))
-                })
-                .collect()
+                        });
+                        // At the edges' distance from the plane (mitcad#1195).
+                        at.map(|p| add(frame.point(p), scale(normal, *offset)))
+                    })
+                    .collect();
+                (normal, positions)
+            }
+            HoleAt::Face(face, centres) => {
+                (face.normal, centres.iter().copied().map(Some).collect())
+            }
         };
         let known: Vec<[f64; 3]> = positions.iter().flatten().copied().collect();
         let mut drilled = self
@@ -1613,14 +1723,19 @@ impl<K: Kernel> Importer<'_, '_, K> {
         // arcs, or of its points (mitcad#964: the groove took the sketch's
         // own circles only, so a hole drilled at an external arc's centre
         // had no thread there).
-        let groove = match &thread {
-            Some(t) if modeled => {
+        let groove = match (&thread, &at) {
+            (Some(t), HoleAt::Sketch { sketch, .. }) if modeled => {
                 let centers: Vec<[f64; 3]> = positions
                     .iter()
                     .zip(&reached)
                     .filter_map(|(p, hit)| if *hit { *p } else { None })
                     .collect();
-                Some(self.thread_groove(o, t, centers, &sketch, target))
+                Some(self.thread_groove(o, t, centers, sketch, target))
+            }
+            (Some(_), HoleAt::Face(..)) if modeled => {
+                return Err(
+                    "a modelled thread of a hole at a face's circles is not translated".to_owned(),
+                );
             }
             _ => None,
         };
@@ -1699,27 +1814,40 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let boxes: Vec<Option<mitcad_model::BoundingBox>> =
             participants.iter().map(|b| self.box_of(*b)).collect();
         let reversed = o.bool("Reversed").unwrap_or(false);
-        // Holes at a feature's circles off the sketch's plane (the far end
-        // of its pad, mitcad#1195) start on the plane through them, at the
-        // centres where the sketch puts them now.
-        let lifted = offset.abs() > SAME_GEOMETRY * (1.0 + norm(sketch.frame.origin));
-        let placement = if lifted {
-            let at: Vec<[f64; 3]> = positions.iter().flatten().copied().collect();
-            if at.len() != points.len() {
-                return Err("a hole's centre did not solve".to_owned());
+        let placement = match &at {
+            HoleAt::Sketch {
+                sketch,
+                points,
+                offset,
+                object,
+            } => {
+                // Holes at a feature's circles off the sketch's plane (the
+                // far end of its pad, mitcad#1195) start on the plane
+                // through them, at the centres where the sketch puts them
+                // now.
+                let offset = *offset;
+                let lifted = offset.abs() > SAME_GEOMETRY * (1.0 + norm(sketch.frame.origin));
+                if lifted {
+                    let at: Vec<[f64; 3]> = positions.iter().flatten().copied().collect();
+                    if at.len() != points.len() {
+                        return Err("a hole's centre did not solve".to_owned());
+                    }
+                    notes.push(format!(
+                        "drilled from {object}'s face {offset:.3} mm off its sketch's plane, at \
+                         fixed places"
+                    ));
+                    json!({"type": "plane",
+                           "plane": {"origin": add(sketch.frame.origin, scale(normal, offset)), "normal": normal},
+                           "points": at})
+                } else {
+                    json!({"type": "sketch_points", "sketch": sketch.uid.to_string(), "points": points})
+                }
             }
-            json!({"type": "plane",
-                   "plane": {"origin": add(sketch.frame.origin, scale(normal, offset)), "normal": normal},
-                   "points": at})
-        } else {
-            json!({"type": "sketch_points", "sketch": sketch.uid.to_string(), "points": points})
+            // On the face (it follows the face's plane), at its circles'
+            // centres as the stored shape has them.
+            HoleAt::Face(face, centres) => json!({"type": "face",
+                "body": face.body.to_string(), "face": face.face, "points": centres}),
         };
-        if lifted {
-            notes.push(format!(
-                "drilled from {}'s face {offset:.3} mm off its sketch's plane, at fixed places",
-                link.object
-            ));
-        }
         let mut out = Vec::new();
         for flip in [reversed, !reversed] {
             let mut def = json!({"type": "hole",

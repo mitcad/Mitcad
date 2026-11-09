@@ -895,6 +895,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         // A definition the translation does not have (its reason says
         // "not translated"): a fallback of group 1 (mitcad#539).
         let mut missing = false;
+        let mut inherited = false;
         match candidates {
             Ok(candidates) => {
                 for (tried, candidate) in candidates.iter().enumerate() {
@@ -977,7 +978,10 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 }
             }
             Err(why) => {
-                missing = why.contains("not translated");
+                // A definition whose input has no parametric counterpart (a
+                // base feature of a union of scripted objects, mitcad#1557).
+                inherited = why.contains("no parametric counterpart");
+                missing = !inherited && why.contains("not translated");
                 last = no_counterpart(&object.type_name).unwrap_or(why);
             }
         }
@@ -1010,7 +1014,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
         // The fallback's group: no parametric counterpart (by its type, or
         // FreeCAD's own result invalid), missing in Mitcad, or other.
-        let group = if no_counterpart(&object.type_name).is_some() {
+        let group = if no_counterpart(&object.type_name).is_some() || inherited {
             FallbackGroup::NoCounterpart
         } else if missing {
             FallbackGroup::Missing

@@ -9,7 +9,6 @@
 #include <utility>
 #include <vector>
 
-#include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
@@ -24,6 +23,7 @@
 #include <TopoDS_Compound.hxx>
 #include <gp_Lin.hxx>
 
+#include "face_select.hpp"
 #include "history.hpp"
 #include "sweep.hpp"
 #include "util.hpp"
@@ -41,7 +41,8 @@ double depth_to(const Target& target, const gp_Ax1& ray) {
   const gp_Lin line(ray);
   bool planar = target.kind == Target::Kind::Plane;
   if (target.kind == Target::Kind::Face && target.extend) {
-    planar = BRepAdaptor_Surface(detail::target_faces(target).front()).GetType() == GeomAbs_Plane;
+    // A flat spline face too (a sheet body's wall, mitcad#1554).
+    planar = detail::reference_plane(detail::target_faces(target).front()).has_value();
   }
   if (planar) {
     const gp_Pln plane = detail::target_plane(target, ray.Direction());

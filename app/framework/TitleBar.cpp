@@ -22,6 +22,7 @@
 #include "Ribbon.hpp"
 #include "TestSync.hpp"
 #include "Theme.hpp"
+#include "UiSizes.hpp"
 #include "platform/MacChrome.hpp"
 
 namespace mitcad {
@@ -67,8 +68,8 @@ public:
     setFocusPolicy(Qt::NoFocus);
     setAttribute(Qt::WA_Hover);
     setCursor(Qt::ArrowCursor);
-    setFixedHeight(kControlHeight);
-    setFixedWidth(220);
+    setFixedHeight(uiRoomSize(kControlHeight));
+    setFixedWidth(uiRoomSize(220));
   }
 
 protected:
@@ -89,9 +90,13 @@ protected:
     painter.setBrush(tint(pal, isDarkPalette(pal) ? 24 : 15));
     painter.drawRoundedRect(box, radius, radius);
     painter.setPen(tint(pal, 150));
-    const QPixmap glass = m_glass.pixmap(QSize(14, 14), devicePixelRatioF());
-    painter.drawPixmap(QPointF(12, (height() - 14) / 2.0), glass);
-    painter.drawText(QRect(34, 0, width() - 44, height()), Qt::AlignVCenter | Qt::AlignLeft, m_label);
+    // The glass at Icon size, the label after it (mitcad#1556).
+    const int side = uiIconSize(14);
+    const QPixmap glass = m_glass.pixmap(QSize(side, side), devicePixelRatioF());
+    painter.drawPixmap(QPointF(12, (height() - side) / 2.0), glass);
+    const int textLeft = 12 + side + 8;
+    painter.drawText(QRect(textLeft, 0, width() - textLeft - 10, height()), Qt::AlignVCenter | Qt::AlignLeft,
+                     painter.fontMetrics().elidedText(m_label, Qt::ElideRight, width() - textLeft - 10));
   }
 
 private:
@@ -101,12 +106,12 @@ private:
 
 } // namespace
 
-int TitleBar::rowHeight() { return kRowHeight; }
+int TitleBar::rowHeight() { return uiRoomSize(kRowHeight); }
 
 TitleBar::TitleBar(Ribbon* ribbon, QAction* undo, QAction* redo, QAction* search, QWidget* parent)
     : QWidget(parent) {
   setObjectName(QStringLiteral("titleBar"));
-  setFixedHeight(kRowHeight);
+  setFixedHeight(rowHeight());
   auto* row = new QHBoxLayout(this);
   row->setContentsMargins(12, 0, 12, 0);
   row->setSpacing(12);
@@ -121,10 +126,11 @@ TitleBar::TitleBar(Ribbon* ribbon, QAction* undo, QAction* redo, QAction* search
   auto* pair = new QHBoxLayout(history);
   pair->setContentsMargins(4, 2, 4, 3);
   pair->setSpacing(2);
-  pair->addWidget(new RibbonButton(undo, 18));
+  pair->addWidget(new RibbonButton(undo, uiIconSize(18)));
   pair->addWidget(new Divider);
-  pair->addWidget(new RibbonButton(redo, 18));
-  history->setFixedHeight(34);
+  pair->addWidget(new RibbonButton(redo, uiIconSize(18)));
+  // The buttons (the icon and 10) and the frame's 5 at Icon size (mitcad#1556).
+  history->setFixedHeight(uiIconSize(18) + 16);
   row->addWidget(history);
 
   QTabBar* tabs = ribbon->tabBar();
@@ -177,7 +183,7 @@ void TitleBar::setIndicator(QWidget* indicator) {
   }
   m_indicator = indicator;
   indicator->setParent(this);
-  indicator->setFixedHeight(kControlHeight);
+  indicator->setFixedHeight(uiRoomSize(kControlHeight));
   row->insertWidget(row->indexOf(m_search), indicator);
   indicator->show();
   if (m_floatingRow) {
@@ -194,7 +200,7 @@ void TitleBar::setAgentIndicator(QWidget* indicator) {
   }
   m_agentIndicator = indicator;
   indicator->setParent(this);
-  indicator->setFixedHeight(kControlHeight);
+  indicator->setFixedHeight(uiRoomSize(kControlHeight));
   row->insertWidget(row->indexOf(m_search), indicator);
   indicator->show();
   if (m_floatingRow) {
@@ -211,7 +217,7 @@ void TitleBar::setChatButton(QWidget* button) {
   }
   m_chatButton = button;
   button->setParent(this);
-  button->setFixedHeight(kControlHeight);
+  button->setFixedHeight(uiRoomSize(kControlHeight));
   row->insertWidget(row->indexOf(m_search), button);
   button->show();
   if (m_floatingRow) {
@@ -227,7 +233,7 @@ void TitleBar::setFloatingRow(bool floating) {
   }
   m_floatingRow = floating;
   setObjectName(floating ? QStringLiteral("titleRow") : QStringLiteral("titleBar"));
-  setFixedHeight(floating ? kFloatingRowHeight : kRowHeight);
+  setFixedHeight(floating ? uiRoomSize(kFloatingRowHeight) : rowHeight());
   // The row starts and ends at the layout's margin to the view's edges, as
   // the ribbon's group cards below it; no traffic lights to leave room for.
   layout()->setContentsMargins(floating ? 0 : 12, 0, floating ? 0 : 12, 0);
