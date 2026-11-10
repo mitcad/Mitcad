@@ -60,32 +60,33 @@ ShapePtr extrude_face(const Shape& body, const FaceExtrudeSpec& spec) {
   return detail::run("extrude face", [&] {
     const std::vector<int> found = body.find_faces(spec.face);
     if (found.empty()) {
-      throw std::invalid_argument("the body has no face " + spec.face);
+      throw std::invalid_argument(no_face_error(spec.face));
     }
     if (found.size() > 1) {
-      throw std::invalid_argument(spec.face + " names " + std::to_string(found.size()) +
-                                  " faces; an extrusion takes one face");
+      throw std::invalid_argument(face_error(
+          spec.face, "the face is in " + std::to_string(found.size()) + " pieces; an extrusion takes one face",
+          spec.face + " names " + std::to_string(found.size()) + " faces; an extrusion takes one face"));
     }
     const TopoDS_Face& face = body.face(found.front());
     TopLoc_Location location;
     if (BRep_Tool::Surface(face, location).IsNull()) {
-      throw std::invalid_argument("face " + spec.face +
-                                  " has no surface (a mesh body's triangles): an extrusion takes a "
-                                  "planar face");
+      const std::string why = " has no surface (a mesh body's triangles): an extrusion takes a planar face";
+      throw std::invalid_argument(face_error(spec.face, "the face" + why, "face " + spec.face + why));
     }
     const BRepAdaptor_Surface surface(face);
     const bool tapered = spec.taper1 != 0.0 || (spec.distance2 && spec.taper2 != 0.0);
     const bool planar = surface.GetType() == GeomAbs_Plane;
     if (!planar && (!spec.direction || tapered || spec.start_offset != 0.0)) {
-      throw std::invalid_argument("face " + spec.face +
-                                  " is not planar: an extrusion takes a planar face (a curved one only "
-                                  "along a direction, without a taper or a start offset)");
+      const std::string why = " is not planar: an extrusion takes a planar face (a curved one only along a "
+                              "direction, without a taper or a start offset)";
+      throw std::invalid_argument(face_error(spec.face, "the face" + why, "face " + spec.face + why));
     }
     // Out of the material: the plane's normal as the face is oriented (a
     // curved face goes along its direction).
     const gp_Dir normal = planar ? detail::planar_normal(face, surface.Plane()) : *spec.direction;
     if (planar && spec.direction && std::abs(spec.direction->Dot(normal)) < 1.0e-6) {
-      throw std::invalid_argument("the extrusion direction lies in the plane of face " + spec.face);
+      throw std::invalid_argument(face_error(spec.face, "the extrusion direction lies in the plane of the face",
+                                             "the extrusion direction lies in the plane of face " + spec.face));
     }
     const gp_Dir sweep_along = spec.direction ? *spec.direction : normal;
     const gp_Dir along = spec.reversed ? sweep_along.Reversed() : sweep_along;

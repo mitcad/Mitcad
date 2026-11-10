@@ -204,8 +204,8 @@ ShapePtr untrim_surface(const std::string& feature, const Shape& body, const std
     const ShapePtr copy = detail::working_copy(body);
     const std::vector<int> found = detail::resolve_faces(*copy, {face}, "face");
     if (found.size() != 1) {
-      throw std::invalid_argument("untrim: face " + face + " is in " + std::to_string(found.size()) +
-                                  " pieces; name one piece");
+      const std::string pieces = " is in " + std::to_string(found.size()) + " pieces; name one piece";
+      throw std::invalid_argument(face_error(face, "untrim: the face" + pieces, "untrim: face " + face + pieces));
     }
     const TopoDS_Face& original = copy->face(found.front());
     TopLoc_Location location;

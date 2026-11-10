@@ -8,7 +8,10 @@
 // ring there. The chamfer adds material: where it runs past the ring's far
 // edge it is cut by the face beyond, the disc's rim cylinder, never left
 // hanging out past the rim. At 4 mm the chamfer's contact meets the rim
-// exactly at the flats' middles: it fails with a message that says where.
+// exactly at the flats' middles: built all the same, the ring gone, as
+// valid as the chamfer on a wider disc cut by the rim (mitcad#1613; also
+// on the reported design's sizes, the octagon's flats at 36 mm on a disc
+// of 80 mm).
 // The check of mitcad#1253 warns of such a chamfer hanging out past the rim
 // (made by hand here: the chamfer on a larger disc, the disc cut back).
 //
@@ -28,25 +31,30 @@
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <Geom_Curve.hxx>
 #include <Geom_Surface.hxx>
+#include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Pln.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
 #include "check.hpp"
+#include "../src/cutouts.hpp"
 #include "../src/dressup_check.hpp"
 #include "mitcad/analysis/properties.hpp"
 #include "mitcad/geometry/dressup.hpp"
@@ -75,10 +83,11 @@ ShapePtr named(const TopoDS_Shape& body) {
   return std::make_shared<Shape>(body, faces);
 }
 
-// The octagon on the disc (of radius 44, or `radius`).
-TopoDS_Shape octagon_on_disc(double radius = kDiscRadius) {
+// The octagon (flats at `flat` from the axis, from the disc's top up to
+// kTop, its vertical corners rounded).
+TopoDS_Shape octagon(double flat) {
   BRepBuilderAPI_MakePolygon polygon;
-  const double circumradius = kFlat / std::cos(kPi / 8);
+  const double circumradius = flat / std::cos(kPi / 8);
   for (int k = 0; k < 8; ++k) {
     const double a = kPi / 8 + k * kPi / 4;
     polygon.Add(gp_Pnt(circumradius * std::cos(a), circumradius * std::sin(a), kDiscTop));
@@ -95,9 +104,13 @@ TopoDS_Shape octagon_on_disc(double radius = kDiscRadius) {
       corners.Add(kCornerRadius, edge);
     }
   }
-  const TopoDS_Shape octagon = corners.Shape();
+  return corners.Shape();
+}
+
+// The octagon on the disc (of radius 44, or `radius`).
+TopoDS_Shape octagon_on_disc(double radius = kDiscRadius) {
   const TopoDS_Shape disc = BRepPrimAPI_MakeCylinder(radius, kDiscTop).Shape();
-  return BRepAlgoAPI_Fuse(disc, octagon).Shape();
+  return BRepAlgoAPI_Fuse(disc, octagon(kFlat)).Shape();
 }
 
 // The faces on the disc's top plane facing up: the ring's pieces.
@@ -242,8 +255,9 @@ Reference read_reference(Reference built_in, const std::string& folder) {
   return out;
 }
 
-ChamferSet foot_chamfer(const Shape& body, double size) {
-  ChamferSet set;
+// The index of the octagon's foot edge at the flat on the +x side.
+int foot_edge(const Shape& body, double flat = kFlat) {
+  int found = -1;
   for (int i = 0; i < body.edge_count(); ++i) {
     const TopoDS_Edge& edge = TopoDS::Edge(body.edge(i));
     if (BRep_Tool::Degenerated(edge)) {
@@ -252,15 +266,78 @@ ChamferSet foot_chamfer(const Shape& body, double size) {
     double first = 0.0;
     double last = 0.0;
     const occ::handle<Geom_Curve> curve = BRep_Tool::Curve(edge, first, last);
-    if (!curve.IsNull() && curve->Value(0.5 * (first + last)).Distance(gp_Pnt(kFlat, 0, kDiscTop)) < 1e-6) {
-      set.edges.push_back(body.edge_name(i));
+    if (!curve.IsNull() && curve->Value(0.5 * (first + last)).Distance(gp_Pnt(flat, 0, kDiscTop)) < 1e-6) {
+      CHECK(found < 0);
+      found = i;
     }
   }
-  CHECK(set.edges.size() == 1);
+  CHECK(found >= 0);
+  return found;
+}
+
+ChamferSet foot_chamfer(const Shape& body, double size, double flat = kFlat) {
+  ChamferSet set;
+  const int edge = foot_edge(body, flat);
+  if (edge >= 0) {
+    set.edges.push_back(body.edge_name(edge));
+  }
   set.spec.type = ChamferType::EqualDistance;
   set.spec.distance = size;
   set.tangent_chain = true;
   return set;
+}
+
+// Whether the shape is one solid whose shells are closed.
+bool one_closed_solid(const TopoDS_Shape& shape) {
+  int solids = 0;
+  for (TopExp_Explorer ex(shape, TopAbs_SOLID); ex.More(); ex.Next()) {
+    ++solids;
+  }
+  for (TopExp_Explorer ex(shape, TopAbs_SHELL); ex.More(); ex.Next()) {
+    if (!BRep_Tool::IsClosed(ex.Current())) {
+      return false;
+    }
+  }
+  return solids == 1;
+}
+
+// A foot chamfer as wide as the disc's ring at the flats, its contact
+// meeting the rim there (mitcad#1613): built as one valid closed solid
+// without notes, nothing of it outside the rim, its volume that of the
+// same chamfer on the octagon on a wider disc (`wide`, where it runs over
+// nothing) cut by the rim cylinder grown up. Returns the volume it adds.
+double check_to_the_rim(const std::string& label, const Shape& body, const ChamferSet& set,
+                        const TopoDS_Shape& wide, double radius, double flat = kFlat) {
+  ShapePtr result;
+  try {
+    result = chamfer("C", body, {set});
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "%s: %s\n", label.c_str(), error.what());
+    CHECK(false);
+    return 0.0;
+  }
+  dump(result->occt(), label);
+  const ShapePtr wide_body = named(wide);
+  const ShapePtr wide_chamfered = chamfer("C", *wide_body, {foot_chamfer(*wide_body, set.spec.distance, flat)});
+  const TopoDS_Shape rim =
+      BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, -50), gp_Dir(0, 0, 1)), radius, 100.0).Shape();
+  const double expected = volume_of(BRepAlgoAPI_Common(wide_chamfered->occt(), rim).Shape());
+  const double volume = volume_of(result->occt());
+  std::printf("%s: valid %d, volume %.4f (expected %.4f, added %.4f), faces %d, vertices %.9f and edges %.9f from "
+              "the axis at most, ring pieces %d\n",
+              label.c_str(), BRepCheck_Analyzer(result->occt()).IsValid() ? 1 : 0, volume, expected,
+              volume - volume_of(body.occt()), result->face_count(), vertex_radius(result->occt()),
+              largest_radius(result->occt()), ring_pieces(result->occt()));
+  for (const std::string& note : result->notes()) {
+    std::printf("  note: %s\n", note.c_str());
+  }
+  CHECK(BRepCheck_Analyzer(result->occt()).IsValid());
+  CHECK(one_closed_solid(result->occt()));
+  CHECK(result->notes().empty());
+  CHECK_NEAR_TOL(volume, expected, 1e-6);
+  CHECK(vertex_radius(result->occt()) <= radius + 1e-6);
+  CHECK(largest_radius(result->occt()) <= radius + 1e-5);
+  return volume - volume_of(body.occt());
 }
 
 void test_octagon_foot() {
@@ -311,18 +388,66 @@ void test_octagon_foot() {
     CHECK(result->notes().empty());
   }
   // The exact tangent case: the chamfer's contact meets the rim at the
-  // flats' middles. A message that names the edge and the faces.
-  try {
-    const ShapePtr result = chamfer("C", *body, {foot_chamfer(*body, 4.0)});
-    std::fprintf(stderr, "octagon foot 4 mm: built (volume %.3f, largest radius %.6f)\n", volume_of(result->occt()),
-                 largest_radius(result->occt()));
-    CHECK(false);
-  } catch (const std::exception& error) {
-    const std::string message = error.what();
-    std::printf("octagon foot 4 mm: %s\n", message.c_str());
-    CHECK(message.find("edge E{") != std::string::npos);
-    CHECK(message.find("reaches exactly to the far edge of face N") != std::string::npos);
-    CHECK(message.find("at (44, 0, 2)") != std::string::npos);
+  // flats' middles, where the ring ends in points; the ring is gone, the
+  // chamfer cut by the rim cylinder all round (mitcad#1613: a valid solid,
+  // built; mitcad#1260 refused it).
+  check_to_the_rim("octagon foot 4 mm", *body, foot_chamfer(*body, 4.0), octagon_on_disc(50.0), kDiscRadius);
+}
+
+// The reported design's part (mitcad#1613): the octagon with flats at
+// 36 mm on a disc of 80 mm, the disc's outline from the end chamfer of a
+// thread under it (a neck of 76 mm with its end chamfer; the disc's rim a
+// cylinder about the axis pointing down, as an extrusion of a circle
+// projected from that edge has it).
+constexpr double kRimFlat = 36.0;
+
+TopoDS_Shape octagon_on_rim(double radius) {
+  BRepBuilderAPI_MakePolygon profile;
+  profile.Add(gp_Pnt(0, 0, 0));
+  profile.Add(gp_Pnt(38, 0, 0));
+  profile.Add(gp_Pnt(38, 0, -7));
+  profile.Add(gp_Pnt(37, 0, -8));
+  profile.Add(gp_Pnt(0, 0, -8));
+  profile.Close();
+  const TopoDS_Face section = BRepBuilderAPI_MakeFace(profile.Wire(), true).Face();
+  const TopoDS_Shape neck = BRepPrimAPI_MakeRevol(section, gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1))).Shape();
+  // (Mirrored: the rim's cylinder about the axis pointing down in a
+  // left-handed frame, as the design's.)
+  gp_Trsf mirror;
+  mirror.SetMirror(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)));
+  const TopoDS_Shape disc =
+      BRepBuilderAPI_Transform(
+          BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, -kDiscTop), gp_Dir(0, 0, 1)), radius, kDiscTop).Shape(),
+          mirror, true)
+          .Shape();
+  return BRepAlgoAPI_Fuse(BRepAlgoAPI_Fuse(neck, disc).Shape(), octagon(kRimFlat)).Shape();
+}
+
+// Its foot chamfered 4 mm, exactly to the rim of the disc at the flats'
+// middles: on a disc of exactly 40 mm, and of the design's 40 mm less
+// 3.4e-10 (its sketch's circle as projected), where the contact crosses
+// the rim by that much and the rim's pieces cannot be joined into one
+// valid face. The chamfer adds what the design's part gets, 1727.685 mm3.
+void test_octagon_foot_to_the_rim() {
+  for (const double radius : {40.0, 39.999999999661824}) {
+    const ShapePtr body = named(octagon_on_rim(radius));
+    CHECK(BRepCheck_Analyzer(body->occt()).IsValid());
+    const std::string label = radius == 40.0 ? "foot to the rim" : "foot to the projected rim";
+    const double added = check_to_the_rim(label, *body, foot_chamfer(*body, 4.0, kRimFlat), octagon_on_rim(46.0),
+                                          radius, kRimFlat);
+    CHECK(std::abs(added - 1727.685) < 0.01);
+    // Where it would not be sound, the refusal is in plain words
+    // (mitcad#1327, mitcad#1613): no names, ids or coordinates.
+    std::vector<int> owner(static_cast<std::size_t>(body->edge_count()), -1);
+    const int edge = foot_edge(*body, kRimFlat);
+    if (edge >= 0) {
+      owner[static_cast<std::size_t>(edge)] = 0;
+    }
+    const std::string text = detail::overflow_tangent(*body, owner, [](int, int) { return 4.0; });
+    std::printf("%s, tangent: %s\n", label.c_str(), text.c_str());
+    CHECK(text.find("reaches exactly to the far edge of the narrow face") != std::string::npos);
+    CHECK(text.find("E{") == std::string::npos && text.find("face N") == std::string::npos &&
+          text.find("(40") == std::string::npos);
   }
 }
 
@@ -419,6 +544,7 @@ void test_warning_on_an_eave() {
 
 int main() {
   test::guarded("octagon foot", test::test_octagon_foot);
+  test::guarded("octagon foot to the rim", test::test_octagon_foot_to_the_rim);
   test::guarded("warning on an eave", test::test_warning_on_an_eave);
   if (test::failures == 0) {
     std::puts("test_chamfer_overflow_concave: all checks passed");

@@ -376,13 +376,16 @@ fn an_ambiguous_reference_is_left_with_its_error() {
     let report = auto_fix(&mut doc, &["F3"]);
     assert_eq!(
         report["message"],
-        format!("Auto Fix: 0 of 1 warning fixed; Shell1: {tie}, pick one of them again"),
+        format!(
+            "Auto Fix: 0 of 1 warning fixed; Shell1: {}, pick one of them again",
+            mitcad_model::notice::user_message(tie.agent_text())
+        ),
         "{report}"
     );
     assert_eq!(report["label"], Value::Null);
     assert_eq!(
         report["left"],
-        json!([{"feature": "F3", "name": "Shell1", "message": tie,
+        json!([{"feature": "F3", "name": "Shell1", "message": tie.agent_text(),
                 "advice": "pick one of them again"}])
     );
     assert_eq!(doc.undo_depth(), depth);
@@ -391,7 +394,10 @@ fn an_ambiguous_reference_is_left_with_its_error() {
     let report = auto_fix(&mut doc, &["F2", "F3"]);
     assert_eq!(
         report["message"],
-        format!("Auto Fix: 1 of 2 warnings fixed; Shell1: {tie}, pick one of them again"),
+        format!(
+            "Auto Fix: 1 of 2 warnings fixed; Shell1: {}, pick one of them again",
+            mitcad_model::notice::user_message(tie.agent_text())
+        ),
         "{report}"
     );
     assert_eq!(report["label"], "Auto Fix Extrude1");

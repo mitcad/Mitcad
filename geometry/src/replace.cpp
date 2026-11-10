@@ -579,8 +579,8 @@ ShapePtr replace_by_slab(const Shape& body, const std::vector<int>& faces, const
     for (const std::string& old : body.face_names(f)) {
       for (int i = 0; i < result->face_count(); ++i) {
         if (face_matches(result->face_names(i), old)) {
-          throw std::runtime_error("face " + old + " could not be replaced: the target does not "
-                                   "reach all of it");
+          const std::string why = " could not be replaced: the target does not reach all of it";
+          throw std::runtime_error(face_error(old, "a face" + why, "face " + old + why));
         }
       }
     }

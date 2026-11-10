@@ -161,7 +161,7 @@ fn missing_and_damaged_data_fail_the_base_feature() {
     back.recompute();
     assert_eq!(
         back.status(FeatureUid(3)),
-        Some(&FeatureStatus::Failed(format!(
+        Some(&FeatureStatus::failed(format!(
             "body 0: its B-rep data {bolt} is missing from the project store (.mitcad/brep)"
         )))
     );

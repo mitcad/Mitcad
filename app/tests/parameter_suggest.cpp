@@ -1023,6 +1023,53 @@ void removeNameTests() {
   QApplication::processEvents(); // the menu's choice runs after it closes
   CHECK(edit->text() == QStringLiteral("7"));
 
+  // Backspace (mitcad#1614): the first over the selected value deletes the
+  // value, the next takes the whole `name = ` off, as typed; the field's
+  // undo brings the name back.
+  edit->setText(QStringLiteral("gap = 20 mm"));
+  edit->setSelection(6, 5);
+  press(*edit, Qt::Key_Backspace);
+  CHECK(edit->text() == QStringLiteral("gap = "));
+  const int before = edits;
+  press(*edit, Qt::Key_Backspace);
+  CHECK(edit->text().isEmpty());
+  CHECK(edits > before);
+  CHECK(field->nameRemovedByBackspace());
+  pressWith(*edit, Qt::Key_Z, Qt::ControlModifier);
+  CHECK(edit->text() == QStringLiteral("gap = "));
+  // The name back: no longer taken off by Backspace.
+  CHECK(!field->nameRemovedByBackspace());
+  // A value left, or the caret inside the name: the field's own Backspace.
+  edit->setText(QStringLiteral("gap = 2"));
+  edit->setCursorPosition(7);
+  press(*edit, Qt::Key_Backspace);
+  CHECK(edit->text() == QStringLiteral("gap = "));
+  edit->setCursorPosition(3);
+  press(*edit, Qt::Key_Backspace);
+  CHECK(edit->text() == QStringLiteral("ga = "));
+  field->close(); // `ga` typed opened the list
+  // Without the `=` the text is a value, not a name.
+  edit->setText(QStringLiteral("gap"));
+  edit->setCursorPosition(3);
+  press(*edit, Qt::Key_Backspace);
+  CHECK(edit->text() == QStringLiteral("ga"));
+
+  // The tooltip says so while a name shows, and only then.
+  edit->setToolTip(QStringLiteral("own tip"));
+  const QPoint at(5, edit->height() / 2);
+  edit->setText(QStringLiteral("gap = 20 mm"));
+  QHelpEvent named(QEvent::ToolTip, at, edit->mapToGlobal(at));
+  QApplication::sendEvent(edit, &named);
+  CHECK(QToolTip::text() == QStringLiteral("own tip\nBackspace on an empty value removes the name"));
+  CHECK(ParameterField::removeNameHint() == QStringLiteral("Backspace on an empty value removes the name"));
+  QToolTip::hideText();
+  edit->setText(QStringLiteral("20 mm"));
+  QHelpEvent plain(QEvent::ToolTip, at, edit->mapToGlobal(at));
+  QApplication::sendEvent(edit, &plain);
+  CHECK(QToolTip::text() == QStringLiteral("own tip"));
+  QToolTip::hideText();
+  edit->setToolTip(QString());
+
   // Not offered without a name, nor in a field that does not take it off.
   const auto offered = [edit] {
     bool found = false;
@@ -1047,6 +1094,11 @@ void removeNameTests() {
   options.removeName = false;
   ParameterField::attach(edit, options);
   CHECK(!offered());
+  // Nor does Backspace take a name off there (mitcad#1614).
+  edit->setText(QStringLiteral("gap = "));
+  edit->setCursorPosition(6);
+  press(*edit, Qt::Key_Backspace);
+  CHECK(edit->text() == QStringLiteral("gap ="));
 }
 
 int parameterSuggestTests() {

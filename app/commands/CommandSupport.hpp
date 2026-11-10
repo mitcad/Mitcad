@@ -79,6 +79,10 @@ constexpr SelectFilter kPointKinds =
 // Paths: sketch curves, edges, or the curve of an Intersection Curve picked
 // in the view or on the timeline (a feature, mitcad#1405).
 constexpr SelectFilter kPathKinds = SelectKind::SketchCurve | SelectKind::Edge | SelectKind::Feature;
+// What a path input takes of kPathKinds (withAccepts): a feature only when
+// it is an Intersection Curve's curve (isFeatureCurve), never another
+// feature clicked on the timeline (mitcad#1610).
+bool isPathItem(const SelectionItem& item);
 // Straight lines as extent objects (mitcad#1329); isStraightLine tells.
 constexpr SelectFilter kStraightLineKinds = SelectKind::Axis | SelectKind::Edge | SelectKind::SketchCurve;
 

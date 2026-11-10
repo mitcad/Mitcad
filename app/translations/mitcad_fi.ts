@@ -26450,6 +26450,10 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
         <source>gives this parameter its automatic name back</source>
         <translation>palauttaa parametrille sen automaattisen nimen</translation>
     </message>
+    <message>
+        <source>Backspace on an empty value removes the name</source>
+        <translation>Backspace tyhjässä arvossa poistaa nimen</translation>
+    </message>
 </context>
 <context>
     <name>mitcad::ParametersDialog</name>

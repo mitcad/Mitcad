@@ -387,8 +387,12 @@ impl FeatureInfo for LoftDef {
                 LoftSectionDef::Face { body, face } => {
                     ctx.body(*body).map_err(at)?;
                     for feature in face.features() {
-                        ctx.feature(feature)
-                            .map_err(|e| at(format!("face {face}: {e}")))?;
+                        ctx.feature(feature).map_err(|e| {
+                            at(crate::notice::about_place(
+                                crate::notice::NoticePlace::face(face.to_string()),
+                                &e.to_string(),
+                            ))
+                        })?;
                     }
                 }
                 LoftSectionDef::Point { point } => point.check(ctx, Want::Point).map_err(at)?,
@@ -552,7 +556,14 @@ impl<K: Kernel> Evaluate<K> for LoftDef {
                 LoftSectionDef::Face { body, face } => {
                     let shape = ctx.surface_body(*body).map_err(at)?;
                     let face = ctx
-                        .face_or(&shape, face, || format!("body {body} has no face {face}"))
+                        .face_or(&shape, face, || {
+                            crate::notice::placed(
+                                "the body has no such face",
+                                crate::notice::NoticePlace::face(face.to_string())
+                                    .in_body(&body.to_string()),
+                                format!("body {body} has no face {face}"),
+                            )
+                        })
                         .map_err(at)?;
                     Found::Face(shape, face)
                 }

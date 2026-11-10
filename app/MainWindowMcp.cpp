@@ -210,10 +210,10 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
       idleDocument().validate_mcp_document_command(rustStr(compactJson(entries[i])));
     } catch (const std::exception& error) {
       if (!array) {
-        refuse(errorText(error));
+        refuse(agentErrorText(error));
       }
       // Nothing of the array has run.
-      refuseWith(entryName(i) + errorText(error),
+      refuseWith(entryName(i) + agentErrorText(error),
                  {{QStringLiteral("entry"), static_cast<qint64>(i)},
                   {QStringLiteral("applied"), false},
                   {QStringLiteral("undone"), 0}});
@@ -293,7 +293,7 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
       }
     } catch (const std::exception& failure) {
       // Optional guidance does not change the outcome of the applied edits.
-      qWarning().noquote() << QStringLiteral("MCP modeling hints unavailable: %1").arg(errorText(failure));
+      qWarning().noquote() << QStringLiteral("MCP modeling hints unavailable: %1").arg(agentErrorText(failure));
     }
   }
   if (inSketch) {
@@ -313,7 +313,7 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
       result = parseObject(m_document->mcp_diagnose_dressups(rustStr(compactJson(result))));
     } catch (const std::exception& error) {
       qWarning().noquote() << QStringLiteral("MCP: the failed fillet's edges were not tried one at a time: %1")
-                                  .arg(errorText(error));
+                                  .arg(agentErrorText(error));
     }
   }
   QStringList kinds;
@@ -333,7 +333,7 @@ bool MainWindow::mcpModelStep(const QJsonObject& request, QJsonObject* answer, Q
   try {
     command = parseObject(idleDocument().mcp_resolve_command(rustStr(compactJson(request))));
   } catch (const std::exception& error) {
-    reason = errorText(error);
+    reason = agentErrorText(error);
     return false;
   }
   if (!runModelCommand(command, answer)) {
@@ -440,7 +440,7 @@ QJsonObject MainWindow::mcpExport(const QJsonObject& arguments) {
     plan = parseObject(idleDocument().mcp_export_plan(rustStr(compactJson(arguments)), rustStr(path.toUtf8()),
                                                       rustStr(title.toUtf8()), rustStr(folder.toUtf8())));
   } catch (const std::exception& error) {
-    refuse(errorText(error));
+    refuse(agentErrorText(error));
   }
   // The other files it writes (an OBJ's .mtl) by the same rule.
   for (const QJsonValue& output : plan.value(QStringLiteral("outputs")).toArray()) {
@@ -456,7 +456,7 @@ QJsonObject MainWindow::mcpExport(const QJsonObject& arguments) {
     try {
       result = parseObject(idleDocument().mcp_export_drawing(rustStr(compactJson(command)), overwrite));
     } catch (const std::exception& error) {
-      refuse(errorText(error));
+      refuse(agentErrorText(error));
     }
   } else if (!runCommand(command, &result)) {
     refuse(lastError().isEmpty() ? QStringLiteral("The export failed.") : lastError());
@@ -490,7 +490,7 @@ QJsonObject MainWindow::mcpRender(const QJsonObject& arguments) const {
     result = parseObject(idleDocument().mcp_render(rustStr(compactJson(arguments)), rustStr(m_mcpDocumentId.toUtf8()),
                                                    rustStr(path.toUtf8())));
   } catch (const std::exception& error) {
-    refuse(errorText(error));
+    refuse(agentErrorText(error));
   }
   if (result.contains(QStringLiteral("error"))) {
     const QString error = result.take(QStringLiteral("error")).toString();

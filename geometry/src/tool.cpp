@@ -143,8 +143,9 @@ gp_Pln tool_plane(const Tool& tool, const char* what) {
     const std::vector<int> faces = resolve_faces(*tool.shape, {tool.face}, what);
     const auto plane = reference_plane(tool.shape->face(faces.front()));
     if (!plane) {
-      throw std::invalid_argument(std::string("unsupported: ") + what + " " + tool.face +
-                                  " is not planar");
+      throw std::invalid_argument(face_error(tool.face, std::string("unsupported: the ") + what + " is not planar",
+                                             std::string("unsupported: ") + what + " " + tool.face +
+                                                 " is not planar"));
     }
     return *plane;
   }
@@ -213,7 +214,7 @@ Cutter make_cutter(const Tool& tool, const Bnd_Box& around, bool extend) {
         const TopoDS_Shape start = BRepBuilderAPI_Transform(edge, back, true).Shape();
         BRepPrimAPI_MakePrism prism(start, gp_Vec(tool.direction) * (2.0 * length));
         if (!prism.IsDone()) {
-          throw std::runtime_error("the curve " + segment + " could not be swept");
+          throw std::runtime_error(placed_error("a curve could not be swept", "the curve " + segment + " could not be swept"));
         }
         for (TopExp_Explorer it(prism.Shape(), TopAbs_FACE); it.More(); it.Next()) {
           add(it.Current(), segment);

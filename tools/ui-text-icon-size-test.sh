@@ -7,6 +7,7 @@
 # check-all sources: app/framework/WindowStyle.cpp app/browser/TimelineWidget.cpp app/MainWindow.cpp
 # check-all sources: tools/ui-scripts/text-icon-size.mitcad-ui
 # check-all sources: app/framework/IconSizeStyle.cpp app/framework/IconSizeStyle.hpp
+# check-all sources: app/print/MaterialsDialog.cpp
 # Preferences › Display › Text size, Icon size and Font (mitcad#1556,
 # GitHub mitcad/Mitcad#207) through the real UI, the input script
 # tools/ui-scripts/text-icon-size.mitcad-ui: MitCad started with the
@@ -23,7 +24,8 @@
 # (a menu's and a combo box's, mitcad#1561) at the style's sizes times Icon
 # size, the application's style inside Icon size's proxy, and the window, the
 # ribbon, the Browser and the panel lay out whole, no input of the panel
-# clipped; Preferences shows the
+# clipped; the Materials window's appearance swatches 20 px times Icon size
+# (mitcad#1610); Preferences shows the
 # sizes, and Icon size one step up is saved for the next start.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -77,6 +79,8 @@ run() {
   } > "$CONF"
   export MITCAD_TEST_TEXT_SIZE=$text MITCAD_TEST_ICON_SIZE=$icon MITCAD_TEST_FONT=$font
   export MITCAD_TEST_ICON_NEXT=$((icon + 5))
+  # The Materials window's appearance swatches (mitcad#1610).
+  export MITCAD_TEST_SWATCH_SIZE=$(((20 * icon + 50) / 100))
   if [ "$font" = system ]; then
     export MITCAD_TEST_SYSTEM_FONT=true
   else

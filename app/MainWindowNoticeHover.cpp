@@ -8,9 +8,15 @@
 // Faces, edges and vertices are drawn as the selection preview draws them,
 // in the hover's colour and seen through what hides them; a point as a
 // ball; a sketch region as its profile. Nothing is selected, picked or
-// framed; moving away clears them.
-// Logged for the UI tests, when what is painted changes:
+// framed; moving away clears them. While a job computes the model they are
+// kept and drawn once it has ended (mitcad#1600). A message shown in place
+// of the hovered one in the message band or the status line gives its own
+// feature's places, or none (mitcad#1609).
+// Logged for the UI tests, when what is painted changes, with where it is
+// drawn in the design's coordinates:
 //   Notice hover highlighted: panel: face F3:fillet(E{…}) of F1.b0, point 1.000,2.000,3.000 (2 drawn)
+//   Notice hover bounds: x 0.0 to 60.0, y 0.0 to 2.0, z 18.0 to 20.0
+//   Notice hover highlighted: timeline: face F3:fillet(E{…}) of F1.b0 (drawn when the job ends)
 //   Notice hover highlighted: none
 #include "MainWindow.hpp"
 
@@ -21,13 +27,16 @@
 #include <utility>
 #include <vector>
 
+#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <Bnd_Box.hxx>
 #include <TopoDS_Compound.hxx>
 #include <BRep_Builder.hxx>
 #include <gp_Pnt.hxx>
 
 #include <QEvent>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QLabel>
@@ -131,17 +140,57 @@ void MainWindow::hoverNoticePlaces(const QString& source, const QJsonArray& plac
   m_noticeHoverSource = places.isEmpty() ? QString() : source;
   m_noticeHover = places;
   m_noticeHoverBodies = places.isEmpty() ? std::vector<BodyDisplay>() : preview;
-  const std::size_t drawn = noticeHighlights().size();
-  const QString logged = places.isEmpty() ? QStringLiteral("none")
-                                          : QStringLiteral("%1: %2 (%3 drawn)")
-                                                .arg(source, placesText(places))
-                                                .arg(static_cast<qulonglong>(drawn));
+  if (modelBusy()) {
+    // The worker's now (mitcad#1600: a command's preview or an asynchronous
+    // command computes, the window stays live): the places are kept and
+    // neither counted nor drawn, since their shapes read the document;
+    // both once the job has ended, unless the pointer left them by then.
+    const QString logged = noticeHoverText(source, places, -1);
+    if (logged != m_loggedNoticeHover) {
+      m_loggedNoticeHover = logged;
+      qDebug().noquote() << QStringLiteral("Notice hover highlighted: %1").arg(logged);
+    }
+    if (!m_noticeHoverWaits) {
+      m_noticeHoverWaits = true;
+      whenIdle(this, [this] {
+        m_noticeHoverWaits = false;
+        const QString waited = m_noticeHoverSource;
+        const QJsonArray shown = m_noticeHover;
+        const std::vector<BodyDisplay> bodies = m_noticeHoverBodies;
+        hoverNoticePlaces(waited, shown, bodies);
+      });
+    }
+    return;
+  }
+  const std::vector<HighlightDisplay> highlights = noticeHighlights();
+  const QString logged = noticeHoverText(source, places, static_cast<int>(highlights.size()));
   if (logged != m_loggedNoticeHover) {
     m_loggedNoticeHover = logged;
     qDebug().noquote() << QStringLiteral("Notice hover highlighted: %1").arg(logged);
-  }
-  if (modelBusy()) {
-    return; // (Drawn with the next idle refresh.)
+    // Where they are drawn, in the design's coordinates (mitcad#1609: a
+    // component's sketch region where its occurrence places it).
+    Bnd_Box box;
+    for (const HighlightDisplay& shown : highlights) {
+      if (!shown.shape.IsNull()) {
+        BRepBndLib::Add(shown.shape, box);
+      }
+    }
+    if (!box.IsVoid()) {
+      double x0 = 0;
+      double y0 = 0;
+      double z0 = 0;
+      double x1 = 0;
+      double y1 = 0;
+      double z1 = 0;
+      box.Get(x0, y0, z0, x1, y1, z1);
+      qDebug().noquote() << QStringLiteral("Notice hover bounds: x %1 to %2, y %3 to %4, z %5 to %6")
+                                .arg(x0, 0, 'f', 1)
+                                .arg(x1, 0, 'f', 1)
+                                .arg(y0, 0, 'f', 1)
+                                .arg(y1, 0, 'f', 1)
+                                .arg(z0, 0, 'f', 1)
+                                .arg(z1, 0, 'f', 1);
+    }
   }
   if (m_mode == Mode::Command && m_session) {
     m_session->refreshHighlights();
@@ -215,12 +264,14 @@ std::vector<HighlightDisplay> MainWindow::noticeHighlights() const {
       continue;
     }
     if (kind == QStringLiteral("region")) {
-      // A region of a sketch (mitcad#1334), drawn as its profile; one of
-      // no sketch, or one the sketch no longer has, draws nothing.
+      // A region of a sketch (mitcad#1334), drawn as its profile where the
+      // sketch is shown: a component's where its occurrence places it
+      // (mitcad#1609); one of no sketch, or one the sketch no longer has,
+      // draws nothing.
       const QString sketch = place.value(QStringLiteral("sketch")).toString();
       const QString name = place.value(QStringLiteral("name")).toString();
       if (!sketch.isEmpty() && !name.isEmpty()) {
-        const SelectionItem item{SelectKind::Profile, sketch, name, QString(), QString()};
+        const SelectionItem item{SelectKind::Profile, sketch, name, QString(), placingOccurrence(sketch)};
         add(item, itemShape(item));
       }
       continue;
@@ -272,8 +323,17 @@ void MainWindow::installNoticeHover() {
     return;
   }
   new HoverWatch(m_statusLabel, [this](bool hovered) {
-    previewNoticePlaces(QStringLiteral("status line"), hovered ? m_statusFeature : QString());
+    m_statusHovered = hovered;
+    updateStatusNoticeHover();
   });
+}
+
+void MainWindow::updateStatusNoticeHover() {
+  // Also when another message takes the hovered one's place (mitcad#1609):
+  // the new one's feature, or none.
+  if (m_statusNoticeHover.update(m_statusHovered, m_statusFeature)) {
+    previewNoticePlaces(QStringLiteral("status line"), m_statusNoticeHover.feature());
+  }
 }
 
 } // namespace mitcad

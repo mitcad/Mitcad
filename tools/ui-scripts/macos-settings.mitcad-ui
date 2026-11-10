@@ -119,6 +119,19 @@ mark
 key Space
 wait-log '^Settings: saved note shown'
 expect-setting view/constrainedOrbit false
+# Stereo depth and convergence save with the note too (mitcad#1610).
+command tools.preferences.display
+focus-dialog '^Settings$'
+mark
+focus-widget preferencesStereoDepth
+key Up
+wait-log '^Preferences: stereo depth [0-9]+ %, convergence [0-9]+ %$'
+wait-log '^Settings: saved note shown'
+mark
+focus-widget preferencesStereoConvergence
+key Up
+wait-log '^Preferences: stereo depth [0-9]+ %, convergence [0-9]+ %$'
+wait-log '^Settings: saved note shown'
 key ctrl+w
 expect-dialog-gone '^Settings$'
 

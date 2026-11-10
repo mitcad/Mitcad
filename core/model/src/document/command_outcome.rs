@@ -27,7 +27,14 @@ pub struct TimelineBefore {
 pub struct FailedFeature {
     pub uid: FeatureUid,
     pub name: String,
+    /// The error for agents: with the names and coordinates (mitcad#1612).
     pub error: String,
+    /// What a person reads of it, where that is not `error`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// The places it is about: faces, edges, vertices, points.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub places: Vec<crate::notice::NoticePlace>,
     /// The command added the feature or changed it: its definition, its
     /// suppression or its component, or the command names it as the one
     /// it edits (`edit_feature`, `suppress_feature`, `reorder_feature`, a
@@ -76,7 +83,7 @@ impl<K: Kernel> Document<K> {
             .results
             .iter()
             .filter_map(|r| {
-                let error = r.status.error()?;
+                let error = r.status.failure()?;
                 let entry = *current.get(&r.uid)?;
                 let edited = Some(r.uid) == target
                     || before.features.get(&r.uid).is_none_or(|old| {
@@ -89,7 +96,9 @@ impl<K: Kernel> Document<K> {
                 Some(FailedFeature {
                     uid: r.uid,
                     name: entry.name.clone(),
-                    error: error.to_owned(),
+                    error: error.agent_text().to_owned(),
+                    message: (error.message != error.agent_text()).then(|| error.message.clone()),
+                    places: error.places.clone(),
                     edited,
                     new: !before.failed.contains(&r.uid),
                 })

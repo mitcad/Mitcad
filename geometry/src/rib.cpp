@@ -189,7 +189,7 @@ TopoDS_Face web_band(const RibSpec& spec, const PathCurve& curve, double low, do
   if (c.kind == ModelCurveKind::Line) {
     const gp_Vec along(c.start, c.end);
     if (along.Magnitude() <= Precision::Confusion()) {
-      throw std::invalid_argument("web curve " + key + " has no length");
+      throw std::invalid_argument(placed_error("a web curve has no length", "web curve " + key + " has no length"));
     }
     const gp_Vec side = gp_Vec(normal.Crossed(gp_Dir(along)));
     start_low = c.start.Translated(side * low);

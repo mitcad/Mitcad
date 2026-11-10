@@ -323,7 +323,11 @@ fn dimensions_on_views_take_tolerances_and_follow_the_model() {
     // A broken annotation is a warning about it (mitcad#1040).
     assert_eq!(broken["level"], "warning", "{broken}");
     assert_eq!(broken["notices"][0]["level"], "warning", "{broken}");
-    assert_eq!(broken["notices"][0]["message"], broken["error"], "{broken}");
+    // In plain words; `error` keeps the body's uid for agents (mitcad#1612).
+    assert_eq!(
+        broken["notices"][0]["message"], "the view does not show the body",
+        "{broken}"
+    );
     assert_eq!(broken["notices"][0]["target"], "1", "{broken}");
     assert!(broken["box"].is_array());
     let warnings = sheet(&doc)["warnings"].clone();

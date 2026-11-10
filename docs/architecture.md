@@ -3290,9 +3290,14 @@ commands ([commands.md](../core/model-api/src/commands.md), "Projects").
   (`mitcad_model::file::single_file_text`), the others stay byte for
   byte; then MitCad's lines of `.gitattributes` and `.gitignore`, `.git`
   only when MitCad made the repository (its mark, else a history whose
-  first versions hold the marker), and `.mitcad`. A repository that was
-  there before keeps its history and records a version without the
-  project's files; a remote is never touched.
+  first versions hold the marker), and `.mitcad`. The designs are found
+  by a walk of its own, not the discovery scan: dot folders count, and a
+  folder it cannot read or a link to a folder refuses the removal
+  (mitcad#1598). A repository that was there before keeps its history
+  and records a version without the project's files; a design of the
+  latest version that still refers to the store and is not rewritten in
+  the folder goes into that version as a single file made from its blob
+  (`commit_with_contents`, mitcad#1607); a remote is never touched.
 - **Onto a repository's files** (`connect` with `onto_files`, Local →
   Cloud): the sync's replay (`remote/sync.rs`) puts all of the project's
   versions after the remote's, with `.gitignore` and `.gitattributes`

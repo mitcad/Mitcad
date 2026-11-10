@@ -3423,16 +3423,27 @@ impl SketchEdit<'_> {
             .collect();
         self.note_vanished(&vanished);
         for m in merged {
-            self.report.notes.push(format!(
-                "c{}'s offset runs on along c{}'s at this distance",
-                m.curve.0, m.into.0
+            self.report.notes.push(crate::said(
+                "a curve's offset runs on along its neighbor's at this distance",
+                format!(
+                    "c{}'s offset runs on along c{}'s at this distance",
+                    m.curve.0, m.into.0
+                ),
             ));
         }
         if !left.is_empty() {
             let names: Vec<String> = left.iter().map(|c| format!("c{}", c.0)).collect();
-            self.report.notes.push(format!(
-                "the offset leaves out {}, a part too small for this distance",
-                listed(&names)
+            let part = if names.len() == 1 {
+                "a part too small for this distance".to_owned()
+            } else {
+                format!("{} parts too small for this distance", names.len())
+            };
+            self.report.notes.push(crate::said(
+                format!("the offset leaves out {part}"),
+                format!(
+                    "the offset leaves out {}, a part too small for this distance",
+                    listed(&names)
+                ),
             ));
         }
         if outlines > 1 {
@@ -3472,9 +3483,15 @@ impl SketchEdit<'_> {
         };
         let names: Vec<String> = dropped.iter().map(|c| format!("c{}", c.0)).collect();
         let note = if names.len() == 1 {
-            format!("{what} {} vanishes at this distance", names[0])
+            crate::said(
+                format!("{} {what} vanishes at this distance", article(what)),
+                format!("{what} {} vanishes at this distance", names[0]),
+            )
         } else {
-            format!("{what}s {} vanish at this distance", listed(&names))
+            crate::said(
+                format!("{} {what}s vanish at this distance", names.len()),
+                format!("{what}s {} vanish at this distance", listed(&names)),
+            )
         };
         self.report.notes.push(note);
     }
@@ -3808,9 +3825,12 @@ impl SketchEdit<'_> {
             lost.extend(gone);
             if curves.is_empty() {
                 self.report.removed.push(t.offset.id.to_string());
-                self.report.warnings.push(format!(
-                    "offset {} is removed: the curves it offset vanish at this distance",
-                    t.offset.id
+                self.report.warnings.push(crate::said(
+                    "an offset is removed: the curves it offset vanish at this distance",
+                    format!(
+                        "offset {} is removed: the curves it offset vanish at this distance",
+                        t.offset.id
+                    ),
                 ));
                 continue;
             }
@@ -3825,15 +3845,20 @@ impl SketchEdit<'_> {
             let built = built?;
             if !lost.is_empty() {
                 let names: Vec<String> = lost.iter().map(|c| format!("c{}", c.0)).collect();
-                self.report.notes.push(format!(
-                    "offset {} is made again without {}, which {} at this distance",
-                    t.offset.id,
-                    listed(&names),
-                    if names.len() == 1 {
-                        "vanishes"
-                    } else {
-                        "vanish"
-                    }
+                let (curves, vanish) = if names.len() == 1 {
+                    ("a curve".to_owned(), "vanishes")
+                } else {
+                    (format!("{} curves", names.len()), "vanish")
+                };
+                self.report.notes.push(crate::said(
+                    format!(
+                        "an offset is made again without {curves}, which {vanish} at this distance"
+                    ),
+                    format!(
+                        "offset {} is made again without {}, which {vanish} at this distance",
+                        t.offset.id,
+                        listed(&names),
+                    ),
                 ));
             }
             remade.push((t.offset.clone(), built));
@@ -4090,8 +4115,9 @@ impl SketchEdit<'_> {
         for (k, refs, one) in lost {
             self.report.removed.push(k.to_string());
             if one {
-                self.report.warnings.push(format!(
-                    "{k} is removed: the curves it was on are one line at this distance"
+                self.report.warnings.push(crate::said(
+                    "a constraint is removed: the curves it was on are one line at this distance",
+                    format!("{k} is removed: the curves it was on are one line at this distance"),
                 ));
                 continue;
             }
@@ -4100,9 +4126,17 @@ impl SketchEdit<'_> {
                 .filter(|r| self.def.entity(r.uid()).is_none())
                 .map(ToString::to_string)
                 .collect();
-            self.report.warnings.push(format!(
-                "{k} is removed: it was on {}, which vanishes at this distance",
-                listed(&gone)
+            let on = if gone.len() == 1 {
+                "a curve, which vanishes".to_owned()
+            } else {
+                format!("{} curves, which vanish", gone.len())
+            };
+            self.report.warnings.push(crate::said(
+                format!("a constraint is removed: it was on {on} at this distance"),
+                format!(
+                    "{k} is removed: it was on {}, which vanishes at this distance",
+                    listed(&gone)
+                ),
             ));
         }
     }
@@ -4398,5 +4432,15 @@ impl SketchEdit<'_> {
             }
         }
         Ok(())
+    }
+}
+
+/// "a" or "an" before `word` (mitcad#1612: notes that count instead of
+/// naming).
+fn article(word: &str) -> &'static str {
+    if word.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
     }
 }

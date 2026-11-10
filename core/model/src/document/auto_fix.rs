@@ -303,7 +303,7 @@ fn problems<S>(result: Option<&FeatureResult<S>>) -> Vec<String> {
     if let FeatureStatus::Failed(error) = &result.status
         && problem(error).is_some()
     {
-        found.push(error.clone());
+        found.push(error.agent_text().to_owned());
     }
     found
 }
@@ -374,7 +374,8 @@ pub struct AutoFix {
     /// The undo step's name; None when nothing changed.
     pub label: Option<String>,
     /// The summary: `Auto Fix: 2 of 3 warnings fixed; Hole1: the body has
-    /// no edge E{…}, pick it again`.
+    /// no edge, pick it again`, in plain words (mitcad#1612: `left` names
+    /// the edge for agents).
     pub message: String,
 }
 
@@ -384,8 +385,15 @@ fn summary(total: usize, fixed: usize, left: &[AutoFixLeft], followed: &[String]
     }
     let noun = if total == 1 { "warning" } else { "warnings" };
     let mut text = format!("Auto Fix: {fixed} of {total} {noun} fixed");
+    // In plain words (mitcad#1612): `left` keeps the agents' texts.
     for item in left {
-        let _ = write!(text, "; {}: {}, {}", item.name, item.message, item.advice);
+        let _ = write!(
+            text,
+            "; {}: {}, {}",
+            item.name,
+            crate::notice::user_message(&item.message),
+            item.advice
+        );
     }
     if !followed.is_empty() {
         let _ = write!(text, "; also updated: {}", followed.join(", "));

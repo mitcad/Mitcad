@@ -1,0 +1,323 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: at an end where the fillet is cut by the faces round the vertex
+(PerformIntersectionAtEnd), a crossing with the common boundary of two of
+those faces past the end of the edge the walk round the vertex reached
+it at, where that boundary goes on in another edge of both faces, is
+taken on that edge (mitcad#1615).
+
+A flange 2 thick whose end cap stops 2 short of the flange's tip, the
+inner corner rounded with 5 and the outer edge of the flange's foot and
+the end face rounded with 7 along its whole length: past the cap, over
+the last 2, the rounding's contact on the end face (7 from the edge)
+lies beyond that face's narrow part (the flange's end, 2 wide), and the
+end is cut by the faces round the notch: the cap's side, the flange's
+inside and the flange's tip. The flange's inside meets the cap's side
+along a straight boundary split at the cap's inner corner (2 up), the
+edge below it from the notch's floor (the end face) and the one above
+from the inner rounding; the rounding crosses that boundary at
+7 - sqrt(4 r - 4) = 2.101 up for r = 7, past the first edge's end
+(above r = 4 + 2 sqrt(2) = 6.83). The crossing beyond an edge's end
+was taken for one on the prolongation of the faces' common boundary
+(where the two faces part there): a new edge from the vertex to the
+crossing was made along the first edge's curve while the second edge,
+over it, stayed whole in both faces, and the flange's inside kept its
+part under the rounding with the notch floor's edge, which lost its
+other face: the result had a free edge, an open shell.
+
+- ChFi3d_CrossingOnCommonBoundary: from the vertex past which the
+  crossing lies, the edges of both faces that go on from it in turn, up
+  to the first the blend crosses within its range (at most eight): that
+  edge, the crossing's parameter on it and point on the blend, and the
+  edges passed on the way with their vertices towards the crossing.
+- PerformIntersectionAtEnd: where such an edge is found (not at the
+  corner's vertex nor at the previous edge's vertex, where the earlier
+  handling stays), it is the edge of that step and the crossing lies on
+  it, cut there as any crossing on its edge, its end towards the corner
+  the one the chain reached it at; each edge passed is cut at its end
+  towards the crossing, the whole of it removed with the corner (as the
+  edges between a prolonged edge's end and the vertex are).
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+index b233b4b..b2da9da 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -10195,6 +10195,107 @@ static bool containE(const TopoDS_Face& F1, const TopoDS_Edge& E)
+   return contain;
+ }
+ 
++//=======================================================================
++// function : ChFi3d_CrossingOnCommonBoundary
++// purpose  : The blend HGs crosses the curve of E, an edge of the common
++//            boundary of the faces Fa and Fb, past E's end vertex V, where
++//            that boundary goes on in other edges of both faces (a straight
++//            boundary split at a vertex where an edge of a third face ends):
++//            the edge of the chain from V that the blend crosses within its
++//            range (Enext), the crossing's parameter on it (Wnext) and point
++//            on the blend (UVnext), and the edges passed on the way, E first,
++//            each with its vertex towards the crossing (PassedE, PassedV):
++//            they lie under the blend, in the corner it removes. False where
++//            the boundary does not go on at V, or the blend crosses none of a
++//            few edges of the chain.
++//=======================================================================
++
++static bool ChFi3d_CrossingOnCommonBoundary(const TopoDS_Edge&                      E,
++                                            const TopoDS_Vertex&                    V,
++                                            const TopoDS_Face&                      Fa,
++                                            const TopoDS_Face&                      Fb,
++                                            const occ::handle<GeomAdaptor_Surface>& HGs,
++                                            TopoDS_Edge&                            Enext,
++                                            double&                                 Wnext,
++                                            gp_Pnt2d&                               UVnext,
++                                            NCollection_List<TopoDS_Shape>&         PassedE,
++                                            NCollection_List<TopoDS_Shape>&         PassedV)
++{
++  PassedE.Clear();
++  PassedV.Clear();
++  TopoDS_Edge   aCur  = E;
++  TopoDS_Vertex aVCur = V;
++  for (int aStep = 0; aStep < 8; aStep++)
++  {
++    PassedE.Append(aCur);
++    PassedV.Append(aVCur);
++    // The edge of both faces that goes on from aVCur.
++    TopoDS_Edge aNext;
++    for (TopExp_Explorer anExp(Fa, TopAbs_EDGE); anExp.More() && aNext.IsNull(); anExp.Next())
++    {
++      const TopoDS_Edge& anE = TopoDS::Edge(anExp.Current());
++      if (anE.IsSame(aCur) || BRep_Tool::Degenerated(anE) || !containE(Fb, anE))
++      {
++        continue;
++      }
++      TopoDS_Vertex aV1, aV2;
++      TopExp::Vertices(anE, aV1, aV2);
++      if (aV1.IsSame(aVCur) || aV2.IsSame(aVCur))
++      {
++        aNext = anE;
++      }
++    }
++    if (aNext.IsNull())
++    {
++      return false;
++    }
++    double                        aF = 0., aL = 0.;
++    const occ::handle<Geom_Curve> aC = BRep_Tool::Curve(aNext, aF, aL);
++    if (aC.IsNull())
++    {
++      return false;
++    }
++    occ::handle<GeomAdaptor_Curve> aHC = new GeomAdaptor_Curve(aC, aF, aL);
++    IntCurveSurface_HInter         anInters;
++    anInters.Perform(aHC, HGs);
++    if (!anInters.IsDone())
++    {
++      return false;
++    }
++    const double aTolW = std::max(aHC->Resolution(BRep_Tool::Tolerance(aNext)), Precision::PConfusion());
++    const gp_Pnt aPV   = BRep_Tool::Pnt(aVCur);
++    int          aBest = 0;
++    double       aDist = RealLast();
++    for (int i = 1; i <= anInters.NbPoints(); i++)
++    {
++      const double aW = anInters.Point(i).W();
++      if (aW < aF - aTolW || aW > aL + aTolW)
++      {
++        continue;
++      }
++      const double aD = anInters.Point(i).Pnt().Distance(aPV);
++      if (aD < aDist)
++      {
++        aDist = aD;
++        aBest = i;
++      }
++    }
++    if (aBest > 0)
++    {
++      Enext  = aNext;
++      Wnext  = std::min(std::max(anInters.Point(aBest).W(), aF), aL);
++      UVnext = gp_Pnt2d(anInters.Point(aBest).U(), anInters.Point(aBest).V());
++      return true;
++    }
++    // On to the next edge, from aNext's other end.
++    TopoDS_Vertex aV1, aV2;
++    TopExp::Vertices(aNext, aV1, aV2);
++    aVCur = aV1.IsSame(aVCur) ? aV2 : aV1;
++    aCur  = aNext;
++  }
++  return false;
++}
++
+ //=======================================================================
+ // function : IsShrink
+ // purpose  : check if U (if <isU>==True) or V of points of <PC> is within
+@@ -11831,6 +11932,10 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+   TopoDS_Face                faceprol[nn];
+   int                        indcurve[nn], indpoint2 = 0, indpoint1 = 0;
+   occ::handle<TopOpeBRepDS_CurvePointInterference>   Interfp1, Interfp2, Interfedge[nn];
++  // Where the crossing with Edge[i] was found on a later edge of the two
++  // faces' common boundary (ChFi3d_CrossingOnCommonBoundary): the edges
++  // passed on the way, each with its vertex towards the crossing.
++  NCollection_List<TopoDS_Shape> aPassedEdges[nn], aPassedVertices[nn];
+   occ::handle<TopOpeBRepDS_SurfaceCurveInterference> Interfc, InterfPC[nn], InterfPS[nn];
+   double                                             u2, v2, p1, p2, paredge1;
+   double                                             paredge2 = 0., tolex = 1.e-4;
+@@ -12304,50 +12409,81 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+             const TopoDS_Edge   aForwardE2 = TopoDS::Edge(E2.Oriented(TopAbs_FORWARD));
+             const TopoDS_Vertex anEnd      = aW > aLastE2 ? TopExp::LastVertex(aForwardE2)
+                                                           : TopExp::FirstVertex(aForwardE2);
+-            C2dint1 = BRep_Tool::CurveOnSurface(E2, F, u2, v2);
+-            C2dint2 = BRep_Tool::CurveOnSurface(E2, Face[nb], u2, v2);
+-            // A face between the end's first and last faces is passed
+-            // beside, not cut, when the crossing with its first edge lies
+-            // beyond the corner where the previous edge meets that edge,
+-            // outside both faces of the edge, and so does the crossing with
+-            // its next edge (a narrow chamfer at a corner of the faces at the
+-            // end): their boundary is not prolonged there, the crossings are
+-            // taken as they are.
+-            bool isOutOfBothFaces = false;
+-            bool isCornerOfPrevious = false;
+-            if (nb >= 1 && !Edge[nb - 1].IsNull() && !Edge[nb - 1].IsSame(E2))
++            // The two faces' common boundary may go on past that vertex in
++            // another edge (a straight boundary split where an edge of a
++            // third face ends): the fillet crosses that edge, which is cut
++            // there as usual, and the edges before it lie under the fillet
++            // (not where that vertex is the previous edge's, below).
++            TopoDS_Edge    aNextE;
++            double         aNextW = 0.;
++            gp_Pnt2d       aNextUV;
++            bool           isAtPrevious = false;
++            if (nb >= 1 && !Edge[nb - 1].IsNull())
+             {
+               TopoDS_Vertex aV1, aV2;
+               TopExp::Vertices(Edge[nb - 1], aV1, aV2);
+-              isCornerOfPrevious = anEnd.IsSame(aV1) || anEnd.IsSame(aV2);
++              isAtPrevious = anEnd.IsSame(aV1) || anEnd.IsSame(aV2);
+             }
+-            if (nbface >= 3 && nb <= nbface - 1 && (isCornerOfPrevious || wasBesideMiddleFace)
+-                && !anEnd.IsSame(Vtx) && !C2dint1.IsNull() && !C2dint2.IsNull())
++            if (!anEnd.IsSame(Vtx) && !isAtPrevious
++                && ChFi3d_CrossingOnCommonBoundary(
++                  E2, anEnd, F, Face[nb], HGs, aNextE, aNextW, aNextUV, aPassedEdges[nb], aPassedVertices[nb]))
+             {
+-              isOutOfBothFaces = true;
+-              for (int iF = 0; iF < 2 && isOutOfBothFaces; iF++)
+-              {
+-                occ::handle<BRepAdaptor_Surface> aSurf =
+-                  new BRepAdaptor_Surface(iF == 0 ? F : Face[nb]);
+-                BRepTopAdaptor_TopolTool aTool(aSurf);
+-                const double             aTol2d =
+-                  std::max(aSurf->UResolution(BRep_Tool::Tolerance(anEnd)),
+-                           aSurf->VResolution(BRep_Tool::Tolerance(anEnd)));
+-                const gp_Pnt2d aP = (iF == 0 ? C2dint1 : C2dint2)->Value(aW);
+-                isOutOfBothFaces  = aTool.Classify(aP, aTol2d) == TopAbs_OUT;
+-              }
++              E2       = aNextE;
++              Edge[nb] = aNextE;
++              tabedg.SetValue(nb, aNextE);
++              paredge2 = aNextW;
++              pfil2    = aNextUV;
++              gapmin   = 0.;
+             }
+-            isBesideMiddleFace = isOutOfBothFaces;
+-            if (!isOutOfBothFaces && !C2dint1.IsNull() && !C2dint2.IsNull()
+-                && inters.Point(nbp).Pnt().Distance(BRep_Tool::Pnt(anEnd))
+-                     > BRep_Tool::Tolerance(anEnd))
++            else
+             {
+-              paredge2 = aW;
+-              Vprol    = anEnd;
+-              cint     = C;
+-              Sface    = BRep_Tool::Surface(Face[nb]);
+-              tolex    = std::max(tolex, BRep_Tool::Tolerance(E2));
+-              extend   = true;
++              aPassedEdges[nb].Clear();
++              aPassedVertices[nb].Clear();
++              C2dint1 = BRep_Tool::CurveOnSurface(E2, F, u2, v2);
++              C2dint2 = BRep_Tool::CurveOnSurface(E2, Face[nb], u2, v2);
++              // A face between the end's first and last faces is passed
++              // beside, not cut, when the crossing with its first edge lies
++              // beyond the corner where the previous edge meets that edge,
++              // outside both faces of the edge, and so does the crossing with
++              // its next edge (a narrow chamfer at a corner of the faces at the
++              // end): their boundary is not prolonged there, the crossings are
++              // taken as they are.
++              bool isOutOfBothFaces = false;
++              bool isCornerOfPrevious = false;
++              if (nb >= 1 && !Edge[nb - 1].IsNull() && !Edge[nb - 1].IsSame(E2))
++              {
++                TopoDS_Vertex aV1, aV2;
++                TopExp::Vertices(Edge[nb - 1], aV1, aV2);
++                isCornerOfPrevious = anEnd.IsSame(aV1) || anEnd.IsSame(aV2);
++              }
++              if (nbface >= 3 && nb <= nbface - 1 && (isCornerOfPrevious || wasBesideMiddleFace)
++                  && !anEnd.IsSame(Vtx) && !C2dint1.IsNull() && !C2dint2.IsNull())
++              {
++                isOutOfBothFaces = true;
++                for (int iF = 0; iF < 2 && isOutOfBothFaces; iF++)
++                {
++                  occ::handle<BRepAdaptor_Surface> aSurf =
++                    new BRepAdaptor_Surface(iF == 0 ? F : Face[nb]);
++                  BRepTopAdaptor_TopolTool aTool(aSurf);
++                  const double             aTol2d =
++                    std::max(aSurf->UResolution(BRep_Tool::Tolerance(anEnd)),
++                             aSurf->VResolution(BRep_Tool::Tolerance(anEnd)));
++                  const gp_Pnt2d aP = (iF == 0 ? C2dint1 : C2dint2)->Value(aW);
++                  isOutOfBothFaces  = aTool.Classify(aP, aTol2d) == TopAbs_OUT;
++                }
++              }
++              isBesideMiddleFace = isOutOfBothFaces;
++              if (!isOutOfBothFaces && !C2dint1.IsNull() && !C2dint2.IsNull()
++                  && inters.Point(nbp).Pnt().Distance(BRep_Tool::Pnt(anEnd))
++                       > BRep_Tool::Tolerance(anEnd))
++              {
++                paredge2 = aW;
++                Vprol    = anEnd;
++                cint     = C;
++                Sface    = BRep_Tool::Surface(Face[nb]);
++                tolex    = std::max(tolex, BRep_Tool::Tolerance(E2));
++                extend   = true;
++              }
+             }
+           }
+           if (!extend)
+@@ -12943,7 +13079,14 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+ 
+     if (nb != nbface || oneintersection1 || oneintersection2)
+     {
+-      if (nface == 3)
++      if (!aPassedEdges[nb].IsEmpty())
++      {
++        // (A crossing on a later edge of the common boundary: its end
++        // towards the corner is the one the chain reached it at.)
++        ori = TopExp::FirstVertex(Edge[nb]).IsSame(aPassedVertices[nb].Last()) ? TopAbs_FORWARD
++                                                                                  : TopAbs_REVERSED;
++      }
++      else if (nface == 3)
+       {
+         V1 = TopExp::FirstVertex(Edge[nb]);
+         V2 = TopExp::LastVertex(Edge[nb]);
+@@ -13010,6 +13153,23 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+       {
+         int Iarc2      = DStr.AddShape(Edge[nb]);
+         Interfedge[nb] = ChFi3d_FilPointInDS(ori, Iarc2, indpoint2, paredge2);
++        // The edges passed before it lie under the fillet, in the corner it
++        // removes: each is cut at its end towards the crossing, the whole of
++        // it removed.
++        NCollection_List<TopoDS_Shape>::Iterator itPV(aPassedVertices[nb]);
++        for (NCollection_List<TopoDS_Shape>::Iterator itPE(aPassedEdges[nb]); itPE.More() && itPV.More();
++             itPE.Next(), itPV.Next())
++        {
++          const TopoDS_Edge&   aPE = TopoDS::Edge(itPE.Value());
++          const TopoDS_Vertex& aPV = TopoDS::Vertex(itPV.Value());
++          const int            anIE = DStr.AddShape(aPE);
++          DStr.ChangeShapeInterferences(anIE).Append(
++            ChFi3d_FilPointInDS(TopExp::LastVertex(aPE).IsSame(aPV) ? TopAbs_FORWARD : TopAbs_REVERSED,
++                                anIE,
++                                DStr.AddShape(aPV),
++                                BRep_Tool::Parameter(aPV, aPE),
++                                true));
++        }
+         //  DStr.ChangeShapeInterferences(Edge[nb]).Append(Interfp2);
+       }
+       else

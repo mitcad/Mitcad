@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+# A sketch region's notice place in a moved component (mitcad#1609), on
+# notice-places-region.json (Part:1 placed 100 mm along x; Plate extrudes
+# its Sketch1's rectangle, x -30 to 30 in the component, and warns that a
+# line drawn across it split the region): the pointer over Plate's
+# Timeline item paints the warning's places, the region as referenced and
+# the two pieces it was found as, where the occurrence shows the sketch,
+# x 70 to 130 (the rectangle's -30 to 30 moved by the component's 100),
+# not at the component's own origin; moving away clears them.
+# Run by tools/ui-notice-places-test.sh (Linux) and
+# tools/ui-windows-notice-places-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+expect-ever '^Timeline Plate at '
+mark
+hover-logged '^Timeline Plate at '
+wait-log '^Notice hover highlighted: timeline: region r[{][^ ]* of F1, region r[{][^ ]* of F1, region r[{][^ ]* of F1 [(]3 drawn[)]$' 10
+wait-log '^Notice hover bounds: x 70[.]0 to 130[.]0, y -20[.]0 to 20[.]0, ' 10
+screenshot '${MITCAD_TEST_SHOTS}/notice-places-region.png'
+mark
+timeline-leave
+wait-log '^Notice hover highlighted: none$' 10
+wait-idle
+expect-never 'The document was read while a job computes it|Input dropped while the model computes|TestDriver: FAIL'

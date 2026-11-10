@@ -2774,3 +2774,31 @@ fn model_render_takes_an_overlay() {
     assert!(description.contains("quality raytrace"));
     assert!(render["inputSchema"]["properties"]["overlay"]["properties"]["up"].is_object());
 }
+
+/// A model refusal with its places (mitcad#1612): agents read its detail,
+/// with the names, in place of the plain message, and its places.
+#[test]
+fn a_refusal_s_tail_becomes_its_detail_and_places() {
+    let tail = r#"{"message":"an edge is listed more than once","detail":"edge E{F2:a|F2:b} is listed more than once","places":[{"kind":"edge","name":"E{F2:a|F2:b}"}]}"#;
+    let text = format!("commands[1]: an edge is listed more than once\n[placed: {tail}]");
+    let (agents, places) = agent_text(&text);
+    assert_eq!(
+        agents,
+        "commands[1]: edge E{F2:a|F2:b} is listed more than once"
+    );
+    assert_eq!(
+        places,
+        vec![json!({"kind": "edge", "name": "E{F2:a|F2:b}"})]
+    );
+    let error = tool_error(text);
+    assert_eq!(
+        error["structuredContent"]["error"],
+        "commands[1]: edge E{F2:a|F2:b} is listed more than once"
+    );
+    assert_eq!(error["structuredContent"]["places"][0]["kind"], "edge");
+    // Plain text as it is.
+    assert_eq!(
+        agent_text("fillet failed"),
+        ("fillet failed".to_owned(), Vec::new())
+    );
+}

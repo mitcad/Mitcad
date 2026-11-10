@@ -2725,10 +2725,8 @@ void MainWindow::noteKeptParameters(const QJsonObject& result) {
   if (moved.isEmpty()) {
     return;
   }
-  QStringList notes;
-  for (const QJsonValue& note : result.value(QStringLiteral("notes")).toArray()) {
-    notes << note.toString();
-  }
+  // In plain words (mitcad#1612).
+  const QStringList notes = shownTexts(result, QStringLiteral("notes"), QStringLiteral("note_messages"));
   // The model's words, shown now and again when the command's panel closes
   // (onCommandFinished), after a placement warning.
   QString note = notes.join(QStringLiteral("; "));
@@ -3164,7 +3162,15 @@ QStringList MainWindow::bodyUids() const {
 bool MainWindow::reportRecompute(const QJsonObject& result, double milliseconds) {
   const QString error = result.value(QStringLiteral("error")).toString();
   if (!error.isEmpty()) {
-    showError(tr("Recompute failed: %1").arg(error));
+    // In plain words, its places painted while the pointer is over it
+    // (mitcad#1612: the model's `error_notice`; its `error` keeps the
+    // names and coordinates for agents and the log).
+    const QJsonObject notice = result.value(QStringLiteral("error_notice")).toObject();
+    const QString message = notice.value(QStringLiteral("message")).toString();
+    const QString feature = notice.value(QStringLiteral("target")).toString();
+    qDebug().noquote() << QStringLiteral("Recompute failed: %1").arg(error);
+    showFeatureStatus(tr("Recompute failed: %1").arg(message.isEmpty() ? userText(error) : message),
+                      NoticeLevel::Error, feature);
     return false;
   }
   const int recomputed = result.value(QStringLiteral("recomputed")).toInt();
@@ -3172,6 +3178,9 @@ bool MainWindow::reportRecompute(const QJsonObject& result, double milliseconds)
   m_statusIsHint = true;
   // Information, without an icon of its own (mitcad#1040).
   m_statusLevel = NoticeLevel::Information;
+  // About no feature: a feature's places go with its message (mitcad#1609).
+  m_statusFeature.clear();
+  updateStatusNoticeHover();
   if (m_statusIcon != nullptr) {
     m_statusIcon->clear();
     m_statusIcon->hide();
@@ -4584,6 +4593,7 @@ void MainWindow::showFeatureStatus(const QString& message, NoticeLevel level, co
   m_statusIsHint = level == NoticeLevel::Hint || level == NoticeLevel::Progress;
   m_statusLevel = level;
   m_statusFeature = feature; // its notice places on hover (mitcad#1327)
+  updateStatusNoticeHover(); // shown under the pointer: its own (mitcad#1609)
   if (level == NoticeLevel::Error) {
     setErrorStyleSheet(m_statusLabel);
   } else if (level == NoticeLevel::Warning) {
@@ -4647,6 +4657,9 @@ void MainWindow::clearDesignMessages() {
   // it.
   m_statusIsHint = true;
   m_statusLevel = NoticeLevel::Hint;
+  // Its feature's places with it (mitcad#1609).
+  m_statusFeature.clear();
+  updateStatusNoticeHover();
   if (m_statusLabel != nullptr) {
     setErrorStyleSheet(m_statusLabel, QString());
     m_statusLabel->clear();
@@ -5898,7 +5911,14 @@ QString MainWindow::featureError(const QString& uid) const {
     const QJsonObject feature = value.toObject();
     if (feature.value(QStringLiteral("uid")).toString() == uid &&
         feature.value(QStringLiteral("status")).toString() == QStringLiteral("error")) {
-      return feature.value(QStringLiteral("error")).toString();
+      // In plain words, as its error notice gives it (mitcad#1612); the
+      // model's `error` keeps the names for agents.
+      for (const QJsonValue& notice : feature.value(QStringLiteral("notices")).toArray()) {
+        if (notice.toObject().value(QStringLiteral("level")).toString() == QStringLiteral("error")) {
+          return notice.toObject().value(QStringLiteral("message")).toString();
+        }
+      }
+      return userText(feature.value(QStringLiteral("error")).toString());
     }
   }
   return QString();

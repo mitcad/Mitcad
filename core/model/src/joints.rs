@@ -404,9 +404,12 @@ pub fn origin_frame(r: &mut impl Resolver, geometry: &GeomRef) -> Result<Transfo
             let shape = r.shape(*body)?;
             let face = &crate::features::renamed::face_for(r, &shape, face)?;
             let kernel = r.kernel();
-            let surface = kernel
-                .face_geometry(&shape, face)
-                .map_err(|e| format!("face {face}: {e}"))?;
+            let surface = kernel.face_geometry(&shape, face).map_err(|e| {
+                crate::notice::about_place(
+                    crate::notice::NoticePlace::face(face.to_string()),
+                    &e.to_string(),
+                )
+            })?;
             use crate::datum::SurfaceGeometry as S;
             match surface {
                 S::Plane { origin, normal } => {
@@ -428,18 +431,25 @@ pub fn origin_frame(r: &mut impl Resolver, geometry: &GeomRef) -> Result<Transfo
             let shape = r.shape(*body)?;
             let edge = &crate::features::renamed::edge_for(r, &shape, edge)?;
             use crate::datum::CurveGeometry as C;
-            match r
-                .kernel()
-                .edge_geometry(&shape, edge)
-                .map_err(|e| format!("edge {edge}: {e}"))?
-            {
+            match r.kernel().edge_geometry(&shape, edge).map_err(|e| {
+                crate::notice::about_place(
+                    crate::notice::NoticePlace::edge(edge.to_string()),
+                    &e.to_string(),
+                )
+            })? {
                 C::Circle { center, normal, .. } => {
                     let axis = canonical_axis(unit(normal).ok_or("the circle has no normal")?);
                     Ok(frame_along(center, axis))
                 }
                 C::Line { start, end } => {
-                    let along = unit(std::array::from_fn(|i| end[i] - start[i]))
-                        .ok_or_else(|| format!("edge {edge} has no length"))?;
+                    let along =
+                        unit(std::array::from_fn(|i| end[i] - start[i])).ok_or_else(|| {
+                            crate::notice::placed(
+                                "the edge has no length",
+                                crate::notice::NoticePlace::edge(edge.to_string()),
+                                format!("edge {edge} has no length"),
+                            )
+                        })?;
                     Ok(frame_along(
                         std::array::from_fn(|i| (start[i] + end[i]) / 2.0),
                         along,

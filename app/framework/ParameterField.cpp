@@ -353,6 +353,13 @@ ParameterField::ParameterField(QLineEdit* edit, ParameterFieldOptions options)
   edit->addAction(m_fx, QLineEdit::TrailingPosition);
   connect(m_fx, &QAction::triggered, this, [this] { openBrowser(); });
   connect(edit, &QLineEdit::textEdited, this, [this] { textEdited(); });
+  // A name shown again (the field's undo, typed or set): Backspace no
+  // longer took it off (mitcad#1614).
+  connect(edit, &QLineEdit::textChanged, this, [this](const QString& text) {
+    if (m_nameBackspaced && !namedPrefix(text).isEmpty()) {
+      m_nameBackspaced = false;
+    }
+  });
   connect(edit, &QLineEdit::cursorPositionChanged, this, [this] { caretMoved(); });
   edit->setContextMenuPolicy(Qt::CustomContextMenu);
   connect(edit, &QWidget::customContextMenuRequested, this, &ParameterField::showMenu);
@@ -1365,6 +1372,37 @@ bool ParameterField::removeName() {
   return true;
 }
 
+QString ParameterField::removeNameHint() {
+  return tr("Backspace on an empty value removes the name");
+}
+
+bool ParameterField::backspaceName(const QKeyEvent& key) {
+  if (!m_options.removeName || m_mode == Mode::Browsing || key.key() != Qt::Key_Backspace ||
+      (key.modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) != Qt::KeyboardModifiers() ||
+      m_edit->hasSelectedText()) {
+    return false;
+  }
+  // Only the `name = ` is left and the caret is after it: the value was
+  // deleted (the first Backspace over the selected value), so the next one
+  // takes the name, not its `=` and letters one by one (mitcad#1614).
+  const QString text = m_edit->text();
+  const QString name = namedPrefix(text);
+  const int start = expressionStart(text);
+  if (name.isEmpty() || !text.mid(start).trimmed().isEmpty() || m_edit->cursorPosition() < start) {
+    return false;
+  }
+  close();
+  // As if the text had been deleted: textEdited follows (the owner's
+  // preview), and the field's own undo (Ctrl+Z) brings the name back.
+  m_inserting = true;
+  m_edit->selectAll();
+  m_edit->insert(QString());
+  m_inserting = false;
+  m_nameBackspaced = true;
+  qDebug().noquote() << QStringLiteral("Parameter name %1 removed by Backspace for %2").arg(name, m_options.label);
+  return true;
+}
+
 void ParameterField::close(const QString& why) {
   if (m_mode == Mode::Closed && !(m_popup && m_popup->isVisible())) {
     return;
@@ -1498,6 +1536,17 @@ bool ParameterField::eventFilter(QObject* watched, QEvent* event) {
   switch (event->type()) {
   case QEvent::ToolTip: {
     const auto* help=static_cast<QHelpEvent*>(event);
+    // While the text shows a name the field can take off, every tooltip
+    // says how Backspace takes it (mitcad#1614).
+    const QString nameHint =
+        m_options.removeName && !namedPrefix(m_edit->text()).isEmpty() ? removeNameHint() : QString();
+    const auto withHint = [&nameHint](const QString& tooltip) {
+      if (nameHint.isEmpty() || tooltip.isEmpty()) {
+        return tooltip.isEmpty() ? nameHint : tooltip;
+      }
+      return Qt::mightBeRichText(tooltip) ? QStringLiteral("%1<br>%2").arg(tooltip, nameHint.toHtmlEscaped())
+                                          : QStringLiteral("%1\n%2").arg(tooltip, nameHint);
+    };
     const ParameterSource* source=parameterSourceOf(m_edit);
     if (source && source->query) {
       try {
@@ -1508,7 +1557,7 @@ bool ParameterField::eventFilter(QObject* watched, QEvent* event) {
         const QJsonObject part=result.value(QStringLiteral("selection")).toObject();
         const QString shown=part.value(QStringLiteral("error")).toString(part.value(QStringLiteral("text")).toString());
         if (!shown.isEmpty()) {
-          QToolTip::showText(help->globalPos(),shown,m_edit);
+          QToolTip::showText(help->globalPos(),withHint(shown),m_edit);
           return true;
         }
       } catch (const std::exception&) {}
@@ -1518,7 +1567,11 @@ bool ParameterField::eventFilter(QObject* watched, QEvent* event) {
     // with a line on how its value steps (mitcad#1254). Added as it shows:
     // the field's owner sets its tooltip again as its parameter changes.
     if (m_options.steps) {
-      QToolTip::showText(help->globalPos(), stepTooltip(m_edit->toolTip()), m_edit);
+      QToolTip::showText(help->globalPos(), withHint(stepTooltip(m_edit->toolTip())), m_edit);
+      return true;
+    }
+    if (!nameHint.isEmpty()) {
+      QToolTip::showText(help->globalPos(), withHint(m_edit->toolTip()), m_edit);
       return true;
     }
     break;
@@ -1546,6 +1599,11 @@ bool ParameterField::eventFilter(QObject* watched, QEvent* event) {
   }
   case QEvent::KeyPress: {
     auto* key = static_cast<QKeyEvent*>(event);
+    // Backspace on an empty value takes the whole `name = ` off
+    // (mitcad#1614), with the list closed or typing.
+    if (backspaceName(*key)) {
+      return true;
+    }
     if (!isOpen()) {
       // Up and Down step a plain value (mitcad#1254); with an expression
       // they do nothing (stepValue logs why).

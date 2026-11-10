@@ -202,4 +202,18 @@ inline TerminalLaunch testTerminal(const QString& program, const QString& script
   return {QStringLiteral("test"), program, {script}, QString(), false, false};
 }
 
+// What SignInTerminal::start does with the terminal it may have open
+// (mitcad#1610): none open (or one that returned at once and waits for the
+// user), a new one starts; one open for the same agent is that agent's, and
+// none starts; one open for another agent is let go (it stays open for the
+// user, its end checks no agent) and the new agent's starts, so that Sign in
+// Again for a second agent never does nothing while it reports success.
+enum class SignInStart { Start, AlreadyOpen, ReplaceOther };
+inline SignInStart signInStart(bool open, const QString& openFor, const QString& agentId) {
+  if (!open) {
+    return SignInStart::Start;
+  }
+  return openFor == agentId ? SignInStart::AlreadyOpen : SignInStart::ReplaceOther;
+}
+
 } // namespace mitcad::agent

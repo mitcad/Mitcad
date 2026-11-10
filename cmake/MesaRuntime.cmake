@@ -1447,7 +1447,7 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
               -Out "${CMAKE_BINARY_DIR}/ui-windows-notice-places"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
-    set_tests_properties(app.ui-windows-notice-places PROPERTIES TIMEOUT 360)
+    set_tests_properties(app.ui-windows-notice-places PROPERTIES TIMEOUT 600)
     # The rolled-back features evaluated in the background after an edit
     # before the marker, so that the marker dragged to the end evaluates
     # nothing; an edit that opens cancels a run at once (mitcad#1267); the
@@ -2043,6 +2043,42 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-glyph-clear"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-sketch-glyph-clear PROPERTIES TIMEOUT 300)
+
+    # A name given to a sketch dimension's parameter taken off again
+    # (mitcad#1577), and the bare name typed as the value keeps it as a
+    # user parameter without a refusal (mitcad#1608). The Linux test's
+    # shared input script (tools/ui-sketch-remove-dimension-name-test.sh).
+    add_test(NAME app.ui-windows-sketch-remove-dimension-name
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-remove-dimension-name-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-remove-dimension-name"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-remove-dimension-name PROPERTIES TIMEOUT 300)
+    # New Project's Create as Local for Now (mitcad#1601): in a folder with
+    # a file and a Cloud address that is not reached, the project is made
+    # in the new subfolder, not in the folder itself; the test's folders are
+    # outside any git checkout (mitcad#1574). The Linux test's shared input
+    # script (tools/ui-project-local-subfolder-test.sh).
+    add_test(NAME app.ui-windows-project-local-subfolder
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-project-local-subfolder-test.ps1"
+              -App "$<TARGET_FILE:mitcad>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-project-local-subfolder"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-project-local-subfolder PROPERTIES TIMEOUT 300)
+    # Editing a component's features whose To Object or Start Object is a
+    # sketch point or line (mitcad#1599): an extrusion up to a point, a
+    # hole down to one and an extrusion from a line keep the loaded object
+    # in the profiles' occurrence and preview. The Linux test's shared
+    # input script (tools/ui-extrude-to-point-test.sh).
+    add_test(NAME app.ui-windows-extrude-to-point
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-extrude-to-point-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-extrude-to-point"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-extrude-to-point PROPERTIES TIMEOUT 300)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

@@ -53,4 +53,12 @@ QString placesText(const QJsonArray& places) {
   return parts.isEmpty() ? QStringLiteral("none") : parts.join(QStringLiteral(", "));
 }
 
+QString noticeHoverText(const QString& source, const QJsonArray& places, int drawn) {
+  if (places.isEmpty()) {
+    return QStringLiteral("none");
+  }
+  const QString count = drawn < 0 ? QStringLiteral("drawn when the job ends") : QStringLiteral("%1 drawn").arg(drawn);
+  return QStringLiteral("%1: %2 (%3)").arg(source, placesText(places), count);
+}
+
 } // namespace mitcad

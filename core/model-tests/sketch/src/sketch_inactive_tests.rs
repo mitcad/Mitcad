@@ -141,7 +141,7 @@ fn the_solve_leaves_an_inactive_constraint_out_and_activation_is_checked() {
             .unwrap()
             .iter()
             .any(|n| n["level"] == "info"
-                && n["message"].as_str().unwrap().contains(horizontal.as_str())),
+                && n["message"] == "An inactive constraint the geometry does not meet"),
         "{s}"
     );
 

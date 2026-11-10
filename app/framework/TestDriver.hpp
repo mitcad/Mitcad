@@ -86,7 +86,8 @@
 //   expect-no-qt-popup     no Qt popup owns input or remains logically
 //                           visible, including hidden native presenters
 //   expect-widget-property <object-name> <property> <value>
-//                           a Qt target widget's property as text
+//                           a Qt target widget's property as text (a
+//                           size as WxH)
 //   expect-widget-background <object-name> <#rrggbb> <tolerance>  wait until
 //                           the colour covering most of the visible main
 //                           window widget's area, in a grab of its window
@@ -147,6 +148,9 @@
 //                           controls/captions and reachable slider track/knob
 //   expect-dialog-gone <title-regex> no matching Qt tool window remains visible
 //   hover-logged <regex>       move to a logged control without clicking
+//   hover-logged-now <regex>   the same without waiting for the model: a
+//                              Timeline item while a command's preview
+//                              computes (mitcad#1600)
 //   timeline-leave             leave the timeline and clear its preview
 //   leave-widget <objectName>  the pointer leaves that widget (its viewport
 //                              too): a notice's hover ends (mitcad#1327)

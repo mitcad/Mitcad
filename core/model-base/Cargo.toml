@@ -18,3 +18,10 @@ mitcad-expr = { path = "../expr" }
 mitcad-print-keys = { path = "../print-keys" }
 serde.workspace = true
 serde_json.workspace = true
+
+[features]
+# Messages a person reads are checked in debug builds of the model's tests
+# (mitcad#1612, `notice::user_text_leaks`): the mock kernel's crate turns
+# it on, so that every model test fails on a name, id or coordinate in a
+# shown message.
+strict-user-text = []

@@ -15,5 +15,12 @@
 `.f3z` package (mitcad#923), which `mitcad-f3d-design`'s `package` opens one
 at a time.
 
+A mesh container's stream declares its own size; `paramesh` refuses a
+stream that declares more than `MAX_STREAM_BYTES` (256 MiB) or would take
+the container's streams past `MAX_CONTAINER_BYTES` (512 MiB) together,
+before its data is copied or inflated, and the LZMA decoder checks the
+stream's start before it reserves any output (mitcad#1604). Such a mesh
+body is not brought in, with the parse error as its warning.
+
 Until mitcad#776 this was part of `mitcad-f3d`, which re-exports it
 under the same paths (`mitcad_f3d::container`, `mitcad_f3d::F3dFile`, ...).

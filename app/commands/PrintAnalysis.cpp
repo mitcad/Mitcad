@@ -9,6 +9,8 @@
 #include <QSettings>
 #include <QStringList>
 
+#include "../framework/UserText.hpp"
+
 namespace mitcad {
 namespace {
 
@@ -285,8 +287,9 @@ QString runPrintAnalysis(const QJsonObject& def, const PrintQuery& query, PrintA
       return QString();
     }
     answer = query(request, slow);
+    // In plain words (mitcad#1612).
     const QJsonValue error = answer.value(QStringLiteral("error"));
-    return error.isString() ? error.toString() : QString();
+    return error.isString() ? userText(error.toString()) : QString();
   };
   QString error = ask(printOverhangsQuery(def), true, answers.overhangs);
   if (error.isEmpty()) {

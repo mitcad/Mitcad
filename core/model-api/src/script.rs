@@ -96,6 +96,27 @@ fn close(actual: f64, expected: f64, tolerance: f64) -> bool {
     (actual - expected).abs() <= tolerance * expected.abs().max(1.0)
 }
 
+/// What a script's commands report beside the design (`mitcad-cli run`
+/// prints it before the report): a line for each item a `place_on_plate`
+/// took off another plate (mitcad#1595), `Plates: Body1 moved from one to
+/// two (count 2)`; empty without one. `results` is [`ScriptApi::run_script`]'s
+/// answer.
+pub fn script_notes(results: &str) -> String {
+    let Ok(Value::Array(results)) = serde_json::from_str::<Value>(results) else {
+        return String::new();
+    };
+    let mut out = String::new();
+    for result in &results {
+        for moved in result["moved"].as_array().into_iter().flatten() {
+            out.push_str(&format!(
+                "Plates: {}\n",
+                super::print_plates::plate_move_text(moved)
+            ));
+        }
+    }
+    out
+}
+
 /// Scripts of JSON commands run on a document. An extension trait
 /// (mitcad#777), so that the api can live in a crate above the model.
 pub trait ScriptApi<K: Kernel> {

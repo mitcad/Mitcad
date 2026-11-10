@@ -424,6 +424,56 @@ hint and progress are the frontends' own.
   them into its places, naming their kind in the text ("the fillet of an
   edge"); new messages are written without them from the start.
 
+**The rule, complete** (mitcad#1612; the single written source, decided
+in mitcad#1171, #1327, #1566 and #1587, not argued again): text shown to
+a person never contains
+
+- topological names: `E{…}`, `V{…}`, `F3:side(…)`, and bare ones such as
+  `F1:top`, `F35:end` or `F1:side0`;
+- sketch region keys: `r{…}`;
+- internal ids: a sketch's `k5`, `p15`, `c14`, `r2`, `t3`, a feature's
+  `F57`, a body's `F2.b0`;
+- coordinates: `(28.28, -28.28, 202)`, a sketch's `(1.5, -2)`.
+
+That holds for every place a person reads it: the status bar and the
+Floating message band, notices, Timeline and Browser tooltips, the command
+panel, dialogs, sketch refusals, and export and import errors ("a face
+could not be triangulated (its surface: plane)", not "… F1:side0
+(cylinder)"). The message says what is wrong in words: "the chamfer
+reaches exactly to the far edge of the face beside it, so that face would
+end in a point; make the chamfer a little smaller or larger". The place is
+painted while the pointer is over it, through the error's places (faces,
+edges, vertices, points).
+
+- **A failure is structured.** The model's `FeatureError` (in
+  `core/model-base/src/notice.rs`) holds the `message` a person reads,
+  its `places`, and the `detail` for agents and the log: the same
+  sentence with its names, ids and points. The geometry kernel throws
+  the same with `placed_error`
+  (`geometry/include/mitcad/geometry/user_error.hpp`). As text it travels
+  as the message and a last line `[placed: {…}]`. The application shows
+  only the text before that line (`userText`, `app/framework/Json.hpp`)
+  or a notice's `message`, never a model `error` string as it is.
+- **The raw `error` is the agents'.** MCP results, a command's `error`,
+  `failed_features[].error`, the `timeline` and `feature` queries and the
+  log keep the full detail with names, ids and coordinates, plus
+  `places`. Nothing that tells an agent which edge is lost: it moves to
+  the detail and the places.
+- **"A message that says where" means places that say where.** A ticket
+  (also an older one, as mitcad#1185-#1260) that asks for an error that
+  names the edge or the point is done with places and an MCP detail,
+  never with names or a point in the message.
+- **The guard.** `notice::user_text_leaks` finds what may not be shown;
+  in the model's tests `Notice::new` and `FeatureError::new` assert that
+  none is left (the `strict-user-text` feature), and
+  `core/model-tests/api/src/user_text_guard_tests.rs` runs failing cases
+  (a chamfer or fillet too large, a thread, sketch conflicts, an export)
+  and checks every shown message. A scan test over `geometry/src/*.cpp`
+  refuses thrown text that names an edge or a face, or prints a point,
+  outside `placed_error`. Old texts and imported ones are still cleaned on
+  the way (bare names and body uids become words, a coordinate tuple a
+  point place), but new messages are written plain from the start.
+
 | Level | Qualifies when | Examples | Word in the UI |
 |---|---|---|---|
 | **Error** | The result is missing: the work stopped, and the user must act to get it. | A feature that produces nothing; an export not written; a configuration change refused; a file that cannot be read; conflicting constraints; a sketch that did not converge. | *Failed* for features and commands, *Refused* for configuration changes, *Could not …* in messages |

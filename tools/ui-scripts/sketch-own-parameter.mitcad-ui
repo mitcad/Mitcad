@@ -35,7 +35,7 @@ type ' * 2'
 key Return
 wait-log '^Dimension k5 = BuckleDiameter [*] 2 [(]d[0-9]+[)]$'
 wait-log '^Dimension k5: BuckleDiameter kept as a user parameter, now d[0-9]+$'
-wait-log '^Sketch notice: BuckleDiameter is now a user parameter [(]5 mm[)]; dimension k5 is d[0-9]+ = BuckleDiameter [*] 2[.]$'
+wait-log '^Sketch notice: BuckleDiameter is now a user parameter [(]5 mm[)]; the dimension is d[0-9]+ = BuckleDiameter [*] 2[.]$'
 expect-model-parameter BuckleDiameter 5 user
 expect-model-parameter Clearance 6 user
 
@@ -46,7 +46,7 @@ wait-log '^Context menu: '
 expect-log '^Context menu: .*Move Strap to User Parameters'
 popup 'Move Strap to User Parameters'
 wait-log '^Dimension k6: Strap kept as a user parameter, now Strap$'
-wait-log '^Sketch notice: Strap is now a user parameter [(]25 mm[)]; dimension k6 uses it[.]$'
+wait-log '^Sketch notice: Strap is now a user parameter [(]25 mm[)]; the dimension uses it[.]$'
 expect-model-parameter Strap 25 user
 command sketch.finish
 wait-log '^Sketch finished'

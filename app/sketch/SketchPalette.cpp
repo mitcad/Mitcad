@@ -623,7 +623,7 @@ void SketchPalette::refresh() {
   // also the solve's redundant constraints, grouped by the offset, pattern
   // or sketch they come from, as links to what they name (mitcad#1171).
   m_warnings->setWarnings(model.warnings, model.warningEntities);
-  // "Sketch Palette warnings: Offset k1: 2 dimensions follow from the
+  // "Sketch Palette warnings: An offset: 2 dimensions follow from the
   // others" and the redundant constraints' ids ("Sketch Palette redundant:
   // k7, k9"), when they change, for UI tests and the log.
   const QString warningsLine =

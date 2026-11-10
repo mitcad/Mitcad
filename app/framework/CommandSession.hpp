@@ -29,6 +29,7 @@
 #include "AutoOperationPolicy.hpp"
 #include "Command.hpp"
 #include "CommandPanel.hpp"
+#include "NoticeLevel.hpp"
 #include "PreviewHold.hpp"
 #include "SectionPreview.hpp"
 #include "mitcad/geometry/item_origin.hpp"
@@ -757,6 +758,10 @@ private:
   std::vector<BodyDisplay> m_messageBodies;
   bool m_messageHovered = false;
   void hoverMessage(bool on);
+  // The panel's message without a preview report (a hint, an error, a
+  // progress): the shown preview's places and bodies go with it
+  // (mitcad#1609).
+  void showPanelMessage(const QString& message, NoticeLevel level);
   // The constraints and dimensions that block the sketch command the model
   // refused, painted while the message shows it (mitcad#1566).
   QStringList m_sketchConflict;

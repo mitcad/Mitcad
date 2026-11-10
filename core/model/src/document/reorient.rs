@@ -209,7 +209,8 @@ impl<K: Kernel> Document<K> {
             if !added && !old_ok.contains(&f.uid) {
                 continue;
             }
-            let Some(error) = result.result(f.uid).and_then(|r| r.status.error()) else {
+            // (With its tail: a person reads its message, mitcad#1612.)
+            let Some(error) = result.result(f.uid).and_then(|r| r.status.failure()) else {
                 continue;
             };
             let mut place = Vec::new();

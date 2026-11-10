@@ -657,7 +657,8 @@ std::vector<SweepFace> chain_wall_faces(const std::string& feature, const Frame&
     for (const PathCurve& piece : chain) {
       maker.Add(model_edge(piece.curve));
       if (!maker.IsDone()) {
-        throw std::invalid_argument("thin wall curve " + piece.name + " does not join the curve before it");
+        throw std::invalid_argument(placed_error("a thin wall curve does not join the curve before it",
+                                                 "thin wall curve " + piece.name + " does not join the curve before it"));
       }
       names.emplace_back(maker.Edge(), piece.name);
     }
@@ -668,8 +669,10 @@ std::vector<SweepFace> chain_wall_faces(const std::string& feature, const Frame&
       // A closed chain bounds an area: its walls as a region's.
       BRepBuilderAPI_MakeFace area(plane, wire, true);
       if (!area.IsDone() || !BRepCheck_Analyzer(area.Face()).IsValid()) {
-        throw std::invalid_argument("the closed chain of " + chain.front().name +
-                                    " does not bound an area; it may cross itself");
+        throw std::invalid_argument(placed_error("a closed chain of curves does not bound an area; it may cross "
+                                                 "itself",
+                                                 "the closed chain of " + chain.front().name +
+                                                     " does not bound an area; it may cross itself"));
       }
       ShapeMap on_face;
       TopExp::MapShapes(area.Face(), TopAbs_EDGE, on_face);
@@ -1973,7 +1976,7 @@ std::vector<TopoDS_Face> target_faces(const Target& target) {
     faces.push_back(target.body->face(i));
   }
   if (faces.empty()) {
-    throw std::invalid_argument("the body has no face " + target.face);
+    throw std::invalid_argument(no_face_error(target.face));
   }
   return faces;
 }
@@ -1985,7 +1988,7 @@ gp_Pln target_plane(const Target& target, const gp_Dir& along) {
     // A plane, or a flat spline face (a sheet body's wall, mitcad#1554).
     const std::optional<gp_Pln> found = reference_plane(faces.front());
     if (!found) {
-      throw std::invalid_argument("face " + target.face + " is not planar");
+      throw std::invalid_argument(face_error(target.face, "the face is not planar", "face " + target.face + " is not planar"));
     }
     plane = *found;
   } else if (target.kind == Target::Kind::Body) {

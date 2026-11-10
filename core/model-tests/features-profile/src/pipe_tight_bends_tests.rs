@@ -61,21 +61,15 @@ fn fillet(doc: &mut Document<MockKernel>, a: &str, b: &str, radius: f64) -> Stri
 #[test]
 fn a_fillet_tighter_than_the_section_warns_with_the_numbers() {
     let (mut doc, first, second) = l_path();
-    let arc = fillet(&mut doc, &first, &second, 3.0);
+    fillet(&mut doc, &first, &second, 3.0);
     let said = pipe(&mut doc, &first, json!({}));
     assert_eq!(said.len(), 1, "{said:?}");
+    // The curve by its sketch's name, no id (mitcad#1612).
     let warning = &said[0];
-    assert!(
-        warning.starts_with("the path bends with radius 3 mm at Sketch1's c"),
-        "{warning}"
+    assert_eq!(
+        warning,
+        "the path bends with radius 3 mm at a curve of Sketch1; the pipe needs at least 5 mm"
     );
-    assert!(
-        warning.ends_with("; the pipe needs at least 5 mm"),
-        "{warning}"
-    );
-    if !arc.is_empty() {
-        assert!(warning.contains(&format!("Sketch1's {arc};")), "{warning}");
-    }
 }
 
 #[test]
@@ -104,7 +98,8 @@ fn a_chamfer_too_short_for_its_miters_warns() {
     let said = pipe(&mut doc, &first, json!({}));
     assert_eq!(said.len(), 1, "{said:?}");
     let warning = &said[0];
-    assert!(warning.starts_with("Sketch1's c"), "{warning}");
+    // The curve by its sketch's name, no id (mitcad#1612).
+    assert!(warning.starts_with("a curve of Sketch1 is "), "{warning}");
     assert!(
         warning.ends_with(
             " is 2.828 mm long; the pipe's mitered corners need at least 4.142 mm there"

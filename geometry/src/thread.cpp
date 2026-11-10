@@ -735,7 +735,8 @@ TopoDS_Shape radial_band(const std::vector<TopoDS_Shape>& pieces, const std::str
       }
     }
     if (thick.IsNull()) {
-      throw std::runtime_error("the thread's teeth could not be built on face " + face);
+      throw std::runtime_error(face_error(face, "the thread's teeth could not be built on the face",
+                                          "the thread's teeth could not be built on face " + face));
     }
     for (TopExp_Explorer it(thick, TopAbs_SOLID); it.More(); it.Next()) {
       builder.Add(band, it.Current());
@@ -899,7 +900,9 @@ void chamfer_steps(std::vector<Step>& steps, const Thread& t, double from, doubl
   }
   const double depth = chamfer_depth(t, c, material, face);
   if ((low ? depth : 0.0) + (high ? depth : 0.0) >= to - from - kSame) {
-    throw std::invalid_argument("the thread's end chamfers on face " + face + " are deeper than the thread is long");
+    throw std::invalid_argument(face_error(face, "the thread's end chamfers are deeper than the thread is long",
+                                           "the thread's end chamfers on face " + face +
+                                               " are deeper than the thread is long"));
   }
   if (low) {
     steps.push_back({Stage::ChamferLow, c.low_name,
@@ -1123,7 +1126,8 @@ std::vector<Step> other_steps(const Shape& body, const FacePlan& p, const Thread
       to = p.even_high - short_of;
     }
     if (to - from <= kSame) {
-      throw std::invalid_argument("face " + p.face + " is too short all round for the thread");
+      throw std::invalid_argument(face_error(p.face, "the face is too short all round for the thread",
+                                             "face " + p.face + " is too short all round for the thread"));
     }
     // The end chamfers, before the grooves: the first turn starts on the
     // cone.
@@ -1681,10 +1685,12 @@ FacePlan plan_face(const Shape& body, const ThreadSpec& spec, std::size_t k, Fac
   if (spec.groove) {
     check_clearance(spec, cylinder.internal);
     if (!cylinder.internal && cylinder.radius <= spec.minor / 2.0 - spec.radial_clearance + kSame) {
-      throw std::invalid_argument("face " + face + " is too thin for the thread");
+      throw std::invalid_argument(
+          face_error(face, "the face is too thin for the thread", "face " + face + " is too thin for the thread"));
     }
     if (cylinder.internal && cylinder.radius >= spec.major / 2.0 + spec.radial_clearance - kSame) {
-      throw std::invalid_argument("face " + face + " is too wide for the thread");
+      throw std::invalid_argument(
+          face_error(face, "the face is too wide for the thread", "face " + face + " is too wide for the thread"));
     }
   }
   const double tolerance = 1.0e-6;
@@ -1699,7 +1705,8 @@ FacePlan plan_face(const Shape& body, const ThreadSpec& spec, std::size_t k, Fac
       to = from + spec.length;
     }
     if (from < -tolerance || to > cylinder.length + tolerance) {
-      throw std::invalid_argument("the thread does not fit on face " + face);
+      throw std::invalid_argument(
+          face_error(face, "the thread does not fit on the face", "the thread does not fit on face " + face));
     }
     from = std::max(from, 0.0);
     to = std::min(to, cylinder.length);

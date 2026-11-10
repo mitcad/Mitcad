@@ -1419,8 +1419,12 @@ is not; and it is our own logic, which goes in Rust first. The camera
 (`core/preview/src/camera.rs`) is a pure function of the view, the
 framed box and the picture's shape, shared with every later quality, so
 that a fast preview and a ray-traced picture of the same arguments frame
-alike. Edges are drawn against the depth of the faces with a small
-tolerance; transparent bodies are drawn faintly after the others.
+alike. Triangles and edges are clipped to the picture (with a small
+margin) and to the camera's near plane before they are drawn, so a face
+or edge that runs far past the picture, or close to the eye, is drawn
+along its true line and without gaps. Edges are drawn against the depth
+of the faces with a small tolerance; transparent bodies are drawn
+faintly after the others.
 Pictures larger than about two million pixels are drawn without the 2x2
 supersampling that smooths the edges of smaller ones.
 

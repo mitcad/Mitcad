@@ -31,6 +31,8 @@ const FULL_DISTANCES: usize = 1 << (END_POS_MODEL >> 1);
 const ALIGN_BITS: u32 = 4;
 /// The shortest match.
 const MATCH_MIN: usize = 2;
+/// The most output bytes reserved before decoding.
+const RESERVE_MAX: usize = 16 << 20;
 
 /// The range decoder over the compressed bytes.
 struct Range<'a> {
@@ -181,7 +183,9 @@ impl Lengths {
 /// position bits `lp` and position bits `pb` to exactly `size` bytes. The
 /// dictionary size only bounds the distances (the whole output is the
 /// dictionary here). An end marker before `size` bytes is an error;
-/// whatever follows the `size` bytes is not read.
+/// whatever follows the `size` bytes is not read. `size` is not trusted
+/// for the allocation: the caller caps it, and at most `RESERVE_MAX`
+/// bytes are reserved before the stream proves to hold them.
 pub fn decompress(
     data: &[u8],
     lc: u32,
@@ -195,11 +199,17 @@ pub fn decompress(
             "LZMA properties out of range: lc {lc}, lp {lp}, pb {pb}"
         ));
     }
-    let mut out: Vec<u8> = Vec::with_capacity(size);
     if size == 0 {
-        return Ok(out);
+        return Ok(Vec::new());
     }
+    // The range coder's start is checked before the output is allocated,
+    // and `size` (the caller's, from the file) reserves at most
+    // `RESERVE_MAX` up front: the output grows as it is decoded
+    // (mitcad#1604).
     let mut rc = Range::new(data)?;
+    let mut out: Vec<u8> = Vec::new();
+    out.try_reserve(size.min(RESERVE_MAX))
+        .map_err(|_| format!("no memory for an LZMA stream of {size} bytes"))?;
     let mut literals = vec![PROB_INIT; 0x300 << (lc + lp)];
     let mut is_match = [PROB_INIT; STATES * POS_STATES_MAX];
     let mut is_rep = [PROB_INIT; STATES];
@@ -417,5 +427,15 @@ pub(crate) mod tests {
             decompress(&[], 3, 0, 2, 1 << 20, 0).unwrap(),
             Vec::<u8>::new()
         );
+    }
+
+    #[test]
+    fn does_not_allocate_a_declared_size_up_front() {
+        // mitcad#1604: a huge size over a payload that is no stream, or a
+        // bare range coder start, fails without reserving the size.
+        assert!(decompress(&[1, 0, 0, 0, 0], 3, 0, 2, 1 << 20, usize::MAX).is_err());
+        assert!(decompress(&[0, 0], 3, 0, 2, 1 << 20, usize::MAX).is_err());
+        let error = decompress(&[0, 0, 0, 0, 0], 3, 0, 2, 1 << 20, u32::MAX as usize).unwrap_err();
+        assert!(error.contains("corrupt"), "{error}");
     }
 }

@@ -412,7 +412,8 @@ ProfileFace exact_profile(const Frame& frame, const Region& region) {
     maker.Add(wires[i]);
   }
   if (!maker.IsDone()) {
-    throw std::invalid_argument("profile " + region.name + " could not be built");
+    throw std::invalid_argument(
+        placed_error("a profile could not be built", "profile " + region.name + " could not be built"));
   }
   ProfileFace profile;
   profile.face = maker.Face();
@@ -425,7 +426,8 @@ ProfileFace exact_profile(const Frame& frame, const Region& region) {
   for (const auto& [edge, name] : names) {
     const int index = edges.FindIndex(edge);
     if (index == 0) {
-      throw std::runtime_error("profile " + region.name + ": edge " + name + " is not on the face");
+      throw std::runtime_error(placed_error("an edge of a profile is not on its face",
+                                            "profile " + region.name + ": edge " + name + " is not on the face"));
     }
     profile.edges.emplace_back(TopoDS::Edge(edges(index)), name);
   }
@@ -476,7 +478,8 @@ ProfileFace healed_profile(const Frame& frame, const Region& region, double max_
     maker.Add(wires[i]);
   }
   if (!maker.IsDone()) {
-    throw std::invalid_argument("profile " + region.name + " could not be built");
+    throw std::invalid_argument(
+        placed_error("a profile could not be built", "profile " + region.name + " could not be built"));
   }
   ShapeFix_Face fix(maker.Face());
   fix.SetPrecision(max_gap);
@@ -504,7 +507,8 @@ ProfileFace healed_profile(const Frame& frame, const Region& region, double max_
       }
     }
     if (edge_middles[best].Distance(point) > 1e3 * max_gap) {
-      throw std::invalid_argument("segment " + name + " is not on the healed profile");
+      throw std::invalid_argument(placed_error("a segment of the profile is not on the healed profile",
+                                               "segment " + name + " is not on the healed profile"));
     }
     profile.edges.emplace_back(edges[best], name);
   }
@@ -522,7 +526,7 @@ namespace {
 ProfileFace profile_with_gap(const Frame& frame, const Region& region, double max_gap, bool strict) {
   require_positive("profile gap tolerance", max_gap);
   if (region.loops.empty()) {
-    throw std::invalid_argument("profile " + region.name + " has no boundary");
+    throw std::invalid_argument(placed_error("a profile has no boundary", "profile " + region.name + " has no boundary"));
   }
   return detail::run("profile", [&] {
     if (strict) {

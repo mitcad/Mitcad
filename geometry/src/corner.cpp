@@ -29,6 +29,8 @@
 #include <TopoDS_Solid.hxx>
 #include <gp_Pln.hxx>
 
+#include "mitcad/geometry/user_error.hpp"
+
 #include "face_select.hpp"
 #include "history.hpp"
 #include "util.hpp"
@@ -88,7 +90,9 @@ ShapePtr setback_corners(const std::string& feature, const char* role, const Sha
     found[c].faces = dressed.find_faces(face_name(feature, "corner", corner.vertex));
     const std::vector<int> apexes = body.find_vertices(corner.vertex);
     if (found[c].faces.empty() || apexes.size() != 1) {
-      throw std::runtime_error("no corner face at vertex " + corner.vertex);
+      throw std::runtime_error(placed_error("a setback corner has no corner face",
+                                            "no corner face at vertex " + corner.vertex,
+                                            {vertex_place(corner.vertex)}));
     }
     const gp_Pnt apex = BRep_Tool::Pnt(body.vertex(apexes.front()));
     std::set<int> around;
@@ -106,7 +110,9 @@ ShapePtr setback_corners(const std::string& feature, const char* role, const Sha
       const std::string edge_name = dressed_edge(dressed.face_names(g), prefix);
       const std::vector<int> edges = body.find_edges(edge_name);
       if (edges.size() != 1) {
-        throw std::runtime_error("no edge " + edge_name + " for a setback corner");
+        throw std::runtime_error(placed_error("a setback corner misses an edge of its corner",
+                                              "no edge " + edge_name + " for a setback corner",
+                                              {vertex_place(corner.vertex)}));
       }
       // The point `distance` along the edge from the vertex, and the plane
       // across the edge there.
@@ -117,8 +123,10 @@ ShapePtr setback_corners(const std::string& feature, const char* role, const Sha
       const GCPnts_AbscissaPoint at(curve, from_first ? corner.distance : -corner.distance,
                                     from_first ? first : last);
       if (!at.IsDone() || at.Parameter() <= first || at.Parameter() >= last) {
-        throw std::invalid_argument("unsupported: a setback corner at vertex " + corner.vertex +
-                                    ", where an edge is shorter than the setback");
+        throw std::invalid_argument(placed_error(
+            "unsupported: a setback corner where an edge is shorter than the setback",
+            "unsupported: a setback corner at vertex " + corner.vertex + ", where an edge is shorter than the setback",
+            {vertex_place(corner.vertex), edge_place(edge_name)}));
       }
       gp_Pnt p;
       gp_Vec tangent;
@@ -134,8 +142,10 @@ ShapePtr setback_corners(const std::string& feature, const char* role, const Sha
         cuts.emplace_back(g, TopoDS::Edge(it.Current()));
       }
       if (!section.IsDone() || count == 0) {
-        throw std::invalid_argument("unsupported: a setback corner at vertex " + corner.vertex +
-                                    ", where a rounding is shorter than the setback");
+        throw std::invalid_argument(placed_error(
+            "unsupported: a setback corner where a rounding is shorter than the setback",
+            "unsupported: a setback corner at vertex " + corner.vertex + ", where a rounding is shorter than the setback",
+            {vertex_place(corner.vertex)}));
       }
       found[c].around.push_back(g);
     }
@@ -188,8 +198,11 @@ ShapePtr setback_corners(const std::string& feature, const char* role, const Sha
         }
       }
       if (pieces.size() < 2 || next_to_corner != 1) {
-        throw std::invalid_argument("unsupported: a setback corner at vertex " + corners[c].vertex +
-                                    ", where a rounding is shorter than the setback");
+        throw std::invalid_argument(placed_error("unsupported: a setback corner where a rounding is shorter than "
+                                                 "the setback",
+                                                 "unsupported: a setback corner at vertex " + corners[c].vertex +
+                                                     ", where a rounding is shorter than the setback",
+                                                 {vertex_place(corners[c].vertex)}));
       }
     }
     // Tangent to the faces outside where what it replaces was (the
@@ -214,12 +227,16 @@ ShapePtr setback_corners(const std::string& feature, const char* role, const Sha
     }
     detail::build(filling);
     if (!filling.IsDone() || bounds < 3) {
-      throw std::runtime_error("the patch of a setback corner at vertex " + corners[c].vertex +
-                               " could not be built");
+      throw std::runtime_error(placed_error("the patch of a setback corner could not be built",
+                                            "the patch of a setback corner at vertex " + corners[c].vertex +
+                                                " could not be built",
+                                            {vertex_place(corners[c].vertex)}));
     }
     if (filling.G0Error() > 10 * kPatchGap || filling.G1Error() > 10 * kPatchAngle) {
-      throw std::runtime_error("the patch of a setback corner at vertex " + corners[c].vertex +
-                               " does not meet the faces around it");
+      throw std::runtime_error(placed_error("the patch of a setback corner does not meet the faces around it",
+                                            "the patch of a setback corner at vertex " + corners[c].vertex +
+                                                " does not meet the faces around it",
+                                            {vertex_place(corners[c].vertex)}));
     }
     patches.emplace_back(TopoDS::Face(filling.Shape()), face_name(feature, "corner", corners[c].vertex));
     for (int h = 1; h <= hole.Extent(); ++h) {

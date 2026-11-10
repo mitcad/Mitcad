@@ -699,6 +699,88 @@ fn boundary_surfaces_and_fairings_come_in() {
     assert_eq!(doc.parameters().value(fair.tolerance), Some(0.2));
 }
 
+/// A Join To Object of a design before format 40 keeps the body it runs to
+/// apart (mitcad#1603): when that body is its only target, the one body of
+/// its component or the one it names, the tool joins nothing and comes in
+/// as a new body of its own, with a note, so the design has two bodies.
+#[test]
+fn a_join_keeping_its_only_target_apart_is_a_new_body() {
+    use mitcad_model::features::{Extent, ExtentObject, Operation as ModelOperation};
+    for targets in [json!([]), json!(["Body1"])] {
+        let sketch = json!({
+            "points": [
+                {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+                {"id": "p1", "pos": [2.0, 2.0], "fixed": true},
+                {"id": "p2", "pos": [4.0, 2.0], "fixed": true},
+                {"id": "p3", "pos": [4.0, 4.0], "fixed": true},
+                {"id": "p4", "pos": [2.0, 4.0], "fixed": true}],
+            "curves": [
+                {"id": "l1", "type": "line", "a": 1, "b": 2},
+                {"id": "l2", "type": "line", "a": 2, "b": 3},
+                {"id": "l3", "type": "line", "a": 3, "b": 4},
+                {"id": "l4", "type": "line", "a": 4, "b": 1}],
+            "constraints": []});
+        // A box from z 0 to 10; a square sketched at z 20 extruded down to
+        // the box's top face.
+        let v = json!({"format": "solidcraft/39", "name": "J", "params": [], "features": [
+            {"id": 1, "name": "Box1", "type": "box", "corner": [0, 0, 0], "length": "10", "width": "10",
+             "height": "10", "body_names": ["Body1"]},
+            {"id": 2, "name": "Sketch1", "type": "sketch",
+             "plane": {"type": "offset", "base": {"type": "origin", "name": "XY"}, "distance": "20"},
+             "sketch": sketch},
+            {"id": 3, "name": "Extrude1", "type": "extrude", "sketch": 2, "profiles": {"type": "all"},
+             "extent": {"distance": "10", "to": [3, 3, 10]}, "operation": "join", "targets": targets.clone()}]});
+        let file = mitcad_solidcraft::SolidcraftFile::from_value(v).unwrap();
+        let mut doc = Document::new(MockKernel::default());
+        // The box's faces on its bounds, so that the extent's point finds
+        // the top face (and the body it belongs to).
+        doc.kernel().box_faces.set(true);
+        let report = import_solidcraft_file(
+            &mut doc,
+            file,
+            "j.solidcraft",
+            &SolidcraftOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(outcome(&report, "Box1"), Outcome::Parametric, "{targets}");
+        let extrude = report
+            .features
+            .iter()
+            .find(|f| f.name == "Extrude1")
+            .unwrap();
+        assert_eq!(
+            extrude.outcome,
+            Outcome::Partial,
+            "{targets}: {:?}",
+            extrude.notes
+        );
+        assert!(
+            extrude.notes.iter().any(|n| n.contains("a new body")),
+            "{targets}: {:?}",
+            extrude.notes
+        );
+        let entry = doc.features().find(|f| f.name == "Extrude1").unwrap();
+        let FeatureDef::Extrude(def) = &entry.def else {
+            panic!("Extrude1 is not an extrude: {:?}", entry.def)
+        };
+        assert!(
+            matches!(&def.extent, Extent::ToObject { object, .. }
+                if matches!(**object, ExtentObject::Face { .. })),
+            "{targets}: {:?}",
+            def.extent
+        );
+        assert_eq!(def.operation, ModelOperation::NewBody, "{targets}");
+        assert!(def.participants.is_empty(), "{targets}");
+        assert!(
+            doc.status(entry.uid).is_some_and(|s| s.is_ok()),
+            "{targets}"
+        );
+        let names: Vec<String> = doc.bodies().iter().map(|b| b.name.clone()).collect();
+        assert_eq!(names.len(), 2, "{targets}: {names:?}");
+        assert!(names.iter().any(|n| n == "Body1"), "{targets}: {names:?}");
+    }
+}
+
 /// A modelled thread runs its grooves out (mitcad#1302): SolidCraft runs
 /// its groove a pitch past an end of the face, a cone there too, and
 /// leaves no flat lip. A cosmetic thread has no ends to cut.

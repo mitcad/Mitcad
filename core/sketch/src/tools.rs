@@ -86,8 +86,15 @@ pub enum ArcMode {
     Tangent { from: EntityUid, end: PointInput },
     /// From the end point `from` of a line or a circular arc, square to it
     /// (normal, mitcad#1393), to `end`: the arc's centre on the line, or on
-    /// the arc's tangent at `from`.
-    Normal { from: EntityUid, end: PointInput },
+    /// the arc's tangent at `from`. It leaves toward the side of the curve
+    /// `toward` is on (a position), else the side `end` is on: with
+    /// `toward`, an arc that sweeps 180 degrees or more, whose end lies
+    /// behind the curve, keeps the side it was drawn to (mitcad#1608).
+    Normal {
+        from: EntityUid,
+        end: PointInput,
+        toward: Option<P2>,
+    },
 }
 
 /// Slot tools; `width` is the slot's width. A centre given as an existing
@@ -546,7 +553,7 @@ impl SketchEdit<'_> {
                 self.add_constraint(ConstraintKind::tangent(curve, id));
                 kind
             }
-            ArcMode::Normal { from, end } => {
+            ArcMode::Normal { from, end, toward } => {
                 let p = self.at(from)?;
                 let (curve, direction) = self.leaving(from, construction)?;
                 // What holds the arc square to the curve: its centre on the
@@ -566,11 +573,17 @@ impl SketchEdit<'_> {
                 let pe = self.at(e)?;
                 let d = unit(direction);
                 let chord = sub(pe, p);
-                let across = dot(chord, perp(d));
                 if dot(chord, d).abs() <= 1e-12 * norm(chord).max(1e-300) {
                     return Err("the end is straight across; draw a line".to_owned());
                 }
-                // It leaves `from` across the curve, toward the end's side.
+                // It leaves `from` across the curve, toward the side
+                // `toward` is on, else the end's side (mitcad#1608: past
+                // 180 degrees the end is behind the curve).
+                if let Some(toward) = toward {
+                    finite(&[toward])?;
+                }
+                let side = toward.map_or(chord, |toward| sub(toward, p));
+                let across = dot(side, perp(d));
                 let t = scale(perp(d), if across < 0.0 { -1.0 } else { 1.0 });
                 let (center, kind) = self.leaving_arc(from, e, t, p, pe);
                 let hold = match previous_center {

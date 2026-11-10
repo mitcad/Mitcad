@@ -162,6 +162,8 @@ pub use analysis::AnalysisApi;
 pub use drawing::DrawingApi;
 pub use report::ReportApi;
 pub use script::ScriptApi;
+// The plate moves a script's commands report (mitcad#1595).
+pub use script::script_notes;
 pub use sketch::SketchApi;
 
 /// The document's api methods are extension traits (mitcad#777), so that
@@ -1834,6 +1836,12 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 .count();
             result["restored_packed"] = json!(packed);
         }
+        // The first failure as a person reads it, with its places
+        // (mitcad#1612: the status line paints them); `error` keeps the
+        // names and coordinates for agents.
+        if let Some(first) = &stats.error {
+            result["error_notice"] = first.notice().to_json();
+        }
         result["error"] = json!(stats.error.map(|e| e.to_string()));
         // Every failed feature, and whether this command made it
         // (mitcad#401), when any failed.
@@ -2852,10 +2860,11 @@ fn preview_json(report: &PreviewReport) -> Value {
     // (mitcad#1327: the panel paints them while the pointer is over its
     // message); `warnings` keeps the model's own text for one release.
     // (A failure's error first, in plain words too.)
+    // (Its message and places, mitcad#1612.)
     let failure = report
         .status
-        .error()
-        .map(|error| notice::Notice::error(error).to_json());
+        .failure()
+        .map(|error| error.notice().to_json());
     let notices: Vec<Value> = failure
         .into_iter()
         .chain(report.warnings.iter().map(|warning| {

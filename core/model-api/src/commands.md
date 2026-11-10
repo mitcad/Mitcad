@@ -253,7 +253,11 @@ expression (`"d1 / 2 + 5 mm"`, `"30 deg"`; syntax and unit rules in
   `user_parameters` lists what moved (`name`, `dimension`, and the
   `parameter` the dimension uses now) and its `notes` say it
   (`BuckleDiameter is now a user parameter (5 mm); dimension k3 is d7 =
-  BuckleDiameter * 2`). A parameter that another dimension of the sketch
+  BuckleDiameter * 2`), and its `note_messages` in plain words for a
+  person (`…; the dimension is d7 = BuckleDiameter * 2`, mitcad#1612: a
+  sketch command's `warnings` and `notes` are the agents', with ids, and
+  `warning_messages` and `note_messages` beside them what the application
+  shows). A parameter that another dimension of the sketch
   uses as well stays the sketch's: the dimension only gets a parameter of
   its own. `BuckleDiameter = BuckleDiameter * 2` (the own name on the
   left) names and sets the own parameter as before, so it is refused as a
@@ -2356,8 +2360,10 @@ The general form has edge sets with a reference face:
   name, a wall's face continued down the wall's. It is never built
   smaller than asked (no 0.1 % smaller retry where a face beside the edges
   is narrower than the bevel): where it cannot be built so, the error says
-  where, `…; the chamfer of edge E{…} is wider than face F… and cannot
-  meet face F… beyond it`. Where an overflowing bevel meets other bevels
+  so in words with the edge and faces as its places (mitcad#1612): the
+  message reads `…; the chamfer is wider than the face beside it and
+  cannot meet the face beyond it`, the `detail` (MCP) `…; the chamfer of
+  edge E{…} is wider than face F… and cannot meet face F… beyond it`. Where an overflowing bevel meets other bevels
   at a vertex (mitcad#1238), the corner is built as without the overflow
   on the body continued past each edge's narrow faces on its own; where
   the corner type cannot build it there, the error adds the corner's
@@ -2369,19 +2375,27 @@ The general form has edge sets with a reference face:
   continued (the disc's rim cylinder grows up to the bevel), never left
   hanging out past it, so nothing lies outside the body's original
   extent. Where the bevel's contact touches a far edge exactly (the
-  bevel as wide as the narrow face at a point, which would end the face
-  in a point there), it fails with the place, `the chamfer of edge E{…}
-  reaches exactly to the far edge of face F… where face F… lies beyond
-  it, at (44, 0, 2): its contact touches that edge there, so that the
-  face would end in a point; it cannot be built at this size`.
+  bevel as wide as the narrow face at a point, which ends the face in a
+  point there, or covers it with the face gone: an octagon's foot
+  chamfered as wide as the ring of the disc at its flats), it is built
+  the same way where the result is one valid closed solid and the
+  dressup check (mitcad#1253) finds nothing of the bevel hanging out or
+  turned over
+  (mitcad#1613); pieces of one surface that cannot be joined into a valid
+  face there stay apart. Otherwise it fails in plain words, `the chamfer
+  reaches exactly to the far edge of the narrow face beside its edge: its
+  contact touches that edge in a point, and the chamfer cannot be built
+  there as a sound solid at this size`.
 - A bevel the geometry kernel cannot build fails with what was asked in
   its error, the kernel's own message kept at its end (mitcad#1185): the
   selected edges and the faces their chains end against, `chamfer: the
   geometry kernel could not build the bevel of edge E{…}, its chain ending
   against face F3:chamfer(…) (kernel error: …)`, or after the kernel's
   explanation, `chamfer failed; the distance may be too large for the
-  edges (edge E{…}, …)`. The feature's error, the timeline and MCP's
-  results carry the same text.
+  edges (edge E{…}, …)`. Those are the agents' texts: the error's
+  `detail`, which the timeline's and MCP's `error` carry; a person reads
+  the message without the names, the edges and faces painted from its
+  `places` (mitcad#1612, "Errors: message, places and detail").
 
 ### Face features: shell, draft, offset_face, delete_face, replace_face, split_body, split_face
 
@@ -5416,7 +5430,7 @@ made, in order) and `status` (as the `sketch` query: `dof`,
 | `sketch.add_line` | `start`, `end` (point inputs), `construction`, `centerline`; `mode` (optional): `two_point` (the default: `start`, `end`) or `midpoint` (`center`, `end`: the line runs through `center` to `end` and as far on the other side; mitcad#1393) | `midpoint` makes a point at `center` (or takes the existing point given) and holds it at the line's middle with a `midpoint` constraint; `made`: the line |
 | `sketch.rectangle` | `mode`: `two_point` (`a`, `b` corners), `three_point` (side `a`–`b`, `c` on the opposite side: a position [x, y] only), `center` (`center`, `corner`); `a`, `b`, `center` and `corner` are point inputs (an existing point is that corner, or the centre point held at the diagonal's middle, mitcad#1269); `construction`; `radius` (value, optional: rounded corners, [Rounded rectangles and fillets of several corners](#rounded-rectangles-and-fillets-of-several-corners)) | four joined lines (counter-clockwise), horizontal and vertical (perpendicular for `three_point`), a construction diagonal with the centre at its midpoint for `center`; with `radius` also four arcs (`made`: the lines, then the arcs) |
 | `sketch.circle` | `mode`: `center` (`center` point input, `radius`), `two_point` (`a`, `b`: a diameter), `three_point` (`a`, `b`, `c`), `two_tangent` (`lines` [2], `radius`, `near`: a position [x, y] only), `three_tangent` (`lines` [3]); `construction`; `a`, `b` and `c` are point inputs: an existing point is held on the circle with a `coincident` (mitcad#1269) | tangent constraints for the tangent modes |
-| `sketch.arc` | `mode`: `three_point` (`start`, `through`, `end`), `center` (`center`, `start`, `end`: the direction of the end, a position [x, y] only, `clockwise`), `tangent` (`from`: an end point of a curve, `end`), `normal` (`from`: an end point of a line or a circular arc, `end`: the arc leaves `from` square to that curve, toward the side `end` is on; mitcad#1393); `construction`; the other points are point inputs: `start` and `end` are the arc's ends, `center` its centre point, and an existing point as `through` is held on the arc with a `coincident` (mitcad#1269) | `tangent` adds a tangent constraint; `normal` holds the arc's centre on the line with a `coincident`, or adds a construction line from the circular arc's centre to `from` that the new arc is tangent to |
+| `sketch.arc` | `mode`: `three_point` (`start`, `through`, `end`), `center` (`center`, `start`, `end`: the direction of the end, a position [x, y] only, `clockwise`), `tangent` (`from`: an end point of a curve, `end`), `normal` (`from`: an end point of a line or a circular arc, `end`: the arc leaves `from` square to that curve, toward the side `toward` is on, a position [x, y], else the side `end` is on; mitcad#1393, mitcad#1608); `construction`; the other points are point inputs: `start` and `end` are the arc's ends, `center` its centre point, and an existing point as `through` is held on the arc with a `coincident` (mitcad#1269) | `tangent` adds a tangent constraint; `normal` holds the arc's centre on the line with a `coincident`, or adds a construction line from the circular arc's centre to `from` that the new arc is tangent to |
 | `sketch.polygon` | `center`, `vertex` (point inputs, mitcad#1269: an existing point as `center` is the polygon's centre point, no new one is made; as the `vertex` of an inscribed polygon it is the first corner; a circumscribed polygon's `vertex` is a position [x, y] only), `sides` (3–256), `inscribed` (default true; false: `vertex` is a side's middle), `construction` | joined lines that stay a regular polygon (four degrees of freedom: placement, orientation, size; mitcad#303): inscribed, equal sides with the corners on a construction circle; circumscribed, the sides tangent to a construction circle and the corners on a second construction circle around the same centre point (the first circle is the one through `vertex`). Polygons stored earlier keep their constraints |
 | `sketch.slot` | `mode`: `center_to_center` (`a`, `b`), `center_point` (`center`, `end`: an end's centre), `arc` (`center`, `start`, `end`: the direction of the far end, a position [x, y] only); `width`; the other points are point inputs: an existing point is that end arc's centre, the slot's middle (held at its centre line's middle) or the arc slot's centre (mitcad#1269) | two end arcs, two tangent sides, a construction centre line or arc with the arc centres at its ends, equal end arcs |
 | `sketch.ellipse` | `center` (point input), `major` (end of the major axis; a point input, mitcad#1269), `minor_radius`, `start` and `end` (point inputs; an elliptical arc), `construction` | |
@@ -5468,8 +5482,8 @@ The `sketch` query (`{"query": "sketch", "uid": "F1"}`) returns:
 - `warnings`: the sketch evaluation's (as the timeline's), such as linked
   projections that could not follow their sources; then the solve's
   redundant constraints (mitcad#1171), one warning per offset, pattern
-  and the sketch's own that has any, counted by kind: `Offset k1: 2
-  dimensions follow from the others`, `Pattern k8: 1 constraint follows
+  and the sketch's own that has any, counted by kind, without ids (mitcad#1612): `An offset: 2
+  dimensions follow from the others`, `A pattern: 1 constraint follows
   from the others`, `Redundant: 1 dimension and 1 fixed entity follow
   from the others` (an offset's own are its lines' distances and
   parallels, its helpers' lengths and point-on-curve constraints, and its
@@ -8522,10 +8536,13 @@ tolerances themselves (mitcad#398):
   cut sphere is that much smaller than the cut circle, gets edges of about
   a thousand points instead of fifty; edges that touch keep their
   deviation. Every mesh (export, the view, `face_meshes`) does so.
-- A face that still cannot be triangulated fails the export with its
-  topological name and its surface's kind: `Body1: a face could not be
-  triangulated: F1:side0 (cylinder)` (its index among the body's faces,
-  `face 2`, when it has no name).
+- A face that still cannot be triangulated fails the export. A person
+  reads its surface's kind, `Body1: a face could not be triangulated (its
+  surface: cylinder)`, the face being the error's place; the agents'
+  detail (the CLI's and MCP's error, the log) keeps its topological name,
+  `Body1: a face could not be triangulated: F1:side0 (cylinder)` (its
+  index among the body's faces, `face 2`, when it has no name;
+  mitcad#1612).
 - `mitcad-cli export --refinement low|medium|high` takes a preset,
   `--deviation MM --angle DEG` the absolute tolerance. MCP's
   `model_export` takes `refinement` as `export` does, a preset or the
@@ -9184,17 +9201,29 @@ keeps `.git` and its history: a version `Remove the MitCad project` by
 files, the edited or removed `.gitattributes` and `.gitignore` and the
 rewritten designs out (`commit`). When that version cannot be recorded
 now (HEAD detached, a merge in progress) the command is refused with the
-reason (`unsupported`), nothing changed. A project without a repository
-of its own (`repository: "none"`) loses only its files. A Cloud project's
-remote is never touched (`remote`, as in `inspect_folder`).
+reason (`unsupported`), nothing changed. A design that the latest
+version holds with references into the store but whose file in the
+folder differs from it (deleted, or saved again without a version) is
+recorded in that version as a single file made from the latest version's
+data, so no recorded design refers to the store the version removes; the
+folder's file stays as it is, and a warning names it (mitcad#1607). A
+project without a repository of its own (`repository: "none"`) loses
+only its files. A Cloud project's remote is never touched (`remote`, as
+in `inspect_folder`).
 
 Designs that refer to B-rep data in the project's store are written as
 single files with that data inside, their statistics kept, before
 anything else changes (`rewritten`); all others stay byte for byte
-(`designs` counts them all). Refused before anything changes: a folder
-that is no project (`not_a_project`), `.mitcad` that is a link, a design
-this MitCad cannot read or whose data cannot be read or put inside
-(`unsupported`). Any other failure is the answer's `error` (class
+(`designs` counts them all). Every design under the folder counts, in
+folders whose names start with a dot too (`.archive`); only `.git` and
+`.mitcad` folders are left out, and subfolders that are projects of
+their own, whose designs keep their own store (mitcad#1598). Refused
+before anything changes: a folder that is no project (`not_a_project`),
+`.mitcad` that is a link, a folder under it that cannot be read, a link
+to a folder (never followed), a link to a design that refers to the
+store (never written through), a design whose name is not UTF-8, a
+design this MitCad cannot read or whose data cannot be read or put
+inside (`unsupported`). Any other failure is the answer's `error` (class
 `other`).
 
 The answer: `root`, `dry_run`, `repository`, `versions`, `removed`
@@ -14006,7 +14035,12 @@ feature this command made fails" from "a feature elsewhere fails", a
 command's result has, when any feature is in error after it,
 `"failed_features"`: every failed feature in timeline order, each
 
-- `uid`, `name`, `error` (the feature's error);
+- `uid`, `name`, `error` (the feature's error for agents: with its
+  topological names, ids and coordinates, mitcad#1612);
+- `message`: what a person reads of it, without those, when it differs
+  from `error`; `places`: the faces, edges, vertices and points it is
+  about, when it has any ([Errors: message, places and
+  detail](#errors-message-places-and-detail));
 - `edited`: the command added the feature or edited it: its definition,
   suppression or component changed, or it is the `uid` of
   `edit_feature`, `suppress_feature` or `reorder_feature` or the `sketch`
@@ -14022,7 +14056,10 @@ command's result has, when any feature is in error after it,
 ```
 
 Without failed features the field is left out. `error` stays the first
-failed feature, as before. The MCP server's `model_command` is an error
+failed feature, as before; `error_notice` beside it is that failure as a
+person reads it (`level`, `message` "Fillet1: …" without names, ids or
+coordinates, `target`, `places`), which the application's status line
+shows. The MCP server's `model_command` is an error
 only when one of these is `edited` and lists them at the top level
 ([docs/mcp.md](../../../docs/mcp.md)). Its `error` text then says that
 the feature stays in the timeline and how to remove it (mitcad#1481):
@@ -14032,6 +14069,52 @@ for an edit; an array's entry is named, `commands[1]: …`).
 
 Tests: `core/model-tests/api/src/failed_features_tests.rs` (mock kernel),
 `core/mcp/src/tests.rs`, `tools/cli/mcp-results-test.cmake`.
+
+## Errors: message, places and detail
+
+What a person reads never names topological names (`E{…}`, `V{…}`,
+`F3:side(…)`, a bare `F1:top`), sketch region keys (`r{…}`), internal ids
+(`k5`, `p15`, `c14`, `F57`, a body's `F2.b0`) or coordinates
+(mitcad#1612, `docs/ui-conventions.md` "What a message says"). So a
+failure is structured (`notice::FeatureError`): its `message` in plain
+words, its `places` (faces, edges and vertices of a body, a sketch's
+regions, points in the model's space), and its `detail`, the same with
+the names, ids and points, for agents and the log.
+
+Where a result gives text, that text is the agents': a command's `error`,
+`failed_features[].error`, the `timeline` and `feature` queries' `error`,
+MCP's results. The person's side is beside it: `error_notice` of a
+command's result and `message` and `places` of each failed feature, an
+error notice in the feature's `notices`, and a preview's error notice.
+A refusal of a command (the `Err` of `command`, `query` or `preview`
+through the application's bridge) is its message, then a last line
+`[placed: {"message": …, "detail": …, "places": […]}]`; the application
+shows only the text before that line, and a sketch refusal's
+`[conflicts: …]` line stays last. The geometry kernel throws the same
+form (`placed_error`, `geometry/include/mitcad/geometry/user_error.hpp`),
+which the bridge reads into the feature's error.
+
+An example, a chamfer wider than the face beside its edge:
+
+```json
+{"error": "Chamfer4: the chamfer of edge E{F2:end(…)|F2:side(c1[c4,c2])} is wider than face F2:side(c1[c4,c2]) and cannot meet face F2:start(…) beyond it",
+ "error_notice": {"level": "error", "target": "F4",
+                  "message": "Chamfer4: the chamfer is wider than the face beside its edge and cannot meet the face beyond it",
+                  "places": [{"kind": "edge", "body": "F2.b0", "name": "E{…}"},
+                             {"kind": "face", "body": "F2.b0", "name": "F2:side(c1[c4,c2])"},
+                             {"kind": "face", "body": "F2.b0", "name": "F2:start(…)"}]}}
+```
+
+A point is a place too, `{"kind": "point", "at": [28.28, -28.28, 202]}`,
+where an error says where in the model's space; its coordinates are in
+the detail, never in the message.
+
+An older text, or an imported one, that still names them is cleaned on
+the way: the names become their kind in words ("an edge", "a face", "a
+body") and their places, a coordinate tuple "a point" and a point place,
+and the text as it was the detail. Tests:
+`core/model-base/src/notice.rs`, `core/model-tests/api/src/user_text_guard_tests.rs`,
+`geometry/tests/test_user_text_scan.cpp`.
 
 ## Adding a feature in the middle of the timeline
 
@@ -21960,7 +22043,7 @@ text (for one release, as below); the logs too.
 - **Sketches.** The `sketch` query's `notices`: a solve that did not
   converge or conflicting constraints (its `error`) an error, redundant
   constraints a warning per offset, pattern and the sketch's own
-  (mitcad#1171: `Offset k1: 2 dimensions follow from the others`,
+  (mitcad#1171: `An offset: 2 dimensions follow from the others`,
   `Redundant: 1 constraint follows from the others`; also in its
   `warnings`, with their entities in `warning_entities`, and the ids in
   `redundant`), unmet inactive constraints information (`Inactive
@@ -22663,6 +22746,38 @@ count the item has (here or on the plate it leaves), else 1. What is on a
 deleted plate goes on no plate (the first one's). Nothing changing is no
 undo step.
 
+**Moves (mitcad#1595).** An item is on one plate at most, so
+`place_on_plate` takes an item that is on another plate off it. Its result
+lists each such item, in the order of `items`, with the plate it left and
+the count it had there, and says so in `warnings` (one line each):
+
+```json
+{"cmd": "place_on_plate", "plate": "two", "items": [{"body": "Body1"}]}
+→ {"moved": [{"body": "F1.b0", "name": "Body1", "count": 2,
+              "from": {"id": "plate1", "name": "one", "count": 2},
+              "to": {"id": "plate2", "name": "two"}}],
+   "warnings": ["Body1 moved from one to two (count 2)"]}      "Move Body1 from one to two"
+```
+
+- An item is `{"body": uid}` or `{"occurrence": "O1/O4"}` (its path of
+  uids), with `name` (the body's, or the occurrence's path of names
+  `Arm:1/Pin:2`) as `print_plates` lists items. `count` is its count on
+  the plate now: the one given, else the one it had (`from.count`). A count
+  given that replaces another says so: `Body1 moved from two to one (count
+  3, was 2)`.
+- A first placement, a change on the plate the item is on and a call that
+  changes nothing move nothing: `{"moved": [], "warnings": []}`. In a batch
+  only the items that left another plate are listed, each with its own
+  `from`.
+- One moved item names the move in the undo text (`Move Body1 from one to
+  two`, `Move 3 of Body1 from two to one` with a count above 1); several
+  items keep `Put 2 items on two`. Undo puts the items back on the plates
+  they left with their counts; redo moves them again.
+- Through MCP, `model_command`'s `result` is this result (the last
+  command's in an array). `mitcad-cli run` prints a line for each moved
+  item before its report (to stderr with `--json`): `Plates: Body1 moved
+  from one to two (count 2)`.
+
 Queries:
 
 - `{"query": "print_plates"}` → `{"plates": [{"id", "name", "index",
@@ -22736,7 +22851,11 @@ Tests: `core/model-tests/print/src/print_plates_tests.rs` (mock kernel:
 items with counts, the settings order, the file, a Bambu-family project of
 two plates with the vase mode on its plate, PrusaSlicer's beds, a Cura
 file per plate, a plate's layout) and the unit tests of
-`core/model/src/print_plates.rs` (the slicers' grids).
+`core/model/src/print_plates.rs` (the slicers' grids). The moves:
+`core/model-tests/print/src/plate_moves_tests.rs` (mock kernel), the ctest
+`cli.plate_move` (`tools/cli/tests/plate_move.json`) and
+`test_place_on_plate_reports_the_plate_an_item_left` in
+`tools/cli/mcp-test.py`.
 ## How volumes and areas are computed (mitcad#1200)
 
 Every volume, area, centre of mass, mass and inertia a query gives comes
@@ -23517,6 +23636,17 @@ would be a line); from a spline or an ellipse the mode is refused.
 
 ```json
 {"cmd": "sketch.arc", "sketch": "F1", "mode": "normal", "from": "p3", "end": [15, 5]}
+```
+
+An arc that sweeps 180 degrees or more ends behind the curve, on the
+other side than it leaves toward: `toward`, a position [x, y], gives the
+side it leaves toward instead of `end` (mitcad#1608; the Line tool passes
+its cursor's side). From `p3` at (10, 0) at the end of a line along +x,
+this arc leaves upward and sweeps 270 degrees round the centre (20, 0) to
+(20, -10):
+
+```json
+{"cmd": "sketch.arc", "sketch": "F1", "mode": "normal", "from": "p3", "end": [20, -10], "toward": [10, 5]}
 ```
 
 The sketch Line tool draws both kinds of arc by a drag from a chain's end

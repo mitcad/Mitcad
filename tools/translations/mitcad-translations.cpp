@@ -407,6 +407,31 @@ std::vector<Listed> readList(const std::string& text, std::string& error) {
   return listed;
 }
 
+// The language list with each listed language's baseline set to its count
+// in `counts`; other lines, and a language line's trailing comment with the
+// space before it ("de 120  # note"), are kept as they are.
+std::string rewriteBaselines(const std::string& text, const std::map<std::string, int>& counts) {
+  std::ostringstream out;
+  std::istringstream lines(text);
+  std::string line;
+  while (std::getline(lines, line)) {
+    const std::size_t hash = line.find('#');
+    const std::string content = line.substr(0, hash);
+    std::istringstream words(content);
+    std::string code;
+    if ((words >> code) && counts.count(code) != 0) {
+      std::string tail;
+      if (hash != std::string::npos) {
+        const std::size_t last = content.find_last_not_of(" \t");
+        tail = line.substr(last == std::string::npos ? hash : last + 1);
+      }
+      line = code + " " + std::to_string(counts.at(code)) + tail;
+    }
+    out << line << "\n";
+  }
+  return out.str();
+}
+
 // Checks every listed language; with `write`, sets each baseline to the
 // count instead. Returns the number of problems.
 int checkLanguages(const fs::path& list, bool write) {
@@ -473,18 +498,7 @@ int checkLanguages(const fs::path& list, bool write) {
     }
   }
   if (write && problems == 0) {
-    std::ostringstream out;
-    std::istringstream lines(text);
-    std::string line;
-    while (std::getline(lines, line)) {
-      std::istringstream words(line.substr(0, line.find('#')));
-      std::string code;
-      if ((words >> code) && counts.count(code) != 0) {
-        line = code + " " + std::to_string(counts[code]);
-      }
-      out << line << "\n";
-    }
-    if (!writeFile(list, out.str())) {
+    if (!writeFile(list, rewriteBaselines(text, counts))) {
       std::cerr << list.string() << ": cannot write\n";
       return 1;
     }
@@ -743,6 +757,10 @@ int selfTest() {
          "the language list");
   readList("fi many\n", listError);
   expect(!listError.empty(), "a bad baseline is an error");
+  const std::string rewritten = rewriteBaselines("# comment\nfi 3 # note\nde 120  # two spaces\nxx 0\n\n",
+                                                 {{"fi", 7}, {"de", 118}});
+  expect(rewritten == "# comment\nfi 7 # note\nde 118  # two spaces\nxx 0\n\n",
+         "baselines rewritten with their comments kept: " + rewritten);
   if (failures == 0) std::cout << "translations self-test passed\n";
   return failures == 0 ? 0 : 1;
 }

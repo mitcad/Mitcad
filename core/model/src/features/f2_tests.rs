@@ -172,7 +172,11 @@ fn fillet_and_chamfer_checks() {
             "chamfer distance must be greater than zero",
         ),
     ] {
-        let error = add!(b, value).unwrap_err().to_string();
+        // The agents' text, with the names (mitcad#1612).
+        let error =
+            crate::notice::FeatureError::from_text(&add!(b, value).unwrap_err().to_string())
+                .agent_text()
+                .to_owned();
         assert!(error.contains(expected), "{error}");
     }
 
@@ -383,7 +387,11 @@ fn replace_face_targets_any_surface_of_another_body() {
         if let Some(offset) = offset {
             value["offset"] = json!(offset);
         }
-        let error = add!(b, value).unwrap_err().to_string();
+        // The agents' text, with the names (mitcad#1612).
+        let error =
+            crate::notice::FeatureError::from_text(&add!(b, value).unwrap_err().to_string())
+                .agent_text()
+                .to_owned();
         assert!(error.contains(expected), "{error}");
     }
 }
@@ -460,7 +468,11 @@ fn split_body_creates_bodies_named_like_new_bodies() {
             "only a plane can be offset",
         ),
     ] {
-        let error = add!(b, value).unwrap_err().to_string();
+        // The agents' text, with the names (mitcad#1612).
+        let error =
+            crate::notice::FeatureError::from_text(&add!(b, value).unwrap_err().to_string())
+                .agent_text()
+                .to_owned();
         assert!(error.contains(expected), "{error}");
     }
     // A splitting face names its body: the earlier form without one is not

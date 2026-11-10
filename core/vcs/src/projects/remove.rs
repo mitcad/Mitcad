@@ -11,10 +11,16 @@
 //!
 //! Designs that refer to B-rep data in the project's store are written as
 //! single files with that data inside first; the others stay byte for
-//! byte. Everything is checked before anything changes: a design whose
-//! data cannot be read, or a repository that cannot record the version,
-//! refuses the removal with the folder as it was.
+//! byte. Every design under the folder counts, in dot folders too, and a
+//! folder that cannot be read or a link to a folder refuses the removal
+//! (mitcad#1598). In a kept repository, a design that the latest version
+//! holds with references but the folder no longer matches is recorded as
+//! a single file made from that version (mitcad#1607). Everything is
+//! checked before anything changes: a design whose data cannot be read,
+//! or a repository that cannot record the version, refuses the removal
+//! with the folder as it was.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -23,9 +29,8 @@ use mitcad_model::file::{GITATTRIBUTES, GITIGNORE, PROJECT_MARKER, brep_referenc
 use serde::Serialize;
 
 use super::inspect::{ProjectRemote, remotes_of};
-use crate::commit::design_files_in;
 use crate::remote::{COUNT_LIMIT, ErrorClass, failure, remove_clone};
-use crate::{Identity, ProjectRepo, VcsError, absolute, io_error, same_folder};
+use crate::{Identity, ProjectRepo, VcsError, absolute, io_error, is_design_file, same_folder};
 
 /// The message of the version that takes a project's files out of a
 /// repository that was there before the project.
@@ -237,6 +242,116 @@ fn is_link(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
 }
 
+/// What [`project_designs`] found in a project's folder.
+struct Found {
+    /// The design files whose data the project's store may keep, links to
+    /// design files among them.
+    designs: Vec<PathBuf>,
+    /// Subfolders that are projects of their own: their designs keep their
+    /// data in their own store.
+    nested: Vec<PathBuf>,
+}
+
+/// The refusal of a removal while an entry may hide designs (mitcad#1598):
+/// `why` it does, `fix` what the user can do.
+fn unknown_designs(path: &Path, why: &str, fix: &str) -> VcsError {
+    failure(
+        ErrorClass::Unsupported,
+        format!(
+            "{} {why}, so whether designs there keep data in the project is not known, and \
+             removing the project could lose it: {fix}",
+            path.display()
+        ),
+    )
+}
+
+/// What to do about a folder or entry that cannot be read.
+const MAKE_READABLE: &str = "make it readable, or move it out of the folder first";
+/// What to do about a link.
+const REMOVE_LINK: &str = "remove the link, or move it out of the folder first";
+
+/// The design files of the project in folder `root` (mitcad#1598): every
+/// design under the folder saves and loads its B-rep data in the
+/// project's store, so the list must be complete before the store goes.
+/// Folders whose names start with a dot are walked too; only `.git` and
+/// `.mitcad` folders are left out, and subfolders that are projects of
+/// their own. Refused, naming the entry, when the list cannot be
+/// complete: a folder that cannot be read, an entry whose kind cannot be
+/// told, a design whose name is not UTF-8, or a link to a folder (never
+/// followed).
+fn project_designs(root: &Path) -> Result<Found, VcsError> {
+    let mut found = Found {
+        designs: Vec::new(),
+        nested: Vec::new(),
+    };
+    let mut folders = vec![root.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        let unreadable = |e: std::io::Error| {
+            unknown_designs(&folder, &format!("cannot be read ({e})"), MAKE_READABLE)
+        };
+        let entries = fs::read_dir(&folder).map_err(unreadable)?;
+        for entry in entries {
+            let entry = entry.map_err(unreadable)?;
+            let path = entry.path();
+            let name = entry.file_name();
+            let kind = entry.file_type().map_err(|e| {
+                unknown_designs(&path, &format!("cannot be inspected ({e})"), MAKE_READABLE)
+            })?;
+            if kind.is_dir() {
+                if name == ".git" || name == ".mitcad" {
+                    continue;
+                }
+                if path.join(PROJECT_MARKER).is_file() {
+                    found.nested.push(path);
+                } else {
+                    folders.push(path);
+                }
+                continue;
+            }
+            let file = if kind.is_symlink() {
+                match fs::metadata(&path) {
+                    Ok(target) if target.is_dir() => {
+                        return Err(unknown_designs(
+                            &path,
+                            "is a link to a folder, which MitCad does not follow",
+                            REMOVE_LINK,
+                        ));
+                    }
+                    Ok(target) => target.is_file(),
+                    // A broken link holds no data.
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                    Err(e) => {
+                        return Err(unknown_designs(
+                            &path,
+                            &format!("is a link that cannot be followed ({e})"),
+                            REMOVE_LINK,
+                        ));
+                    }
+                }
+            } else {
+                kind.is_file()
+            };
+            if !file || !is_design_file(&name.to_string_lossy()) {
+                continue;
+            }
+            if name.to_str().is_none() {
+                return Err(failure(
+                    ErrorClass::Unsupported,
+                    format!(
+                        "{} has a name that is not UTF-8 text: rename it, or move it out of the \
+                         folder first",
+                        path.display()
+                    ),
+                ));
+            }
+            found.designs.push(path);
+        }
+    }
+    found.designs.sort();
+    found.nested.sort();
+    Ok(found)
+}
+
 /// Takes the project out of folder `dir` (a project's folder): see the
 /// module. With `dry_run` nothing changes and the answer says what would
 /// happen (Remove Project's confirmation). `author` records the version in
@@ -315,8 +430,9 @@ pub fn remove_project(
         }),
         _ => None,
     };
-    // The designs, and those that need their B-rep data put inside.
-    let designs = design_files_in(&dir);
+    // The designs, and those that need their B-rep data put inside: all of
+    // them, in dot folders too (mitcad#1598).
+    let Found { designs, nested } = project_designs(&dir)?;
     let store = project.store();
     let mut rewrites: Vec<(PathBuf, String)> = Vec::new();
     for design in &designs {
@@ -340,6 +456,16 @@ pub fn remove_project(
             Ok(_) => {}
             Err(e) => return Err(unreadable(e.to_string())),
         }
+        if is_link(design) {
+            return Err(failure(
+                ErrorClass::Unsupported,
+                format!(
+                    "{} is a link to a design that keeps data in the project, and MitCad does \
+                     not write through a link: {REMOVE_LINK}",
+                    design.display()
+                ),
+            ));
+        }
         match mitcad_model::file::single_file_text(&text, &store) {
             Ok(Some(single)) => rewrites.push((design.clone(), single)),
             Ok(None) => {}
@@ -351,6 +477,70 @@ pub fn remove_project(
                         design.display()
                     ),
                 ));
+            }
+        }
+    }
+    // A kept repository's version removes the store: the designs of the
+    // latest version that refer to it and are not rewritten in the folder
+    // (deleted or saved again since, without a version) are recorded as
+    // single files made from that version (mitcad#1607).
+    let mut recorded_singles: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    if let (Some(repo), RepositoryFate::Kept) = (&repo, fate)
+        && let Some(head) = repo.head_commit()?
+    {
+        let rewritten: BTreeSet<String> = rewrites
+            .iter()
+            .map(|(path, _)| repo.relative(path))
+            .collect::<Result<_, _>>()?;
+        let nested: Vec<String> = nested
+            .iter()
+            .map(|path| repo.relative(path))
+            .collect::<Result<_, _>>()?;
+        let tree = repo.repo.find_commit(head)?.tree_id()?.detach();
+        for (path, id) in repo.design_files(tree)? {
+            let in_nested = nested
+                .iter()
+                .any(|folder| path.starts_with(&format!("{folder}/")));
+            if rewritten.contains(&path) || in_nested {
+                continue;
+            }
+            let unreadable = |why: String| {
+                failure(
+                    ErrorClass::Unsupported,
+                    format!(
+                        "{path} of the latest version is no design file this MitCad reads \
+                         ({why}), so whether it keeps data in the project is not known: record \
+                         a version that removes or replaces it first"
+                    ),
+                )
+            };
+            let Ok(text) = String::from_utf8(repo.repo.find_blob(id)?.take_data()) else {
+                return Err(unreadable("not UTF-8 text".to_owned()));
+            };
+            match brep_references(&text) {
+                Ok(references) if references.is_empty() => continue,
+                Ok(_) => {}
+                Err(e) => return Err(unreadable(e.to_string())),
+            }
+            match mitcad_model::file::single_file_text(&text, &store) {
+                Ok(Some(single)) => {
+                    warnings.push(format!(
+                        "{path} differs from the latest version, which keeps its data in the \
+                         project: the version records it as a single file with that data \
+                         inside, and the folder's file stays as it is"
+                    ));
+                    recorded_singles.insert(path, single.into_bytes());
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Err(failure(
+                        ErrorClass::Unsupported,
+                        format!(
+                            "{path} of the latest version keeps data in the project, which the \
+                             removal's version would lose: {e}"
+                        ),
+                    ));
+                }
             }
         }
     }
@@ -426,7 +616,8 @@ pub fn remove_project(
             }
             remove_folder(&mitcad)?;
             let author = author.expect("a kept repository's author");
-            let outcome = repo.commit(&files, REMOVE_MESSAGE, &author)?;
+            let outcome =
+                repo.commit_with_contents(&files, &recorded_singles, REMOVE_MESSAGE, &author)?;
             if let Some(reason) = outcome.skipped {
                 removal.warnings.push(format!(
                     "the project's files are gone from the folder, but no version records it: \

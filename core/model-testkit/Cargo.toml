@@ -11,7 +11,8 @@ publish.workspace = true
 # Only the model's base: the model depends on this crate (its `testing`
 # feature and its tests), so this crate must not depend on the model.
 [dependencies]
-mitcad-model-base = { path = "../model-base" }
+# Shown messages checked in the tests (mitcad#1612).
+mitcad-model-base = { path = "../model-base", features = ["strict-user-text"] }
 # Vector helpers on [f64; 3].
 mitcad-vec3 = { path = "../vec3" }
 serde.workspace = true

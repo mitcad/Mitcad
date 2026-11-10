@@ -785,11 +785,19 @@ impl CheckContext<'_> {
         }
         for (i, edge) in edges.iter().enumerate() {
             if edges[..i].contains(edge) {
-                return Err(format!("edge {edge} is listed more than once"));
+                return Err(crate::notice::placed(
+                    "an edge is listed more than once",
+                    crate::notice::NoticePlace::edge(edge.to_string()),
+                    format!("edge {edge} is listed more than once"),
+                ));
             }
             for feature in edge.features() {
-                self.feature(feature)
-                    .map_err(|e| format!("edge {edge}: {e}"))?;
+                self.feature(feature).map_err(|e| {
+                    crate::notice::about_place(
+                        crate::notice::NoticePlace::edge(edge.to_string()),
+                        &e.to_string(),
+                    )
+                })?;
             }
         }
         Ok(())
@@ -1333,8 +1341,23 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
     }
 
     /// Explains why the body has no such edge, naming the feature after
-    /// which it disappeared.
+    /// which it disappeared (mitcad#1612: the person reads "an edge no
+    /// longer exists after Extrude2", the edge painted; agents read its
+    /// name).
     pub fn missing_edge(&self, body: BodyUid, edge: &EdgeName) -> String {
+        let named = self.missing_edge_named(body, edge);
+        let said = match named.strip_prefix(&format!("edge {edge} ")) {
+            Some(rest) => format!("an edge {rest}"),
+            None => "the body has no such edge".to_owned(),
+        };
+        crate::notice::placed(
+            said,
+            crate::notice::NoticePlace::edge(edge.to_string()).in_body(&body.to_string()),
+            named,
+        )
+    }
+
+    fn missing_edge_named(&self, body: BodyUid, edge: &EdgeName) -> String {
         let mut existed = false;
         let mut lost_after = None;
         for result in self.env.history {

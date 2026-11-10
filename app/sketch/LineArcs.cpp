@@ -41,7 +41,12 @@ V2 lineArcDirection(LineArcKind kind, const V2& leaving, const V2& start, const 
 }
 
 std::optional<Curve2> lineArc(LineArcKind kind, const V2& start, const V2& leaving, const V2& end) {
-  return tangentArc(start, lineArcDirection(kind, leaving, start, end), end);
+  return lineArc(kind, start, leaving, end, end);
+}
+
+std::optional<Curve2> lineArc(LineArcKind kind, const V2& start, const V2& leaving, const V2& end,
+                              const V2& toward) {
+  return tangentArc(start, lineArcDirection(kind, leaving, start, toward), end);
 }
 
 V2 lineArcEnd(const V2& start, const V2& direction, const V2& cursor, std::optional<double> radius,

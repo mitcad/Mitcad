@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <exception>
+#include <initializer_list>
 #include <map>
 #include <optional>
 #include <set>
@@ -77,6 +78,7 @@
 #include "face_select.hpp"
 #include "history.hpp"
 #include "mitcad/geometry/boolean.hpp"
+#include "mitcad/geometry/user_error.hpp"
 #include "mitred_dressup.hpp"
 #include "node_dressup.hpp"
 #include "ring_dressup.hpp"
@@ -357,6 +359,20 @@ std::string describe_edge(const Shape& body, int edge) {
   return name.empty() ? "an unnamed edge" : "edge " + name;
 }
 
+// An error about edges of the body (mitcad#1612): `said` in plain words for
+// the person, `named` with their names (describe_edge) for agents, the
+// edges painted.
+std::string edges_error(const Shape& body, std::initializer_list<int> edges, const std::string& said,
+                        const std::string& named) {
+  std::vector<ErrorPlace> places;
+  for (const int edge : edges) {
+    if (edge >= 0 && edge < body.edge_count()) {
+      places.push_back(edge_place(body.edge_name(edge)));
+    }
+  }
+  return placed_error(said, named, places);
+}
+
 // The set (index) each selected edge of the body belongs to; -1 for edges
 // no set selects. An edge may be in one set only.
 template <class Set>
@@ -369,7 +385,8 @@ std::vector<int> select_edges(const Shape& body, const std::vector<Set>& sets) {
     for (int edge : detail::resolve_edges(body, sets[s].edges, sets[s].faces)) {
       int& set = owner[static_cast<std::size_t>(edge)];
       if (set >= 0 && set != static_cast<int>(s)) {
-        throw std::invalid_argument(describe_edge(body, edge) + " is in two edge sets");
+        throw std::invalid_argument(edges_error(body, {edge}, "an edge is in two edge sets",
+                                                describe_edge(body, edge) + " is in two edge sets"));
       }
       set = static_cast<int>(s);
     }
@@ -398,17 +415,19 @@ std::vector<int> check_contours(const BRepFilletAPI_LocalOperation& maker, const
         set = own;
         seed = edge;
       } else if (own != set) {
-        throw std::invalid_argument("unsupported: " + describe_edge(body, edge) +
-                                    " continues the tangent chain of " +
-                                    describe_edge(body, seed) + " from another edge set");
+        throw std::invalid_argument(edges_error(
+            body, {edge, seed}, "unsupported: an edge continues the tangent chain of an edge from another edge set",
+            "unsupported: " + describe_edge(body, edge) + " continues the tangent chain of " +
+                describe_edge(body, seed) + " from another edge set"));
       }
     }
     if (set >= 0 && unselected >= 0 && !sets[static_cast<std::size_t>(set)].tangent_chain) {
-      throw std::invalid_argument(
+      const std::string why = "; without a tangent chain only the selected edges would be rounded, but the "
+                              "geometry kernel's chain goes on into it";
+      throw std::invalid_argument(edges_error(
+          body, {seed, unselected}, "unsupported: a selected edge continues tangentially into an edge not selected" + why,
           "unsupported: " + describe_edge(body, seed) + " continues tangentially into " +
-          describe_edge(body, unselected) +
-          "; without a tangent chain only the selected edges would be rounded, but the "
-          "geometry kernel's chain goes on into it");
+              describe_edge(body, unselected) + why));
     }
     contour_sets.push_back(set);
   }
@@ -655,13 +674,15 @@ bool inherited_faults_only(const TopoDS_Shape& result, const TopoDS_Shape& input
   return true;
 }
 
-// Where a dressup's result that OCCT's checker rejects is faulty, for its
-// error (mitcad#1253): "; the fault lies in the corner of the fillet at
-// V{…}", the first of the faces the dressup made (<feature>:…) that the
-// checker rejects, with how many more; empty when none is. Only the made
-// faces are checked again: on a large body the whole check takes about as
-// long as the dressup.
-std::string faulty_where(const Shape& result, const std::string& feature, const char* role) {
+// The error `what` of a dressup's result that OCCT's checker rejects, with
+// where it is faulty (mitcad#1253): "; the fault lies in a face the fillet
+// made", the faces the dressup made (<feature>:…) that the checker rejects
+// painted, and for agents the first of them by name ("the corner of the
+// fillet at V{…}", mitcad#1612), with how many more; `what` as it is when
+// none is. Only the made faces are checked again: on a large body the
+// whole check takes about as long as the dressup.
+std::string with_faulty_where(const std::string& what, const Shape& result, const std::string& feature,
+                              const char* role) {
   try {
     OCC_CATCH_SIGNALS
     const std::string prefix = feature + ":";
@@ -676,21 +697,25 @@ std::string faulty_where(const Shape& result, const std::string& feature, const 
     }
     const ShapeMap faulty = faulty_parts(made_faces);
     std::vector<std::string> where;
+    std::vector<ErrorPlace> places;
     for (int i = 1; i <= faulty.Extent(); ++i) {
       const int f = faulty(i).ShapeType() == TopAbs_FACE ? result.face_index(faulty(i)) : -1;
       if (f >= 0) {
         where.push_back(detail::made_face(result.face_names(f).front(), feature, role, false));
+        places.push_back(face_place(result.face_names(f).front()));
       }
     }
     if (where.empty()) {
-      return {};
+      return what;
     }
     const std::size_t more = where.size() - 1;
-    return "; the fault lies in " + where.front() +
-           (more == 0 ? std::string()
-                      : " (and in " + std::to_string(more) + " more " + (more == 1 ? "face" : "faces") + ")");
+    const std::string others =
+        more == 0 ? std::string()
+                  : " (and in " + std::to_string(more) + " more " + (more == 1 ? "face" : "faces") + ")";
+    return placed_error(what + "; the fault lies in a face the " + role + " made" + others,
+                        what + "; the fault lies in " + where.front() + others, places);
   } catch (const Standard_Failure&) {
-    return {};
+    return what;
   }
 }
 
@@ -1006,7 +1031,7 @@ ShapePtr name_result(BRepFilletAPI_LocalOperation& maker, const std::string& fea
     } catch (const Cancelled&) {
       throw;
     } catch (const std::runtime_error& error) {
-      throw std::runtime_error(error.what() + faulty_where(*namer.shape(), feature, role));
+      throw std::runtime_error(with_faulty_where(error.what(), *namer.shape(), feature, role));
     }
   }
   require_closed(body.occt(), namer.result(), role);
@@ -1100,7 +1125,8 @@ NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> piece_vertices(const Shap
 std::pair<int, int> edge_face_pair(const Shape& body, int edge) {
   const std::vector<int> faces = detail::faces_at_edge(body, edge);
   if (faces.size() != 2) {
-    throw std::invalid_argument(describe_edge(body, edge) + " does not lie between two faces");
+    throw std::invalid_argument(edges_error(body, {edge}, "an edge does not lie between two faces",
+                                            describe_edge(body, edge) + " does not lie between two faces"));
   }
   return {faces[0], faces[1]};
 }
@@ -1114,13 +1140,15 @@ double chord_radius(const Shape& body, int edge, double chord) {
   for (const double t : {0.1, 0.9}) {
     if (std::abs(detail::normal_angle(e, body.face(a), body.face(b), t) - angle) >
         kAngleTolerance) {
-      throw std::invalid_argument("unsupported: a chord length fillet on " +
-                                  describe_edge(body, edge) +
-                                  ", where the angle between the faces varies");
+      throw std::invalid_argument(edges_error(
+          body, {edge}, "unsupported: a chord length fillet on an edge where the angle between the faces varies",
+          "unsupported: a chord length fillet on " + describe_edge(body, edge) +
+              ", where the angle between the faces varies"));
     }
   }
   if (angle < 1.0e-3) {
-    throw std::invalid_argument(describe_edge(body, edge) + " joins its faces tangentially");
+    throw std::invalid_argument(edges_error(body, {edge}, "an edge joins its faces tangentially",
+                                            describe_edge(body, edge) + " joins its faces tangentially"));
   }
   return chord / (2.0 * std::sin(angle / 2.0));
 }
@@ -1226,7 +1254,8 @@ void add_variable(BRepFilletAPI_MakeFillet& maker, const Shape& body, const Fill
   if (!set.start_vertex.empty()) {
     const std::vector<int> start = body.find_vertices(set.start_vertex);
     if (start.size() != 1) {
-      throw std::invalid_argument("the body has no vertex " + set.start_vertex);
+      throw std::invalid_argument(placed_error("the body has no such start vertex",
+                                              "the body has no vertex " + set.start_vertex));
     }
     if (closed) {
       throw std::invalid_argument("unsupported: a variable radius around a closed chain");
@@ -1234,7 +1263,9 @@ void add_variable(BRepFilletAPI_MakeFillet& maker, const Shape& body, const Fill
     const TopoDS_Shape& vertex = body.vertex(start.front());
     reversed = maker.LastVertex(ic).IsSame(vertex);
     if (!reversed && !maker.FirstVertex(ic).IsSame(vertex)) {
-      throw std::invalid_argument("vertex " + set.start_vertex + " is not an end of the edges' chain");
+      throw std::invalid_argument(placed_error(
+          "the start vertex is not an end of the edges' chain",
+          "vertex " + set.start_vertex + " is not an end of the edges' chain", {vertex_place(set.start_vertex)}));
     }
   }
   if (closed) {
@@ -1307,12 +1338,15 @@ void add_spline(BRepFilletAPI_MakeFillet& maker, const Shape& body, const Fillet
   if (!set.start_vertex.empty()) {
     const std::vector<int> start = body.find_vertices(set.start_vertex);
     if (start.size() != 1) {
-      throw std::invalid_argument("the body has no vertex " + set.start_vertex);
+      throw std::invalid_argument(placed_error("the body has no such start vertex",
+                                              "the body has no vertex " + set.start_vertex));
     }
     const TopoDS_Shape& vertex = body.vertex(start.front());
     reversed = maker.LastVertex(ic).IsSame(vertex);
     if (!reversed && !maker.FirstVertex(ic).IsSame(vertex)) {
-      throw std::invalid_argument("vertex " + set.start_vertex + " is not an end of the edges' chain");
+      throw std::invalid_argument(placed_error(
+          "the start vertex is not an end of the edges' chain",
+          "vertex " + set.start_vertex + " is not an end of the edges' chain", {vertex_place(set.start_vertex)}));
     }
   }
   std::vector<double> knots = set.knots;
@@ -1516,17 +1550,40 @@ std::string corner_failure(const BRepFilletAPI_MakeFillet& maker) {
 // another failure), roundings of contours that overlap, cross or intersect
 // each other, or a corner. The import's report names it; a text that names
 // no vertex marks a failure along the edges (the import's retries rely on
-// that).
+// that). The person reads "along an edge", the contour's edges painted;
+// agents read the edge's name (mitcad#1612).
+std::string fillet_failure_along(const BRepFilletAPI_MakeFillet& maker, const std::string& along);
+
 std::string fillet_failure(const BRepFilletAPI_MakeFillet& maker, const Shape& body) {
   const int ic = maker.FailedContour();
-  std::string along;
+  std::string said;
+  std::string named;
+  std::vector<ErrorPlace> places;
   if (ic > 0 && maker.NbEdges(ic) > 0) {
     const int edge = body.edge_index(maker.Edge(ic, 1));
-    along = " along " + (edge >= 0 ? describe_edge(body, edge) : std::string("an edge"));
+    said = " along an edge";
+    named = " along " + (edge >= 0 ? describe_edge(body, edge) : std::string("an edge"));
+    for (int k = 1; k <= maker.NbEdges(ic); ++k) {
+      const int on = body.edge_index(maker.Edge(ic, k));
+      if (on >= 0) {
+        places.push_back(edge_place(body.edge_name(on)));
+      }
+    }
     if (maker.NbEdges(ic) > 1) {
-      along += " (and " + std::to_string(maker.NbEdges(ic) - 1) + " more edges of its chain)";
+      const std::string more = " (and " + std::to_string(maker.NbEdges(ic) - 1) + " more edges of its chain)";
+      said += more;
+      named += more;
     }
   }
+  if (places.empty()) {
+    return fillet_failure_along(maker, said);
+  }
+  return placed_error(fillet_failure_along(maker, said), fillet_failure_along(maker, named), places);
+}
+
+// fillet_failure's text with `along` (" along an edge") where it names the
+// contour.
+std::string fillet_failure_along(const BRepFilletAPI_MakeFillet& maker, const std::string& along) {
   switch (maker.Failure()) {
   case ChFi3d_Builder::Failure_NoStart:
     return "the geometry kernel finds no start for the rounding" + along +
@@ -1792,7 +1849,8 @@ int measured_face(const Shape& body, int edge, const std::string& reference, boo
     const std::array<int, 2> faces = body.edge_faces(edge);
     const int measured = flip ? faces[1] : faces[0];
     if (measured < 0) {
-      throw std::invalid_argument(describe_edge(body, edge) + " has no face to measure on");
+      throw std::invalid_argument(edges_error(body, {edge}, "an edge has no face to measure the chamfer on",
+                                              describe_edge(body, edge) + " has no face to measure on"));
     }
     return measured;
   }
@@ -1800,9 +1858,12 @@ int measured_face(const Shape& body, int edge, const std::string& reference, boo
   const bool on_a = face_matches(body.face_names(a), reference);
   const bool on_b = face_matches(body.face_names(b), reference);
   if (on_a == on_b) {
-    throw std::invalid_argument(describe_edge(body, edge) +
-                                (on_a ? " lies between two pieces of face " : " does not border face ") +
-                                reference);
+    throw std::invalid_argument(placed_error(
+        on_a ? "an edge lies between two pieces of the face its distance is measured on"
+             : "an edge does not border the face its distance is measured on",
+        describe_edge(body, edge) + (on_a ? " lies between two pieces of face " : " does not border face ") +
+            reference,
+        {edge_place(body.edge_name(edge)), face_place(reference)}));
   }
   return (on_a != flip) ? a : b;
 }
@@ -1871,8 +1932,10 @@ bool convex_edge(const Shape& body, int edge) {
   const ChFiDS_TypeOfConcavity type =
       ChFi3d::DefineConnectType(body.edge(edge), body.face(a), body.face(b), 1.0e-4, false);
   if (type != ChFiDS_Convex && type != ChFiDS_Concave) {
-    throw std::invalid_argument("unsupported: a miter corner at " + describe_edge(body, edge) +
-                                ", which is neither convex nor concave along its length");
+    throw std::invalid_argument(edges_error(
+        body, {edge}, "unsupported: a miter corner at an edge that is neither convex nor concave along its length",
+        "unsupported: a miter corner at " + describe_edge(body, edge) +
+            ", which is neither convex nor concave along its length"));
   }
   return type == ChFiDS_Convex;
 }
@@ -1993,7 +2056,8 @@ double contact_distance(const Shape& body, int edge, const FilletSet& set) {
   const auto [a, b] = edge_face_pair(body, edge);
   const double angle = detail::normal_angle(body.edge(edge), body.face(a), body.face(b));
   if (angle < 1.0e-3) {
-    throw std::invalid_argument(describe_edge(body, edge) + " joins its faces tangentially");
+    throw std::invalid_argument(edges_error(body, {edge}, "an edge joins its faces tangentially",
+                                            describe_edge(body, edge) + " joins its faces tangentially"));
   }
   if (set.size == FilletSize::ChordLength) {
     return set.chord / (2.0 * std::cos(angle / 2.0));
@@ -3090,10 +3154,13 @@ ShapePtr over_cutouts(const Shape& input, const std::vector<FilletSet>& sets, co
 // out again, the walls taken away put back: the chamfer at its full size,
 // cut by the faces beyond, the narrow faces gone where it is wider. Null
 // where no such face is found or the result is not one valid solid (never
-// throws but for cancelling).
+// throws but for cancelling); with `pieces_apart`, where only joining the
+// pieces of a face beyond on its surface makes it invalid, the result with
+// them apart (a chamfer reaching exactly to a far edge, mitcad#1613).
 template <class Build>
 ShapePtr over_narrow_faces(const std::string& feature, const Shape& input, const std::vector<ChamferSet>& sets,
-                           const std::vector<int>& owner, Build&& build, std::string* why = nullptr) {
+                           const std::vector<int>& owner, Build&& build, std::string* why = nullptr,
+                           bool pieces_apart = false) {
   // First with only the space past the far edges filled, the geometry
   // kernel cutting the chamfer by a wall it meets there; then with the
   // walls rising past the far edges taken away and put back.
@@ -3112,6 +3179,7 @@ ShapePtr over_narrow_faces(const std::string& feature, const Shape& input, const
       corner = count >= 2;
     }
   }
+  ShapePtr unmerged;
   for (int mode = 0; mode < 4; ++mode) {
     const bool walls = (mode & 1) != 0;
     const bool at_corners = mode >= 2;
@@ -3139,7 +3207,8 @@ ShapePtr over_narrow_faces(const std::string& feature, const Shape& input, const
       if (!chamfered || !detail::put_walls_back(cutouts, *chamfered, feature + ":chamfer(", *copy)) {
         continue;
       }
-      if (ShapePtr result = detail::cut_out_again(chamfered, cutouts, *copy)) {
+      ShapePtr* const apart = pieces_apart ? &unmerged : nullptr;
+      if (ShapePtr result = detail::cut_out_again(chamfered, cutouts, *copy, apart)) {
         return result;
       }
     } catch (const Cancelled&) {
@@ -3147,7 +3216,9 @@ ShapePtr over_narrow_faces(const std::string& feature, const Shape& input, const
     } catch (...) {
     }
   }
-  return nullptr;
+  // (Else the first result valid with the pieces of a face beyond apart,
+  // mitcad#1613.)
+  return unmerged;
 }
 
 // The body with the pieces of one surface joined (detail::join_surface_pieces)
@@ -3437,11 +3508,19 @@ std::string narrow_face_cause(const Shape& body, const std::vector<FilletSet>& s
     const std::string edges_named = !a.empty() && !b.empty()
                                         ? "the edges " + a + " and " + b
                                         : describe_edge(body, worst.a) + " and " + describe_edge(body, worst.b);
-    return "the roundings of " + edges_named + " reach " +
-           millimetres(contact[static_cast<std::size_t>(worst.a)]) + " and " +
-           millimetres(contact[static_cast<std::size_t>(worst.b)]) + " mm into " + face +
-           " between them, which is only " + millimetres(worst.width) +
-           " mm wide there: the face would vanish under them" + more;
+    // In plain words for the person, the edges and the face painted; the
+    // names for agents (mitcad#1612).
+    const auto said = [&](const std::string& roundings, const std::string& into) {
+      return "the roundings of " + roundings + " reach " + millimetres(contact[static_cast<std::size_t>(worst.a)]) +
+             " and " + millimetres(contact[static_cast<std::size_t>(worst.b)]) + " mm into " + into +
+             " between them, which is only " + millimetres(worst.width) +
+             " mm wide there: the face would vanish under them" + more;
+    };
+    std::vector<ErrorPlace> places{edge_place(a), edge_place(b)};
+    if (!names.empty()) {
+      places.push_back(face_place(names.front()));
+    }
+    return placed_error(said("two edges", "the face"), said(edges_named, face), places);
   } catch (const Standard_Failure&) {
   } catch (const std::exception&) {
   }
@@ -3602,6 +3681,24 @@ ShapePtr chamfer_unexplained(const std::string& feature, const Shape& input, con
 
 namespace {
 
+// Whether a chamfer built past a narrow face whose far edge its contact
+// touches (detail::overflow_tangent) is sound, the face beside it ending
+// in a point there (mitcad#1613): one valid closed solid, and the check of
+// mitcad#1253 finds nothing of the chamfer hanging out past the body or
+// turned over on its surface (mitcad#1260's silent broken result).
+bool sound_at_tangent(const std::string& feature, const Shape& input, const Shape& result,
+                      const std::vector<int>& owner, double size) {
+  int solids = 0;
+  for (TopExp_Explorer ex(result.occt(), TopAbs_SOLID); ex.More(); ex.Next()) {
+    ++solids;
+  }
+  if (solids != 1 || !closed_solids(result.occt()) || !BRepCheck_Analyzer(result.occt()).IsValid()) {
+    return false;
+  }
+  const std::optional<detail::DressupSide> side = detail::dressup_side(input, owner);
+  return !side || detail::dressup_check(input, result, feature, "chamfer", *side, size).empty();
+}
+
 // Up to three names of a list, then how many more.
 std::string some_names(const std::vector<std::string>& names) {
   std::string text;
@@ -3723,18 +3820,30 @@ ShapePtr chamfer(const std::string& feature, const Shape& input, const std::vect
       throw;
     }
     std::string context;
+    // The selected edges painted; the context names them for agents only
+    // (mitcad#1612).
+    std::vector<ErrorPlace> places;
     try {
       OCC_CATCH_SIGNALS
-      context = chamfer_context(input, sets, select_edges(input, sets));
+      const std::vector<int> owner = select_edges(input, sets);
+      context = chamfer_context(input, sets, owner);
+      for (int edge = 0; edge < input.edge_count() && edge < static_cast<int>(owner.size()); ++edge) {
+        if (owner[static_cast<std::size_t>(edge)] >= 0) {
+          places.push_back(edge_place(input.edge_name(edge)));
+        }
+      }
     } catch (...) {
       throw error;
     }
     const std::string raw = "chamfer: ";
-    if (message.compare(0, raw.size(), raw) == 0) {
-      throw std::runtime_error(raw + "the geometry kernel could not build the bevel of " + context +
-                               " (kernel error: " + message.substr(raw.size()) + ")");
+    // (A kernel's failure that already says where keeps its places.)
+    if (message.compare(0, raw.size(), raw) == 0 && message.find(kPlacedTail) == std::string::npos) {
+      throw std::runtime_error(placed_error(raw + "the geometry kernel could not build the bevel of the selected edges",
+                                            raw + "the geometry kernel could not build the bevel of " + context +
+                                                " (kernel error: " + message.substr(raw.size()) + ")",
+                                            places));
     }
-    throw std::runtime_error(message + " (" + context + ")");
+    throw std::runtime_error(with_detail(message, " (" + context + ")", places));
   }
 }
 
@@ -3793,12 +3902,16 @@ ShapePtr chamfer_unexplained(const std::string& feature, const Shape& input, con
         } catch (...) {
           // At the exact size, before the 0.1 % smaller retry: a chamfer
           // wider than a narrow face beside its edges goes on past the
-          // face's far edge, cut by the faces beyond (mitcad#1232). Not
-          // where it reaches exactly to that edge, its contact touching it
-          // (mitcad#1260): the error says where.
+          // face's far edge, cut by the faces beyond (mitcad#1232). Where
+          // it reaches exactly to that edge, its contact touching it, the
+          // face beside it ends in a point there (mitcad#1260): valid where
+          // the result is one valid closed solid that nothing of the
+          // chamfer hangs out of or turns over in (the check of
+          // mitcad#1253 finds nothing), else refused (mitcad#1613).
+          std::string tangent;
           {
             const ShapePtr copy = detail::working_copy(input);
-            const std::string tangent = detail::overflow_tangent(*copy, selected, [&](int e, int f) {
+            tangent = detail::overflow_tangent(*copy, selected, [&](int e, int f) {
               const int s = selected[static_cast<std::size_t>(e)];
               if (s < 0) {
                 return 0.0;
@@ -3813,13 +3926,15 @@ ShapePtr chamfer_unexplained(const std::string& feature, const Shape& input, con
               }
               return measured ? spec.distance : spec.distance * std::tan(spec.angle);
             });
-            if (!tangent.empty()) {
-              throw std::runtime_error(tangent);
-            }
           }
           std::string why;
-          if (ShapePtr over = over_narrow_faces(feature, input, sets, selected, bevelled, &why)) {
-            return over;
+          if (ShapePtr over = over_narrow_faces(feature, input, sets, selected, bevelled, &why, !tangent.empty())) {
+            if (tangent.empty() || sound_at_tangent(feature, input, *over, selected, largest_size(sets))) {
+              return over;
+            }
+          }
+          if (!tangent.empty()) {
+            throw std::runtime_error(tangent);
           }
           // Else the error says where, and at a corner why the chamfer past
           // the narrow face failed there and which corner types build it

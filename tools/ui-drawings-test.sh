@@ -1158,6 +1158,39 @@ grep -q "Drawing kept: D3" <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && ui_fail "a 
 grep -aq "(BY HAND)" "$WORK/second.pdf" || ui_fail "the note added by hand is not in the second PDF"
 echo "ok   the note made by hand kept and written"
 
+echo "--- File › Export Drawing, DXF: the unit the dialog shows, not the sheet's (mitcad#1610)"
+# Drawing2's sheet set to inches; the design is in millimetres. The
+# dialog's DXF unit is the design's (mm): the file is written in mm.
+ui_mark
+ui_step "open Drawing2 (double-click)"     ui_double_click_logged "Browser Root/Drawings/Drawing2"
+ui_expect_new "Drawing opened: D2 Drawing2" "Drawing2 opened"
+ui_mark
+settled "Drawing Sheet"
+ui_step "Sheet…"                           ui_click_logged "Drawing Sheet"
+ui_expect_new "Drawing sheet dialog opened: " "the sheet's dialog"
+ui_focus_dialog '^Sheet$'
+ui_step "Units: Inches (Alt+U, i)"         ui_key alt+u i
+ui_step "OK"                               ui_key Return
+ui_focus_main
+ui_expect_new '"units":"in"' "the sheet in inches"
+no_refusal
+ui_mark
+settled "Drawing Close Drawing"
+ui_step "Close Drawing"                    ui_click_logged "Drawing Close Drawing"
+ui_expect_new "Drawing closed" "the 3D view again"
+ui_focus_main
+ui_mark
+ui_step "Export Drawing (search)"          ui_command "Export Drawing"
+ui_expect_new ", drawing D2" "Drawing2 offered"
+ui_step "type the path, Enter"             ui_type_path "Export Drawing" "$WORK/inches-sheet.dxf"
+ui_focus_main
+ui_expect_new "Drawing exported as it is: D2" "Drawing2 written as it is"
+ui_expect_new "Exported $WORK/inches-sheet.dxf: drawing" "the DXF written" 30
+ui_expect_new ", in mm" "in the unit the dialog showed"
+tr -d '\r ' < "$WORK/inches-sheet.dxf" | grep -A2 -x '$INSUNITS' | sed -n 3p | grep -qx 4 ||
+  ui_fail "the DXF's \$INSUNITS is not millimetres (4)"
+echo "ok   the DXF in millimetres although its sheet is in inches"
+
 echo "--- A cut sheet (mitcad#853): Create Drawing › Cut Sheet, two bodies, DXF"
 # A plate 100 x 60 (Body1) and a disk of 40 (Body2), 3 thick.
 PLATES="$WORK/plates.mitcad"

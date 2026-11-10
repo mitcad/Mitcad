@@ -59,3 +59,5 @@ mod feature_own_parameter_tests;
 mod design_review_tests;
 // Occurrence-specific print context in design review (mitcad#1513).
 mod design_review_print_context_tests;
+// What a person reads names no faces, edges, ids or points (mitcad#1612).
+mod user_text_guard_tests;

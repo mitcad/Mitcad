@@ -112,11 +112,12 @@ pub(crate) fn resolve_geo(r: &mut impl Resolver, origin: &JointOrigin) -> Result
         GeomRef::Face { body, face } => {
             let shape = r.shape(*body)?;
             let face = &crate::features::renamed::face_for(r, &shape, face)?;
-            match r
-                .kernel()
-                .face_geometry(&shape, face)
-                .map_err(|e| format!("face {face}: {e}"))?
-            {
+            match r.kernel().face_geometry(&shape, face).map_err(|e| {
+                crate::notice::about_place(
+                    crate::notice::NoticePlace::face(face.to_string()),
+                    &e.to_string(),
+                )
+            })? {
                 SurfaceGeometry::Plane { .. } => (GeoKind::Plane, 0.0),
                 SurfaceGeometry::Cylinder { radius, .. } => (GeoKind::Cylinder, radius),
                 SurfaceGeometry::Sphere { radius, .. } => (GeoKind::Sphere, radius),
@@ -124,18 +125,24 @@ pub(crate) fn resolve_geo(r: &mut impl Resolver, origin: &JointOrigin) -> Result
                     (GeoKind::Axis, 0.0)
                 }
                 SurfaceGeometry::Other { kind } => {
-                    return Err(format!("face {face} ({kind}) is no constraint's geometry"));
+                    return Err(crate::notice::placed(
+                        format!("the face ({kind}) is no constraint's geometry"),
+                        crate::notice::NoticePlace::face(face.to_string())
+                            .in_body(&body.to_string()),
+                        format!("face {face} ({kind}) is no constraint's geometry"),
+                    ));
                 }
             }
         }
         GeomRef::Edge { body, edge } => {
             let shape = r.shape(*body)?;
             let edge = &crate::features::renamed::edge_for(r, &shape, edge)?;
-            match r
-                .kernel()
-                .edge_geometry(&shape, edge)
-                .map_err(|e| format!("edge {edge}: {e}"))?
-            {
+            match r.kernel().edge_geometry(&shape, edge).map_err(|e| {
+                crate::notice::about_place(
+                    crate::notice::NoticePlace::edge(edge.to_string()),
+                    &e.to_string(),
+                )
+            })? {
                 CurveGeometry::Circle { radius, .. } => {
                     // The circle's side: the outward normal of a planar face
                     // it bounds (a hole's rim on the top face looks up).

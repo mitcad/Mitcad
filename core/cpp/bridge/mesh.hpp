@@ -22,7 +22,9 @@ TriangleMesh triangle_mesh(const geometry::Shape& shape, double deviation, doubl
 // The message of a face of `shape` that a meshing left without a
 // triangulation (io::FaceError, mitcad#1568), the face named by its
 // topological names when it has any, else by its index; with its surface's
-// kind: "a face could not be triangulated: F4:top (plane)".
+// kind: "a face could not be triangulated: F4:top (plane)". That is the
+// agents' detail (mitcad#1612): a person reads "a face could not be
+// triangulated (its surface: plane)", the face painted (placed_error).
 std::string untriangulated_face_message(const geometry::Shape& shape, int index, const std::string& surface);
 
 std::shared_ptr<geometry::Shape> mesh_from_triangles(rust::Slice<const double> vertices,

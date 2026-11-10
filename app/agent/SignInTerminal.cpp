@@ -92,8 +92,15 @@ TerminalLaunch SignInTerminal::find(const QString& script) {
 
 bool SignInTerminal::start(const QString& agentId, const QString& heading, const QString& closing,
                            const QList<QStringList>& commands, QString* error) {
-  if (m_process != nullptr) {
+  // One terminal at a time, for one agent (mitcad#1610): another agent's is
+  // let go (left open for the user) and this agent's starts.
+  const SignInStart how = signInStart(m_process != nullptr, m_agentId, agentId);
+  if (how == SignInStart::AlreadyOpen) {
     return true;
+  }
+  if (how == SignInStart::ReplaceOther) {
+    qInfo().noquote() << QStringLiteral("Chat: Sign in Again: the terminal for %1 left open; starting one for %2")
+                             .arg(m_agentId, agentId);
   }
   forget();
   const QString script = scriptPath(agentId);

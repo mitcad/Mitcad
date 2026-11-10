@@ -11,7 +11,19 @@
 #      leaves 20 mm, and Enter gives d1 back.
 #   4. Named again; Remove Name width from k5's context menu in the sketch
 #      gives d1 back at once.
-# Run by tools/ui-sketch-remove-dimension-name-test.sh (Linux).
+#   5. Named again; Backspace twice (mitcad#1614): the first deletes the
+#      selected value, the second the whole width = at once; the field's
+#      undo (Ctrl+Z) brings it back; Backspace again, 30 and Enter give
+#      d1 = 30 mm, and k6 follows (15 mm).
+#   6. Named again; Backspace twice, the user parameter spacing (40 mm)
+#      typed and Enter: d1 = spacing, 40 mm, and k6 follows (20 mm); then
+#      k5 is set back to 20 mm.
+#   7. Named again; the text replaced by the bare name width and Enter
+#      (mitcad#1608): no refusal, width is kept as a user parameter that
+#      k5 uses, and no name is removed.
+# The design also holds the user parameter spacing = 40 mm.
+# Run by tools/ui-sketch-remove-dimension-name-test.sh (Linux) and
+# tools/ui-windows-sketch-remove-dimension-name-test.ps1 (Windows).
 expect-ever 'View area'
 wait-idle
 
@@ -125,6 +137,117 @@ wait-log '^Dimension k5: name width removed, now d1 [(]rewritten: d2[)]$'
 expect-model-parameter d1 20 model
 expect-model-parameter width absent
 expect-model-parameter d2 10 model
+
+# 5. Named again; Backspace twice takes the name off (mitcad#1614).
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at .* with d1 = 20 mm$'
+key ctrl+a
+type width
+wait-log '^Parameter suggestions for dimension d1 "width": none; actions: name'
+key Return
+wait-log '^Parameter naming for dimension d1: width = $'
+type '20 mm'
+key Return
+wait-log '^Dimension k5 = width = 20 mm [(]width[)]$'
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at .* with width = 20 mm$'
+# The first Backspace deletes the selected value; the name stays.
+key Backspace
+expect-widget-property sketchValueEditor text 'width = '
+expect-no-log '^Parameter name width removed by Backspace'
+# The second takes the whole width = off at once.
+key Backspace
+wait-log '^Parameter name width removed by Backspace for dimension width$'
+expect-widget-property sketchValueEditor text ''
+# The field's undo brings it back.
+key ctrl+z
+expect-widget-property sketchValueEditor text 'width = '
+expect-model-parameter width 20 model
+# Off again (the undo may leave the text selected, which Backspace
+# deletes as a whole too); 30 typed and Enter: the automatic name with
+# 30 mm.
+key Backspace
+expect-widget-property sketchValueEditor text ''
+type 30
+key Return
+wait-log '^Dimension k5: name width removed, now d1 [(]rewritten: d2[)]$'
+wait-log '^Dimension k5 = 30( mm)? [(]d1[)]$'
+expect-model-parameter d1 30 model
+expect-model-parameter width absent
+expect-model-parameter d2 15 model
+
+# 6. Named again; Backspace twice and another parameter's name typed: the
+#    dimension follows spacing (mitcad#1614).
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at .* with d1 = 30( mm)?$'
+key ctrl+a
+type width
+wait-log '^Parameter suggestions for dimension d1 "width": none; actions: name'
+key Return
+wait-log '^Parameter naming for dimension d1: width = $'
+type '30 mm'
+key Return
+wait-log '^Dimension k5 = width = 30 mm [(]width[)]$'
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at .* with width = 30 mm$'
+key Backspace
+key Backspace
+wait-log '^Parameter name width removed by Backspace for dimension width$'
+expect-widget-property sketchValueEditor text ''
+type spa
+wait-log '^Parameter suggestions for dimension width "spa": spacing'
+key Return
+wait-log '^Parameter suggestion inserted spacing into dimension width: spacing$'
+key Return
+wait-log '^Dimension k5: name width removed, now d1 [(]rewritten: d2[)]$'
+wait-log '^Dimension k5 = spacing [(]d1[)]$'
+expect-model-parameter d1 40 model
+expect-model-parameter width absent
+expect-model-parameter spacing 40 user
+expect-model-parameter d2 20 model
+# k5 back to 20 mm for the next step.
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at .* with d1 = spacing$'
+key ctrl+a
+type '20 mm'
+key Return
+wait-log '^Dimension k5 = 20 mm [(]d1[)]$'
+expect-model-parameter d1 20 model
+expect-model-parameter d2 10 model
+
+# 7. Named again; its text replaced by the bare name width (mitcad#1608):
+#    no refusal, width stays as a user parameter that k5 uses.
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at .* with d1 = 20 mm$'
+key ctrl+a
+type width
+wait-log '^Parameter suggestions for dimension d1 "width": none; actions: name'
+key Return
+wait-log '^Parameter naming for dimension d1: width = $'
+type '20 mm'
+key Return
+wait-log '^Dimension k5 = width = 20 mm [(]width[)]$'
+expect-model-parameter width 20 model
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at .* with width = 20 mm$'
+key ctrl+a
+type width
+wait-log '^Parameter suggestions for dimension width "width": width [(]this dimension.s value, 20[.0]* mm, kept as a user parameter[)]'
+key Return
+wait-log '^Dimension k5 = width [(]width[)]$'
+wait-log '^Dimension k5: width kept as a user parameter, now width$'
+wait-log '^Sketch value editor closed$'
+expect-no-log 'only the parameter of a dimension or a feature has an automatic name'
+expect-no-log '^Dimension k5: name width removed'
+expect-no-log '^Sketch value editor kept open'
+expect-model-parameter width 20 user
 command sketch.finish
 wait-log '^Sketch finished'
 expect-never 'TestDriver: FAIL'

@@ -287,9 +287,8 @@ private:
                               .arg(kept)
                               .arg(leftOut);
     m_notes.clear();
-    for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
-      m_notes << warning.toString();
-    }
+    // In plain words (mitcad#1612).
+    m_notes << shownTexts(result, QStringLiteral("warnings"), QStringLiteral("warning_messages"));
     return true;
   }
 

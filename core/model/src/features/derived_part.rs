@@ -382,7 +382,8 @@ pub fn evaluate_source<K: Kernel>(
     if bodies.is_empty() {
         let failed = result.results.iter().find_map(|r| {
             let entry = state.entry(r.uid)?;
-            r.status.error().map(|e| format!("{}: {e}", entry.name))
+            // (With its tail: its message, places and detail, mitcad#1612.)
+            r.status.failure().map(|e| format!("{}: {e}", entry.name))
         });
         return Err(match failed {
             Some(failure) => format!("its design builds no bodies ({failure})"),

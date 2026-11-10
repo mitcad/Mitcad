@@ -1620,8 +1620,16 @@ without the variable.
 projects saved by earlier versions (each design with its project's
 `.mitcad/brep` store), never committed. ctest `designs.corpus`
 (`tools/cli/designs-corpus.cmake`) opens every `.mitcad` with `mitcad-cli
-info` and fails when a sketch of one fails, such as a linked projection
-whose source changed shape since (mitcad#249); skipped without the corpus.
+info` and fails when any feature of one fails (mitcad#1613): a sketch
+such as a linked projection whose source changed shape since (mitcad#249),
+or a feature an earlier version built, such as a chamfer refused since. A
+feature that legitimately fails (the design was saved with it failing) is
+listed in a `known.txt` in the design's project folder or any folder of
+the corpus: a line per feature with three tab-separated columns, the
+design's path relative to the `known.txt`'s folder (forward slashes), the
+feature's uid and the reason (`#` starts a comment). The test counts such
+a feature as known, and reports a listed feature that builds again so
+that its line is removed. Skipped without the corpus.
 
 ### 3MF print settings corpus
 
@@ -1974,6 +1982,20 @@ runs one step after another. Build and lint use half the cores unless
   [UI conventions](ui-conventions.md); the ctest `repo.ui-strings`
   checks what a pattern can (retired words, Title Case's short words,
   "×" and "°", AppKit texts through `tr()`, the core's `'{x}'` quoting).
+- An error, warning, refusal or notice a person reads never names
+  topological names (`E{…}`, `V{…}`, `F3:side(…)`, `F1:top`), sketch
+  region keys (`r{…}`), internal ids (`k5`, `p15`, `F57`, `F2.b0`) or
+  coordinates ([UI conventions, "What a message
+  says"](ui-conventions.md), mitcad#1612). Write it in words and put the
+  place into the error's places and the names into its detail for agents:
+  in the model `notice::FeatureError::new(message).at(place).with_detail(…)`
+  (or `notice::placed`), in the geometry `placed_error(message, detail,
+  places)` (`mitcad/geometry/user_error.hpp`). The application shows a
+  notice's `message` or `userText(…)` of an error, never a model `error`
+  string as it is. The model's tests assert it (`user_text_leaks`) and the
+  ctest `geometry.user-text-scan` refuses thrown text in
+  `geometry/src/*.cpp` that names an edge or a face, or prints a point,
+  outside `placed_error`.
 - A color the user sees is a role of the role table
   (`themeColor`, `viewColor` in `app/framework/Theme.hpp`), never a
   literal: the ctest `repo.ui-colors` (`tools/ui-colors-check`) fails on

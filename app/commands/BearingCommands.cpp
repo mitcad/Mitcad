@@ -23,6 +23,7 @@
 #include <QStringList>
 
 #include "../framework/CommandRegistry.hpp"
+#include "../framework/UserText.hpp"
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
 #include "Commands.hpp"
@@ -319,7 +320,8 @@ CommandDef bearingCommand(const CommandContext& context) {
     } catch (...) {
       return QString();
     }
-    const QString error = values.value(QStringLiteral("error")).toString();
+    // In plain words (mitcad#1612).
+    const QString error = userText(values.value(QStringLiteral("error")).toString());
     if (!error.isEmpty()) {
       QString text = error;
       text[0] = text[0].toUpper();

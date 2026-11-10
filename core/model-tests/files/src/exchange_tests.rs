@@ -276,8 +276,8 @@ fn base_features_join_and_cut_participant_bodies() {
     let uid = b.doc.add_base_feature(missing).unwrap().feature.uid;
     assert_eq!(
         b.doc.status(uid),
-        Some(&FeatureStatus::Failed(
-            "the base feature does not cut into any participant body".to_owned()
+        Some(&FeatureStatus::failed(
+            "the base feature does not cut into any participant body"
         ))
     );
 }

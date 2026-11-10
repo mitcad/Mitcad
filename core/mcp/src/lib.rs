@@ -814,7 +814,60 @@ fn error(id: Option<&Value>, code: i32, message: &str) -> Value {
 }
 
 fn tool_error(message: String) -> Value {
-    tool_content(json!({"error": message}), true)
+    // A refusal with its places (mitcad#1612, the model's `FeatureError`
+    // as text): agents read its detail, with the names, ids and
+    // coordinates, and its places beside it, not the tail.
+    let (text, places) = agent_text(&message);
+    let mut value = json!({"error": text});
+    if !places.is_empty() {
+        value["places"] = Value::Array(places);
+    }
+    tool_content(value, true)
+}
+
+/// The agents' text of a model text that may carry failures' tails
+/// (mitcad#1612, `PLACED_TAIL` in `core/model-base/src/notice.rs`): each
+/// tail's detail in place of the message it explains, and their places.
+/// Other text as it is. (The model's `FeatureError::agent_text`, for a crate
+/// that does not depend on the model.)
+fn agent_text(text: &str) -> (String, Vec<Value>) {
+    const TAIL: &str = "\n[placed: ";
+    let mut out = String::new();
+    let mut places = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(TAIL) {
+        let json = &rest[at + TAIL.len()..];
+        let mut stream = serde_json::Deserializer::from_str(json).into_iter::<Value>();
+        let Some((inner, used)) = (match stream.next() {
+            Some(Ok(inner)) => Some((inner, stream.byte_offset())),
+            _ => None,
+        })
+        .filter(|(inner, used)| inner.is_object() && json[*used..].starts_with(']')) else {
+            break;
+        };
+        let before = &rest[..at];
+        let message = inner["message"].as_str().unwrap_or_default();
+        let detail = inner["detail"].as_str().unwrap_or_default();
+        match before.strip_suffix(message) {
+            _ if detail.is_empty() => out.push_str(before),
+            Some(head) => {
+                out.push_str(head);
+                out.push_str(detail);
+            }
+            None => {
+                out.push_str(before);
+                out.push_str(" (");
+                out.push_str(detail);
+                out.push(')');
+            }
+        }
+        if let Some(found) = inner["places"].as_array() {
+            places.extend(found.iter().cloned());
+        }
+        rest = &json[used + 1..];
+    }
+    out.push_str(rest);
+    (out, places)
 }
 
 fn tool_content(value: Value, is_error: bool) -> Value {

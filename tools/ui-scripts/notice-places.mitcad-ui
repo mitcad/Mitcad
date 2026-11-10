@@ -6,9 +6,14 @@
 # the pointer over it paints its places (the rounding's face of the body,
 # a point) in the view until it leaves:
 #   1. the Timeline item, with its tooltip;
-#   2. the message band, the warnings badge's message about Rim;
+#   2. the message band, the warnings badge's message about Rim; another
+#      message in its place under the pointer paints none (mitcad#1609);
 #   3. the command panel's message while Rim is edited (its preview's
-#      faces), Esc then.
+#      faces); its edges emptied, the hint hovered paints none
+#      (mitcad#1609), Esc then;
+#   4. the Timeline item while a new fillet's preview computes, held by
+#      the worker's gate: nothing read from the design, the places painted
+#      once the preview has ended (mitcad#1600).
 # Run by tools/ui-notice-places-test.sh (Linux) and
 # tools/ui-windows-notice-places-test.ps1 (Windows).
 expect-ever 'View area'
@@ -38,9 +43,14 @@ mark
 hover-logged '^Message band text at '
 wait-log '^Notice hover highlighted: message band: .*face F4:fillet[(][^ ]* of F1[.]b0.*point ' 10
 screenshot '${MITCAD_TEST_SHOTS}/notice-places-band.png'
+# Another message in its place, the pointer where it was (mitcad#1609): a
+# warning about no feature takes Rim's places away.
 mark
-leave-widget messageBandText
+test-status-message warning 'A warning about no feature'
+wait-log '^Message band full: warning A warning about no feature$' 10
 wait-log '^Notice hover highlighted: none$' 10
+expect-no-log '^Notice hover highlighted: message band: '
+leave-widget messageBandText
 key Escape
 wait-idle
 
@@ -59,6 +69,46 @@ screenshot '${MITCAD_TEST_SHOTS}/notice-places-panel.png'
 mark
 leave-widget commandMessage
 wait-log '^Notice hover highlighted: none$' 10
+# The edges emptied (mitcad#1609): the message is a hint of no preview,
+# which names no places; hovered, it paints none of the warning's.
+mark
+button '^(✕|Clear the selection)$' clear_sets.0.edges
+wait-log '^Fillet Edges: nothing' 10
+wait-log '^Panel Fillet message [0-9]+x[0-9]+, ' 10
+wait-idle
+mark
+hover-logged '^Panel Fillet message at '
+wait-log '^Panel Fillet message hovered: 0 places$' 10
+expect-no-log '^Notice hover highlighted: panel: '
+leave-widget commandMessage
+wait-log '^Panel Fillet message left$' 10
 key Escape
 wait-log '^Command Fillet cancelled' 20
 wait-idle
+
+# 4. The Timeline item while a command's preview computes (mitcad#1600):
+# the worker's gate holds a new fillet's preview; the places are kept
+# without reading the design, then counted and painted once it has ended.
+mark
+hold-model-preview true
+command solid.fillet
+expect-log '^Command Fillet started'
+wait-log '^Pick places:' 20
+click-pick 'edge F1[.]b0/E[{]F1:side[123][|]F1:top[}]'
+wait-log '^Fillet Edges: 1 edge' 10
+wait-log '^Computing preview started' 30
+expect-model-busy true
+hover-logged-now '^Timeline Rim at '
+wait-log '^Notice hover highlighted: timeline: .*face F4:fillet[(][^ ]* of F1[.]b0.*[(]drawn when the job ends[)]$' 10
+expect-model-busy true
+mark
+hold-model-preview false
+wait-log '^Notice hover highlighted: timeline: .*face F4:fillet[(][^ ]* of F1[.]b0.*[(][1-9][0-9]* drawn[)]$' 30
+wait-idle 30
+mark
+timeline-leave
+wait-log '^Notice hover highlighted: none$' 10
+key Escape
+wait-log '^Command Fillet cancelled' 20
+wait-idle
+expect-never 'The document was read while a job computes it|Input dropped while the model computes|TestDriver: FAIL'

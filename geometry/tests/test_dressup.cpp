@@ -230,6 +230,12 @@ void test_chamfer_failure_names_its_edges_and_ends() {
   CHECK(message.find(side("F2", 1, 1)) != std::string::npos);
   CHECK(message.find(side("F2", 1, 3)) != std::string::npos);
   CHECK(message.find("is wider than face") != std::string::npos);
+  // The names above are the agents' detail; a person reads plain words
+  // (mitcad#1612), the edge painted.
+  const std::string shown = error_message(message);
+  CHECK(shown.find("E{") == std::string::npos && shown.find("F2:") == std::string::npos);
+  CHECK(shown.find("is wider than the face beside its edge") != std::string::npos);
+  CHECK(message.find("\"kind\":\"edge\"") != std::string::npos);
   // 30: the plane z = y - 10 takes away 200 mm2 down to the bottom and the
   // triangle of legs 20 above it, along 60.
   huge.distance = 30;

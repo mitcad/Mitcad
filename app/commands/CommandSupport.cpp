@@ -352,6 +352,8 @@ bool isCircular(const SelectionItem& item) {
   return item.geometry == QStringLiteral("circle") || item.geometry == QStringLiteral("arc");
 }
 
+bool isPathItem(const SelectionItem& item) { return item.kind != SelectKind::Feature || isFeatureCurve(item); }
+
 bool isAxial(const SelectionItem& item) {
   switch (item.kind) {
   case SelectKind::Axis:

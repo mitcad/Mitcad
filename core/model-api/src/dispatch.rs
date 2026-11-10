@@ -115,6 +115,7 @@ impl<K: Kernel> DispatchOps<K> for Document<K> {
                 run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
                     let command = super::sketch::parse_sketch_command(value)?;
                     doc.run_sketch_command(command)
+                        .map(super::sketch::with_shown_texts)
                 },
             },
             // Components and occurrences (F6, `components.rs`).

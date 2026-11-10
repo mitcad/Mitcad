@@ -220,7 +220,8 @@ TopoDS_Wire path_wire(const Path& path) {
   for (std::size_t i = 1; i < edges.size(); ++i) {
     const double gap = BRep_Tool::Pnt(TopExp::LastVertex(edges[i - 1])).Distance(BRep_Tool::Pnt(TopExp::FirstVertex(edges[i])));
     if (gap > tolerance) {
-      throw std::invalid_argument("path curve " + path[i].name + " does not join the curve before it");
+      throw std::invalid_argument(placed_error("a path curve does not join the curve before it",
+                                               "path curve " + path[i].name + " does not join the curve before it"));
     }
   }
   occ::handle<ShapeExtend_WireData> data = new ShapeExtend_WireData();

@@ -96,8 +96,12 @@ impl ExtentObject {
             Self::Face { body, face, .. } => {
                 ctx.body(*body)?;
                 for feature in face.features() {
-                    ctx.feature(feature)
-                        .map_err(|e| format!("face {face}: {e}"))?;
+                    ctx.feature(feature).map_err(|e| {
+                        crate::notice::about_place(
+                            crate::notice::NoticePlace::face(face.to_string()),
+                            &e.to_string(),
+                        )
+                    })?;
                 }
                 Ok(())
             }
@@ -213,7 +217,14 @@ impl ExtentObject {
                             };
                             match before {
                                 Some(earlier) if has(ctx, &earlier)? => shape = earlier,
-                                _ => return Err(format!("body {body} has no face {face}")),
+                                _ => {
+                                    return Err(super::geom_ref::placed_at(
+                                        crate::notice::NoticePlace::face(face.to_string()),
+                                        *body,
+                                        "the body has no such face",
+                                        format!("body {body} has no face {face}"),
+                                    ));
+                                }
                             }
                         }
                     }
@@ -286,8 +297,12 @@ impl FaceRef {
     pub fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
         ctx.body(self.body)?;
         for feature in self.face.features() {
-            ctx.feature(feature)
-                .map_err(|e| format!("face {}: {e}", self.face))?;
+            ctx.feature(feature).map_err(|e| {
+                crate::notice::about_place(
+                    crate::notice::NoticePlace::face(self.face.to_string()),
+                    &e.to_string(),
+                )
+            })?;
         }
         Ok(())
     }

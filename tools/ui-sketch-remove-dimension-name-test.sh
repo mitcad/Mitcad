@@ -13,7 +13,11 @@
 # width / 2; the name deleted in k5's value editor gives d1 back and k6's
 # expression follows (d1 / 2), one undo step; Remove Name in the value
 # editor's right-click menu and Remove Name width in k5's context menu do
-# the same. The steps are
+# the same; Backspace twice in k5's editor takes the whole width = off,
+# the field's undo brings it back, and 30 or the user parameter spacing
+# typed then gives d1 with that value (mitcad#1614); the text replaced by
+# the bare name width keeps width as a user parameter that k5 uses,
+# without a refusal (mitcad#1608). The steps are
 # tools/ui-scripts/sketch-remove-dimension-name.mitcad-ui.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
@@ -31,7 +35,7 @@ export MITCAD_TEST_INPUT=$here/ui-scripts/sketch-remove-dimension-name.mitcad-ui
 "$cli" run "$here/ui-scripts/sketch-remove-dimension-name.json" --save "$work/names.mitcad" || exit 1
 ui_start_display
 ui_start_app --ui=qt --no-mcp --open "$work/names.mitcad"
-for _ in $(seq 1 600); do
+for _ in $(seq 1 900); do
   kill -0 "$UI_RUNNER" 2> /dev/null || break
   sleep 0.2
 done
@@ -43,5 +47,8 @@ ui_expect_log 'Dimension k5: name width removed, now d1 (rewritten: d2)' 'the na
 ui_expect_log 'Editing dimension k6 (d1 / 2)' "k6's expression follows"
 ui_expect_log 'Undo: Remove Name width' 'one undo step'
 ui_expect_log 'Parameter name width removed for dimension width: 20 mm' "Remove Name in the value editor's menu"
+ui_expect_log 'Parameter name width removed by Backspace for dimension width' 'Backspace on the empty value takes the name off'
+ui_expect_log 'Dimension k5 = spacing (d1)' 'the automatic name follows another parameter typed'
+ui_expect_log 'Dimension k5: width kept as a user parameter, now width' 'the bare name keeps width as a user parameter'
 ui_expect_log 'TestDriver: done' 'the name removed in the editor, its menu and the context menu'
 ui_finish 'UI sketch dimension name removed'

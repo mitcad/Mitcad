@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT
+# mitcad#1601: New Project in a folder that holds a file
+# (${MITCAD_TEST_WORKSHOP}, made by the runner,
+# tools/ui-project-local-subfolder-test.sh and the Windows
+# tools/ui-windows-project-local-subfolder-test.ps1) offers Create in a New
+# Subfolder with its proposed name; Cloud with an address that is not reached
+# (${MITCAD_TEST_UNREACHABLE}) offers Create as Local for Now, which makes the
+# project in the new subfolder New Project, not in the folder itself. The
+# runner checks afterwards that the folder got none of the project's files.
+wait-idle
+
+# 1. New Project on the folder with a file: the offer and its name.
+mark
+command file.new_project
+focus-dialog '^New Project$'
+wait-log '^New Project dialog: ' 10
+key ctrl+a
+type '${MITCAD_TEST_WORKSHOP}'
+wait-log '^New Project dialog: folder ${MITCAD_TEST_WORKSHOP:re}: other$' 10
+wait-log '^New Project dialog: ${MITCAD_TEST_WORKSHOP:re} holds files: it becomes the project with its subfolders, 0 designs, Create in a New Subfolder offered$' 10
+
+# 2. Cloud with a server that is not there: Create as Local for Now.
+mark
+key alt+o
+wait-log '^New Project dialog: storage cloud$' 10
+key alt+e
+type '${MITCAD_TEST_UNREACHABLE}'
+wait-log '^Cloud check ${MITCAD_TEST_UNREACHABLE:re}: network' 60
+
+# 3. Create as Local for Now: the project in the new subfolder.
+mark
+key alt+n
+wait-log '^New Project: Create as Local for Now$' 10
+wait-log '^New Project: creating ${MITCAD_TEST_WORKSHOP:re}/New Project \(local\)$' 10
+wait-log '^New Project: created ${MITCAD_TEST_WORKSHOP:re}/New Project: version ' 30
+focus-main
+expect-file '${MITCAD_TEST_WORKSHOP}/New Project/.mitcad/project.json' 10
+expect-no-log '^New Project failed'
+expect-never 'TestDriver: FAIL'

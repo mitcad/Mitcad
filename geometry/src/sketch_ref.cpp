@@ -375,7 +375,7 @@ std::vector<NamedBoundaryCurve> face_boundary(const Shape& shape, const std::str
     for (const int f : shape.find_faces(face)) {
       // A flat spline face too (a sheet body's wall, mitcad#1554).
       if (!geometry::face_plane(shape.face(f))) {
-        throw std::invalid_argument("face " + face + " is not planar");
+        throw std::invalid_argument(face_error(face, "the face is not planar", "face " + face + " is not planar"));
       }
       for (const int e : face_edges(shape, f)) {
         ++uses[e];

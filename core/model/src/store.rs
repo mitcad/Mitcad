@@ -885,7 +885,11 @@ impl ResultStore {
                     .iter()
                     .map(|r| StoredRead::new(r, params))
                     .collect(),
-                error: output.result.clone().err(),
+                error: output
+                    .result
+                    .as_ref()
+                    .err()
+                    .map(crate::notice::FeatureError::text),
                 warnings: output.warnings.clone(),
                 infos: output.infos.clone(),
                 warning_places: output.warning_places.clone(),
@@ -1197,7 +1201,9 @@ fn restore<K: Kernel>(
         reads,
         time: Duration::from_secs_f64(head.ms.max(0.0) / 1000.0),
         persisted: Flag::new(true),
-        result: head.error.clone().map_or(Ok(()), Err),
+        result: head.error.as_deref().map_or(Ok(()), |text| {
+            Err(crate::notice::FeatureError::from_text(text))
+        }),
         warnings: head.warnings.clone(),
         infos: head.infos.clone(),
         warning_places: head.warning_places.clone(),

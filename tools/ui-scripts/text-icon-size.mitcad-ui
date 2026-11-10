@@ -5,7 +5,8 @@
 #   MITCAD_TEST_TEXT_SIZE, MITCAD_TEST_ICON_SIZE  the percents kept;
 #   MITCAD_TEST_FONT        the family kept, or `system` for none;
 #   MITCAD_TEST_SYSTEM_FONT `true` when none is kept, else `false`;
-#   MITCAD_TEST_ICON_NEXT   the Icon size 5 % above the kept one.
+#   MITCAD_TEST_ICON_NEXT   the Icon size 5 % above the kept one;
+#   MITCAD_TEST_SWATCH_SIZE 20 px times Icon size, rounded (mitcad#1610).
 #   1. The start-up logs the sizes and the font it applied, the application's
 #      style inside Icon size's proxy (mitcad#1561; no run's Icon size is
 #      100 %), the application font and the icon sizes.
@@ -17,7 +18,9 @@
 #      layout: ..."); the window, the ribbon's captions, the Browser's rows
 #      and the panel's OK and fields whole (expect-interface-size at the
 #      screen's own ratio).
-#   3. Preferences shows the kept sizes and font; Icon size one step up
+#   3. The Materials window's list of a material's appearances: its
+#      swatches 20 px times Icon size, scaled once (mitcad#1610).
+#   4. Preferences shows the kept sizes and font; Icon size one step up
 #      (Right) is saved for the next start.
 # Run by tools/ui-text-icon-size-test.sh and
 # tools/ui-windows-text-icon-size-test.ps1 with several sizes and fonts.
@@ -39,7 +42,17 @@ expect-interface-size any
 key Escape
 wait-idle
 
-# 3. Preferences: the kept sizes and font shown; Icon size one step up kept
+# 3. The Materials window: the appearance list's icons at Icon size once,
+# not twice (mitcad#1610).
+mark
+command solid.materials
+focus-dialog '^Materials$'
+expect-widget-property materialAppearances iconSize '${MITCAD_TEST_SWATCH_SIZE}x${MITCAD_TEST_SWATCH_SIZE}'
+button '^Close$'
+focus-main
+wait-idle
+
+# 4. Preferences: the kept sizes and font shown; Icon size one step up kept
 # for the next start.
 mark
 command tools.preferences.display

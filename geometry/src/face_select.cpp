@@ -30,6 +30,7 @@
 #include <gp_Vec.hxx>
 
 #include "mitcad/geometry/datum.hpp"
+#include "mitcad/geometry/user_error.hpp"
 
 namespace mitcad::geometry::detail {
 namespace {
@@ -54,7 +55,7 @@ std::vector<int> resolve_faces(const Shape& body, const std::vector<std::string>
   for (const std::string& reference : references) {
     const std::vector<int> found = body.find_faces(reference);
     if (found.empty()) {
-      throw std::invalid_argument("the body has no face " + reference);
+      throw std::invalid_argument(no_face_error(reference));
     }
     for (int i : found) {
       add_once(faces, i);
@@ -72,7 +73,7 @@ std::vector<int> resolve_edges(const Shape& body, const std::vector<std::string>
   for (const std::string& reference : edges) {
     const std::vector<int> found = body.find_edges(reference);
     if (found.empty()) {
-      throw std::invalid_argument("the body has no edge " + reference);
+      throw std::invalid_argument(no_edge_error(reference));
     }
     for (int i : found) {
       add_once(result, i);

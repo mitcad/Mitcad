@@ -2,7 +2,9 @@
 // The places of the model's notices (mitcad#1327): read from a result's
 // notices each once, the messages of a level in plain words, the places
 // in the log's words; and a feature of the timeline keeps its notices'
-// places and a failure's plain error.
+// places and a failure's plain error. A hover's log words, also while a
+// job computes (mitcad#1600), and the feature a message under the pointer
+// gives when another takes its place (mitcad#1609).
 #include "browser/DocumentSnapshot.hpp"
 #include "framework/NoticePlaces.hpp"
 
@@ -108,11 +110,56 @@ void snapshotTests() {
   }
 }
 
+// The log's words for a hover (mitcad#1600: while a job computes, the
+// places kept and not counted).
+void hoverTextTests() {
+  const QJsonObject result = parsed(R"json({"notices": [{"level": "warning", "message": "m",
+    "places": [{"kind": "face", "body": "F1.b0", "name": "F4:fillet(E{a|b})"}, {"kind": "point", "at": [1, 2, 3]}]}]})json");
+  const QJsonArray places = noticePlaces(result.value(QStringLiteral("notices")).toArray());
+  CHECK(noticeHoverText(QStringLiteral("timeline"), places, 2) ==
+        QStringLiteral("timeline: face F4:fillet(E{a|b}) of F1.b0, point 1.000,2.000,3.000 (2 drawn)"));
+  CHECK(noticeHoverText(QStringLiteral("timeline"), places, -1) ==
+        QStringLiteral("timeline: face F4:fillet(E{a|b}) of F1.b0, point 1.000,2.000,3.000 (drawn when the job ends)"));
+  CHECK(noticeHoverText(QStringLiteral("panel"), places, 0) ==
+        QStringLiteral("panel: face F4:fillet(E{a|b}) of F1.b0, point 1.000,2.000,3.000 (0 drawn)"));
+  CHECK(noticeHoverText(QStringLiteral("panel"), QJsonArray(), 3) == QStringLiteral("none"));
+  CHECK(noticeHoverText(QStringLiteral("panel"), QJsonArray(), -1) == QStringLiteral("none"));
+}
+
+// The feature a message under the pointer gives (mitcad#1609): given
+// again when another message takes the hovered one's place.
+void hoverLatchTests() {
+  NoticeHover hover;
+  // Not over it: nothing given, whatever it shows.
+  CHECK(!hover.update(false, QStringLiteral("F4")));
+  CHECK(hover.feature().isEmpty());
+  // Over a message about no feature: nothing.
+  CHECK(!hover.update(true, QString()));
+  // The pointer over Rim's warning: F4, once, however often it moves.
+  CHECK(hover.update(true, QStringLiteral("F4")));
+  CHECK(hover.feature() == QStringLiteral("F4"));
+  CHECK(!hover.update(true, QStringLiteral("F4")));
+  // Another feature's message in its place, the pointer where it was.
+  CHECK(hover.update(true, QStringLiteral("F7")));
+  CHECK(hover.feature() == QStringLiteral("F7"));
+  // A message about no feature in its place: none.
+  CHECK(hover.update(true, QString()));
+  CHECK(hover.feature().isEmpty());
+  CHECK(!hover.update(true, QString()));
+  // A feature's message again, then the pointer leaves: none, once.
+  CHECK(hover.update(true, QStringLiteral("F4")));
+  CHECK(hover.update(false, QStringLiteral("F4")));
+  CHECK(hover.feature().isEmpty());
+  CHECK(!hover.update(false, QStringLiteral("F4")));
+}
+
 } // namespace
 
 int noticePlacesTests() {
   failures = 0;
   readTests();
   snapshotTests();
+  hoverTextTests();
+  hoverLatchTests();
   return failures;
 }

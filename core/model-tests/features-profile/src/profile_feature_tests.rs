@@ -544,9 +544,13 @@ fn extrusions_to_an_object_depend_on_its_body() {
         json!({}),
     );
     b.doc.edit_feature(uid, &edited).unwrap();
+    // The person reads plain words, the face painted; agents read the names
+    // (mitcad#1612).
+    let failed = status(&b.doc, uid);
+    assert_eq!(failed.error(), Some("body F2.b0 has no face F2:end(r{c9})"));
     assert_eq!(
-        status(&b.doc, uid),
-        FeatureStatus::Failed("body F2.b0 has no face F2:end(r{c9})".to_owned())
+        failed.failure().map(|e| e.message.as_str()),
+        Some("the body has no such face")
     );
     // A sketch is not a plane to extrude to.
     edited = extrude_def(
@@ -801,7 +805,7 @@ fn holes_go_into_faces_and_sketch_points() {
     // parallel: no point.
     assert_eq!(
         status(&b.doc, uid),
-        FeatureStatus::Failed("the edges of the hole's position are parallel".to_owned())
+        FeatureStatus::failed("the edges of the hole's position are parallel")
     );
     b.doc.undo();
 
@@ -1474,7 +1478,7 @@ fn taper_pipe_threads_taper_even_when_cosmetic() {
     .unwrap();
     assert_eq!(
         status(&doc, uid),
-        FeatureStatus::Failed("Rc 1/8 is an internal thread; use R 1/8 for a shaft".to_owned())
+        FeatureStatus::failed("Rc 1/8 is an internal thread; use R 1/8 for a shaft")
     );
     let r = json!({"standard": "iso_taper", "designation": "R 1/8"});
     doc.edit_feature(
@@ -1777,7 +1781,7 @@ fn cosmetic_threads_are_data_and_modelled_ones_geometry() {
         .unwrap();
     assert_eq!(
         status(&doc, uid),
-        FeatureStatus::Failed("face F2:end(r{c1}) is not cylindrical".to_owned())
+        FeatureStatus::failed("face F2:end(r{c1}) is not cylindrical")
     );
     let internal_class = def(json!({"type": "thread",
         "faces": [{"body": "F2.b0", "face": "F2:side(c1)"}],
@@ -1785,7 +1789,7 @@ fn cosmetic_threads_are_data_and_modelled_ones_geometry() {
     doc.edit_feature(uid, &internal_class).unwrap();
     assert_eq!(
         status(&doc, uid),
-        FeatureStatus::Failed("class 6H is for internal threads; use 6g for a shaft".to_owned())
+        FeatureStatus::failed("class 6H is for internal threads; use 6g for a shaft")
     );
     // A modelled thread too big for the rod.
     let too_big = def(
@@ -3002,7 +3006,7 @@ fn an_extrusion_goes_along_its_own_direction() {
     let (_, status) = extrude_with(&mut b, distance.clone(), json!({"direction": [1, 0, 0]}));
     assert_eq!(
         status,
-        FeatureStatus::Failed("the extrusion direction lies in the sketch plane".to_owned())
+        FeatureStatus::failed("the extrusion direction lies in the sketch plane")
     );
     for (extra, expected) in [
         (json!({"direction": [0, 0, 0]}), "of some length"),

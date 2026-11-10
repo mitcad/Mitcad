@@ -4848,7 +4848,10 @@ list or the field's right-click menu, and the parameter gets its
 automatic name back, such as `d1`. The right-click menu of the dimension
 in the sketch offers **Remove Name width** too. Other dimensions and
 parameters that use `width` change to the new name, in one step that
-Undo takes back.
+Undo takes back. Backspace is quicker: the first press deletes the
+value, the next removes the whole `width = `, so you can type a new value
+or another parameter's name and press Enter. Ctrl+Z in the field brings
+the name back. The field's tooltip says so while it shows a name.
 
 #### Tables
 
@@ -9086,7 +9089,9 @@ of these:
 - A problem of the sign-in or of the network
 
 When MitCad cannot reach the server, **Create as Local for Now** makes a
-Local project. You can share it later in Project Settings.
+Local project. You can share it later in Project Settings. For a folder
+with files, it makes the project in the new subfolder, unless you
+clicked Create for the whole folder before.
 
 **Open from Cloud.** **Open from Cloud** clones a project into a new or
 empty folder. The default folder is Documents/Mitcad/<repository>. The

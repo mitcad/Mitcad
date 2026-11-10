@@ -574,7 +574,7 @@ FaceTool face_tool(const Shape& body, const std::vector<std::string>& names) {
     for (const std::string& name : names) {
       const std::vector<int> found = body.find_faces(name);
       if (found.empty()) {
-        throw std::invalid_argument("the body has no face " + name);
+        throw std::invalid_argument(no_face_error(name));
       }
       for (int face : found) {
         if (std::find(indices.begin(), indices.end(), face) == indices.end()) {

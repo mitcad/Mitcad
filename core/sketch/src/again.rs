@@ -84,11 +84,12 @@ impl SketchEdit<'_> {
     ) -> Result<Vec<ProjectedAgain>, String> {
         let mut out = Vec::with_capacity(projections.len());
         for &k in projections {
-            let projection = self
-                .def
-                .projections
-                .get(k)
-                .ok_or_else(|| format!("the sketch has no projection {k}"))?;
+            let projection = self.def.projections.get(k).ok_or_else(|| {
+                crate::said(
+                    "the sketch has no such projection",
+                    format!("the sketch has no projection {k}"),
+                )
+            })?;
             let Some(report) = follow.iter().find(|r| r.projection == k) else {
                 return Err(format!(
                     "the projection of {} follows its source: nothing to project again",
@@ -271,10 +272,14 @@ impl SketchEdit<'_> {
             .collect();
         kept.extend(needed);
         // The ids the new entities take: the lowest of the old ones that go
-        // to them, else new ones.
+        // to them, else new ones. Only new entities take ids: an old point
+        // that goes to a point of the sketch the new curves end on (another
+        // projection's, mitcad#1605) goes, its constraints and curves moved
+        // onto that point.
+        let fresh_ids: BTreeSet<EntityUid> = fresh.iter().map(|e| e.id).collect();
         let mut final_id: BTreeMap<EntityUid, EntityUid> = BTreeMap::new();
         for (old, new) in plan.curve_to.iter().chain(&plan.point_to) {
-            if kept.contains(old) {
+            if kept.contains(old) || !fresh_ids.contains(new) {
                 continue;
             }
             let taken = final_id.entry(*new).or_insert(*old);
@@ -282,7 +287,6 @@ impl SketchEdit<'_> {
                 *taken = *old;
             }
         }
-        let fresh_ids: BTreeSet<EntityUid> = fresh.iter().map(|e| e.id).collect();
         let unnamed: Vec<EntityUid> = fresh
             .iter()
             .map(|e| e.id)
@@ -913,4 +917,114 @@ fn placed(kind: &EntityKind, at: &dyn Fn(EntityUid) -> Option<P2>) -> Option<Cur
         }
         EntityKind::Point { .. } | EntityKind::FittedSpline { .. } => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::project::Projected;
+    use super::*;
+    use crate::def::SketchDef;
+    use crate::ids::{BodyUid, FeatureUid};
+    use crate::parameters::Parameters;
+    use crate::{Projection, ProjectionSource};
+
+    #[test]
+    fn an_old_point_that_goes_to_another_projections_point_goes() {
+        // (mitcad#1605) Projection A of a body: a line from (0, 0) to
+        // (10, 0). Projection B of the same body: a line from its own
+        // corner point P = p4 at (12, 0) to (20, 0), the user's line c8
+        // ending on P. The model changes so that B's source starts where
+        // A's line ends: the new line is joined to A's end point Q = p2, and
+        // P goes to Q.
+        let line = |id: u32, start: u32, end: u32| {
+            Entity::new(
+                EntityUid(id),
+                EntityKind::Line {
+                    start: EntityUid(start),
+                    end: EntityUid(end),
+                    centerline: false,
+                },
+            )
+        };
+        let projected = |mut e: Entity| {
+            e.fixed = true;
+            e.reference = true;
+            e
+        };
+        let projection = |source: &str, ids: [u32; 3]| Projection {
+            source: source.parse::<ProjectionSource>().unwrap(),
+            body: Some(BodyUid::new(FeatureUid(1), 0)),
+            entities: vec![
+                Ref::Point(EntityUid(ids[0])),
+                Ref::Point(EntityUid(ids[1])),
+                Ref::Curve(EntityUid(ids[2])),
+            ],
+            link: None,
+            by_geometry: true,
+            section: false,
+            chain: Vec::new(),
+            after: None,
+            outline: false,
+        };
+        let def: SketchDef = SketchDef {
+            entities: vec![
+                projected(Entity::point(EntityUid(1), [0.0, 0.0])),
+                projected(Entity::point(EntityUid(2), [10.0, 0.0])),
+                projected(line(3, 1, 2)),
+                projected(Entity::point(EntityUid(4), [12.0, 0.0])),
+                projected(Entity::point(EntityUid(5), [20.0, 0.0])),
+                projected(line(6, 4, 5)),
+                Entity::point(EntityUid(7), [12.0, 10.0]),
+                line(8, 4, 7),
+            ],
+            projections: vec![
+                projection("F1:top", [1, 2, 3]),
+                projection("F1:bottom", [4, 5, 6]),
+            ],
+            ..SketchDef::default()
+        };
+        let follow = ProjectionFollow {
+            projection: 1,
+            unfollowed: vec![EntityUid(6)],
+            current: vec![Projected::Curve(Curve2::Line {
+                a: [10.0, 0.0],
+                b: [20.0, 0.0],
+            })],
+            ..ProjectionFollow::default()
+        };
+        let mut params = Parameters::default();
+        let mut edit = SketchEdit::new(def, &mut params, FeatureUid(1), "Sketch1");
+        let done = edit.project_again(&[follow], &[1]).unwrap();
+        assert!(
+            done[0]
+                .carried
+                .contains(&(Ref::Point(EntityUid(4)), Ref::Point(EntityUid(2)))),
+            "{done:?}"
+        );
+        assert!(done[0].kept.is_empty(), "{done:?}");
+        let def = &edit.def;
+        // The old point is gone, and the user's line ends on A's point.
+        assert!(def.entity(EntityUid(4)).is_none(), "{:?}", def.entities);
+        let user = def.entity(EntityUid(8)).unwrap();
+        assert_eq!(
+            user.kind.points(),
+            vec![EntityUid(2), EntityUid(7)],
+            "{user:?}"
+        );
+        // Every reference entity of the sketch is listed by a projection.
+        let listed: BTreeSet<EntityUid> = def
+            .projections
+            .iter()
+            .flat_map(|p| p.entities.iter().map(|r| r.uid()))
+            .collect();
+        for e in def.entities.iter().filter(|e| e.reference) {
+            assert!(listed.contains(&e.id), "{e:?} is listed by no projection");
+        }
+        // B's new line took its old id and runs from Q to (20, 0).
+        let index = EntityIndex::new(&def.entities);
+        let line = def.entity(EntityUid(6)).unwrap();
+        let ends: Vec<Option<P2>> = line.kind.points().iter().map(|p| index.point(*p)).collect();
+        assert!(line.kind.points().contains(&EntityUid(2)), "{line:?}");
+        assert!(ends.contains(&Some([20.0, 0.0])), "{line:?}: {ends:?}");
+    }
 }

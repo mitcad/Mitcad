@@ -604,7 +604,12 @@ impl SketchEdit<'_> {
             .patterns
             .iter()
             .position(|p| p.id == id)
-            .ok_or_else(|| format!("pattern {id} does not exist"))
+            .ok_or_else(|| {
+                crate::said(
+                    "the pattern does not exist",
+                    format!("pattern {id} does not exist"),
+                )
+            })
     }
 
     /// The parameter of a pattern value: a number or an expression sets
@@ -811,7 +816,10 @@ impl SketchEdit<'_> {
                 symmetric,
             } => {
                 if change.angle.is_some() || change.center.is_some() {
-                    return Err(format!("{id} is a rectangular pattern: no angle or center"));
+                    return Err(crate::said(
+                        "a rectangular pattern has no angle or center",
+                        format!("{id} is a rectangular pattern: no angle or center"),
+                    ));
                 }
                 let spacing = match &change.spacing {
                     Some([a, b]) => [

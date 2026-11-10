@@ -100,6 +100,16 @@ pub mod loops;
 // edit (mitcad#1566).
 pub mod conflict;
 
+/// A refusal or note of a sketch edit that names the sketch's ids
+/// (mitcad#1612, `docs/ui-conventions.md` "What a message says"): `said`
+/// in plain words for a person, `named` with the ids (`c3`, `p7`, `k5`)
+/// for agents and the log, as one text ([`mitcad_model_base::notice::FeatureError::text`]).
+pub(crate) fn said(said: impl Into<String>, named: impl Into<String>) -> String {
+    mitcad_model_base::notice::FeatureError::new(said)
+        .with_detail(named)
+        .text()
+}
+
 #[cfg(test)]
 mod tests;
 // Equal spacing (mitcad#221).

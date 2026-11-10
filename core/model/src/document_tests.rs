@@ -145,10 +145,7 @@ fn a_failed_feature_is_skipped_and_reported() {
     let mut b = block();
     b.doc.kernel().fail.borrow_mut().insert("fillet");
     let fillet = b.fillet(&[&corner(b.extrude, 1, 0)], 50.0);
-    assert_eq!(
-        b.status(fillet),
-        FeatureStatus::Failed("fillet failed".to_owned())
-    );
+    assert_eq!(b.status(fillet), FeatureStatus::failed("fillet failed"));
     assert_eq!(
         b.doc.stats().error.unwrap().to_string(),
         "Fillet1: fillet failed"
@@ -176,11 +173,11 @@ fn a_failed_sketch_fails_what_uses_it_until_it_works_again() {
     b.doc.set_parameter("d1", 0.0).unwrap();
     assert_eq!(
         b.status(b.sketch),
-        FeatureStatus::Failed("d1 must be greater than zero, got 0".to_owned())
+        FeatureStatus::failed("d1 must be greater than zero, got 0")
     );
     assert_eq!(
         b.status(b.extrude),
-        FeatureStatus::Failed("Sketch1 has no result".to_owned())
+        FeatureStatus::failed("Sketch1 has no result")
     );
     assert!(b.doc.bodies().is_empty());
     assert_eq!(b.doc.stats().error.unwrap().name, "Sketch1");
@@ -288,7 +285,7 @@ fn join_cut_and_intersect_change_their_participants() {
     let miss = b.circle_extrude("cut", &[]);
     assert_eq!(
         b.status(miss),
-        FeatureStatus::Failed("the extrusion does not cut into any participant body".to_owned())
+        FeatureStatus::failed("the extrusion does not cut into any participant body")
     );
 }
 
@@ -561,7 +558,7 @@ fn extents_set_the_start_and_end_of_the_extrusion() {
     let uid = b.doc.add_feature(&flipped, None).unwrap().uid;
     assert_eq!(
         b.status(uid),
-        FeatureStatus::Failed("there are no bodies in the extrude direction".to_owned())
+        FeatureStatus::failed("there are no bodies in the extrude direction")
     );
 }
 
@@ -994,10 +991,7 @@ fn previews_do_not_commit_and_the_commit_reuses_them() {
         json!({"type": "fillet", "body": b.body, "edges": [corner(b.extrude, 1, 0)], "radius": 1.0}),
     );
     let report = b.doc.preview_add(&fillet, None).unwrap();
-    assert_eq!(
-        report.status,
-        FeatureStatus::Failed("fillet failed".to_owned())
-    );
+    assert_eq!(report.status, FeatureStatus::failed("fillet failed"));
     // An invalid one is rejected like the command.
     let bad = def(json!({"type": "fillet", "body": b.body, "edges": [], "radius": 1.0}));
     assert!(b.doc.preview_add(&bad, None).is_err());

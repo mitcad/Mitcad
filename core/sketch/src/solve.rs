@@ -79,23 +79,28 @@ pub struct SketchStatus {
 
 impl SketchStatus {
     /// The sketch warning about collapsed curves (mitcad#365), `None` when
-    /// none has collapsed. The palette shows it; [`degenerate`] names what
-    /// it is about.
+    /// none has collapsed: counted in plain words (mitcad#1612). The palette
+    /// shows it; [`degenerate`] names what it is about.
     ///
     /// [`degenerate`]: SketchStatus::degenerate
     pub fn degenerate_warning(&self) -> Option<String> {
         if self.degenerate.is_empty() {
             return None;
         }
-        let names: Vec<String> = self
-            .degenerate
-            .iter()
-            .map(|id| Ref::Curve(*id).to_string())
-            .collect();
+        // Counted, not named (mitcad#1612): `degenerate` and the query's
+        // `warning_entities` name them, and the palette selects them.
+        let curves = match self.degenerate.len() {
+            1 => "a curve".to_owned(),
+            n => format!("{n} curves"),
+        };
         Some(format!(
-            "{} collapsed (a line of no length or a circle or arc of no radius) and makes no \
-             region",
-            names.join(", ")
+            "{curves} collapsed (a line of no length or a circle or arc of no radius) and \
+             {} no region",
+            if self.degenerate.len() == 1 {
+                "makes"
+            } else {
+                "make"
+            }
         ))
     }
 }

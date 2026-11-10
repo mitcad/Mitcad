@@ -619,9 +619,16 @@ impl EmbossDef {
             depth: if raise { depth } else { -depth },
             taper,
         };
-        ctx.kernel
-            .projected_emboss(&spec)
-            .map_err(|e| format!("to project onto face {}: {e}", face.face))
+        ctx.kernel.projected_emboss(&spec).map_err(|e| {
+            let inner = crate::notice::FeatureError::from_text(&e.to_string());
+            crate::notice::FeatureError {
+                message: format!("to project onto the face: {}", inner.message),
+                detail: format!("to project onto face {}: {}", face.face, inner.agent_text()),
+                places: inner.places,
+            }
+            .at(crate::notice::NoticePlace::face(face.face.to_string()))
+            .text()
+        })
     }
 
     /// The profiles extruded `depth` along `direction`, tapered by `taper`

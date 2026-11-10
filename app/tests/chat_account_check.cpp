@@ -9,7 +9,8 @@
 // with one configuration folder share one sign-in (mitcad#1297). Sign In
 // Again (mitcad#1585, agent/SignInCommands.hpp): offered beside Check again
 // for an agent whose sign-in MitCad knows only; its commands quoted for
-// people, its scripts, and each platform's terminal.
+// people, its scripts, and each platform's terminal; a second agent's
+// start while one terminal runs (mitcad#1610).
 #include "agent/AccountCheck.hpp"
 #include "agent/SignInCommands.hpp"
 
@@ -196,5 +197,19 @@ int chatAccountCheckTests() {
   // The UI tests' stand-in: the script as its one argument.
   const TerminalLaunch test = mitcad::agent::testTerminal(QStringLiteral("/work/clients/test-terminal"), script);
   CHECK(test.kind == QStringLiteral("test") && test.arguments == QStringList{script} && !test.returnsAtOnce);
+
+  // One terminal at a time (mitcad#1610): a start for a second agent while
+  // the first agent's terminal runs starts the second's (the first is let
+  // go), not nothing; the same agent's open terminal is kept.
+  using mitcad::agent::SignInStart;
+  using mitcad::agent::signInStart;
+  const QString claudeId = QStringLiteral("claude");
+  const QString codexId = QStringLiteral("codex");
+  CHECK(signInStart(false, QString(), claudeId) == SignInStart::Start);
+  CHECK(signInStart(false, codexId, claudeId) == SignInStart::Start);
+  CHECK(signInStart(false, claudeId, claudeId) == SignInStart::Start);
+  CHECK(signInStart(true, claudeId, claudeId) == SignInStart::AlreadyOpen);
+  CHECK(signInStart(true, claudeId, codexId) == SignInStart::ReplaceOther);
+  CHECK(signInStart(true, codexId, claudeId) == SignInStart::ReplaceOther);
   return failures;
 }

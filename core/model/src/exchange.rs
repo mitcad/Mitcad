@@ -239,6 +239,17 @@ fn kernel_error(e: crate::kernel::KernelError) -> ModelError {
     invalid(e.to_string())
 }
 
+/// A body's export failure from the geometry kernel (mitcad#1612): the
+/// body's name before the kernel's message and its detail ("Body1: a face
+/// could not be triangulated …"), its places in the body, so that the
+/// person reads plain words and the face is painted.
+pub(crate) fn body_failure(name: &str, uid: BodyUid, error: &crate::kernel::KernelError) -> String {
+    crate::notice::FeatureError::from_text(&error.to_string())
+        .in_body(&uid.to_string())
+        .prefixed(&format!("{name}: "))
+        .text()
+}
+
 /// Whether two placements of a body print alike (mitcad#1052): the same
 /// material, values and slicers' own keys, wherever each comes from.
 fn same_print(a: &crate::document::EffectivePrint, b: &crate::document::EffectivePrint) -> bool {
@@ -878,7 +889,7 @@ impl<K: Kernel> Document<K> {
         let mesh = self
             .kernel()
             .triangle_mesh(body.shape, tolerance)
-            .map_err(|e| invalid(format!("{}: {e}", body.name)))?;
+            .map_err(|e| invalid(body_failure(&body.name, body.uid, &e)))?;
         if mesh.triangles.is_empty() {
             return Err(invalid(format!("{} has no triangles", body.name)));
         }

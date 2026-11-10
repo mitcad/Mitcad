@@ -496,7 +496,7 @@ void MainWindow::animationFrame() {
     return; // stopped while the preview computed
   }
   if (report.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
-    stopAnimation(report.value(QStringLiteral("error")).toString());
+    stopAnimation(userText(report.value(QStringLiteral("error")).toString()));
     return;
   }
   showPreviewPlacements(report, m_animation->bodies);

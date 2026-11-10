@@ -65,10 +65,12 @@ void check_axis(const TopoDS_Face& face, const gp_Pln& plane, const gp_Ax1& axis
       }
     }
     if (low < -tolerance && high > tolerance) {
-      throw std::invalid_argument("face " + name + " crosses the revolve axis");
+      throw std::invalid_argument(
+          face_error(name, "the face crosses the revolve axis", "face " + name + " crosses the revolve axis"));
     }
     if (high - low <= tolerance) {
-      throw std::invalid_argument("face " + name + " lies on the revolve axis");
+      throw std::invalid_argument(
+          face_error(name, "the face lies on the revolve axis", "face " + name + " lies on the revolve axis"));
     }
     return;
   }
@@ -78,7 +80,8 @@ void check_axis(const TopoDS_Face& face, const gp_Pln& plane, const gp_Ax1& axis
   const gp_Pnt pierce = axis.Location().Translated(gp_Vec(direction) * t);
   BRepClass_FaceClassifier classifier(face, pierce, tolerance);
   if (classifier.State() == TopAbs_IN) {
-    throw std::invalid_argument("the revolve axis passes through face " + name);
+    throw std::invalid_argument(face_error(name, "the revolve axis passes through the face",
+                                           "the revolve axis passes through face " + name));
   }
 }
 
@@ -89,7 +92,8 @@ ShapePtr named_revolution(const detail::SweepFace& face, const gp_Ax1& axis, dou
   BRepPrimAPI_MakeRevol maker(face.face, axis, angle);
   maker.Build();
   if (!maker.IsDone()) {
-    throw std::runtime_error("the revolution of face " + face.regions.front() + " failed");
+    throw std::runtime_error(face_error(face.regions.front(), "the revolution of the face failed",
+                                        "the revolution of face " + face.regions.front() + " failed"));
   }
   detail::FaceNamer namer(maker.Shape());
   for (const auto& [edge, name] : face.edges) {
@@ -127,22 +131,23 @@ ShapePtr revolve_face(const Shape& body, const FaceRevolveSpec& spec) {
   return detail::run("revolve face", [&] {
     const std::vector<int> found = body.find_faces(spec.face);
     if (found.empty()) {
-      throw std::invalid_argument("the body has no face " + spec.face);
+      throw std::invalid_argument(no_face_error(spec.face));
     }
     if (found.size() > 1) {
-      throw std::invalid_argument(spec.face + " names " + std::to_string(found.size()) +
-                                  " faces; a revolution takes one face");
+      throw std::invalid_argument(face_error(
+          spec.face, "the face is in " + std::to_string(found.size()) + " pieces; a revolution takes one face",
+          spec.face + " names " + std::to_string(found.size()) + " faces; a revolution takes one face"));
     }
     const TopoDS_Face& face = body.face(found.front());
     TopLoc_Location location;
     if (BRep_Tool::Surface(face, location).IsNull()) {
-      throw std::invalid_argument("face " + spec.face +
-                                  " has no surface (a mesh body's triangles): a revolution takes a "
-                                  "planar face");
+      const std::string why = " has no surface (a mesh body's triangles): a revolution takes a planar face";
+      throw std::invalid_argument(face_error(spec.face, "the face" + why, "face " + spec.face + why));
     }
     const BRepAdaptor_Surface surface(face);
     if (surface.GetType() != GeomAbs_Plane) {
-      throw std::invalid_argument("face " + spec.face + " is not planar: a revolution takes a planar face");
+      throw std::invalid_argument(face_error(spec.face, "the face is not planar: a revolution takes a planar face",
+                                             "face " + spec.face + " is not planar: a revolution takes a planar face"));
     }
     check_axis(face, surface.Plane(), spec.axis, spec.face);
 

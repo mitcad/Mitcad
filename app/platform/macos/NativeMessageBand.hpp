@@ -22,7 +22,9 @@
 // it leaves (mitcad#1379), as the Qt band's noticeHovered does: the text
 // and the stub track the pointer's coming and going and the band calls
 // noticeHovered with the feature's uid, then with an empty one when the
-// pointer leaves or the message under it is taken away.
+// pointer leaves or the message under it is taken away; another message
+// shown in its place gives its own feature's uid, or an empty one
+// (mitcad#1609).
 //
 // Logged: `Native message band: full|stub <level> <text>` when what it
 // shows changes; `Message history: <n> entries` when the history opens,

@@ -21,7 +21,7 @@ fn status(doc: &Document<MockKernel>, uid: FeatureUid) -> FeatureStatus {
 
 fn error(doc: &Document<MockKernel>, uid: FeatureUid) -> String {
     match status(doc, uid) {
-        FeatureStatus::Failed(message) => message,
+        FeatureStatus::Failed(message) => message.agent_text().to_owned(),
         other => panic!("expected a failure, got {other:?}"),
     }
 }

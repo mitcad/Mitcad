@@ -63,6 +63,8 @@
 #include <gp_Ax2.hxx>
 #include <gp_Pnt2d.hxx>
 
+#include "mitcad/geometry/user_error.hpp"
+
 #include "face_select.hpp"
 #include "history.hpp"
 #include "util.hpp"
@@ -1337,6 +1339,8 @@ std::string overflow_failure(const Shape& body, const std::vector<int>& owner, d
     TopExp::MapShapesAndUniqueAncestors(body.occt(), TopAbs_VERTEX, TopAbs_EDGE, edges_at);
     const EdgeFaces edge_faces(body);
     std::string first;
+    std::string message;
+    std::vector<ErrorPlace> places;
     int more = 0;
     for (int e = 0; e < body.edge_count() && e < static_cast<int>(owner.size()); ++e) {
       if (owner[static_cast<std::size_t>(e)] < 0) {
@@ -1376,12 +1380,20 @@ std::string overflow_failure(const Shape& body, const std::vector<int>& owner, d
           ++more;
           continue;
         }
+        // In plain words for the person, the names for agents and their
+        // places painted (mitcad#1612).
         const std::string& edge = body.edge_name(e);
+        places.push_back(edge_place(edge));
+        places.push_back(face_place(body.face_names(n).front()));
+        message = std::string("the chamfer is wider than the face beside its edge and cannot meet the ") +
+                  (beyond.size() == 1 ? "face" : "faces") + " beyond it";
         first = "the chamfer of " + (edge.empty() ? std::string("an unnamed edge") : "edge " + edge) +
                 " is wider than face " + body.face_names(n).front() + " and cannot meet " +
                 (beyond.size() == 1 ? "face " : "faces ") + beyond.front();
+        places.push_back(face_place(beyond.front()));
         for (std::size_t k = 1; k < beyond.size() && k < 3; ++k) {
           first += (k + 1 == beyond.size() || k == 2 ? " and " : ", ") + beyond[k];
+          places.push_back(face_place(beyond[k]));
         }
         first += " beyond it";
         // The corner where it meets other bevels, if any.
@@ -1398,15 +1410,22 @@ std::string overflow_failure(const Shape& body, const std::vector<int>& owner, d
             const std::string bevels = others == 1 ? std::string("bevel of 1 more edge")
                                                    : "bevels of " + std::to_string(others) + " more edges";
             first += ", at its corner with the " + bevels + " at vertex " + *vertex;
+            message += ", at its corner with the " + bevels;
+            places.push_back(vertex_place(*vertex));
             break;
           }
         }
       }
     }
-    if (more > 0) {
-      first += " (and " + std::to_string(more) + " more such " + (more == 1 ? "face" : "faces") + ")";
+    if (first.empty()) {
+      return first;
     }
-    return first;
+    if (more > 0) {
+      const std::string such = " (and " + std::to_string(more) + " more such " + (more == 1 ? "face" : "faces") + ")";
+      first += such;
+      message += such;
+    }
+    return placed_error(message, first, places);
   } catch (const Standard_Failure&) {
     return {};
   }
@@ -1563,22 +1582,11 @@ std::string overflow_tangent(const Shape& body, const std::vector<int>& owner,
           if (std::abs(extreme) > touching || edge < 0) {
             continue;
           }
-          std::vector<std::string> beyond;
-          for (const int f : edge_faces.at(r)) {
-            if (f != n && !body.face_names(f).empty()) {
-              beyond.push_back(body.face_names(f).front());
-            }
-          }
-          const std::string& name = body.edge_name(edge);
-          char point[96];
-          std::snprintf(point, sizeof point, "(%.4g, %.4g, %.4g)", std::abs(p.X()) < 5.0e-5 ? 0.0 : p.X(),
-                        std::abs(p.Y()) < 5.0e-5 ? 0.0 : p.Y(), std::abs(p.Z()) < 5.0e-5 ? 0.0 : p.Z());
-          return "the chamfer of " + (name.empty() ? std::string("an unnamed edge") : "edge " + name) +
-                 " reaches exactly to the far edge of face " +
-                 (body.face_names(n).empty() ? std::string("?") : body.face_names(n).front()) +
-                 (beyond.empty() ? std::string() : " where face " + beyond.front() + " lies beyond it") + ", at " +
-                 point + ": its contact touches that edge there, so that the face would end in a point; it "
-                 "cannot be built at this size";
+          // (In plain words, mitcad#1327, mitcad#1613: the edge, the faces
+          // and the point are for the error's places, mitcad#1612.)
+          return "the chamfer reaches exactly to the far edge of the narrow face beside its edge: its contact "
+                 "touches that edge in a point, and the chamfer cannot be built there as a sound solid at this "
+                 "size";
         }
       }
     }
@@ -1650,7 +1658,7 @@ bool put_walls_back(Cutouts& cutouts, const Shape& chamfered, const std::string&
   });
 }
 
-ShapePtr cut_out_again(const ShapePtr& rounded, const Cutouts& cutouts, const Shape& input) {
+ShapePtr cut_out_again(const ShapePtr& rounded, const Cutouts& cutouts, const Shape& input, ShapePtr* unmerged) {
   if (!rounded) {
     return nullptr;
   }
@@ -1689,68 +1697,85 @@ ShapePtr cut_out_again(const ShapePtr& rounded, const Cutouts& cutouts, const Sh
     for (const int f : cutouts.faces) {
       surfaces.push_back(BRep_Tool::Surface(input.face(f)));
     }
-    const TopoDS_Shape result = merged_on(shape, surfaces, input.occt(), tolerance, *history);
-    int solids = 0;
-    for (TopExp_Explorer ex(result, TopAbs_SOLID); ex.More(); ex.Next()) {
-      ++solids;
-    }
-    if (solids != 1 || !BRepCheck_Analyzer(result).IsValid()) {
-      return nullptr;
-    }
-    FaceNamer namer(result);
-    namer.carry(*history, *rounded);
-    // A face the cut or the join made lies on a wall of a region: it is
-    // that face of the input (grown out or back to the rounding), named
-    // after it.
-    for (TopExp_Explorer ex(result, TopAbs_FACE); ex.More(); ex.Next()) {
-      if (namer.named(ex.Current())) {
-        continue;
+    const auto one_valid_solid = [](const TopoDS_Shape& candidate) {
+      int solids = 0;
+      for (TopExp_Explorer ex(candidate, TopAbs_SOLID); ex.More(); ex.Next()) {
+        ++solids;
       }
-      const std::vector<gp_Pnt> points = samples(TopoDS::Face(ex.Current()));
-      int best = -1;
-      double nearest = Precision::Infinite();
-      for (const int f : cutouts.faces) {
-        if (!on_surface(points, BRep_Tool::Surface(input.face(f)), tolerance)) {
+      return solids == 1 && BRepCheck_Analyzer(candidate).IsValid();
+    };
+    // The result named by its history.
+    const auto name = [&](const TopoDS_Shape& result, const BRepTools_History& made) {
+      FaceNamer namer(result);
+      namer.carry(made, *rounded);
+      // A face the cut or the join made lies on a wall of a region: it is
+      // that face of the input (grown out or back to the rounding), named
+      // after it.
+      for (TopExp_Explorer ex(result, TopAbs_FACE); ex.More(); ex.Next()) {
+        if (namer.named(ex.Current())) {
           continue;
         }
-        const double d = distance(ex.Current(), input.face(f));
-        if (d < nearest) {
-          nearest = d;
-          best = f;
-        }
-      }
-      // (A wall continued straight down: the nearest of the faces.)
-      // (Of those it meets, the one holding most of its points: the wall's
-      // foot is its top edge.)
-      if (best < 0 && cutouts.nearest_names) {
-        int most = -1;
+        const std::vector<gp_Pnt> points = samples(TopoDS::Face(ex.Current()));
+        int best = -1;
+        double nearest = Precision::Infinite();
         for (const int f : cutouts.faces) {
-          if (std::find(cutouts.spine.begin(), cutouts.spine.end(), f) != cutouts.spine.end()) {
+          if (!on_surface(points, BRep_Tool::Surface(input.face(f)), tolerance)) {
             continue;
           }
           const double d = distance(ex.Current(), input.face(f));
-          if (d > tolerance && best >= 0) {
-            continue;
-          }
-          int held = 0;
-          for (const gp_Pnt& p : points) {
-            held += distance(BRepBuilderAPI_MakeVertex(p).Vertex(), input.face(f)) <= 10.0 * tolerance ? 1 : 0;
-          }
-          if (held > most || (held == most && d < nearest)) {
-            most = held;
+          if (d < nearest) {
             nearest = d;
             best = f;
           }
         }
+        // (A wall continued straight down: the nearest of the faces.)
+        // (Of those it meets, the one holding most of its points: the
+        // wall's foot is its top edge.)
+        if (best < 0 && cutouts.nearest_names) {
+          int most = -1;
+          for (const int f : cutouts.faces) {
+            if (std::find(cutouts.spine.begin(), cutouts.spine.end(), f) != cutouts.spine.end()) {
+              continue;
+            }
+            const double d = distance(ex.Current(), input.face(f));
+            if (d > tolerance && best >= 0) {
+              continue;
+            }
+            int held = 0;
+            for (const gp_Pnt& p : points) {
+              held += distance(BRepBuilderAPI_MakeVertex(p).Vertex(), input.face(f)) <= 10.0 * tolerance ? 1 : 0;
+            }
+            if (held > most || (held == most && d < nearest)) {
+              most = held;
+              nearest = d;
+              best = f;
+            }
+          }
+        }
+        if (best >= 0) {
+          namer.add(ex.Current(), input.face_names(best), -1);
+        }
       }
-      if (best >= 0) {
-        namer.add(ex.Current(), input.face_names(best), -1);
-      }
+      namer.finish();
+      ShapePtr named = namer.shape();
+      named->copy_notes(*rounded);
+      return named;
+    };
+    // The pieces on the input's faces' surfaces merged (on a copy of the
+    // history, which the merge adds to).
+    const occ::handle<BRepTools_History> merging = new BRepTools_History(*history);
+    const TopoDS_Shape merged = merged_on(shape, surfaces, input.occt(), tolerance, *merging);
+    if (one_valid_solid(merged)) {
+      return name(merged, *merging);
     }
-    namer.finish();
-    ShapePtr named = namer.shape();
-    named->copy_notes(*rounded);
-    return named;
+    // Where the merge leaves an invalid face, the pieces as they are, for
+    // the caller to take when nothing else builds (mitcad#1613: the rim of
+    // a disc whose cylinder is in a left-handed frame, as an extrusion
+    // makes it, grown up to a chamfer that reaches exactly to it).
+    if (unmerged != nullptr && unmerged->get() == nullptr && one_valid_solid(shape)) {
+      *unmerged = name(shape, *history);
+    }
+    return nullptr;
   });
 }
 

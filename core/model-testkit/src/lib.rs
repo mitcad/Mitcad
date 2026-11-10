@@ -113,6 +113,10 @@ pub struct MockKernel {
     pub boolean_fail_targets: RefCell<BTreeSet<String>>,
     /// A boolean fails when its tool has this exact shape history.
     pub boolean_fail_tools: RefCell<BTreeSet<String>>,
+    /// Operations that fail with this text, as the geometry kernel's
+    /// (mitcad#1612: a text with its places, `placed_error`'s tail, or an
+    /// older one that names faces, edges and points).
+    pub fail_text: RefCell<BTreeMap<&'static str, String>>,
     /// Operations that fail as one whose allocation failed does (mitcad#80).
     pub out_of_memory: RefCell<BTreeSet<&'static str>>,
     /// Which targets a boolean touches, by index; all when None.
@@ -220,8 +224,10 @@ pub struct MockKernel {
     pub cuts_keep_bounds: Cell<bool>,
     /// A box's faces lie on its bounds (mitcad#524): `face_plane` gives
     /// `bottom` and `top` (-z, +z) and `side0` to `side3` (-y, +x, +y, -x)
-    /// there, `face_boxes` each face's slab of the bounds, and
-    /// `segment_crossings` where a segment enters and leaves the bounds.
+    /// there, `face_boxes` each face's slab of the bounds,
+    /// `face_point_normal` the point of that slab nearest to a point
+    /// (mitcad#1603), and `segment_crossings` where a segment enters and
+    /// leaves the bounds.
     pub box_faces: Cell<bool>,
     /// A stitch's faces close up into a solid (mitcad#456); a surface body
     /// otherwise.
@@ -667,6 +673,8 @@ impl MockKernel {
                 "{op}: {}",
                 KernelError::OUT_OF_MEMORY
             )))
+        } else if let Some(text) = self.fail_text.borrow().get(op) {
+            Err(KernelError::failed(text.clone()))
         } else if self.fail.borrow().contains(op) {
             Err(KernelError::failed(format!("{op} failed")))
         } else {
@@ -2452,6 +2460,32 @@ impl Kernel for MockKernel {
         }
     }
 
+    /// With `box_faces`: the point of a box's face (its slab of the bounds)
+    /// nearest to `near`, with the face's outward normal (mitcad#1603: a
+    /// face picked by a point, as imports find one).
+    fn face_point_normal(
+        &self,
+        shape: &MockShape,
+        face: &FaceName,
+        near: [f64; 3],
+    ) -> Result<mitcad_model_base::datum::SurfacePoint, KernelError> {
+        let side = box_side(plain_role(face)).filter(|_| self.box_faces.get());
+        let (Some((axis, high)), Some(bounds), true) = (side, shape.bounds, shape.has_face(face))
+        else {
+            return Err(KernelError::Unsupported("face normals"));
+        };
+        let mut point: [f64; 3] =
+            std::array::from_fn(|i| near[i].max(bounds.min[i]).min(bounds.max[i]));
+        point[axis] = if high {
+            bounds.max[axis]
+        } else {
+            bounds.min[axis]
+        };
+        let mut normal = [0.0; 3];
+        normal[axis] = if high { 1.0 } else { -1.0 };
+        Ok(mitcad_model_base::datum::SurfacePoint { point, normal })
+    }
+
     /// With `box_faces` (mitcad#524): each face's slab of the bounds (a
     /// box's face), else the bounds.
     fn face_boxes(&self, shape: &MockShape) -> Result<Vec<[[f64; 3]; 2]>, KernelError> {
@@ -3357,6 +3391,7 @@ impl Kernel for MockKernel {
         Some(MockKernel {
             measures: self.measures.clone(),
             fail: self.fail.clone(),
+            fail_text: self.fail_text.clone(),
             boolean_fail_targets: self.boolean_fail_targets.clone(),
             boolean_fail_tools: self.boolean_fail_tools.clone(),
             out_of_memory: self.out_of_memory.clone(),

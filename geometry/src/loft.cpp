@@ -88,8 +88,9 @@ Prepared prepare(const std::string& feature, const LoftSection& section, std::si
     const ShapePtr body = detail::working_copy(*section.body);
     const std::vector<int> faces = body->find_faces(section.face);
     if (faces.size() != 1) {
-      throw std::invalid_argument(which + ": face " + section.face +
-                                  (faces.empty() ? " does not exist" : " is in several pieces"));
+      const std::string why = faces.empty() ? " does not exist" : " is in several pieces";
+      throw std::invalid_argument(face_error(section.face, which + ": the face" + why,
+                                             which + ": face " + section.face + why));
     }
     const TopoDS_Face face = body->face(faces.front());
     // A face with holes lofts its outer boundary, as a face without them

@@ -57,6 +57,7 @@ use crate::datum::{
 };
 use crate::ids::{BodyUid, EntityUid, FeatureUid};
 use crate::kernel::Kernel;
+use crate::notice::NoticePlace;
 use crate::profile::SegmentGeometry;
 use crate::recompute::Read;
 use crate::sketch::geometry::Curve2;
@@ -626,6 +627,56 @@ fn finite(what: &str, values: &[f64]) -> Result<(), String> {
 }
 
 impl GeomRef {
+    /// The reference in plain words for a person (mitcad#1612): "the face",
+    /// "the edge", "the sketch curves"; its names and ids are the agents'
+    /// (its `Display`), its place painted ([`GeomRef::place`]).
+    pub fn words(&self) -> String {
+        match self {
+            Self::Origin(_) | Self::FixedPlane { .. } | Self::FixedAxis { .. } => self.to_string(),
+            Self::FixedPoint(_) => self.to_string(),
+            Self::Datum(_) => "the construction geometry".to_owned(),
+            Self::Face { .. } => "the face".to_owned(),
+            Self::Edge { .. } => "the edge".to_owned(),
+            Self::Vertex { .. } => "the vertex".to_owned(),
+            Self::Body(_) => "the body".to_owned(),
+            Self::SketchCurves { curves, .. } if curves.len() == 1 => "the sketch curve".to_owned(),
+            Self::SketchCurves { .. } => "the sketch curves".to_owned(),
+            Self::SketchPoint { .. } => "the sketch point".to_owned(),
+            Self::Mount { .. } => "the mount frame".to_owned(),
+        }
+    }
+
+    /// The place of a body's face, edge or vertex, painted while the
+    /// pointer is over a message about it (mitcad#1612); None for others.
+    pub fn place(&self) -> Option<crate::notice::NoticePlace> {
+        use crate::notice::NoticePlace;
+        match self {
+            Self::Face { body, face } => {
+                Some(NoticePlace::face(face.to_string()).in_body(&body.to_string()))
+            }
+            Self::Edge { body, edge } => {
+                Some(NoticePlace::edge(edge.to_string()).in_body(&body.to_string()))
+            }
+            Self::Vertex { body, vertex } => {
+                Some(NoticePlace::vertex(vertex.to_string()).in_body(&body.to_string()))
+            }
+            _ => None,
+        }
+    }
+
+    /// An error about the reference (mitcad#1612): the person reads its
+    /// words and `said` ("the face is not a plane"), agents its name ("face
+    /// F2:top is not a plane"), its place painted.
+    pub fn error(&self, said: &str) -> String {
+        let error = crate::notice::FeatureError::new(format!("{}{said}", self.words()))
+            .with_detail(format!("{self}{said}"));
+        match self.place() {
+            Some(place) => error.at(place),
+            None => error,
+        }
+        .text()
+    }
+
     /// Adds the features it refers to.
     pub fn add_to(&self, references: &mut References) {
         match self {
@@ -986,7 +1037,7 @@ fn surface_of(
     let found = super::renamed::face_for(r, &shape, face)?;
     r.kernel()
         .face_geometry(&shape, &found)
-        .map_err(|e| format!("face {face}: {e}"))
+        .map_err(|e| about(NoticePlace::face(face.to_string()), body, &e))
 }
 
 fn curve_of(
@@ -998,7 +1049,32 @@ fn curve_of(
     let found = super::renamed::edge_for(r, &shape, edge)?;
     r.kernel()
         .edge_geometry(&shape, &found)
-        .map_err(|e| format!("edge {edge}: {e}"))
+        .map_err(|e| about(NoticePlace::edge(edge.to_string()), body, &e))
+}
+
+/// A failure about a face, an edge or a vertex of `body` (mitcad#1612,
+/// `notice::about_place`): the person reads `error`'s message, the place
+/// is painted, agents read its name.
+pub(crate) fn about(place: NoticePlace, body: BodyUid, error: &impl fmt::Display) -> String {
+    crate::notice::about_place(place.in_body(&body.to_string()), &error.to_string())
+}
+
+/// A failure of a linked body (mitcad#1612): the person reads "a linked
+/// body: …", agents its uid.
+fn linked_body_failure(body: BodyUid, error: &impl fmt::Display) -> String {
+    let inner = crate::notice::FeatureError::from_text(&error.to_string());
+    crate::notice::FeatureError {
+        message: format!("a linked body: {}", inner.message),
+        detail: format!("body {body}: {}", inner.agent_text()),
+        places: inner.places,
+    }
+    .text()
+}
+
+/// A failure about a face, an edge or a vertex of `body` in words
+/// (mitcad#1612): `said` for the person, `named` with its name for agents.
+pub(crate) fn placed_at(place: NoticePlace, body: BodyUid, said: &str, named: String) -> String {
+    crate::notice::placed(said, place.in_body(&body.to_string()), named)
 }
 
 pub(crate) fn resolve_plane(
@@ -1013,7 +1089,12 @@ pub(crate) fn resolve_plane(
                 SurfaceGeometry::Plane { origin, normal } => {
                     Ok(DatumPlane::on_plane(origin, normal))
                 }
-                other => Err(format!("face {face} is not planar ({})", other.kind())),
+                other => Err(placed_at(
+                    NoticePlace::face(face.to_string()),
+                    *body,
+                    "the face is not planar",
+                    format!("face {face} is not planar ({})", other.kind()),
+                )),
             };
         }
         GeomRef::FixedPlane {
@@ -1032,12 +1113,12 @@ pub(crate) fn resolve_plane(
                 y_axis,
             });
         }
-        _ => return Err(format!("{reference} is not a plane")),
+        _ => return Err(reference.error(" is not a plane")),
     };
     match (datum, reference) {
         (Datum::Plane(plane), _) => Ok(plane),
         (other, GeomRef::Datum(uid)) => Err(not_a(r, *uid, &other, "a plane")),
-        _ => Err(format!("{reference} is not a plane")),
+        _ => Err(reference.error(" is not a plane")),
     }
 }
 
@@ -1050,15 +1131,28 @@ pub(crate) fn resolve_axis(
         GeomRef::Datum(uid) => r.datum(*uid)?,
         GeomRef::Edge { body, edge } => {
             return match curve_of(r, *body, edge)? {
-                CurveGeometry::Line { start, end } => DatumAxis::through(start, end)
-                    .ok_or_else(|| format!("edge {edge} has no length")),
+                CurveGeometry::Line { start, end } => {
+                    DatumAxis::through(start, end).ok_or_else(|| {
+                        placed_at(
+                            NoticePlace::edge(edge.to_string()),
+                            *body,
+                            "the edge has no length",
+                            format!("edge {edge} has no length"),
+                        )
+                    })
+                }
                 CurveGeometry::Circle { center, normal, .. } => Ok(DatumAxis {
                     origin: center,
                     direction: canonical_axis(unit(normal).ok_or("the circle has no normal")?),
                 }),
-                other => Err(format!(
-                    "edge {edge} is neither straight nor circular ({})",
-                    other.kind()
+                other => Err(placed_at(
+                    NoticePlace::edge(edge.to_string()),
+                    *body,
+                    "the edge is neither straight nor circular",
+                    format!(
+                        "edge {edge} is neither straight nor circular ({})",
+                        other.kind()
+                    ),
                 )),
             };
         }
@@ -1074,7 +1168,12 @@ pub(crate) fn resolve_axis(
                     origin,
                     direction: axis,
                 }),
-                other => Err(format!("face {face} has no axis ({})", other.kind())),
+                other => Err(placed_at(
+                    NoticePlace::face(face.to_string()),
+                    *body,
+                    "the face has no axis",
+                    format!("face {face} has no axis ({})", other.kind()),
+                )),
             };
         }
         GeomRef::SketchCurves { sketch, curves } if curves.len() == 1 => {
@@ -1090,12 +1189,12 @@ pub(crate) fn resolve_axis(
             let [origin, _, _, direction] = crate::joints::frame_parts(&r.mount(*feature, name)?);
             return Ok(DatumAxis { origin, direction });
         }
-        _ => return Err(format!("{reference} is not an axis")),
+        _ => return Err(reference.error(" is not an axis")),
     };
     match (datum, reference) {
         (Datum::Axis(axis), _) => Ok(axis),
         (other, GeomRef::Datum(uid)) => Err(not_a(r, *uid, &other, "an axis")),
-        _ => Err(format!("{reference} is not an axis")),
+        _ => Err(reference.error(" is not an axis")),
     }
 }
 
@@ -1133,7 +1232,15 @@ fn sketch_line(
             }),
     };
     ends.and_then(|(a, b)| DatumAxis::through(a, b))
-        .ok_or_else(|| format!("{} has no line {}", r.name(sketch), curve.curve_name()))
+        .ok_or_else(|| {
+            crate::notice::FeatureError::new(format!("{} has no such line", r.name(sketch)))
+                .with_detail(format!(
+                    "{} has no line {}",
+                    r.name(sketch),
+                    curve.curve_name()
+                ))
+                .text()
+        })
 }
 
 pub(crate) fn resolve_point(r: &mut impl Resolver, reference: &GeomRef) -> Result<Vec3, String> {
@@ -1146,15 +1253,20 @@ pub(crate) fn resolve_point(r: &mut impl Resolver, reference: &GeomRef) -> Resul
             return r
                 .kernel()
                 .vertex_point(&shape, &found)
-                .map_err(|e| format!("vertex {vertex}: {e}"));
+                .map_err(|e| about(NoticePlace::vertex(vertex.to_string()), *body, &e));
         }
         GeomRef::Edge { body, edge } => {
             return match curve_of(r, *body, edge)? {
                 CurveGeometry::Circle { center, .. } => Ok(center),
                 CurveGeometry::Line { start, end } => Ok(scale(add(start, end), 0.5)),
-                other => Err(format!(
-                    "edge {edge} is neither straight nor circular ({})",
-                    other.kind()
+                other => Err(placed_at(
+                    NoticePlace::edge(edge.to_string()),
+                    *body,
+                    "the edge is neither straight nor circular",
+                    format!(
+                        "edge {edge} is neither straight nor circular ({})",
+                        other.kind()
+                    ),
                 )),
             };
         }
@@ -1169,12 +1281,12 @@ pub(crate) fn resolve_point(r: &mut impl Resolver, reference: &GeomRef) -> Resul
         }
         GeomRef::FixedPoint(point) => return Ok(*point),
         GeomRef::Mount { feature, name } => return Ok(r.mount(*feature, name)?.translation),
-        _ => return Err(format!("{reference} is not a point")),
+        _ => return Err(reference.error(" is not a point")),
     };
     match (datum, reference) {
         (Datum::Point(point), _) => Ok(point.point),
         (other, GeomRef::Datum(uid)) => Err(not_a(r, *uid, &other, "a point")),
-        _ => Err(format!("{reference} is not a point")),
+        _ => Err(reference.error(" is not a point")),
     }
 }
 
@@ -1183,7 +1295,7 @@ pub(crate) fn resolve_surface(
     reference: &GeomRef,
 ) -> Result<SurfaceGeometry, String> {
     let GeomRef::Face { body, face } = reference else {
-        return Err(format!("{reference} is not a face"));
+        return Err(reference.error(" is not a face"));
     };
     surface_of(r, *body, face)
 }
@@ -1193,7 +1305,7 @@ pub(crate) fn resolve_curve(
     reference: &GeomRef,
 ) -> Result<CurveGeometry, String> {
     let GeomRef::Edge { body, edge } = reference else {
-        return Err(format!("{reference} is not an edge"));
+        return Err(reference.error(" is not an edge"));
     };
     curve_of(r, *body, edge)
 }
@@ -1205,8 +1317,7 @@ pub(crate) fn resolve_face_point(
 ) -> Result<SurfacePoint, String> {
     let GeomRef::Face { body, face } = reference else {
         // A plane stands for a planar face: its whole plane.
-        let plane =
-            resolve_plane(r, reference).map_err(|_| format!("{reference} is not a face"))?;
+        let plane = resolve_plane(r, reference).map_err(|_| reference.error(" is not a face"))?;
         let n = plane.normal();
         return Ok(SurfacePoint {
             point: sub(near, scale(n, dot(sub(near, plane.origin), n))),
@@ -1230,7 +1341,7 @@ pub(crate) fn resolve_face_point(
     }
     r.kernel()
         .face_point_normal(&shape, face, near)
-        .map_err(|e| format!("face {face}: {e}"))
+        .map_err(|e| about(NoticePlace::face(face.to_string()), *body, &e))
 }
 
 pub(crate) fn resolve_path(
@@ -1739,11 +1850,11 @@ impl<K: Kernel> Resolver for EvalContext<'_, K> {
         };
         let (component, transform) = self
             .linked(&link)
-            .map_err(|e| format!("body {body}: {e}"))?;
+            .map_err(|e| linked_body_failure(body, &e))?;
         let shape = self.body_in(component, body)?;
         self.kernel
             .transform_shape(&shape, &transform, None)
-            .map_err(|e| format!("body {body}: {e}"))
+            .map_err(|e| linked_body_failure(body, &e))
     }
 
     fn sketch(&mut self, uid: FeatureUid) -> Result<Arc<SketchOutput>, String> {
@@ -2315,7 +2426,13 @@ impl GeomRef {
                 let face: FaceName = f.need("face", "a face reference")?;
                 match f.take::<BodyUid>("body")? {
                     Some(body) => Self::Face { body, face },
-                    None => return Err(format!("face {face} needs its body")),
+                    None => {
+                        return Err(crate::notice::placed(
+                            "a face reference needs its body",
+                            NoticePlace::face(face.to_string()),
+                            format!("face {face} needs its body"),
+                        ));
+                    }
                 }
             }
             "edge" => Self::Edge {

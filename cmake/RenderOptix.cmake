@@ -24,20 +24,27 @@ function(mitcad_render_optix_problem devices kernels required out_var)
   # The kernels' file names only: a prefix's folder may be named for OptiX.
   set(optix_kernels ${kernels})
   list(FILTER optix_kernels INCLUDE REGEX "[Oo][Pp][Tt][Ii][Xx][^/\\\\]*$")
+  # One string each (string(CONCAT)): set() with several pieces would make a
+  # list, which the FATAL_ERROR prints with semicolons between the pieces.
   if("OPTIX" IN_LIST required)
-    set(problem "MITCAD_RENDER_REQUIRED_DEVICES (${required}) names OPTIX: MitCad never builds or ships OptiX "
-                "(docs/rendering.md, \"Building an OptiX worker yourself\")")
+    string(CONCAT problem "MITCAD_RENDER_REQUIRED_DEVICES (${required}) names OPTIX: MitCad never builds or ships "
+                  "OptiX (docs/rendering.md, \"Building an OptiX worker yourself\")")
   elseif(required AND ("OPTIX" IN_LIST devices OR optix_kernels))
-    set(found "${devices}")
+    # The devices joined with commas, so that only the required devices'
+    # own value shows a semicolon.
+    list(JOIN devices ", " found)
     if(optix_kernels)
       list(GET optix_kernels 0 kernel)
       get_filename_component(kernel "${kernel}" NAME)
-      string(APPEND found "; the OptiX kernel ${kernel}")
+      if(NOT found STREQUAL "")
+        string(APPEND found ", with ")
+      endif()
+      string(APPEND found "the OptiX kernel ${kernel}")
     endif()
-    set(problem "The render prefix was built with OptiX (${found}), and this configure is a release's "
-                "(MITCAD_RENDER_REQUIRED_DEVICES=${required}): MitCad never ships OptiX. Build the release "
-                "with a prefix of tools/dev-env/build-cycles.sh --cuda or build-cycles.ps1 -Cuda, without "
-                "--optix or -Optix")
+    string(CONCAT problem "The render prefix was built with OptiX (${found}), and this configure is a release's "
+                  "(MITCAD_RENDER_REQUIRED_DEVICES=${required}): MitCad never ships OptiX. Build the release "
+                  "with a prefix of tools/dev-env/build-cycles.sh --cuda or build-cycles.ps1 -Cuda, without "
+                  "--optix or -Optix")
   endif()
   set(${out_var} "${problem}" PARENT_SCOPE)
 endfunction()

@@ -38,7 +38,7 @@ fn status(doc: &Document<MockKernel>, feature: &str) -> FeatureStatus {
 
 fn error(doc: &Document<MockKernel>, feature: &str) -> String {
     match status(doc, feature) {
-        FeatureStatus::Failed(message) => message,
+        FeatureStatus::Failed(message) => message.agent_text().to_owned(),
         other => panic!("expected a failure, got {other:?}"),
     }
 }

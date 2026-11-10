@@ -243,11 +243,19 @@ pub(crate) fn check_faces(
     }
     for (i, face) in faces.iter().enumerate() {
         if faces[..i].contains(face) {
-            return Err(format!("face {face} is listed more than once"));
+            return Err(crate::notice::placed(
+                "a face is listed more than once",
+                crate::notice::NoticePlace::face(face.to_string()),
+                format!("face {face} is listed more than once"),
+            ));
         }
         for feature in face.features() {
-            ctx.feature(feature)
-                .map_err(|e| format!("face {face}: {e}"))?;
+            ctx.feature(feature).map_err(|e| {
+                crate::notice::about_place(
+                    crate::notice::NoticePlace::face(face.to_string()),
+                    &e.to_string(),
+                )
+            })?;
         }
     }
     Ok(())
@@ -267,7 +275,27 @@ pub(crate) fn require_faces<K: Kernel>(
     ctx.faces_on(body, shape, faces)
 }
 
+/// Why the body has no such face (mitcad#1612): the person reads "a face
+/// no longer exists after Extrude2", the face painted; agents read its
+/// name ([`missing_face_named`]).
 pub(crate) fn missing_face<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    body: BodyUid,
+    face: &FaceName,
+) -> String {
+    let named = missing_face_named(ctx, body, face);
+    let said = match named.strip_prefix(&format!("face {face} ")) {
+        Some(rest) => format!("a face {rest}"),
+        None => "the body has no such face".to_owned(),
+    };
+    crate::notice::placed(
+        said,
+        crate::notice::NoticePlace::face(face.to_string()).in_body(&body.to_string()),
+        named,
+    )
+}
+
+fn missing_face_named<K: Kernel>(
     ctx: &EvalContext<'_, K>,
     body: BodyUid,
     face: &FaceName,

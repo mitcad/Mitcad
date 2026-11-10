@@ -20,7 +20,8 @@
 // terminal found`), `Chat: Sign in Again: started <program> <arguments>;
 // it runs <command> | <command>`, `Chat: Sign in Again: the terminal ended
 // (exit <code>)`, `... returned at once; checking again when MitCad's
-// window is active again`, `... back in MitCad's window`.
+// window is active again`, `... back in MitCad's window`, `... the terminal
+// for <agent> left open; starting one for <agent>`.
 
 #include <QElapsedTimer>
 #include <QList>
@@ -59,7 +60,9 @@ public:
 
   // Writes the script that shows `heading`, runs `commands` and shows
   // `closing`, and starts it in the terminal; false with `error` (no
-  // terminal found, the script not written).
+  // terminal found, the script not written). True at once while this
+  // agent's terminal is open; another agent's open terminal is let go
+  // first (signInStart, mitcad#1610).
   bool start(const QString& agentId, const QString& heading, const QString& closing,
              const QList<QStringList>& commands, QString* error);
   // Forgets the terminal (it stays open for the user): no ended() comes.

@@ -353,10 +353,13 @@ impl<K: Kernel> Evaluate<K> for MortiseTenonDef {
         let tenon_body = ctx.surface_body(self.body)?;
         let mortise_body = ctx.surface_body(self.mortise_body)?;
         let face = ctx.face_on(self.body, &tenon_body, &self.face)?;
-        let plane = ctx
-            .kernel
-            .face_plane(&tenon_body, &face)
-            .map_err(|_| format!("the tenon's end face {face} must be planar"))?;
+        let plane = ctx.kernel.face_plane(&tenon_body, &face).map_err(|_| {
+            crate::notice::placed(
+                "the tenon's end face must be planar",
+                crate::notice::NoticePlace::face(face.to_string()).in_body(&self.body.to_string()),
+                format!("the tenon's end face {face} must be planar"),
+            )
+        })?;
         let z = unit_div(plane.normal).ok_or("the tenon's end face has no normal")?;
         let curves = ctx
             .kernel

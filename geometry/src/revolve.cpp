@@ -56,10 +56,12 @@ void check_axis(const std::vector<detail::SweepFace>& faces, const Frame& frame,
         }
       }
       if (low < -tolerance && high > tolerance) {
-        throw std::invalid_argument("profile " + face.regions.front() + " crosses the revolve axis");
+        throw std::invalid_argument(placed_error("a profile crosses the revolve axis",
+                                                 "profile " + face.regions.front() + " crosses the revolve axis"));
       }
       if (high - low <= tolerance) {
-        throw std::invalid_argument("profile " + face.regions.front() + " lies on the revolve axis");
+        throw std::invalid_argument(placed_error("a profile lies on the revolve axis",
+                                                 "profile " + face.regions.front() + " lies on the revolve axis"));
       }
     }
     return;
@@ -71,7 +73,8 @@ void check_axis(const std::vector<detail::SweepFace>& faces, const Frame& frame,
   for (const detail::SweepFace& face : faces) {
     BRepClass_FaceClassifier classifier(face.face, pierce, tolerance);
     if (classifier.State() == TopAbs_IN) {
-      throw std::invalid_argument("the revolve axis passes through profile " + face.regions.front());
+      throw std::invalid_argument(placed_error("the revolve axis passes through a profile",
+                                               "the revolve axis passes through profile " + face.regions.front()));
     }
   }
 }
@@ -145,7 +148,9 @@ std::vector<detail::SweepFace> split_across_axis(const std::vector<detail::Sweep
     splitter.SetNonDestructive(true);
     detail::build(splitter);
     if (!splitter.IsDone() || splitter.HasErrors()) {
-      throw std::runtime_error("profile " + face.regions.front() + " could not be parted at the revolve axis");
+      throw std::runtime_error(placed_error("a profile could not be parted at the revolve axis",
+                                            "profile " + face.regions.front() +
+                                                " could not be parted at the revolve axis"));
     }
     std::vector<std::pair<TopoDS_Edge, std::string>> named;
     for (const auto& [edge, name] : face.edges) {
@@ -182,7 +187,8 @@ ShapePtr named_revolution(const detail::SweepFace& face, const gp_Ax1& axis, dou
   BRepPrimAPI_MakeRevol maker(face.face, axis, angle);
   maker.Build();
   if (!maker.IsDone()) {
-    throw std::runtime_error("the revolution of " + face.regions.front() + " failed");
+    throw std::runtime_error(
+        placed_error("the revolution of a profile failed", "the revolution of " + face.regions.front() + " failed"));
   }
   detail::FaceNamer namer(maker.Shape());
   for (const auto& [edge, name] : face.edges) {

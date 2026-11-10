@@ -166,10 +166,22 @@ impl<K: Kernel> SketchClipboardOps<K> for Document<K> {
             ));
         }
         if !pasted.values.is_empty() {
-            warnings.push(format!(
-                "{} took their values: the parameters their expressions use are not in this design",
-                pasted.values.join(", ")
-            ));
+            // Counted for a person, the ids for agents (mitcad#1612).
+            let counted = match pasted.values.len() {
+                1 => "a dimension took its value".to_owned(),
+                n => format!("{n} dimensions took their values"),
+            };
+            warnings.push(
+                mitcad_model::notice::FeatureError::new(format!(
+                    "{counted}: the parameters their expressions use are not in this design"
+                ))
+                .with_detail(format!(
+                    "{} took their values: the parameters their expressions use are not in this \
+                     design",
+                    pasted.values.join(", ")
+                ))
+                .text(),
+            );
             value["values"] = json!(pasted.values);
         }
         if !warnings.is_empty() {

@@ -287,6 +287,8 @@ fn commands_build_a_part_and_queries_describe_it() {
     assert_eq!(
         changed,
         json!({"changed": ["d4"], "recomputed": 1, "error": "Fillet1: fillet failed",
+               "error_notice": {"level": "error", "message": "Fillet1: fillet failed",
+                                "target": "F3"},
                "failed_features": [{"uid": "F3", "name": "Fillet1", "error": "fillet failed",
                                     "edited": false, "new": true}]})
     );

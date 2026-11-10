@@ -1261,10 +1261,8 @@ void SketchController::convertProjected() {
     line += QStringLiteral("; kept projected: %1").arg(kept.join(QStringLiteral(", ")));
   }
   qDebug().noquote() << line;
-  QStringList warnings;
-  for (const QJsonValue& v : result.value(QStringLiteral("warnings")).toArray()) {
-    warnings << v.toString();
-  }
+  // In plain words (mitcad#1612).
+  const QStringList warnings = shownTexts(result, QStringLiteral("warnings"), QStringLiteral("warning_messages"));
   if (!warnings.isEmpty()) {
     hint(tr("Convert to Sketch Geometry: %1").arg(warnings.join(QStringLiteral("; "))));
   }
@@ -1348,10 +1346,24 @@ void SketchController::editDimension(const QString& id) {
         // The `name = ` deleted: the parameter gets its automatic name back
         // in the same undo step (mitcad#1577).
         const bool unname = !named.isEmpty() && namedPrefix(expression).isEmpty();
+        // Another parameter's bare name typed after Backspace took the name
+        // off (mitcad#1614): the dimension's own parameter takes it as its
+        // expression, so that it gets its automatic name with that
+        // expression (`d1 = spacing`) and the uses of the name follow. The
+        // whole text replaced by another parameter's name (Ctrl+A and
+        // typing, a reference inserted) still switches the dimension to
+        // that parameter (mitcad#1577).
+        const ParameterField* field = m_editor ? ParameterField::of(m_editor) : nullptr;
+        const bool backspaced = field != nullptr && field->nameRemovedByBackspace();
+        static const QRegularExpression bareName(QStringLiteral(R"(^\w+$)"),
+                                                 QRegularExpression::UseUnicodePropertiesOption);
+        const QString typed = expression.trimmed();
+        const bool another = backspaced && unname && typed != named && bareName.match(typed).hasMatch() &&
+                             !typed.at(0).isDigit();
         SketchOp op(*this);
         QJsonObject cmd = op.command(QStringLiteral("sketch.set_dimension"));
         cmd.insert(QStringLiteral("dimension"), id);
-        cmd.insert(QStringLiteral("value"), expression);
+        cmd.insert(QStringLiteral("value"), another ? QStringLiteral("%1 = %2").arg(named, typed) : expression);
         QJsonObject result;
         if (!op.run(cmd, &result)) {
           const QString reason = op.error();
@@ -1360,8 +1372,14 @@ void SketchController::editDimension(const QString& id) {
           return;
         }
         // A value that used the own name gave the dimension a new parameter
-        // already (mitcad#1535): nothing is left to rename then.
-        const DimensionData* now = unname ? op.model().dimension(id) : nullptr;
+        // already (mitcad#1535): nothing is left to rename then. The bare
+        // name keeps the parameter, as a user parameter, for the dimension
+        // to use: it is no automatic name to give back (mitcad#1608).
+        bool keptOwn = expression.trimmed() == named;
+        for (const QJsonValue& entry : result.value(QStringLiteral("user_parameters")).toArray()) {
+          keptOwn = keptOwn || entry.toObject().value(QStringLiteral("name")).toString() == named;
+        }
+        const DimensionData* now = unname && !keptOwn ? op.model().dimension(id) : nullptr;
         if (now != nullptr && now->parameter == named) {
           QJsonObject removed;
           if (!op.run({{QStringLiteral("cmd"), QStringLiteral("remove_parameter_name")},
@@ -1404,10 +1422,8 @@ void SketchController::noteKeptParameters(const QJsonObject& result) {
   if (kept.isEmpty()) {
     return;
   }
-  QStringList notes;
-  for (const QJsonValue& note : result.value(QStringLiteral("notes")).toArray()) {
-    notes << note.toString();
-  }
+  // In plain words (mitcad#1612).
+  const QStringList notes = shownTexts(result, QStringLiteral("notes"), QStringLiteral("note_messages"));
   for (const QJsonValue& value : kept) {
     const QJsonObject k = value.toObject();
     // "Dimension k5: BuckleDiameter kept as a user parameter, now d3", for
@@ -3800,8 +3816,10 @@ void SketchController::acceptEditor() {
   const QString typed = editor->text();
   const QString dimension = m_editorDimension;
   // The name the text opened with, deleted: refused when the dimension
-  // keeps it (mitcad#1577).
-  const QString removed = rename.isEmpty() ? m_editorName : QString();
+  // keeps it (mitcad#1577), except when the text is that bare name, which
+  // keeps it on purpose, as a user parameter (mitcad#1608).
+  const QString removed =
+      rename.isEmpty() && expression.trimmed() != m_editorName ? m_editorName : QString();
   hideNativeInlineEditor(editor);
   editor->hide();
   if (accept) {

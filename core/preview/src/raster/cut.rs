@@ -205,36 +205,16 @@ pub(super) fn draw_on_top(
     b: Vec3,
     s: usize,
 ) -> bool {
-    let (mut ca, mut cb) = (projector.camera(a), projector.camera(b));
-    if projector.perspective {
-        let near = projector.near;
-        if ca[2] < near && cb[2] < near {
-            return false;
-        }
-        if ca[2] < near || cb[2] < near {
-            let t = (near - ca[2]) / (cb[2] - ca[2]);
-            let cut = [0, 1, 2].map(|i| ca[i] + (cb[i] - ca[i]) * t);
-            if ca[2] < near {
-                ca = cut;
-            } else {
-                cb = cut;
-            }
-        }
-    }
-    let (ax, ay, _) = projector.screen(ca);
-    let (bx, by, _) = projector.screen(cb);
-    let (w, h) = (target.width as f64, target.height as f64);
+    // Clipped to the picture and its guard band, as an edge (mitcad#1606).
+    let Some([(ax, ay, _), (bx, by, _)]) = projector.segment(a, b) else {
+        return false;
+    };
     let width = 2 * s;
-    let margin = width as f64 + 1.0;
-    if (ax < -margin && bx < -margin)
-        || (ay < -margin && by < -margin)
-        || (ax > w + margin && bx > w + margin)
-        || (ay > h + margin && by > h + margin)
-    {
+    let length = (bx - ax).abs().max((by - ay).abs());
+    if !length.is_finite() {
         return false;
     }
-    let length = (bx - ax).abs().max((by - ay).abs());
-    let steps = ((length * 2.0).ceil() as usize).clamp(1, 1 << 16);
+    let steps = ((length * 2.0).ceil() as usize).max(1);
     let reach = width as f64 / 2.0;
     let rgba = [ACCENT[0], ACCENT[1], ACCENT[2], 255];
     let mut any = false;

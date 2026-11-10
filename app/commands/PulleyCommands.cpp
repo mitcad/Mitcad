@@ -34,6 +34,7 @@
 
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/Theme.hpp"
+#include "../framework/UserText.hpp"
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
 #include "Commands.hpp"
@@ -506,7 +507,8 @@ CommandDef pulleyCommand(const CommandContext& context) {
     if (!shaft.isEmpty()) {
       parts << shaft;
     }
-    const QString error = values.value(QStringLiteral("error")).toString();
+    // In plain words (mitcad#1612).
+    const QString error = userText(values.value(QStringLiteral("error")).toString());
     if (!error.isEmpty()) {
       parts << error;
     }

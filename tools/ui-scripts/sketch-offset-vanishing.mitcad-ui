@@ -22,14 +22,14 @@ expect-selection 1 0
 mark
 command sketch.offset
 wait-log '^Command Offset started'
-wait-log '^Preview Offset: ok, note: corner arcs .* vanish at this distance$'
+wait-log '^Preview Offset: ok, note: [0-9]+ corner arcs vanish at this distance$'
 expect-no-log '^Preview Offset: failed'
 
 # 2 mm, the arcs' radius: they collapse to their centers, where the sides'
 # offsets meet; OK keeps it.
 mark
 type-in '^Panel Offset input distance at ' '2 mm'
-wait-log '^Preview Offset: ok, note: corner arcs .* vanish at this distance$'
+wait-log '^Preview Offset: ok, note: [0-9]+ corner arcs vanish at this distance$'
 expect-no-log '^Preview Offset: failed'
 screenshot '${MITCAD_TEST_WORK}/sketch-offset-vanishing.png'
 mark

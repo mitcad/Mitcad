@@ -1,0 +1,65 @@
+{
+  "format": "solidcraft/39",
+  "name": "Join to body apart",
+  "units": "mm",
+  "params": [],
+  "features": [
+    {
+      "id": 1, "name": "Box1", "type": "box", "body_names": ["Body1"],
+      "corner": [0, 0, 0], "length": "10", "width": "10", "height": "10"
+    },
+    {
+      "id": 2, "name": "Sketch1", "type": "sketch",
+      "plane": {"type": "offset", "base": {"type": "origin", "name": "XY"}, "distance": "20"},
+      "sketch": {
+        "points": [
+          {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p1", "pos": [2.0, 2.0], "fixed": true},
+          {"id": "p2", "pos": [4.0, 2.0], "fixed": true},
+          {"id": "p3", "pos": [4.0, 4.0], "fixed": true},
+          {"id": "p4", "pos": [2.0, 4.0], "fixed": true}
+        ],
+        "curves": [
+          {"id": "l1", "type": "line", "a": 1, "b": 2},
+          {"id": "l2", "type": "line", "a": 2, "b": 3},
+          {"id": "l3", "type": "line", "a": 3, "b": 4},
+          {"id": "l4", "type": "line", "a": 4, "b": 1}
+        ],
+        "constraints": []
+      }
+    },
+    {
+      "id": 3, "name": "Extrude1", "type": "extrude",
+      "sketch": 2, "profiles": {"type": "all"},
+      "extent": {"distance": "10", "to": [3.0, 3.0, 10.0]},
+      "operation": "join"
+    },
+    {
+      "id": 4, "name": "Sketch2", "type": "sketch",
+      "plane": {"type": "offset", "base": {"type": "origin", "name": "XY"}, "distance": "20"},
+      "sketch": {
+        "points": [
+          {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p1", "pos": [6.0, 6.0], "fixed": true},
+          {"id": "p2", "pos": [8.0, 6.0], "fixed": true},
+          {"id": "p3", "pos": [8.0, 8.0], "fixed": true},
+          {"id": "p4", "pos": [6.0, 8.0], "fixed": true}
+        ],
+        "curves": [
+          {"id": "l1", "type": "line", "a": 1, "b": 2},
+          {"id": "l2", "type": "line", "a": 2, "b": 3},
+          {"id": "l3", "type": "line", "a": 3, "b": 4},
+          {"id": "l4", "type": "line", "a": 4, "b": 1}
+        ],
+        "constraints": []
+      }
+    },
+    {
+      "id": 5, "name": "Extrude2", "type": "extrude",
+      "sketch": 4, "profiles": {"type": "all"},
+      "extent": {"distance": "10", "to": [7.0, 7.0, 10.0]},
+      "operation": "join", "targets": ["Body1"]
+    }
+  ],
+  "next_id": 6
+}

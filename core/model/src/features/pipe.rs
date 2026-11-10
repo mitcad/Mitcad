@@ -578,17 +578,18 @@ impl<K: Kernel> Evaluate<K> for PipeDef {
 }
 
 impl PipeDef {
-    /// A curve of the path for a message: the sketch's name and the
-    /// curve's id (`Sketch2's c4`), an edge of a body, or the path's own
-    /// name for it.
-    fn place<K: Kernel>(&self, ctx: &EvalContext<'_, K>, piece: &PathCurve) -> String {
+    /// A curve of the path for a message a person reads (mitcad#1612: no
+    /// sketch ids or edge names): a curve of the sketch by the sketch's
+    /// name (`a curve of Sketch2`), an edge of the path, or a piece of the
+    /// path.
+    fn place<K: Kernel>(&self, ctx: &EvalContext<'_, K>, _piece: &PathCurve) -> String {
         match &self.path {
             CurvePath::Sketch(SketchCurves { sketch, .. })
             | CurvePath::Path(
                 PathRef::SketchCurve { sketch, .. } | PathRef::SketchCurves { sketch, .. },
-            ) => format!("{}'s {}", ctx.feature_name(*sketch), piece.name),
-            CurvePath::Path(PathRef::Edges { .. }) => format!("the edge {}", piece.name),
-            CurvePath::Path(_) => format!("the path's {}", piece.name),
+            ) => format!("a curve of {}", ctx.feature_name(*sketch)),
+            CurvePath::Path(PathRef::Edges { .. }) => "an edge of the path".to_owned(),
+            CurvePath::Path(_) => "a piece of the path".to_owned(),
         }
     }
 }

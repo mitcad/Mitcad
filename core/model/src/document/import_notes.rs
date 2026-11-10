@@ -220,8 +220,9 @@ pub fn feature_notices_placed(
     places: &[(String, Vec<crate::notice::NoticePlace>)],
 ) -> Vec<Notice> {
     let mut notices = Vec::new();
-    if let Some(error) = status.and_then(FeatureStatus::error) {
-        notices.push(Notice::error(error).with_target(uid));
+    // A failure as a person reads it, its places with it (mitcad#1612).
+    if let Some(error) = status.and_then(FeatureStatus::failure) {
+        notices.push(error.notice().with_target(uid));
     }
     if !matches!(status, Some(FeatureStatus::Failed(_))) {
         // References a change in one sketch renamed are one notice of
@@ -291,7 +292,7 @@ mod tests {
 
     #[test]
     fn a_feature_s_level_is_its_worst_notice() {
-        let failed = FeatureStatus::Failed("no result".to_owned());
+        let failed = FeatureStatus::failed("no result");
         let warned = ["lost 2 of 5 edges".to_owned()];
         let note = Some("Stands in for Fillet3");
         // Failed: an error, also with warnings or a note.
@@ -372,7 +373,7 @@ mod tests {
             ]
         );
         // A failed feature has no infos to tell.
-        let failed = FeatureStatus::Failed("no result".to_owned());
+        let failed = FeatureStatus::failed("no result");
         assert_eq!(
             feature_notices(Some(&failed), &[], &infos, None, F),
             vec![Notice::error("no result").with_target("F4")]

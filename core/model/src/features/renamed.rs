@@ -303,11 +303,24 @@ impl Lost {
     }
 }
 
+/// A reference a sketch change made ambiguous (mitcad#1612): the person
+/// reads how many it could be, the reference and the candidates painted;
+/// agents and Auto Fix read the names.
 fn ambiguous(name: &dyn std::fmt::Display, candidates: &[String]) -> Lost {
-    Lost::Ambiguous(format!(
+    let named = format!(
         "{name} is ambiguous after a sketch change: {}",
         candidates.join(", ")
-    ))
+    );
+    let places = crate::notice::FeatureError::from_text(&named).places;
+    Lost::Ambiguous(
+        crate::notice::FeatureError::new(format!(
+            "a reference is ambiguous after a sketch change: it could be any of {} candidates",
+            candidates.len()
+        ))
+        .with_places(places)
+        .with_detail(named)
+        .text(),
+    )
 }
 
 /// The faces a face name of a feature reference can stand for on the
@@ -707,11 +720,15 @@ pub fn with_edge_suggestions<K: Kernel>(
     } else {
         String::new()
     };
-    format!(
-        "{message}; existing edges of body {body} that share a face with it \
+    // For agents only (mitcad#1612): the person reads the message.
+    let error = crate::notice::FeatureError::from_text(&message);
+    let detail = format!(
+        "{}; existing edges of body {body} that share a face with it \
          (suggestions only, not applied): {}{more}",
+        error.agent_text(),
         items.join(", ")
-    )
+    );
+    crate::notice::FeatureError { detail, ..error }.text()
 }
 
 /// Rule 4 for a vertex: None when every face of its name finds its face,
@@ -1092,12 +1109,16 @@ mod tests {
         }
     }
 
-    /// The message `lost` about `edge` on the body, with its suggestions.
+    /// The message `lost` about `edge` on the body, with its suggestions:
+    /// the agents' text (mitcad#1612: the person reads "lost").
     fn suggested(shape: &MockShape, edge: &str) -> String {
         let edge: EdgeName = edge.parse().unwrap();
         let body = BodyUid::new(FeatureUid(2), 0);
         let kernel = MockKernel::default();
-        with_edge_suggestions(&kernel, shape, body, &edge, "lost".to_owned())
+        let text = with_edge_suggestions(&kernel, shape, body, &edge, "lost".to_owned());
+        let error = crate::notice::FeatureError::from_text(&text);
+        assert_eq!(error.message, "lost");
+        error.agent_text().to_owned()
     }
 
     /// The text before the suggestions.

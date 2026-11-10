@@ -1815,3 +1815,200 @@ fn a_removed_project_leaves_the_users_repository() {
     let plan = remove_project(&mine, true, None).unwrap();
     assert_eq!(plan.repository, RepositoryFate::Kept);
 }
+
+/// Whether a design file's text refers to B-rep data in a project's store.
+fn refers_to_store(text: &str) -> bool {
+    !mitcad_model::file::brep_references(text)
+        .unwrap()
+        .is_empty()
+}
+
+/// Remove Project counts the designs in folders whose names start with a
+/// dot too (mitcad#1598): `.archive/a.mitcad` saves its data in the
+/// project's store, so it is written as a single file before the store
+/// goes. A subfolder that is a project of its own keeps its designs and
+/// its store.
+#[test]
+fn a_removed_project_puts_the_data_of_designs_in_dot_folders_inside() {
+    let scratch = Scratch::new("remove-dot");
+    let dir = scratch.join("Workshop");
+    fs::create_dir_all(&dir).unwrap();
+    let options = CreateOptions {
+        design: None,
+        ..options(None)
+    };
+    let mut log = Vec::new();
+    create_project(&dir, &options, &Context::default(), None, &mut log).unwrap();
+    let archived = dir.join(".archive/a.mitcad");
+    fs::create_dir_all(archived.parent().unwrap()).unwrap();
+    design().save_file(&archived, FileFormat::Auto).unwrap();
+    assert!(refers_to_store(&fs::read_to_string(&archived).unwrap()));
+    // A project of its own inside the folder.
+    let inner = dir.join("inner");
+    mitcad_model::Project::init(&inner).unwrap();
+    let inner_design = inner.join("b.mitcad");
+    design().save_file(&inner_design, FileFormat::Auto).unwrap();
+    let inner_text = fs::read_to_string(&inner_design).unwrap();
+    assert!(refers_to_store(&inner_text));
+
+    let plan = remove_project(&dir, true, None).unwrap();
+    assert_eq!(plan.rewritten, [".archive/a.mitcad"]);
+    assert_eq!(plan.designs, 1);
+    assert!(refers_to_store(&fs::read_to_string(&archived).unwrap()));
+
+    remove_project(&dir, false, None).unwrap();
+    assert!(!dir.join(".mitcad").exists());
+    let text = fs::read_to_string(&archived).unwrap();
+    assert!(!refers_to_store(&text), "{text}");
+    let loaded = Document::load_design(&archived, MockKernel::default()).unwrap();
+    assert!(
+        loaded
+            .load_warnings()
+            .iter()
+            .all(|warning| !warning.contains("B-rep")),
+        "{:?}",
+        loaded.load_warnings()
+    );
+    // The inner project is untouched.
+    assert_eq!(fs::read_to_string(&inner_design).unwrap(), inner_text);
+    assert!(inner.join(PROJECT_MARKER).is_file());
+    let inner_loaded = Document::load_design(&inner_design, MockKernel::default()).unwrap();
+    assert!(
+        inner_loaded
+            .load_warnings()
+            .iter()
+            .all(|warning| !warning.contains("B-rep")),
+        "{:?}",
+        inner_loaded.load_warnings()
+    );
+}
+
+/// Remove Project refuses while a folder under the project cannot be read
+/// or a link leads to a folder (mitcad#1598): a design there may keep its
+/// data in the project's store, so the store is kept.
+#[cfg(unix)]
+#[test]
+fn a_project_with_designs_out_of_sight_is_not_removed() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let scratch = Scratch::new("remove-hidden");
+    let dir = scratch.join("Workshop");
+    fs::create_dir_all(&dir).unwrap();
+    let options = CreateOptions {
+        design: None,
+        ..options(None)
+    };
+    let mut log = Vec::new();
+    create_project(&dir, &options, &Context::default(), None, &mut log).unwrap();
+    let locked = dir.join("parts");
+    fs::create_dir_all(&locked).unwrap();
+    let hidden = locked.join("x.mitcad");
+    design().save_file(&hidden, FileFormat::Auto).unwrap();
+    let hidden_text = fs::read_to_string(&hidden).unwrap();
+    assert!(refers_to_store(&hidden_text));
+    let store_kept = |dir: &Path| {
+        assert!(dir.join(PROJECT_MARKER).is_file());
+        assert!(dir.join(brep_file("6 bolt")).is_file());
+        assert!(dir.join(".git").is_dir());
+    };
+
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    // A user who reads every folder (root) cannot be refused this way.
+    if fs::read_dir(&locked).is_err() {
+        for dry_run in [true, false] {
+            let error = remove_project(&dir, dry_run, None).unwrap_err();
+            assert!(
+                matches!(&error, VcsError::Remote(e) if e.class == ErrorClass::Unsupported),
+                "{error:?}"
+            );
+            assert!(error.to_string().contains("parts"), "{error}");
+            store_kept(&dir);
+        }
+    }
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(fs::read_to_string(&hidden).unwrap(), hidden_text);
+
+    // A link to a folder is never followed.
+    let elsewhere = scratch.join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    symlink(&elsewhere, dir.join("linked")).unwrap();
+    let error = remove_project(&dir, false, None).unwrap_err();
+    assert!(error.to_string().contains("linked"), "{error}");
+    store_kept(&dir);
+    fs::remove_file(dir.join("linked")).unwrap();
+
+    // Readable again: removed, the design with its data inside.
+    remove_project(&dir, false, None).unwrap();
+    assert!(!refers_to_store(&fs::read_to_string(&hidden).unwrap()));
+}
+
+/// Remove Project in a kept repository (mitcad#1607): designs that the
+/// latest version holds with references into the store, which its version
+/// removes, but the folder's files no longer match (one deleted, one saved
+/// again as a single file, neither recorded), are recorded as single files
+/// made from the latest version; the folder's files stay as they are.
+#[test]
+fn a_removed_projects_version_keeps_no_references_to_its_store() {
+    if !has_git() {
+        return;
+    }
+    let scratch = Scratch::new("remove-recorded");
+    let own = scratch.join("own");
+    fs::create_dir_all(&own).unwrap();
+    git(&own, &["init", "-q"]).unwrap();
+    fs::write(own.join("readme.txt"), "mine").unwrap();
+    git(&own, &["add", "-A"]).unwrap();
+    git(&own, &["commit", "-q", "-m", "My files"]).unwrap();
+    let options = CreateOptions {
+        design: None,
+        ..options(None)
+    };
+    let mut log = Vec::new();
+    create_project(&own, &options, &Context::default(), None, &mut log).unwrap();
+    let deleted = own.join("c.mitcad");
+    let resaved = own.join("d.mitcad");
+    design().save_file(&deleted, FileFormat::Auto).unwrap();
+    design().save_file(&resaved, FileFormat::Auto).unwrap();
+    let repo = ProjectRepo::open(&own).unwrap();
+    repo.commit(&[deleted.clone(), resaved.clone()], "Two parts", &author())
+        .unwrap();
+    drop(repo);
+    for name in ["c.mitcad", "d.mitcad"] {
+        let text = git(&own, &["show", &format!("HEAD:{name}")]).unwrap();
+        assert!(refers_to_store(&text), "{name}");
+    }
+    // Neither change is recorded.
+    fs::remove_file(&deleted).unwrap();
+    let single = design().to_json();
+    fs::write(&resaved, &single).unwrap();
+
+    let plan = remove_project(&own, true, None).unwrap();
+    assert_eq!(plan.repository, RepositoryFate::Kept);
+    assert!(plan.rewritten.is_empty(), "{plan:?}");
+    for name in ["c.mitcad", "d.mitcad"] {
+        assert!(
+            plan.warnings.iter().any(|w| w.starts_with(name)),
+            "{:?}",
+            plan.warnings
+        );
+    }
+    let removed = remove_project(&own, false, Some(&author())).unwrap();
+    assert!(removed.commit.is_some(), "{removed:?}");
+    let files = git(&own, &["ls-tree", "-r", "--name-only", "HEAD"]).unwrap();
+    assert!(!files.contains(".mitcad/"), "{files}");
+    for name in ["c.mitcad", "d.mitcad"] {
+        let text = git(&own, &["show", &format!("HEAD:{name}")]).unwrap();
+        assert!(!refers_to_store(&text), "{name}: {text}");
+    }
+    // The folder's files are as they were: c.mitcad deleted, d.mitcad the
+    // single file saved after the latest version.
+    assert!(!deleted.exists());
+    assert_eq!(fs::read_to_string(&resaved).unwrap(), single);
+    let status = git(&own, &["status", "--porcelain"]).unwrap();
+    assert!(status.lines().any(|line| line == " D c.mitcad"), "{status}");
+    git(
+        &own,
+        &["fsck", "--strict", "--no-progress", "--no-dangling"],
+    )
+    .unwrap();
+}

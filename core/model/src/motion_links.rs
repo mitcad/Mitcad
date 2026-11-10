@@ -145,29 +145,41 @@ impl<R: Resolver, F: FnMut(ComponentUid) -> R> LinkGeo<'_, R, F> {
             GeomRef::Face { body, face } => {
                 let shape = r.shape(*body)?;
                 let face = crate::features::renamed::face_for(&mut r, &shape, face)?;
-                match r
-                    .kernel()
-                    .face_geometry(&shape, &face)
-                    .map_err(|e| format!("face {face}: {e}"))?
-                {
+                match r.kernel().face_geometry(&shape, &face).map_err(|e| {
+                    crate::notice::about_place(
+                        crate::notice::NoticePlace::face(face.to_string()),
+                        &e.to_string(),
+                    )
+                })? {
                     SurfaceGeometry::Cylinder { radius, .. }
                     | SurfaceGeometry::Cone { radius, .. }
                     | SurfaceGeometry::Sphere { radius, .. } => radius,
                     other => {
-                        return Err(format!("face {face} ({}) is not round", other.kind()));
+                        return Err(crate::notice::placed(
+                            "the face is not round",
+                            crate::notice::NoticePlace::face(face.to_string()),
+                            format!("face {face} ({}) is not round", other.kind()),
+                        ));
                     }
                 }
             }
             GeomRef::Edge { body, edge } => {
                 let shape = r.shape(*body)?;
                 let edge = crate::features::renamed::edge_for(&mut r, &shape, edge)?;
-                match r
-                    .kernel()
-                    .edge_geometry(&shape, &edge)
-                    .map_err(|e| format!("edge {edge}: {e}"))?
-                {
+                match r.kernel().edge_geometry(&shape, &edge).map_err(|e| {
+                    crate::notice::about_place(
+                        crate::notice::NoticePlace::edge(edge.to_string()),
+                        &e.to_string(),
+                    )
+                })? {
                     CurveGeometry::Circle { radius, .. } => radius,
-                    other => return Err(format!("edge {edge} ({}) is not round", other.kind())),
+                    other => {
+                        return Err(crate::notice::placed(
+                            "the edge is not round",
+                            crate::notice::NoticePlace::edge(edge.to_string()),
+                            format!("edge {edge} ({}) is not round", other.kind()),
+                        ));
+                    }
                 }
             }
             GeomRef::SketchCurves { sketch, curves } if curves.len() == 1 => {
@@ -258,7 +270,12 @@ impl<R: Resolver, F: FnMut(ComponentUid) -> R> LinkGeo<'_, R, F> {
                 let curves = r
                     .kernel()
                     .curves_of(&shape, &TopoName::Face(face.clone()))
-                    .map_err(|e| format!("face {face}: {e}"))?;
+                    .map_err(|e| {
+                        crate::notice::about_place(
+                            crate::notice::NoticePlace::face(face.to_string()),
+                            &e.to_string(),
+                        )
+                    })?;
                 curves
                     .iter()
                     .map(|c| sample_curve(c, tol))

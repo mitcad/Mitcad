@@ -60,7 +60,8 @@ ChainWire chain_wire(const Path& chain) {
     const TopoDS_Edge edge = detail::model_edge(piece.curve);
     make.Add(edge);
     if (!make.IsDone()) {
-      throw std::invalid_argument("curve " + piece.name + " does not join the curve before it");
+      throw std::invalid_argument(placed_error("a curve does not join the curve before it",
+                                               "curve " + piece.name + " does not join the curve before it"));
     }
     middles.emplace_back(middle_of(edge), piece.name);
   }

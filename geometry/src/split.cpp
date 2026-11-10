@@ -123,7 +123,9 @@ ShapePtr split_faces(const std::string& feature, const Shape& body,
     }
     for (int f : chosen) {
       if (crossed.count(f) == 0) {
-        throw std::invalid_argument("the tool does not cross face " + detail::primary_name(body, f));
+        const std::string name = detail::primary_name(body, f);
+        throw std::invalid_argument(
+            face_error(name, "the tool does not cross one of the faces to split", "the tool does not cross face " + name));
       }
     }
     detail::build(splitter);
@@ -132,7 +134,9 @@ ShapePtr split_faces(const std::string& feature, const Shape& body,
     }
     for (int f : chosen) {
       if (splitter.Modified(body.face(f)).Extent() < 2) {
-        throw std::invalid_argument("the tool does not split face " + detail::primary_name(body, f));
+        const std::string name = detail::primary_name(body, f);
+        throw std::invalid_argument(
+            face_error(name, "the tool does not split one of the faces", "the tool does not split face " + name));
       }
     }
     detail::FaceNamer namer(splitter.Shape());

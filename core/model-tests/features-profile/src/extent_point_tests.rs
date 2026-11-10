@@ -342,7 +342,7 @@ fn line_object(curve: &str) -> Value {
 fn failure(b: &mut Block, def: &FeatureDef<mitcad_model::ValueInput>) -> String {
     match b.doc.add_feature(def, None) {
         Ok(added) => match status(&b.doc, added.uid) {
-            FeatureStatus::Failed(message) => message,
+            FeatureStatus::Failed(message) => message.agent_text().to_owned(),
             other => panic!("{other:?}"),
         },
         Err(error) => error.to_string(),

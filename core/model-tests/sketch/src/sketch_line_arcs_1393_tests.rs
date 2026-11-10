@@ -240,6 +240,80 @@ fn a_normal_arc_needs_a_line_or_an_arc_and_an_end_off_the_square() {
     );
 }
 
+/// The counter-clockwise sweep of the arc `id`, radians.
+fn sweep_of(s: &Value, id: &str) -> f64 {
+    let geometry = &entity(s, id)["geometry"];
+    let (start, end) = (
+        geometry["start_angle"].as_f64().unwrap(),
+        geometry["end_angle"].as_f64().unwrap(),
+    );
+    (end - start).rem_euclid(std::f64::consts::TAU)
+}
+
+#[test]
+fn a_normal_arc_of_more_than_half_a_turn_leaves_toward_the_side_it_is_drawn_to() {
+    // (mitcad#1608) From the end (10, 0) of a line along +x, an arc of
+    // radius 10 that sweeps 270 degrees upward round (20, 0) ends at
+    // (20, -10), below the line: `toward` keeps it leaving upward.
+    let mut d = with_sketch();
+    command(
+        &mut d,
+        json!({"cmd": "sketch.add_line", "sketch": "F1", "start": [0, 0], "end": [10, 0]}),
+    );
+    let made = command(
+        &mut d,
+        json!({"cmd": "sketch.arc", "sketch": "F1", "mode": "normal", "from": "p3",
+               "end": [20, -10], "toward": [10, 5]}),
+    );
+    let arc = made["made"][0].as_str().unwrap().to_owned();
+    let s = sketch(&d);
+    assert!(near(center_of(&s, &arc), [20.0, 0.0]), "{s}");
+    let sweep = sweep_of(&s, &arc);
+    assert!(
+        (sweep - 1.5 * std::f64::consts::PI).abs() <= 1e-6,
+        "sweep {sweep}: {s}"
+    );
+    // Clockwise from p3 (counter-clockwise to it): it leaves upward.
+    assert_eq!(entity(&s, &arc)["end"], "p3", "{s}");
+    // Without `toward` the end's side decides: the quarter that leaves
+    // downward, as before.
+    let mut d = with_sketch();
+    command(
+        &mut d,
+        json!({"cmd": "sketch.add_line", "sketch": "F1", "start": [0, 0], "end": [10, 0]}),
+    );
+    let made = command(
+        &mut d,
+        json!({"cmd": "sketch.arc", "sketch": "F1", "mode": "normal", "from": "p3", "end": [20, -10]}),
+    );
+    let arc = made["made"][0].as_str().unwrap().to_owned();
+    let s = sketch(&d);
+    let sweep = sweep_of(&s, &arc);
+    assert!(
+        (sweep - 0.5 * std::f64::consts::PI).abs() <= 1e-6,
+        "sweep {sweep}: {s}"
+    );
+    assert_eq!(entity(&s, &arc)["start"], "p3", "{s}");
+    // Half a turn, the end on the line's own line: the side `toward` is on,
+    // either way.
+    for (toward, from_end) in [([10.0, 5.0], "end"), ([10.0, -5.0], "start")] {
+        let mut d = with_sketch();
+        command(
+            &mut d,
+            json!({"cmd": "sketch.add_line", "sketch": "F1", "start": [0, 0], "end": [10, 0]}),
+        );
+        let made = command(
+            &mut d,
+            json!({"cmd": "sketch.arc", "sketch": "F1", "mode": "normal", "from": "p3",
+                   "end": [30, 0], "toward": toward}),
+        );
+        let arc = made["made"][0].as_str().unwrap().to_owned();
+        let s = sketch(&d);
+        assert!(near(center_of(&s, &arc), [20.0, 0.0]), "{s}");
+        assert_eq!(entity(&s, &arc)[from_end], "p3", "{toward:?}: {s}");
+    }
+}
+
 #[test]
 fn a_midpoint_line_is_held_symmetric_about_its_middle() {
     let mut d = with_sketch();

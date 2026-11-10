@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <initializer_list>
 #include <optional>
 
 namespace {
@@ -127,11 +128,56 @@ void endTests() {
   CHECK(swept.has_value() && same(swept->radius, 5.0));
 }
 
+// A normal arc whose typed sweep is 180 degrees or more (mitcad#1608): its
+// end lies behind the curve, on the other side than the cursor, and the
+// arc still leaves toward the cursor's side and sweeps as typed.
+void sweepTests() {
+  using mitcad::sketch::lineArc;
+  using mitcad::sketch::lineArcDirection;
+  using mitcad::sketch::lineArcEnd;
+  using mitcad::sketch::sweep;
+  const V2 start{0.0, 0.0};
+  const V2 along{1.0, 0.0};
+  const V2 above{3.0, 5.0};
+  const V2 below{3.0, -5.0};
+  // Radius 10 and 270 degrees with the cursor above: round (10, 0) to
+  // (10, -10), below the line.
+  const V2 up = lineArcDirection(LineArcKind::Normal, along, start, above);
+  CHECK(same(up, V2{0.0, 1.0}));
+  const V2 end = lineArcEnd(start, up, above, 10.0, 1.5 * kPi);
+  CHECK(same(end, V2{10.0, -10.0}));
+  const auto arc = lineArc(LineArcKind::Normal, start, along, end, above);
+  CHECK(arc.has_value());
+  if (arc) {
+    CHECK(same(arc->center, V2{10.0, 0.0}));
+    CHECK(same(arc->radius, 10.0));
+    CHECK(same(sweep(arc->start, arc->end), 1.5 * kPi));
+    CHECK(same(leavingAt(*arc, start), V2{0.0, 1.0}));
+  }
+  // From the end's side alone it would be the quarter leaving downward.
+  const auto quarter = lineArc(LineArcKind::Normal, start, along, end);
+  CHECK(quarter.has_value() && same(sweep(quarter->start, quarter->end), kPi / 2.0));
+  // Half a turn: the end on the line's own line, the side the cursor's,
+  // above or below.
+  for (const V2& cursor : {above, below}) {
+    const V2 direction = lineArcDirection(LineArcKind::Normal, along, start, cursor);
+    const V2 half = lineArcEnd(start, direction, cursor, 10.0, kPi);
+    CHECK(same(half, V2{20.0, 0.0}));
+    const auto halfArc = lineArc(LineArcKind::Normal, start, along, half, cursor);
+    CHECK(halfArc.has_value());
+    if (halfArc) {
+      CHECK(std::abs(sweep(halfArc->start, halfArc->end) - kPi) <= 1e-9);
+      CHECK(same(leavingAt(*halfArc, start), V2{0.0, cursor.y > 0.0 ? 1.0 : -1.0}));
+    }
+  }
+}
+
 } // namespace
 
 int lineArcsTests() {
   kindTests();
   arcTests();
   endTests();
+  sweepTests();
   return failures;
 }

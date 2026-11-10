@@ -692,6 +692,152 @@ fn a_streaming_call_that_is_never_made_gets_a_failed_result() {
     assert_eq!(ended[1]["subtype"], "error");
 }
 
+/// The ids of the calls in `messages` without a result in the message after
+/// them (the Messages API refuses such a conversation).
+fn calls_without_results(messages: &Value) -> Vec<String> {
+    let messages = messages.as_array().unwrap();
+    let mut missing = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
+        let Some(blocks) = message["content"].as_array() else {
+            continue;
+        };
+        for block in blocks.iter().filter(|block| block["type"] == "tool_use") {
+            let id = block["id"].as_str().unwrap_or_default();
+            let answered = messages.get(index + 1).is_some_and(|next| {
+                next["role"] == "user"
+                    && next["content"].as_array().is_some_and(|results| {
+                        results.iter().any(|result| {
+                            result["type"] == "tool_result" && result["tool_use_id"] == id
+                        })
+                    })
+            });
+            if !answered {
+                missing.push(id.to_owned());
+            }
+        }
+    }
+    missing
+}
+
+#[test]
+fn a_refused_answer_keeps_no_call_without_a_result() {
+    // mitcad#1602: an answer that streams a call and then ends with
+    // stop_reason "refusal" keeps its text but not its call, so the next
+    // message's request is one the API accepts.
+    let mut stream = connected("anthropic", "https://api.anthropic.com", "");
+    let sent = control(&mut stream, json!({"op": "message", "text": "a box"}));
+    let id = sent[0]["id"].as_u64().unwrap();
+    let streamed = lines(&[
+        anthropic_event(
+            "message_start",
+            json!({"type": "message_start", "message": {"id": "msg_r"}}),
+        ),
+        anthropic_event(
+            "content_block_start",
+            json!({"type": "content_block_start", "index": 0,
+                   "content_block": {"type": "text", "text": ""}}),
+        ),
+        anthropic_event(
+            "content_block_delta",
+            json!({"type": "content_block_delta", "index": 0,
+                   "delta": {"type": "text_delta", "text": "Adding the box."}}),
+        ),
+        anthropic_event(
+            "content_block_stop",
+            json!({"type": "content_block_stop", "index": 0}),
+        ),
+        anthropic_event(
+            "content_block_start",
+            json!({"type": "content_block_start", "index": 1,
+                   "content_block": {"type": "tool_use", "id": "toolu_r", "name": "model_command", "input": {}}}),
+        ),
+        anthropic_event(
+            "content_block_delta",
+            json!({"type": "content_block_delta", "index": 1,
+                   "delta": {"type": "input_json_delta", "partial_json": "{\"command\": {}}"}}),
+        ),
+        anthropic_event(
+            "content_block_stop",
+            json!({"type": "content_block_stop", "index": 1}),
+        ),
+        anthropic_event(
+            "message_delta",
+            json!({"type": "message_delta", "delta": {"stop_reason": "refusal"}}),
+        ),
+        anthropic_event("message_stop", json!({"type": "message_stop"})),
+    ]);
+    let refs: Vec<&str> = streamed.iter().map(String::as_str).collect();
+    sse(&mut stream, id, &refs);
+    let ended = control(
+        &mut stream,
+        json!({"op": "http_end", "id": id, "status": 200}),
+    );
+    assert_eq!(kinds(&ended), ["tool_result", "turn_end", "transcript"]);
+    assert_eq!(ended[0]["id"], "toolu_r");
+    assert_eq!(ended[0]["error"], true);
+    assert!(ended[0]["text"].as_str().unwrap().contains("declined"));
+    assert_eq!(ended[1]["subtype"], "refusal");
+    assert_eq!(ended[1]["error"], true);
+    let kept: Value = serde_json::from_str(ended[2]["content"].as_str().unwrap()).unwrap();
+    let messages = &kept["messages"];
+    assert_eq!(messages.as_array().unwrap().len(), 2);
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["content"].as_array().unwrap().len(), 1);
+    assert_eq!(messages[1]["content"][0]["text"], "Adding the box.");
+    assert!(calls_without_results(messages).is_empty());
+
+    // The next message follows the kept text.
+    let next = control(&mut stream, json!({"op": "message", "text": "a cylinder"}));
+    assert_eq!(kinds(&next), ["http"]);
+    let body = body_of(&next[0]);
+    let messages = &body["messages"];
+    assert_eq!(messages.as_array().unwrap().len(), 3);
+    assert_eq!(messages[2]["role"], "user");
+    assert_eq!(messages[2]["content"][0]["text"], "a cylinder");
+    assert!(calls_without_results(messages).is_empty());
+}
+
+#[test]
+fn a_refused_answer_with_only_a_call_keeps_nothing() {
+    // mitcad#1602: a refused answer with nothing but a call keeps nothing,
+    // and its message is taken out as after any refused first request.
+    let mut stream = connected("anthropic", "https://api.anthropic.com", "");
+    let sent = control(&mut stream, json!({"op": "message", "text": "a box"}));
+    let id = sent[0]["id"].as_u64().unwrap();
+    assert_eq!(
+        kinds(&call_started(&mut stream, id, "toolu_q")),
+        ["tool_start"]
+    );
+    let streamed = lines(&[
+        anthropic_event(
+            "message_delta",
+            json!({"type": "message_delta", "delta": {"stop_reason": "refusal"}}),
+        ),
+        anthropic_event("message_stop", json!({"type": "message_stop"})),
+    ]);
+    let refs: Vec<&str> = streamed.iter().map(String::as_str).collect();
+    assert!(sse(&mut stream, id, &refs).is_empty());
+    let ended = control(
+        &mut stream,
+        json!({"op": "http_end", "id": id, "status": 200}),
+    );
+    assert_eq!(kinds(&ended), ["tool_result", "turn_end", "transcript"]);
+    assert_eq!(ended[0]["id"], "toolu_q");
+    assert_eq!(ended[0]["error"], true);
+    assert_eq!(ended[1]["subtype"], "refusal");
+    let kept: Value = serde_json::from_str(ended[2]["content"].as_str().unwrap()).unwrap();
+    assert!(kept["messages"].as_array().unwrap().is_empty());
+
+    let next = control(&mut stream, json!({"op": "message", "text": "a cylinder"}));
+    assert_eq!(kinds(&next), ["http"]);
+    let body = body_of(&next[0]);
+    let messages = &body["messages"];
+    assert_eq!(messages.as_array().unwrap().len(), 1);
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[0]["content"][0]["text"], "a cylinder");
+    assert!(calls_without_results(messages).is_empty());
+}
+
 #[test]
 fn the_kept_conversation_resumes_or_a_new_one_starts() {
     let kept = json!({"format": "mitcad-chat-api", "provider": "openai", "messages": [

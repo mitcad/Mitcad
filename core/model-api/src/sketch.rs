@@ -149,6 +149,9 @@ named_enum! {
             clockwise: bool,
             #[serde(default)]
             from: Option<String>,
+            // A normal arc's side (mitcad#1608).
+            #[serde(default)]
+            toward: Option<[f64; 2]>,
             #[serde(default)]
             construction: bool,
         },
@@ -1056,6 +1059,36 @@ pub(super) fn status_json(status: &SketchStatus, def: &SketchDef) -> Value {
     value
 }
 
+/// A sketch command's result with what a person reads of its warnings and
+/// notes (mitcad#1612, `docs/ui-conventions.md` "What a message says"):
+/// `warnings` and `notes` keep the agents' texts, with the sketch's ids
+/// and the names of what it projects; `warning_messages` and
+/// `note_messages` beside them say the same in plain words
+/// ([`notice::user_message`]), which the application shows.
+pub(super) fn with_shown_texts(mut value: Value) -> Value {
+    if !value.is_object() {
+        return value;
+    }
+    for (key, shown) in [("warnings", "warning_messages"), ("notes", "note_messages")] {
+        let Some(texts) = value[key].as_array() else {
+            continue;
+        };
+        let errors: Vec<notice::FeatureError> = texts
+            .iter()
+            .filter_map(Value::as_str)
+            .map(notice::FeatureError::from_text)
+            .collect();
+        value[key] = json!(errors.iter().map(|e| e.agent_text()).collect::<Vec<_>>());
+        value[shown] = json!(
+            errors
+                .iter()
+                .map(|e| e.message.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+    value
+}
+
 /// The result of an edit: what it made and the sketch's status.
 pub(super) fn report_json(report: &EditReport, def: Option<&SketchDef>) -> Value {
     let texts: Vec<String> = report.texts.iter().map(|t| format!("t{}", t.0)).collect();
@@ -1736,6 +1769,10 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
             warnings.push(message.clone());
             warning_entities.push(entities.clone());
         }
+        // What a person reads of them (mitcad#1612): `warnings` keeps the
+        // agents' texts with the sketch's ids and the sources' names.
+        let warning_messages: Vec<String> =
+            warnings.iter().map(|w| notice::user_message(w)).collect();
         let mut result = json!({
             "uid": uid,
             "name": entry.name,
@@ -1745,6 +1782,7 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
             "solved": solved.is_some(),
             "error": error.map(|e| e.message),
             "warnings": warnings,
+            "warning_messages": warning_messages,
             "warning_entities": warning_entities,
             "entities": entities,
             "constraints": def.constraints,
@@ -1799,16 +1837,16 @@ pub(crate) fn solve_notices(
     for (message, _) in redundant {
         notices.push(Notice::warning(message.as_str()));
     }
-    if !status.unmet_inactive.is_empty() {
-        let items: Vec<String> = status
-            .unmet_inactive
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        notices.push(Notice::info(format!(
-            "Inactive constraints the geometry does not meet: {}",
-            items.join(", ")
-        )));
+    // Counted, not named (mitcad#1612); the status's `unmet_inactive` lists
+    // their ids for agents.
+    match status.unmet_inactive.len() {
+        0 => {}
+        1 => notices.push(Notice::info(
+            "An inactive constraint the geometry does not meet",
+        )),
+        n => notices.push(Notice::info(format!(
+            "{n} inactive constraints the geometry does not meet"
+        ))),
     }
     notices
 }
@@ -1816,8 +1854,9 @@ pub(crate) fn solve_notices(
 /// The solve's redundant constraints grouped by where they come from
 /// (mitcad#1171): an offset's own (its lines' distances and parallels, its
 /// helpers' lengths, its tangent corners), a pattern's, then the sketch's,
-/// each group a message that counts them ("Offset k1: 2 dimensions follow
-/// from the others", "Redundant: 1 constraint follows from the others")
+/// each group a message that counts them ("An offset: 2 dimensions follow
+/// from the others", "Redundant: 1 constraint follows from the others";
+/// mitcad#1612: no ids, the entities it names select and paint it)
 /// with the entities they name (an offset's results, a pattern's entities
 /// for what they hold themselves), for the Sketch Palette to select. The
 /// ids themselves are the query's `redundant`. Without the definition every
@@ -1834,12 +1873,12 @@ pub(crate) fn redundant_groups(
             let offsets = def.offsets.iter().map(|o| {
                 let own = constraints_of(o, &def.entities, &def.constraints, &def.dimensions);
                 let made = o.results.iter().map(|r| Ref::Curve(*r).to_string());
-                (format!("Offset {}", o.id), own, made.collect())
+                ("An offset".to_owned(), own, made.collect())
             });
             let patterns = def.patterns.iter().map(|p| {
                 let made = p.entities.iter().map(ToString::to_string);
                 (
-                    format!("Pattern {}", p.id),
+                    "A pattern".to_owned(),
                     BTreeSet::from([p.id]),
                     made.collect(),
                 )
@@ -2281,6 +2320,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     center,
                     clockwise,
                     from,
+                    toward,
                     construction,
                     ..
                 } => {
@@ -2315,6 +2355,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                             )?)
                             .map_err(|e| e.to_string())?,
                             end: point(&need(end, "end", m)?)?,
+                            toward,
                         },
                         other => {
                             return Err(format!(
@@ -3322,19 +3363,42 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                 let mut by: Vec<String> = one.kept.iter().flat_map(|(_, h)| h.clone()).collect();
                 by.sort();
                 by.dedup();
-                warnings.push(format!(
-                    "the projection of {}: {} kept as construction references, held by {} \
-                     that could not be carried over",
-                    one.source,
-                    names(&kept),
-                    by.join(", ")
-                ));
+                // In plain words for a person, the ids for agents
+                // (mitcad#1612).
+                let said = if kept.len() == 1 {
+                    "a projection: a curve kept as a construction reference, held by \
+                     constraints that could not be carried over"
+                        .to_owned()
+                } else {
+                    format!(
+                        "a projection: {} curves kept as construction references, held by \
+                         constraints that could not be carried over",
+                        kept.len()
+                    )
+                };
+                warnings.push(
+                    notice::FeatureError::new(said)
+                        .with_detail(format!(
+                            "the projection of {}: {} kept as construction references, held by {} \
+                             that could not be carried over",
+                            one.source,
+                            names(&kept),
+                            by.join(", ")
+                        ))
+                        .text(),
+                );
             }
             for same in &one.same {
-                warnings.push(format!(
-                    "c{} is in the sketch already: not projected again",
-                    same.0
-                ));
+                warnings.push(
+                    notice::FeatureError::new(
+                        "a curve is in the sketch already: not projected again",
+                    )
+                    .with_detail(format!(
+                        "c{} is in the sketch already: not projected again",
+                        same.0
+                    ))
+                    .text(),
+                );
             }
             let carried: Vec<Value> = one
                 .carried
@@ -3713,7 +3777,11 @@ mod notice_tests {
             notices[1].message, "Redundant: 1 constraint follows from the others",
             "{notices:?}"
         );
-        assert!(notices[2].message.ends_with(": k5"), "{notices:?}");
+        // Counted, without ids (mitcad#1612).
+        assert_eq!(
+            notices[2].message, "An inactive constraint the geometry does not meet",
+            "{notices:?}"
+        );
         assert!(solve_notices(None, &SketchStatus::default(), &[]).is_empty());
     }
 
@@ -3770,7 +3838,7 @@ mod notice_tests {
             redundant_groups(&status, Some(&def)),
             [
                 (
-                    "Offset k2: 1 dimension and 1 constraint follow from the others".to_owned(),
+                    "An offset: 1 dimension and 1 constraint follow from the others".to_owned(),
                     strings(&["c1", "c2"])
                 ),
                 (

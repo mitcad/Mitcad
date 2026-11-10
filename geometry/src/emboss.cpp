@@ -572,8 +572,9 @@ ShapePtr tapered_solid(const std::string& feature, const Wrap& wrap, const detai
     ++shells;
   }
   if (shells != 1 || sewing.NbFreeEdges() != 0) {
-    throw std::runtime_error("the tapered walls of the profile " + detail::region_list(profile.regions) +
-                             " do not close up with its top and foot");
+    throw std::runtime_error(placed_error("the tapered walls of the profile do not close up with its top and foot",
+                                          "the tapered walls of the profile " + detail::region_list(profile.regions) +
+                                              " do not close up with its top and foot"));
   }
   BRep_Builder builder;
   shell.Closed(true);

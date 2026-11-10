@@ -41,7 +41,7 @@ impl<K: Kernel> ReportApi<K> for Document<K> {
         let _ = writeln!(text, "Timeline (marker {marker}):");
         for item in self.timeline() {
             let status = match (item.status, item.message()) {
-                (Some(FeatureStatus::Failed(message)), _) => format!("error: {message}"),
+                (Some(FeatureStatus::Failed(error)), _) => format!("error: {}", error.agent_text()),
                 (Some(FeatureStatus::Ok), Some(warnings)) => format!("warning: {warnings}"),
                 // A placeholder of an imported item (mitcad#170).
                 (Some(FeatureStatus::Suppressed), Some(note)) => format!("suppressed: {note}"),

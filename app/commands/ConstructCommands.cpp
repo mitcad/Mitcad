@@ -223,7 +223,8 @@ InputDef fieldInput(const FieldSpec& field) {
         });
   case Field::Path:
     return selectionInput(key, name, kPathKinds, 1, 0)
-        .withTooltip(QObject::tr("A sketch line, arc or circle, connected edges, or an intersection curve"));
+        .withTooltip(QObject::tr("A sketch line, arc or circle, connected edges, or an intersection curve"))
+        .withAccepts(isPathItem);
   case Field::Distance:
     return valueInput(key, name, ValueKind::Length, QStringLiteral("10 mm"));
   case Field::Angle:

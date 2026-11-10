@@ -55,6 +55,7 @@ use crate::fingerprint::Fingerprint;
 use crate::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use crate::kernel::{Kernel, KernelError, ShapeUnpacker};
 use crate::monitor::{Cancelled, RecomputeMonitor};
+use crate::notice::FeatureError;
 use crate::parameters::{ParamId, Parameters};
 use crate::store::ResultStore;
 use crate::transform::Transform;
@@ -82,14 +83,21 @@ pub(crate) type BodyState<S> = BTreeMap<BodyUid, Versioned<S>>;
 #[derive(Debug, Clone, PartialEq)]
 pub enum FeatureStatus {
     Ok,
-    /// Evaluation failed with this message; the state passed it by.
-    Failed(String),
+    /// Evaluation failed with this error (mitcad#1612: the user's message,
+    /// its places and the agent's detail); the state passed it by.
+    Failed(FeatureError),
     Suppressed,
     /// After the timeline marker, not evaluated.
     RolledBack,
 }
 
 impl FeatureStatus {
+    /// Failed with the error of `text` ([`FeatureError::from_text`]: its
+    /// places and detail where it carries them).
+    pub fn failed(text: impl AsRef<str>) -> Self {
+        Self::Failed(FeatureError::from_text(text.as_ref()))
+    }
+
     pub fn is_ok(&self) -> bool {
         *self == Self::Ok
     }
@@ -104,9 +112,16 @@ impl FeatureStatus {
         }
     }
 
+    /// A failure's text for agents and the log: its detail with names and
+    /// coordinates, or its message ([`FeatureError::agent_text`]).
     pub fn error(&self) -> Option<&str> {
+        self.failure().map(FeatureError::agent_text)
+    }
+
+    /// A failure's error: what a person reads, its places, the detail.
+    pub fn failure(&self) -> Option<&FeatureError> {
         match self {
-            Self::Failed(message) => Some(message),
+            Self::Failed(error) => Some(error),
             _ => None,
         }
     }
@@ -296,7 +311,8 @@ pub struct Output<S> {
     pub time: Duration,
     /// In the result store: read from it, or written to it (P7d).
     pub persisted: Flag,
-    pub result: Result<(), String>,
+    /// Its failure (mitcad#1612): the user's message, places and detail.
+    pub result: Result<(), FeatureError>,
     /// What an evaluation that succeeded built with caveats (P9).
     pub warnings: Vec<String>,
     /// What is worth knowing of how it was built (mitcad#1106).
@@ -1891,7 +1907,7 @@ impl<'s, S: Clone + Send + Sync> Walk<'s, S> {
         if status.is_ok()
             && let Err(message) = place(state, entry, &placements, &mut done.placements)
         {
-            status = FeatureStatus::Failed(message);
+            status = FeatureStatus::failed(message);
         }
         // Joints and rigid groups (mitcad#55) read the placements and the
         // other components' bodies at this point: applied here too.
@@ -1908,7 +1924,7 @@ impl<'s, S: Clone + Send + Sync> Walk<'s, S> {
                     applied_warnings = Some(all);
                 }
                 Ok(_) => {}
-                Err(message) => status = FeatureStatus::Failed(message),
+                Err(message) => status = FeatureStatus::failed(message),
             }
         }
         if status.is_ok() || output.placements.is_empty() {
@@ -1998,12 +2014,13 @@ impl<'s, S: Clone + Send + Sync> Walk<'s, S> {
                 follow_pieces(done, entry.uid, &output);
             }
         }
-        if let FeatureStatus::Failed(message) = &status {
+        if let FeatureStatus::Failed(error) = &status {
+            // (What a person reads: the blocker is shown, mitcad#1612.)
             crate::sheet::block(
                 &mut done.sheets,
                 &output.sheet_footprint,
                 entry.uid,
-                message,
+                &error.message,
             );
         }
         done.results.push(FeatureResult {
@@ -2413,11 +2430,14 @@ fn with_turns(mut warnings: Vec<String>, turns: &[String]) -> Vec<String> {
     warnings
 }
 
-/// A failed feature's message with what its angles say (the warnings of
-/// a feature that failed are not shown).
-fn failed_with_turns(message: String, turns: &[String]) -> String {
+/// A failed feature's error from its evaluation's text (mitcad#1612: with
+/// the places and detail it carries, [`FeatureError::from_text`]), with
+/// what its angles say (the warnings of a feature that failed are not
+/// shown).
+fn failed_with_turns(message: String, turns: &[String]) -> FeatureError {
+    let error = FeatureError::from_text(&message);
     if turns.is_empty() {
-        return message;
+        return error;
     }
-    format!("{message}; {}", turns.join("; "))
+    error.suffixed(&format!("; {}", turns.join("; ")))
 }

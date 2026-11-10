@@ -689,7 +689,8 @@ std::vector<TopoDS_Face> guide_faces(const std::vector<GuideFace>& guide) {
     }
     const std::vector<int> found = g.body->find_faces(g.face);
     if (found.empty()) {
-      throw std::invalid_argument("guide surface " + g.face + " does not exist");
+      throw std::invalid_argument(
+          face_error(g.face, "a guide surface does not exist", "guide surface " + g.face + " does not exist"));
     }
     for (const int i : found) {
       faces.push_back(g.body->face(i));
@@ -838,21 +839,23 @@ detail::SweepFace profile_face_of(const SweepSpec& spec, Frame& frame) {
   const Shape& body = *spec.profile_body;
   const std::vector<int> found = body.find_faces(spec.profile_face);
   if (found.empty()) {
-    throw std::invalid_argument("the body has no face " + spec.profile_face);
+    throw std::invalid_argument(no_face_error(spec.profile_face));
   }
   if (found.size() > 1) {
-    throw std::invalid_argument(spec.profile_face + " names " + std::to_string(found.size()) +
-                                " faces; a sweep takes one face");
+    throw std::invalid_argument(face_error(
+        spec.profile_face, "the face is in " + std::to_string(found.size()) + " pieces; a sweep takes one face",
+        spec.profile_face + " names " + std::to_string(found.size()) + " faces; a sweep takes one face"));
   }
   const TopoDS_Face& face = body.face(found.front());
   TopLoc_Location location;
   if (BRep_Tool::Surface(face, location).IsNull()) {
-    throw std::invalid_argument("face " + spec.profile_face +
-                                " has no surface (a mesh body's triangles): a sweep takes a planar face");
+    const std::string why = " has no surface (a mesh body's triangles): a sweep takes a planar face";
+    throw std::invalid_argument(face_error(spec.profile_face, "the face" + why, "face " + spec.profile_face + why));
   }
   const BRepAdaptor_Surface surface(face);
   if (surface.GetType() != GeomAbs_Plane) {
-    throw std::invalid_argument("face " + spec.profile_face + " is not planar: a sweep takes a planar face");
+    const std::string why = " is not planar: a sweep takes a planar face";
+    throw std::invalid_argument(face_error(spec.profile_face, "the face" + why, "face " + spec.profile_face + why));
   }
   const detail::InputCopy copy(face);
   detail::SweepFace profile{TopoDS::Face(copy.shape()), {}, {spec.profile_key}};

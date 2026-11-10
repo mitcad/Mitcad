@@ -624,8 +624,9 @@ ShapePtr ruled_surface(const Shape& body, const RuledSpec& spec) {
         } else if (faces.size() == 1) {
           entry.face = faces.front();
         } else {
-          throw std::invalid_argument("ruled surface: edge " + copy->edge_name(e) +
-                                      " lies between two faces; give the face beside the chain");
+          const std::string why = " lies between two faces; give the face beside the chain";
+          throw std::invalid_argument(edge_error(copy->edge_name(e), "ruled surface: an edge" + why,
+                                                 "ruled surface: edge " + copy->edge_name(e) + why));
         }
         chain.push_back(entry);
       }
@@ -733,13 +734,15 @@ ShapePtr extend_surface(const Shape& body, const std::vector<std::string>& edges
     for (const int e : picked_edges(body, edges, openings)) {
       const std::vector<int> faces = edge_faces.at(e);
       if (faces.size() != 1 || BRep_Tool::IsClosed(body.edge(e), body.face(faces.front()))) {
-        throw std::invalid_argument("extend: edge " + body.edge_name(e) +
-                                    " is not on the surface's open boundary");
+        const std::string why = " is not on the surface's open boundary";
+        throw std::invalid_argument(
+            edge_error(body.edge_name(e), "extend: an edge" + why, "extend: edge " + body.edge_name(e) + why));
       }
       const int side = side_of(body.edge(e), body.face(faces.front()));
       if (side < 0) {
-        throw std::invalid_argument("unsupported: extend of edge " + body.edge_name(e) +
-                                    ", which does not run along a side of its face's parameter range");
+        const std::string why = ", which does not run along a side of its face's parameter range";
+        throw std::invalid_argument(edge_error(body.edge_name(e), "unsupported: extend of an edge" + why,
+                                               "unsupported: extend of edge " + body.edge_name(e) + why));
       }
       sides[faces.front()][static_cast<std::size_t>(side)] = true;
     }

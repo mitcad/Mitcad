@@ -54,6 +54,15 @@ pub const MAGIC: [u8; 12] = [
 /// The folder of the mesh containers in a document.
 pub const FOLDER: &str = "ParaMeshGeometry.BlobParts";
 
+/// The most bytes one stream may declare (mitcad#1604): the size field is
+/// the file's, and a stream above it is refused before anything is
+/// allocated or inflated (22 million vertices of positions).
+pub const MAX_STREAM_BYTES: usize = 256 << 20;
+
+/// The most bytes the streams of one container may declare together: the
+/// container keeps every inflated stream until its end.
+pub const MAX_CONTAINER_BYTES: usize = 512 << 20;
+
 /// One mesh container, decoded.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MeshContainer {
@@ -124,6 +133,16 @@ pub fn determinant(m: &[[f64; 4]; 4]) -> f64 {
 
 /// Decodes a mesh container.
 pub fn parse(data: &[u8]) -> Result<MeshContainer, String> {
+    parse_within(data, MAX_STREAM_BYTES, MAX_CONTAINER_BYTES)
+}
+
+/// Decodes a mesh container whose streams declare at most `stream_max`
+/// bytes each and `container_max` bytes together.
+fn parse_within(
+    data: &[u8],
+    stream_max: usize,
+    container_max: usize,
+) -> Result<MeshContainer, String> {
     if data.get(..MAGIC.len()) != Some(&MAGIC[..]) {
         return Err("not a mesh container (its first bytes differ)".to_owned());
     }
@@ -142,6 +161,8 @@ pub fn parse(data: &[u8]) -> Result<MeshContainer, String> {
     // The chunks: the name table and the streams.
     let mut names: Option<Vec<(String, u64)>> = None;
     let mut streams: Vec<Stream> = Vec::new();
+    // The bytes the streams read so far hold.
+    let mut held = 0usize;
     let mut p = end;
     while p < data.len() {
         let size = u64_at(data, p)
@@ -155,7 +176,12 @@ pub fn parse(data: &[u8]) -> Result<MeshContainer, String> {
             .ok_or("a mesh container chunk runs past the container's end")?;
         match kind {
             3 => names = Some(name_table(body)?),
-            4 => streams.push(Stream::parse(body)?),
+            4 => {
+                let left = container_max.saturating_sub(held);
+                let stream = Stream::parse(body, stream_max.min(left))?;
+                held += stream.data.len();
+                streams.push(stream);
+            }
             other => return Err(format!("mesh container chunk of kind {other}")),
         }
         p += 12 + size;
@@ -406,7 +432,9 @@ struct Stream {
 }
 
 impl Stream {
-    fn parse(body: &[u8]) -> Result<Self, String> {
+    /// One stream chunk's body; a declared size above `limit` bytes is an
+    /// error before its data is copied or inflated.
+    fn parse(body: &[u8], limit: usize) -> Result<Self, String> {
         let short = || "a mesh container stream ends in its header".to_owned();
         let n = usize::from(u16::from_le_bytes([
             *body.first().ok_or_else(short)?,
@@ -447,6 +475,12 @@ impl Stream {
         if !(size as u64).is_multiple_of(width) {
             return Err(format!(
                 "a mesh container stream of {size} bytes is not whole elements of {width}"
+            ));
+        }
+        if size > limit {
+            return Err(format!(
+                "a mesh container stream declares {size} bytes, more than the {limit} \
+                 bytes it may hold"
             ));
         }
         let data = match encoding {
@@ -772,9 +806,61 @@ mod tests {
         bytes.extend(fixstr("T"));
         bytes.push(0);
         let chunk = stream_chunk(&bytes, &sample, Some(&packed));
-        let stream = Stream::parse(&chunk[12..]).unwrap();
+        let stream = Stream::parse(&chunk[12..], MAX_STREAM_BYTES).unwrap();
         assert_eq!(stream.kind, 0);
         assert_eq!(stream.data, sample);
+    }
+
+    /// A stream chunk's body with its declared size replaced by `size`.
+    fn declaring(chunk: &[u8], size: u32) -> Vec<u8> {
+        let mut body = chunk[12..].to_vec();
+        let at = 2 + usize::from(u16::from_le_bytes([body[0], body[1]]));
+        body[at..at + 4].copy_from_slice(&size.to_le_bytes());
+        body
+    }
+
+    #[test]
+    fn refuses_a_declared_size_above_the_cap() {
+        // mitcad#1604: an LZMA stream that declares u32::MAX bytes over a
+        // bare 5-byte range coder start is refused by the cap, before
+        // anything is allocated or inflated.
+        let mut bytes = vec![0x81];
+        bytes.extend(fixstr("T"));
+        bytes.push(0);
+        let chunk = stream_chunk(&bytes, &[0], Some(&[0, 0, 0, 0, 0]));
+        let body = declaring(&chunk, u32::MAX);
+        let error = Stream::parse(&body, MAX_STREAM_BYTES).unwrap_err();
+        assert!(error.contains("more than"), "{error}");
+        assert!(error.contains(&u32::MAX.to_string()), "{error}");
+        // A valid stream declaring one byte more than the cap.
+        let sample = crate::lzma::tests::sample();
+        let packed = crate::lzma::tests::sample_packed();
+        let chunk = stream_chunk(&bytes, &sample, Some(&packed));
+        let over = u32::try_from(MAX_STREAM_BYTES + 1).unwrap();
+        let error = Stream::parse(&declaring(&chunk, over), MAX_STREAM_BYTES).unwrap_err();
+        assert!(error.contains("more than"), "{error}");
+        // The same stream under a cap below its own size, and at its size.
+        let error = Stream::parse(&chunk[12..], sample.len() - 1).unwrap_err();
+        assert!(error.contains("more than"), "{error}");
+        assert_eq!(
+            Stream::parse(&chunk[12..], sample.len()).unwrap().data,
+            sample
+        );
+        // A stored stream is capped the same way.
+        let raw = stream_chunk(&bytes, &sample, None);
+        assert!(Stream::parse(&raw[12..], sample.len() - 1).is_err());
+    }
+
+    #[test]
+    fn caps_the_streams_of_a_container_together() {
+        // The tetrahedron's streams hold 48 + 48 + 16 bytes.
+        let good = tetrahedron();
+        assert!(parse_within(&good, MAX_STREAM_BYTES, 112).is_ok());
+        let error = parse_within(&good, MAX_STREAM_BYTES, 111).unwrap_err();
+        assert!(error.contains("more than"), "{error}");
+        // Each stream alone under its own cap.
+        assert!(parse_within(&good, 47, MAX_CONTAINER_BYTES).is_err());
+        assert!(parse_within(&good, 48, MAX_CONTAINER_BYTES).is_ok());
     }
 
     #[test]

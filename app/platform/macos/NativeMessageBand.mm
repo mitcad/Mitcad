@@ -12,6 +12,7 @@
 #include "NativeColors.hpp"
 #include "framework/MessageLog.hpp"
 #include "framework/NoticeLevel.hpp"
+#include "framework/NoticePlaces.hpp"
 
 namespace {
 
@@ -178,10 +179,11 @@ NSTrackingArea* hoverTracking(NSView* view) {
   NSBox* _backdrop;
   std::vector<QString> _rowFeatures;
   QString _logged;
-  // The text or the stub under the pointer, and whether noticeHovered was
-  // last called with a feature (mitcad#1379).
+  // The text or the stub under the pointer, and the feature noticeHovered
+  // was last called with (mitcad#1379; mitcad#1609: a message shown in its
+  // place gives its own).
   NSView* __weak _hovered;
-  BOOL _noticeHovered;
+  mitcad::NoticeHover _noticeHover;
 }
 
 - (instancetype)initWithFrame:(NSRect)frame {
@@ -277,9 +279,11 @@ NSTrackingArea* hoverTracking(NSView* view) {
     qDebug().noquote() << QStringLiteral("Native message band: %1").arg(shown);
   }
   // A message taken from under the pointer no longer paints its places, as
-  // the Qt band's hidden text or stub (mitcad#1379).
+  // the Qt band's hidden text or stub (mitcad#1379); another one shown in
+  // its place paints its own, or none (mitcad#1609).
   NSView* hovered = _hovered;
-  if (hovered != nil && hovered.hidden) [self pointerOver:hovered entered:NO];
+  if (hovered != nil && hovered.hidden) _hovered = nil;
+  [self updateNoticeHover];
   self.needsLayout = YES;
 }
 
@@ -289,18 +293,20 @@ NSTrackingArea* hoverTracking(NSView* view) {
 - (void)pointerOver:(NSView*)view entered:(BOOL)entered {
   if (entered) {
     _hovered = view;
-    const mitcad::MessageEntry* entry = nullptr;
-    if (_log != nullptr && !view.hidden) entry = view == _text ? _log->full() : _log->stub();
-    if (entry != nullptr && !entry->feature.isEmpty() && !_noticeHovered) {
-      _noticeHovered = YES;
-      if (noticeHovered) noticeHovered(entry->feature);
-    }
-    return;
+  } else if (view == _hovered) {
+    _hovered = nil;
   }
-  if (view == _hovered) _hovered = nil;
-  if (_noticeHovered) {
-    _noticeHovered = NO;
-    if (noticeHovered) noticeHovered(QString());
+  [self updateNoticeHover];
+}
+
+// The feature of the message under the pointer, given when it changed: the
+// one shown now, also when it took the hovered one's place (mitcad#1609).
+- (void)updateNoticeHover {
+  NSView* view = _hovered;
+  const mitcad::MessageEntry* entry = nullptr;
+  if (_log != nullptr && view != nil && !view.hidden) entry = view == _text ? _log->full() : _log->stub();
+  if (_noticeHover.update(entry != nullptr, entry != nullptr ? entry->feature : QString())) {
+    if (noticeHovered) noticeHovered(_noticeHover.feature());
   }
 }
 

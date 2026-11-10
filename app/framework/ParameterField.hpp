@@ -16,6 +16,7 @@
 class QAction;
 class QEvent;
 class QFocusEvent;
+class QKeyEvent;
 class QLabel;
 class QLineEdit;
 class QPoint;
@@ -82,7 +83,9 @@ struct ParameterFieldOptions {
   // `name =`, the browser and the right-click menu offer to take it off,
   // leaving the value; the field's owner then gives the parameter its
   // automatic name back as it takes the text (a sketch dimension whose
-  // parameter has a name given to it).
+  // parameter has a name given to it). Backspace with the value empty and
+  // the caret after the `name = ` takes the whole `name = ` off at once,
+  // and the field's tooltip says so while a name shows (mitcad#1614).
   bool removeName = false;
   // The list offers Create User Parameter... (not where a dialog would end
   // the editing, as in a table's cell).
@@ -159,6 +162,14 @@ public:
   // leading `name =` taken off the text, which goes in as typed; false
   // when the text has none.
   bool removeName();
+  // The tooltip's line while the text shows a name the field can take off
+  // (mitcad#1614): "Backspace on an empty value removes the name".
+  static QString removeNameHint();
+  // Whether Backspace took the field's `name = ` off (backspaceName,
+  // mitcad#1614) and no name shows again since (the field's undo brings it
+  // back): the field's owner then reads what was typed as the value of the
+  // parameter that loses its name, not as a parameter to switch to.
+  bool nameRemovedByBackspace() const { return m_nameBackspaced; }
   void close(const QString& why = QString());
 
   // Stepping a value (mitcad#1254, ValueStep.hpp), the rules every field
@@ -263,6 +274,11 @@ private:
   std::vector<SuggestedTable> m_tables;
   QString m_columnsOf;
   bool fillColumns();
+  // Backspace on an empty value after a `name = ` (mitcad#1614): the
+  // whole `name = ` off, with the field's undo; false when the key is the
+  // field's own (a value or a selection left, the caret elsewhere).
+  bool backspaceName(const QKeyEvent& key);
+  bool m_nameBackspaced = false;
   bool m_inserting = false;
   int m_wheel = 0; // the wheel's turn not yet a step (1/8 degree units)
   QString m_logged;

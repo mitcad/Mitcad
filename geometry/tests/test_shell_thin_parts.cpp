@@ -121,9 +121,40 @@ double wall_at(const Shape& before, const Shape& after, const std::string& featu
   return outside.Distance(inner.Location());
 }
 
+// Whether a note says `text`. A note names its faces in words, the faces
+// being its places (mitcad#1612): "the wall does not fit under faces
+// F2:end(…)" is a note that says "the wall does not fit under" with a place
+// whose name starts with "F2:end(…)", and a bare face name is a note's
+// place.
 bool has_note(const Shape& shape, const std::string& text) {
-  return std::any_of(shape.notes().begin(), shape.notes().end(),
-                     [&](const std::string& note) { return note.find(text) != std::string::npos; });
+  const auto& notes = shape.notes();
+  const auto& places = shape.note_places();
+  for (std::size_t i = 0; i < notes.size(); ++i) {
+    const std::string& note = notes[i];
+    if (note.find(text) != std::string::npos) {
+      return true;
+    }
+    std::size_t at = text.rfind("faces ");
+    std::size_t word = 6;
+    if (at == std::string::npos) {
+      at = text.rfind("face ");
+      word = 5;
+    }
+    const std::string said = at == std::string::npos ? std::string() : text.substr(0, at);
+    const std::string name = at == std::string::npos ? text : text.substr(at + word);
+    if (!said.empty() && note.find(said) == std::string::npos) {
+      continue;
+    }
+    if (i >= places.size() || places[i].empty()) {
+      continue;
+    }
+    for (const Shape::NotePlace& place : places[i]) {
+      if (place.name.compare(0, name.size(), name) == 0) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 // The cap: a flange of radius 40 mm, 2 mm thick (z 205-207), and on it a

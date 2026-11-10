@@ -249,6 +249,12 @@ if(BUILD_TESTING)
   add_test(NAME cli.failed_expectation COMMAND mitcad-cli run "${scripts}/failing.json")
   set_tests_properties(cli.failed_expectation PROPERTIES WILL_FAIL TRUE)
 
+  # An item put on another print plate says which plate it left
+  # (mitcad#1595); the line comes only after every expectation passed.
+  add_test(NAME cli.plate_move COMMAND mitcad-cli run "${scripts}/plate_move.json")
+  set_tests_properties(cli.plate_move PROPERTIES PASS_REGULAR_EXPRESSION
+    "Plates: Body1 moved from one to two \\(count 2\\)\n.*Body1 \\(F1\\.b0\\)")
+
   # Construction geometry and analysis (F5): datums checked through queries,
   # physical properties, measurement and comparison with a STEP file.
   foreach(script construction analysis holed_block face_separation face_geometry)

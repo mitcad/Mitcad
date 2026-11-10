@@ -1464,13 +1464,26 @@ pub struct ProfileView {
 
 /// The first failed feature of a recompute.
 #[derive(Debug, Clone, PartialEq)]
-pub struct FeatureError {
+pub struct FirstFailure {
     pub uid: FeatureUid,
     pub name: String,
+    /// Its error's text for agents and the log (names and coordinates).
     pub message: String,
+    /// Its error (mitcad#1612): what a person reads, its places.
+    pub error: crate::notice::FeatureError,
 }
 
-impl fmt::Display for FeatureError {
+impl FirstFailure {
+    /// What a person reads of it, as an error notice about the feature:
+    /// "Chamfer4: <the error's message>", its places (mitcad#1612).
+    pub fn notice(&self) -> crate::notice::Notice {
+        let mut notice = self.error.notice().with_target(self.uid);
+        notice.message = format!("{}: {}", self.name, notice.message);
+        notice
+    }
+}
+
+impl fmt::Display for FirstFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: {}", self.name, self.message)
     }
@@ -1482,7 +1495,7 @@ pub struct RecomputeStats {
     /// Features evaluated (not taken from the cache), in timeline order.
     pub evaluated: Vec<FeatureUid>,
     /// The first feature that failed, in timeline order.
-    pub error: Option<FeatureError>,
+    pub error: Option<FirstFailure>,
     /// How long each of `evaluated` took.
     pub times: Vec<Duration>,
     /// Features whose results came from the result store (P7d), in
@@ -1916,13 +1929,14 @@ impl<K: Kernel> Document<K> {
     /// What the last recompute did.
     pub fn stats(&self) -> RecomputeStats {
         let error = self.result.results.iter().find_map(|r| {
-            r.status.error().map(|message| FeatureError {
+            r.status.failure().map(|error| FirstFailure {
                 uid: r.uid,
                 name: self
                     .state
                     .entry(r.uid)
                     .map_or_else(|| r.uid.to_string(), |f| f.name.clone()),
-                message: message.to_owned(),
+                message: error.agent_text().to_owned(),
+                error: error.clone(),
             })
         });
         RecomputeStats {
@@ -3973,10 +3987,17 @@ impl<K: Kernel> Document<K> {
                 let ids = edit.ids(entities.len());
                 project::renumber(&mut entities, &ids);
                 for (_, kept) in &joined.same {
-                    edit.report.warnings.push(format!(
-                        "c{} is in the sketch already: not projected again",
-                        kept.0
-                    ));
+                    // In plain words, the id for agents (mitcad#1612).
+                    edit.report.warnings.push(
+                        crate::notice::FeatureError::new(
+                            "a curve is in the sketch already: not projected again",
+                        )
+                        .with_detail(format!(
+                            "c{} is in the sketch already: not projected again",
+                            kept.0
+                        ))
+                        .text(),
+                    );
                 }
                 let refs = project::refs(&entities);
                 for entity in entities {

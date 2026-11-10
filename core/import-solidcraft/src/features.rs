@@ -239,6 +239,14 @@ fn extrude<K: Kernel>(
     let def = extrude_def(im, f, component, &e, None)?;
     im.add(&def, Some(&f.name), component)?;
     let mut notes = Vec::new();
+    // A join that keeps the body it runs to apart and has no other target
+    // (mitcad#1603).
+    if e.operation == Operation::Join && def["operation"] == Operation::NewBody.as_str() {
+        notes.push(
+            "a new body: it keeps the body it runs to apart and has no other body to join"
+                .to_owned(),
+        );
+    }
     // How a taper closes the profile's sharp corners (format 49).
     if let Some(corner) = &e.extent.corner
         && e.extent.taper.is_some()
@@ -325,7 +333,7 @@ pub(super) fn extrude_def<K: Kernel>(
             ),
         }
     };
-    let (operation, mut participants) = im.operation(e.operation, &e.targets)?;
+    let (mut operation, mut participants) = im.operation(e.operation, &e.targets)?;
     // A Join To Object that keeps the body it runs to apart (format 49,
     // and every design before format 40): only its targets take the tool.
     if x.to_body_apart
@@ -352,8 +360,14 @@ pub(super) fn extrude_def<K: Kernel>(
             .filter(|b| **b != apart)
             .map(ToString::to_string)
             .collect();
-        // None left: MitCad's empty list would join every body.
-        if !joined.is_empty() {
+        // None left (mitcad#1603): the tool joins nothing and stays a body
+        // of its own; MitCad's empty list would join every body, the one
+        // kept apart too.
+        if joined.is_empty() {
+            let (new_body, none) = im.operation(Operation::NewBody, &[])?;
+            operation = new_body;
+            participants = none;
+        } else {
             participants = json!(joined);
         }
     }

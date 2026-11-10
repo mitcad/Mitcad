@@ -119,9 +119,10 @@ std::string overflow_failure(const Shape& body, const std::vector<int>& owner, d
 // Where a chamfer of the selected edges (`owner`) reaches exactly to a far
 // edge of a face beside them, its contact on the face touching that edge
 // at a tangent (mitcad#1260: the face would end in a point there, between
-// the parts the chamfer runs over and those it leaves): "the chamfer of
-// edge E{…} reaches exactly to the edge between face F… and face F… beyond
-// it, at (x, y, z), …" for the first such place. `reach(e, f)` is how far
+// the parts the chamfer runs over and those it leaves): "the chamfer
+// reaches exactly to the far edge of the narrow face beside its edge: …",
+// in plain words (mitcad#1613), for an error where the chamfer built so is
+// not sound. `reach(e, f)` is how far
 // the chamfer of selected edge `e` reaches along its face `f` (the faces'
 // far edges are those overflow_failure looks at). Empty when there is none.
 std::string overflow_tangent(const Shape& body, const std::vector<int>& owner,
@@ -140,7 +141,10 @@ bool put_walls_back(Cutouts& cutouts, const Shape& chamfered, const std::string&
 // its faces named after the dressup's and, where a region's face is new,
 // after the input's face it lies on; the pieces of one face of the input,
 // or of one selected edge's face, on one surface merged. Null when that is
-// not one valid solid.
-ShapePtr cut_out_again(const ShapePtr& rounded, const Cutouts& cutouts, const Shape& input);
+// not one valid solid; then, where only the merge made it invalid,
+// `unmerged` (when given and still null) gets the result with those pieces
+// apart (mitcad#1613), for the caller to take when nothing else builds.
+ShapePtr cut_out_again(const ShapePtr& rounded, const Cutouts& cutouts, const Shape& input,
+                       ShapePtr* unmerged = nullptr);
 
 } // namespace mitcad::geometry::detail

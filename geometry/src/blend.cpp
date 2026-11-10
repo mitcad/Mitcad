@@ -481,6 +481,14 @@ TopoDS_Face blend_face(const occ::handle<Geom_Surface>& surface, const TopoDS_Fa
   return TopoDS::Face(same ? face.Oriented(bevel.Orientation()) : face.Oriented(TopAbs::Reverse(bevel.Orientation())));
 }
 
+// The refusal of an asymmetric or curvature continuous fillet of a bevel's
+// edge, `why` (mitcad#1612): the edge painted, named for agents only.
+std::string unsupported_fillet(const Shape& body, int edge, const std::string& why) {
+  const std::string& name = body.edge_name(edge);
+  return edge_error(name, "unsupported: an asymmetric or curvature continuous fillet of an edge" + why,
+                    "unsupported: an asymmetric or curvature continuous fillet of " + name + why);
+}
+
 } // namespace
 
 ShapePtr blend_bevels(const std::string& feature, const Shape& body, const Shape& chamfered,
@@ -498,7 +506,8 @@ ShapePtr blend_bevels(const std::string& feature, const Shape& body, const Shape
       }
       const std::vector<int> edges = body.find_edges(*edge_name);
       if (edges.size() != 1) {
-        throw std::runtime_error("a fillet's bevel has no edge " + *edge_name);
+        throw std::runtime_error(edge_error(*edge_name, "a fillet's bevel has no edge it rounds",
+                                            "a fillet's bevel has no edge " + *edge_name));
       }
       Bevel bevel;
       bevel.face = f;
@@ -512,8 +521,7 @@ ShapePtr blend_bevels(const std::string& feature, const Shape& body, const Shape
   for (Bevel& bevel : bevels) {
     const std::array<int, 2> sides = body.edge_faces(bevel.edge);
     if (sides[0] < 0 || sides[1] < 0 || sides[0] == sides[1]) {
-      throw std::invalid_argument("unsupported: an asymmetric or curvature continuous fillet of " +
-                                  body.edge_name(bevel.edge) + ", which does not lie between two faces");
+      throw std::invalid_argument(unsupported_fillet(body, bevel.edge, ", which does not lie between two faces"));
     }
     std::set<int> seen;
     for (TopExp_Explorer it(chamfered.face(bevel.face), TopAbs_EDGE); it.More(); it.Next()) {
@@ -545,12 +553,10 @@ ShapePtr blend_bevels(const std::string& feature, const Shape& body, const Shape
       }
     }
     if (bevel.contact_a < 0 || bevel.contact_b < 0) {
-      throw std::invalid_argument("unsupported: an asymmetric or curvature continuous fillet of " +
-                                  body.edge_name(bevel.edge) + " whose bevel does not run along both faces");
+      throw std::invalid_argument(unsupported_fillet(body, bevel.edge, " whose bevel does not run along both faces"));
     }
     if (bevel.seam >= 0 ? bevel.ends.size() != 1 : bevel.ends.size() != 2) {
-      throw std::invalid_argument("unsupported: an asymmetric or curvature continuous fillet of " +
-                                  body.edge_name(bevel.edge) + " whose bevel does not have two ends");
+      throw std::invalid_argument(unsupported_fillet(body, bevel.edge, " whose bevel does not have two ends"));
     }
   }
 
@@ -611,8 +617,7 @@ ShapePtr blend_bevels(const std::string& feature, const Shape& body, const Shape
         } else {
           const std::optional<gp_Pln> plane = face_plane(chamfered.face(other));
           if (!plane) {
-            throw std::invalid_argument("unsupported: an asymmetric or curvature continuous fillet of " +
-                                        body.edge_name(bevel.edge) + " that ends on a face that is not planar");
+            throw std::invalid_argument(unsupported_fillet(body, bevel.edge, " that ends on a face that is not planar"));
           }
           across = plane->Axis().Direction();
         }

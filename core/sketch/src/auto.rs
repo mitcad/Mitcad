@@ -48,7 +48,15 @@ impl SketchEdit<'_> {
             );
         }
         let id = self.add_constraint(kind);
-        let refuse = |reason: String| Err(format!("auto constraint {id}: {reason}"));
+        let refuse = |reason: String| {
+            Err(crate::said(
+                format!(
+                    "auto constraint: {}",
+                    mitcad_model_base::notice::user_message(&reason)
+                ),
+                format!("auto constraint {id}: {reason}"),
+            ))
+        };
         let after = match self.solved() {
             Ok(after) => after,
             Err(e) => return refuse(format!("conflict: {e}")),

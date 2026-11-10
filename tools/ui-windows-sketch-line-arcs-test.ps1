@@ -6,12 +6,17 @@
 # is posted), as tools/ui-sketch-line-arcs-test.sh does on Linux, on a design
 # mitcad-cli makes: Sketch1 (F1) on XY with a line c1 from p2 (-40, -20) to
 # p3 (-10, -20), points p4 (-60, 40) and p5 (60, 40) that widen the fitted
-# view, p6 (20, 20) for a midpoint, p7 (30, -40) and p8 (50, -40) for a chain.
+# view, p6 (20, 20) for a midpoint, p7 (30, -40) and p8 (50, -40) for a chain,
+# p9 (-40, 10) and p10 (-20, 10) for another.
 #   1. The Line tool pressed on c1's end p3 and dragged along it draws a
 #      tangent arc from c1 (no chain before it).
 #   2. A chain's line from p7 to p8, then a drag from its end across it,
 #      with 15 typed while the button is down: a normal arc with a radius
 #      dimension of 15 mm.
+#   2b. A chain's line from (-40, 10) to (-20, 10), then a drag from its
+#      end up across it with 10, Tab and 270 typed: the normal arc leaves
+#      upward, toward the pointer, and sweeps 270 degrees round (-10, 10)
+#      to (-10, 0), below the line (mitcad#1608).
 #   3. Midpoint Line: a click on p6 and one at (5, 10): the line's middle
 #      is p6, its ends as far on either side.
 #   4. Saved, the file has the normal arc's radius dimension and the
@@ -46,15 +51,18 @@ Set-Content -Encoding ascii $modelScript @'
   {"cmd": "sketch.add_point", "sketch": "F1", "at": [60, 40]},
   {"cmd": "sketch.add_point", "sketch": "F1", "at": [20, 20]},
   {"cmd": "sketch.add_point", "sketch": "F1", "at": [30, -40]},
-  {"cmd": "sketch.add_point", "sketch": "F1", "at": [50, -40]}
+  {"cmd": "sketch.add_point", "sketch": "F1", "at": [50, -40]},
+  {"cmd": "sketch.add_point", "sketch": "F1", "at": [-40, 10]},
+  {"cmd": "sketch.add_point", "sketch": "F1", "at": [-20, 10]}
 ]
 '@
 $made = & $Cli run $modelScript --save $design
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $design)) { Ui-Fail "mitcad-cli: $($made -join ' / ')" }
 
-# Arc-Drag x1 y1 x2 y2 [text]: a left drag between sketch points (mm) in
-# eight steps that types the text halfway, with the button still down.
-function Arc-Drag([double]$X1, [double]$Y1, [double]$X2, [double]$Y2, [string]$Text = '') {
+# Arc-Drag x1 y1 x2 y2 [text] [sweep]: a left drag between sketch points
+# (mm) in eight steps that types the text halfway, with the button still
+# down, and then Tab and the sweep.
+function Arc-Drag([double]$X1, [double]$Y1, [double]$X2, [double]$Y2, [string]$Text = '', [string]$Sweep = '') {
   $from = Ui-SketchAt $X1 $Y1
   $to = Ui-SketchAt $X2 $Y2
   $b = $script:UiButtons[1]
@@ -70,6 +78,12 @@ function Arc-Drag([double]$X1, [double]$Y1, [double]$X2, [double]$Y2, [string]$T
       Ui-SyncOr 300
       Ui-Type $Text
       Ui-SyncOr 300
+      if ($Sweep) {
+        Ui-Key 'Tab'
+        Ui-SyncOr 300
+        Ui-Type $Sweep
+        Ui-SyncOr 300
+      }
     }
   }
   Ui-SyncOr 300
@@ -105,6 +119,22 @@ Ui-Step 'drag across it, typing 15'      { Arc-Drag 50 -40 60 -25 '15' }
 Ui-ExpectNew 'Line arc: normal' 'a drag across the line chooses a normal arc'
 Ui-ExpectNew 'Added normal arc c' 'the normal arc is added'
 Ui-ExpectNew ', radius 15.000 mm, dimensioned' 'the typed radius dimensions it'
+Ui-Step 'end the chain (Esc)'            { Ui-Key 'Escape' }
+Ui-Step 'end the tool (Esc)'             { Ui-Key 'Escape' }
+if (@(Ui-LogLines | Where-Object { $_.Contains('Sketch command sketch.arc refused') }).Count -gt 0) {
+  Ui-Fail 'an arc was refused'
+}
+
+Write-Host '--- A normal arc of a typed radius and a sweep of 270 degrees'
+Ui-Mark
+Ui-Step 'line tool (L)'                  { Ui-Key 'l' }
+Ui-Step 'chain: the start on p9'         { Ui-SketchClick -40 10 }
+Ui-Step 'chain: the end on p10'          { Ui-SketchClick -20 10 }
+Ui-ExpectNew ' from (-40, 10) to (-20, 10)' "the chain's line"
+Ui-Step 'drag up across it, typing 10 and 270' { Arc-Drag -20 10 -15 25 '10' '270' }
+Ui-ExpectNew 'Line arc: normal' 'a drag across the line chooses a normal arc'
+Ui-ExpectNew ', radius 10.000 mm, dimensioned' 'the typed radius dimensions it'
+Ui-ExpectNew 'sweeps 270.0 degrees' 'it leaves upward, toward the pointer, and sweeps 270 degrees (mitcad#1608)'
 Ui-Step 'end the chain (Esc)'            { Ui-Key 'Escape' }
 Ui-Step 'end the tool (Esc)'             { Ui-Key 'Escape' }
 if (@(Ui-LogLines | Where-Object { $_.Contains('Sketch command sketch.arc refused') }).Count -gt 0) {

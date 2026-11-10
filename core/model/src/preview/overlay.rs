@@ -541,7 +541,8 @@ impl<K: Kernel> Document<K> {
             read.retain(|b| existing.contains(b));
             let listed: Vec<BodyUid> = read.iter().copied().collect();
             failed.push((
-                json!({"feature": entry.uid, "name": entry.name, "error": message, "bodies": listed}),
+                json!({"feature": entry.uid, "name": entry.name, "error": message.agent_text(),
+                       "bodies": listed}),
                 read,
             ));
         }

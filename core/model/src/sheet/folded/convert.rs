@@ -28,6 +28,7 @@
 //! curves `g<1000000+>` of the feature, the setback lines `g<900000+20k+3>`
 //! (on the panel before the bend) and `g<900010+20k+1>` (after it).
 
+use crate::notice::NoticePlace;
 use mitcad_vec3::{norm, scale, sub};
 
 use super::bends::{BendMetrics, add_bend_strip, construction, port_frame, side};
@@ -72,8 +73,10 @@ fn face<K: Kernel>(
         .face_geometry(shape, name)
         .map_err(kernel_error)?;
     let SurfaceGeometry::Plane { origin, normal } = surface else {
-        return Err(format!(
-            "face {name} is not planar: only planar faces become panels of a sheet"
+        return Err(placed_at(
+            vec![NoticePlace::face(name.to_string())],
+            "the face is not planar: only planar faces become panels of a sheet",
+            format!("face {name} is not planar: only planar faces become panels of a sheet"),
         ));
     };
     let curves = ctx
@@ -81,7 +84,11 @@ fn face<K: Kernel>(
         .curves_of(shape, &TopoName::Face(name.clone()))
         .map_err(kernel_error)?;
     if curves.is_empty() {
-        return Err(format!("the body has no face {name}"));
+        return Err(placed_at(
+            vec![NoticePlace::face(name.to_string())],
+            "the body has no such face",
+            format!("the body has no face {name}"),
+        ));
     }
     Ok(Face {
         name: name.clone(),
@@ -121,10 +128,15 @@ fn outline(
     let n = frame.normal();
     if dot(sub(face.origin, frame.origin), n).abs() > 1e-6 || dot(face.normal, n).abs() < 1.0 - 1e-9
     {
-        return Err(format!(
-            "face {} is not where the bend before it puts it: it must lie in the plane of the \
+        return Err(placed_at(
+            vec![NoticePlace::face(face.name.to_string())],
+            "a face is not where the bend before it puts it: it must lie in the plane of the \
              panel the bend makes",
-            face.name
+            format!(
+                "face {} is not where the bend before it puts it: it must lie in the plane of the \
+                 panel the bend makes",
+                face.name
+            ),
         ));
     }
     let curves = face
@@ -134,10 +146,17 @@ fn outline(
         .collect::<Result<Vec<_>, _>>()?;
     let mut regions = crate::sheet::rederive::regions(feature, slot, curves)?;
     if regions.len() != 1 {
-        return Err(format!(
-            "the outline of face {} is not one region ({} found)",
-            face.name,
-            regions.len()
+        return Err(placed_at(
+            vec![NoticePlace::face(face.name.to_string())],
+            format!(
+                "the outline of a face is not one region ({} found)",
+                regions.len()
+            ),
+            format!(
+                "the outline of face {} is not one region ({} found)",
+                face.name,
+                regions.len()
+            ),
         ));
     }
     let mut region = regions.remove(0);
@@ -273,7 +292,13 @@ pub(crate) fn convert<K: Kernel>(
             .map_err(kernel_error)?
         {
             CurveGeometry::Line { start, end } => lines.push((edge.clone(), start, end)),
-            _ => return Err(format!("bend edge {edge} is not straight")),
+            _ => {
+                return Err(placed_at(
+                    vec![NoticePlace::edge(edge.to_string())],
+                    "a bend edge is not straight",
+                    format!("bend edge {edge} is not straight"),
+                ));
+            }
         }
     }
     // The panels in the order they are reached from the picked face.
@@ -291,9 +316,13 @@ pub(crate) fn convert<K: Kernel>(
             );
             match (ia, ib) {
                 (Some(_), Some(_)) => {
-                    return Err(format!(
-                        "bend edge {} closes a loop of bends: a flat sheet cannot fold into it",
-                        lines[k].0
+                    return Err(placed_at(
+                        vec![NoticePlace::edge(lines[k].0.to_string())],
+                        "a bend edge closes a loop of bends: a flat sheet cannot fold into it",
+                        format!(
+                            "bend edge {} closes a loop of bends: a flat sheet cannot fold into it",
+                            lines[k].0
+                        ),
                     ));
                 }
                 (Some(i), None) => {
@@ -308,9 +337,13 @@ pub(crate) fn convert<K: Kernel>(
             }
         }
         if rest.len() == before {
-            return Err(format!(
-                "bend edge {} does not join the picked face through the other bends",
-                lines[rest[0]].0
+            return Err(placed_at(
+                vec![NoticePlace::edge(lines[rest[0]].0.to_string())],
+                "a bend edge does not join the picked face through the other bends",
+                format!(
+                    "bend edge {} does not join the picked face through the other bends",
+                    lines[rest[0]].0
+                ),
             ));
         }
         todo = rest;
@@ -328,9 +361,18 @@ pub(crate) fn convert<K: Kernel>(
                 && panels.contains(b)
                 && !edges.iter().any(|e| e.faces() == edge.faces())
             {
-                return Err(format!(
-                    "faces {a} and {b} meet at an edge that is no bend: a corner that would have \
-                     to be cut open is not supported"
+                return Err(placed_at(
+                    vec![
+                        NoticePlace::edge(edge.to_string()),
+                        NoticePlace::face(a.to_string()),
+                        NoticePlace::face(b.to_string()),
+                    ],
+                    "two faces meet at an edge that is no bend: a corner that would have to be \
+                     cut open is not supported",
+                    format!(
+                        "faces {a} and {b} meet at an edge that is no bend: a corner that would \
+                         have to be cut open is not supported"
+                    ),
                 ));
             }
         }
@@ -342,8 +384,12 @@ pub(crate) fn convert<K: Kernel>(
             slot: *from as u32,
         };
         let to_face = face(ctx, &shape, &panels[*to])?;
-        let boundary =
-            edge_on(&state, from_id, *start, *end).map_err(|e| format!("bend edge {edge}: {e}"))?;
+        let boundary = edge_on(&state, from_id, *start, *end).map_err(|e| {
+            crate::notice::about_place(
+                NoticePlace::edge(edge.to_string()),
+                &format!("a bend edge: {e}"),
+            )
+        })?;
         let port = port_frame(&state, &boundary)?;
         // Which way the face runs from the edge: probe both sides of the
         // edge's middle in its plane.
@@ -362,15 +408,26 @@ pub(crate) fn convert<K: Kernel>(
             })
             .map(|s| scale(across, s.signum()))
             .ok_or_else(|| {
-                format!(
-                    "bend edge {edge}: face {} does not run from it",
-                    to_face.name
+                placed_at(
+                    vec![
+                        NoticePlace::edge(edge.to_string()),
+                        NoticePlace::face(to_face.name.to_string()),
+                    ],
+                    "a bend edge: the face beside it does not run from it",
+                    format!(
+                        "bend edge {edge}: face {} does not run from it",
+                        to_face.name
+                    ),
                 )
             })?;
         let angle = dot(away, port.n).atan2(dot(away, port.m));
         if angle.abs() <= 1e-6 || angle.abs() >= std::f64::consts::PI - 1e-6 {
-            return Err(format!(
-                "the faces at bend edge {edge} must meet at an angle between 0 and 180 degrees"
+            return Err(placed_at(
+                vec![NoticePlace::edge(edge.to_string())],
+                "the faces at a bend edge must meet at an angle between 0 and 180 degrees",
+                format!(
+                    "the faces at bend edge {edge} must meet at an angle between 0 and 180 degrees"
+                ),
             ));
         }
         let metrics = BendMetrics::new(angle, d.radius, &rules)?;
@@ -447,9 +504,17 @@ pub(crate) fn convert<K: Kernel>(
             n as u32,
         )
         .map_err(|e| {
-            format!(
-                "bend edge {edge}: the faces on its two sides do not run the whole edge after \
-                 their setbacks ({e})"
+            placed_at(
+                vec![NoticePlace::edge(edge.to_string())],
+                format!(
+                    "a bend edge: the faces on its two sides do not run the whole edge after \
+                     their setbacks ({})",
+                    crate::notice::user_message(&e)
+                ),
+                format!(
+                    "bend edge {edge}: the faces on its two sides do not run the whole edge after \
+                     their setbacks ({e})"
+                ),
             )
         })?;
     }
@@ -469,10 +534,17 @@ fn plate<K: Kernel>(
     let t = rules.thickness;
     let measured = body.volume / area;
     if (measured - t).abs() > 1e-6 * t.max(1.0) {
-        return Err(format!(
-            "the body is not a plate of its rules' thickness {t} mm behind face {}: its volume \
-             over the face's area is {measured:.6} mm",
-            d.face
+        return Err(placed_at(
+            vec![NoticePlace::face(d.face.to_string())],
+            format!(
+                "the body is not a plate of its rules' thickness {t} mm behind the face: its \
+                 volume over the face's area is {measured:.6} mm"
+            ),
+            format!(
+                "the body is not a plate of its rules' thickness {t} mm behind face {}: its volume \
+                 over the face's area is {measured:.6} mm",
+                d.face
+            ),
         ));
     }
     let output = publish(ctx, state, rules, None)?;
@@ -484,11 +556,30 @@ fn plate<K: Kernel>(
     if (rebuilt.volume - body.volume).abs() > 1e-6 * body.volume.abs().max(1.0)
         || (0..3).any(|i| (rebuilt.center[i] - body.center[i]).abs() > 1e-6 * size)
     {
-        return Err(format!(
-            "the body is not a plate of even thickness behind face {}: the sheet of that face \
+        return Err(placed_at(
+            vec![NoticePlace::face(d.face.to_string())],
+            "the body is not a plate of even thickness behind the face: the sheet of that face \
              differs from it",
-            d.face
+            format!(
+                "the body is not a plate of even thickness behind face {}: the sheet of that face \
+                 differs from it",
+                d.face
+            ),
         ));
     }
     Ok(output)
+}
+
+/// A refusal about faces and edges of the body (mitcad#1612): `said` in
+/// plain words for a person, the places painted, `named` with their names
+/// for agents.
+fn placed_at(
+    places: Vec<NoticePlace>,
+    said: impl Into<String>,
+    named: impl Into<String>,
+) -> String {
+    crate::notice::FeatureError::new(said)
+        .with_places(places)
+        .with_detail(named)
+        .text()
 }

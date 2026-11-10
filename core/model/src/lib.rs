@@ -59,7 +59,7 @@ pub mod test_support;
 pub use mitcad_model_testkit as testing;
 
 pub use document::{
-    Added, BodyView, ComponentCopy, DocState, Document, FeatureError, ModelError, PreviewReport,
+    Added, BodyView, ComponentCopy, DocState, Document, FirstFailure, ModelError, PreviewReport,
     ProfileView, RecomputeStats, ShapeAdded, TimelineItem,
 };
 // A slot's own parameter kept as a user parameter (mitcad#1536).

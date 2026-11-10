@@ -70,10 +70,14 @@ impl FeatureInfo for SheetCornerReliefDef {
             return Err("a corner relief names exactly two bends".into());
         }
         if self.bends[0] == self.bends[1] {
-            return Err(format!(
-                "bend {} slot {} is selected more than once",
-                self.bends[0].feature, self.bends[0].slot
-            ));
+            return Err(
+                crate::notice::FeatureError::new("a bend is selected more than once")
+                    .with_detail(format!(
+                        "bend {} slot {} is selected more than once",
+                        self.bends[0].feature, self.bends[0].slot
+                    ))
+                    .text(),
+            );
         }
         c.body(self.body)?;
         for f in self.references().features {

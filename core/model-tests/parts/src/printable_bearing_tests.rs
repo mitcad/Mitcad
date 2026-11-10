@@ -45,7 +45,7 @@ fn rejected(doc: &mut Document<MockKernel>, value: Value) -> String {
     match add(doc, value) {
         Err(error) => error.to_string(),
         Ok(uid) => match status(doc, uid) {
-            FeatureStatus::Failed(message) => message,
+            FeatureStatus::Failed(message) => message.agent_text().to_owned(),
             other => panic!("expected a failure, got {other:?}"),
         },
     }

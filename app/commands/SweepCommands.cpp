@@ -28,7 +28,8 @@ QVector<InputDef> pathInputs(const QString& id, const QString& name,
                              std::function<bool(const CommandState&)> shown = {}) {
   QVector<InputDef> inputs = {
       selectionInput(id, name, kPathKinds, 1, 0)
-          .withTooltip(QObject::tr("Sketch curves or edges, joined end to end, or an intersection curve")),
+          .withTooltip(QObject::tr("Sketch curves or edges, joined end to end, or an intersection curve"))
+          .withAccepts(isPathItem),
   };
   if (shown) {
     inputs.first().withVisible(shown);
@@ -162,6 +163,7 @@ CommandDef sweepCommand(const CommandContext& context) {
   // turns and sizes with the line across to the second.
   def.inputs += selectionInput(QStringLiteral("rail2"), QObject::tr("Second Rail"), kPathKinds, 0, 0)
                     .withTooltip(QObject::tr("Optional: a second rail the profile turns and sizes with"))
+                    .withAccepts(isPathItem)
                     .withVisible(rail);
   // Guide surfaces (mitcad#157): faces the path lies on.
   def.inputs += selectionInput(QStringLiteral("surfaces"), QObject::tr("Guide Surface"), SelectKind::Face, 1, 0)
@@ -482,7 +484,8 @@ CommandDef loftCommand(const CommandContext& context) {
       listInput(kRails, QObject::tr("Rails"),
                 {selectionInput(QStringLiteral("path"), QObject::tr("Rail"), kPathKinds, 1, 0)
                      .withTooltip(QObject::tr("Sketch curves or edges joined end to end, meeting every "
-                                              "section"))},
+                                              "section"))
+                     .withAccepts(isPathItem)},
                 QObject::tr("Add Rail"), QObject::tr("Rail %1"))
           .withVisible(guide("rails")),
       checkInput(QStringLiteral("chain"), QObject::tr("Chain Selection"), true)
@@ -490,6 +493,7 @@ CommandDef loftCommand(const CommandContext& context) {
           .withVisible(guide("rails")),
       selectionInput(QStringLiteral("centerline"), QObject::tr("Centerline"), kPathKinds, 1, 0)
           .withTooltip(QObject::tr("Sketch curves or edges joined end to end"))
+          .withAccepts(isPathItem)
           .withVisible(guide("centerline")),
       checkInput(QStringLiteral("closed"), QObject::tr("Closed"), false)
           .withTooltip(QObject::tr("From the last section back to the first")),

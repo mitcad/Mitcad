@@ -372,6 +372,10 @@ private:
   QWidget* m_subfolderRow = nullptr;
   QLineEdit* m_subfolder = nullptr;
   QPushButton* m_inSubfolder = nullptr;
+  // Whether the last Create went into a new subfolder (mitcad#1601): Create
+  // as Local for Now makes the project where that one was to go. Unset
+  // before the first Create and when the folder changes.
+  std::optional<bool> m_lastInSubfolder;
   QPointer<RemoteTask> m_task;
   QString m_loggedFolder;
   bool m_gitMissing = false;
@@ -539,8 +543,22 @@ NewProjectDialog::NewProjectDialog(QWidget* parent, const NewProjectOptions& opt
     accept();
   });
   connect(m_localForNow, &QPushButton::clicked, this, [this] {
+    // Where the Create that did not reach the server was to make the
+    // project (mitcad#1601); before any Create, the new subfolder while it
+    // is offered and named.
+    const bool offered = !m_subfolderRow->isHidden();
+    const bool inSubfolder = m_lastInSubfolder.value_or(offered && !subfolder().isEmpty());
+    QString into;
+    if (inSubfolder) {
+      QString why;
+      into = subfolder(&why);
+      if (into.isEmpty()) {
+        m_problem->setText(why);
+        return;
+      }
+    }
     qInfo().noquote() << QStringLiteral("New Project: Create as Local for Now");
-    create(false);
+    create(false, into);
   });
   connect(m_subfolder, &QLineEdit::textChanged, this, [this] { updateState(); });
   connect(m_inSubfolder, &QPushButton::clicked, this, [this] {
@@ -624,6 +642,7 @@ void NewProjectDialog::reject() {
 }
 
 void NewProjectDialog::folderChanged() {
+  m_lastInSubfolder.reset();
   m_section->setFolderName(QFileInfo(folder()).fileName());
   m_check->check(folder());
   updateState();
@@ -829,6 +848,7 @@ void NewProjectDialog::create(bool asCloud, const QString& into) {
     m_problem->setText(errorMessageOf(checked));
     return;
   }
+  m_lastInSubfolder = !into.isEmpty();
   m_section->stopCheck();
   m_problem->clear();
   const QByteArray createJson = compactJson(command);

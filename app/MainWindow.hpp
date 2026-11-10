@@ -32,6 +32,7 @@
 #include "framework/DialogFolders.hpp"
 #include "framework/DocumentSession.hpp"
 #include "framework/ModelWorker.hpp"
+#include "framework/NoticePlaces.hpp"
 #include "mitcad/geometry/shape.hpp"
 #include "mitcad_bridge/lib.h"
 #include "projects/ProjectPicker.hpp"
@@ -1639,10 +1640,18 @@ private:
   QJsonArray m_noticeHover;
   std::vector<BodyDisplay> m_noticeHoverBodies;
   QString m_loggedNoticeHover = QStringLiteral("none");
+  // Hovered while a job computed the model: drawn when it ends (mitcad#1600).
+  bool m_noticeHoverWaits = false;
   QString m_statusFeature;
+  // The pointer over the status line, and the feature whose places it
+  // gave last (mitcad#1609: a message shown in place of the hovered one
+  // gives its own).
+  bool m_statusHovered = false;
+  NoticeHover m_statusNoticeHover;
   // The pointer over the Docked status line or the message band's text:
   // the places of the feature its message is about.
   void installNoticeHover();
+  void updateStatusNoticeHover();
   Selection m_autoselectPreview; // hover only; never part of the actual selection
   SelectionCreatePanel* m_selectionCreate = nullptr; // the card's Create row (mitcad#619)
   QString m_loggedSelectionCreate = QStringLiteral("none"); // its log line last logged (UI tests)

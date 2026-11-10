@@ -1766,9 +1766,10 @@ void ViewController::showPreferences(const QString& page) {
   };
   connect(stereoDepth, &QSpinBox::valueChanged, host, previewStereo);
   connect(stereoConvergence, &QSpinBox::valueChanged, host, previewStereo);
-  const auto saveStereo = [this, stereoDepth, stereoConvergence] {
+  // Whether it saved anything: only a change shows the saved note.
+  const auto saveStereo = [this, stereoDepth, stereoConvergence]() -> bool {
     if (stereoDepth->value() == m_settings.stereoDepth && stereoConvergence->value() == m_settings.stereoConvergence) {
-      return;
+      return false;
     }
     m_settings.stereoDepth = stereoDepth->value();
     m_settings.stereoConvergence = stereoConvergence->value();
@@ -1776,10 +1777,18 @@ void ViewController::showPreferences(const QString& page) {
     qDebug().noquote() << QStringLiteral("Preferences: stereo depth %1 %, convergence %2 %")
                               .arg(m_settings.stereoDepth)
                               .arg(m_settings.stereoConvergence);
+    return true;
   };
   if (window != nullptr) {
-    connect(stereoDepth, &QSpinBox::valueChanged, host, saveStereo);
-    connect(stereoConvergence, &QSpinBox::valueChanged, host, saveStereo);
+    // With the saved note, as every change the window saves (mitcad#1479,
+    // mitcad#1610).
+    const auto saveStereoNoted = [saveStereo, saved] {
+      if (saveStereo()) {
+        saved();
+      }
+    };
+    connect(stereoDepth, &QSpinBox::valueChanged, host, saveStereoNoted);
+    connect(stereoConvergence, &QSpinBox::valueChanged, host, saveStereoNoted);
   } else {
     connect(dialog.get(), &QDialog::accepted, stereoDepth, saveStereo);
   }

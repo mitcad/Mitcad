@@ -486,9 +486,11 @@ fn front_outline<K: Kernel>(
         ) {
             continue;
         }
-        let name: crate::topo::TopoName = name
-            .parse()
-            .map_err(|_| format!("the result's face {name} has no usable name"))?;
+        let name: crate::topo::TopoName = name.parse().map_err(|_| {
+            crate::notice::FeatureError::new("a face of the result has no usable name")
+                .with_detail(format!("the result's face {name} has no usable name"))
+                .text()
+        })?;
         let mut curves = Vec::new();
         for curve in kernel(ctx.kernel.curves_of(shape, &name))? {
             curves.push(planar_curve(&curve, front)?);

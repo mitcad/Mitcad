@@ -571,10 +571,19 @@ pub(crate) fn chain(pieces: Vec<PathCurve>) -> Result<Vec<PathCurve>, String> {
         order.push((i, forward));
     }
     if let Some(i) = used.iter().position(|u| !u) {
-        return Err(format!(
-            "the path's curves are not connected: {} does not join the others",
-            pieces[i].name
+        // In plain words, an edge painted; the curve's id or the edge's
+        // name for agents (mitcad#1612).
+        let name = &pieces[i].name;
+        let mut error = crate::notice::FeatureError::new(
+            "the path's curves are not connected: a curve does not join the others",
+        )
+        .with_detail(format!(
+            "the path's curves are not connected: {name} does not join the others"
         ));
+        if let Ok(crate::topo::TopoName::Edge(edge)) = name.parse::<crate::topo::TopoName>() {
+            error = error.at(crate::notice::NoticePlace::edge(edge.to_string()));
+        }
+        return Err(error.text());
     }
     let mut pieces: Vec<Option<PathCurve>> = pieces.into_iter().map(Some).collect();
     Ok(order

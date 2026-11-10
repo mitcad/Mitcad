@@ -843,8 +843,15 @@ fn linked_frame<K: Kernel>(
             match ctx
                 .kernel
                 .face_geometry(&shape, found.as_ref().unwrap_or(&**face))
-                .map_err(|e| format!("the sketch plane: face {face}: {e}"))?
-            {
+                .map_err(|e| {
+                    format!(
+                        "the sketch plane: {}",
+                        crate::notice::about_place(
+                            crate::notice::NoticePlace::face(face.to_string()),
+                            &e.to_string(),
+                        )
+                    )
+                })? {
                 crate::datum::SurfaceGeometry::Plane { origin, normal } => {
                     Ok(SketchPlane::face_frame(
                         to_sketch.apply_point(origin),

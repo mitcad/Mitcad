@@ -149,7 +149,12 @@ Checklist for a new command or feature type:
   one of another occurrence is not taken."), as no link carries one; Hole
   refuses a point or line of another component as it refuses its faces
   (`tools/ui-extrude-to-point-test.sh`: a rectangle extruded up to a point
-  of a sketch at right angles to it).
+  of a sketch at right angles to it). A loaded sketch point or line has
+  no occurrence; `canonicalizeSelections` gives it the profiles' (below),
+  so that editing a component's feature keeps it (mitcad#1599: before, the
+  edit was refused with the message above, for a hole as another
+  component's object; the same test edits an extrusion to a point, a hole
+  to a point and an extrusion from a line in a component).
 - Every unit a dialog or panel offers starts at millimeters, the thread
   table at ISO metric (`tools/ui-units-test.sh`).
 
@@ -2936,7 +2941,11 @@ an arc (a spline) takes only tangent arcs. The preview shows the arc with
 the `tangent` or `perpendicular` glyph at the point and two fields,
 Radius and Sweep (Tab), as dimensions on the arc: a typed radius puts the
 end on that circle toward the pointer, a typed sweep that far round,
-both together exactly there (`lineArcEnd`). The release (or Enter with
+both together exactly there (`lineArcEnd`). A normal arc leaves toward
+the pointer's side also when a typed sweep of 180 degrees or more puts
+its end behind the curve, on the other side (mitcad#1608: the preview's
+`lineArc` takes the pointer as `toward`, and the command passes that
+side as `toward`). The release (or Enter with
 the button still down) sends `sketch.arc` with `tangent` or `normal`,
 `from` the point and `end` (the snapped point, or where typed values put
 it), holds a snapped end, adds a radius dimension for a typed radius
@@ -2951,7 +2960,7 @@ a curve's end was to start goes on with a line from that point (logged
 curve's end without a drag starts the chain there as before. Logged
 `Line: an arc from the end p3 of c1`, `Line arc: tangent` (`normal`) and
 `Added normal arc c5 to (15, 5), radius 5.000 mm` (`, dimensioned`
-after it with a typed radius).
+after it with a typed radius) and `Line arc c5 sweeps 90.0 degrees`.
 
 **Midpoint Line** (`sketch.line_midpoint`, icon `line-midpoint`, no
 shortcut) is the second entry of the Lines submenu, which is now a split
@@ -3041,17 +3050,41 @@ show the Lines split button and Midpoint Line without code of their own.
   expressions, configurations and comments that use the name follow, as
   a rename's do (another dimension's `width / 2` is `d1 / 2`). A value
   that uses the own name (`width * 2`) gives the dimension a new
-  parameter already (mitcad#1535), and nothing more is renamed. What the
+  parameter already (mitcad#1535), and nothing more is renamed; the bare
+  own name (`width`) keeps the parameter as a user parameter that the
+  dimension uses, which has no automatic name to give back, so nothing is
+  renamed either (mitcad#1608: the `user_parameters` of the result, or the
+  text the name alone). What the
   model refuses is shown as for any value, and the editor stays open with
   the text typed. **Remove Name** in the field's fx browser and its
   right-click menu (`ParameterFieldOptions::removeName`) takes the
   `name = ` off the text, as deleting it does (Enter then applies it), and
   the sketch's context menu on such a dimension offers **Remove Name
   width** (`SketchController::removeDimensionName`), which applies it at
-  once, one undo step. Logged `Parameter name width removed for dimension
-  width: 20 mm` (the field), `Dimension k5: name width removed, now d1
+  once, one undo step. **Backspace** (mitcad#1614, GitHub
+  mitcad/Mitcad#229): the first Backspace deletes the selected value and
+  leaves `width = `; with the value empty and the caret after the
+  `name = ` (nothing selected), the next takes the whole `width = ` off at
+  once (`ParameterField::backspaceName`), leaving an empty field, so that
+  a value or another parameter's name typed then and Enter give the
+  parameter its automatic name with what was typed. Another parameter's
+  bare name typed after that Backspace (`spacing`) becomes the own
+  parameter's expression (the editor sends `width = spacing`, then
+  `remove_parameter_name`; `ParameterField::nameRemovedByBackspace`), so
+  the parameter is `d1 = spacing` and the uses of `width` follow; the
+  whole text replaced otherwise by another parameter's name (Ctrl+A and
+  typing, a reference inserted or created) still makes the dimension use
+  that parameter, as before. The
+  field's undo (Ctrl+Z) brings the name back, and
+  typing over the selected value keeps the name as before. While the text
+  shows a name, the field's tooltip ends with "Backspace on an empty
+  value removes the name" (`ParameterField::removeNameHint`). Logged
+  `Parameter name width removed for dimension
+  width: 20 mm` (the field), `Parameter name width removed by Backspace
+  for dimension width`, `Dimension k5: name width removed, now d1
   (rewritten: d2)`. Tests: `tools/ui-sketch-remove-dimension-name-test.sh`
-  (steps `tools/ui-scripts/sketch-remove-dimension-name.mitcad-ui`), the
+  and `tools/ui-windows-sketch-remove-dimension-name-test.ps1` (steps
+  `tools/ui-scripts/sketch-remove-dimension-name.mitcad-ui`), the
   unit test `app/tests/parameter_suggest.cpp` (`removeNameTests`) and the
   model's `remove_name_tests`.
   A right click in the view while a sketch tool runs is that tool's Esc
@@ -3584,12 +3617,27 @@ shared by Qt and AppKit (its word, icon, color role and lifetime).
   message band's text and stub have tracking areas that call
   `previewNoticePlaces("message band", …)` through
   `NativeMacWindowCallbacks::messageNoticeHovered` (`NativeMessageBand.mm`,
-  mitcad#1379). Logged
-  `Notice hover highlighted: <source>: <places> (<n> drawn)` and
-  `Notice hover highlighted: none`. Tests: `tools/ui-notice-places-test.sh`
-  (Linux), `app.ui-windows-notice-places`, `app.ui-macos-native-notice-places`
+  mitcad#1379). A sketch region is drawn where its sketch is shown, a
+  component's where its occurrence places it (mitcad#1609). While a job
+  computes the model (a command's preview, an asynchronous command) the
+  places are kept but neither counted nor drawn, as their shapes read the
+  design; both once the job has ended (mitcad#1600). Another message shown
+  in the hovered one's place in the message band (Qt and AppKit) or the
+  status line paints its own feature's places, or none; a panel message
+  without a preview (a hint once the picks are emptied, an error, a
+  progress) names none (mitcad#1609). Logged
+  `Notice hover highlighted: <source>: <places> (<n> drawn)`, with
+  `Notice hover bounds: x <min> to <max>, y …, z …` (where they are drawn,
+  in the design's coordinates), `… (drawn when the job ends)` while a job
+  computes, and `Notice hover highlighted: none`; the panel's message
+  `Panel <command> message hovered: <n> places` and
+  `Panel <command> message left`. Tests: `tools/ui-notice-places-test.sh`
+  (Linux; also `tools/ui-scripts/notice-places-region.mitcad-ui`, a moved
+  component's region), `app.ui-windows-notice-places`,
+  `app.ui-macos-native-notice-places`
   (`tools/ui-macos-native-notice-places-test.sh`: the AppKit Timeline item,
-  message band and command form's message).
+  message band and command form's message); `test_app`'s notice places
+  (the log's words, the hovered feature given again).
 - **A feature's level** is the model's (`level` and `notices` of the
   timeline query): failed an error, built with warnings a warning, an
   import note alone information. The timeline cell's badge (`Timeline cell
@@ -8312,7 +8360,11 @@ settings in the user's settings (`ViewSettings`, group `view`);
   whichever entry is enabled: `sketch.parameters` in a sketch, else
   `solid.parameters` (also while a panel is open, `duringCommands`); so
   its icon, tooltip and enabled state are the command's, and neither is
-  enabled in a read-only window. It is logged as `Navigation bar Edit
+  enabled in a read-only window. The button holds that one action alone:
+  the earlier one is removed before the new default is set (mitcad#1610;
+  `setDefaultAction` keeps both, a menu arrow and a long-press list of the
+  two), logged as `Navigation bar Edit Parameters button: sketch.parameters
+  (1 action(s))`. It is logged as `Navigation bar Edit
   Parameters at x,y` (a name in the bar's lines drops its "…") and a click
   as `Navigation bar: Edit Parameters`. The navigation bar is hidden while
   a drawing takes the view, so the drawing's bar has the same command
@@ -10166,7 +10218,7 @@ Project submenu (mitcad#175); Open Read-Only and Open from Project
 
 | Command | What |
 |---|---|
-| `file.new_project` New Project... | the New Project dialog: folder, Local or Cloud, author, the Cloud section; Create (an empty project, or one of the designs its folder has, shown in the Projects panel), Create in a New Subfolder (a folder with files: the project in a new folder inside it, mitcad#1562), Open It, Open It Instead, Create as Local for Now |
+| `file.new_project` New Project... | the New Project dialog: folder, Local or Cloud, author, the Cloud section; Create (an empty project, or one of the designs its folder has, shown in the Projects panel), Create in a New Subfolder (a folder with files: the project in a new folder inside it, mitcad#1562), Open It, Open It Instead, Create as Local for Now (where the last Create was to make the project; before any, in the new subfolder while it is offered and named, mitcad#1601) |
 | `file.open_project` Open Project... | a project chosen in the [project picker](#project-picker) (the Projects panel's projects, also those without versions; mitcad#176), or a folder (Another Folder...: Qt's folder dialog) recognised with `inspect_folder`: a project shows in the Projects panel and opens its design opened last (`last_design`), else the newest, none when it has none; an older one gets its history (`init_project_history`), anything else goes to New Project with the folder fixed |
 | `file.open_read_only` Open Read-Only... | a design opened without an edit lock (`m_openingReadOnly` for the lock controller) |
 | `file.open_from_project` Open from Project... | File menu, right after Open, before Open Recent (mitcad#530; also in the command search and in a read-only window): a design chosen in the [project browser](#project-browser), opened as Open Recent opens one (unsaved changes asked then; the open design itself only told it is open), or with Read-only checked as Open Read-Only does; Another File... is Open's (or Open Read-Only's) system dialog |
@@ -11604,7 +11656,11 @@ model's `profile` query names the region a key means now
   Construction planes, axes and points without an occurrence get the one
   the view shows them in (`CommandHost::datumOccurrence`: the first
   occurrence of their feature's component; none for the origin's, which
-  the view draws unplaced). In both cases a click on the shown face or
+  the view draws unplaced). Sketch curves and points without an
+  occurrence get their sketch's, as profiles do
+  (`CommandHost::profileOccurrence`; mitcad#1599: a component's To Object
+  or Start Object point or line was otherwise taken as another
+  occurrence's). In these cases a click on the shown face or
   datum is on the loaded entry and takes it out; before, it added the face
   a second time, or replaced a datum with itself (mitcad#432,
   `tools/ui-placed-edit-test.sh`).
@@ -12965,7 +13021,9 @@ SVG at several sizes (`themeIcon`).
     given (a sketch dimension's, mitcad#1577), the browser and the
     right-click menu offer **Remove Name** too, which leaves the value
     alone; the dimension's parameter gets its automatic name back with
-    Enter (the sketch Dimension tool above).
+    Enter (the sketch Dimension tool above). There Backspace on an empty
+    value after the `name = ` takes the whole `name = ` off at once, and
+    the tooltip says so while a name shows (mitcad#1614).
   - **Create User Parameter... (mitcad#568):** offered for an unknown,
     valid name typed (and always in the browser and the right-click
     menu), not in the table's cell editor (a dialog would end the cell's
@@ -13499,7 +13557,7 @@ next screenshot.
 | `Drawing dialog opened: format pdf, sheet A4, scale fit`, `Drawing dialog file\|format\|sheet\|scale\|OK at x,y` (in the dialog's own window), `Drawing dialog: format = svg`, `Drawing dialog: sheet = A3`, `Drawing dialog: svg A3 to <path>`, `Exported <path>: drawing, 3 views, 2 bodies, A3, 1:1`, `Export drawing: <warning>` | File › Export Drawing (mitcad#471, [Drawing](#drawing)) |
 | `Dialog folder import: <folder>`, `Dialog folder import remembered: <folder>` (`open`, `export`, `import`, `texture`, `program`) | where a file dialog of the group starts, and the folder it remembers when accepted ([File dialogs' folders](#file-dialogs-folders), mitcad#498) |
 | `Typed name kept in Open: deselected <folder>` | Qt's own file dialog had other entries selected than the typed name (a folder the typed path passed through); they are deselected so that Enter or Open takes the typed name (`framework/Dialogs.cpp`) |
-| `Parameter suggestions for Extrude Distance "thi": thickness, thickness2 (A length: …); actions: name, create` (`none` when nothing matches), `Parameter suggestion thickness at x,y`, `Parameter suggestion action create at x,y` (`action name`), `Parameter suggestion highlighted: thickness2`, `Parameter suggestion inserted thickness into Extrude Distance: width / 2 + thickness` (`browser`, `created`, `existing` instead of `suggestion`), `Parameter suggestion tilt refused: <why>`, `Parameter suggestions closed for Extrude Distance (Esc)`, `Parameter fx Extrude Distance at x,y`, `Parameter browser opened for Extrude Distance`, `Parameter naming for dimension d1: width = `, `Parameter suggestion action remove-name at x,y`, `Parameter name width removed for dimension width: 20 mm` (mitcad#1577), `Create User Parameter opened for dimension d2: name gap, unit mm`, `Create User Parameter gap refused: <why>`, `Created user parameter gap = 12 mm (mm) for dimension d2`, `Create User Parameter cancelled for dimension d2: <the field's text>` | expression fields' suggestions, fx browser, `name = …` and Create User Parameter (mitcad#567, mitcad#568, [Notes](#notes-on-particular-commands)); the field is named `<command> <input label>`, `dimension <its parameter>`, `sketch dimension` (a new one), `sketch <tool value>` or `<parameter> expression` (the table); places in the main window's coordinates |
+| `Parameter suggestions for Extrude Distance "thi": thickness, thickness2 (A length: …); actions: name, create` (`none` when nothing matches), `Parameter suggestion thickness at x,y`, `Parameter suggestion action create at x,y` (`action name`), `Parameter suggestion highlighted: thickness2`, `Parameter suggestion inserted thickness into Extrude Distance: width / 2 + thickness` (`browser`, `created`, `existing` instead of `suggestion`), `Parameter suggestion tilt refused: <why>`, `Parameter suggestions closed for Extrude Distance (Esc)`, `Parameter fx Extrude Distance at x,y`, `Parameter browser opened for Extrude Distance`, `Parameter naming for dimension d1: width = `, `Parameter suggestion action remove-name at x,y`, `Parameter name width removed for dimension width: 20 mm` (mitcad#1577), `Parameter name width removed by Backspace for dimension width` (mitcad#1614), `Create User Parameter opened for dimension d2: name gap, unit mm`, `Create User Parameter gap refused: <why>`, `Created user parameter gap = 12 mm (mm) for dimension d2`, `Create User Parameter cancelled for dimension d2: <the field's text>` | expression fields' suggestions, fx browser, `name = …` and Create User Parameter (mitcad#567, mitcad#568, [Notes](#notes-on-particular-commands)); the field is named `<command> <input label>`, `dimension <its parameter>`, `sketch dimension` (a new one), `sketch <tool value>` or `<parameter> expression` (the table); places in the main window's coordinates |
 | `Value field Circular Pattern Quantity: Up stepped 4 to 5` (`Shift+Up`, `Ctrl+Down`, `Alt+Down` for Option on macOS, `wheel`), `Value field Extrude Distance: Up not stepped: d1*2 is not a plain value`, `Value field Circular Pattern Quantity: Down not stepped: 1 is at its minimum` | Up, Down or the wheel stepped a value field, or left it as it was (mitcad#1254, [Notes](#notes-on-particular-commands), *Stepping a value*); the field is named as in the suggestions' lines; the stepped text then goes in as typed (`Panel field quantity: 5`, the panel's evaluation and preview) |
 | `Context menu Material: Steel \| Acme PETG \| Shop PETG \| More…`, `Context menu Material checked: Steel` (`none`), `Context menu Material recent: Shop PETG`, `Material assigned from menu: Shop PETG to 2 bodies` (`… to component Root`) | Material › of the view's and the Browser's context menus when it opens, and a pick (mitcad#1046; [Material › in the context menus](#material--in-the-context-menus)); `tools/ui-material-menu-test.sh` |
 
@@ -15535,7 +15593,11 @@ the window's live MCP server.
   <script>`, then `x-terminal-emulator -e`, `gnome-terminal --wait --`,
   `konsole -e`, `xfce4-terminal --disable-server -x`, `xterm -e`. The state
   is `signing-in-again` while it runs (the button disabled while its window
-  is open); when the terminal's process ends, or where it ended at once
+  is open). One terminal is followed at a time (`signInStart`,
+  mitcad#1610): Sign in Again for another agent while one agent's terminal
+  is open lets that one go (it stays open for the user; its end checks no
+  agent) and starts the other agent's, logged as `Chat: Sign in Again: the
+  terminal for <agent> left open; starting one for <agent>`; when the terminal's process ends, or where it ended at once
   (within 2 s with exit 0: Windows Terminal, `open`, a terminal server)
   when MitCad's window is active again after the terminal took the focus,
   the panel runs Check again by itself. A terminal that fails at once is a
@@ -16472,7 +16534,7 @@ choices are, and Close keeps them. Floating and Docked alike.
 | Row | What it does |
 |---|---|
 | **Plate** | The plates (`print_plates`), the chosen one drawn beside the design; "No plates yet" without any. **Add Plate** under it adds one (`add_print_plate`, `Plate <n>`) and chooses it; **Delete Plate** deletes the chosen one (`delete_print_plate`; what was on it goes on the first plate). |
-| **Add Bodies** | A body picked in the view, or a component's occurrence picked in the Browser, goes on the chosen plate at once (`place_on_plate`, one undo step, `Put Body2 on Plate 2`); the row stays empty for the next pick. A surface or empty body is not taken. Without a plate, Plate 1 is added first. |
+| **Add Bodies** | A body picked in the view, or a component's occurrence picked in the Browser, goes on the chosen plate at once (`place_on_plate`, one undo step, `Put Body2 on Plate 2`; one on another plate leaves it with its count, `Move Body2 from Plate 1 to Plate 2`, mitcad#1595); the row stays empty for the next pick. A surface or empty body is not taken. Without a plate, Plate 1 is added first. |
 | **Item** | What is on the plate (shown while it has items), an item that is not in the design marked so. |
 | **Count** | The item's count, 1 to 50 (a larger one the model keeps is listed too): `place_on_plate` with `count`. **Take Off Plate** under it takes the item off (`remove_from_plates`): it prints on the first plate again, as the design places it. |
 | **Spiral Vase** | The plate's own `spiral_vase` (`edit_print_plate`; off takes the value away, the design's then). |
@@ -16948,8 +17010,12 @@ sketches (the model's `intersection_curve`, `core/model-api/src/commands.md`,
   Sweep (path, guide rails), Pipe, Loft (rails, center line), the surface
   sweeps and the construction planes and points along a path; Pattern on
   Path's Path takes it too. `pathOf` writes `{"feature": "F5"}` (one
-  feature alone), `pathItems` reads it back for editing. The model refuses
-  a feature that is not an Intersection Curve with its reason.
+  feature alone), `pathItems` reads it back for editing. Each path input
+  takes a feature only as an Intersection Curve's curve (`isPathItem`,
+  `isFeatureCurve`, mitcad#1610): another feature clicked on the timeline
+  goes in as its bodies or sketch, which a path does not take, and Path
+  stays as it was. The model refuses a feature that is not an Intersection
+  Curve with its reason.
 - **Logs:** `Intersection Curve First Curves: 1 sketch curve [sketch
   curve c1 of F1]`, `Added intersection curve of 1 and 1 curve(s)`, and
   the curve in `Construction shown: IntersectionCurve1`; a path picked as
@@ -17301,8 +17367,11 @@ Preferences › Display, under Interface size (GitHub mitcad/Mitcad#207):
   Windows); each time the start-up's log lines (`Style icon size:` wrapped
   at that Icon size), the step above (the runners count the menu's and the
   combo box's icons from its line again), the layout
-  with Box's panel open, Preferences showing the sizes and System, and
-  Icon size one step up (Right) saved for the next start. `app.unit`
+  with Box's panel open, the Materials window's list of appearances with
+  its swatches 20 px times Icon size, scaled once (mitcad#1610:
+  `expect-widget-property` gives a size as `WxH`), Preferences showing the
+  sizes and System, and Icon size one step up (Right) saved for the next
+  start. `app.unit`
   (`tests/ui_sizes.cpp`): the kept sizes and family and their fallbacks,
   `uiIconSize` and `uiRoomSize`, and the application font
   `applyTextAndIconSize` gives; (`tests/icon_size_style.cpp`) the metrics

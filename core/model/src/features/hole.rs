@@ -690,8 +690,12 @@ impl FeatureInfo for HoleDef {
             HolePlacement::Face { body, face, points } => {
                 ctx.body(*body)?;
                 for feature in face.features() {
-                    ctx.feature(feature)
-                        .map_err(|e| format!("face {face}: {e}"))?;
+                    ctx.feature(feature).map_err(|e| {
+                        crate::notice::about_place(
+                            crate::notice::NoticePlace::face(face.to_string()),
+                            &e.to_string(),
+                        )
+                    })?;
                 }
                 if points.is_empty() {
                     return Err("the hole has no position".to_owned());
@@ -709,8 +713,12 @@ impl FeatureInfo for HoleDef {
             } => {
                 ctx.body(*body)?;
                 for feature in face.features() {
-                    ctx.feature(feature)
-                        .map_err(|e| format!("face {face}: {e}"))?;
+                    ctx.feature(feature).map_err(|e| {
+                        crate::notice::about_place(
+                            crate::notice::NoticePlace::face(face.to_string()),
+                            &e.to_string(),
+                        )
+                    })?;
                 }
                 ctx.edges(&[(**edge1).clone(), (**edge2).clone()])?;
             }
@@ -733,8 +741,12 @@ impl FeatureInfo for HoleDef {
             } => {
                 ctx.body(*body)?;
                 for feature in face.features() {
-                    ctx.feature(feature)
-                        .map_err(|e| format!("face {face}: {e}"))?;
+                    ctx.feature(feature).map_err(|e| {
+                        crate::notice::about_place(
+                            crate::notice::NoticePlace::face(face.to_string()),
+                            &e.to_string(),
+                        )
+                    })?;
                 }
                 plane.check(ctx, Want::Plane)?;
                 if !toward.iter().all(|v| v.is_finite()) {

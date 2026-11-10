@@ -149,6 +149,18 @@ std::string regions_of(const detail::SweepFace& profile) {
   return text;
 }
 
+// An error about the profile `profile` (mitcad#1612): the person reads "the
+// profile" and `said`, agents "the profile <its region keys>" and `named`;
+// the face `face` is painted where one is given.
+std::string profile_error(const detail::SweepFace& profile, const std::string& said, const std::string& named,
+                          const std::string& face = std::string()) {
+  std::vector<ErrorPlace> places;
+  if (!face.empty()) {
+    places.push_back(face_place(face));
+  }
+  return placed_error("the profile" + said, "the profile " + regions_of(profile) + named, places);
+}
+
 // The flux of the constant field `d` through the faces, their orientations
 // applied: by Stokes' theorem half the circulation of d x r round their
 // edges (d = curl(d x r / 2)). An edge a face holds twice (a seam) cancels;
@@ -264,8 +276,8 @@ std::vector<TopoDS_Face> projected_piece(const TopoDS_Shape& target, const detai
   common.SetNonDestructive(true);
   detail::build(common);
   if (!common.IsDone() || common.HasErrors()) {
-    throw std::runtime_error("the profile " + regions_of(profile) + " could not be projected onto face " +
-                             face_ref);
+    throw std::runtime_error(profile_error(profile, " could not be projected onto the face",
+                                           " could not be projected onto face " + face_ref, face_ref));
   }
   // The sketch plane's normal; the direction crosses the plane (one in it
   // is refused), so along . normal is not zero.
@@ -288,8 +300,8 @@ std::vector<TopoDS_Face> projected_piece(const TopoDS_Shape& target, const detai
     pieces.push_back(std::move(piece));
   }
   if (pieces.empty()) {
-    throw std::invalid_argument("the profile " + regions_of(profile) + " misses face " + face_ref +
-                                " along the projection");
+    throw std::invalid_argument(profile_error(profile, " misses the face along the projection",
+                                              " misses face " + face_ref + " along the projection", face_ref));
   }
   // Ahead of the sketch plane, the nearest first; then behind it, the
   // nearest first.
@@ -306,8 +318,9 @@ std::vector<TopoDS_Face> projected_piece(const TopoDS_Shape& target, const detai
   const double across = area.Mass() * std::abs(along.Dot(normal));
   const Piece& piece = pieces.front();
   if (std::abs(std::abs(piece.flux) - across) > kCovered * across) {
-    throw std::invalid_argument("the profile " + regions_of(profile) + " falls partly off face " + face_ref +
-                                " along the projection (or past where the face turns away from it)");
+    const std::string off = " along the projection (or past where the face turns away from it)";
+    throw std::invalid_argument(profile_error(profile, " falls partly off the face" + off,
+                                              " falls partly off face " + face_ref + off, face_ref));
   }
   return piece.faces;
 }
@@ -446,7 +459,8 @@ ShapePtr grown(const std::string& feature, const detail::SweepFace& profile, con
   gp_Pnt inside;
   gp_Vec normal;
   if (!detail::inner_point(piece.front(), inside, normal)) {
-    throw std::runtime_error("the profile " + regions_of(profile) + " projected onto the face has no inside");
+    throw std::runtime_error(profile_error(profile, " projected onto the face has no inside",
+                                           " projected onto the face has no inside"));
   }
   // Halfway through the solid asked for, and where its far side lies.
   const gp_Pnt middle = inside.Translated(normal * (depth / 2.0));
@@ -492,9 +506,9 @@ ShapePtr grown(const std::string& feature, const detail::SweepFace& profile, con
       }
     }
     if (result.IsNull()) {
-      throw std::runtime_error("the profile " + regions_of(profile) +
-                               " projected onto the face could not be grown along its normals (the face "
-                               "may curve more tightly than the depth)");
+      const std::string why = " projected onto the face could not be grown along its normals (the face may "
+                              "curve more tightly than the depth)";
+      throw std::runtime_error(profile_error(profile, why, why));
     }
     detail::FaceNamer namer(result);
     // The side the solid lies on: the far face of the piece's first face
@@ -587,8 +601,8 @@ ShapePtr grown(const std::string& feature, const detail::SweepFace& profile, con
     }
     return namer.shape();
   }
-  throw std::runtime_error("the profile " + regions_of(profile) +
-                           " projected onto the face could not be grown to the side asked for");
+  const std::string why = " projected onto the face could not be grown to the side asked for";
+  throw std::runtime_error(profile_error(profile, why, why));
 }
 
 
@@ -633,7 +647,8 @@ ShapePtr tapered(const std::string& feature, const detail::SweepFace& profile, c
     }
   }
   if (top.empty()) {
-    throw std::runtime_error("the tapered top of the profile " + regions + " could not be built");
+    throw std::runtime_error(placed_error("the tapered top of the profile could not be built",
+                                          "the tapered top of the profile " + regions + " could not be built"));
   }
   // The boundaries of foot and top by the segment over them.
   std::map<std::string, NCollection_Sequence<TopoDS_Shape>> foot_edges;
@@ -671,7 +686,9 @@ ShapePtr tapered(const std::string& feature, const detail::SweepFace& profile, c
     const occ::handle<NCollection_HSequence<TopoDS_Shape>> wires =
         ShapeAnalysis_FreeBounds::ConnectEdgesToWires(sequence, tolerance, false);
     if (wires.IsNull() || wires->Length() != 1) {
-      throw std::runtime_error("the tapered wall " + name + " of the profile " + regions + " could not be built");
+      throw std::runtime_error(placed_error("a tapered wall of the profile could not be built",
+                                            "the tapered wall " + name + " of the profile " + regions +
+                                                " could not be built"));
     }
     return TopoDS::Wire(wires->Value(1));
   };
@@ -685,7 +702,9 @@ ShapePtr tapered(const std::string& feature, const detail::SweepFace& profile, c
   std::vector<std::pair<TopoDS_Face, std::string>> walls;
   for (const auto& [name, edges] : top_edges) {
     if (name.empty() || foot_edges.count(name) == 0) {
-      throw std::invalid_argument("the taper collapses the profile " + regions + ": its top has other edges than its foot");
+      throw std::invalid_argument(placed_error("the taper collapses the profile: its top has other edges than its foot",
+                                               "the taper collapses the profile " + regions +
+                                                   ": its top has other edges than its foot"));
     }
   }
   // The corners of the top, for walls whose top edge is gone.
@@ -697,7 +716,9 @@ ShapePtr tapered(const std::string& feature, const detail::SweepFace& profile, c
     const auto found = top_edges.find(name);
     const bool gone = std::find(vanished.begin(), vanished.end(), name) != vanished.end();
     if (name.empty() || (found == top_edges.end()) != gone) {
-      throw std::invalid_argument("the taper collapses the profile " + regions + ": its top has other edges than its foot");
+      throw std::invalid_argument(placed_error("the taper collapses the profile: its top has other edges than its foot",
+                                               "the taper collapses the profile " + regions +
+                                                   ": its top has other edges than its foot"));
     }
     const TopoDS_Wire foot_wire = chain(edges, name);
     if (gone) {
@@ -721,7 +742,9 @@ ShapePtr tapered(const std::string& feature, const detail::SweepFace& profile, c
       sections.AddVertex(apex);
       detail::build(sections);
       if (apex.IsNull() || !sections.IsDone()) {
-        throw std::runtime_error("the tapered wall " + name + " of the profile " + regions + " could not be built");
+        throw std::runtime_error(placed_error("a tapered wall of the profile could not be built",
+                                            "the tapered wall " + name + " of the profile " + regions +
+                                                " could not be built"));
       }
       for (TopExp_Explorer f(sections.Shape(), TopAbs_FACE); f.More(); f.Next()) {
         sewing.Add(f.Current());
@@ -745,7 +768,9 @@ ShapePtr tapered(const std::string& feature, const detail::SweepFace& profile, c
     sections.AddWire(top_wire);
     detail::build(sections);
     if (!sections.IsDone()) {
-      throw std::runtime_error("the tapered wall " + name + " of the profile " + regions + " could not be built");
+      throw std::runtime_error(placed_error("a tapered wall of the profile could not be built",
+                                            "the tapered wall " + name + " of the profile " + regions +
+                                                " could not be built"));
     }
     for (TopExp_Explorer f(sections.Shape(), TopAbs_FACE); f.More(); f.Next()) {
       sewing.Add(f.Current());
@@ -762,7 +787,9 @@ ShapePtr tapered(const std::string& feature, const detail::SweepFace& profile, c
     shell = TopoDS::Shell(e.Current());
   }
   if (shell.IsNull() || sewing.NbFreeEdges() != 0) {
-    throw std::runtime_error("the tapered walls of the profile " + regions + " do not close up with its top and foot");
+    throw std::runtime_error(placed_error("the tapered walls of the profile do not close up with its top and foot",
+                                          "the tapered walls of the profile " + regions +
+                                              " do not close up with its top and foot"));
   }
   BRep_Builder builder;
   TopoDS_Solid solid;
@@ -812,7 +839,7 @@ ShapePtr projected_emboss(const Shape& body, const EmbossProjectSpec& spec) {
     builder.MakeCompound(pieces);
     const std::vector<int> found = body.find_faces(spec.face);
     if (found.empty()) {
-      throw std::invalid_argument("the body has no face " + spec.face);
+      throw std::invalid_argument(no_face_error(spec.face));
     }
     for (const int i : found) {
       builder.Add(pieces, body.face(i));

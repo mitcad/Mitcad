@@ -315,6 +315,7 @@ vcpkg_from_github(
         1664-brepfill-sweep-sides-extended-past-a-corner-as-the-prisms-of-their-end-sections.patch
         1665-bopds-paves-of-an-edge-whose-blocks-do-not-chain.patch
         1666-brepfill-trim-shell-corner-round-along-the-bisector-plane-where-the-sides-intersection-breaks-up.patch
+        1670-chfi3d-end-crossing-on-the-next-edge-of-the-faces-common-boundary.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

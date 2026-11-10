@@ -301,29 +301,42 @@ impl SketchEdit<'_> {
                     anchor_at(&solved, *r)
                         .map(|p| (*r, dot(p, u)))
                         .ok_or_else(|| {
-                            format!("equal spacing: {r} is not where it can be measured")
+                            crate::said(
+                                "equal spacing: an item is not where it can be measured",
+                                format!("equal spacing: {r} is not where it can be measured"),
+                            )
                         })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             sorted_along(&at).map_err(|(a, b)| {
-                format!(
-                    "equal spacing: {a} and {b} are at the same place along the {}; give \
-                     their order (keep the listed order) or measure another way",
-                    match input.mode {
-                        SpacingMode::Horizontal => "x axis",
-                        SpacingMode::Vertical => "y axis",
-                        _ => "direction",
-                    }
+                let along = match input.mode {
+                    SpacingMode::Horizontal => "x axis",
+                    SpacingMode::Vertical => "y axis",
+                    _ => "direction",
+                };
+                crate::said(
+                    format!(
+                        "equal spacing: two items are at the same place along the {along}; give \
+                         their order (keep the listed order) or measure another way"
+                    ),
+                    format!(
+                        "equal spacing: {a} and {b} are at the same place along the {along}; give \
+                         their order (keep the listed order) or measure another way"
+                    ),
                 )
             })?
         } else {
             input.anchors.clone()
         };
         if let Some(pattern) = governing_pattern(&self.def, &anchors) {
-            return Err(format!(
-                "equal spacing: {} are instances of pattern {pattern}, whose spacing already \
-                 keeps them equally spaced; change it with Edit Pattern",
-                list(&anchors)
+            return Err(crate::said(
+                "equal spacing: these are instances of a pattern, whose spacing already keeps \
+                 them equally spaced; change it with Edit Pattern",
+                format!(
+                    "equal spacing: {} are instances of pattern {pattern}, whose spacing already \
+                     keeps them equally spaced; change it with Edit Pattern",
+                    list(&anchors)
+                ),
             ));
         }
         Ok(ConstraintKind::EqualSpacing {
@@ -453,14 +466,23 @@ impl SketchEdit<'_> {
             }
         }
         Err(if others.is_empty() {
-            format!(
-                "{id} would over-constrain the sketch: the others already fix what it constrains"
+            crate::said(
+                "the equal spacing would over-constrain the sketch: the others already fix what \
+                 it constrains",
+                format!(
+                    "{id} would over-constrain the sketch: the others already fix what it \
+                     constrains"
+                ),
             )
         } else {
-            format!(
-                "{id} would over-constrain the sketch: it follows from {} (they already fix what \
-                 it constrains)",
-                names(&others)
+            crate::said(
+                "the equal spacing would over-constrain the sketch: it follows from other \
+                 constraints, which already fix what it constrains",
+                format!(
+                    "{id} would over-constrain the sketch: it follows from {} (they already fix \
+                     what it constrains)",
+                    names(&others)
+                ),
             )
         })
     }

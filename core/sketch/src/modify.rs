@@ -388,7 +388,12 @@ impl SketchEdit<'_> {
                 .ok_or_else(|| format!("line c{} does not exist", id.0))?;
             match &mut e.kind {
                 EntityKind::Line { centerline, .. } => *centerline = on,
-                other => return Err(format!("c{} is a {}", id.0, other.type_name())),
+                other => {
+                    return Err(crate::said(
+                        format!("the curve is a {}, not a line", other.type_name()),
+                        format!("c{} is a {}", id.0, other.type_name()),
+                    ));
+                }
             }
             if on {
                 e.construction = false;
@@ -537,16 +542,27 @@ impl SketchEdit<'_> {
                 .unwrap_or_default();
             let now = self.params.name(param);
             let note = if param == p {
-                format!("{kept_name} is now a user parameter ({shown}); dimension {id} uses it")
+                crate::said(
+                    format!("{kept_name} is now a user parameter ({shown}); the dimension uses it"),
+                    format!(
+                        "{kept_name} is now a user parameter ({shown}); dimension {id} uses it"
+                    ),
+                )
             } else {
                 let expression = self
                     .params
                     .get(param)
                     .map(|q| q.expression().to_owned())
                     .unwrap_or_default();
-                format!(
-                    "{kept_name} is now a user parameter ({shown}); dimension {id} is {now} = \
-                     {expression}"
+                crate::said(
+                    format!(
+                        "{kept_name} is now a user parameter ({shown}); the dimension is {now} = \
+                         {expression}"
+                    ),
+                    format!(
+                        "{kept_name} is now a user parameter ({shown}); dimension {id} is {now} = \
+                         {expression}"
+                    ),
                 )
             };
             self.report.notes.push(note);
@@ -691,7 +707,10 @@ impl SketchEdit<'_> {
                 DragTarget::Radius(c, r) => {
                     self.editable(c)?;
                     if !matches!(self.curve(c)?.kind, EntityKind::Circle { .. }) {
-                        return Err(format!("c{} is not a circle", c.0));
+                        return Err(crate::said(
+                            "the curve is not a circle",
+                            format!("c{} is not a circle", c.0),
+                        ));
                     }
                     goals.push(Goal::Radius(c, r));
                 }
@@ -968,31 +987,48 @@ impl SketchEdit<'_> {
             }
             let names: Vec<String> = removed.iter().map(ToString::to_string).collect();
             self.report.removed.extend(names.iter().cloned());
-            self.report.notes.push(format!(
-                "the rotation turned {} off the sketch's axes: {} held parallel or \
-                 perpendicular to {} instead",
-                names.join(", "),
-                if names.len() == 1 {
-                    "its line"
-                } else {
-                    "their lines"
-                },
-                Ref::Curve(first)
+            let held = if names.len() == 1 {
+                "its line"
+            } else {
+                "their lines"
+            };
+            self.report.notes.push(crate::said(
+                format!(
+                    "the rotation turned {} off the sketch's axes: {held} held parallel or \
+                     perpendicular to the first line instead",
+                    counted(names.len(), "constraint", "constraints")
+                ),
+                format!(
+                    "the rotation turned {} off the sketch's axes: {held} held parallel or \
+                     perpendicular to {} instead",
+                    names.join(", "),
+                    Ref::Curve(first)
+                ),
             ));
         }
         if !aligned.is_empty() {
-            self.report.notes.push(format!(
-                "the rotation turned {} off the sketch's axes: now an aligned distance",
-                aligned.join(", ")
+            self.report.notes.push(crate::said(
+                format!(
+                    "the rotation turned {} off the sketch's axes: now an aligned distance",
+                    counted(aligned.len(), "dimension", "dimensions")
+                ),
+                format!(
+                    "the rotation turned {} off the sketch's axes: now an aligned distance",
+                    aligned.join(", ")
+                ),
             ));
         }
         if !off.is_empty() {
             let reason = "turned off the sketch's axes by a rotation";
             self.set_active(&off, false, Some(reason))?;
             let names: Vec<String> = off.iter().map(ToString::to_string).collect();
-            self.report
-                .notes
-                .push(format!("{} deactivated: {reason}", names.join(", ")));
+            self.report.notes.push(crate::said(
+                format!(
+                    "{} deactivated: {reason}",
+                    counted(names.len(), "constraint", "constraints")
+                ),
+                format!("{} deactivated: {reason}", names.join(", ")),
+            ));
         }
         Ok(changed)
     }
@@ -1096,7 +1132,12 @@ impl SketchEdit<'_> {
     pub fn mirror(&mut self, entities: &[Ref], axis: EntityUid) -> Result<Vec<Ref>, String> {
         let (a, b) = match self.curve(axis)?.kind {
             EntityKind::Line { start, end, .. } => (self.at(start)?, self.at(end)?),
-            _ => return Err(format!("the mirror line c{} is not a line", axis.0)),
+            _ => {
+                return Err(crate::said(
+                    "the mirror line is not a line",
+                    format!("the mirror line c{} is not a line", axis.0),
+                ));
+            }
         };
         let entities: Vec<Ref> = entities
             .iter()
@@ -1962,7 +2003,10 @@ impl SketchEdit<'_> {
         let ends = |l: EntityUid| -> Result<(EntityUid, EntityUid), String> {
             match self.curve(l)?.kind {
                 EntityKind::Line { start, end, .. } => Ok((start, end)),
-                ref other => Err(format!("c{} is a {}, not a line", l.0, other.type_name())),
+                ref other => Err(crate::said(
+                    format!("the curve is a {}, not a line", other.type_name()),
+                    format!("c{} is a {}, not a line", l.0, other.type_name()),
+                )),
             }
         };
         let (a0, a1) = ends(a)?;
@@ -2304,7 +2348,12 @@ impl SketchEdit<'_> {
         [s, e]
             .into_iter()
             .find(|&q| self.held_ends(at, q, other, curve))
-            .ok_or_else(|| format!("p{} is no end of c{}", at.0, curve.0))
+            .ok_or_else(|| {
+                crate::said(
+                    "the point is not an end of the curve",
+                    format!("p{} is no end of c{}", at.0, curve.0),
+                )
+            })
     }
 
     /// The corner at `at` where the curves `a` and `b` (lines or circular
@@ -2327,7 +2376,12 @@ impl SketchEdit<'_> {
 
     /// A line or a circular arc as it leaves its end `at` (at `corner`).
     fn fillet_leg(&self, curve: EntityUid, at: EntityUid, corner: P2) -> Result<Leg, String> {
-        let not_an_end = || format!("p{} is no end of c{}", at.0, curve.0);
+        let not_an_end = || {
+            crate::said(
+                "the point is not an end of the curve",
+                format!("p{} is no end of c{}", at.0, curve.0),
+            )
+        };
         match self.curve(curve)?.kind {
             EntityKind::Line { start, end, .. } => {
                 let far = match (start == at, end == at) {
@@ -2481,8 +2535,12 @@ impl SketchEdit<'_> {
             match ends_here[..] {
                 [a, b] if rounds(a) && rounds(b) => {
                     if self.is_line(a.id) && self.is_line(b.id) {
-                        self.corner(a.id, b.id)
-                            .map_err(|e| format!("p{} is no corner: {e}", p.0))?;
+                        self.corner(a.id, b.id).map_err(|e| {
+                            crate::said(
+                                format!("the point is no corner: {}", notice_message(&e)),
+                                format!("p{} is no corner: {e}", p.0),
+                            )
+                        })?;
                     } else if !self.is_fillet_corner(a.id, b.id, p)? {
                         return Err(format!(
                             "p{} is no corner: c{} and c{} are tangent there",
@@ -3080,7 +3138,12 @@ impl SketchEdit<'_> {
                     }
                     Offset::Circle(center, r)
                 }
-                _ => return Err(format!("c{} cannot be offset exactly", id.0)),
+                _ => {
+                    return Err(crate::said(
+                        "a curve cannot be offset exactly",
+                        format!("c{} cannot be offset exactly", id.0),
+                    ));
+                }
             });
         }
         let n = pieces.len();
@@ -3249,7 +3312,13 @@ impl SketchEdit<'_> {
     fn center_of(&self, id: EntityUid) -> Result<EntityUid, String> {
         match self.curve(id)?.kind {
             EntityKind::Arc { center, .. } | EntityKind::Circle { center, .. } => Ok(center),
-            ref other => Err(format!("c{} is a {}", id.0, other.type_name())),
+            ref other => Err(crate::said(
+                format!(
+                    "the curve is a {}, not a circle or an arc",
+                    other.type_name()
+                ),
+                format!("c{} is a {}", id.0, other.type_name()),
+            )),
         }
     }
 
@@ -3448,10 +3517,18 @@ impl SketchEdit<'_> {
                 .count()
         };
         if let Some(p) = all.iter().find(|p| degree(**p) > 2) {
-            return format!(
-                "the curves are not one connected chain: {} of them end at p{} (it branches there)",
-                degree(*p),
-                p.0
+            return crate::said(
+                format!(
+                    "the curves are not one connected chain: {} of them end at one point (it \
+                     branches there)",
+                    degree(*p)
+                ),
+                format!(
+                    "the curves are not one connected chain: {} of them end at p{} (it branches \
+                     there)",
+                    degree(*p),
+                    p.0
+                ),
             );
         }
         let at = |p: EntityUid| solved.points.get(&p).copied();
@@ -3483,22 +3560,36 @@ impl SketchEdit<'_> {
             return "the curves are not one connected chain".to_owned();
         };
         if d <= GAP {
-            format!(
-                "the curves are not one connected chain: c{} ends {} p{} of c{} but on a \
-                 point of its own (p{}); a Coincident constraint joins them",
-                u.0,
-                apart(d, size),
-                q.0,
-                v.0,
-                p.0
+            crate::said(
+                format!(
+                    "the curves are not one connected chain: a curve ends {} another curve's \
+                     end but on a point of its own; a Coincident constraint joins them",
+                    apart(d, size)
+                ),
+                format!(
+                    "the curves are not one connected chain: c{} ends {} p{} of c{} but on a \
+                     point of its own (p{}); a Coincident constraint joins them",
+                    u.0,
+                    apart(d, size),
+                    q.0,
+                    v.0,
+                    p.0
+                ),
             )
         } else {
-            format!(
-                "the curves are not one connected chain: c{} does not join the others (its \
-                 nearest end is {} mm from c{})",
-                u.0,
-                gap_text(d),
-                v.0
+            crate::said(
+                format!(
+                    "the curves are not one connected chain: a curve does not join the others \
+                     (its nearest end is {} mm from another curve)",
+                    gap_text(d)
+                ),
+                format!(
+                    "the curves are not one connected chain: c{} does not join the others (its \
+                     nearest end is {} mm from c{})",
+                    u.0,
+                    gap_text(d),
+                    v.0
+                ),
             )
         }
     }
@@ -3536,17 +3627,21 @@ impl SketchEdit<'_> {
                 })
             });
             if let Some((c, q, d)) = other {
-                out.push(format!(
-                    "the chain ends at p{}, where c{} ends {} on a point of its own (p{}); a \
-                     Coincident constraint joins them",
-                    p.0,
-                    c.0,
-                    if d <= 1e-9 * size {
-                        "at the same place".to_owned()
-                    } else {
-                        format!("{} mm away", gap_text(d))
-                    },
-                    q.0
+                let place = if d <= 1e-9 * size {
+                    "at the same place".to_owned()
+                } else {
+                    format!("{} mm away", gap_text(d))
+                };
+                out.push(crate::said(
+                    format!(
+                        "the chain ends where another curve ends {place} on a point of its own; \
+                         a Coincident constraint joins them"
+                    ),
+                    format!(
+                        "the chain ends at p{}, where c{} ends {place} on a point of its own \
+                         (p{}); a Coincident constraint joins them",
+                        p.0, c.0, q.0
+                    ),
                 ));
             }
         }
@@ -3835,4 +3930,26 @@ fn negate_expression(expression: &str) -> String {
         }
     }
     format!("-({text})")
+}
+
+/// "a constraint" or "3 constraints" (mitcad#1612: what a note counts,
+/// its ids in the agents' detail).
+fn counted(n: usize, one: &str, many: &str) -> String {
+    if n == 1 {
+        format!(
+            "{} {one}",
+            if one.starts_with(['a', 'e', 'i', 'o', 'u']) {
+                "an"
+            } else {
+                "a"
+            }
+        )
+    } else {
+        format!("{n} {many}")
+    }
+}
+
+/// The message a person reads of an error's text (its tail left out).
+fn notice_message(text: &str) -> String {
+    mitcad_model_base::notice::user_message(text)
 }

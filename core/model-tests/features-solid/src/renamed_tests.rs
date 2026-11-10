@@ -315,10 +315,12 @@ fn a_face_whose_curve_is_deleted_is_gone() {
         json!({"cmd": "sketch.remove", "sketch": "F1", "items": ["c14"]}),
     );
     assert_eq!(status(&doc, 2), FeatureStatus::Ok);
-    assert_eq!(
-        status(&doc, 3),
-        FeatureStatus::Failed(format!("the body has no face {corner}"))
-    );
+    // In plain words, the face for agents (mitcad#1612).
+    let FeatureStatus::Failed(error) = status(&doc, 3) else {
+        panic!("the shell did not fail");
+    };
+    assert_eq!(error.message, "the body has no such face");
+    assert_eq!(error.agent_text(), format!("the body has no face {corner}"));
     assert!(warnings(&doc, 3).is_empty());
 }
 
@@ -419,12 +421,12 @@ fn a_missing_edge_suggests_edges_of_its_faces_and_takes_none() {
     assert!(warnings(&doc, 4).is_empty());
     // The feature query and the edge lookup of a query give the same detail.
     let feature = query(&doc, json!({"query": "feature", "uid": "F4"}));
-    assert_eq!(feature["error"], message.as_str());
+    assert_eq!(feature["error"], message.agent_text());
     let (_, suggestions) = message.split_once("; ").unwrap();
     let lookup = json!({"query": "tangent_chains", "body": "F2.b0", "edge": edge});
     let error = doc.query(&lookup.to_string()).unwrap_err();
     assert_eq!(
-        error.to_string(),
+        mitcad_model::notice::FeatureError::from_text(&error.to_string()).agent_text(),
         format!("the body has no edge {edge}; {suggestions}")
     );
 }

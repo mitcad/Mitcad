@@ -384,6 +384,20 @@ impl LineStyle {
         }
     }
 
+    /// What it names in plain words, for a person (mitcad#1612: no ids;
+    /// [`Self::target_text`] is the agents'): `an edge of a body`, `a
+    /// body`, `an occurrence`.
+    pub fn target_words(&self) -> &'static str {
+        match (&self.body, &self.edge) {
+            (Some(_), Some(_)) => "an edge of a body",
+            (Some(_), None) => "a body",
+            (None, _) => match &self.occurrence {
+                Some(_) => "an occurrence",
+                None => "nothing",
+            },
+        }
+    }
+
     /// How closely it names a body placed at `path` (lower first): 0 the
     /// body itself, then its occurrences from the deepest; None when it
     /// does not name the body. An edge's style is matched by its edge.
@@ -1509,7 +1523,12 @@ impl DrawingSheet {
             for (k, line) in view.lines.iter().enumerate() {
                 line.check().map_err(|e| format!("{at}: {e}"))?;
                 if view.lines[..k].iter().any(|l| l.same_target(line)) {
-                    return Err(format!("{at}: {} has two line styles", line.target_text()));
+                    return Err(crate::notice::FeatureError::new(format!(
+                        "{} has two line styles",
+                        line.target_words()
+                    ))
+                    .with_detail(format!("{at}: {} has two line styles", line.target_text()))
+                    .text());
                 }
             }
             let mut along: Vec<&ViewBreak> = view.breaks.iter().collect();

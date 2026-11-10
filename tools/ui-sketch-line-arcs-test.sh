@@ -6,12 +6,16 @@
 # UI, on a design mitcad-cli makes: Sketch1 (F1) on XY with a line c1 from
 # p2 (-40, -20) to p3 (-10, -20), points p4 (-60, 40) and p5 (60, 40) that
 # widen the fitted view, p6 (20, 20) for a midpoint, p7 (30, -40) and
-# p8 (50, -40) for a chain.
+# p8 (50, -40) for a chain, p9 (-40, 10) and p10 (-20, 10) for another.
 #   1. The Line tool pressed on c1's end p3 and dragged along it draws a
 #      tangent arc from c1 (no chain before it).
 #   2. A chain's line from p7 to p8, then a drag from its end across it,
 #      with 15 typed while the button is down: a normal arc with a radius
 #      dimension of 15 mm.
+#   2b. A chain's line from (-40, 10) to (-20, 10), then a drag from its
+#      end up across it with 10, Tab and 270 typed: the normal arc leaves
+#      upward, toward the pointer, and sweeps 270 degrees round (-10, 10)
+#      to (-10, 0), below the line (mitcad#1608).
 #   3. Midpoint Line: a click on p6 and one at (5, 10): the line's middle
 #      is p6, its ends as far on either side.
 #   4. Saved, the file has the normal arc's radius dimension and the
@@ -35,13 +39,16 @@ cat > "$WORK/model.json" << 'EOF'
   {"cmd": "sketch.add_point", "sketch": "F1", "at": [60, 40]},
   {"cmd": "sketch.add_point", "sketch": "F1", "at": [20, 20]},
   {"cmd": "sketch.add_point", "sketch": "F1", "at": [30, -40]},
-  {"cmd": "sketch.add_point", "sketch": "F1", "at": [50, -40]}
+  {"cmd": "sketch.add_point", "sketch": "F1", "at": [50, -40]},
+  {"cmd": "sketch.add_point", "sketch": "F1", "at": [-40, 10]},
+  {"cmd": "sketch.add_point", "sketch": "F1", "at": [-20, 10]}
 ]
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
 
-# arc_drag x1 y1 x2 y2 text: a left drag between sketch points (mm) that
-# types the text halfway, with the button still down.
+# arc_drag x1 y1 x2 y2 text [sweep]: a left drag between sketch points (mm)
+# that types the text halfway, with the button still down, and then Tab
+# and the sweep.
 arc_drag() {
   local i fx fy tx ty
   read -r fx fy <<< "$(ui_sketch_at "$1" "$2")"
@@ -55,6 +62,12 @@ arc_drag() {
   ui_sync
   xdotool type --delay 40 "$5"
   ui_sync
+  if [ -n "${6:-}" ]; then
+    xdotool key Tab
+    ui_sync
+    xdotool type --delay 40 "$6"
+    ui_sync
+  fi
   for i in 5 6 7 8; do
     xdotool mousemove $((fx + (tx - fx) * i / 8)) $((fy + (ty - fy) * i / 8))
     sleep 0.08
@@ -92,6 +105,20 @@ ui_step "drag across it, typing 15"      arc_drag 50 -40 60 -25 15
 ui_expect_new "Line arc: normal" "a drag across the line chooses a normal arc"
 ui_expect_new "Added normal arc c" "the normal arc is added"
 ui_expect_new ", radius 15.000 mm, dimensioned" "the typed radius dimensions it"
+ui_step "end the chain (Esc)"            ui_key Escape
+ui_step "end the tool (Esc)"             ui_key Escape
+grep -q "Sketch command sketch.arc refused" "$UI_LOG" && ui_fail "an arc was refused"
+
+echo "--- A normal arc of a typed radius and a sweep of 270 degrees"
+ui_mark
+ui_step "line tool (L)"                  ui_key l
+ui_step "chain: the start on p9"         ui_sketch_click -40 10
+ui_step "chain: the end on p10"          ui_sketch_click -20 10
+ui_expect_new " from (-40, 10) to (-20, 10)" "the chain's line"
+ui_step "drag up across it, typing 10 and 270" arc_drag -20 10 -15 25 10 270
+ui_expect_new "Line arc: normal" "a drag across the line chooses a normal arc"
+ui_expect_new ", radius 10.000 mm, dimensioned" "the typed radius dimensions it"
+ui_expect_new "sweeps 270.0 degrees" "it leaves upward, toward the pointer, and sweeps 270 degrees (mitcad#1608)"
 ui_step "end the chain (Esc)"            ui_key Escape
 ui_step "end the tool (Esc)"             ui_key Escape
 grep -q "Sketch command sketch.arc refused" "$UI_LOG" && ui_fail "an arc was refused"

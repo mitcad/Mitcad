@@ -581,7 +581,11 @@ impl FeatureInfo for SweepDef {
             }
             for (i, face) in self.guide_surfaces.iter().enumerate() {
                 if self.guide_surfaces[..i].contains(face) {
-                    return Err(format!("guide surface {} is selected twice", face.face));
+                    return Err(crate::notice::placed(
+                        "a guide surface is selected twice",
+                        crate::notice::NoticePlace::face(face.face.to_string()),
+                        format!("guide surface {} is selected twice", face.face),
+                    ));
                 }
                 face.check(ctx).map_err(|e| format!("guide surface: {e}"))?;
             }

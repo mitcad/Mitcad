@@ -294,27 +294,36 @@ bool MessageBand::eventFilter(QObject* watched, QEvent* event) {
     switch (event->type()) {
     case QEvent::Enter:
     case QEvent::MouseMove:
-    case QEvent::HoverMove: {
-      const MessageLog& log = m_center.log();
-      const MessageEntry* entry = watched == m_text ? log.full() : log.stub();
-      if (entry != nullptr && !entry->feature.isEmpty() && !m_noticeHovered) {
-        m_noticeHovered = true;
-        emit noticeHovered(entry->feature);
-      }
+    case QEvent::HoverMove:
+      m_pointerOver = static_cast<QWidget*>(watched);
+      updateNoticeHover();
       break;
-    }
     case QEvent::Leave:
     case QEvent::Hide:
-      if (m_noticeHovered) {
-        m_noticeHovered = false;
-        emit noticeHovered(QString());
+      if (m_pointerOver == watched) {
+        m_pointerOver = nullptr;
       }
+      updateNoticeHover();
       break;
     default:
       break;
     }
   }
   return QWidget::eventFilter(watched, event);
+}
+
+void MessageBand::updateNoticeHover() {
+  // The feature of the message under the pointer: the one shown now, also
+  // when it took the hovered one's place (mitcad#1609); none when it is
+  // about no feature or the pointer is not over it.
+  const MessageLog& log = m_center.log();
+  const MessageEntry* entry = nullptr;
+  if (m_pointerOver != nullptr && m_pointerOver->isVisible()) {
+    entry = m_pointerOver == m_text ? log.full() : log.stub();
+  }
+  if (m_noticeHover.update(entry != nullptr, entry != nullptr ? entry->feature : QString())) {
+    emit noticeHovered(m_noticeHover.feature());
+  }
 }
 
 int MessageBand::fullHeight() const {
@@ -394,6 +403,9 @@ void MessageBand::refresh() {
   fitText();
   updateGeometry();
   m_refreshing = false;
+  // Another message in place of the one under the pointer: its places, or
+  // none (mitcad#1609).
+  updateNoticeHover();
   emit layoutChanged();
   // A message's button shown or gone where it was (mitcad#1416): its place
   // logged once the band is laid out.

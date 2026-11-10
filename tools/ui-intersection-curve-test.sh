@@ -17,6 +17,8 @@
 #     a half ring, pi 2^2 times the half circle's 20 pi (Pappus);
 #   - the file keeps the sweep's path as the curve's feature; the sweep and
 #     the curve open again with their picks.
+#   - a path input takes no other feature (mitcad#1610): Sweep1 clicked on
+#     the timeline with Path active leaves Path as it was.
 #   - Project and Intersect take the curve (mitcad#1417): in Sketch4 on XY
 #     Project takes IntersectionCurve1 on its Browser row and Sketch1
 #     clicked on the timeline as a whole sketch (a timeline click on a
@@ -193,6 +195,27 @@ ui_expect_new "Sweep Path: 1 feature [feature F4]" "its path is the curve"
 ui_expect_new "Preview Sweep: ok" "previewed as it is"
 ui_step "cancel (Esc)"                     ui_key Escape
 ui_expect_new "Command Sweep cancelled" "nothing changed"
+
+echo "--- A path input takes no other feature from the timeline (mitcad#1610)"
+ui_mark
+ui_step "sweep (search)"                   ui_command "Sweep"
+ui_step "the path input"                   ui_click_logged "Panel Sweep input path"
+ui_step "pick IntersectionCurve1"          ui_click_logged "Timeline IntersectionCurve1"
+ui_expect_new "Sweep Path: 1 feature [feature F4]" "the curve picked as the path"
+ui_mark
+ui_step "click Sweep1 on the timeline"     ui_click_logged "Timeline Sweep1"
+ui_sync
+sleep 0.5
+ui_sync
+path_now=$(grep -F "Sweep Path: " "$UI_LOG" | tail -1 | sed 's/.*Sweep Path: //')
+[ "$path_now" = "1 feature [feature F4]" ] ||
+  ui_fail "Sweep1, no intersection curve, went into Path: $path_now"
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Sweep Path: " | grep -qF "F5" &&
+  ui_fail "Sweep1 (F5) went into Path"
+echo "ok   Path as it was: $path_now"
+ui_step "cancel (Esc)"                     ui_key Escape
+ui_expect_new "Command Sweep cancelled" "nothing added"
+
 ui_mark
 ui_step "double-click IntersectionCurve1"  ui_double_click_logged "Timeline IntersectionCurve1"
 ui_expect_new "Editing F4 with Intersection Curve" "editing IntersectionCurve1"

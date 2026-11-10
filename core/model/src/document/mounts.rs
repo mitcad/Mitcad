@@ -601,7 +601,10 @@ impl<K: Kernel> Document<K> {
                         TargetClass::Axis(self.kernel().face_cylinder(&shape, &face).ok())
                     }
                     Ok(other) => TargetClass::Other(format!("a {} face", other.kind())),
-                    Err(e) => TargetClass::Other(format!("face {face}: {e}")),
+                    Err(e) => TargetClass::Other(crate::notice::about_place(
+                        crate::notice::NoticePlace::face(face.to_string()),
+                        &e.to_string(),
+                    )),
                 }
             }
             GeomRef::Edge { body, edge } => {
@@ -617,7 +620,10 @@ impl<K: Kernel> Document<K> {
                 match self.kernel().edge_geometry(&shape, &edge) {
                     Ok(crate::datum::CurveGeometry::Circle { .. }) => TargetClass::Axis(None),
                     Ok(other) => TargetClass::Other(format!("a {} edge", other.kind())),
-                    Err(e) => TargetClass::Other(format!("edge {edge}: {e}")),
+                    Err(e) => TargetClass::Other(crate::notice::about_place(
+                        crate::notice::NoticePlace::edge(edge.to_string()),
+                        &e.to_string(),
+                    )),
                 }
             }
             other => TargetClass::Other(format!("{other}")),

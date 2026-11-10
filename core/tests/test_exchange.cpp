@@ -1037,7 +1037,11 @@ void test_untriangulated_face_named(const fs::path& dir) {
       message = error.what();
     }
     std::fprintf(stderr, "untriangulated face, %s: %s\n", file, message.c_str());
-    CHECK(contains(message, "Body1: a face could not be triangulated: F1:side0 (cylinder)"));
+    // A person reads plain words, the face painted; agents read its name in
+    // the detail (mitcad#1612).
+    CHECK(contains(message, "Body1: a face could not be triangulated (its surface: cylinder)"));
+    CHECK(contains(message, "a face could not be triangulated: F1:side0 (cylinder)"));
+    CHECK(contains(message, "\"kind\":\"face\""));
   }
   mitcad::io::use_face_algorithms_for_tests(occ::handle<IMeshTools_MeshAlgoFactory>());
 }

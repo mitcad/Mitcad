@@ -22,13 +22,16 @@
 #include <TopExp_Explorer.hxx>
 #include <TopoDS_Shape.hxx>
 
+#include "mitcad/geometry/user_error.hpp"
+
 #include "history.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry {
 namespace {
 
-// A point as the messages give it: "(10, 5, 2.5)".
+// A point as agents read it: "(10, 5, 2.5)" (mitcad#1612: the person reads
+// "a point", the point painted).
 std::string point_text(const gp_Pnt& p) {
   char text[128];
   std::snprintf(text, sizeof text, "(%g, %g, %g)", p.X(), p.Y(), p.Z());
@@ -127,16 +130,18 @@ std::vector<BoundaryCell> boundary_cells(const std::vector<const Shape*>& tools,
       for (std::size_t i = 0; i < tools.size(); ++i) {
         const TopAbs_State state = solids[i].state(points[p]);
         if (state == TopAbs_ON) {
-          throw std::runtime_error("the point " + point_text(points[p]) + " lies on the boundary of tool " +
-                                   std::to_string(i + 1));
+          const std::string tool = " lies on the boundary of tool " + std::to_string(i + 1);
+          throw std::runtime_error(
+              placed_error("a point" + tool, "the point " + point_text(points[p]) + tool, {point_place(points[p])}));
         }
         if (state == TopAbs_IN) {
           holders[p].push_back(i);
         }
       }
       if (holders[p].empty()) {
-        throw std::runtime_error("the point " + point_text(points[p]) +
-                                 " is inside no tool body: no enclosed cell there");
+        const std::string none = " is inside no tool body: no enclosed cell there";
+        throw std::runtime_error(
+            placed_error("a point" + none, "the point " + point_text(points[p]) + none, {point_place(points[p])}));
       }
     }
 
@@ -186,7 +191,9 @@ std::vector<BoundaryCell> boundary_cells(const std::vector<const Shape*>& tools,
       builder.AddToResult(take, avoid);
       const TopoDS_Shape found = builder.Shape();
       if (found.IsNull() || !TopExp_Explorer(found, TopAbs_SOLID).More()) {
-        throw std::runtime_error("the cell at " + point_text(points[p]) + " came out empty");
+        throw std::runtime_error(placed_error("the cell at a point came out empty",
+                                              "the cell at " + point_text(points[p]) + " came out empty",
+                                              {point_place(points[p])}));
       }
       // Each face of the cell takes the names of the tool faces it is a
       // piece of, by the history of the parts the cell kept.

@@ -32,3 +32,5 @@ mod process_printers_tests;
 mod library_own_colour_tests;
 // model_render's overlay from Print Analysis' functions (mitcad#1488).
 mod render_overlay_tests;
+// The plate an item left when place_on_plate moves it (mitcad#1595).
+mod plate_moves_tests;

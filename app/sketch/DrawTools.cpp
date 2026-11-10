@@ -406,7 +406,7 @@ public:
       }
     } else if (m_state == State::Arc) {
       const LineArcKind kind = arcKind();
-      if (const auto arc = lineArc(kind, m_start, m_prevDir, m_arcEnd)) {
+      if (const auto arc = lineArc(kind, m_start, m_prevDir, m_arcEnd, m_snap.at)) {
         preview.curve(*arc, 2.0 * m_c.pixel());
         preview.glyph = kind == LineArcKind::Normal ? QStringLiteral("perpendicular") : QStringLiteral("tangent");
         preview.glyphAt = m_start;
@@ -506,13 +506,15 @@ private:
   }
 
   // The arc's end from the cursor and the typed values, and the values it
-  // has shown in the fields.
+  // has shown in the fields. The arc leaves toward the cursor's side, also
+  // when a typed sweep of 180 degrees or more puts its end on the other
+  // (mitcad#1608).
   void updateArc() {
     const LineArcKind kind = arcKind();
     const V2 direction = lineArcDirection(kind, m_prevDir, m_start, m_snap.at);
     m_arcEnd = lineArcEnd(m_start, direction, m_snap.at, m_c.fieldValue(QStringLiteral("radius")),
                           m_c.fieldValue(QStringLiteral("angle")));
-    if (const auto arc = lineArc(kind, m_start, m_prevDir, m_arcEnd)) {
+    if (const auto arc = lineArc(kind, m_start, m_prevDir, m_arcEnd, m_snap.at)) {
       m_c.setLive(QStringLiteral("radius"), arc->radius);
       m_c.setLive(QStringLiteral("angle"), sweep(arc->start, arc->end));
     }
@@ -805,7 +807,7 @@ private:
   void commitArc(const Snap& snap) {
     const LineArcKind kind = arcKind();
     const bool normal = kind == LineArcKind::Normal;
-    const auto preview = lineArc(kind, m_start, m_prevDir, m_arcEnd);
+    const auto preview = lineArc(kind, m_start, m_prevDir, m_arcEnd, m_snap.at);
     if (!preview) {
       arcNotMade();
       return;
@@ -817,6 +819,12 @@ private:
     cmd.insert(QStringLiteral("mode"), normal ? QStringLiteral("normal") : QStringLiteral("tangent"));
     cmd.insert(QStringLiteral("from"), m_startPoint);
     cmd.insert(QStringLiteral("end"), op.pointInput(endSnap));
+    if (normal) {
+      // The side the preview leaves toward (mitcad#1608): past 180 degrees
+      // the end is on the other side.
+      const V2 leaving = lineArcDirection(kind, m_prevDir, m_start, m_snap.at);
+      cmd.insert(QStringLiteral("toward"), xy(m_start + leaving));
+    }
     cmd.insert(QStringLiteral("construction"), m_c.construction());
     QJsonObject result;
     if (!op.run(cmd, &result)) {
@@ -850,13 +858,18 @@ private:
       m_prevDir = *dir;
     }
     double radius = preview->radius;
+    double swept = sweep(preview->start, preview->end);
     if (const CurveData* c = m_c.model().curve(arc)) {
       radius = c->curve.radius;
+      swept = sweep(c->curve.start, c->curve.end);
     }
     qDebug().noquote() << QStringLiteral("Added %1 arc %2 to %3, radius %4 mm%5")
                               .arg(normal ? QStringLiteral("normal") : QStringLiteral("tangent"), arc, text(m_start))
                               .arg(radius, 0, 'f', 3)
                               .arg(dimensioned ? QStringLiteral(", dimensioned") : QString());
+    // How far round it goes, for UI tests (mitcad#1608: a typed sweep of
+    // 180 degrees or more).
+    qDebug().noquote() << QStringLiteral("Line arc %1 sweeps %2 degrees").arg(arc).arg(swept * 180.0 / kPi, 0, 'f', 1);
     m_previous = arc;
     m_prevArc = true;
     m_arcFromFirst = false;

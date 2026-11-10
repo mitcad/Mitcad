@@ -206,7 +206,7 @@ ShapePtr dogbone_tool(const Shape& body, const DogboneSpec& spec) {
       Found found = corner_at(body, edge, classifier, picked != nullptr ? nullptr : &axis);
       if (!found.corner) {
         if (picked != nullptr) {
-          throw std::invalid_argument("edge " + *picked + " " + found.why);
+          throw std::invalid_argument(edge_error(*picked, "an edge " + found.why, "edge " + *picked + " " + found.why));
         }
         return;
       }
@@ -216,7 +216,7 @@ ShapePtr dogbone_tool(const Shape& body, const DogboneSpec& spec) {
     for (const std::string& name : spec.edges) {
       const std::vector<int> edges = body.find_edges(name);
       if (edges.empty()) {
-        throw std::invalid_argument("the body has no edge " + name);
+        throw std::invalid_argument(no_edge_error(name));
       }
       for (const int edge : edges) {
         take(edge, -1, &name);
@@ -225,7 +225,7 @@ ShapePtr dogbone_tool(const Shape& body, const DogboneSpec& spec) {
     for (const std::string& name : spec.faces) {
       const std::vector<int> faces = body.find_faces(name);
       if (faces.empty()) {
-        throw std::invalid_argument("the body has no face " + name);
+        throw std::invalid_argument(no_face_error(name));
       }
       for (const int index : faces) {
         const TopoDS_Face& face = body.face(index);

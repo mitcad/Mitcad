@@ -505,7 +505,8 @@ CommandDef pathPatternCommand(const CommandContext& context) {
       selectionInput(QStringLiteral("path"), QObject::tr("Path"), SelectKind::SketchCurve | SelectKind::Feature, 1, 0)
           .withTooltip(QObject::tr("A sketch line, arc or circle, a chain of them, or an intersection curve"))
           .withAccepts([](const SelectionItem& item) {
-            return item.kind == SelectKind::Feature || isLine(item) || isCircular(item);
+            // A feature only as an Intersection Curve's curve (mitcad#1610).
+            return isFeatureCurve(item) || isLine(item) || isCircular(item);
           }),
       distanceTypeInput(),
       directionTypeInput(QStringLiteral("direction_type"), QObject::tr("Direction Type")),

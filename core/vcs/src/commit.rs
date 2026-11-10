@@ -58,6 +58,8 @@ struct Prepared {
     removed: Vec<String>,
     /// B-rep files the version drops, to delete from the folder.
     unreferenced: Vec<String>,
+    /// Paths whose content came from memory, not from the folder's file.
+    from_memory: Vec<String>,
     warnings: Vec<String>,
 }
 
@@ -89,11 +91,43 @@ impl ProjectRepo {
         author: &Identity,
         renames: &[(String, String)],
     ) -> Result<CommitOutcome, VcsError> {
+        self.record_commit(files, &BTreeMap::new(), message, author, renames)
+    }
+
+    /// Records `files` as [`ProjectRepo::commit`] does, and the paths of
+    /// `contents` (relative to the project, with `/`) with that content
+    /// instead of the folder's file, which stays as it is (Remove
+    /// Project's single-file form of a recorded design, mitcad#1607). The
+    /// index entries of those paths take no file times, so git compares
+    /// the folder's file with the version by content.
+    pub(crate) fn commit_with_contents(
+        &self,
+        files: &[PathBuf],
+        contents: &BTreeMap<String, Vec<u8>>,
+        message: &str,
+        author: &Identity,
+    ) -> Result<CommitOutcome, VcsError> {
+        self.record_commit(files, contents, message, author, &[])
+    }
+
+    fn record_commit(
+        &self,
+        files: &[PathBuf],
+        contents: &BTreeMap<String, Vec<u8>>,
+        message: &str,
+        author: &Identity,
+        renames: &[(String, String)],
+    ) -> Result<CommitOutcome, VcsError> {
         let mut paths: Vec<String> = Vec::new();
         for file in files {
             let path = self.relative(file)?;
             if !paths.contains(&path) {
                 paths.push(path);
+            }
+        }
+        for path in contents.keys() {
+            if !paths.contains(path) {
+                paths.push(path.clone());
             }
         }
         if let Some(reason) = self.why_not_commit()? {
@@ -124,7 +158,7 @@ impl ProjectRepo {
                 std::thread::sleep(Duration::from_millis(20 << attempt));
             }
             let head = self.head_commit()?;
-            let prepared = self.prepare(head, &paths)?;
+            let prepared = self.prepare(head, &paths, contents)?;
             if prepared.tree == prepared.base {
                 return Ok(CommitOutcome {
                     warnings: prepared.warnings,
@@ -191,9 +225,14 @@ impl ProjectRepo {
         })
     }
 
-    /// HEAD's tree with `paths` as they are in the folder, and the B-rep
-    /// files reconciled.
-    fn prepare(&self, head: Option<ObjectId>, paths: &[String]) -> Result<Prepared, VcsError> {
+    /// HEAD's tree with `paths` as they are in the folder (or in
+    /// `contents`), and the B-rep files reconciled.
+    fn prepare(
+        &self,
+        head: Option<ObjectId>,
+        paths: &[String],
+        contents: &BTreeMap<String, Vec<u8>>,
+    ) -> Result<Prepared, VcsError> {
         let base = match head {
             Some(id) => self.repo.find_commit(id)?.tree_id()?.detach(),
             None => ObjectId::empty_tree(self.repo.object_hash()),
@@ -206,6 +245,7 @@ impl ProjectRepo {
             written: Vec::new(),
             removed: Vec::new(),
             unreferenced: Vec::new(),
+            from_memory: Vec::new(),
             warnings: Vec::new(),
         };
         // The references of the saved design files (None: unreadable).
@@ -213,7 +253,14 @@ impl ProjectRepo {
         for path in paths {
             let full = self.root.join(path);
             let old = self.blob_entry(base, path)?;
-            match fs::read(&full) {
+            let read = match contents.get(path) {
+                Some(data) => {
+                    prepared.from_memory.push(path.clone());
+                    Ok(data.clone())
+                }
+                None => fs::read(&full),
+            };
+            match read {
                 Ok(data) => {
                     let id = self.repo.write_blob(&data)?.detach();
                     if old != Some(id) {
@@ -359,7 +406,7 @@ impl ProjectRepo {
             deleted: Vec::new(),
             warnings: prepared.warnings,
         };
-        if let Err(e) = self.update_index(lock, &prepared.entries) {
+        if let Err(e) = self.update_index(lock, &prepared.entries, &prepared.from_memory) {
             outcome.warnings.push(format!(
                 "the version is recorded, but git's index could not be updated, so git status \
                  may show its files as changed: {e}"
@@ -392,12 +439,15 @@ impl ProjectRepo {
 
     /// Sets the index entries of the committed paths to their blobs with
     /// the folder's file times and sizes (removing those of removed
-    /// paths), so `git status` sees them clean; other entries stay. Writes
-    /// the index through the lock held since the round began.
+    /// paths), so `git status` sees them clean; other entries stay. Those
+    /// of `from_memory`, whose blobs are not the folder's files, take no
+    /// file times, so that git compares them by content. Writes the index
+    /// through the lock held since the round began.
     fn update_index(
         &self,
         mut lock: gix::lock::File,
         entries: &[(String, Option<ObjectId>)],
+        from_memory: &[String],
     ) -> Result<(), VcsError> {
         let path = self.repo.index_path();
         // Read now, under the lock: not the repository's snapshot, which may
@@ -420,10 +470,14 @@ impl ProjectRepo {
             let Some(id) = id else {
                 continue;
             };
-            let stat = gix::index::fs::Metadata::from_path_no_follow(&self.root.join(relative))
-                .ok()
-                .and_then(|metadata| gix::index::entry::Stat::from_fs(&metadata).ok())
-                .unwrap_or_default();
+            let stat = if from_memory.contains(relative) {
+                gix::index::entry::Stat::default()
+            } else {
+                gix::index::fs::Metadata::from_path_no_follow(&self.root.join(relative))
+                    .ok()
+                    .and_then(|metadata| gix::index::entry::Stat::from_fs(&metadata).ok())
+                    .unwrap_or_default()
+            };
             index.dangerously_push_entry(
                 stat,
                 *id,

@@ -13,7 +13,8 @@
 # Floating and then the Docked layout:
 #   - the navigation bar's Edit Parameters opens the parameter table in the
 #     SOLID, BUILD and MAKE workspaces and, as the sketch's entry, in a
-#     sketch, which stays open;
+#     sketch, which stays open; the pinned button has one action in the
+#     sketch and after it (mitcad#1610);
 #   - in a drawing, where the navigation bar is hidden, the drawing bar's
 #     Edit Parameters opens it over the drawing, which stays open.
 #

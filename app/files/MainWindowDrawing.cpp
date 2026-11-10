@@ -140,10 +140,12 @@ void MainWindow::exportDrawing() {
                {QStringLiteral("drawing"), drawing},
                {QStringLiteral("title"), base}};
   }
-  // A DXF file in another unit than the design's (mitcad#1408); left out,
-  // each sheet's unit (or the design's).
+  // A DXF file's length unit (mitcad#1408): always the one the dialog
+  // shows, also when it is the design's (mitcad#1610). Left out, the
+  // model takes each sheet's unit, so that a drawing whose sheet has a
+  // unit of its own would be written in that one, not in the chosen one.
   const bool dxf = options.value(QStringLiteral("format")).toString() == QStringLiteral("dxf");
-  if (dxf && !choice->dxfUnit.isEmpty() && choice->dxfUnit != lengthUnit()) {
+  if (dxf && !choice->dxfUnit.isEmpty()) {
     command.insert(QStringLiteral("units"), choice->dxfUnit);
   }
   QJsonObject result;

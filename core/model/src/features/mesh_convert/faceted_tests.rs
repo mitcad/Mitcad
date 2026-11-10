@@ -468,8 +468,16 @@ fn a_failing_faceted_solid_is_refused_and_changes_nothing() {
         )
         .unwrap_err()
         .to_string();
+    // A person reads no body uid; agents do (mitcad#1612).
+    let read = crate::notice::FeatureError::from_text(&error);
     assert!(
-        error.contains("ConvertMesh1: body F2.b0 (from Extrude1) is not a mesh body"),
+        read.message
+            .starts_with("ConvertMesh1: a body (from Extrude1) is not a mesh body"),
+        "{error}"
+    );
+    assert!(
+        read.agent_text()
+            .contains("ConvertMesh1: body F2.b0 (from Extrude1) is not a mesh body"),
         "{error}"
     );
     assert_eq!(doc.features().count(), features);

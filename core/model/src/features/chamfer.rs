@@ -271,7 +271,11 @@ impl FeatureInfo for ChamferDef {
             }
             for edge in &set.edges {
                 if self.sets[..i].iter().any(|s| s.edges.contains(edge)) {
-                    return Err(at(format!("edge {edge} is in two edge sets")));
+                    return Err(at(crate::notice::placed(
+                        "an edge is in two edge sets",
+                        crate::notice::NoticePlace::edge(edge.to_string()),
+                        format!("edge {edge} is in two edge sets"),
+                    )));
                 }
             }
         }

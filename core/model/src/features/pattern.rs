@@ -3849,7 +3849,13 @@ fn splits_of_one_place<K: Kernel>(
         ) {
             (Ok(before), Ok(after)) if after <= before => {}
             (Ok(_), Ok(_)) => split.push(i),
-            _ => return Err(format!("face {text} not found")),
+            _ => {
+                return Err(crate::notice::placed(
+                    "a face is not found",
+                    crate::notice::NoticePlace::face(text.to_string()),
+                    format!("face {text} not found"),
+                ));
+            }
         }
     }
     if split.is_empty() {

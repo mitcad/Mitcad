@@ -132,6 +132,21 @@ impl From<PlateItem> for ItemFile {
     }
 }
 
+/// An item that `place_on_plate` took off another plate, since an item
+/// is on one plate at most (mitcad#1595): the target, the plate it left
+/// with the count it had there, and the plate it went to with the count it
+/// has there now (the one given, else the one it had).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlateMove {
+    pub target: PlateTarget,
+    pub from_id: String,
+    pub from_name: String,
+    pub from_count: u32,
+    pub to_id: String,
+    pub to_name: String,
+    pub count: u32,
+}
+
 /// A print plate: its id (`plate1`, never given again while the design
 /// has it), its name for people, what goes on it and its own settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

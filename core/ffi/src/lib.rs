@@ -242,11 +242,15 @@ mod ffi {
         /// committing it; see preview_body_shape and preview_tool_shape.
         fn preview(self: &mut Document, json: &str) -> Result<String>;
         fn clear_preview(self: &mut Document);
-        /// Runs a script of commands and expectations (mitcad-cli run).
+        /// Runs a script of commands and expectations (mitcad-cli run);
+        /// returns what its commands report beside the design, a line
+        /// each ("Plates: Body1 moved from one to two (count 2)" for an
+        /// item a place_on_plate took off another plate, mitcad#1595),
+        /// empty without one.
         fn run_script(self: &mut Document, json: &str) -> Result<String>;
         /// Runs a script as run_script does; returns how long each step
         /// took, a line "Timing steps[i] <name>: <ms> ms" per step
-        /// (mitcad-cli run --timings).
+        /// (mitcad-cli run --timings), then run_script's lines.
         fn run_script_timings(self: &mut Document, json: &str) -> Result<String>;
         /// The timeline and the bodies with their measurements, as text or
         /// JSON.
@@ -865,6 +869,26 @@ fn load_document_at(json: &str, path: &str) -> Result<Box<Document>, mitcad_mode
         .map(|doc| Box::new(Document(doc)))
 }
 
+/// A refusal as the application reads it (mitcad#1612,
+/// `docs/ui-conventions.md` "What a message says"): the names, ids and
+/// coordinates an older text gives taken out of its message into its
+/// places and its detail ([`mitcad_model::notice::FeatureError::from_text`];
+/// a refusal that has its own tail keeps it). The application shows the
+/// text before the tail; the log and the MCP, which reads the model
+/// directly, keep the names. A sketch refusal's conflicts line stays last
+/// (mitcad#1566).
+fn placed_refusal(error: ApiError) -> ApiError {
+    const CONFLICTS: &str = "\n[conflicts: ";
+    let (head, trailer) = match error.0.rfind(CONFLICTS) {
+        Some(at) => error.0.split_at(at),
+        None => (error.0.as_str(), ""),
+    };
+    ApiError(format!(
+        "{}{trailer}",
+        mitcad_model::notice::FeatureError::from_text(head).text()
+    ))
+}
+
 fn init_project(dir: &str) -> Result<String, ApiError> {
     let (project, written) = mitcad_model::Project::init(std::path::Path::new(dir))
         .map_err(|e| ApiError(format!("cannot make {dir} a project: {e}")))?;
@@ -927,8 +951,12 @@ impl Document {
 
     /// Model commands, and `import_f3d`, `import_fcstd` and `import_ipt`,
     /// which need the file's bodies built here (one command, or among an
-    /// array).
+    /// array). A refusal as the application reads it ([`placed_refusal`]).
     fn command(&mut self, json: &str) -> Result<String, ApiError> {
+        self.command_answer(json).map_err(placed_refusal)
+    }
+
+    fn command_answer(&mut self, json: &str) -> Result<String, ApiError> {
         let value: Option<serde_json::Value> = serde_json::from_str(json).ok();
         let is_import = |v: &serde_json::Value| {
             matches!(
@@ -957,7 +985,13 @@ impl Document {
             Some(v) if is_import(&v) => {
                 let mut result = self.import_command(v)?;
                 result["recomputed"] = serde_json::json!(self.0.stats().evaluated.len());
-                result["error"] = serde_json::json!(self.0.stats().error.map(|e| e.to_string()));
+                let first = self.0.stats().error;
+                // What a person reads of it, its places (mitcad#1612); `error`
+                // keeps the names and coordinates for agents.
+                if let Some(first) = &first {
+                    result["error_notice"] = first.notice().to_json();
+                }
+                result["error"] = serde_json::json!(first.map(|e| e.to_string()));
                 Ok(result.to_string())
             }
             Some(serde_json::Value::Array(commands)) if commands.iter().any(is_import) => {
@@ -1003,13 +1037,13 @@ impl Document {
     }
 
     fn query(&self, json: &str) -> Result<String, ApiError> {
-        let answer = self.0.query(json)?;
+        let answer = self.0.query(json).map_err(placed_refusal)?;
         // The caches' diagnostics (P7d) with the process's memory.
         Ok(result_store::with_process_memory(json, answer))
     }
 
     fn preview(&mut self, json: &str) -> Result<String, ApiError> {
-        self.0.preview(json)
+        self.0.preview(json).map_err(placed_refusal)
     }
 
     fn clear_preview(&mut self) {
@@ -1017,12 +1051,14 @@ impl Document {
     }
 
     fn run_script(&mut self, json: &str) -> Result<String, ApiError> {
-        self.0.run_script(json)
+        let results = self.0.run_script(json)?;
+        Ok(mitcad_model_api::script_notes(&results))
     }
 
     fn run_script_timings(&mut self, json: &str) -> Result<String, ApiError> {
         let mut times = String::new();
-        self.0.run_script_timed(json, Some(&mut times))?;
+        let results = self.0.run_script_timed(json, Some(&mut times))?;
+        times.push_str(&mitcad_model_api::script_notes(&results));
         Ok(times)
     }
 

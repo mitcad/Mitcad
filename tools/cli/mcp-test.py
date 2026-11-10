@@ -1420,6 +1420,49 @@ class McpTest(unittest.TestCase):
                     self.assertEqual(self.print_import_state(client, document), before)
                 client.finish()
 
+    def test_place_on_plate_reports_the_plate_an_item_left(self):
+        """mitcad#1595: a moved item names the plate it left; undo puts it back."""
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            client.tool("model_command", {"document": document, "command": BOX})
+            second = copy.deepcopy(BOX)
+            second["def"]["corner"] = [50, 0]
+            client.tool("model_command", {"document": document, "command": second})
+            placed = client.tool("model_command", {"document": document, "command": [
+                {"cmd": "add_print_plate", "name": "one"},
+                {"cmd": "add_print_plate", "name": "two"},
+                {"cmd": "place_on_plate", "plate": "one",
+                 "items": [{"body": "Body1", "count": 2}, {"body": "Body2"}]}]})
+            # The fields the moves own; the result also carries the command
+            # envelope's (error, recomputed), and its notices repeat the warnings.
+            def moves_of(result):
+                notices = [(notice["level"], notice["message"]) for notice in result.get("notices", [])]
+                self.assertEqual(notices, [("warning", text) for text in result["warnings"]])
+                return {"moved": result["moved"], "warnings": result["warnings"]}
+
+            self.assertEqual(moves_of(placed["result"]), {"moved": [], "warnings": []})
+            moved = client.tool("model_command", {"document": document, "command": {
+                "cmd": "place_on_plate", "plate": "two", "items": [{"body": "Body1"}]}})
+            self.assertTrue(moved["applied"])
+            self.assertEqual(moves_of(moved["result"]), {
+                "moved": [{"body": "F1.b0", "name": "Body1", "count": 2,
+                           "from": {"id": "plate1", "name": "one", "count": 2},
+                           "to": {"id": "plate2", "name": "two"}}],
+                "warnings": ["Body1 moved from one to two (count 2)"]})
+
+            def items():
+                plates = client.tool("model_query", {
+                    "document": document, "query": {"query": "print_plates"}})["result"]["plates"]
+                return [[(item["name"], item["count"]) for item in plate["items"]] for plate in plates]
+
+            self.assertEqual(items(), [[("Body2", 1)], [("Body1", 2)]])
+            client.tool("model_command", {"document": document, "command": {"cmd": "undo"}})
+            self.assertEqual(items(), [[("Body1", 2), ("Body2", 1)], []])
+            client.tool("model_command", {"document": document, "command": {"cmd": "redo"}})
+            self.assertEqual(items(), [[("Body2", 1)], [("Body1", 2)]])
+            client.finish()
+
     def test_print_plates_are_exported_with_their_files_checked(self):
         """mitcad#1490: a plate per box, one file or a file per plate."""
         with Session(self.workspace) as client:

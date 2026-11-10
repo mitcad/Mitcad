@@ -13,6 +13,7 @@
 #include <QRectF>
 
 #include "../framework/Theme.hpp"
+#include "../framework/UserText.hpp"
 
 namespace mitcad {
 namespace {
@@ -36,7 +37,8 @@ std::optional<CenterOfMassShown> centerOfMassOf(const QJsonObject& answer) {
   }
   CenterOfMassShown shown;
   shown.visible = marker.toObject().value(QStringLiteral("visible")).toBool(true);
-  shown.error = answer.value(QStringLiteral("error")).toString();
+  // In plain words (mitcad#1612).
+  shown.error = userText(answer.value(QStringLiteral("error")).toString());
   shown.mass = answer.value(QStringLiteral("mass")).toDouble();
   shown.bodies = answer.value(QStringLiteral("bodies")).toInt();
   shown.defaultMaterial = answer.value(QStringLiteral("default_material")).toInt();

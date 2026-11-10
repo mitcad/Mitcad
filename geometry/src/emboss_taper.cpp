@@ -43,6 +43,8 @@
 #include <TopoDS_Wire.hxx>
 #include <gp_Pln.hxx>
 
+#include "mitcad/geometry/user_error.hpp"
+
 namespace mitcad::geometry::detail {
 
 namespace {
@@ -397,7 +399,8 @@ MovedLoops moved_loops(const TopoDS_Face& face, double distance, const std::stri
       Geom2dConvert_ApproxCurve approximation(new Geom2d_TrimmedCurve(m.curve, m.from, m.to), 1.0e-9, GeomAbs_C2,
                                               1000, 14);
       if (!approximation.HasResult()) {
-        throw std::runtime_error("a tapered edge of the profile " + regions + " could not be built");
+        throw std::runtime_error(placed_error("a tapered edge of the profile could not be built",
+                                              "a tapered edge of the profile " + regions + " could not be built"));
       }
       curve = approximation.Curve();
       from = curve->FirstParameter();

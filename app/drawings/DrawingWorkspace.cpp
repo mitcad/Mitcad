@@ -55,6 +55,7 @@
 #include "DrawingPreferences.hpp"
 #include "DrawingSheetView.hpp"
 #include "../framework/UiSizes.hpp"
+#include "../framework/UserText.hpp"
 
 namespace mitcad::drawings {
 namespace {
@@ -705,7 +706,7 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
   if (m_cutSheet) {
     QStringList warnings;
     for (const QJsonValue& warning : sheet.value(QStringLiteral("warnings")).toArray()) {
-      warnings << warning.toString();
+      warnings << userText(warning.toString()); // in plain words (mitcad#1612)
     }
     const QString told = warnings.join(QStringLiteral("; "));
     if (told != m_cutWarnings) {
@@ -726,7 +727,7 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
     // What of the bodies it keeps is gone from the design (mitcad#1293): a
     // warning, the rest drawn.
     for (const QJsonValue& warning : view.value(QStringLiteral("warnings")).toArray()) {
-      gone << tr("View %1: %2").arg(view.value(QStringLiteral("id")).toInt()).arg(warning.toString());
+      gone << tr("View %1: %2").arg(view.value(QStringLiteral("id")).toInt()).arg(userText(warning.toString()));
     }
   }
   const QString said = (problems + gone).join(QStringLiteral("; "));
@@ -1161,7 +1162,7 @@ void DrawingWorkspace::fillViewPanel(int id) {
   }
   // Bodies or occurrences it keeps that are gone (mitcad#1293).
   for (const QJsonValue& warning : json.value(QStringLiteral("warnings")).toArray()) {
-    auto* gone = new QLabel(warning.toString());
+    auto* gone = new QLabel(userText(warning.toString()));
     gone->setWordWrap(true);
     setWarningStyleSheet(gone);
     m_form->addRow(gone);
@@ -3839,7 +3840,7 @@ void DrawingWorkspace::fillCutSheetPanel() {
   m_form->addRow(tr("Scale"), new QLabel(QStringLiteral("1:1")));
   m_form->addRow(tr("Components"), new QLabel(QString::number(sheet.value(QStringLiteral("views")).toArray().size())));
   for (const QJsonValue& warning : sheet.value(QStringLiteral("warnings")).toArray()) {
-    auto* said = new QLabel(warning.toString());
+    auto* said = new QLabel(userText(warning.toString()));
     said->setWordWrap(true);
     setWarningStyleSheet(said);
     m_form->addRow(said);

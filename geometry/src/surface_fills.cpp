@@ -137,7 +137,8 @@ Chain chain_of(const EdgeChain& input, bool faces_needed, const char* what) {
   if (!input.face.empty()) {
     const std::vector<int> found = detail::resolve_faces(body, {input.face}, "face");
     if (found.size() != 1) {
-      throw std::invalid_argument(std::string(what) + ": face " + input.face + " is not one face");
+      throw std::invalid_argument(face_error(input.face, std::string(what) + ": the face is not one face",
+                                             std::string(what) + ": face " + input.face + " is not one face"));
     }
     face = found.front();
   }
@@ -147,15 +148,18 @@ Chain chain_of(const EdgeChain& input, bool faces_needed, const char* what) {
     int f = -1;
     if (face >= 0) {
       if (std::find(beside.begin(), beside.end(), face) == beside.end()) {
-        throw std::invalid_argument(std::string(what) + ": face " + input.face + " is not beside edge " +
-                                    body.edge_name(e));
+        throw std::invalid_argument(
+            placed_error(std::string(what) + ": the face is not beside an edge of the chain",
+                         std::string(what) + ": face " + input.face + " is not beside edge " + body.edge_name(e),
+                         {face_place(input.face), edge_place(body.edge_name(e))}));
       }
       f = face;
     } else if (beside.size() == 1) {
       f = beside.front();
     } else if (faces_needed) {
-      throw std::invalid_argument(std::string(what) + ": edge " + body.edge_name(e) +
-                                  " lies between two faces; name the face beside the chain");
+      const std::string why = " lies between two faces; name the face beside the chain";
+      throw std::invalid_argument(edge_error(body.edge_name(e), std::string(what) + ": an edge" + why,
+                                             std::string(what) + ": edge " + body.edge_name(e) + why));
     }
     chain.face_of[e] = f;
   }
@@ -856,8 +860,9 @@ TopoDS_Face faired_face(const Shape& body, int f, const Fairing& fairing) {
     return TopoDS_Face();
   }
   if (!natural(face)) {
-    throw std::invalid_argument("unsupported: fair surface of face " + detail::primary_name(body, f) +
-                                ", which is not bounded by its surface's parameter range alone");
+    const std::string why = ", which is not bounded by its surface's parameter range alone";
+    throw std::invalid_argument(face_error(detail::primary_name(body, f), "unsupported: fair surface of a face" + why,
+                                           "unsupported: fair surface of face " + detail::primary_name(body, f) + why));
   }
   TopLoc_Location location;
   const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face, location);
@@ -944,14 +949,17 @@ ShapePtr match_surface(const Shape& body, const std::string& face, const EdgeCha
     } else {
       const std::vector<int> found = detail::resolve_faces(body, {face}, "face");
       if (found.size() != 1) {
-        throw std::invalid_argument("match surface: face " + face + " is in " + std::to_string(found.size()) +
-                                    " pieces");
+        const std::string pieces = " is in " + std::to_string(found.size()) + " pieces";
+        throw std::invalid_argument(
+            face_error(face, "match surface: the face" + pieces, "match surface: face " + face + pieces));
       }
       f = found.front();
     }
     if (!natural(body.face(f))) {
-      throw std::invalid_argument("unsupported: match surface of face " + detail::primary_name(body, f) +
-                                  ", which is not bounded by its surface's parameter range alone");
+      const std::string why = ", which is not bounded by its surface's parameter range alone";
+      const std::string name = detail::primary_name(body, f);
+      throw std::invalid_argument(face_error(name, "unsupported: match surface of a face" + why,
+                                             "unsupported: match surface of face " + name + why));
     }
     const Chain chain = chain_of(target, continuity != Continuity::G0, "match surface");
     return replaced(body, {{f, matched_face(body.face(f), chain, continuity)}});

@@ -38,6 +38,7 @@
 // Display meshings compared face by face (mitcad#644).
 #include "mesh_compare.hpp"
 // A mixed installation at start-up (mitcad#1454).
+#include "framework/UserText.hpp"
 #include "update/InstallationCheck.hpp"
 
 namespace {
@@ -73,6 +74,9 @@ const char* const kUsage = R"(usage:
       on an opened one, then prints the same report. A script is a JSON
       array of commands ({"cmd": ...}), expectations ({"expect": {...}}) and
       comments ({"comment": "..."}); see core/model-api/src/commands.md.
+      Before the report, a line for each item a place_on_plate took off
+      another plate, such as Plates: Body1 moved from one to two (count 2),
+      written to stderr with --json.
       --save writes the resulting design.
       --timings prints how long each step of the script took first,
       "Timing steps[i] <command>: <ms> ms", and adds the last recompute's
@@ -496,7 +500,9 @@ bool read_file(const std::string& path, std::string& text) {
 }
 
 int fail(const std::string& message) {
-  std::cerr << "mitcad-cli: " << message << "\n";
+  // The agents' text of a model's refusal (mitcad#1612): its detail with the
+  // names and coordinates, not the tail it travels with.
+  std::cerr << "mitcad-cli: " << mitcad::agentText(QString::fromStdString(message)).toStdString() << "\n";
   return 1;
 }
 
@@ -707,12 +713,10 @@ int info_or_run(const std::string& mode, const std::vector<std::string>& args) {
     if (!read_file(input, script)) {
       return fail("cannot read " + input);
     }
-    if (timings) {
-      // The steps' times (mitcad#670), before the report; to stderr with --json.
-      (json ? std::cerr : std::cout) << std::string(document->run_script_timings(script));
-    } else {
-      document->run_script(script);
-    }
+    // The steps' times (mitcad#670) with --timings, then the plates' moves
+    // (mitcad#1595), before the report; to stderr with --json.
+    const std::string notes(timings ? document->run_script_timings(script) : document->run_script(script));
+    (json ? std::cerr : std::cout) << notes;
   }
   if (!save.empty()) {
     save_document(*document, save);

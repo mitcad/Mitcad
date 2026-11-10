@@ -158,8 +158,9 @@ ShapePtr band(const RimBandSpec& spec) {
   const Shape& body = *spec.body;
   const std::vector<int> found = body.find_faces(spec.face);
   if (found.size() != 1) {
-    throw std::invalid_argument(found.empty() ? "the body has no face " + spec.face
-                                              : "the rim face " + spec.face + " is in several pieces");
+    throw std::invalid_argument(found.empty() ? no_face_error(spec.face)
+                                              : face_error(spec.face, "the rim face is in several pieces",
+                                                           "the rim face " + spec.face + " is in several pieces"));
   }
   const TopoDS_Face& face = body.face(found.front());
   const BRepAdaptor_Surface surface(face);

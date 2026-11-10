@@ -35,8 +35,16 @@ LineArcKind lineArcKind(const V2& leaving, const V2& drag, bool normalAllowed);
 V2 lineArcDirection(LineArcKind kind, const V2& leaving, const V2& start, const V2& toward);
 
 // The arc of `kind` from `start` (the curve leaving along `leaving`) to
-// `end`; none when it would be straight.
+// `end`; none when it would be straight. A normal arc leaves toward the
+// side `end` is on.
 std::optional<Curve2> lineArc(LineArcKind kind, const V2& start, const V2& leaving, const V2& end);
+
+// The same, a normal arc leaving toward the side `toward` (the cursor) is
+// on (mitcad#1608): one that sweeps 180 degrees or more ends behind the
+// curve, on the other side, and keeps the side it is drawn to (the model's
+// `sketch.arc` with `normal` and `toward`).
+std::optional<Curve2> lineArc(LineArcKind kind, const V2& start, const V2& leaving, const V2& end,
+                              const V2& toward);
 
 // Where an arc leaving `start` along the unit direction `direction` ends:
 // at `cursor`; with a typed `radius`, where the circle of that radius on

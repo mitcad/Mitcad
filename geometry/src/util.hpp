@@ -26,6 +26,8 @@
 #include "mitcad/geometry/guard.hpp"
 #include "mitcad/geometry/input_check.hpp"
 #include "mitcad/geometry/shape.hpp"
+// Errors a person reads, with their places (mitcad#1612).
+#include "mitcad/geometry/user_error.hpp"
 
 namespace mitcad::geometry::detail {
 

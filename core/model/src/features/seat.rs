@@ -260,14 +260,29 @@ pub(crate) fn round_of<R: Resolver>(r: &mut R, shaft: &GeomRef) -> Result<Round,
             let shape = r.shape(*body)?;
             let found = super::renamed::face_for(r, &shape, face)?;
             if matches!(r.kernel().count_faces(&shape, &found), Ok(0)) {
-                return Err(format!("body {body} has no face {face}"));
+                return Err(super::geom_ref::placed_at(
+                    crate::notice::NoticePlace::face(face.to_string()),
+                    *body,
+                    "the body has no such face",
+                    format!("body {body} has no face {face}"),
+                ));
             }
-            let cylinder = r
-                .kernel()
-                .face_cylinder(&shape, &found)
-                .map_err(|e| format!("face {face} is not round ({e}): {NOT_ROUND}"))?;
-            let axis = unit(cylinder.axis.direction)
-                .ok_or_else(|| format!("face {face} has no axis: {NOT_ROUND}"))?;
+            let cylinder = r.kernel().face_cylinder(&shape, &found).map_err(|e| {
+                super::geom_ref::placed_at(
+                    crate::notice::NoticePlace::face(face.to_string()),
+                    *body,
+                    &format!("the face is not round: {NOT_ROUND}"),
+                    format!("face {face} is not round ({e}): {NOT_ROUND}"),
+                )
+            })?;
+            let axis = unit(cylinder.axis.direction).ok_or_else(|| {
+                super::geom_ref::placed_at(
+                    crate::notice::NoticePlace::face(face.to_string()),
+                    *body,
+                    &format!("the face has no axis: {NOT_ROUND}"),
+                    format!("face {face} has no axis: {NOT_ROUND}"),
+                )
+            })?;
             Ok(Round {
                 low: cylinder.axis.origin,
                 axis,
@@ -280,10 +295,12 @@ pub(crate) fn round_of<R: Resolver>(r: &mut R, shaft: &GeomRef) -> Result<Round,
         GeomRef::Edge { body, edge } => {
             let shape = r.shape(*body)?;
             let found = super::renamed::edge_for(r, &shape, edge)?;
-            let curve = r
-                .kernel()
-                .edge_geometry(&shape, &found)
-                .map_err(|e| format!("edge {edge}: {e}"))?;
+            let curve = r.kernel().edge_geometry(&shape, &found).map_err(|e| {
+                crate::notice::about_place(
+                    crate::notice::NoticePlace::edge(edge.to_string()),
+                    &e.to_string(),
+                )
+            })?;
             let (center, normal, radius) = match curve {
                 crate::datum::CurveGeometry::Circle {
                     center,
@@ -292,13 +309,22 @@ pub(crate) fn round_of<R: Resolver>(r: &mut R, shaft: &GeomRef) -> Result<Round,
                     ..
                 } => (center, normal, radius),
                 other => {
-                    return Err(format!(
-                        "edge {edge} is not round (a {}): {NOT_ROUND}",
-                        other.kind()
+                    return Err(super::geom_ref::placed_at(
+                        crate::notice::NoticePlace::edge(edge.to_string()),
+                        *body,
+                        &format!("the edge is not round: {NOT_ROUND}"),
+                        format!("edge {edge} is not round (a {}): {NOT_ROUND}", other.kind()),
                     ));
                 }
             };
-            let normal = unit(normal).ok_or_else(|| format!("edge {edge} has no axis"))?;
+            let normal = unit(normal).ok_or_else(|| {
+                super::geom_ref::placed_at(
+                    crate::notice::NoticePlace::edge(edge.to_string()),
+                    *body,
+                    "the edge has no axis",
+                    format!("edge {edge} has no axis"),
+                )
+            })?;
             let tolerance = 1.0e-6 * radius.max(1.0);
             for face in found.faces() {
                 let face = super::renamed::face_for(r, &shape, face)?;

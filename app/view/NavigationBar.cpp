@@ -407,9 +407,18 @@ void NavigationBar::updateParametersButton() {
   }
   QAction* wanted =
       m_sketchParameters != nullptr && m_sketchParameters->isEnabled() ? m_sketchParameters : m_parameters;
-  if (m_parametersButton->defaultAction() != wanted) {
+  if (QAction* earlier = m_parametersButton->defaultAction(); earlier != wanted) {
+    // setDefaultAction adds the action and keeps the earlier one: taken
+    // off first, so that the button has one action, no menu arrow and no
+    // long-press list of both (mitcad#1610).
+    if (earlier != nullptr) {
+      m_parametersButton->removeAction(earlier);
+    }
     m_parametersButton->setDefaultAction(wanted);
     styleButton(m_parametersButton);
+    qDebug().noquote() << QStringLiteral("Navigation bar Edit Parameters button: %1 (%2 action(s))")
+                              .arg(wanted == m_parameters ? kParametersId : kSketchParametersId)
+                              .arg(m_parametersButton->actions().size());
     requestLog();
   }
 }

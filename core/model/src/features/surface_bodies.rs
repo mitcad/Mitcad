@@ -106,7 +106,7 @@ mod tests {
 
     fn failure(doc: &Document<crate::testing::MockKernel>, uid: FeatureUid) -> String {
         match doc.status(uid).cloned().expect("recomputed") {
-            FeatureStatus::Failed(message) => message,
+            FeatureStatus::Failed(message) => message.agent_text().to_owned(),
             other => panic!("{uid} did not fail: {other:?}"),
         }
     }

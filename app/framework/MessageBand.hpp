@@ -13,6 +13,7 @@
 
 #include "MessageLog.hpp"
 #include "NoticeLevel.hpp"
+#include "NoticePlaces.hpp"
 
 class QLabel;
 class QScrollArea;
@@ -117,7 +118,9 @@ signals:
   void layoutChanged();
   // The pointer came over the message shown (in full or in the stub) about
   // `feature`, or left it (an empty uid; mitcad#1327: the view paints the
-  // places of the feature's notices meanwhile).
+  // places of the feature's notices meanwhile); again when another message
+  // takes the hovered one's place, with its feature or an empty uid
+  // (mitcad#1609).
   void noticeHovered(const QString& feature);
 
 protected:
@@ -141,7 +144,11 @@ private:
   QString m_loggedPlaces;
   QString m_loggedTextPlace;
   QString m_loggedActionPlace; // the button's (mitcad#1416)
-  bool m_noticeHovered = false; // noticeHovered with a feature last
+  // The text or the stub under the pointer, and the feature noticeHovered
+  // gave last (mitcad#1609: a message shown in its place gives its own).
+  QWidget* m_pointerOver = nullptr;
+  NoticeHover m_noticeHover;
+  void updateNoticeHover();
 };
 
 // The session's message history (mitcad#1042): a panel over the window,

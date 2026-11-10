@@ -65,7 +65,11 @@ impl FeatureInfo for SheetConvertDef {
         }
         for (i, edge) in self.bends.iter().enumerate() {
             if self.bends[..i].contains(edge) {
-                return Err(format!("edge {edge} is listed more than once"));
+                return Err(crate::notice::placed(
+                    "an edge is listed more than once",
+                    crate::notice::NoticePlace::edge(edge.to_string()),
+                    format!("edge {edge} is listed more than once"),
+                ));
             }
         }
         for f in self.references().features {

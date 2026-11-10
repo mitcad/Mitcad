@@ -270,8 +270,8 @@ fn pieces_no_longer_made_warn_instead_of_taking_others() {
             .uid;
     assert_eq!(
         s.b.doc.status(combine),
-        Some(&FeatureStatus::Failed(
-            "body F4.b1 is a piece Extrude2 no longer makes (its pieces changed)".to_owned()
+        Some(&FeatureStatus::failed(
+            "body F4.b1 is a piece Extrude2 no longer makes (its pieces changed)"
         ))
     );
     s.b.doc.undo();

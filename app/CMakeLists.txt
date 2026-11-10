@@ -124,6 +124,7 @@ qt_add_executable(mitcad
   framework/Theme.hpp
   framework/TitleBar.cpp
   framework/TitleBar.hpp
+  framework/UserText.hpp
   # Command definitions: one registration per toolbar family (U4).
   commands/CommandFactories.hpp
   commands/Commands.hpp

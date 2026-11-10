@@ -9,7 +9,9 @@
 #      parameter table, which lists width; OK closes it.
 #   3. In Sketch1 the button is the sketch's entry (sketch.parameters, its
 #      tooltip saying the sketch stays open): a click opens the table, the
-#      sketch stays open, OK goes back to it.
+#      sketch stays open, OK goes back to it. The pinned button has one
+#      action, the sketch's, and after the sketch one again, the model's
+#      (mitcad#1610: no menu arrow, no long-press list).
 #   4. In Drawing1, where the navigation bar is hidden, the drawing's bar
 #      has Edit Parameters after Add Revision: a click opens the table over
 #      the drawing, which stays open.
@@ -72,6 +74,7 @@ mark
 dblclick-logged '^Timeline Sketch1 at '
 wait-log '^Editing sketch F1 \(Sketch1\)'
 wait-log '^Navigation bar tooltips: .*[|] Edit Parameters: User and model parameters; the sketch stays open' 10
+wait-log '^Navigation bar Edit Parameters button: sketch[.]parameters [(]1 action[(]s[)][)]$'
 wait-idle
 mark
 click-logged '^Navigation bar Edit Parameters at '
@@ -87,6 +90,7 @@ mark
 command sketch.finish
 wait-log '^Sketch finished'
 wait-log '^Navigation bar tooltips: .*[|] Edit Parameters: User and model parameters: names' 10
+wait-log '^Navigation bar Edit Parameters button: solid[.]parameters [(]1 action[(]s[)][)]$'
 wait-idle
 
 # 4. In a drawing: the drawing bar's button, the drawing kept.

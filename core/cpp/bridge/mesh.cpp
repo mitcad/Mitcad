@@ -5,11 +5,13 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <Poly_Triangle.hxx>
 #include <Poly_Triangulation.hxx>
 #include <gp_Pnt.hxx>
 
+#include "mitcad/geometry/user_error.hpp"
 #include "mitcad/io/mesh.hpp"
 #include "mitcad_bridge/kernel/mesh.h"
 
@@ -17,12 +19,19 @@ namespace mitcad::bridge {
 
 std::string untriangulated_face_message(const geometry::Shape& shape, int index, const std::string& surface) {
   std::string names;
+  std::vector<geometry::ErrorPlace> places;
   if (index >= 0 && index < shape.face_count()) {
     for (const std::string& name : shape.face_names(index)) {
       names += (names.empty() ? "" : ", ") + name;
+      places.push_back(geometry::face_place(name));
     }
   }
-  return io::face_error_message(names.empty() ? "face " + std::to_string(index) : names, surface);
+  // A person reads the face's kind, the face painted; agents read its
+  // names (mitcad#1612).
+  return geometry::placed_error("a face could not be triangulated (its surface: " + surface + ")",
+                                io::face_error_message(names.empty() ? "face " + std::to_string(index) : names,
+                                                       surface),
+                                places);
 }
 
 TriangleMesh triangle_mesh(const geometry::Shape& shape, double deviation, double angle,

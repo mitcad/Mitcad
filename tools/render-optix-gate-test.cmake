@@ -29,7 +29,25 @@ function(expect description devices kernels required stops)
   set(failures ${failures} PARENT_SCOPE)
 endfunction()
 
-set(cuda_kernels "/prefix/install/cycles/kernels/lib/kernel_sm_75.cubin.zst"
+# expect_one_string(description, devices, kernels, required): the configure
+# stops, and with a one-element required list the reason is one string, not
+# a list: no semicolons between its pieces (mitcad#1611).
+function(expect_one_string description devices kernels required)
+  mitcad_render_optix_problem("${devices}" "${kernels}" "${required}" problem)
+  string(FIND "${problem}" ";" semicolon)
+  if(problem STREQUAL "")
+    message("FAIL: ${description}: the configure goes on")
+    math(EXPR failures "${failures} + 1")
+  elseif(NOT semicolon EQUAL -1)
+    message("FAIL: ${description}: a semicolon in the reason: ${problem}")
+    math(EXPR failures "${failures} + 1")
+  else()
+    message("ok   ${description}: ${problem}")
+  endif()
+  set(failures ${failures} PARENT_SCOPE)
+endfunction()
+
+set(cuda_kernels"/prefix/install/cycles/kernels/lib/kernel_sm_75.cubin.zst"
                  "/prefix/install/cycles/kernels/lib/kernel_compute_75.ptx.zst")
 set(optix_kernels ${cuda_kernels} "/prefix/install/cycles/kernels/lib/kernel_optix.ptx.zst"
                   "/prefix/install/cycles/kernels/lib/kernel_optix_shader_raytrace.ptx.zst")
@@ -46,6 +64,13 @@ expect("a development build without OptiX" "CPU;CUDA" "${cuda_kernels}" "" FALSE
 expect("a user's own OptiX build" "CPU;CUDA;OPTIX" "${optix_kernels}" "" FALSE)
 expect("a configure that requires OPTIX" "CPU;CUDA;OPTIX" "${optix_kernels}" "CPU;CUDA;OPTIX" TRUE)
 expect("a CPU-only release check" "CPU" "" "CPU" FALSE)
+
+# The stopping reasons read as one sentence each.
+expect_one_string("the reason for one OptiX device" "OPTIX" "" "CUDA")
+expect_one_string("the reason for several devices with OptiX" "CPU;CUDA;OPTIX" "" "CUDA")
+expect_one_string("the reason for an OptiX kernel" "CUDA" "${optix_kernels}" "CUDA")
+expect_one_string("the reason for an OptiX kernel without devices" "" "${optix_kernels}" "CUDA")
+expect_one_string("the reason for a required OPTIX" "OPTIX" "" "OPTIX")
 
 if(failures GREATER 0)
   message(FATAL_ERROR "${failures} checks of the OptiX gate failed")

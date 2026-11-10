@@ -419,7 +419,8 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   m_appearanceList->setRootIsDecorated(false);
   m_appearanceList->setItemsExpandable(false);
   m_appearanceList->setUniformRowHeights(true);
-  m_appearanceList->setIconSize(uiIconSize(swatchSize(), swatchSize()));
+  // swatchSize() is at Icon size already: not scaled again (mitcad#1610).
+  m_appearanceList->setIconSize(QSize(swatchSize(), swatchSize()));
   m_appearanceList->setSelectionMode(QAbstractItemView::SingleSelection);
   m_appearanceList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   m_appearanceList->setContextMenuPolicy(Qt::CustomContextMenu);

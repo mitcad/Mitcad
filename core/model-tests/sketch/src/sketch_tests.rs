@@ -1512,7 +1512,7 @@ fn a_constraint_the_others_imply_in_full_is_still_refused() {
 // --- A collapsed curve is a sketch warning (mitcad#365)
 
 #[test]
-fn a_line_collapsed_by_a_constraint_is_a_warning_naming_it() {
+fn a_line_collapsed_by_a_constraint_is_a_warning_about_it() {
     let mut d = doc();
     command(&mut d, json!({"cmd": "sketch.create"}));
     command(
@@ -1535,7 +1535,14 @@ fn a_line_collapsed_by_a_constraint_is_a_warning_naming_it() {
     assert_eq!(s["degenerate"], json!(["c1"]), "{s}");
     let warnings = s["warnings"].as_array().unwrap();
     assert_eq!(warnings.len(), 1, "{s}");
-    assert!(warnings[0].as_str().unwrap().contains("c1"), "{s}");
+    // In plain words; what it is about in `warning_entities` (mitcad#1612).
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .starts_with("a curve collapsed"),
+        "{s}"
+    );
     assert_eq!(s["warning_entities"], json!([["c1"]]), "{s}");
     // Pulling the ends apart again clears it.
     command(&mut d, json!({"cmd": "undo"}));

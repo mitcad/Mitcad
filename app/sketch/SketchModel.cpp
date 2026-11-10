@@ -7,6 +7,7 @@
 #include <QSet>
 
 #include "../framework/ModelShapes.hpp"
+#include "../framework/UserText.hpp"
 
 namespace mitcad::sketch {
 namespace {
@@ -100,10 +101,8 @@ bool SketchModel::load(const QJsonObject& sketch) {
   name = sketch.value(QStringLiteral("name")).toString(uid);
   solved = flag(sketch, "solved");
   error = sketch.value(QStringLiteral("error")).toString();
-  warnings.clear();
-  for (const QJsonValue& warning : sketch.value(QStringLiteral("warnings")).toArray()) {
-    warnings << warning.toString();
-  }
+  // In plain words (mitcad#1612): `warnings` keeps the agents' texts.
+  warnings = shownTexts(sketch, QStringLiteral("warnings"), QStringLiteral("warning_messages"));
   // What each warning is about (mitcad#264), one list per warning.
   warningEntities.clear();
   const QJsonArray about = sketch.value(QStringLiteral("warning_entities")).toArray();

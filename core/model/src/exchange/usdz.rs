@@ -262,7 +262,7 @@ impl<K: Kernel> Document<K> {
             let faces = self
                 .kernel()
                 .face_meshes(body.shape, tolerance)
-                .map_err(|e| invalid(format!("{}: {e}", body.name)))?;
+                .map_err(|e| invalid(super::body_failure(&body.name, body.uid, &e)))?;
             if faces.triangles.is_empty() {
                 return Err(invalid(format!("{} has no triangles", body.name)));
             }

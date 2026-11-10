@@ -128,6 +128,8 @@ use mitcad_model::EdgeMiddle;
 use mitcad_model::FacePoints;
 // Cancellation inside an operation (P7e).
 use mitcad_model::RecomputeMonitor;
+// Errors with their places (mitcad#1612).
+use mitcad_model::notice::{FeatureError, PLACED_TAIL};
 
 pub use shape::ffi::Shape;
 
@@ -136,6 +138,12 @@ fn failed(error: cxx::Exception) -> KernelError {
 }
 
 /// The error of a C++ exception's message (`what`), as `failed` makes it.
+/// A message the geometry kernel wrote with its places
+/// (`mitcad/geometry/user_error.hpp`, mitcad#1612: the plain message, then
+/// `\n[placed: {"message", "detail", "places"}]`) is split into them and
+/// carried on in the model's form ([`FeatureError::text`]), so that the
+/// model shows the message, paints the places and gives agents the detail;
+/// a tail it cannot read stays text.
 fn failed_with(what: &str) -> KernelError {
     match what {
         // A C++ allocation that failed outside the geometry's operations,
@@ -145,6 +153,9 @@ fn failed_with(what: &str) -> KernelError {
             "the geometry kernel: {}",
             KernelError::OUT_OF_MEMORY
         )),
+        what if what.contains(PLACED_TAIL) => {
+            KernelError::Failed(FeatureError::from_text(what).text())
+        }
         what => KernelError::Failed(what.to_owned()),
     }
 }

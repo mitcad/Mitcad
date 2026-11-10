@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: MIT
+# mitcad#1599: editing a component's features whose To Object or Start
+# Object is a sketch point or line (extrude-to-point-component.json). A
+# loaded definition's sketch point or curve has no occurrence; the edit
+# gives it the one the view shows the sketch in, the profiles' own, so the
+# panel does not refuse it as another occurrence's (before: "Pick a point
+# or a line where the profiles are", no preview, OK disabled; a hole: "The
+# object is in Root"). All geometry is synthetic.
+wait-idle
+window-resize 1400 990
+command view.fit
+wait-log '^Bodies shown: .*F3\.b0 in O1'
+
+# Extrude1 up to the sketch point p1.
+mark
+dblclick-logged '^Timeline Extrude1 at '
+wait-log 'Editing F3 with Extrude'
+wait-log '^Extrude Object: 1 sketch point \[sketch point p1 of F2 in O1\]'
+wait-log '^Preview Extrude: ok' 30
+expect-no-log 'not built: Pick a point or a line'
+mark
+key Escape
+wait-log 'Command Extrude cancelled'
+
+# Hole1 down to the sketch point p2.
+mark
+dblclick-logged '^Timeline Hole1 at '
+wait-log 'Editing F4 with Hole'
+wait-log '^Hole Object: 1 sketch point \[sketch point p2 of F2 in O1\]'
+wait-log '^Preview Hole: ok' 30
+expect-no-log 'not built: The object is in'
+mark
+key Escape
+wait-log 'Command Hole cancelled'
+
+# Extrude2 from the sketch line c5.
+mark
+dblclick-logged '^Timeline Extrude2 at '
+wait-log 'Editing F5 with Extrude'
+wait-log '^Extrude Start Object: 1 sketch curve \[sketch curve c5 of F2 in O1\]'
+wait-log '^Preview Extrude: ok' 30
+expect-no-log 'not built: Pick a point or a line'
+mark
+key Escape
+wait-log 'Command Extrude cancelled'
+
+expect-never 'not built: Pick a point or a line'
+expect-never 'Preview Hole: not built: The object is in'
+expect-never 'Recompute failed'
+expect-never 'TestDriver: FAIL'

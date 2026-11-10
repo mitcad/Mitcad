@@ -28,6 +28,7 @@ use mitcad_model::datum::CurveGeometry;
 use mitcad_model::features::OccurrencePath;
 use mitcad_model::ids::BodyUid;
 use mitcad_model::kernel::Kernel;
+use mitcad_model::notice;
 use mitcad_model::topo::EdgeName;
 use mitcad_model_drawing::annotate::{self, PenPattern, PenWidth, SketchPen};
 use mitcad_model_drawing::compose::{EdgeSeen, LinePens};
@@ -207,19 +208,36 @@ impl<K: Kernel> DrawingLinesOps<K> for Document<K> {
             .map(|own| own.iter().filter_map(|k| evaluated.shown.get(*k)).collect())
             .unwrap_or_default();
         if !shown.iter().any(|s| style.rank(s.body, &s.path).is_some()) {
-            return Err(ApiError(format!(
-                "view {} does not show {}",
-                c.view,
-                style.target_text()
-            )));
+            // In plain words, the ids for agents (mitcad#1612).
+            return Err(ApiError(
+                notice::FeatureError::new(format!(
+                    "the view does not show {}",
+                    style.target_words()
+                ))
+                .with_detail(format!(
+                    "view {} does not show {}",
+                    c.view,
+                    style.target_text()
+                ))
+                .text(),
+            ));
         }
         if let (Some(body), Some(edge)) = (style.body, &style.edge) {
-            let shape = self
-                .body_shape(body)
-                .ok_or_else(|| ApiError(format!("the body {body} is gone")))?;
-            self.kernel()
-                .edge_geometry(shape, edge)
-                .map_err(|_| ApiError(format!("the body {body} has no edge {edge}")))?;
+            let shape = self.body_shape(body).ok_or_else(|| {
+                ApiError(
+                    notice::FeatureError::new("the body is gone")
+                        .with_detail(format!("the body {body} is gone"))
+                        .text(),
+                )
+            })?;
+            self.kernel().edge_geometry(shape, edge).map_err(|_| {
+                ApiError(
+                    notice::FeatureError::new("the body has no such edge")
+                        .at(notice::NoticePlace::edge(edge.to_string()).in_body(&body.to_string()))
+                        .with_detail(format!("the body {body} has no edge {edge}"))
+                        .text(),
+                )
+            })?;
         }
         if let Some(k) = existing {
             style.width = lines[k].width;
@@ -273,10 +291,17 @@ impl<K: Kernel> DrawingLinesOps<K> for Document<K> {
         }
         for line in view.lines.iter().filter(|l| l.edge.is_none()) {
             if !shown.iter().any(|s| line.rank(s.body, &s.path).is_some()) {
-                warnings.push(format!(
-                    "the view no longer shows {}: its line style is kept",
-                    line.target_text()
-                ));
+                warnings.push(
+                    notice::FeatureError::new(format!(
+                        "the view no longer shows {}: its line style is kept",
+                        line.target_words()
+                    ))
+                    .with_detail(format!(
+                        "the view no longer shows {}: its line style is kept",
+                        line.target_text()
+                    ))
+                    .text(),
+                );
             }
         }
         // Each edge's lines: those of its body that lie on it as the view
@@ -289,10 +314,17 @@ impl<K: Kernel> DrawingLinesOps<K> for Document<K> {
                 .iter()
                 .position(|s| s.body == body && s.path.as_slice() == line.path())
             else {
-                warnings.push(format!(
-                    "the view no longer shows {}: its line style is kept",
-                    line.target_text()
-                ));
+                warnings.push(
+                    notice::FeatureError::new(format!(
+                        "the view no longer shows {}: its line style is kept",
+                        line.target_words()
+                    ))
+                    .with_detail(format!(
+                        "the view no longer shows {}: its line style is kept",
+                        line.target_text()
+                    ))
+                    .text(),
+                );
                 continue;
             };
             let curve = self

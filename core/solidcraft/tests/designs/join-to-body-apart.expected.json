@@ -1,0 +1,10 @@
+{
+  "comment": "Worked out by hand (mitcad#1603): a design of format 39 keeps the body a Join To Object runs to apart. A 10 mm cube Body1 (1000); a 2 x 2 square sketched at z 20 extruded down to the cube's top (40) with no targets, so none but the cube, kept apart; another one with the cube as its only target (40). Each tool is a body of its own on the cube: 3 bodies, 1080 in all.",
+  "body_count": 3,
+  "total": {"volume_mm3": 1080},
+  "bbox": {"min": [0, 0, 0], "max": [10, 10, 20]},
+  "bodies": [
+    {"name": "Body1", "volume_mm3": 1000, "bbox": {"min": [0, 0, 0], "max": [10, 10, 10]}}
+  ],
+  "timeline": [{"name": "Box1"}, {"name": "Sketch1"}, {"name": "Extrude1"}, {"name": "Sketch2"}, {"name": "Extrude2"}]
+}

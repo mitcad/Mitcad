@@ -197,7 +197,7 @@ std::vector<int> loop_edges(const Shape& body, const PatchLoop& loop) {
     for (const std::string& name : loop.edges) {
       const std::vector<int> found = body.find_edges(name);
       if (found.empty()) {
-        throw std::invalid_argument("the body has no edge " + name);
+        throw std::invalid_argument(no_edge_error(name));
       }
       for (const int e : found) {
         if (std::find(edges.begin(), edges.end(), e) == edges.end()) {
@@ -584,7 +584,8 @@ ShapePtr patch_loop(const std::string& feature, const Shape& body, const PatchLo
       for (const int e : copy->find_edges(name)) {
         const auto at = std::find(edges.begin(), edges.end(), e);
         if (at == edges.end()) {
-          throw std::invalid_argument("edge " + name + " has a continuity of its own but is not an edge of the loop");
+          const std::string why = " has a continuity of its own but is not an edge of the loop";
+          throw std::invalid_argument(edge_error(name, "an edge" + why, "edge " + name + why));
         }
         orders[static_cast<std::size_t>(at - edges.begin())] = continuity;
       }
@@ -619,8 +620,12 @@ ShapePtr patch_loop(const std::string& feature, const Shape& body, const PatchLo
         }
         const std::vector<int> faces = edge_faces.at(edges[i]);
         if (faces.size() != 1) {
-          throw std::invalid_argument("unsupported: g1 and g2 need the one face beside an edge; edge " +
-                                      copy->edge_name(edges[i]) + " lies between two faces");
+          const std::string& name = copy->edge_name(edges[i]);
+          throw std::invalid_argument(edge_error(name,
+                                                 "unsupported: g1 and g2 need the one face beside an edge; an "
+                                                 "edge lies between two faces",
+                                                 "unsupported: g1 and g2 need the one face beside an edge; edge " +
+                                                     name + " lies between two faces"));
         }
         filling.Add(edge, copy->face(faces.front()), order_of(orders[i]), true);
       }

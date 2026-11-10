@@ -805,7 +805,11 @@ impl FeatureInfo for ThreadDef {
         }
         for (i, face) in self.faces.iter().enumerate() {
             if self.faces[..i].contains(face) {
-                return Err(format!("face {} is listed more than once", face.face));
+                return Err(crate::notice::placed(
+                    "a face is listed more than once",
+                    crate::notice::NoticePlace::face(face.face.to_string()),
+                    format!("face {} is listed more than once", face.face),
+                ));
             }
             face.check(ctx)?;
         }
@@ -897,7 +901,12 @@ impl<K: Kernel> Evaluate<K> for ThreadDef {
                 let shape = ctx.surface_body(face.body)?;
                 // A face a sketch change renamed is found again (mitcad#272).
                 let found = ctx.face_or(&shape, &face.face, || {
-                    format!("body {} has no face {}", face.body, face.face)
+                    super::geom_ref::placed_at(
+                        crate::notice::NoticePlace::face(face.face.to_string()),
+                        face.body,
+                        "the body has no such face",
+                        format!("body {} has no face {}", face.body, face.face),
+                    )
                 })?;
                 targets.push((face.body, shape, found, None));
             }

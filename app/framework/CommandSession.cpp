@@ -163,11 +163,8 @@ QString plain(double value, int decimals) {
 
 // A sketch command's `warnings` (mitcad#232).
 QStringList answerWarnings(const QJsonObject& answer) {
-  QStringList warnings;
-  for (const QJsonValue& warning : answer.value(QStringLiteral("warnings")).toArray()) {
-    warnings << warning.toString();
-  }
-  return warnings;
+  // In plain words (mitcad#1612); `warnings` keeps the agents' texts.
+  return shownTexts(answer, QStringLiteral("warnings"), QStringLiteral("warning_messages"));
 }
 
 // Warnings for a preview's log line: ", warning: a; b", or nothing.
@@ -178,11 +175,8 @@ QString warningsLog(const QStringList& warnings) {
 // A sketch command's `notes` (mitcad#1234: the curves of an offset that
 // vanish at its distance), information beside the warnings.
 QStringList answerNotes(const QJsonObject& answer) {
-  QStringList notes;
-  for (const QJsonValue& note : answer.value(QStringLiteral("notes")).toArray()) {
-    notes << note.toString();
-  }
-  return notes;
+  // In plain words (mitcad#1612); `notes` keeps the agents' texts.
+  return shownTexts(answer, QStringLiteral("notes"), QStringLiteral("note_messages"));
 }
 
 // Notes for a preview's log line: ", note: a; b", or nothing.
@@ -720,6 +714,12 @@ void CommandSession::canonicalizeSelections() {
     Selection& items = m_state.items(slot.key);
     for (SelectionItem& item : items) {
       if (item.kind == SelectKind::Profile) {
+        item.occurrence = m_host.profileOccurrence(item.owner);
+      } else if (item.occurrence.isEmpty() &&
+                 (item.kind == SelectKind::SketchCurve || item.kind == SelectKind::SketchPoint)) {
+        // Where the view shows the sketch, as a pick there gives: a loaded
+        // To Object or Start Object of a component's sketch is then in the
+        // profiles' occurrence, not refused as another's (mitcad#1599).
         item.occurrence = m_host.profileOccurrence(item.owner);
       } else if (item.occurrence.isEmpty() &&
                  (item.kind == SelectKind::Face || item.kind == SelectKind::Edge ||
@@ -2289,7 +2289,7 @@ void CommandSession::runInspection() {
   bool error = false;
   if (!previewReady(message, error)) {
     m_presenter->setResult(QString());
-    m_presenter->setMessage(message, error ? NoticeLevel::Error : NoticeLevel::Hint);
+    showPanelMessage(message, error ? NoticeLevel::Error : NoticeLevel::Hint);
     m_host.viewer().setPreview(TopoDS_Shape());
     if (m_def.keepsSection) {
       m_host.showPrintAnalysis(QJsonObject()); // nothing to analyse yet (mitcad#620)
@@ -2331,7 +2331,7 @@ void CommandSession::runInspection() {
     const auto inspect = m_def.inspect;
     const quint64 generation = m_generation;
     m_asyncPending = true;
-    m_presenter->setMessage(tr("Computing inspection…"), NoticeLevel::Progress);
+    showPanelMessage(tr("Computing inspection…"), NoticeLevel::Progress);
     m_presenter->setOkEnabled(false);
     const bool started = m_host.modelInspectionAsync(m_def.name, this,
         [state, inspect, shapes = std::move(shapes)](const Document& document) {
@@ -2352,7 +2352,7 @@ void CommandSession::runInspection() {
             m_previewOk = true; // Close remains available after cancellation.
             m_shownKey = QByteArrayLiteral("inspection");
             m_presenter->setResult(QString());
-            m_presenter->setMessage(tr("Inspection canceled; change an input to try again."), NoticeLevel::Information);
+            showPanelMessage(tr("Inspection canceled; change an input to try again."), NoticeLevel::Information);
             m_presenter->setOkEnabled(true);
             m_host.viewer().setPreview(TopoDS_Shape());
             if (m_def.keepsSection) {
@@ -2385,7 +2385,7 @@ void CommandSession::acceptInspection(const Inspection& result) {
   if (m_done || !m_presenter) { return; }
   m_failed = !result.error.isEmpty();
   m_presenter->setInspection(result);
-  m_presenter->setMessage(result.error, m_failed ? NoticeLevel::Error : NoticeLevel::Information);
+  showPanelMessage(result.error, m_failed ? NoticeLevel::Error : NoticeLevel::Information);
   const auto style = result.red ? OcctViewer::PreviewStyle::Interference
                    : result.measurementWire ? OcctViewer::PreviewStyle::MeasurementWire
                                             : OcctViewer::PreviewStyle::Add;
@@ -2438,7 +2438,7 @@ void CommandSession::measureInspection(const Inspection& result) {
     if (!error.isEmpty()) {
       m_failed = true;
       m_presenter->setResult(QString());
-      m_presenter->setMessage(error, NoticeLevel::Error);
+      showPanelMessage(error, NoticeLevel::Error);
       m_presenter->setOkEnabled(!m_def.apply);
       qDebug().noquote() << QStringLiteral("Inspect %1: failed: %2").arg(m_def.name, error);
       return;
@@ -2503,7 +2503,7 @@ void CommandSession::runPreview() {
     m_shownKey.clear();
     m_previewOk = false;
     m_failed = error;
-    m_presenter->setMessage(message, error ? NoticeLevel::Error : NoticeLevel::Hint);
+    showPanelMessage(message, error ? NoticeLevel::Error : NoticeLevel::Hint);
     m_presenter->setOkEnabled(false);
     if (m_def.modelCommand) {
       // A model command's rows read the model, not a preview (mitcad#1059:
@@ -2524,7 +2524,7 @@ void CommandSession::runPreview() {
         m_shownKey.clear();
         m_previewOk = false;
         m_failed = true;
-        m_presenter->setMessage(refused, NoticeLevel::Error);
+        showPanelMessage(refused, NoticeLevel::Error);
         m_presenter->setOkEnabled(false);
         qDebug().noquote() << QStringLiteral("Preview %1: failed: %2").arg(m_def.name, refused);
         updateHighlights();
@@ -2535,7 +2535,7 @@ void CommandSession::runPreview() {
     m_shownKey = compactJson(built.def);
     m_previewOk = true;
     m_failed = false;
-    m_presenter->setMessage(QString(), NoticeLevel::Hint);
+    showPanelMessage(QString(), NoticeLevel::Hint);
     m_presenter->setOkEnabled(true);
     // A model command's rows follow its inputs (mitcad#1059: what the
     // Material tool's bodies are made of now). Not an application panel's
@@ -2626,7 +2626,7 @@ void CommandSession::runPreview() {
     const quint64 generation = m_generation;
     const quint64 structure = m_structureGeneration;
     m_asyncPending = true;
-    m_presenter->setMessage(tr("Computing preview…"), NoticeLevel::Progress);
+    showPanelMessage(tr("Computing preview…"), NoticeLevel::Progress);
     m_presenter->setOkEnabled(false);
     const bool started = m_host.modelPreviewAsync(key, m_def.name, this,
         [this, generation, structure, key, built, computedFrom](const CommandHost::AsyncResult& result) {
@@ -2962,9 +2962,32 @@ bool CommandSession::refreshRowNotes() {
   return changed;
 }
 
+void CommandSession::showPanelMessage(const QString& message, NoticeLevel level) {
+  // A message without a preview report names no places: those of the
+  // preview shown before go (mitcad#1609), also from the view while the
+  // pointer is over the message.
+  if (!m_messagePlaces.isEmpty() || !m_messageBodies.empty()) {
+    m_messagePlaces = QJsonArray();
+    m_messageBodies.clear();
+    if (m_messageHovered) {
+      m_host.hoverNoticePlaces(QStringLiteral("panel"), QJsonArray(), std::vector<BodyDisplay>());
+    }
+  }
+  if (m_presenter) {
+    m_presenter->setMessage(message, level);
+  }
+}
+
 void CommandSession::hoverMessage(bool on) {
   if (on == m_messageHovered && !on) {
     return;
+  }
+  if (on != m_messageHovered) {
+    // For the UI tests (mitcad#1609): how many places it paints.
+    qDebug().noquote() << (on ? QStringLiteral("Panel %1 message hovered: %2 places")
+                                    .arg(m_def.name)
+                                    .arg(m_messagePlaces.size())
+                              : QStringLiteral("Panel %1 message left").arg(m_def.name));
   }
   m_messageHovered = on;
   m_host.hoverNoticePlaces(QStringLiteral("panel"), on ? m_messagePlaces : QJsonArray(),
@@ -3085,7 +3108,8 @@ void CommandSession::acceptFeaturePreview(const QByteArray& key, const Built& bu
     // In plain words where the model gave its notice (mitcad#1327); the
     // log keeps the model's own text.
     const QStringList shown = noticeMessages(preview.report, QStringLiteral("error"));
-    m_presenter->setMessage(shown.isEmpty() ? problem : shown.join(QLatin1Char('\n')), NoticeLevel::Error);
+    // Without a notice, still only what a person reads (mitcad#1612).
+    m_presenter->setMessage(shown.isEmpty() ? userText(problem) : shown.join(QLatin1Char('\n')), NoticeLevel::Error);
     qDebug().noquote() << QStringLiteral("Preview %1: failed: %2").arg(m_def.name, problem);
   }
   // The places the message's notices name, and the bodies they are on
@@ -3344,7 +3368,7 @@ void CommandSession::showCancelledPreview(const QByteArray& key) {
   m_previewCancelled = true;
   m_previewOk = true; // OK computes it, with a progress and a cancel of its own
   m_failed = false;
-  m_presenter->setMessage(tr("Preview canceled; change an input to preview again."), NoticeLevel::Information);
+  showPanelMessage(tr("Preview canceled; change an input to preview again."), NoticeLevel::Information);
   m_presenter->setOkEnabled(true);
   updateHighlights();
   if (!m_shownReport.isEmpty()) {
@@ -3411,7 +3435,7 @@ void CommandSession::showSketchPreview(const Built& built, bool keep) {
     m_failed = false;
     setSketchConflict({});
     m_host.refreshScene();
-    m_presenter->setMessage(tr("Preview canceled; change an input to preview again."), NoticeLevel::Information);
+    showPanelMessage(tr("Preview canceled; change an input to preview again."), NoticeLevel::Information);
     m_presenter->setOkEnabled(true);
     updateHighlights();
     qDebug().noquote() << QStringLiteral("Preview %1: cancelled").arg(m_def.name);
@@ -3471,7 +3495,7 @@ void CommandSession::showSketchPreview(const Built& built, bool keep) {
     refreshRowNotes(); // the rows under the inputs (Belt Drive's belt, mitcad#656)
     // With warnings: a warning in its box (mitcad#1040); a note alone is
     // information.
-    m_presenter->setMessage(shown.join(QLatin1Char('\n')),
+    showPanelMessage(shown.join(QLatin1Char('\n')),
                             warnings.isEmpty() ? NoticeLevel::Information : NoticeLevel::Warning);
     setSketchConflict({});
     m_host.showHint(selectionHint(tr("%1: Enter to confirm, Esc to cancel.").arg(m_def.name)));
@@ -3479,7 +3503,7 @@ void CommandSession::showSketchPreview(const Built& built, bool keep) {
   } else {
     // A conflict in words, what blocks it painted; the log keeps the
     // model's ids (mitcad#1566).
-    m_presenter->setMessage(sketchProblem(problem), NoticeLevel::Error);
+    showPanelMessage(sketchProblem(problem), NoticeLevel::Error);
     qDebug().noquote() << QStringLiteral("Preview %1: failed: %2")
                               .arg(m_def.name, QString(problem).replace(QLatin1Char('\n'), QLatin1Char(' ')));
   }
@@ -3502,7 +3526,7 @@ void CommandSession::takeBackSketchPreview() {
       if (!result.succeeded()) {
         m_appliedDepth = depth;
         m_previewOk = false;
-        m_presenter->setMessage(result.error, NoticeLevel::Error);
+        showPanelMessage(result.error, NoticeLevel::Error);
       }
       if (m_cancelRequested) { finishAsyncCancel(); }
       else { resumePendingCommit(); }
@@ -3912,7 +3936,7 @@ void CommandSession::showSketchPreviewAsync(const Built& built) {
       m_appliedDepth = oldDepth;
       m_cancelRequested = false;
       m_previewOk = false;
-      m_presenter->setMessage(undone.error, NoticeLevel::Error);
+      showPanelMessage(undone.error, NoticeLevel::Error);
       if (cancelling) { emit cancelFinished(false); }
       return;
     }
@@ -3940,7 +3964,7 @@ void CommandSession::showSketchPreviewAsync(const Built& built) {
           m_appliedDepth = depth;
           m_cancelRequested = false;
           m_previewOk = false;
-          m_presenter->setMessage(undone.error, NoticeLevel::Error);
+          showPanelMessage(undone.error, NoticeLevel::Error);
           if (cancelling) { emit cancelFinished(false); }
           return;
         }
@@ -3976,7 +4000,7 @@ void CommandSession::showSketchPreviewAsync(const Built& built) {
         if (m_previewOk) {
           setSketchConflict({});
         }
-        m_presenter->setMessage(result.cancelled ? tr("Preview canceled; change an input to preview again.")
+        showPanelMessage(result.cancelled ? tr("Preview canceled; change an input to preview again.")
                                                  : (m_previewOk ? (warnings + notes).join(QLatin1Char('\n'))
                                                                 : problem),
                                 level);
@@ -4025,14 +4049,14 @@ void CommandSession::recoverFailedCommit(const CommandHost::AsyncResult& result)
     }
     if (!recovered.succeeded()) {
       m_previewOk = false;
-      m_presenter->setMessage(recovered.error, NoticeLevel::Error);
+      showPanelMessage(recovered.error, NoticeLevel::Error);
       return;
     }
     m_host.refreshScene();
     if (m_presenter) { m_presenter->refresh(m_state); }
     // A sketch command's conflict in words, what blocks it painted
     // (mitcad#1566).
-    m_presenter->setMessage(result.cancelled ? tr("Computation canceled.") : sketchProblem(result.error),
+    showPanelMessage(result.cancelled ? tr("Computation canceled.") : sketchProblem(result.error),
                             result.cancelled ? NoticeLevel::Information : NoticeLevel::Error);
     m_presenter->setOkEnabled(true);
     qDebug().noquote() << QStringLiteral("%1: OK %2").arg(m_def.name,
@@ -4306,7 +4330,7 @@ void CommandSession::finishAsyncCancel() {
       m_appliedDepth = depth;
       m_cancelRequested = false;
       m_previewOk = false;
-      if (m_presenter) { m_presenter->setMessage(undone.error, NoticeLevel::Error); }
+      if (m_presenter) { showPanelMessage(undone.error, NoticeLevel::Error); }
       emit cancelFinished(false);
       return;
     }
@@ -4554,7 +4578,7 @@ bool CommandSession::applyCommand() {
   QString message;
   bool error = false;
   if (!previewReady(message, error)) {
-    m_presenter->setMessage(message, error ? NoticeLevel::Error : NoticeLevel::Hint);
+    showPanelMessage(message, error ? NoticeLevel::Error : NoticeLevel::Hint);
     qDebug().noquote() << QStringLiteral("%1: OK refused: %2").arg(m_def.name, message);
     return false;
   }
@@ -4977,7 +5001,7 @@ void CommandSession::finish(bool committed) {
         m_asyncPending = false;
         m_committing = false;
         m_cancelRequested = false;
-        if (m_presenter) { m_presenter->setMessage(restored.error, NoticeLevel::Error); }
+        if (m_presenter) { showPanelMessage(restored.error, NoticeLevel::Error); }
         else { m_host.showHint(restored.error); }
         if (cancelling) { emit cancelFinished(false); }
         return;
@@ -4991,7 +5015,7 @@ void CommandSession::finish(bool committed) {
               m_asyncPending = false;
               m_committing = false;
               m_cancelRequested = false;
-              if (m_presenter) { m_presenter->setMessage(result.error, NoticeLevel::Error); }
+              if (m_presenter) { showPanelMessage(result.error, NoticeLevel::Error); }
               else { m_host.showHint(result.error); }
               if (cancelling) { emit cancelFinished(false); }
               return;
@@ -5119,7 +5143,7 @@ bool CommandSession::ask(const QString& key, const QString& message) {
   m_previewOk = false;
   m_presenter->setOkEnabled(false);
   // The command's rows say what is asked; the status bar says it too.
-  m_presenter->setMessage(QString(), NoticeLevel::Hint);
+  showPanelMessage(QString(), NoticeLevel::Hint);
   qDebug().noquote() << QStringLiteral("Panel %1 asks: %2").arg(m_def.name, message);
   m_host.showHint(message);
   updateHighlights();

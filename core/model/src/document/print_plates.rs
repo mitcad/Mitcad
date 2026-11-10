@@ -22,7 +22,7 @@ use crate::ids::{BodyUid, ComponentUid, OccurrenceUid};
 use crate::kernel::Kernel;
 use crate::print_keys;
 use crate::print_plates::{
-    MAX_COUNT, MAX_PLATES, PlateItem, PlateTarget, PrintPlate, new_plate, path_text,
+    MAX_COUNT, MAX_PLATES, PlateItem, PlateMove, PlateTarget, PrintPlate, new_plate, path_text,
 };
 
 /// A plate's change (`edit_print_plate`): its name, and values to set (a
@@ -91,7 +91,7 @@ impl<K: Kernel> Document<K> {
 
     /// A target's name for people: the body's name, or the occurrence's
     /// path of names (`Arm:1/Pin:2`).
-    pub(crate) fn plate_target_name(&self, target: &PlateTarget) -> String {
+    pub fn plate_target_name(&self, target: &PlateTarget) -> String {
         match target {
             PlateTarget::Body(uid) => self.body_name(*uid),
             PlateTarget::Occurrence(path) => self.assembly().path_name(path),
@@ -289,12 +289,14 @@ impl<K: Kernel> Document<K> {
 
     /// Puts bodies and occurrences on a plate, each with its count (None:
     /// the count it has, here or on another plate, else 1); one on another
-    /// plate moves here. One undo step, unless nothing changes.
+    /// plate moves here. One undo step, unless nothing changes. The items
+    /// that left another plate (mitcad#1595), in the order given: none for
+    /// a first placement, a change on this plate or nothing changing.
     pub fn place_on_plate(
         &mut self,
         plate: &str,
         items: &[(PlateTarget, Option<u32>)],
-    ) -> Result<(), ModelError> {
+    ) -> Result<Vec<PlateMove>, ModelError> {
         if items.is_empty() {
             return Err(invalid(
                 "place_on_plate needs the bodies or occurrences to put on it",
@@ -319,12 +321,23 @@ impl<K: Kernel> Document<K> {
             }
         }
         let mut plates = self.state.print_plates.clone();
+        let mut moves = Vec::new();
         for (target, count) in items {
             // The count it has, here or on the plate it leaves.
             let here = plates
                 .iter()
                 .find_map(|p| p.item(target))
                 .map(|item| item.count);
+            // The other plate it is on, which it leaves.
+            let left = plates
+                .iter()
+                .enumerate()
+                .filter(|(p, _)| *p != i)
+                .find_map(|(_, other)| {
+                    other
+                        .item(target)
+                        .map(|item| (other.id.clone(), other.name.clone(), item.count))
+                });
             for (p, other) in plates.iter_mut().enumerate() {
                 if p != i {
                     other.items.retain(|item| item.target != *target);
@@ -342,23 +355,48 @@ impl<K: Kernel> Document<K> {
                     count,
                 }),
             }
+            if let Some((from_id, from_name, from_count)) = left {
+                moves.push(PlateMove {
+                    target: target.clone(),
+                    from_id,
+                    from_name,
+                    from_count,
+                    to_id: plates[i].id.clone(),
+                    to_name: plates[i].name.clone(),
+                    count,
+                });
+            }
         }
         if plates == self.state.print_plates {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let plate_name = plates[i].name.clone();
-        let label = match items {
-            [(target, Some(count))] if plates[i].item(target).is_some() && *count > 1 => format!(
-                "Put {count} of {} on {plate_name}",
-                self.plate_target_name(target)
+        // One item that left another plate says so in the undo text.
+        let label = match (items, moves.as_slice()) {
+            ([(target, Some(count))], [moved]) if *count > 1 => format!(
+                "Move {count} of {} from {} to {plate_name}",
+                self.plate_target_name(target),
+                moved.from_name
             ),
-            [(target, _)] => format!("Put {} on {plate_name}", self.plate_target_name(target)),
+            ([(target, _)], [moved]) => format!(
+                "Move {} from {} to {plate_name}",
+                self.plate_target_name(target),
+                moved.from_name
+            ),
+            ([(target, Some(count))], _) if plates[i].item(target).is_some() && *count > 1 => {
+                format!(
+                    "Put {count} of {} on {plate_name}",
+                    self.plate_target_name(target)
+                )
+            }
+            ([(target, _)], _) => format!("Put {} on {plate_name}", self.plate_target_name(target)),
             _ => format!("Put {} items on {plate_name}", items.len()),
         };
         self.apply_with(move |state| {
             state.print_plates = plates;
             Ok((label, (), false))
-        })
+        })?;
+        Ok(moves)
     }
 
     /// Takes bodies and occurrences off the plates they are on (they then

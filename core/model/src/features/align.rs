@@ -109,7 +109,12 @@ impl AlignRef {
                     frame.origin = ctx
                         .kernel
                         .face_plane(&shape, face)
-                        .map_err(|e| format!("face {face}: {e}"))?
+                        .map_err(|e| {
+                            crate::notice::about_place(
+                                crate::notice::NoticePlace::face(face.to_string()),
+                                &e.to_string(),
+                            )
+                        })?
                         .origin;
                 }
                 Resolved::Plane(frame)

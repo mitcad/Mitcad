@@ -36,7 +36,7 @@ ShapePtr prism(const ExtrudeSpec& spec, const Frame& frame, const Region& region
   BRepPrimAPI_MakePrism maker(profile.face, gp_Vec(spec.direction) * (spec.end - spec.start));
   maker.Build();
   if (!maker.IsDone()) {
-    throw std::runtime_error("the extrusion of " + region.name + " failed");
+    throw std::runtime_error(placed_error("the extrusion of a profile failed", "the extrusion of " + region.name + " failed"));
   }
   detail::FaceNamer namer(maker.Shape());
   for (const auto& [edge, segment] : profile.edges) {

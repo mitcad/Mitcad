@@ -24,6 +24,12 @@
 //! - A section's cut and caps and highlighted edges (mitcad#1487): `cut`.
 //! - An overlay's triangles (mitcad#1488) are drawn flat after the opaque
 //!   bodies, a little off their surface, without changing their depth.
+//! - Triangles and edges are clipped in the camera's frame, before they are
+//!   projected, to what is drawn (mitcad#1606): in front of the near plane
+//!   (perspective) and inside the picture widened by `GUARD_BAND`. So a
+//!   side that runs far past the picture, or ends just in front of the
+//!   eye, is drawn along its true line, and an edge's stamps are counted
+//!   on the part in the picture.
 //!
 //! One thread, a fixed order: the same input gives the same pixels.
 
@@ -63,8 +69,11 @@ const TRANSPARENT_OPACITY: f64 = 0.25;
 const SHARP_DEGREES: f64 = 40.0;
 /// Subpixel steps of the fill grid.
 const SUB: i64 = 256;
-/// The farthest a vertex is drawn from the picture's centre, pixels.
-const GUARD: f64 = 1.0e6;
+/// How far past the picture's sides triangles and edges are clipped,
+/// samples (mitcad#1606): wider than the widest line's reach, so that a
+/// line's stamps reach the picture's border, and a triangle's cut sides,
+/// which may round apart from a neighbour's, lie outside the picture.
+const GUARD_BAND: f64 = 16.0;
 
 /// One body as placed, in the design's coordinates.
 #[derive(Debug, Clone, Default)]
@@ -94,6 +103,10 @@ pub struct Mesh {
 // A section and highlighted edges (mitcad#1487).
 mod cut;
 pub use cut::{ACCENT, ACCENT_RGB, Inspection};
+
+// Sides that run far past the picture or close to the eye (mitcad#1606).
+#[cfg(test)]
+mod clip_tests;
 
 /// How a triangle's samples are written.
 #[derive(Clone, Copy)]
@@ -338,6 +351,46 @@ struct Projector {
     z1: f64,
     light: Vec3,
     half: Vec3,
+    /// What is drawn, in the camera's frame ([`Projector::frustum`]).
+    bounds: Vec<Bound>,
+}
+
+/// A half-space of the camera's frame: the points `c` with
+/// `dot(normal, c) + offset <= 0`.
+#[derive(Debug, Clone, Copy)]
+struct Bound {
+    normal: Vec3,
+    offset: f64,
+}
+
+impl Bound {
+    /// Positive outside.
+    fn value(&self, c: Vec3) -> f64 {
+        dot(self.normal, c) + self.offset
+    }
+}
+
+/// The part of the segment from `a` to `b` (the camera's frame) inside
+/// every bound, if any.
+fn clip_segment(bounds: &[Bound], a: Vec3, b: Vec3) -> Option<(Vec3, Vec3)> {
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for bound in bounds {
+        let (va, vb) = (bound.value(a), bound.value(b));
+        match (va > 0.0, vb > 0.0) {
+            (true, true) => return None,
+            (true, false) => t0 = t0.max(va / (va - vb)),
+            (false, true) => t1 = t1.min(va / (va - vb)),
+            (false, false) => {}
+        }
+    }
+    if t0 > t1 {
+        return None;
+    }
+    let at = |t: f64| [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t);
+    Some((
+        if t0 > 0.0 { at(t0) } else { a },
+        if t1 < 1.0 { at(t1) } else { b },
+    ))
 }
 
 impl Projector {
@@ -346,8 +399,54 @@ impl Projector {
         [dot(q, self.right), dot(q, self.up), dot(q, self.forward)]
     }
 
+    /// What is drawn, as half-spaces of the camera's frame: in front of
+    /// the near plane (perspective) and inside the picture widened by
+    /// `margin` samples on every side. A point's sample x is
+    /// `cx + focal * c[0] / w` and its y `cy - focal * c[1] / w`, `w` its
+    /// distance `c[2]` (perspective) or 1, so each side of the picture is
+    /// a plane through the eye (perspective) or a plane along the line of
+    /// sight (orthographic).
+    fn frustum(&self, margin: f64) -> Vec<Bound> {
+        // `focal * dot(axis, c) - limit * w <= 0`.
+        let side = |axis: Vec3, limit: f64| {
+            let normal = scale(axis, self.focal);
+            if self.perspective {
+                Bound {
+                    normal: add(normal, [0.0, 0.0, -limit]),
+                    offset: 0.0,
+                }
+            } else {
+                Bound {
+                    normal,
+                    offset: -limit,
+                }
+            }
+        };
+        let (half_x, half_y) = (self.cx + margin, self.cy + margin);
+        let mut bounds = Vec::with_capacity(5);
+        if self.perspective {
+            bounds.push(Bound {
+                normal: [0.0, 0.0, -1.0],
+                offset: self.near,
+            });
+        }
+        bounds.push(side([1.0, 0.0, 0.0], half_x));
+        bounds.push(side([-1.0, 0.0, 0.0], half_x));
+        bounds.push(side([0.0, 1.0, 0.0], half_y));
+        bounds.push(side([0.0, -1.0, 0.0], half_y));
+        bounds
+    }
+
+    /// A segment (the design's coordinates) clipped to what is drawn and
+    /// projected: its ends' sample coordinates and depth keys.
+    fn segment(&self, a: Vec3, b: Vec3) -> Option<[(f64, f64, f64); 2]> {
+        let (ca, cb) = clip_segment(&self.bounds, self.camera(a), self.camera(b))?;
+        Some([self.screen(ca), self.screen(cb)])
+    }
+
     /// Sample coordinates and depth key (larger: nearer) of a point in the
-    /// camera's frame.
+    /// camera's frame, in front of the eye (perspective). Not clamped: what
+    /// is drawn is clipped to the bounds first.
     fn screen(&self, c: Vec3) -> (f64, f64, f64) {
         let (x, y, key) = if self.perspective {
             (
@@ -362,11 +461,7 @@ impl Projector {
                 (self.z1 - c[2]) / (self.z1 - self.z0),
             )
         };
-        (
-            self.cx + x.clamp(-GUARD, GUARD),
-            self.cy - y.clamp(-GUARD, GUARD),
-            key,
-        )
+        (self.cx + x, self.cy - y, key)
     }
 
     /// Whether a triangle with this normal, at this corner, faces the eye.
@@ -460,61 +555,8 @@ pub fn render_with(
         1
     };
     let (sw, sh) = (width as usize * s, height as usize * s);
-    let forward = camera.direction();
-    let up = camera.up;
-    let right = cross(forward, up);
-    let distance = norm(sub(camera.target, camera.eye)).max(1e-9);
-    let perspective = camera.projection == Projection::Perspective;
-    let focal = if perspective {
-        sh as f64 / 2.0 / (camera.fov.to_radians() / 2.0).tan()
-    } else {
-        sh as f64 / camera.height
-    };
-    let light = unit(add(
-        add(scale(right, LIGHT[0]), scale(up, LIGHT[1])),
-        scale(forward, LIGHT[2]),
-    ))
-    .unwrap_or(forward);
-    // Halfway between the way to the light and the way to the eye.
-    let half = unit(sub(scale(light, -1.0), forward)).unwrap_or(forward);
-    let mut projector = Projector {
-        eye: camera.eye,
-        right,
-        up,
-        forward,
-        perspective,
-        focal,
-        cx: sw as f64 / 2.0,
-        cy: sh as f64 / 2.0,
-        near: distance * 1e-3,
-        z0: 0.0,
-        z1: 1.0,
-        light,
-        half,
-    };
-    if !perspective {
-        let (mut z0, mut z1) = (f64::MAX, f64::MIN);
-        for mesh in &prepared.scene.meshes {
-            for &v in &mesh.vertices {
-                let z = dot(sub(v, camera.eye), forward);
-                z0 = z0.min(z);
-                z1 = z1.max(z);
-            }
-        }
-        if z0 <= z1 {
-            projector.z0 = z0 - 1e-6;
-            projector.z1 = z1 + 1e-6;
-        }
-    }
-    let mut target = Target {
-        width: sw,
-        height: sh,
-        color: vec![[0, 0, 0, 0]; sw * sh],
-        depth: vec![f32::NEG_INFINITY; sw * sh],
-        slack: vec![0.0; sw * sh],
-        cap: vec![false; sw * sh],
-        samples: s,
-    };
+    let projector = Projector::new(&prepared.scene.meshes, camera, sw, sh);
+    let mut target = Target::new(sw, sh, s);
     fill_background(&mut target, style.background, s);
     let clip = inspection
         .section
@@ -601,6 +643,78 @@ pub fn render_with(
         pixels,
         triangles,
         edges,
+    }
+}
+
+impl Target {
+    /// Empty buffers of `width` x `height` samples, `samples` a pixel
+    /// along each side: no colour, nothing drawn in depth.
+    fn new(width: usize, height: usize, samples: usize) -> Self {
+        Self {
+            width,
+            height,
+            color: vec![[0, 0, 0, 0]; width * height],
+            depth: vec![f32::NEG_INFINITY; width * height],
+            slack: vec![0.0; width * height],
+            cap: vec![false; width * height],
+            samples,
+        }
+    }
+}
+
+impl Projector {
+    /// The camera's projection onto a grid of `sw` x `sh` samples; an
+    /// orthographic depth spans the meshes.
+    fn new(meshes: &[Mesh], camera: &Camera, sw: usize, sh: usize) -> Self {
+        let forward = camera.direction();
+        let up = camera.up;
+        let right = cross(forward, up);
+        let distance = norm(sub(camera.target, camera.eye)).max(1e-9);
+        let perspective = camera.projection == Projection::Perspective;
+        let focal = if perspective {
+            sh as f64 / 2.0 / (camera.fov.to_radians() / 2.0).tan()
+        } else {
+            sh as f64 / camera.height
+        };
+        let light = unit(add(
+            add(scale(right, LIGHT[0]), scale(up, LIGHT[1])),
+            scale(forward, LIGHT[2]),
+        ))
+        .unwrap_or(forward);
+        // Halfway between the way to the light and the way to the eye.
+        let half = unit(sub(scale(light, -1.0), forward)).unwrap_or(forward);
+        let mut projector = Projector {
+            eye: camera.eye,
+            right,
+            up,
+            forward,
+            perspective,
+            focal,
+            cx: sw as f64 / 2.0,
+            cy: sh as f64 / 2.0,
+            near: distance * 1e-3,
+            z0: 0.0,
+            z1: 1.0,
+            light,
+            half,
+            bounds: Vec::new(),
+        };
+        if !perspective {
+            let (mut z0, mut z1) = (f64::MAX, f64::MIN);
+            for mesh in meshes {
+                for &v in &mesh.vertices {
+                    let z = dot(sub(v, camera.eye), forward);
+                    z0 = z0.min(z);
+                    z1 = z1.max(z);
+                }
+            }
+            if z0 <= z1 {
+                projector.z0 = z0 - 1e-6;
+                projector.z1 = z1 + 1e-6;
+            }
+        }
+        projector.bounds = projector.frustum(GUARD_BAND);
+        projector
     }
 }
 
@@ -714,35 +828,61 @@ fn draw_mesh(
     drawn
 }
 
-/// Clips a triangle to the near plane (perspective) and fills it.
+/// Clips a triangle to what is drawn (the near plane and the picture's
+/// guard band, mitcad#1606) and fills it.
 fn draw_triangle(target: &mut Target, projector: &Projector, corners: [Corner; 3], paint: Paint) {
-    if !projector.perspective {
+    let inside = |c: &Corner| projector.bounds.iter().all(|b| b.value(c.c) <= 0.0);
+    if corners.iter().all(inside) {
         fill(target, projector, corners, paint);
         return;
     }
-    let near = projector.near;
-    if corners.iter().all(|c| c.c[2] >= near) {
-        fill(target, projector, corners, paint);
-        return;
-    }
-    let mut kept: Vec<Corner> = Vec::with_capacity(4);
-    for k in 0..3 {
-        let (p, q) = (corners[k], corners[(k + 1) % 3]);
-        let (pin, qin) = (p.c[2] >= near, q.c[2] >= near);
-        if pin {
-            kept.push(p);
-        }
-        if pin != qin {
-            let t = (near - p.c[2]) / (q.c[2] - p.c[2]);
-            kept.push(lerp_corner(p, q, t));
-        }
-    }
-    for k in 1..kept.len().saturating_sub(1) {
-        fill(target, projector, [kept[0], kept[k], kept[k + 1]], paint);
+    let polygon = clip_polygon(&projector.bounds, corners.to_vec());
+    for k in 1..polygon.len().saturating_sub(1) {
+        fill(
+            target,
+            projector,
+            [polygon[0], polygon[k], polygon[k + 1]],
+            paint,
+        );
     }
 }
 
-/// Fills a triangle whose corners are in front of the eye.
+/// The part of a convex polygon (corners in the camera's frame, in order)
+/// inside every bound, one bound after another. A side that crosses a
+/// bound is cut at the point measured from its inside end, so that two
+/// triangles sharing that side cut it at the same point, bit for bit.
+fn clip_polygon(bounds: &[Bound], mut polygon: Vec<Corner>) -> Vec<Corner> {
+    for bound in bounds {
+        let values: Vec<f64> = polygon.iter().map(|c| bound.value(c.c)).collect();
+        if values.iter().all(|v| *v <= 0.0) {
+            continue;
+        }
+        let n = polygon.len();
+        let mut kept: Vec<Corner> = Vec::with_capacity(n + 1);
+        for k in 0..n {
+            let j = (k + 1) % n;
+            let (p, q) = (polygon[k], polygon[j]);
+            let (vp, vq) = (values[k], values[j]);
+            match (vp <= 0.0, vq <= 0.0) {
+                (true, true) => kept.push(p),
+                (true, false) => {
+                    kept.push(p);
+                    kept.push(lerp_corner(p, q, vp / (vp - vq)));
+                }
+                (false, true) => kept.push(lerp_corner(q, p, vq / (vq - vp))),
+                (false, false) => {}
+            }
+        }
+        if kept.len() < 3 {
+            return Vec::new();
+        }
+        polygon = kept;
+    }
+    polygon
+}
+
+/// Fills a triangle whose corners are inside the bounds (in front of the
+/// eye and near the picture).
 fn fill(target: &mut Target, projector: &Projector, corners: [Corner; 3], paint: Paint) {
     let screen = corners.map(|c| projector.screen(c.c));
     let mut fixed = screen.map(|(x, y, _)| {
@@ -881,35 +1021,16 @@ fn draw_line(
     color: [u8; 3],
     s: usize,
 ) -> bool {
-    let (mut ca, mut cb) = (projector.camera(a), projector.camera(b));
-    if projector.perspective {
-        let near = projector.near;
-        if ca[2] < near && cb[2] < near {
-            return false;
-        }
-        if ca[2] < near || cb[2] < near {
-            let t = (near - ca[2]) / (cb[2] - ca[2]);
-            let cut = [0, 1, 2].map(|i| ca[i] + (cb[i] - ca[i]) * t);
-            if ca[2] < near {
-                ca = cut;
-            } else {
-                cb = cut;
-            }
-        }
-    }
-    let (ax, ay, ak) = projector.screen(ca);
-    let (bx, by, bk) = projector.screen(cb);
-    let (w, h) = (target.width as f64, target.height as f64);
-    let margin = s as f64 + 1.0;
-    if (ax < -margin && bx < -margin)
-        || (ay < -margin && by < -margin)
-        || (ax > w + margin && bx > w + margin)
-        || (ay > h + margin && by > h + margin)
-    {
+    // Clipped to the picture and its guard band (mitcad#1606), so the
+    // steps, half a sample apart, are counted on the part that is drawn.
+    let Some([(ax, ay, ak), (bx, by, bk)]) = projector.segment(a, b) else {
+        return false;
+    };
+    let length = (bx - ax).abs().max((by - ay).abs());
+    if !length.is_finite() {
         return false;
     }
-    let length = (bx - ax).abs().max((by - ay).abs());
-    let steps = ((length * 2.0).ceil() as usize).clamp(1, 1 << 16);
+    let steps = ((length * 2.0).ceil() as usize).max(1);
     let reach = s as f64 / 2.0;
     let rgba = [color[0], color[1], color[2], 255];
     let mut any = false;

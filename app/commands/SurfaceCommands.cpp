@@ -297,7 +297,8 @@ CommandDef surfaceSweepCommand(const CommandContext& context) {
   def.inputs = sheetInputs();
   def.inputs += {
       selectionInput(QStringLiteral("path"), QObject::tr("Path"), kPathKinds, 1, 0)
-          .withTooltip(QObject::tr("Sketch curves or edges, joined end to end")),
+          .withTooltip(QObject::tr("Sketch curves or edges, joined end to end"))
+          .withAccepts(isPathItem),
       choiceInput(QStringLiteral("orientation"), QObject::tr("Orientation"),
                   {{QStringLiteral("perpendicular"), QStringLiteral("Perpendicular")},
                    {QStringLiteral("parallel"), QStringLiteral("Parallel")}},

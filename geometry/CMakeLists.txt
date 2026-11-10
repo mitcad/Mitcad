@@ -318,6 +318,11 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/item_origin.cpp
   include/mitcad/geometry/item_origin.hpp)
+
+# Errors a person reads in plain words, their places and the agents'
+# detail on a last line the model splits off (mitcad#1612).
+target_sources(mitcad_geometry PRIVATE
+  include/mitcad/geometry/user_error.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -1168,4 +1173,23 @@ if(BUILD_TESTING)
   add_executable(test_pipe_square_section tests/test_pipe_square_section.cpp)
   target_link_libraries(test_pipe_square_section PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.pipe_square_section COMMAND test_pipe_square_section)
+endif()
+
+if(BUILD_TESTING)
+  # A fillet's end cut by the faces round a notch (mitcad#1615, the port's
+  # patch 1670): a flange's foot rounded past an end cap that stops short of
+  # the flange's tip, the rounding crossing the cap's side's boundary with
+  # the flange's inside past a vertex that splits it: one valid closed solid,
+  # every edge on two faces, the exact shape's volume.
+  add_executable(test_fillet_end_past_split_edge tests/test_fillet_end_past_split_edge.cpp)
+  target_link_libraries(test_fillet_end_past_split_edge PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_end_past_split_edge COMMAND test_fillet_end_past_split_edge)
+  # Thrown texts say what is wrong in words (mitcad#1612): no face, edge or
+  # vertex named and no point printed outside placed_error() and its helpers
+  # (mitcad/geometry/user_error.hpp); the scan of the sources and its own
+  # check on planted ones.
+  add_executable(test_user_text_scan tests/test_user_text_scan.cpp)
+  target_link_libraries(test_user_text_scan PRIVATE mitcad_warnings)
+  add_test(NAME geometry.user-text-scan COMMAND test_user_text_scan "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  add_test(NAME geometry.user-text-scan-self-test COMMAND test_user_text_scan --self-test)
 endif()

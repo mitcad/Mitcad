@@ -117,7 +117,7 @@ ui_expect_new "Selected: 2 sketch curves" "both lines selected"
 ui_mark
 ui_step "offset (O)"                     ui_key o
 ui_expect_new "Preview Offset: failed: " "no chain: the preview fails"
-ui_expect_new "c15 ends at p14 of c12 but on a point of its own (p16)" "the reason names the ends"
+ui_expect_new "a curve ends at another curve's end but on a point of its own" "the reason says where the chain breaks"
 ui_expect_new "a Coincident constraint joins them" "and what joins them"
 ui_mark
 ui_step "cancel (Esc)"                   ui_key Escape

@@ -137,7 +137,9 @@ Distinguish modeled ears from a slicer's brim when estimating plate space.
    0.8 mm is an analysis threshold, not a strength certificate. The
    MCP summary suffices until a flagged region needs closer inspection.
 4. Check `build_volume` against the selected printer and `print_plates`
-   for the intended grouping. Without a printer, obtain its actual bed
+   for the intended grouping. An item is on one plate at most:
+   `place_on_plate` moves one from another plate, and its result's
+   `moved` names the plate it left and its count. Without a printer, obtain its actual bed
    and height before claiming that the design fits. Export arrangement
    can differ from assembly placement; inspect the resulting layout too.
 5. Use `print_estimate` for approximate material use. Supply realistic

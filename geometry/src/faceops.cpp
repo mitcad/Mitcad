@@ -580,21 +580,23 @@ ShapePtr draft_faces(const Shape& body, const std::vector<int>& faces, const gp_
       continue;
     }
     const TopoDS_Face& face = body.face(f);
-    step("draft failed on face " + detail::primary_name(body, f),
+    const std::string name = detail::primary_name(body, f);
+    step(face_error(name, "draft failed on a face", "draft failed on face " + name),
          [&] { maker.Add(face, pull, angle, neutral, true); });
     if (!maker.AddDone()) {
-      throw std::runtime_error("draft failed on face " + detail::primary_name(body, f) +
-                               "; only planar, cylindrical and conical faces can be drafted, "
-                               "and the fixed plane must cross them");
+      const std::string why = "; only planar, cylindrical and conical faces can be drafted, and the fixed plane "
+                              "must cross them";
+      throw std::runtime_error(face_error(name, "draft failed on a face" + why, "draft failed on face " + name + why));
     }
     // OCCT drafts the tangent neighbours along.
     for (int index : detail::tangent_closure(body, {f})) {
       drafted.insert(index);
       if (!tangent_chain && selected.count(index) == 0) {
+        const std::string why = " is tangent to a drafted face; without a tangent chain only the selected faces "
+                                "would be drafted, but the geometry kernel always drafts the whole chain";
+        const std::string tangent = detail::primary_name(body, index);
         throw std::invalid_argument(
-            "unsupported: face " + detail::primary_name(body, index) +
-            " is tangent to a drafted face; without a tangent chain only the selected faces "
-            "would be drafted, but the geometry kernel always drafts the whole chain");
+            face_error(tangent, "unsupported: a face" + why, "unsupported: face " + tangent + why));
       }
     }
   }
@@ -827,7 +829,8 @@ ShapePtr delete_faces(const std::string& feature, const Shape& body,
     }
     for (int f : chosen) {
       if (!maker.IsDeleted(body.face(f))) {
-        throw std::runtime_error("face " + detail::primary_name(body, f) + " could not be deleted");
+        const std::string name = detail::primary_name(body, f);
+        throw std::runtime_error(face_error(name, "a face could not be deleted", "face " + name + " could not be deleted"));
       }
     }
     detail::FaceNamer namer(maker.Shape());
@@ -889,8 +892,9 @@ ShapePtr replace_faces(const std::string& feature, const Shape& body,
       const gp_Dir normal = detail::face_plane(body.face(f))->Axis().Direction();
       const double facing = normal.Dot(up);
       if (std::abs(facing) < 1.0e-3) {
-        throw std::invalid_argument("the target is perpendicular to face " +
-                                    detail::primary_name(body, f));
+        const std::string name = detail::primary_name(body, f);
+        throw std::invalid_argument(
+            face_error(name, "the target is perpendicular to the face", "the target is perpendicular to face " + name));
       }
       // Where the face's normal line through each vertex meets the target.
       double nearest = 0.0;

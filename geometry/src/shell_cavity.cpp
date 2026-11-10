@@ -767,6 +767,21 @@ std::string faces_phrase(const std::vector<std::string>& names) {
   return (names.size() == 1 ? "face " : "faces ") + listed(names);
 }
 
+// The faces in plain words for the person, "a face", "3 faces"
+// (mitcad#1612): their names are for agents (faces_phrase), the faces
+// painted (face_places).
+std::string faces_counted(const std::vector<std::string>& names) {
+  return names.size() == 1 ? std::string("a face") : std::to_string(names.size()) + " faces";
+}
+
+std::vector<ErrorPlace> face_places(const std::vector<std::string>& names) {
+  std::vector<ErrorPlace> places;
+  for (const std::string& name : names) {
+    places.push_back(face_place(name));
+  }
+  return places;
+}
+
 // The faces of the shape as a compound.
 TopoDS_Compound face_compound(const TopoDS_Shape& shape) {
   BRep_Builder builder;
@@ -1189,8 +1204,10 @@ ShapePtr shell_by_cavity(const std::string& feature, const Shape& body, const st
         }
       }
       std::sort(names.begin(), names.end());
-      throw std::runtime_error("shell failed; the wall does not fit under " + faces_phrase(names) +
-                               ": nothing can be hollowed");
+      throw std::runtime_error(placed_error(
+          "shell failed; the wall does not fit under " + faces_counted(names) + ": nothing can be hollowed",
+          "shell failed; the wall does not fit under " + faces_phrase(names) + ": nothing can be hollowed",
+          face_places(names)));
     }
     note_missing_walls(feature, body, removed, thickness, *result);
     return result;
@@ -1261,13 +1278,16 @@ void note_missing_walls(const std::string& feature, const Shape& body, const std
   std::sort(solid.begin(), solid.end());
   std::sort(past.begin(), past.end());
   if (!solid.empty()) {
-    result.add_note("the wall does not fit under " + faces_phrase(solid) +
-                    (solid.size() == 1 ? "; it is" : "; the body is") + " left solid there");
+    // (In plain words, the faces painted: mitcad#1612.)
+    result.add_note("the wall does not fit under " + faces_counted(solid) +
+                        (solid.size() == 1 ? "; it is" : "; the body is") + " left solid there",
+                    face_places(solid));
   }
   if (!past.empty()) {
-    result.add_note("the inside of the wall runs past " + faces_phrase(past) +
-                    (past.size() == 1 ? ", which is" : ", which are") +
-                    " too small or too tightly curved for it to follow");
+    result.add_note("the inside of the wall runs past " + faces_counted(past) +
+                        (past.size() == 1 ? ", which is" : ", which are") +
+                        " too small or too tightly curved for it to follow",
+                    face_places(past));
   }
   if (!thinner.empty()) {
     std::sort(thinner.begin(), thinner.end());
@@ -1275,7 +1295,7 @@ void note_missing_walls(const std::string& feature, const Shape& body, const std
     std::snprintf(amounts, sizeof amounts, "the wall is thinner than %g mm beside ", thickness);
     char least[64];
     std::snprintf(least, sizeof least, ": down to %.2f mm (%.2f mm less)", thinnest, thickness - thinnest);
-    result.add_note(amounts + faces_phrase(thinner) + least);
+    result.add_note(amounts + faces_counted(thinner) + least, face_places(thinner));
   }
 }
 

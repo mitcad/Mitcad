@@ -5,6 +5,7 @@
 # check-all sources: app/framework/WindowStyle.cpp tools/ui-scripts/text-icon-size.mitcad-ui
 # check-all sources: app/framework/IconSizeStyle.cpp app/framework/IconSizeStyle.hpp
 # check-all sources: app/platform/windows/WindowsTheme.cpp
+# check-all sources: app/print/MaterialsDialog.cpp
 # Preferences > Display > Text size, Icon size and Font (mitcad#1556,
 # GitHub mitcad/Mitcad#207) on Windows, the shared input script
 # tools/ui-scripts/text-icon-size.mitcad-ui as
@@ -73,6 +74,8 @@ function Run-Sizes([string]$Layout, [int]$Text, [int]$Icon, [string]$Font) {
   $env:MITCAD_TEST_TEXT_SIZE = "$Text"
   $env:MITCAD_TEST_ICON_SIZE = "$Icon"
   $env:MITCAD_TEST_ICON_NEXT = "$next"
+  # The Materials window's appearance swatches (mitcad#1610).
+  $env:MITCAD_TEST_SWATCH_SIZE = "$([math]::Floor((20 * $Icon + 50) / 100))"
   $env:MITCAD_TEST_FONT = $Font
   $env:MITCAD_TEST_SYSTEM_FONT = if ($Font -eq 'system') { 'true' } else { 'false' }
   Write-Host "--- $name"

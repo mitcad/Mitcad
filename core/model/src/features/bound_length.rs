@@ -249,7 +249,12 @@ impl FeatureInfo for BoundLengthDef {
         from.check(ctx).map_err(|e| format!("from: {e}"))?;
         match &self.to.geometry {
             GeomRef::Face { .. } | GeomRef::Mount { .. } => {}
-            other => return Err(format!("to: {other} is no planar face or frame")),
+            other => {
+                return Err(format!(
+                    "to: {}",
+                    other.error(" is no planar face or frame")
+                ));
+            }
         }
         to.check(ctx).map_err(|e| format!("to: {e}"))?;
         let v = self.direction.vector();
@@ -349,12 +354,31 @@ pub fn measure_to<R: Resolver>(
                     vec![*body],
                 ),
                 Ok(other) => {
-                    return Err(format!("to: face {face} is not planar ({})", other.kind()));
+                    return Err(crate::notice::placed(
+                        "to: the face is not planar",
+                        crate::notice::NoticePlace::face(face.to_string())
+                            .in_body(&body.to_string()),
+                        format!("to: face {face} is not planar ({})", other.kind()),
+                    ));
                 }
-                Err(e) => return Err(format!("to: face {face}: {e}")),
+                Err(e) => {
+                    return Err(format!(
+                        "to: {}",
+                        crate::notice::about_place(
+                            crate::notice::NoticePlace::face(face.to_string())
+                                .in_body(&body.to_string()),
+                            &e.to_string(),
+                        )
+                    ));
+                }
             }
         }
-        other => return Err(format!("to: {other} is no planar face or frame")),
+        other => {
+            return Err(format!(
+                "to: {}",
+                other.error(" is no planar face or frame")
+            ));
+        }
     };
     let normal = unit(normal).ok_or("to: the plane has no normal")?;
     let distance = ray_plane(start, direction, point, normal)

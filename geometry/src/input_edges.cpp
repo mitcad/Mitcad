@@ -48,7 +48,7 @@ std::vector<std::vector<gp_Pnt>> edge_polylines(const Shape& shape, const std::v
     for (const std::string& name : edges) {
       const std::vector<int> found = shape.find_edges(name);
       if (found.empty()) {
-        throw std::runtime_error("the body has no edge " + name);
+        throw std::runtime_error(no_edge_error(name));
       }
       for (const int e : found) {
         picked.Add(shape.edge(e));
@@ -57,7 +57,7 @@ std::vector<std::vector<gp_Pnt>> edge_polylines(const Shape& shape, const std::v
     for (const std::string& name : faces) {
       const std::vector<int> found = shape.find_faces(name);
       if (found.empty()) {
-        throw std::runtime_error("the body has no face " + name);
+        throw std::runtime_error(no_face_error(name));
       }
       for (const int f : found) {
         for (TopExp_Explorer it(shape.face(f), TopAbs_EDGE); it.More(); it.Next()) {

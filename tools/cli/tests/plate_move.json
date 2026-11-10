@@ -1,0 +1,16 @@
+[
+  {"comment": "mitcad#1595: two boxes, Body1 (F1.b0) and Body2 (F2.b0), on two plates. Body1 goes twice on one with Body2, then on two without a count: it leaves one and keeps its count of 2; mitcad-cli run says so before the report."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 30, "width": 20, "height": 10, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [50, 0], "length": 30, "width": 20, "height": 10, "operation": "new_body"}},
+  {"expect": {"bodies": 2, "body": "Body1", "volume": 6000}},
+  {"cmd": "add_print_plate", "name": "one"},
+  {"cmd": "add_print_plate", "name": "two"},
+  {"cmd": "place_on_plate", "plate": "one", "items": [{"body": "Body1", "count": 2}, {"body": "Body2"}]},
+  {"cmd": "place_on_plate", "plate": "two", "items": [{"body": "Body1"}]},
+  {"expect": {"query": {"query": "print_plates"}, "result": {"plates": [
+    {"id": "plate1", "name": "one", "items": [{"body": "F2.b0", "name": "Body2", "count": 1}]},
+    {"id": "plate2", "name": "two", "items": [{"body": "F1.b0", "name": "Body1", "count": 2}]}]}}},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Move Body1 from one to two"}}}
+]

@@ -1024,10 +1024,11 @@ impl ApiStream {
 
     fn anthropic_answered(&mut self, answer: Answer) -> Vec<Value> {
         let cut_short = answer.stop_reason == "max_tokens";
+        let refused = answer.stop_reason == "refusal";
         // Calls shown as they streamed that are not made: their rows end.
         let dropped = if cut_short {
             not_made(&answer, NOT_MADE_CUT)
-        } else if answer.stop_reason == "refusal" {
+        } else if refused {
             not_made(&answer, NOT_MADE_REFUSED)
         } else {
             Vec::new()
@@ -1038,9 +1039,11 @@ impl ApiStream {
             .into_iter()
             .filter(|block| !block.is_null())
             .collect();
-        if cut_short {
-            // A call cut at the output limit has no whole input: not made,
-            // and not kept (each kept call needs its result).
+        if cut_short || refused {
+            // A call cut at the output limit has no whole input, and a
+            // refused answer's calls are not made either: not kept, as each
+            // kept call needs its result before the next user message
+            // (mitcad#1602).
             blocks.retain(|block| block.get("type").and_then(Value::as_str) != Some("tool_use"));
         }
         let calls: Vec<Call> = blocks
@@ -1076,7 +1079,7 @@ impl ApiStream {
                 turn.answered = true;
             }
         }
-        if answer.stop_reason == "refusal" {
+        if refused {
             let mut events = dropped;
             events.extend(self.finish(
                 "refusal",

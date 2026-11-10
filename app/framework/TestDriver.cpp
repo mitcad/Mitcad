@@ -454,6 +454,9 @@ const StepSpec kSpecs[] = {
     // The wheel over a logged place without the model-idle gate: a panel's
     // value field while its preview computes (mitcad#1407).
     {"wheel-logged-now", 2, 3, kPlain},
+    // The pointer over a logged place without the model-idle gate: a
+    // Timeline item while a command's preview computes (mitcad#1600).
+    {"hover-logged-now", 1, 1, kPlain},
     // The design in front shows its ribbon, Browser and navigation bar, the
     // Docked view below the ribbon (mitcad#1451).
     {"expect-design-chrome", 0, 0, kIdle},
@@ -2526,7 +2529,9 @@ void TestDriver::run(const Step& step) {
       QString error;
       if (!mac::test::setAppearance(a.at(0), error)) fail(line, error);
     });
-  } else if (name == QLatin1String("hover-logged")) {
+  } else if (name == QLatin1String("hover-logged") || name == QLatin1String("hover-logged-now")) {
+    // The -now form does not wait for the model (its step kind): the
+    // pointer over a Timeline item while a preview computes (mitcad#1600).
     QRegularExpression re;
     if (!regex(a.at(0), re)) return;
     const auto point = std::make_shared<QPoint>();
@@ -5265,8 +5270,15 @@ void TestDriver::run(const Step& step) {
     QWidget* window = targetWindow();
     QObject* widget = namedWidget(window, a.at(0));
     const QVariant value = widget ? widget->property(a.at(1).toUtf8().constData()) : QVariant();
-    if (!value.isValid() || value.toString() != a.at(2)) {
-      fail(line, QStringLiteral("widget %1.%2 is '%3', expected '%4'").arg(a.at(0), a.at(1), value.toString(), a.at(2)));
+    // A size as WxH (an item view's iconSize, mitcad#1610); others as
+    // QVariant gives them as text.
+    QString text = value.toString();
+    if (value.typeId() == QMetaType::QSize) {
+      const QSize size = value.toSize();
+      text = QStringLiteral("%1x%2").arg(size.width()).arg(size.height());
+    }
+    if (!value.isValid() || text != a.at(2)) {
+      fail(line, QStringLiteral("widget %1.%2 is '%3', expected '%4'").arg(a.at(0), a.at(1), text, a.at(2)));
     }
   } else if (name == QLatin1String("expect-widget-background")) {
     // The colour that covers most of a visible widget's area as its window

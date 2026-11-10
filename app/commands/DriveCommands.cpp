@@ -28,6 +28,7 @@
 #include "../browser/DocumentHost.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/Theme.hpp"
+#include "../framework/UserText.hpp"
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
 #include "Commands.hpp"
@@ -323,7 +324,8 @@ Built nothingChosen(const CommandState& state) {
   if (!std::isfinite(ratioOf(state))) {
     return Built::failure(QObject::tr("Type the ratio as 1 : 2"), QStringLiteral("ratio"));
   }
-  const QString error = state.object(kCandidates).value(QStringLiteral("error")).toString();
+  // In plain words (mitcad#1612).
+  const QString error = userText(state.object(kCandidates).value(QStringLiteral("error")).toString());
   return Built::failure(error.isEmpty() ? QObject::tr("Nothing fits this ratio between these axes") : error,
                         error.isEmpty() ? QStringLiteral("ratio") : kSecond);
 }

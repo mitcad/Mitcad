@@ -423,11 +423,20 @@ fn face_frame<R: Resolver>(
         GeomRef::Face { body, face: name } => {
             let shape = r.shape(*body)?;
             let found = super::renamed::face_for(r, &shape, name)?;
-            let plane = r
-                .kernel()
-                .face_plane(&shape, &found)
-                .map_err(|e| format!("face {name} is not planar ({e})"))?;
-            let normal = unit(plane.normal).ok_or_else(|| format!("face {name} has no normal"))?;
+            let plane = r.kernel().face_plane(&shape, &found).map_err(|e| {
+                crate::notice::placed(
+                    "the face is not planar",
+                    crate::notice::NoticePlace::face(name.to_string()).in_body(&body.to_string()),
+                    format!("face {name} is not planar ({e})"),
+                )
+            })?;
+            let normal = unit(plane.normal).ok_or_else(|| {
+                crate::notice::placed(
+                    "the face has no normal",
+                    crate::notice::NoticePlace::face(name.to_string()).in_body(&body.to_string()),
+                    format!("face {name} has no normal"),
+                )
+            })?;
             (
                 DatumPlane::on_plane(plane.origin, normal),
                 Some(plane.origin),
