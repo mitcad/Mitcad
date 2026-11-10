@@ -187,7 +187,10 @@ fn a_section_by_its_heading_or_a_name_it_lists() {
             .starts_with("Face features")
     );
     assert!(text(&answer).contains("split_body"));
-    let (answer, _) = lookup(&mut session, json!({"section": "sketch commands"}));
+    let (answer, _) = lookup(
+        &mut session,
+        json!({"section": "sketch commands", "extended": true}),
+    );
     assert_eq!(answer["section"], "Sketch commands");
     // How a sketch's ids are given out, which model_command's description
     // gives in short (mitcad#1269, mitcad#1506), is at its start.
@@ -308,7 +311,10 @@ fn a_long_section_is_cut_and_continues_from_its_offset() {
     let end = start + reference[start..].find("\n## Commands\n").unwrap();
     let whole = &reference[start..end];
     assert!(whole.len() > 2 * reference::LIMIT);
-    let (first, is_error) = lookup(&mut session, json!({"section": "Feature definitions"}));
+    let (first, is_error) = lookup(
+        &mut session,
+        json!({"section": "Feature definitions", "extended": true}),
+    );
     assert!(!is_error);
     assert_eq!(first["truncated"], true);
     assert!(text(&first).len() <= reference::LIMIT);
@@ -321,7 +327,7 @@ fn a_long_section_is_cut_and_continues_from_its_offset() {
     while let Some(offset) = next {
         let (page, is_error) = lookup(
             &mut session,
-            json!({"section": "Feature definitions", "offset": offset}),
+            json!({"section": "Feature definitions", "offset": offset, "extended": true}),
         );
         assert!(!is_error);
         assert!(text(&page).len() <= reference::LIMIT);
@@ -439,7 +445,8 @@ fn sections_marked_internal_are_left_out() {
     assert!(shown.contains(&"Caches".to_owned()));
     assert!(shown.contains(&"  Memory cache and diagnostics".to_owned()));
     assert!(!shown.contains(&"  Result store".to_owned()));
-    let section = reference::answer(&json!({"section": "Caches"}), &cache).unwrap();
+    let section =
+        reference::answer(&json!({"section": "Caches", "extended": true}), &cache).unwrap();
     assert!(
         text(&section).starts_with("## Caches\n### Memory cache and diagnostics\n"),
         "{section}"
@@ -735,4 +742,169 @@ fn errors_repeat_only_the_start_of_a_clients_long_names() {
     assert!(error.contains("this one has no cmd"), "{error}");
     assert!(error.contains(", and 980 more)"), "{error}");
     assert!(error.len() < 8 * 1024, "{}", error.len());
+}
+
+/// mitcad#1587: a feature type's section comes in brief by default (the
+/// example, the fields, no nested details or issue numbers), and whole
+/// with `extended`.
+#[test]
+fn a_feature_type_in_brief_and_whole_on_request() {
+    let brief = reference::answer(&json!({"feature": "sketch"}), &Vocabulary::default()).unwrap();
+    let whole = reference::answer(
+        &json!({"feature": "sketch", "extended": true}),
+        &Vocabulary::default(),
+    )
+    .unwrap();
+    assert_eq!(brief["brief"], true);
+    assert!(whole.get("brief").is_none());
+    assert!(whole.get("note").is_none());
+    let (brief_text, whole_text) = (text(&brief), text(&whole));
+    assert!(
+        brief_text.len() * 2 < whole_text.len(),
+        "{}",
+        brief_text.len()
+    );
+    // The example and every field stay.
+    assert!(brief_text.contains("```json"));
+    for field in [
+        "`plane`",
+        "`frame`",
+        "`entities`",
+        "`constraints`",
+        "`dimensions`",
+        "`offsets`",
+    ] {
+        assert!(brief_text.contains(field), "{field}");
+    }
+    // Nested details are the whole text's only.
+    assert!(whole_text.contains("**An independent set**"));
+    assert!(!brief_text.contains("**An independent set**"));
+    assert!(brief["note"].as_str().unwrap().contains("extended: true"));
+    // Every paragraph and list item keeps to its limit.
+    let mut fenced = false;
+    for line in brief_text.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        }
+        if !fenced && !line.starts_with('|') {
+            assert!(line.len() <= 800 + 4, "{line}");
+        }
+    }
+    // Issue numbers in parentheses are left out.
+    let revolve =
+        reference::answer(&json!({"feature": "revolve"}), &Vocabulary::default()).unwrap();
+    assert!(!text(&revolve).contains("(mitcad#"), "{}", text(&revolve));
+    let revolve = reference::answer(
+        &json!({"feature": "revolve", "extended": true}),
+        &Vocabulary::default(),
+    )
+    .unwrap();
+    assert!(text(&revolve).contains("(mitcad#"));
+}
+
+/// mitcad#1587: a section in brief names its subsections instead of giving
+/// their texts.
+#[test]
+fn a_section_in_brief_names_its_subsections() {
+    let brief = reference::answer(&json!({"section": "Patterns"}), &Vocabulary::default()).unwrap();
+    assert_eq!(brief["brief"], true);
+    let subsections = brief["subsections"].as_array().unwrap();
+    assert!(subsections.contains(&json!("Fillets and chamfers among the features")));
+    assert!(text(&brief).contains("Fillets and chamfers among the features"));
+    assert!(!text(&brief).contains("is not copied but applied again"));
+    let whole = reference::answer(
+        &json!({"section": "Patterns", "extended": true}),
+        &Vocabulary::default(),
+    )
+    .unwrap();
+    assert!(text(&whole).contains("is not copied but applied again"));
+    // A short section that loses nothing comes whole, without the note.
+    let short = reference::answer(&json!({"section": "Paths"}), &Vocabulary::default()).unwrap();
+    if short.get("brief").is_none() {
+        assert!(short.get("note").is_none());
+    }
+}
+
+/// mitcad#1587: an unknown field gets the feature type's brief reference,
+/// and a definition's `name` says where a name goes.
+#[test]
+fn an_unknown_field_gets_the_reference_and_where_a_name_goes() {
+    let backend = NamingBackend {
+        answer: Some(Err(
+            "commands[0]: invalid command: unknown field `name`, expected one of `plane`, `frame`, `entities`".to_owned(),
+        )),
+        ..NamingBackend::default()
+    };
+    let mut session = ready(backend);
+    let response = session
+        .handle(call(
+            "model_command",
+            json!({"document": "D1", "command": {"cmd": "add_feature", "def": {"type": "construction_plane", "name": "Diagonal"}}}),
+        ))
+        .unwrap();
+    let value = &response["result"]["structuredContent"];
+    let error = value["error"].as_str().unwrap();
+    assert!(
+        error.contains("a feature's name is not part of its definition"),
+        "{error}"
+    );
+    assert!(error.contains("rename_feature"), "{error}");
+    assert!(!error.contains("sketch.create"), "{error}");
+    assert_eq!(value["reference"]["feature"], "construction_plane");
+    assert!(
+        value["reference"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("`offset_through_point`")
+    );
+    // A field of the command itself gets the command's rows.
+    let backend = NamingBackend {
+        answer: Some(Err("invalid command: unknown field `strat`".to_owned())),
+        ..NamingBackend::default()
+    };
+    let mut session = ready(backend);
+    let response = session
+        .handle(call(
+            "model_command",
+            json!({"document": "D1", "command": {"cmd": "sketch.add_line", "strat": [0, 0], "end": [1, 0]}}),
+        ))
+        .unwrap();
+    let value = &response["result"]["structuredContent"];
+    assert_eq!(value["reference"]["command"], "sketch.add_line");
+}
+
+/// mitcad#1587: a parameter named like a function says to choose another
+/// name.
+#[test]
+fn a_reserved_parameter_name_suggests_another() {
+    let backend = NamingBackend {
+        answer: Some(Err("commands[4]: Round is a unit, function or constant and cannot name a parameter; the 4 step(s) of the entries before it were undone".to_owned())),
+        ..NamingBackend::default()
+    };
+    let mut session = ready(backend);
+    let response = session
+        .handle(call(
+            "model_command",
+            json!({"document": "D1", "command": {"cmd": "add_parameter", "name": "Round", "value": 2}}),
+        ))
+        .unwrap();
+    let error = response["result"]["structuredContent"]["error"]
+        .as_str()
+        .unwrap();
+    assert!(error.contains("e.g. RoundValue"), "{error}");
+}
+
+/// mitcad#1587: MCP's profiles queries ask for each region's area and
+/// centre unless the agent says otherwise.
+#[test]
+fn profiles_queries_ask_for_the_measures() {
+    let asked = mcp_defaults("model_query", &json!({"query": {"query": "profiles"}}));
+    assert_eq!(asked["query"]["measures"], true);
+    let kept = mcp_defaults(
+        "model_query",
+        &json!({"query": {"query": "profiles", "measures": false}}),
+    );
+    assert_eq!(kept["query"]["measures"], false);
+    let other = mcp_defaults("model_query", &json!({"query": {"query": "bodies"}}));
+    assert!(other["query"].get("measures").is_none());
 }

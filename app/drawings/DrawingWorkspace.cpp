@@ -232,6 +232,17 @@ QString placedText(const QJsonObject& answer, bool freely) {
   return parts.join(QStringLiteral(", "));
 }
 
+// A window's command on the bar as the log names it: its name without the
+// mnemonic and the "…" ("Edit Parameters", mitcad#1582).
+QString loggedName(const QAction* action) {
+  QString name = action->text();
+  name.remove(QLatin1Char('&'));
+  if (name.endsWith(QChar(char16_t(0x2026)))) {
+    name.chop(1);
+  }
+  return name;
+}
+
 } // namespace
 
 QList<TemplateChoice> availableTemplates(const DocumentHost& host) {
@@ -281,6 +292,7 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
   bar->setContentsMargins(0, 0, 0, 0);
   bar->setSpacing(4);
   rows->addLayout(bar);
+  m_barRow = bar;
   // The tools in a row of their own, which a cut sheet's row replaces
   // (mitcad#853).
   m_toolRow = new QWidget;
@@ -3419,6 +3431,24 @@ void DrawingWorkspace::setCutLabels(bool on) {
   qDebug().noquote() << QStringLiteral("Cut sheet labels: %1").arg(on ? QStringLiteral("on") : QStringLiteral("off"));
 }
 
+void DrawingWorkspace::addBarAction(QAction* action) {
+  if (action == nullptr || m_barRow == nullptr) {
+    return;
+  }
+  // As the bar's own buttons: its icon and its name, a flat button that
+  // takes no focus; the action gives the tooltip and the enabled state.
+  auto* b = new QToolButton;
+  b->setObjectName(QStringLiteral("drawingBar_") + action->objectName());
+  b->setDefaultAction(action);
+  b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+  b->setAutoRaise(true);
+  b->setFocusPolicy(Qt::NoFocus);
+  m_barRow->insertWidget(m_barRow->indexOf(m_addRevision) + 1 + int(m_barActions.size()), b);
+  m_barActions.append(b);
+  connect(b, &QToolButton::clicked, this,
+          [action] { qDebug().noquote() << QStringLiteral("Drawing bar: %1").arg(loggedName(action)); });
+}
+
 void DrawingWorkspace::logPlaces() { logButtons(); }
 
 void DrawingWorkspace::fitTools(int width) {
@@ -3606,6 +3636,12 @@ void DrawingWorkspace::logButtons() {
     add(QStringLiteral("Add Parts"), m_addParts, QStringLiteral("drawing.add_parts"));
   }
   lines << QStringLiteral("Drawing Add Revision at %1").arg(at(m_addRevision));
+  // The window's commands on the bar (addBarAction, mitcad#1582).
+  for (const QToolButton* b : std::as_const(m_barActions)) {
+    if (b->isVisible() && b->defaultAction() != nullptr) {
+      lines << QStringLiteral("Drawing %1 at %2").arg(loggedName(b->defaultAction()), at(b));
+    }
+  }
   for (const DrawingToolDef& tool : drawingTools()) {
     add(QStringLiteral("tool ") + tool.name, m_toolButtons.value(tool.id), tool.id);
   }

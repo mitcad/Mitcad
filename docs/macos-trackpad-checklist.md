@@ -76,6 +76,30 @@ events and do not establish physical-input acceptance.
       Intentional orbit and the saved bindings keep working. Record any
       failing modifier/button/scroll sequence separately from a screenshot.
 
+## Keys and scrolls during a press
+
+The synthetic test (`tools/ui-scripts/navigation-gesture-state.mitcad-ui`,
+mitcad#1571-#1573) sends application events; these need the real devices.
+
+- [ ] Command held, press on an edge, release Command, then the click
+      (with the slight move a trackpad click makes): the edge is added.
+- [ ] Press on an empty spot, press Option during the press and drag: a
+      window selection, the camera does not move. Option-drag to orbit,
+      release Option before the click and drag on: the orbit goes on and
+      the release selects nothing.
+- [ ] Click and hold on an edge with one finger while scrolling with a
+      second finger (plain and with the orbit key), then release: the view
+      neither pans nor orbits, the edge is picked, and the rest of that
+      scroll does not move the view. Repeat with a Magic Mouse, if at hand:
+      hold its button and move a finger on its surface.
+- [ ] Lift the fingers at the end of a scroll without momentum: the next
+      click selects at once (no orbit carried into it).
+- [ ] During an Option-drag orbit, Cmd-Tab to another application and back
+      (also Mission Control): the orbit has ended and the next click picks.
+      With Navigation "Middle pans, Shift + middle or F4 + left orbits", hold
+      F4 over the view, click into a panel field, release F4 there: the next
+      click on an edge picks it.
+
 ## MacBook trackpad, Shift orbit scheme
 
 - [ ] Choose "Trackpad (two-finger scroll pans, pinch zooms, Shift orbits)"

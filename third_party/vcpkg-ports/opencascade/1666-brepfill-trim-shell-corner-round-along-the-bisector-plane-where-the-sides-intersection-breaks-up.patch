@@ -1,0 +1,1729 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Pipe shells' rounded corners where the intersection of the two sides
+breaks up (mitcad#1564). Applies after 1663.
+
+A rounded corner (BRepFill_Round) turns each side's bound about the axis
+through the corner square to both of its tangents, where the bound does
+not reach the bisector plane; where it reaches past the plane, the two
+sides overlap and BRepFill_TrimShellCorner trims them against each other
+along their intersection. The two sides of one section touch where the
+bounds cross the plane (on that axis), and at a small corner they meet at
+a shallow angle all along the overlap: there the intersection of
+approximated sides comes in pieces, the trim finds no loop, and
+BRepFill_Sweep turned the whole bounds about the corner over the
+untrimmed sides (a shell through itself); where that was not a valid
+shell, MitCad's pipes carried the section unturned through the corner,
+leaning by the corner's angle.
+
+When that trim fails for a rounded corner of a closed section, each side
+is now cut where it crosses the bisector plane, as 1663 cuts a mitre,
+only where its bound reaches past the plane: from its bound, the first
+crossing along the path. Where the pieces are straight near the corner
+the two sides are mirror images in the plane and their intersection lies
+in it; elsewhere the two cuts lie within the bend over the overlap's
+depth of each other. The loop round the section is broken where the
+bounds cross the plane (one vertex where both sides' do: on the axis the
+round turns about) and where the U-edges that reach past the plane cross
+it; each edge between two breaks past the plane lies on one face of each
+side, runs through the middles of the two cuts and has each side's cut
+as its curve on that face. Each bound is kept where it does not reach the
+plane, as pieces with the bound's curve, which BRepFill_Sweep's round
+then turns about the corner as it turns the pieces of the trim along the
+intersection: their ends at the breaks lie on the axis, and its turns
+close there in degenerate edges. The U-edges that reach past the plane
+end at its breaks. Refused, as 1663, where the two cuts lie further apart
+than 5e-4 of the section's extent, where the bounds do not cross the
+plane, and where a bound crosses it at a U-edge.
+
+The overlap inside a corner of 12 to 28 degrees reaches up to r tan(14)
+along the curved sides, where the two sides' intersection lies off the
+plane by their bend over that depth (1664's prisms keep a mitre's sides
+straight there; a round's are the sides themselves). Each point of the
+cut, and each U-edge's break, is therefore moved from the plane to where
+the first side's line there (the U-edge's own side's) meets the other
+side, by Newton's method from the two cuts' points; where it does not
+converge (the sides meet nearly tangentially, near the bounds' crossings,
+where the two cuts nearly meet anyway) the point stays in the middle of
+the two cuts.
+
+BRepFill_Sweep's round (Filling) gives the second side's end its curve
+on the turn by the first side's end turned, the parameters mapped
+linearly. Within twice the sweep's tolerance (the two sides' ends are
+each approximated within it) the edge's tolerance now covers how far its
+curve lies from the turn's (it was the turn's 1e-7 mm); further off, the
+piece is not the turned end (8 mm off, a diameter, where the trim along
+the intersection kept the other half of a side's end) and no turn is
+made, so that the try fails instead of making a solid through itself. A
+row's turn reuses the turn's edge the previous row made at their common
+end with that row's angle, so that the two meet there (each row's angle
+is measured at its own farthest point and they differ slightly).
+Oriente, which orients a turn's edges by the bound of the turn's surface
+they lie at, took a degenerated edge at the turn's first end for one at
+its last where the surface is trimmed on a periodic profile (its bounds
+moved into the first period, 2 pi to 0, while the curves on it keep the
+profile's parameters) and reversed it, so the turn's wire did not close
+on its face: where an iso-line lies at neither bound, on a surface whose
+basis is periodic that way (a surface trimmed in a direction is not
+periodic that way itself), it is at the bound it is nearer to over the
+period.
+Where the turn
+of a point next to the axis between two vertices that lie apart (the
+trim along the intersection leaves the two sides' ends so) cannot be made
+an edge and its arc is no longer than the distance between them, it is a
+degenerated edge as for a point on the axis (BRepLib_MakeEdge's
+StdFail_NotDone stopped the sweep); and BuildFace's test of whether a
+turn is planar no longer asks edges that make no wire for their wire.
+
+With MITCAD_TRACE_PIPE_CORNERS set, BRepFill_Sweep::PerformCorner and
+the trim write what each corner does on the standard error: its angle and
+kind, whether the trim along the intersection was done, where the cut
+along the bisector plane was refused (the line of the file) or how far
+apart its two sides lay, how many pieces of the two sides' ends each row
+turns and whether each turn was built.
+
+MitCad's geometry.pipe_square_section checks an 8 mm pipe with rounded
+corners along the intersection curve of a sine wave drawn as ten lines
+on XZ and an arc on XY, and along two B-spline pieces meeting at 3
+degrees: rounded at every corner, square to the path within 0.01 degrees
+at 20 points, its volume within 0.1 % of the legs' less their overlaps
+plus the turns'.
+
+diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx
+--- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx
++++ b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx
+@@ -83,7 +83,10 @@
+ #include <NCollection_IndexedDataMap.hxx>
+ #include <GeomLib_CheckCurveOnSurface.hxx>
+ 
++#include <cmath>
+ #include <cstdio>
++#include <iostream>
++#include <OSD_Environment.hxx>
+ 
+ // #include <BRepFill_TrimCorner.hxx>
+ //  modified by NIZHNY-MKK  Wed Oct 22 12:25:45 2003
+@@ -92,6 +95,16 @@
+ // #include <GeomPlate_PointConstraint.hxx>
+ // OCC500(apo)
+ 
++//=======================================================================
++// function : TracePipeCorners
++// purpose  : Whether the corners say what they do on the standard error
++//            (MITCAD_TRACE_PIPE_CORNERS set, mitcad#1564).
++//=======================================================================
++static bool TracePipeCorners()
++{
++  return !OSD_Environment("MITCAD_TRACE_PIPE_CORNERS").Value().IsEmpty();
++}
++
+ //=================================================================================================
+ 
+ //=======================================================================
+@@ -575,15 +588,51 @@
+ 
+   isuiso = D.IsParallel(VRef, 0.1);
+ 
++  // (mitcad#1564) Whether the iso-line at theX lies at the first bound:
++  // there, or, where it lies at neither bound in the surface's parameters
++  // and the surface is periodic that way, at the bound it is nearer to over
++  // the period. (A turn's surface trimmed on a periodic profile has its
++  // bounds moved into the first period, while the curves on it keep the
++  // profile's parameters: a degenerated edge at the turn's first end was
++  // taken for one at its last and reversed, and its face's wire did not
++  // close.)
++  const auto aAtFirst =
++    [](const double theX, const double theFirst, const double theLast, const bool isPeriodic, const double thePeriod) {
++      if (std::abs(theX - theFirst) < Precision::Confusion())
++      {
++        return true;
++      }
++      if (std::abs(theX - theLast) < Precision::Confusion() || !isPeriodic || thePeriod <= 0.)
++      {
++        return false;
++      }
++      const auto aOff = [thePeriod](const double theD) {
++        return std::abs(theD - thePeriod * std::floor(theD / thePeriod + 0.5));
++      };
++      return aOff(theX - theFirst) < aOff(theX - theLast);
++    };
++
++  // (A surface trimmed in a direction is not periodic that way: its basis
++  // tells the period its bounds were moved by.)
++  occ::handle<Geom_Surface> aBasis = S;
++  {
++    const occ::handle<Geom_RectangularTrimmedSurface> aTrimmed =
++      occ::down_cast<Geom_RectangularTrimmedSurface>(S);
++    if (!aTrimmed.IsNull())
++    {
++      aBasis = aTrimmed->BasisSurface();
++    }
++  }
++
+   if (isuiso)
+   {
+-    isfirst    = (std::abs(P.X() - UFirst) < Precision::Confusion());
++    isfirst    = aAtFirst(P.X(), UFirst, ULast, aBasis->IsUPeriodic(), aBasis->IsUPeriodic() ? aBasis->UPeriod() : 0.);
+     isopposite = D.IsOpposite(VRef, 0.1);
+     E.Orientation(TopAbs_REVERSED);
+   }
+   else
+   {
+-    isfirst    = (std::abs(P.Y() - VFirst) < Precision::Confusion());
++    isfirst    = aAtFirst(P.Y(), VFirst, VLast, aBasis->IsVPeriodic(), aBasis->IsVPeriodic() ? aBasis->VPeriod() : 0.);
+     isopposite = D.IsOpposite(URef, 0.1);
+     E.Orientation(TopAbs_FORWARD);
+   }
+@@ -598,6 +647,29 @@
+   }
+ }
+ 
++//=======================================================================
++// function : TraceTurnEdge
++// purpose  : (mitcad#1564) A turn's edge on the standard error: its
++//            orientation and the ends of its curve on the turn's surface
++//            as it is run.
++//=======================================================================
++static void TraceTurnEdge(const char* theWhat, const TopoDS_Edge& theE, const occ::handle<Geom_Surface>& theS)
++{
++  const TopLoc_Location           aLoc;
++  double                          aF = 0., aL = 0.;
++  const occ::handle<Geom2d_Curve> aC = BRep_Tool::CurveOnSurface(theE, theS, aLoc, aF, aL);
++  std::cerr << "pipe corner: turn's " << theWhat << (BRep_Tool::Degenerated(theE) ? " (degenerated)" : "")
++            << (theE.Orientation() == TopAbs_REVERSED ? ", reversed" : ", forward");
++  if (!aC.IsNull())
++  {
++    const bool     isReversed = theE.Orientation() == TopAbs_REVERSED;
++    const gp_Pnt2d aA         = aC->Value(isReversed ? aL : aF);
++    const gp_Pnt2d aB         = aC->Value(isReversed ? aF : aL);
++    std::cerr << ", (" << aA.X() << ", " << aA.Y() << ") -> (" << aB.X() << ", " << aB.Y() << ")";
++  }
++  std::cerr << std::endl;
++}
++
+ // OCC500(apo)->
+ static void UpdateEdgeOnPlane(const TopoDS_Face& F, const TopoDS_Edge& E, const BRep_Builder& BB)
+ {
+@@ -685,8 +757,19 @@
+       TE3->Tolerance(Precision::Confusion());
+       TE4->Tolerance(Precision::Confusion());
+ 
+-      TopoDS_Wire theWire  = BRepLib_MakeWire(E1, E2, E3, E4);
+-      int         NbPoints = NumberOfPoles(theWire);
++      // (mitcad#1564) Edges that do not make a wire (a turn's degenerated
++      // edge between two vertices) are no plane.
++      BRepLib_MakeWire aMakeWire(E1, E2, E3, E4);
++      TopoDS_Wire            theWire;
++      if (aMakeWire.IsDone())
++      {
++        theWire = aMakeWire.Wire();
++      }
++      else if (TracePipeCorners())
++      {
++        std::cerr << "pipe corner: a turn's edges make no wire" << std::endl;
++      }
++      int NbPoints = theWire.IsNull() ? 101 : NumberOfPoles(theWire);
+       if (NbPoints <= 100) // limitation for CPU
+       {
+         BRepLib_FindSurface FS(theWire, -1, true);
+@@ -946,6 +1029,42 @@
+   BRepLib_MakeEdge MkE(C3d, VF, VL, f, l);
+   if (!MkE.IsDone())
+   { // Error of construction !!
++    // (mitcad#1564) The turn of a point next to the axis between two
++    // vertices that lie apart (the two sides' ends where the trim along
++    // their intersection leaves them): where no edge can be made along an
++    // arc no longer than the distance between them, the edge is
++    // degenerated, as for a point on the axis, its vertices covering each
++    // other and the arc.
++    const gp_Pnt aStart = C3d->Value(f);
++    double       aSpan  = 0.;
++    for (int i = 1; i <= 8; ++i)
++    {
++      aSpan = std::max(aSpan, aStart.Distance(C3d->Value(f + (l - f) * i / 8.)));
++    }
++    if (TracePipeCorners())
++    {
++      std::cerr << "pipe corner: a turn's edge not made: arc " << aSpan << " long, its vertices "
++                << P1.Distance(P2) << " apart, tolerance " << Tol
++                << (aSpan <= P1.Distance(P2) + Tol ? ", degenerated" : ", fails") << std::endl;
++    }
++    if (aSpan <= P1.Distance(P2) + Tol)
++    {
++      double   aTol = std::max(Tol, P1.Distance(P2) + aSpan);
++      gp_Pnt2d aP2d;
++      C2d->D0(f, aP2d);
++      aTol = std::max(aTol, P1.Distance(S->Value(aP2d.X(), aP2d.Y())));
++      C2d->D0(l, aP2d);
++      aTol = std::max(aTol, P2.Distance(S->Value(aP2d.X(), aP2d.Y())));
++      B.UpdateVertex(VF, aTol);
++      B.UpdateVertex(VL, aTol);
++      B.MakeEdge(E);
++      B.UpdateEdge(E, C2d, S, TopLoc_Location(), aTol);
++      B.Add(E, VF);
++      B.Add(E, VL);
++      B.Range(E, f, l);
++      B.Degenerated(E, true);
++      return E;
++    }
+   }
+ 
+   E = MkE.Edge();
+@@ -1086,6 +1205,20 @@
+     Angle = -Angle;
+     axe.Reverse();
+   }
++  // (mitcad#1564) A turn's edge the round of the previous row made (Aux1 or
++  // Aux2) is the turn of its point by that row's angle: this row turns by
++  // the same, so that the two meet at its end. (Each row's angle is
++  // measured at its own end's farthest point; the rows' differ by the
++  // approximation of the sides.)
++  if (WithE3 || WithE4)
++  {
++    const BRepAdaptor_Curve aShared(WithE3 ? E3 : E4);
++    const double            anAngleOld = aShared.LastParameter() - aShared.FirstParameter();
++    if (anAngleOld > 0. && std::abs(anAngleOld - Angle) <= 1.e-2 * std::max(Angle, anAngleOld))
++    {
++      Angle = anAngleOld;
++    }
++  }
+ 
+   occ::handle<Geom_SurfaceOfRevolution> Rev = new (Geom_SurfaceOfRevolution)(Prof1, axe);
+ 
+@@ -1289,8 +1422,48 @@
+   // Update des Edges
+   TopLoc_Location         Loc;
+   occ::handle<Geom_Curve> C3d;
++  // (mitcad#1564) The second side's end is the first's turned only within
++  // the approximation of the two sides (each within Tol of the sweep): its
++  // tolerance covers how far its curve lies from the turn's up to twice
++  // that. Further off, the turn is not the second side's end (a piece of
++  // the wrong part of it, or of another row): no turn is made.
++  double                        aOff = 0.;
++  double                        aF2 = 0., aL2 = 0.;
++  const occ::handle<Geom_Curve> aE2 = BRep_Tool::Curve(E2, aF2, aL2);
++  if (!aE2.IsNull())
++  {
++    for (int i = 0; i <= 32; ++i)
++    {
++      const double aT = aF2 + (aL2 - aF2) * i / 32.;
++      gp_Pnt2d     aUV;
++      C2->D0(aT, aUV);
++      aOff = std::max(aOff, aE2->Value(aT).Distance(Surf->Value(aUV.X(), aUV.Y())));
++    }
++    if (TracePipeCorners())
++    {
++      std::cerr << "pipe corner: the second side's end lies " << aOff << " off the turn (tolerance "
++                << BRep_Tool::Tolerance(E2) << ", " << 2. * Tol << " allowed)" << std::endl;
++    }
++    if (aOff > 2. * Tol)
++    {
++      return false;
++    }
++  }
+   B.UpdateEdge(E1, C1, Surf, Loc, /*Tol3d*/ Precision::Confusion());
+   B.UpdateEdge(E2, C2, Surf, Loc, /*Tol3d*/ Precision::Confusion());
++  if (aOff > BRep_Tool::Tolerance(E2))
++  {
++    B.UpdateEdge(E2, aOff);
++    TopoDS_Vertex aVF2, aVL2;
++    TopExp::Vertices(E2, aVF2, aVL2);
++    for (const TopoDS_Vertex& aV : {aVF2, aVL2})
++    {
++      if (!aV.IsNull() && BRep_Tool::Tolerance(aV) < aOff)
++      {
++        B.UpdateVertex(aV, aOff);
++      }
++    }
++  }
+ 
+   if (E3.IsSame(E4))
+   {
+@@ -1359,8 +1532,36 @@
+     }
+   }
+ 
++  // (mitcad#1564) Traced: the turn's surface's bounds, its edges as Oriente
++  // orients them, and as the wire of its face runs them.
++  if (TracePipeCorners())
++  {
++    double aU1 = 0., aU2 = 0., aV1b = 0., aV2b = 0.;
++    Surf->Bounds(aU1, aU2, aV1b, aV2b);
++    std::cerr << "pipe corner: turn's surface u " << aU1 << " to " << aU2 << ", v " << aV1b << " to " << aV2b
++              << std::endl;
++    const char*        aNames[] = {"first side's end", "first end's turn", "second side's end", "last end's turn"};
++    const TopoDS_Edge* aEdges[] = {&E1, &E3, &E2, &E4};
++    for (int i = 0; i < 4; ++i)
++    {
++      TopoDS_Edge anEdge = *aEdges[i];
++      Oriente(Surf, anEdge);
++      TraceTurnEdge(aNames[i], anEdge, Surf);
++    }
++  }
++
+   // Construct face
+   BuildFace(Surf, E1, E3, E2, E4, EEmap, false, false, Result);
++  if (TracePipeCorners())
++  {
++    for (TopExp_Explorer aW(Result, TopAbs_WIRE); aW.More(); aW.Next())
++    {
++      for (TopoDS_Iterator anIt(aW.Current()); anIt.More(); anIt.Next())
++      {
++        TraceTurnEdge("edge in its face's wire", TopoDS::Edge(anIt.Value()), Surf);
++      }
++    }
++  }
+ 
+   // Set the continuities.
+   B.Continuity(E1, TopoDS::Face(F1), Result, GeomAbs_G1);
+@@ -3746,6 +3947,14 @@
+   myLoc->Law(I2)->GetDomain(F, L);
+   myLoc->Law(I2)->GetCurve()->D1(F, P2, T2);
+   T2.Normalize();
++  if (TracePipeCorners())
++  {
++    std::cerr << "pipe corner " << Index << ": " << T1.Angle(T2) * 180. / M_PI << " degrees, "
++              << (Transition == BRepFill_Right   ? "mitred"
++                  : Transition == BRepFill_Round ? "rounded"
++                                                 : "other")
++              << std::endl;
++  }
+ 
+   if (T1.Angle(T2) < myAngMin)
+   {
+@@ -3887,6 +4096,10 @@
+   }
+   else if ((TheTransition == BRepFill_Right) || aTrim.HasSection())
+   {
++    if (TracePipeCorners())
++    {
++      std::cerr << "pipe corner " << Index << ": not trimmed, left open" << std::endl;
++    }
+ #ifdef OCCT_DEBUG
+     std::cout << "Fail of TrimCorner" << std::endl;
+ #endif
+@@ -3913,6 +4126,11 @@
+     {
+       KeepEdge(myFaces->Value(ii, I1), Bounds->Value(ii, 1), list1);
+       KeepEdge(myFaces->Value(ii, I2), Bounds->Value(ii, 2), list2);
++      if (TracePipeCorners())
++      {
++        std::cerr << "pipe corner " << Index << ": row " << ii << ", " << list1.Extent() << " and "
++                  << list2.Extent() << " piece(s) of the two sides' ends to turn" << std::endl;
++      }
+       if (list1.Extent() == list2.Extent())
+       {
+         NCollection_List<TopoDS_Shape>::Iterator It1(list1);
+@@ -3977,6 +4195,10 @@
+                       Bord1,
+                       Bord2,
+                       FF);
++          if (TracePipeCorners())
++          {
++            std::cerr << "pipe corner " << Index << ": turn " << (B ? "built" : "not built") << std::endl;
++          }
+ 
+           if (B)
+           {
+diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
+--- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
++++ b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
+@@ -60,6 +60,9 @@
+ #include <Bnd_Box.hxx>
+ #include <algorithm>
+ #include <vector>
++#include <utility>
++#include <iostream>
++#include <OSD_Environment.hxx>
+ #include <NCollection_Array2.hxx>
+ #include <BRepLib.hxx>
+ #include <BRepTools.hxx>
+@@ -281,11 +284,30 @@
+   }
+ }
+ 
++//=======================================================================
++// function : TracePipeCorners
++// purpose  : Whether the corners' trims say what they do on the standard
++//            error (MITCAD_TRACE_PIPE_CORNERS set, mitcad#1564).
++//=======================================================================
++static bool TracePipeCorners()
++{
++  return !OSD_Environment("MITCAD_TRACE_PIPE_CORNERS").Value().IsEmpty();
++}
++
+ //=================================================================================================
+ 
+ void BRepFill_TrimShellCorner::Perform()
+ {
+   PerformByIntersection();
++  if (TracePipeCorners())
++  {
++    std::cerr << "pipe corner: "
++              << (myTransition == BRepFill_Right   ? "mitred"
++                  : myTransition == BRepFill_Round ? "rounded"
++                                                   : "other")
++              << ", " << myFaces->ColLength() << " face(s) a side, trim along the intersection "
++              << (myDone ? "done" : "failed") << std::endl;
++  }
+   // Two sides of one section touch where their normals coincide (at the
+   // corner's sides), and along a small corner they meet at a shallow
+   // angle: there the intersection of approximated sides can come in
+@@ -299,6 +321,28 @@
+     {
+       myHistMap.Clear();
+     }
++    if (TracePipeCorners())
++    {
++      std::cerr << "pipe corner: mitre along the bisector plane " << (myDone ? "done" : "refused")
++                << std::endl;
++    }
++  }
++  // A rounded corner likewise (mitcad#1564): each side is cut where it
++  // reaches past the bisector plane, and keeps its bound where it does
++  // not, for the round to turn about the corner.
++  else if (!myDone && myTransition == BRepFill_Round)
++  {
++    myHistMap.Clear();
++    myDone = PerformRoundByBisectorPlane();
++    if (!myDone)
++    {
++      myHistMap.Clear();
++    }
++    if (TracePipeCorners())
++    {
++      std::cerr << "pipe corner: round's cut along the bisector plane " << (myDone ? "done" : "refused")
++                << std::endl;
++    }
+   }
+ }
+ 
+@@ -3643,3 +3687,1208 @@
+   }
+   return true;
+ }
++
++//=======================================================================
++// Rounded corners cut along the bisector plane (mitcad#1564)
++//=======================================================================
++
++namespace
++{
++
++// The parameter between theFrom and theTo (either way round) where
++// thePoint (a point along a curve) first crosses the plane going from
++// theFrom, and its point; false where it does not cross.
++template <class PointAt>
++bool FirstCrossing(const PointAt& thePoint,
++                   const double   theFrom,
++                   const double   theTo,
++                   const gp_Pln&  thePlane,
++                   double&        theParam,
++                   gp_Pnt&        theCrossing)
++{
++  const gp_XYZ aN    = thePlane.Axis().Direction().XYZ();
++  const gp_XYZ aO    = thePlane.Location().XYZ();
++  const auto   aSide = [&](const double theT) { return (thePoint(theT).XYZ() - aO).Dot(aN); };
++  const int    aNb   = 256;
++  double       aTa   = theFrom;
++  double       aFa   = aSide(aTa);
++  for (int i = 1; i <= aNb; ++i)
++  {
++    const double aTb = theFrom + (theTo - theFrom) * i / aNb;
++    const double aFb = aSide(aTb);
++    if ((aFa < 0.) != (aFb < 0.))
++    {
++      double a = aTa, b = aTb, aFA = aFa;
++      for (int k = 0; k < 200 && std::abs(b - a) > 1.e-15 * (1. + std::abs(b)); ++k)
++      {
++        const double m   = 0.5 * (a + b);
++        const double aFm = aSide(m);
++        if ((aFm < 0.) == (aFA < 0.))
++        {
++          a   = m;
++          aFA = aFm;
++        }
++        else
++        {
++          b = m;
++        }
++      }
++      theParam    = 0.5 * (a + b);
++      theCrossing = thePoint(theParam);
++      return true;
++    }
++    aTa = aTb;
++    aFa = aFb;
++  }
++  return false;
++}
++
++// One side of a rounded corner: its rows' faces, their bounds at the
++// corner and each bound's path parameter on its face. Sign makes the
++// distance from the plane positive past it, into the other side. A place
++// on the side is a row and a fraction of it from its U-edge to the next;
++// the cut is where the side crosses the plane, which it does where its
++// bound lies past the plane, sampled at kNb + 1 places of each row.
++struct RoundSide
++{
++  static const int                 kNb = 64;
++  gp_Pln                           Plane;
++  double                           Sign = 1.;
++  std::vector<SweptFace>           Faces;
++  std::vector<TopoDS_Edge>         Bounds;
++  std::vector<double>              TB;
++  std::vector<std::vector<char>>   Has;
++  std::vector<std::vector<double>> T;
++  std::vector<std::vector<gp_Pnt>> P;
++
++  int NbRows() const { return static_cast<int>(Faces.size()); }
++
++  const SweptFace& Face(const int theRow) const { return Faces[static_cast<size_t>(theRow)]; }
++
++  double Bound(const int theRow) const { return TB[static_cast<size_t>(theRow)]; }
++
++  // The path parameter of the face's other end.
++  double Far(const int theRow) const
++  {
++    const SweptFace& aF = Face(theRow);
++    return std::abs(Bound(theRow) - aF.T0) < std::abs(Bound(theRow) - aF.T1) ? aF.T1 : aF.T0;
++  }
++
++  double Distance(const gp_Pnt& thePoint) const
++  {
++    return Sign * (thePoint.XYZ() - Plane.Location().XYZ()).Dot(Plane.Axis().Direction().XYZ());
++  }
++
++  gp_Pnt BoundPoint(const int theRow, const double theFrac) const
++  {
++    const SweptFace& aF = Face(theRow);
++    return aF.Value(aF.Section(theFrac), Bound(theRow));
++  }
++
++  // How far the bound lies past the plane at the place.
++  double Past(const int theRow, const double theFrac) const { return Distance(BoundPoint(theRow, theFrac)); }
++
++  // The side lies before the plane at the middle of each face's other end.
++  bool Behind() const
++  {
++    for (int r = 0; r < NbRows(); ++r)
++    {
++      const SweptFace& aF = Face(r);
++      if (Distance(aF.Value(aF.Section(0.5), Far(r))) >= 0.)
++      {
++        return false;
++      }
++    }
++    return true;
++  }
++
++  // The cut at the place: the crossing nearest to the bound along the path.
++  bool Cut(const int theRow, const double theFrac, double& theT, gp_Pnt& theP) const
++  {
++    if (Past(theRow, theFrac) <= 0.)
++    {
++      return false;
++    }
++    const SweptFace& aF  = Face(theRow);
++    const double     aS  = aF.Section(theFrac);
++    const auto       aAt = [&aF, aS](const double theV) { return aF.Value(aS, theV); };
++    return FirstCrossing(aAt, Bound(theRow), Far(theRow), Plane, theT, theP);
++  }
++
++  void Sample()
++  {
++    const size_t aNbR = Faces.size();
++    Has.assign(aNbR, std::vector<char>(kNb + 1, 0));
++    T.assign(aNbR, std::vector<double>(kNb + 1, 0.));
++    P.assign(aNbR, std::vector<gp_Pnt>(kNb + 1));
++    for (size_t r = 0; r < aNbR; ++r)
++    {
++      for (int j = 0; j <= kNb; ++j)
++      {
++        const size_t i = static_cast<size_t>(j);
++        Has[r][i]      = static_cast<char>(Cut(static_cast<int>(r), double(j) / kNb, T[r][i], P[r][i]) ? 1 : 0);
++      }
++    }
++  }
++
++  // The places where the bound crosses the plane, in each row; false
++  // where one lies at a U-edge.
++  bool Roots(std::vector<std::pair<int, double>>& theRoots) const
++  {
++    for (int r = 0; r < NbRows(); ++r)
++    {
++      double aFa = 0.;
++      bool   bA  = Past(r, aFa) > 0.;
++      for (int j = 1; j <= kNb; ++j)
++      {
++        const double aFb = double(j) / kNb;
++        const bool   bB  = Past(r, aFb) > 0.;
++        if (bA != bB)
++        {
++          double a = aFa, b = aFb;
++          for (int k = 0; k < 100 && b - a > 1.e-15; ++k)
++          {
++            const double m = 0.5 * (a + b);
++            if ((Past(r, m) > 0.) == bA)
++            {
++              a = m;
++            }
++            else
++            {
++              b = m;
++            }
++          }
++          const double aRoot = 0.5 * (a + b);
++          if (aRoot < 1.e-6 || aRoot > 1. - 1.e-6)
++          {
++            return false;
++          }
++          theRoots.emplace_back(r, aRoot);
++        }
++        aFa = aFb;
++        bA  = bB;
++      }
++    }
++    return true;
++  }
++
++  // The bound's parameter at the place: at a row's end that end of the
++  // bound, elsewhere where its curve on the face reaches the place's
++  // section parameter.
++  bool BoundParam(const int theRow, const double theFrac, double& theU) const
++  {
++    const SweptFace&                aF = Face(theRow);
++    double                          f = 0., l = 0.;
++    const occ::handle<Geom2d_Curve> aC =
++      BRep_Tool::CurveOnSurface(Bounds[static_cast<size_t>(theRow)], aF.Face, f, l);
++    if (aC.IsNull())
++    {
++      return false;
++    }
++    const double aS   = aF.Section(theFrac);
++    const auto   aSOf = [&aC, &aF](const double theV) {
++      const gp_Pnt2d aP = aC->Value(theV);
++      return aF.SectionInU ? aP.X() : aP.Y();
++    };
++    const double aHf = aSOf(f) - aS;
++    const double aHl = aSOf(l) - aS;
++    if (theFrac <= 0. || theFrac >= 1. || (aHf < 0.) == (aHl < 0.))
++    {
++      theU = std::abs(aHf) <= std::abs(aHl) ? f : l;
++      return true;
++    }
++    double a = f, b = l;
++    for (int k = 0; k < 200 && std::abs(b - a) > 1.e-15 * (1. + std::abs(b)); ++k)
++    {
++      const double m = 0.5 * (a + b);
++      if ((aSOf(m) - aS < 0.) == (aHf < 0.))
++      {
++        a = m;
++      }
++      else
++      {
++        b = m;
++      }
++    }
++    theU = 0.5 * (a + b);
++    return true;
++  }
++
++  // The place on the cut nearest to thePoint, in theRow (any row when
++  // negative): the nearest sample, then a golden-section search about it.
++  bool Nearest(const gp_Pnt& thePoint,
++               const int     theRow,
++               int&          theFound,
++               double&       theFrac,
++               double&       theT,
++               gp_Pnt&       theP) const
++  {
++    double aBest = RealLast();
++    int    aJ    = 0;
++    theFound     = -1;
++    for (size_t r = 0; r < Faces.size(); ++r)
++    {
++      if (theRow >= 0 && static_cast<int>(r) != theRow)
++      {
++        continue;
++      }
++      for (int j = 0; j <= kNb; ++j)
++      {
++        const size_t i = static_cast<size_t>(j);
++        if (!Has[r][i])
++        {
++          continue;
++        }
++        const double d = P[r][i].Distance(thePoint);
++        if (d < aBest)
++        {
++          aBest    = d;
++          theFound = static_cast<int>(r);
++          aJ       = j;
++        }
++      }
++    }
++    if (theFound < 0)
++    {
++      return false;
++    }
++    double       a     = std::max(0., double(aJ - 1) / kNb);
++    double       b     = std::min(1., double(aJ + 1) / kNb);
++    const double ratio = 0.5 * (std::sqrt(5.) - 1.);
++    const int    aRow  = theFound;
++    const auto   aDist = [this, aRow, &thePoint](const double theF) {
++      double t = 0.;
++      gp_Pnt p;
++      return Cut(aRow, theF, t, p) ? p.Distance(thePoint) : RealLast();
++    };
++    for (int k = 0; k < 100 && b - a > 1.e-13; ++k)
++    {
++      const double c = b - ratio * (b - a);
++      const double d = a + ratio * (b - a);
++      if (aDist(c) < aDist(d))
++      {
++        b = d;
++      }
++      else
++      {
++        a = c;
++      }
++    }
++    for (const double aF : {0.5 * (a + b), a, b, double(aJ) / kNb})
++    {
++      if (Cut(aRow, aF, theT, theP))
++      {
++        theFrac = aF;
++        return true;
++      }
++    }
++    return false;
++  }
++};
++
++// A place on the loop round the section where an edge of the round's cut
++// ends: where the bounds cross the plane (Root), or where a U-edge of
++// either side (or of both) crosses it. Each side's row, fraction, path
++// parameter and point there; the first side's row and fraction are the
++// break's place along the loop.
++struct RoundBreak
++{
++  int           Row[2]    = {0, 0};
++  double        Frac[2]   = {0., 0.};
++  double        T[2]      = {0., 0.};
++  gp_Pnt        P[2];
++  int           UEdge[2]  = {-1, -1};
++  double        UParam[2] = {0., 0.};
++  bool          Root      = false;
++  TopoDS_Vertex Vertex;
++
++  double Lambda() const { return Row[0] + Frac[0]; }
++};
++
++// A place given by a row and a fraction, the fraction below 1.
++void NormalizePlace(const int theNbRows, int& theRow, double& theFrac)
++{
++  if (theFrac >= 1.)
++  {
++    theRow  = (theRow + 1) % theNbRows;
++    theFrac = 0.;
++  }
++}
++
++// The point of a swept face and its derivatives along the section and the
++// path.
++void SweptD1(const SweptFace& theF,
++             const double     theS,
++             const double     theT,
++             gp_Pnt&          theP,
++             gp_Vec&          theDS,
++             gp_Vec&          theDT)
++{
++  if (theF.SectionInU)
++  {
++    theF.Surface->D1(theS, theT, theP, theDS, theDT);
++  }
++  else
++  {
++    theF.Surface->D1(theT, theS, theP, theDT, theDS);
++  }
++}
++
++// Whether theV lies in [theA, theB] (either way round) within a slack.
++bool Within(const double theV, const double theA, const double theB)
++{
++  const double aSlack = 1.e-9 * (1. + std::abs(theB - theA));
++  return theV >= std::min(theA, theB) - aSlack && theV <= std::max(theA, theB) + aSlack;
++}
++
++// Where the line of theA at the section parameter theS (along the path)
++// meets theB's surface: Newton's method from theTA on theA and from
++// (theSB, theTB) on theB. False where it leaves either face's ranges,
++// where the two meet nearly tangentially, and where it does not converge.
++bool Meet(const SweptFace& theA,
++          const double     theS,
++          double&          theTA,
++          const SweptFace& theB,
++          double&          theSB,
++          double&          theTB,
++          gp_Pnt&          theP)
++{
++  double tA = theTA, sB = theSB, tB = theTB;
++  gp_Pnt aPA, aPB;
++  gp_Vec aDAs, aDAt, aDBs, aDBt;
++  for (int k = 0; k < 50; ++k)
++  {
++    SweptD1(theA, theS, tA, aPA, aDAs, aDAt);
++    SweptD1(theB, sB, tB, aPB, aDBs, aDBt);
++    // A(tA + x1) = B(sB + x2, tB + x3), to first order.
++    const gp_Vec aR(aPA, aPB);
++    if (aR.SquareMagnitude() <= 1.e-30)
++    {
++      break;
++    }
++    const gp_Vec aC1    = aDAt;
++    const gp_Vec aC2    = aDBs.Reversed();
++    const gp_Vec aC3    = aDBt.Reversed();
++    const double aDet   = aC1.Dot(aC2.Crossed(aC3));
++    const double aScale = aC1.Magnitude() * aC2.Magnitude() * aC3.Magnitude();
++    if (aScale <= 0. || std::abs(aDet) <= 1.e-6 * aScale)
++    {
++      return false;
++    }
++    const double x1 = aR.Dot(aC2.Crossed(aC3)) / aDet;
++    const double x2 = aC1.Dot(aR.Crossed(aC3)) / aDet;
++    const double x3 = aC1.Dot(aC2.Crossed(aR)) / aDet;
++    tA += x1;
++    sB += x2;
++    tB += x3;
++    if (!Within(tA, theA.T0, theA.T1) || !Within(sB, theB.S0, theB.S1) || !Within(tB, theB.T0, theB.T1))
++    {
++      return false;
++    }
++    if (std::abs(x1) <= 1.e-15 * (1. + std::abs(tA)) && std::abs(x2) <= 1.e-15 * (1. + std::abs(sB))
++        && std::abs(x3) <= 1.e-15 * (1. + std::abs(tB)))
++    {
++      break;
++    }
++  }
++  aPA = theA.Value(theS, tA);
++  aPB = theB.Value(sB, tB);
++  if (aPA.Distance(aPB) > 1.e-2 * Precision::Confusion())
++  {
++    return false;
++  }
++  theTA = tA;
++  theSB = sB;
++  theTB = tB;
++  theP  = gp_Pnt(0.5 * (aPA.XYZ() + aPB.XYZ()));
++  return true;
++}
++
++// The fraction of the face's row at its section parameter, within [0, 1].
++double FracOf(const SweptFace& theF, const double theS)
++{
++  return std::min(1., std::max(0., (theS - theF.From) / (theF.To - theF.From)));
++}
++
++// The parameter of the curve nearest to thePoint within a 256th of its
++// range of theT.
++double ParamNear(const BRepAdaptor_Curve& theC, const double theT, const gp_Pnt& thePoint)
++{
++  const double aF     = theC.FirstParameter();
++  const double aL     = theC.LastParameter();
++  const double aDelta = (aL - aF) / 256.;
++  double       a      = std::max(aF, theT - aDelta);
++  double       b      = std::min(aL, theT + aDelta);
++  const double ratio  = 0.5 * (std::sqrt(5.) - 1.);
++  for (int k = 0; k < 200 && b - a > 1.e-15 * (1. + std::abs(b)); ++k)
++  {
++    const double c = b - ratio * (b - a);
++    const double d = a + ratio * (b - a);
++    if (theC.Value(c).Distance(thePoint) < theC.Value(d).Distance(thePoint))
++    {
++      b = d;
++    }
++    else
++    {
++      a = c;
++    }
++  }
++  return 0.5 * (a + b);
++}
++
++} // namespace
++
++//=======================================================================
++// function : PerformRoundByBisectorPlane
++// purpose  : A rounded corner turns each side's bound about the corner
++//            where it does not reach the bisector plane; where it reaches
++//            past the plane the two sides overlap and are trimmed against
++//            each other. Their intersection there lies in the bisector
++//            plane where the pieces are straight near the corner (the
++//            sides are mirror images in it) and within the bend over the
++//            overlap's depth of it elsewhere. Each side is cut where it
++//            crosses the plane, the two cuts are joined along edges in
++//            their middle, and each bound is kept where it does not reach
++//            the plane. The bounds cross the plane on the axis the round
++//            turns about, into one vertex of both. Refused where the two
++//            cuts lie further apart than 5e-4 of the section's extent, for
++//            a section that is not closed, and where the bounds do not
++//            cross the plane.
++//=======================================================================
++bool BRepFill_TrimShellCorner::PerformRoundByBisectorPlane()
++{
++  // Where it is refused, by the line of this file (traced).
++  const auto aRefuse = [](const int theLine) {
++    if (TracePipeCorners())
++    {
++      std::cerr << "pipe corner: round's cut refused at BRepFill_TrimShellCorner.cxx:" << theLine << std::endl;
++    }
++    return false;
++  };
++  if (myFaces.IsNull() || myUEdges.IsNull() || myBounds.IsNull() || myVEdges.IsNull()
++      || myFaces->RowLength() != 2 || myUEdges->RowLength() != 2 || myBounds->RowLength() != 2
++      || myUEdges->ColLength() != myFaces->ColLength() + 1
++      || myBounds->ColLength() != myFaces->ColLength())
++  {
++    return aRefuse(__LINE__);
++  }
++  const gp_Pln aPlane(myAxeOfBisPlane.Location(), myAxeOfBisPlane.Direction());
++  const int    aRow0    = myFaces->LowerRow();
++  const int    aURow0   = myUEdges->LowerRow();
++  const int    aBRow0   = myBounds->LowerRow();
++  const int    aNbRows  = myFaces->ColLength();
++  const int    aCol[2]  = {myFaces->LowerCol(), myFaces->UpperCol()};
++  const int    aUCol[2] = {myUEdges->LowerCol(), myUEdges->UpperCol()};
++  const int    aBCol[2] = {myBounds->LowerCol(), myBounds->UpperCol()};
++  BRep_Builder aBB;
++  for (int c = 0; c < 2; ++c)
++  {
++    for (int k = 0; k <= aNbRows; ++k)
++    {
++      const TopoDS_Shape& aS = myUEdges->Value(aURow0 + k, aUCol[c]);
++      if (aS.IsNull() || aS.ShapeType() != TopAbs_EDGE)
++      {
++        return aRefuse(__LINE__);
++      }
++    }
++    if (!myUEdges->Value(aURow0, aUCol[c]).IsSame(myUEdges->Value(aURow0 + aNbRows, aUCol[c])))
++    {
++      return aRefuse(__LINE__);
++    }
++  }
++  const auto aUEdge = [&](const int theRow, const int theSide) {
++    return TopoDS::Edge(myUEdges->Value(aURow0 + (theRow % aNbRows), aUCol[theSide]));
++  };
++
++  // Each side: the first runs into the corner along the plane's normal,
++  // the second out of it.
++  RoundSide aSide[2];
++  for (int c = 0; c < 2; ++c)
++  {
++    RoundSide& aS = aSide[c];
++    aS.Plane      = aPlane;
++    aS.Sign       = c == 0 ? 1. : -1.;
++    for (int r = 0; r < aNbRows; ++r)
++    {
++      const TopoDS_Shape& aFace  = myFaces->Value(aRow0 + r, aCol[c]);
++      const TopoDS_Shape& aBound = myBounds->Value(aBRow0 + r, aBCol[c]);
++      SweptFace           aF;
++      if (aFace.IsNull() || aFace.ShapeType() != TopAbs_FACE || aBound.IsNull()
++          || aBound.ShapeType() != TopAbs_EDGE
++          || !aF.Init(TopoDS::Face(aFace), aUEdge(r, c), aUEdge(r + 1, c)))
++      {
++        return aRefuse(__LINE__);
++      }
++      double                          f = 0., l = 0.;
++      const occ::handle<Geom2d_Curve> aC = BRep_Tool::CurveOnSurface(TopoDS::Edge(aBound), aF.Face, f, l);
++      if (aC.IsNull())
++      {
++        return aRefuse(__LINE__);
++      }
++      const gp_Pnt2d aM = aC->Value(0.5 * (f + l));
++      aS.Faces.push_back(aF);
++      aS.Bounds.push_back(TopoDS::Edge(aBound));
++      aS.TB.push_back(aF.SectionInU ? aM.Y() : aM.X());
++    }
++    if (!aS.Behind())
++    {
++      return aRefuse(__LINE__);
++    }
++    aS.Sample();
++  }
++  Bnd_Box aBox;
++  for (int r = 0; r < aNbRows; ++r)
++  {
++    for (int j = 0; j <= RoundSide::kNb; ++j)
++    {
++      aBox.Add(aSide[0].BoundPoint(r, double(j) / RoundSide::kNb));
++    }
++  }
++  if (aBox.IsVoid())
++  {
++    return aRefuse(__LINE__);
++  }
++  const double aMaxGapAllowed = 5.e-4 * std::sqrt(aBox.SquareExtent());
++  double       aMaxGap        = 0.;
++
++  // Where the bounds cross the plane, as many times on both sides.
++  std::vector<std::pair<int, double>> aRoots[2];
++  for (int c = 0; c < 2; ++c)
++  {
++    if (!aSide[c].Roots(aRoots[c]))
++    {
++      return aRefuse(__LINE__);
++    }
++  }
++  if (aRoots[0].empty() || aRoots[0].size() != aRoots[1].size() || aRoots[0].size() % 2 != 0)
++  {
++    return aRefuse(__LINE__);
++  }
++  // Which U-edges reach past the plane.
++  std::vector<char> aInner[2];
++  for (int c = 0; c < 2; ++c)
++  {
++    for (int k = 0; k < aNbRows; ++k)
++    {
++      const bool bAfter  = aSide[c].Past(k, 0.) > 0.;
++      const bool bBefore = aSide[c].Past((k + aNbRows - 1) % aNbRows, 1.) > 0.;
++      if (bAfter != bBefore)
++      {
++        return aRefuse(__LINE__);
++      }
++      aInner[c].push_back(static_cast<char>(bAfter ? 1 : 0));
++    }
++  }
++
++  // The breaks where the bounds cross the plane: each of the first side's
++  // with the second side's nearest.
++  std::vector<RoundBreak> aBreaks;
++  std::vector<char>       aUsed(aRoots[1].size(), 0);
++  for (const std::pair<int, double>& aR : aRoots[0])
++  {
++    RoundBreak aB;
++    aB.Root      = true;
++    aB.Row[0]    = aR.first;
++    aB.Frac[0]   = aR.second;
++    aB.T[0]      = aSide[0].Bound(aR.first);
++    aB.P[0]      = aSide[0].BoundPoint(aR.first, aR.second);
++    size_t aBest = aRoots[1].size();
++    double aD    = RealLast();
++    for (size_t i = 0; i < aRoots[1].size(); ++i)
++    {
++      const double d = aSide[1].BoundPoint(aRoots[1][i].first, aRoots[1][i].second).Distance(aB.P[0]);
++      if (!aUsed[i] && d < aD)
++      {
++        aD    = d;
++        aBest = i;
++      }
++    }
++    if (aBest == aRoots[1].size() || aD > aMaxGapAllowed)
++    {
++      return aRefuse(__LINE__);
++    }
++    aUsed[aBest] = 1;
++    aB.Row[1]    = aRoots[1][aBest].first;
++    aB.Frac[1]   = aRoots[1][aBest].second;
++    aB.T[1]      = aSide[1].Bound(aB.Row[1]);
++    aB.P[1]      = aSide[1].BoundPoint(aB.Row[1], aB.Frac[1]);
++    aBreaks.push_back(aB);
++  }
++
++  // Where the U-edges that reach past the plane cross it, from their ends
++  // at the corner (the first side's U-edges end there, the second's start
++  // there).
++  std::vector<gp_Pnt> aUP[2];
++  std::vector<double> aUT[2];
++  for (int c = 0; c < 2; ++c)
++  {
++    aUP[c].assign(static_cast<size_t>(aNbRows), gp_Pnt());
++    aUT[c].assign(static_cast<size_t>(aNbRows), 0.);
++    for (int k = 0; k < aNbRows; ++k)
++    {
++      if (!aInner[c][static_cast<size_t>(k)])
++      {
++        continue;
++      }
++      const BRepAdaptor_Curve aC(aUEdge(k, c));
++      const auto              aAt     = [&aC](const double theT) { return aC.Value(theT); };
++      const double            aEnd    = c == 0 ? aC.LastParameter() : aC.FirstParameter();
++      const double            aOther  = c == 0 ? aC.FirstParameter() : aC.LastParameter();
++      const gp_Pnt            aCorner = aSide[c].BoundPoint(k, 0.);
++      if (aC.Value(aEnd).Distance(aCorner) > aC.Value(aOther).Distance(aCorner)
++          || !FirstCrossing(aAt,
++                            aEnd,
++                            aOther,
++                            aPlane,
++                            aUT[c][static_cast<size_t>(k)],
++                            aUP[c][static_cast<size_t>(k)]))
++      {
++        return aRefuse(__LINE__);
++      }
++    }
++  }
++  const size_t aNbRootBreaks = aBreaks.size();
++  for (int k = 0; k < aNbRows; ++k)
++  {
++    if (!aInner[0][static_cast<size_t>(k)])
++    {
++      continue;
++    }
++    RoundBreak aB;
++    aB.Row[0]    = k;
++    aB.Frac[0]   = 0.;
++    aB.UEdge[0]  = k;
++    aB.UParam[0] = aUT[0][static_cast<size_t>(k)];
++    aB.P[0]      = aUP[0][static_cast<size_t>(k)];
++    gp_Pnt aP;
++    if (!aSide[0].Cut(k, 0., aB.T[0], aP))
++    {
++      return aRefuse(__LINE__);
++    }
++    aBreaks.push_back(aB);
++  }
++  for (int k = 0; k < aNbRows; ++k)
++  {
++    if (!aInner[1][static_cast<size_t>(k)])
++    {
++      continue;
++    }
++    const gp_Pnt& aQ = aUP[1][static_cast<size_t>(k)];
++    double        aT = 0.;
++    gp_Pnt        aP;
++    if (!aSide[1].Cut(k, 0., aT, aP))
++    {
++      return aRefuse(__LINE__);
++    }
++    size_t aMet = aBreaks.size();
++    for (size_t i = aNbRootBreaks; i < aBreaks.size(); ++i)
++    {
++      const RoundBreak& aB = aBreaks[i];
++      if (aB.UEdge[0] >= 0 && aB.UEdge[1] < 0 && aB.P[0].Distance(aQ) <= aMaxGapAllowed)
++      {
++        aMet = i;
++        break;
++      }
++    }
++    if (aMet == aBreaks.size())
++    {
++      RoundBreak aB;
++      int        aRow = -1;
++      if (!aSide[0].Nearest(aQ, -1, aRow, aB.Frac[0], aB.T[0], aB.P[0]))
++      {
++        return aRefuse(__LINE__);
++      }
++      aB.Row[0] = aRow;
++      NormalizePlace(aNbRows, aB.Row[0], aB.Frac[0]);
++      aBreaks.push_back(aB);
++    }
++    RoundBreak& aB = aBreaks[aMet];
++    aB.Row[1]      = k;
++    aB.Frac[1]     = 0.;
++    aB.T[1]        = aT;
++    aB.P[1]        = aQ;
++    aB.UEdge[1]    = k;
++    aB.UParam[1]   = aUT[1][static_cast<size_t>(k)];
++  }
++  // The first side's U-edges that meet none of the second's: there on its
++  // cut.
++  for (RoundBreak& aB : aBreaks)
++  {
++    if (aB.Root || aB.UEdge[1] >= 0)
++    {
++      continue;
++    }
++    int aRow = -1;
++    if (!aSide[1].Nearest(aB.P[0], -1, aRow, aB.Frac[1], aB.T[1], aB.P[1]))
++    {
++      return aRefuse(__LINE__);
++    }
++    aB.Row[1] = aRow;
++    NormalizePlace(aNbRows, aB.Row[1], aB.Frac[1]);
++  }
++  // The U-edges' breaks moved from the plane to where each U-edge meets
++  // the other side: the two sides' intersection, which lies off the plane
++  // by the bend of the pieces over the overlap's depth. (Where that is not
++  // found, the break stays on the plane.)
++  for (RoundBreak& aB : aBreaks)
++  {
++    for (int c = 0; c < 2; ++c)
++    {
++      if (aB.UEdge[c] < 0)
++      {
++        continue;
++      }
++      const int        o   = 1 - c;
++      const SweptFace& aF  = aSide[c].Face(aB.Row[c]);
++      const SweptFace& aFo = aSide[o].Face(aB.Row[o]);
++      double           aT  = aB.T[c];
++      double           aSo = aFo.Section(aB.Frac[o]);
++      double           aTo = aB.T[o];
++      gp_Pnt           aP;
++      if (!Meet(aF, aF.Section(aB.Frac[c]), aT, aFo, aSo, aTo, aP)
++          || aP.Distance(aB.P[c]) > 10. * aB.P[c].Distance(aB.P[o]) + 10. * Precision::Confusion())
++      {
++        continue;
++      }
++      aB.T[c]      = aT;
++      aB.P[c]      = aP;
++      aB.UParam[c] = ParamNear(BRepAdaptor_Curve(aUEdge(aB.UEdge[c], c)), aB.UParam[c], aP);
++      if (aB.UEdge[o] < 0)
++      {
++        aB.Frac[o] = FracOf(aFo, aSo);
++        aB.T[o]    = aTo;
++        aB.P[o]    = aP;
++        NormalizePlace(aNbRows, aB.Row[o], aB.Frac[o]);
++      }
++    }
++  }
++  std::sort(aBreaks.begin(), aBreaks.end(), [](const RoundBreak& a, const RoundBreak& b) {
++    return a.Lambda() < b.Lambda();
++  });
++  const int aNbBreaks = static_cast<int>(aBreaks.size());
++  for (int b = 0; b < aNbBreaks; ++b)
++  {
++    const double aL0 = aBreaks[static_cast<size_t>(b)].Lambda();
++    double       aL1 = aBreaks[static_cast<size_t>((b + 1) % aNbBreaks)].Lambda();
++    if (aL1 <= aL0)
++    {
++      aL1 += aNbRows;
++    }
++    if (aL1 - aL0 < 1.e-9)
++    {
++      return aRefuse(__LINE__);
++    }
++  }
++
++  // Their vertices: in the middle of the two sides' points.
++  for (RoundBreak& aB : aBreaks)
++  {
++    const double aGap = aB.P[0].Distance(aB.P[1]);
++    aMaxGap           = std::max(aMaxGap, aGap);
++    aBB.MakeVertex(aB.Vertex,
++                   gp_Pnt(0.5 * (aB.P[0].XYZ() + aB.P[1].XYZ())),
++                   0.5 * aGap + Precision::Confusion());
++  }
++
++  // The edges between consecutive breaks where the bounds reach past the
++  // plane, each within one face of either side: through the middles of
++  // the two cuts.
++  struct RoundEdge
++  {
++    TopoDS_Edge Edge;
++    int         Row[2]     = {0, 0};
++    double      Frac[2][2] = {{0., 0.}, {0., 0.}}; // each side's fraction at its ends
++  };
++  std::vector<RoundEdge> aEdges;
++  const int              aNbS = 32;
++  for (int b = 0; b < aNbBreaks; ++b)
++  {
++    const RoundBreak& aB0 = aBreaks[static_cast<size_t>(b)];
++    const RoundBreak& aB1 = aBreaks[static_cast<size_t>((b + 1) % aNbBreaks)];
++    const double      aL0 = aB0.Lambda();
++    double            aL1 = aB1.Lambda();
++    if (aL1 <= aL0)
++    {
++      aL1 += aNbRows;
++    }
++    double aMid = 0.5 * (aL0 + aL1);
++    if (aMid >= aNbRows)
++    {
++      aMid -= aNbRows;
++    }
++    const int aMidRow = std::min(aNbRows - 1, static_cast<int>(std::floor(aMid)));
++    if (aSide[0].Past(aMidRow, aMid - aMidRow) <= 0.)
++    {
++      // The bounds turn about the corner here.
++      if (!aB0.Root || !aB1.Root)
++      {
++        return aRefuse(__LINE__);
++      }
++      continue;
++    }
++    RoundEdge aRE;
++    aRE.Row[0]       = aB0.Row[0];
++    const double aF0 = aB0.Frac[0];
++    if (aF0 + (aL1 - aL0) > 1. + 1.e-9)
++    {
++      return aRefuse(__LINE__);
++    }
++    const double aF1 = std::min(1., aF0 + (aL1 - aL0));
++    // The second side's face: the one nearest to the middle.
++    {
++      double aT = 0., aFrac = 0.;
++      gp_Pnt aP, aQ;
++      int    aRow = -1;
++      if (!aSide[0].Cut(aRE.Row[0], 0.5 * (aF0 + aF1), aT, aP) || !aSide[1].Nearest(aP, -1, aRow, aFrac, aT, aQ))
++      {
++        return aRefuse(__LINE__);
++      }
++      aRE.Row[1] = aRow;
++    }
++    occ::handle<NCollection_HArray1<gp_Pnt>>   aPoints = new NCollection_HArray1<gp_Pnt>(1, aNbS + 1);
++    occ::handle<NCollection_HArray1<double>>   aParams = new NCollection_HArray1<double>(1, aNbS + 1);
++    occ::handle<NCollection_HArray1<gp_Pnt2d>> aUV[2]  = {new NCollection_HArray1<gp_Pnt2d>(1, aNbS + 1),
++                                                          new NCollection_HArray1<gp_Pnt2d>(1, aNbS + 1)};
++    std::vector<double>                        aFrac[2], aT[2];
++    for (int j = 0; j <= aNbS; ++j)
++    {
++      double aFr[2] = {aF0 + (aF1 - aF0) * j / aNbS, 0.};
++      double aTj[2] = {0., 0.};
++      gp_Pnt aP[2];
++      if (j == 0 || j == aNbS)
++      {
++        const RoundBreak& aB = j == 0 ? aB0 : aB1;
++        aTj[0]               = aB.T[0];
++        aTj[1]               = aB.T[1];
++        aP[0]                = aB.P[0];
++        aP[1]                = aB.P[1];
++        if (aB.Row[1] == aRE.Row[1])
++        {
++          aFr[1] = aB.Frac[1];
++        }
++        else if (aB.Row[1] == (aRE.Row[1] + 1) % aNbRows && aB.Frac[1] == 0.)
++        {
++          aFr[1] = 1.;
++        }
++        else
++        {
++          return aRefuse(__LINE__);
++        }
++      }
++      else
++      {
++        int aRow = -1;
++        if (!aSide[0].Cut(aRE.Row[0], aFr[0], aTj[0], aP[0])
++            || !aSide[1].Nearest(aP[0], aRE.Row[1], aRow, aFr[1], aTj[1], aP[1]))
++        {
++          return aRefuse(__LINE__);
++        }
++        // From the plane to the two sides' intersection, along the first
++        // side's line there.
++        const SweptFace& aFace0 = aSide[0].Face(aRE.Row[0]);
++        const SweptFace& aFace1 = aSide[1].Face(aRE.Row[1]);
++        double           aT0   = aTj[0];
++        double           aS1   = aFace1.Section(aFr[1]);
++        double           aT1   = aTj[1];
++        const gp_Pnt     aMid0 = gp_Pnt(0.5 * (aP[0].XYZ() + aP[1].XYZ()));
++        gp_Pnt           aQ;
++        if (Meet(aFace0, aFace0.Section(aFr[0]), aT0, aFace1, aS1, aT1, aQ)
++            && aQ.Distance(aMid0) <= 10. * aP[0].Distance(aP[1]) + 10. * Precision::Confusion())
++        {
++          aTj[0] = aT0;
++          aTj[1] = aT1;
++          aFr[1] = FracOf(aFace1, aS1);
++          aP[0]  = aQ;
++          aP[1]  = aQ;
++        }
++      }
++      aMaxGap = std::max(aMaxGap, aP[0].Distance(aP[1]));
++      for (int c = 0; c < 2; ++c)
++      {
++        aFrac[c].push_back(aFr[c]);
++        aT[c].push_back(aTj[c]);
++      }
++      gp_Pnt aM(0.5 * (aP[0].XYZ() + aP[1].XYZ()));
++      if (j == 0)
++      {
++        aM = BRep_Tool::Pnt(aB0.Vertex);
++      }
++      else if (j == aNbS)
++      {
++        aM = BRep_Tool::Pnt(aB1.Vertex);
++      }
++      aPoints->SetValue(j + 1, aM);
++      aParams->SetValue(j + 1, double(j) / aNbS);
++    }
++    // An end on the seam of a closed section's face is at the side of the
++    // seam the edge comes from.
++    std::vector<double>& aF2 = aFrac[1];
++    for (const size_t i : {size_t(0), size_t(aNbS)})
++    {
++      const size_t aNext = i == 0 ? 1 : i - 1;
++      if ((aF2[i] == 0. || aF2[i] == 1.) && std::abs(aF2[i] - aF2[aNext]) > 0.5)
++      {
++        aF2[i] = 1. - aF2[i];
++      }
++    }
++    for (int c = 0; c < 2; ++c)
++    {
++      const SweptFace& aF = aSide[c].Face(aRE.Row[c]);
++      for (int j = 0; j <= aNbS; ++j)
++      {
++        const size_t i = static_cast<size_t>(j);
++        aUV[c]->SetValue(j + 1, aF.UV(aF.Section(aFrac[c][i]), aT[c][i]));
++      }
++      aRE.Frac[c][0] = aFrac[c].front();
++      aRE.Frac[c][1] = aFrac[c].back();
++    }
++    GeomAPI_Interpolate aI3d(aPoints, aParams, false, Precision::Confusion());
++    aI3d.Perform();
++    if (!aI3d.IsDone())
++    {
++      return aRefuse(__LINE__);
++    }
++    TopoDS_Edge aE;
++    aBB.MakeEdge(aE, occ::handle<Geom_Curve>(aI3d.Curve()), Precision::Confusion());
++    for (int c = 0; c < 2; ++c)
++    {
++      Geom2dAPI_Interpolate aI2d(aUV[c], aParams, false, Precision::PConfusion());
++      aI2d.Perform();
++      if (!aI2d.IsDone())
++      {
++        return aRefuse(__LINE__);
++      }
++      aBB.UpdateEdge(aE,
++                     occ::handle<Geom2d_Curve>(aI2d.Curve()),
++                     aSide[c].Face(aRE.Row[c]).Face,
++                     Precision::Confusion());
++    }
++    aBB.Range(aE, 0., 1.);
++    aBB.Add(aE, aB0.Vertex.Oriented(TopAbs_FORWARD));
++    aBB.Add(aE, aB1.Vertex.Oriented(TopAbs_REVERSED));
++    aBB.SameParameter(aE, false);
++    BRepLib::SameParameter(aE, Precision::Confusion(), true);
++    const double aTolE = BRep_Tool::Tolerance(aE);
++    for (const TopoDS_Vertex& aV : {aB0.Vertex, aB1.Vertex})
++    {
++      if (BRep_Tool::Tolerance(aV) < aTolE)
++      {
++        aBB.UpdateVertex(aV, aTolE);
++      }
++    }
++    aRE.Edge = aE;
++    aEdges.push_back(aRE);
++  }
++
++  // No cut, or the two cuts apart by more than allowed: the edges would
++  // not join them.
++  if (TracePipeCorners())
++  {
++    std::cerr << "pipe corner: round's cut: " << aRoots[0].size() << " crossing(s) of the bounds, "
++              << aNbBreaks << " break(s), " << aEdges.size() << " edge(s), the two sides " << aMaxGap
++              << " apart at most (" << aMaxGapAllowed << " allowed)" << std::endl;
++  }
++  if (aEdges.empty() || aMaxGap > aMaxGapAllowed)
++  {
++    return aRefuse(__LINE__);
++  }
++
++  // The U-edges up to the break (the first side) and from it (the second),
++  // as SplitUEdges makes them.
++  NCollection_Array2<TopoDS_Shape> aNewU(0, aNbRows - 1, 0, 1);
++  for (const RoundBreak& aB : aBreaks)
++  {
++    for (int c = 0; c < 2; ++c)
++    {
++      if (aB.UEdge[c] < 0)
++      {
++        continue;
++      }
++      const TopoDS_Edge& aE = aUEdge(aB.UEdge[c], c);
++      TopoDS_Vertex      aV1, aV2;
++      TopExp::Vertices(aE, aV1, aV2);
++      double f = 0., l = 0.;
++      BRep_Tool::Range(aE, f, l);
++      TopoDS_Edge aNew = TopoDS::Edge(aE.EmptyCopied());
++      aNew.Orientation(TopAbs_FORWARD);
++      if (c == 0)
++      {
++        aBB.Add(aNew, aV1.Oriented(TopAbs_FORWARD));
++        aBB.Add(aNew, aB.Vertex.Oriented(TopAbs_REVERSED));
++        aBB.Range(aNew, f, aB.UParam[0]);
++      }
++      else
++      {
++        aBB.Add(aNew, aB.Vertex.Oriented(TopAbs_FORWARD));
++        aBB.Add(aNew, aV2.Oriented(TopAbs_REVERSED));
++        aBB.Range(aNew, aB.UParam[1], l);
++      }
++      // The break's vertex covers the U-edge's end there.
++      const double d = BRepAdaptor_Curve(aE).Value(aB.UParam[c]).Distance(BRep_Tool::Pnt(aB.Vertex));
++      if (d > BRep_Tool::Tolerance(aB.Vertex))
++      {
++        aBB.UpdateVertex(aB.Vertex, d);
++      }
++      aNewU(aB.UEdge[c], c) = aNew;
++    }
++  }
++
++  // Each face whose bound reaches the plane: its bound replaced by the
++  // wire of the bound's pieces before the plane and the edges of the cut,
++  // running the way the bound runs, and its U-edges by the new ones. The
++  // round turns the pieces, which keep the bound's curve.
++  for (int c = 0; c < 2; ++c)
++  {
++    for (int r = 0; r < aNbRows; ++r)
++    {
++      std::vector<std::pair<double, TopoDS_Shape>> aOwn;
++      for (const RoundEdge& aRE : aEdges)
++      {
++        if (aRE.Row[c] != r)
++        {
++          continue;
++        }
++        double aU0 = 0., aU1 = 0.;
++        if (!aSide[c].BoundParam(r, aRE.Frac[c][0], aU0) || !aSide[c].BoundParam(r, aRE.Frac[c][1], aU1))
++        {
++          return aRefuse(__LINE__);
++        }
++        aOwn.emplace_back(std::min(aU0, aU1), aRE.Edge.Oriented(aU0 <= aU1 ? TopAbs_FORWARD : TopAbs_REVERSED));
++      }
++      // The places along the row where the bound crosses the plane.
++      std::vector<std::pair<double, int>> aAlong;
++      for (int i = 0; i < aNbBreaks; ++i)
++      {
++        const RoundBreak& aB = aBreaks[static_cast<size_t>(i)];
++        if (aB.Root && aB.Row[c] == r)
++        {
++          aAlong.emplace_back(aB.Frac[c], i);
++        }
++      }
++      if (aOwn.empty() && aAlong.empty() && aNewU(r, c).IsNull() && aNewU((r + 1) % aNbRows, c).IsNull())
++      {
++        continue;
++      }
++      aAlong.emplace_back(0., -1);
++      aAlong.emplace_back(1., -1);
++      std::sort(aAlong.begin(), aAlong.end());
++      const TopoDS_Edge&      aBound = aSide[c].Bounds[static_cast<size_t>(r)];
++      const BRepAdaptor_Curve aBoundCurve(aBound);
++      TopoDS_Vertex           aBV1, aBV2;
++      TopExp::Vertices(aBound, aBV1, aBV2);
++      double aBf = 0., aBl = 0.;
++      BRep_Tool::Range(aBound, aBf, aBl);
++      for (size_t i = 0; i + 1 < aAlong.size(); ++i)
++      {
++        const double aFa = aAlong[i].first, aFb = aAlong[i + 1].first;
++        if (aFb - aFa <= 0. || aSide[c].Past(r, 0.5 * (aFa + aFb)) > 0.)
++        {
++          continue;
++        }
++        double        aU[2] = {0., 0.};
++        TopoDS_Vertex aV[2];
++        for (int e = 0; e < 2; ++e)
++        {
++          const std::pair<double, int>& aEnd = aAlong[i + static_cast<size_t>(e)];
++          if (!aSide[c].BoundParam(r, aEnd.first, aU[e]))
++          {
++            return aRefuse(__LINE__);
++          }
++          if (aEnd.second >= 0)
++          {
++            aV[e] = aBreaks[static_cast<size_t>(aEnd.second)].Vertex;
++            // The vertex covers the bound's end there.
++            const double d = aBoundCurve.Value(aU[e]).Distance(BRep_Tool::Pnt(aV[e]));
++            if (d > BRep_Tool::Tolerance(aV[e]))
++            {
++              aBB.UpdateVertex(aV[e], d);
++            }
++          }
++          else
++          {
++            aV[e] = std::abs(aU[e] - aBf) <= std::abs(aU[e] - aBl) ? aBV1 : aBV2;
++          }
++        }
++        if (aU[0] > aU[1])
++        {
++          std::swap(aU[0], aU[1]);
++          std::swap(aV[0], aV[1]);
++        }
++        TopoDS_Edge aPiece = TopoDS::Edge(aBound.Oriented(TopAbs_FORWARD).EmptyCopied());
++        aPiece.Orientation(TopAbs_FORWARD);
++        aBB.Add(aPiece, aV[0].Oriented(TopAbs_FORWARD));
++        aBB.Add(aPiece, aV[1].Oriented(TopAbs_REVERSED));
++        aBB.Range(aPiece, aU[0], aU[1]);
++        aOwn.emplace_back(aU[0], aPiece);
++      }
++      if (aOwn.empty())
++      {
++        return aRefuse(__LINE__);
++      }
++      std::sort(aOwn.begin(),
++                aOwn.end(),
++                [](const std::pair<double, TopoDS_Shape>& a, const std::pair<double, TopoDS_Shape>& b) {
++                  return a.first < b.first;
++                });
++      TopoDS_Wire aW;
++      aBB.MakeWire(aW);
++      for (const std::pair<double, TopoDS_Shape>& aE : aOwn)
++      {
++        aBB.Add(aW, aE.second);
++      }
++
++      occ::handle<BRepTools_ReShape> aSubstitutor = new BRepTools_ReShape();
++      aSubstitutor->Replace(aBound.Oriented(TopAbs_FORWARD), aW);
++      for (const int k : {r, (r + 1) % aNbRows})
++      {
++        if (!aNewU(k, c).IsNull())
++        {
++          aSubstitutor->Replace(aUEdge(k, c).Oriented(TopAbs_FORWARD), aNewU(k, c).Oriented(TopAbs_FORWARD));
++        }
++      }
++      const TopoDS_Shape& aFace    = myFaces->Value(aRow0 + r, aCol[c]);
++      TopoDS_Shape        aNewFace = aSubstitutor->Apply(aFace);
++      aNewFace.Orientation(aFace.Orientation());
++      NCollection_List<TopoDS_Shape> aL;
++      aL.Append(aNewFace);
++      myHistMap.Bind(aFace, aL);
++      for (TopExp_Explorer anExpE(aFace, TopAbs_EDGE); anExpE.More(); anExpE.Next())
++      {
++        const TopoDS_Shape aNewValue = aSubstitutor->Value(anExpE.Current());
++        if (aNewValue.IsNull() || aNewValue.IsSame(anExpE.Current()) || myHistMap.IsBound(anExpE.Current()))
++        {
++          continue;
++        }
++        NCollection_List<TopoDS_Shape> aLE;
++        for (TopExp_Explorer anExpE2(aNewValue, TopAbs_EDGE); anExpE2.More(); anExpE2.Next())
++        {
++          aLE.Append(anExpE2.Current());
++        }
++        myHistMap.Bind(anExpE.Current(), aLE);
++      }
++    }
++  }
++
++  // The corner's V-edges: the edges of the second side's cut.
++  for (int r = 0; r < aNbRows; ++r)
++  {
++    const TopoDS_Shape& aV = myVEdges->Value(aRow0 + r);
++    if (aV.IsNull() || myHistMap.IsBound(aV))
++    {
++      continue;
++    }
++    NCollection_List<TopoDS_Shape> aL;
++    for (const RoundEdge& aRE : aEdges)
++    {
++      if (aRE.Row[1] == r)
++      {
++        aL.Append(aRE.Edge);
++      }
++    }
++    if (!aL.IsEmpty())
++    {
++      myHistMap.Bind(aV, aL);
++    }
++  }
++  return true;
++}
+diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.hxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.hxx
+--- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.hxx
++++ b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.hxx
+@@ -76,6 +76,15 @@
+   //! section's extent.
+   bool PerformByBisectorPlane();
+ 
++  //! Trims the faces of a rounded corner where they reach past the
++  //! bisector plane, each along its own crossing, joins them along edges
++  //! in the middle of the two, and keeps each bound where it does not
++  //! reach the plane, for the round to turn about the corner; false for a
++  //! section that is not closed or whose bounds do not cross the plane,
++  //! and where the two crossings lie further apart than 5e-4 of the
++  //! section's extent.
++  bool PerformRoundByBisectorPlane();
++
+   bool MakeFacesSec(const int        theIndex,
+                     const BOPDS_PDS& theDS,
+                     const int        theFaceIndex1,

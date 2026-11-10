@@ -735,10 +735,26 @@ if(BUILD_TESTING)
   set_tests_properties(geometry.chamfer_end_against_chamfer PROPERTIES TIMEOUT 60)
   # Lofts from a polygon to a circle shelled with both ends open and offset
   # closed, with the port's patches 1130 and 1190 (mitcad#1184, mitcad#1193).
+  # One ctest per loft: in one ctest the cases took 158 s of 300 and timed
+  # out under a release's load (mitcad#1565).
   add_executable(test_shell_loft_to_circle tests/test_shell_loft_to_circle.cpp)
   target_link_libraries(test_shell_loft_to_circle PRIVATE mitcad_geometry mitcad_warnings)
-  add_test(NAME geometry.shell_loft_to_circle COMMAND test_shell_loft_to_circle)
-  set_tests_properties(geometry.shell_loft_to_circle PROPERTIES TIMEOUT 300)
+  set(shell_loft_to_circle_parts
+    octagon_24_5_seam_0
+    octagon_24_5_seam_22_5
+    octagon_21_7_seam_0
+    octagon_21_7_seam_22_5
+    square_20
+    lean_in_8
+    lean_in_10
+    lean_in_14_1
+    facade)
+  foreach(part IN LISTS shell_loft_to_circle_parts)
+    add_test(NAME geometry.shell_loft_to_circle.${part} COMMAND test_shell_loft_to_circle ${part})
+    set_tests_properties(geometry.shell_loft_to_circle.${part} PROPERTIES TIMEOUT 300)
+  endforeach()
+  add_test(NAME geometry.shell_loft_to_circle_parts
+    COMMAND test_shell_loft_to_circle --check-parts ${shell_loft_to_circle_parts})
   # Reported volumes and areas against exact values and OCCT's adaptive
   # Gauss-Kronrod integration, lofts and their shells included (mitcad#1200).
   add_executable(test_accurate_volumes tests/test_accurate_volumes.cpp)
@@ -1136,6 +1152,14 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING)
+  # Joins of B-spline-faced bodies repeated with the booleans' parallel mode
+  # and the solid classifier's pool on (the port's patch 1282), and
+  # classifiers of a joined solid loaded on several threads at once: the
+  # crash reproduction's loops of mitcad#1553, shortened.
+  add_executable(test_classifier_pool_joins tests/test_classifier_pool_joins.cpp)
+  target_link_libraries(test_classifier_pool_joins PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.classifier_pool_joins COMMAND test_classifier_pool_joins)
+  set_tests_properties(geometry.classifier_pool_joins PROPERTIES TIMEOUT 600)
   # A pipe's section stays square to its path (mitcad#1555): an 8 mm circle
   # along the intersection curves of a sine wave with a plainly bent arc and
   # with one bending a fraction of a millimetre: cuts across the side square

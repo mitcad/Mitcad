@@ -309,6 +309,134 @@ fn a_dataset_material_is_chosen_and_saved_as_the_users_own() {
     assert!(error.contains("not both"), "{error}");
 }
 
+/// mitcad#1552: the dataset's woods and panels, read through the
+/// `material_dataset` query: 17 of the class Wood, each with its density
+/// and, for the solid woods, its Young's modulus (none for the panels);
+/// `create_material` from `wood/oak` makes a Wood material with its look
+/// and its source; a new Wood material starts with the class's look.
+#[test]
+fn the_woods_and_panels_of_the_dataset_are_wood_materials() {
+    let mut doc = block();
+    let all = query(&doc, json!({"query": "material_dataset"}));
+    assert_eq!(
+        all["sources"],
+        json!([
+            {"name": "material-properties dataset", "license": "Apache-2.0"},
+            {"name": "MitCad wood and panel materials", "license": "MIT"}
+        ])
+    );
+    // (id, kg/m³, GPa)
+    let expected: [(&str, f64, Option<f64>); 17] = [
+        ("panel/chipboard", 611.0, None),
+        ("panel/mdf_raw", 736.0, None),
+        ("panel/osb3", 610.0, None),
+        ("panel/plywood_birch", 680.0, None),
+        ("panel/plywood_eucalyptus", 600.0, None),
+        ("panel/plywood_pine", 500.0, None),
+        ("panel/plywood_spruce", 460.0, None),
+        ("wood/birch", 690.0, Some(13.86)),
+        ("wood/cedar", 370.0, Some(7.66)),
+        ("wood/cherry", 560.0, Some(10.3)),
+        ("wood/douglas_fir", 510.0, Some(12.17)),
+        ("wood/eucalyptus", 820.0, Some(18.76)),
+        ("wood/maple", 705.0, Some(12.62)),
+        ("wood/oak", 755.0, Some(12.15)),
+        ("wood/pine", 550.0, Some(10.08)),
+        ("wood/teak", 655.0, Some(12.28)),
+        ("wood/walnut", 610.0, Some(11.59)),
+    ];
+    let materials = all["materials"].as_array().unwrap();
+    let woods: Vec<&Value> = materials.iter().filter(|m| m["class"] == "wood").collect();
+    assert_eq!(woods.len(), expected.len());
+    for (id, density, modulus) in expected {
+        let entry = materials
+            .iter()
+            .find(|m| m["id"] == id)
+            .unwrap_or_else(|| panic!("{id} is missing"));
+        assert_eq!(entry["class"], "wood", "{id}");
+        // g/cm³ and MPa, the model's units.
+        assert!(close(&entry["density"], density / 1000.0), "{id}: {entry}");
+        match modulus {
+            Some(gpa) => assert!(
+                close(&entry["properties"]["youngs_modulus"], gpa * 1000.0),
+                "{id}: {entry}"
+            ),
+            None => assert!(
+                entry["properties"].get("youngs_modulus").is_none(),
+                "{id}: {entry}"
+            ),
+        }
+        assert!(entry["reference"]["source"].is_string(), "{id}");
+    }
+    // A search finds the oak alone.
+    let found = query(&doc, json!({"query": "material_dataset", "search": "oak"}));
+    let found = found["materials"].as_array().unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0]["name"], "Wood - Oak");
+
+    let id = command(
+        &mut doc,
+        json!({"cmd": "create_material", "dataset": "wood/oak"}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let oak = material(&doc, &id);
+    assert_eq!(oak["name"], "Wood - Oak");
+    assert_eq!(oak["class"], "wood");
+    assert_eq!(oak["appearance"], "wood_oak");
+    assert!(close(&oak["density"], 0.755));
+    assert!(close(&oak["properties"]["youngs_modulus"], 12_150.0));
+    assert_eq!(
+        oak["reference"],
+        json!({"source": "The Wood Database", "material": "American white oak (Quercus alba)"})
+    );
+    assert_eq!(undo_label(&doc), "Create Material Wood - Oak");
+    // A panel: its own look, no modulus.
+    let osb = command(
+        &mut doc,
+        json!({"cmd": "create_material", "dataset": "panel/osb3"}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let osb = material(&doc, &osb);
+    assert_eq!(osb["class"], "wood");
+    assert_eq!(osb["appearance"], "panel_osb");
+    assert_eq!(osb["reference"]["grade"], "15 mm");
+    // A new Wood material starts with the class's look; one that names
+    // its appearance keeps it.
+    let plain = command(
+        &mut doc,
+        json!({"cmd": "create_material", "class": "wood", "density": 0.5}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(material(&doc, &plain)["appearance"], "wood_oak");
+    let painted = command(
+        &mut doc,
+        json!({"cmd": "create_material", "class": "wood", "density": 0.5,
+               "appearance": "paint_white"}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(material(&doc, &painted)["appearance"], "paint_white");
+    let metal = command(
+        &mut doc,
+        json!({"cmd": "create_material", "class": "metal", "density": 7.85}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        material(&doc, &metal)
+            .get("appearance")
+            .is_none_or(Value::is_null)
+    );
+}
+
 #[test]
 fn materials_round_trip_through_json_and_csv() {
     let mut doc = block();

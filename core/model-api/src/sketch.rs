@@ -390,6 +390,12 @@ named_enum! {
             entities: Vec<Ref>,
             #[serde(default)]
             by: Option<[f64; 2]>,
+            /// Point to Point (mitcad#1563): the move by `to` − `from`,
+            /// each an existing point or a position, read before the move.
+            #[serde(default)]
+            from: Option<Value>,
+            #[serde(default)]
+            to: Option<Value>,
             #[serde(default)]
             rotate: Option<Rotation>,
             #[serde(default)]
@@ -870,7 +876,9 @@ impl<'de> Deserialize<'de> for ProjectSource {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Rotation {
-    center: Value,
+    /// The pivot; left out, the middle of the entities (mitcad#1563).
+    #[serde(default)]
+    center: Option<Value>,
     angle: f64,
 }
 
@@ -945,6 +953,14 @@ fn point(value: &Value) -> Result<PointInput, String> {
     point_input(value)
 }
 
+/// Where a point input is: its position, or where the existing point is.
+fn place_of(edit: &SketchEdit<'_>, value: &Value) -> Result<[f64; 2], String> {
+    match point(value)? {
+        PointInput::At(at) => Ok(at),
+        PointInput::Existing(p) => edit.at(p),
+    }
+}
+
 /// Mirror's line (mitcad#876): a line `c4`, or the sketch's own axis
 /// `"x"` or `"y"`, made (with the origin point) in the edit when the
 /// sketch has none, as `sketch.axis` makes it.
@@ -974,6 +990,34 @@ fn pattern_made(def: &SketchDef, id: ConstraintUid) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The change a sketch edit makes, as its refusal for conflicting
+/// constraints names it ("the Equal between two lines can't hold with the
+/// fillet", mitcad#1566).
+fn refused_change(command: &SketchCommand) -> &'static str {
+    use SketchCommand as C;
+    match command {
+        C::Fillet { .. } => "the fillet",
+        C::Chamfer { .. } => "the chamfer",
+        C::Trim { .. } => "the trim",
+        C::Extend { .. } => "the extension",
+        C::Offset { .. } | C::EditOffset { .. } => "the offset",
+        C::Mirror { .. } => "the mirror",
+        C::CircularPattern { .. } | C::RectangularPattern { .. } | C::EditPattern { .. } => {
+            "the pattern"
+        }
+        C::AddConstraint { .. } => "the new constraint",
+        C::AddDimension { .. } => "the new dimension",
+        C::SetDimension { .. } => "the new value",
+        C::SetDriven { .. } => "the driving dimension",
+        C::AddEqualSpacing { .. } | C::EditEqualSpacing { .. } => "the equal spacing",
+        C::SetFixed { .. } => "the fix",
+        C::SetActive { .. } => "the activated constraints",
+        C::Move { .. } => "the move",
+        C::Scale { .. } => "the scale",
+        _ => "the change",
+    }
 }
 
 fn need<T>(value: Option<T>, field: &str, mode: &str) -> Result<T, String> {
@@ -2090,7 +2134,10 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
         let curve_list = |ids: Vec<EntityUid>| -> Vec<String> {
             ids.into_iter().map(|c| Ref::Curve(c).to_string()).collect()
         };
+        // What a refusal for conflicting constraints names (mitcad#1566).
+        let change = refused_change(&command);
         let ((), report) = self.edit_sketch(sketch, label, |edit| {
+            edit.change = change.to_owned();
             match command {
                 C::AddPoint { at, fixed, .. } => {
                     let p = edit.point(PointInput::At(at))?;
@@ -2597,7 +2644,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                             joined_ref.get_or_insert_with(|| json!({}))["implied_removed"] =
                                 json!(list);
                         }
-                        edit.require_needed(before.redundant.len(), &id.to_string())?;
+                        edit.require_needed(before.redundant.len())?;
                     }
                 }
                 C::AddDimension {
@@ -2619,7 +2666,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     };
                     let id = edit.add_dimension(dimension, value.as_ref(), driven, None)?;
                     if let (Some(before), false) = (before, driven) {
-                        edit.require_needed(before, &id.to_string())?;
+                        edit.require_needed(before)?;
                     }
                     let scaled = match first {
                         Some(measured) => edit.scale_to_dimension(id, measured)?,
@@ -2636,14 +2683,19 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                 }
                 C::SetDimension {
                     dimension, value, ..
-                } => edit.set_dimension(dimension, &value)?,
+                } => {
+                    // Not what blocks its own new value (mitcad#1566).
+                    edit.changing.push(dimension);
+                    edit.set_dimension(dimension, &value)?
+                }
                 C::SetDriven {
                     dimension, driven, ..
                 } => {
+                    edit.changing.push(dimension);
                     let before = edit.redundancy().ok();
                     edit.set_driven(dimension, driven)?;
                     if let (Some(before), false) = (before, driven) {
-                        edit.require_needed(before, &dimension.to_string())?;
+                        edit.require_needed(before)?;
                     }
                 }
                 C::SetSigned {
@@ -2720,20 +2772,34 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                 C::Move {
                     entities,
                     by,
+                    from,
+                    to,
                     rotate,
                     copy,
                     ..
                 } => {
-                    let map = match (by, rotate) {
-                        (Some(by), None) => Map2::translation(by),
-                        (None, Some(r)) => {
-                            let center = match point(&r.center)? {
-                                PointInput::At(at) => at,
-                                PointInput::Existing(p) => edit.at(p)?,
+                    let map = match (by, from, to, rotate) {
+                        (Some(by), None, None, None) => Map2::translation(by),
+                        // Point to Point (mitcad#1563): both read where
+                        // they are before the move.
+                        (None, Some(from), Some(to), None) => {
+                            let (a, b) = (place_of(edit, &from)?, place_of(edit, &to)?);
+                            Map2::translation([b[0] - a[0], b[1] - a[1]])
+                        }
+                        (None, None, None, Some(r)) => {
+                            // About the entities' middle when no pivot is
+                            // given (mitcad#1563).
+                            let center = match &r.center {
+                                Some(center) => place_of(edit, center)?,
+                                None => edit.middle_of(&entities)?,
                             };
                             Map2::rotation(center, r.angle)
                         }
-                        _ => return Err("give \"by\" or \"rotate\"".to_owned()),
+                        _ => {
+                            return Err(
+                                "give \"by\", \"from\" and \"to\", or \"rotate\"".to_owned()
+                            );
+                        }
                     };
                     if copy {
                         let copies =
@@ -2987,13 +3053,14 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     let before = edit.redundancy().ok();
                     let changed = edit.set_active(&items, active, reason.as_deref())?;
                     if active && !changed.is_empty() {
-                        let names: Vec<String> = changed.iter().map(ToString::to_string).collect();
-                        let what = names.join(", ");
-                        edit.solved()
-                            .map_err(|e| format!("{what} cannot be activated: {e}"))?;
+                        // In words, without the ids (mitcad#1566): a
+                        // conflict names what blocks the activation; the
+                        // ids are the command's `items`.
+                        edit.changing.extend(changed.iter().copied());
+                        let refused = |e: String| format!("cannot be activated: {e}");
+                        edit.check_solves().map_err(refused)?;
                         if let Some(before) = before {
-                            edit.require_needed(before, &what)
-                                .map_err(|e| format!("{what} cannot be activated: {e}"))?;
+                            edit.require_needed(before).map_err(refused)?;
                         }
                     }
                     made_ref.extend(changed.iter().map(ToString::to_string));

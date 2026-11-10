@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: MIT
+# The view never meshes the model's shapes itself (mitcad#1553) on
+# view-mesh-writes.json: Body1 (F6.b0) of lofts, Loft3 after the marker
+# evaluated in the background at each idle point (made 6 s longer by
+# MITCAD_TEST_RECOMPUTE_DELAY_MS, so that the picks come while it runs).
+# An edge picked and highlighted was meshed by itself on the UI thread at
+# the view's deviation, which added a 3D polygon to the body's own edge
+# while the background evaluation's join copied that edge: the heap was
+# damaged and a later join crashed. The body's edges must keep only the
+# polygons the job's display meshing gave them.
+#   1. At the idle point after set_parameter, while the background
+#      evaluation runs: two edges and a face picked (the pick places are
+#      logged by a command's input: Fillet opened and closed first).
+#   2. In Fillet's input: an edge picked, its highlight drawn.
+#   3. A construction plane, a sketch's profile and curves drawn anew,
+#      hovered and picked while the background evaluation runs: the view
+#      meshes them, so they must be shapes of its own (mitcad#1586).
+# Run by tools/ui-view-mesh-writes-test.sh and, in the Windows build VM,
+# tools/ui-windows-view-mesh-writes-test.ps1.
+wait-idle
+expect-body-edges-unmeshed F6.b0
+command solid.fillet
+wait-log '^Pick places:' 30
+key Escape
+wait-idle
+
+# 1. Picks while the background evaluation reads the body.
+mark
+model-command '{"cmd":"set_parameter","name":"h","value":29}'
+wait-log '^Background evaluation started: 1 features after the marker$' 30
+click-pick 'edge F6[.]b0/E[{]F10:start[(]r[{]c1[}][)][|]F6:side'
+wait-log '^Selected: 1 edge' 30
+click-pick 'edge F6[.]b0/E[{]F10:side[(]c1[)][|]F10:side' ctrl
+wait-log '^Selected: 2 edges' 30
+click-pick 'face F6[.]b0/F6:side[(]c1[)]' ctrl
+wait-log '^Selected: .*face F6:side[(]c1[)] of F6[.]b0' 30
+expect-body-edges-unmeshed F6.b0
+wait-log '^Background evaluation: 1 features in [0-9]+ ms, adopted 1$' 120
+expect-body-edges-unmeshed F6.b0
+key Escape
+wait-idle
+
+# 2. An edge in a command's input.
+mark
+command solid.fillet
+wait-log '^Pick places:' 30
+click-pick 'edge F6[.]b0/E[{]F10:end[(]r[{]c1[}][)][|]F6:side'
+wait-log '^Computing preview done' 60
+wait-idle
+expect-body-edges-unmeshed F6.b0
+key Escape
+wait-idle
+
+# 3. Sketch profiles, sketch curves and a construction plane while the
+#    background evaluation runs (mitcad#1586): Plane1 (F2) and the sketch
+#    on it beside the body (F12) shown, its profile's pick place logged by
+#    Extrude's input (opened and closed); then h set again, which draws
+#    Plane1, the profile and the sketch's curves anew as the evaluation
+#    starts, and the profile hovered, Plane1 hovered and picked meanwhile.
+#    Their presentations mesh their shapes on the UI thread: shapes of the
+#    view's own, none of the body's, whose edges stay unmeshed.
+mark
+model-command '{"cmd":"set_feature_visible","uid":"F2","visible":true}'
+model-command '{"cmd":"set_feature_visible","uid":"F12","visible":true}'
+wait-idle
+expect-view-own-shapes
+command solid.extrude
+wait-log '^Pick profile F12/' 30
+key Escape
+wait-idle
+
+mark
+model-command '{"cmd":"set_parameter","name":"h","value":31}'
+wait-log '^Background evaluation started: 1 features after the marker$' 30
+wait-log '^Datum F2 at ' 30
+hover-logged '^Pick profile F12/'
+hover-logged '^Datum F2 at '
+click-logged '^Datum F2 at '
+wait-log '^Selected: .*[[]plane F2[]]' 30
+expect-view-own-shapes
+expect-body-edges-unmeshed F6.b0
+wait-log '^Background evaluation: 1 features in [0-9]+ ms, adopted 1$' 120
+expect-view-own-shapes
+expect-body-edges-unmeshed F6.b0
+key Escape
+wait-idle
+expect-never 'TestDriver: FAIL'

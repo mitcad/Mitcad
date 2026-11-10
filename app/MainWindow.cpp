@@ -291,9 +291,11 @@ bool hasMeshFaces(const TopoDS_Shape& shape) {
 // Meshes the clipped bodies as the view would (mitcad#438): together, on
 // all cores, before they are shown, so that the view keeps these
 // triangulations instead of meshing body after body as it draws them. The
-// faces a clip left as they were keep the meshes they have; mesh bodies
-// (and their caps) are left to the view, as before.
-void meshForView(const std::vector<TopoDS_Shape>& shapes) {
+// shapes are clips of the bodies' detached copies (clipBodies), the
+// caller's alone: the faces a clip left as they were take the meshes of the
+// bodies they were copied from (`donors`, only read), the others are meshed;
+// mesh bodies (and their caps) are left to the view, as before.
+void meshForView(const std::vector<TopoDS_Shape>& shapes, const std::vector<TopoDS_Shape>& donors) {
   // Each body by itself, as the view draws it: its deviation is its own
   // size's (io::shape_deviation, mitcad#1275), not the whole compound's.
   std::vector<TopoDS_Shape> pending;
@@ -306,6 +308,9 @@ void meshForView(const std::vector<TopoDS_Shape>& shapes) {
     return;
   }
   try {
+    for (const TopoDS_Shape& shape : pending) {
+      io::reuse_triangulations(shape, donors);
+    }
     io::mesh_all_in_place(pending, viewMeshOptions());
   } catch (const Standard_Failure&) {
     // The view meshes them when it draws them, as before.
@@ -320,7 +325,11 @@ void meshForView(const std::vector<TopoDS_Shape>& shapes) {
 // `which`, what is left of it: its own shape when the plane leaves it whole
 // (the view keeps it drawn as it is), null when its clip failed and it is
 // shown whole (logged, its error in `errors`; a crash inside OCCT is its
-// error, mitcad#392). The new shapes are meshed for the view.
+// error, mitcad#392). The new shapes are meshed for the view. The bodies
+// are clipped as detached copies (`prepare_clips`, as a section round's):
+// a clip keeps the faces it leaves as they were, and meshing it here would
+// write the new faces' polygons into the bodies' own edges, which the
+// background evaluation may be reading meanwhile (mitcad#1553).
 std::vector<std::shared_ptr<geometry::Shape>> clipBodies(const Document& document, const QJsonValue& plane,
                                                          const QJsonArray& targets,
                                                          const std::vector<std::size_t>& which,
@@ -338,9 +347,13 @@ std::vector<std::shared_ptr<geometry::Shape>> clipBodies(const Document& documen
   };
   std::vector<std::shared_ptr<geometry::Shape>> left(which.size());
   std::vector<TopoDS_Shape> clipped;
+  std::vector<TopoDS_Shape> donors; // the bodies clipped, as the view shows them
   try {
-    const rust::Box<ClippedBodies> results = document.analysis_clips(
-        rustStr(compactJson({{QStringLiteral("plane"), plane}, {QStringLiteral("bodies"), targets}})));
+    const rust::Box<ClippedBodies> results =
+        document
+            .prepare_clips(
+                rustStr(compactJson({{QStringLiteral("plane"), plane}, {QStringLiteral("bodies"), targets}})))
+            ->run();
     for (std::size_t i = 0; i < which.size() && i < results->count(); ++i) {
       const BodyDisplay& body = bodies[which[i]];
       const QString uid = QString::fromStdString(body.uid);
@@ -359,6 +372,7 @@ std::vector<std::shared_ptr<geometry::Shape>> clipBodies(const Document& documen
       logClipAttempts(uid, shape);
       if (!shape->occt().IsSame(body.shape->occt())) {
         clipped.push_back(shape->occt());
+        donors.push_back(body.shape->occt());
       }
       left[i] = shape;
       errors[static_cast<qsizetype>(i)].clear();
@@ -370,7 +384,7 @@ std::vector<std::shared_ptr<geometry::Shape>> clipBodies(const Document& documen
     return left;
   }
   timing.setDetail(QStringLiteral("%1 bodies, %2 new").arg(which.size()).arg(clipped.size()));
-  meshForView(clipped);
+  meshForView(clipped, donors);
   return left;
 }
 
@@ -2131,8 +2145,9 @@ void MainWindow::trigger(const QString& id) {
   m_locks->activity();
   // A command of the 3D view leads back to the model from a drawing
   // (mitcad#707); the menus' commands (Undo, Save, Export) and the
-  // drawing's own tabs' (mitcad#1008) do not.
-  if (def->kind == CommandDef::Kind::Feature || (!def->tab.isEmpty() && !isDrawingCommand(*def))) {
+  // drawing's own tabs' (mitcad#1008) and Edit Parameters (mitcad#1582) do
+  // not.
+  if (leavesDrawing(*def)) {
     leaveDrawing();
   }
   // So does a command of the view from the Start tab (mitcad#1258): a
@@ -3944,7 +3959,10 @@ void MainWindow::showProfiles() {
     }
     // A face built before is used again while the region's geometry and
     // place (the model's hash) and its occurrence's placement stay, so the
-    // view keeps its display of it.
+    // view keeps its display of it. The faces are the view's own: built
+    // here from the region's numbers and handed to nothing but the view,
+    // which meshes them on this thread (mitcad#1586, OcctViewer::setProfiles);
+    // never pass one to the model or a job.
     const QString key = sketch + QLatin1Char('|') + QString::fromStdString(region);
     const QString hash = profile.value(QStringLiteral("hash")).toString();
     const gp_Trsf placement = placementOf(occurrence).Transformation();
@@ -5565,6 +5583,12 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
         if (const QString own = m_sketch->ownParameter(id); !own.isEmpty()) {
           addCall(QStringLiteral("parameters"), tr("Move %1 to User Parameters").arg(own),
                   [this, id] { m_sketch->keepAsUserParameter(id); });
+        }
+        // A name given to its parameter taken off: the automatic d<n> back,
+        // and the uses follow (mitcad#1577).
+        if (const QString named = m_sketch->namedParameter(id); !named.isEmpty()) {
+          addCall(QStringLiteral("parameters"), tr("Remove Name %1").arg(named),
+                  [this, id] { m_sketch->removeDimensionName(id); });
         }
       }
       // A spline right-clicked gets a point there (Insert Point,

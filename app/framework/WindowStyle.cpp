@@ -30,6 +30,7 @@
 
 #include "AutoselectPanel.hpp"
 #include "ChromeStyle.hpp"
+#include "IconSizeStyle.hpp"
 #include "SelectionCreate.hpp"
 #include "Theme.hpp"
 #include "UiSizes.hpp"
@@ -58,16 +59,18 @@ void paintSurface(QWidget* widget, const QRect& rect) {
 
 // The main window's own style: the separators between the docks are the
 // panels' gap and show the window behind them (they still resize the docks).
-// Its children keep the application's style.
-class GapStyle : public QProxyStyle {
+// Its children keep the application's style. Like the application's style,
+// it multiplies the style's icon sizes by Icon size (IconSizeStyle,
+// mitcad#1561): a child with a style sheet takes it as its base.
+class GapStyle : public IconSizeStyle {
 public:
-  explicit GapStyle(QStyle* base) : QProxyStyle(base) {}
+  explicit GapStyle(QStyle* base) : IconSizeStyle(base) {}
 
   int pixelMetric(PixelMetric metric, const QStyleOption* option, const QWidget* widget) const override {
     if (metric == PM_DockWidgetSeparatorExtent) {
       return panel::kGap;
     }
-    return QProxyStyle::pixelMetric(metric, option, widget);
+    return IconSizeStyle::pixelMetric(metric, option, widget);
   }
 
   void drawPrimitive(PrimitiveElement element, const QStyleOption* option, QPainter* painter,
@@ -544,7 +547,8 @@ void WindowStyle::followApplicationStyle() {
   // brings it here (apply). The one before stays this object's child, as
   // a child's style sheet style may still refer to it; the app mode
   // changes seldom.
-  const QString name = QApplication::style()->name();
+  // The key through Icon size's proxy around the application's style.
+  const QString name = applicationStyleKey();
   if (m_window == nullptr || (m_gaps != nullptr && name == m_gapsBase)) {
     return;
   }

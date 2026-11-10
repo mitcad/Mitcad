@@ -5,6 +5,7 @@
 #include <cmath>
 #include <exception>
 #include <limits>
+#include <memory>
 #include <utility>
 
 #include <QApplication>
@@ -813,7 +814,9 @@ void BuildListsDialog::print() {
   const QString title = cutList ? tr("Cut List") : tr("Bill of Materials");
   const QString subtitle = tr("%1, %2").arg(name, QDate::currentDate().toString(Qt::ISODate));
   // The PDF's paper and margins to start with; the dialog may change them.
-  QPrinter printer(QPrinter::HighResolution);
+  // Found without freezing the window (mitcad#1591).
+  const std::unique_ptr<QPrinter> made = printing::newPrinter(this);
+  QPrinter& printer = *made;
   printer.setDocName(QStringLiteral("%1 %2").arg(name, title));
   printer.setCreator(QStringLiteral("MitCad"));
   printer.setPageLayout(QPageLayout(QPageSize(QPageSize::A4), QPageLayout::Landscape, QMarginsF(12, 12, 12, 12),

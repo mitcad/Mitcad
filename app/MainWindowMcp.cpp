@@ -219,11 +219,17 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
                   {QStringLiteral("undone"), 0}});
     }
   }
+  if (arguments.contains(QStringLiteral("hints")) && !arguments.value(QStringLiteral("hints")).isBool()) {
+    refuse(QStringLiteral("hints must be a boolean"));
+  }
+  const bool hints = arguments.value(QStringLiteral("hints")).toBool(true);
   const QString mode = arguments.value(QStringLiteral("timeline")).toString(QStringLiteral("changed"));
   const QScopedValueRollback<bool> active(m_mcpRequestActive, true);
   // What the result compares (mitcad#689): the document before, when only
   // the changes are answered.
-  const QByteArray before = mode == QStringLiteral("changed") ? compactJson(mcpSnapshot()) : QByteArray();
+  const QByteArray before = mode == QStringLiteral("changed") ? compactJson(mcpSnapshot())
+      : hints ? compactJson(QJsonObject{{QStringLiteral("timeline"), query({{QStringLiteral("query"), QStringLiteral("timeline")}})}})
+              : QByteArray();
   const bool inSketch = m_mode == Mode::Sketch;
   const QString sketchUid = inSketch ? m_sketch->uid() : QString();
   const int depth = undoDepth();
@@ -264,11 +270,32 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
     mcpLabelAgentChange(depth);
   }
   const QByteArray timesText = QJsonDocument(times).toJson(QJsonDocument::Compact);
+  const QByteArray after = compactJson(mcpSnapshot());
   QJsonObject result = parseObject(mcp_command_document(rustStr(mode.toUtf8()), rustStr(before),
-                                                        rustStr(compactJson(mcpSnapshot())), rustStr(timesText)));
+                                                        rustStr(after), rustStr(timesText)));
   result.insert(QStringLiteral("document"), m_mcpDocumentId);
   result.insert(QStringLiteral("applied"), true);
   result.insert(QStringLiteral("result"), results.last());
+  if (hints) {
+    result.insert(QStringLiteral("hints"), QJsonArray());
+    QJsonArray commands;
+    for (const QJsonObject& entry : std::as_const(entries)) {
+      commands.append(entry);
+    }
+    try {
+      const QByteArray commandText = QJsonDocument(commands).toJson(QJsonDocument::Compact);
+      const QByteArray resultText = QJsonDocument(results).toJson(QJsonDocument::Compact);
+      const rust::String request = mcp_command_hint_query(rustStr(commandText), rustStr(resultText),
+                                                         rustStr(before), rustStr(after));
+      if (!request.empty()) {
+        const QByteArray review = compactJson(query(parseObject(request)).toObject());
+        result.insert(QStringLiteral("hints"), parseJson(mcp_command_hints(rustStr(review))).array());
+      }
+    } catch (const std::exception& failure) {
+      // Optional guidance does not change the outcome of the applied edits.
+      qWarning().noquote() << QStringLiteral("MCP modeling hints unavailable: %1").arg(errorText(failure));
+    }
+  }
   if (inSketch) {
     result.insert(QStringLiteral("sketch"), sketchUid);
   }
@@ -277,6 +304,16 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
     result.insert(QStringLiteral("results"), results);
     if (stopped >= 0) {
       result.insert(QStringLiteral("stopped_at"), static_cast<qint64>(stopped));
+    }
+  }
+  // Which edges of a failed fillet or chamfer fail alone, tried in
+  // previews (mitcad#1587); the answer as it was when that cannot be said.
+  if (!inSketch) {
+    try {
+      result = parseObject(m_document->mcp_diagnose_dressups(rustStr(compactJson(result))));
+    } catch (const std::exception& error) {
+      qWarning().noquote() << QStringLiteral("MCP: the failed fillet's edges were not tried one at a time: %1")
+                                  .arg(errorText(error));
     }
   }
   QStringList kinds;
@@ -289,7 +326,17 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
 }
 
 bool MainWindow::mcpModelStep(const QJsonObject& request, QJsonObject* answer, QString& reason) {
-  if (!runModelCommand(request, answer)) {
+  // An agent's selections by geometry (a profile by a point, a fillet's
+  // edges by a filter) become names on the document as the entries before
+  // left it (mitcad#1587); the stored definition keeps the names.
+  QJsonObject command;
+  try {
+    command = parseObject(idleDocument().mcp_resolve_command(rustStr(compactJson(request))));
+  } catch (const std::exception& error) {
+    reason = errorText(error);
+    return false;
+  }
+  if (!runModelCommand(command, answer)) {
     reason = lastError().isEmpty() ? QStringLiteral("The model command was refused.") : lastError();
     return false;
   }
@@ -378,8 +425,10 @@ QJsonObject MainWindow::mcpExport(const QJsonObject& arguments) {
   if (m_closePending || QApplication::activeModalWidget() != nullptr) {
     refuse(QStringLiteral("The design is closing or waiting for a dialog."));
   }
+  // An existing file only with overwrite (mitcad#1569), as document_save's.
+  const bool overwrite = arguments.value(QStringLiteral("overwrite")).toBool(false);
   QString reason;
-  const QString path = mcp::agentOutputPath(arguments.value(QStringLiteral("path")).toString(), false, reason);
+  const QString path = mcp::agentOutputPath(arguments.value(QStringLiteral("path")).toString(), overwrite, reason);
   if (path.isEmpty()) {
     refuse(reason);
   }
@@ -395,7 +444,7 @@ QJsonObject MainWindow::mcpExport(const QJsonObject& arguments) {
   }
   // The other files it writes (an OBJ's .mtl) by the same rule.
   for (const QJsonValue& output : plan.value(QStringLiteral("outputs")).toArray()) {
-    if (mcp::agentOutputPath(output.toString(), false, reason).isEmpty()) {
+    if (mcp::agentOutputPath(output.toString(), overwrite, reason).isEmpty()) {
       refuse(reason);
     }
   }
@@ -405,7 +454,7 @@ QJsonObject MainWindow::mcpExport(const QJsonObject& arguments) {
   if (plan.value(QStringLiteral("drawing")).toBool()) {
     // A drawing checks each sheet's file before it writes any.
     try {
-      result = parseObject(idleDocument().mcp_export_drawing(rustStr(compactJson(command))));
+      result = parseObject(idleDocument().mcp_export_drawing(rustStr(compactJson(command)), overwrite));
     } catch (const std::exception& error) {
       refuse(errorText(error));
     }

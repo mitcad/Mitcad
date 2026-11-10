@@ -10,7 +10,6 @@
 // cursor.
 
 #include <functional>
-#include <map>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -79,6 +78,13 @@ public:
     QString id; // k3; for Fixed the entity
     bool valid() const { return kind != Kind::None; }
   };
+  // Where a constraint's symbol is drawn (view pixels), its type and the
+  // entity it is drawn at.
+  struct GlyphPlace {
+    QRectF rect;
+    QString type;
+    QString entity;
+  };
 
   SketchOverlay(SketchController& controller, QWidget* view);
 
@@ -99,8 +105,10 @@ public:
   // An inactive constraint's or dimension's tooltip line (mitcad#721): "Not
   // applied: <why>"; empty for an active one.
   static QString inactiveTooltip(bool active, const QString& reason);
-  // Where each shown constraint's first symbol is drawn (view pixels).
-  std::map<QString, QRectF> constraintGlyphRects() const;
+  // Where every shown constraint symbol is drawn, with its constraint's id,
+  // in the order they are laid out: a constraint drawn at two entities (a
+  // parallel's two lines) has two (mitcad#1594), its first one first.
+  std::vector<std::pair<QString, GlyphPlace>> constraintGlyphPlaces() const;
   // Every shown symbol's bounds, including repeated constraints and fixed
   // entities, as used by painting and picking.
   std::vector<QRectF> constraintGlyphBounds() const;
@@ -165,7 +173,10 @@ private:
   // The sketch's x and y axes across the view, its origin, and the design
   // origin's place when the sketch's origin is elsewhere (mitcad#254).
   void paintAxes(QPainter& painter) const;
-  void paintGlyph(QPainter& painter, const Glyph& glyph, bool selected, bool hovered) const;
+  // `conflicted`: it blocks a refused edit (mitcad#1566), in the error's
+  // colours unless selected or hovered.
+  void paintGlyph(QPainter& painter, const Glyph& glyph, bool selected, bool hovered,
+                  bool conflicted = false) const;
   // The halo under a dimension's lines, arcs and arrowheads (mitcad#633):
   // wider strokes in `halo`, the opposite tone of the lines, so that they
   // show over a body's face of their own tone. Painted for all dimensions
@@ -179,6 +190,11 @@ private:
                       bool inactive = false) const;
   void paintPreview(QPainter& painter, const ToolPreview& preview) const;
   void paintSnap(QPainter& painter) const;
+  // What a command's panel shows in the sketch (mitcad#1563): the points
+  // its inputs picked with the sketch's snaps (Point to Point's, joined
+  // from the first to the second), its handle (Move/Copy's arrow pair)
+  // and the snap of either.
+  void paintCommandPicks(QPainter& painter) const;
   // What highlightLayers gives to paint: the entities drawn as strokes
   // (curves, lines, axes) and as balls (points), the plain point markers
   // over them, and whether they are painted after the strokes.

@@ -128,45 +128,60 @@ std::optional<V2> anchorOf(const SketchModel& model, const QString& id) {
 // The fixed point at the origin that stands for it: no symbol, no cross.
 bool isOrigin(const sketch::PointData& p) { return p.fixed && p.at.x == 0.0 && p.at.y == 0.0; }
 
-// The symbols of the constraints, one per entity and type, as sketch mode
-// shows them (a coincidence at its point, a symmetry at both its points, a
-// tangency at the point it applies at), and the fixed entities' "fix".
+// The symbols of the constraints as sketch mode shows them (a coincidence
+// at its point, a symmetry at both its points, a tangency at the point it
+// applies at), and the fixed entities' "fix". Every constraint keeps at
+// least one symbol (mitcad#1578): two midpoints or tangencies at one point
+// print two; only a constraint drawn at several entities leaves out one
+// where another of its type already stands, while it keeps one elsewhere.
 std::vector<Glyph> glyphsOf(const SketchModel& model) {
   std::vector<Glyph> all;
-  const auto add = [&all](const QString& entity, const QString& type) {
-    if (entity.isEmpty() || !printsConstraint(type)) {
+  const auto add = [&all](const QStringList& entities, const QString& type) {
+    if (!printsConstraint(type)) {
       return;
     }
-    const bool shown = std::any_of(all.begin(), all.end(),
-                                   [&](const Glyph& g) { return g.entity == entity && g.type == type; });
-    if (!shown) {
-      all.push_back({entity, type});
+    bool kept = false;
+    QString first;
+    for (const QString& entity : entities) {
+      if (entity.isEmpty()) {
+        continue;
+      }
+      if (first.isEmpty()) {
+        first = entity;
+      }
+      const bool shown = std::any_of(all.begin(), all.end(),
+                                     [&](const Glyph& g) { return g.entity == entity && g.type == type; });
+      if (!shown) {
+        all.push_back({entity, type});
+        kept = true;
+      }
+    }
+    if (!kept && !first.isEmpty()) {
+      all.push_back({first, type});
     }
   };
   for (const sketch::ConstraintData& k : model.constraints) {
     const QString& t = k.type;
     if (t == QStringLiteral("midpoint")) {
-      add(k.json.value(QStringLiteral("point")).toString(), t);
+      add(QStringList{k.json.value(QStringLiteral("point")).toString()}, t);
     } else if (t == QStringLiteral("symmetric")) {
-      add(k.json.value(QStringLiteral("a")).toString(), t);
-      add(k.json.value(QStringLiteral("b")).toString(), t);
+      add(QStringList{k.json.value(QStringLiteral("a")).toString(), k.json.value(QStringLiteral("b")).toString()},
+          t);
     } else if ((t == QStringLiteral("tangent") || t == QStringLiteral("smooth")) &&
                !k.json.value(QStringLiteral("at")).toString().isEmpty()) {
-      add(k.json.value(QStringLiteral("at")).toString(), t);
+      add(QStringList{k.json.value(QStringLiteral("at")).toString()}, t);
     } else {
-      for (const QString& entity : k.refs) {
-        add(entity, t);
-      }
+      add(k.refs, t);
     }
   }
   for (const sketch::PointData& p : model.points) {
     if (p.fixed && !p.reference && !isOrigin(p) && p.axis.isEmpty()) {
-      add(p.id, QStringLiteral("fix"));
+      add(QStringList{p.id}, QStringLiteral("fix"));
     }
   }
   for (const sketch::CurveData& c : model.curves) {
     if (c.fixed && !c.reference && c.axis.isEmpty()) {
-      add(c.id, QStringLiteral("fix"));
+      add(QStringList{c.id}, QStringLiteral("fix"));
     }
   }
   return all;

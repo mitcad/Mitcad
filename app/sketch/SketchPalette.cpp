@@ -114,7 +114,12 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   }
   m_title = new QLabel;
   m_status = new QLabel;
+  m_status->setObjectName(QStringLiteral("paletteStatus"));
   m_status->setWordWrap(true);
+  // Conflicting constraints as a link: a click selects them (mitcad#1566).
+  m_status->setOpenExternalLinks(false);
+  m_status->setTextInteractionFlags(Qt::LinksAccessibleByMouse);
+  connect(m_status, &QLabel::linkActivated, this, [this](const QString&) { selectConflicts(); });
   layout->addWidget(m_title);
   layout->addWidget(m_status);
   m_solve = new QLabel;
@@ -564,9 +569,20 @@ void SketchPalette::refresh() {
   // The solve's states at their levels (mitcad#1040): conflicting
   // constraints and a solve that did not converge are errors, with the
   // error's icon.
-  if (!model.conflicts.empty()) {
-    status = QStringLiteral("%1&nbsp;<span style='color:%2'>%3</span>")
+  // Conflicting constraints are a link that selects them (mitcad#1566); the
+  // view paints them meanwhile.
+  const bool conflicting = !model.conflicts.empty();
+  m_status->setToolTip(conflicting ? tr("Click to select the constraints and dimensions that conflict") : QString());
+  if (!conflicting) {
+    m_conflictLinkShown = false;
+  }
+  if (conflicting) {
+    status = QStringLiteral("%1&nbsp;<a href='conflicts' style='color:%2; text-decoration: underline;'>%3</a>")
                  .arg(noticeIconHtml(NoticeLevel::Error), errorColor(palette()).name(), tr("Conflicting constraints"));
+    if (!m_conflictLinkShown) {
+      // Once laid out: where it is, for UI tests.
+      TestSync::singleShot(50, this, [this] { logConflictLink(); });
+    }
   } else if (!model.error.isEmpty()) {
     status = QStringLiteral("%1&nbsp;<span style='color:%2'>%3</span>")
                  .arg(noticeIconHtml(NoticeLevel::Error), errorColor(palette()).name(),
@@ -798,6 +814,26 @@ void SketchPalette::selectWarning(int index) {
                             .arg(entities.size())
                             .arg(entities.join(QStringLiteral(", ")));
   m_c.selectEntities(entities, true);
+}
+
+void SketchPalette::selectConflicts() {
+  // "Palette: conflicting constraints select 2 items: k5, k9", for UI
+  // tests (mitcad#1566).
+  const QStringList items = m_c.conflicts();
+  const int selected = m_c.selectConflicts();
+  qDebug().noquote() << QStringLiteral("Palette: conflicting constraints select %1 items: %2")
+                            .arg(selected)
+                            .arg(items.join(QStringLiteral(", ")));
+}
+
+void SketchPalette::logConflictLink() {
+  m_conflictLinkShown = !m_c.model().conflicts.empty() && m_status->isVisible();
+  if (!m_conflictLinkShown) {
+    return;
+  }
+  // "Palette conflict link at x,y", for UI tests.
+  const QPoint center = GlassCard::mapToHost(m_status, m_status->rect().center());
+  qDebug().noquote() << QStringLiteral("Palette conflict link at %1,%2").arg(center.x()).arg(center.y());
 }
 
 void SketchPalette::logCleanUp() const {

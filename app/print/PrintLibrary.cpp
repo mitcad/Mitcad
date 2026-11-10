@@ -349,6 +349,9 @@ QString materialGroupTitle(const QString& group) {
   if (group == QStringLiteral("resins")) {
     return QObject::tr("Resins");
   }
+  if (group == QStringLiteral("wood")) {
+    return QObject::tr("Wood");
+  }
   return QObject::tr("Other");
 }
 
@@ -365,19 +368,22 @@ QString materialClassTitle(const QString& materialClass) {
   if (materialClass == QStringLiteral("resin")) {
     return QObject::tr("Resin");
   }
+  if (materialClass == QStringLiteral("wood")) {
+    return QObject::tr("Wood");
+  }
   return QObject::tr("Other");
 }
 
 const QStringList& materialClasses() {
-  // The model's order (MaterialClass::ALL, mitcad#1102).
+  // The model's order (MaterialClass::ALL, mitcad#1102, mitcad#1552).
   static const QStringList classes{QStringLiteral("metal"), QStringLiteral("plastic"), QStringLiteral("fdm_plastic"),
-                                   QStringLiteral("resin"), QStringLiteral("other")};
+                                   QStringLiteral("resin"), QStringLiteral("wood"), QStringLiteral("other")};
   return classes;
 }
 
 const QStringList& materialGroups() {
   static const QStringList groups{QStringLiteral("metals"), QStringLiteral("plastics"), QStringLiteral("fdm_plastics"),
-                                  QStringLiteral("resins"), QStringLiteral("other")};
+                                  QStringLiteral("resins"), QStringLiteral("wood"), QStringLiteral("other")};
   return groups;
 }
 

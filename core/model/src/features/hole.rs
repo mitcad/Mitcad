@@ -8,7 +8,10 @@
 //! diameter (the tap drill) and tapers the bore from the hole's start,
 //! 1:16 on the diameter from the thread's minor diameter at its opening,
 //! cosmetic or modelled; without `taper` (holes saved before) its bore is
-//! the size's minor diameter, as it was.
+//! the size's minor diameter, as it was. A press-fit hole for printed
+//! parts (mitcad#1517) is a hex or square hole or a bore with crush ribs,
+//! its flats or rib tips the press fit's interference under the hole's
+//! diameter, the pin's, with a flat bottom.
 //!
 //! Mitcad's definitions (experiments K24-K28 test them on .f3d designs):
 //! the depth runs to the shoulder and the drill point is extra; a
@@ -242,6 +245,136 @@ pub struct HoleClearance {
     pub fit: ClearanceFit,
 }
 
+/// The shape of a press-fit hole (mitcad#1517).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PressFitShape {
+    /// A hexagon whose flats grip the pin.
+    Hex,
+    /// A square whose flats grip the pin.
+    Square,
+    /// A round bore with small ribs that the pin or bearing crushes as it
+    /// goes in.
+    CrushRibs,
+}
+
+/// A press fit for printed parts (mitcad#1517): `{"shape": "hex",
+/// "interference": "press_fit_interference"}`. The hole's `diameter` is the
+/// nominal diameter of the pin or bearing that goes in; a hex's or square's
+/// flats, or the crush ribs' tips, touch a circle `interference` smaller on
+/// the diameter (the printed fit parameter `press_fit_interference`, which
+/// the Hole panel offers). The section runs along the whole hole, which has
+/// a flat bottom.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HolePressFit<P = ParamId> {
+    pub shape: PressFitShape,
+    pub interference: P,
+    /// Crush ribs only: their number, 3 when left out.
+    #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+    pub ribs: Option<P>,
+    /// Crush ribs only: how far each stands out of the bore, 0.3 mm when
+    /// left out; the bore is the tips' diameter plus twice this.
+    #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+    pub rib_height: Option<P>,
+    /// The section turned about the axis, 0 when left out
+    /// ([`crate::kernel::HolePressFit`] names where it starts).
+    #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+    pub angle: Option<P>,
+}
+
+/// Crush ribs' number and height when a press fit leaves them out.
+pub const DEFAULT_CRUSH_RIBS: u32 = 3;
+pub const DEFAULT_RIB_HEIGHT: f64 = 0.3;
+/// The most crush ribs a hole takes.
+const MAX_CRUSH_RIBS: u32 = 64;
+
+/// The kernel's section of a press fit (mitcad#1517) from the hole's
+/// nominal `diameter` and the press fit's values: the polygon's inscribed
+/// diameter or the ribs' tips `interference` under it. Checks the values.
+pub fn press_fit_section(
+    shape: PressFitShape,
+    diameter: f64,
+    interference: f64,
+    ribs: Option<f64>,
+    rib_height: Option<f64>,
+    angle: Option<f64>,
+) -> Result<crate::kernel::HolePressFit, String> {
+    use crate::kernel::HolePressFit as Section;
+    if !interference.is_finite() {
+        return Err(format!(
+            "the press fit's interference must be a finite length, got {interference}"
+        ));
+    }
+    let inner = diameter - interference;
+    if inner.is_nan() || inner <= 0.0 {
+        return Err(format!(
+            "the press fit's interference must be less than the hole's diameter {diameter}, got {interference}"
+        ));
+    }
+    let angle = angle.unwrap_or(0.0);
+    if !angle.is_finite() {
+        return Err(format!(
+            "the press fit's angle must be finite, got {angle} rad"
+        ));
+    }
+    let sides = match shape {
+        PressFitShape::Hex => Some(6),
+        PressFitShape::Square => Some(4),
+        PressFitShape::CrushRibs => None,
+    };
+    if let Some(sides) = sides {
+        if ribs.is_some() || rib_height.is_some() {
+            return Err("only crush ribs have `ribs` and `rib_height`".to_owned());
+        }
+        return Ok(Section::Polygon {
+            sides,
+            inscribed: inner,
+            angle,
+        });
+    }
+    let count = ribs.unwrap_or(f64::from(DEFAULT_CRUSH_RIBS));
+    let whole = count.round();
+    if !(count.is_finite()
+        && (count - whole).abs() <= 1e-9
+        && (3.0..=f64::from(MAX_CRUSH_RIBS)).contains(&whole))
+    {
+        return Err(format!(
+            "a press fit's number of crush ribs must be a whole number from 3 to {MAX_CRUSH_RIBS}, got {count}"
+        ));
+    }
+    let ribs = whole as u32;
+    let height = rib_height.unwrap_or(DEFAULT_RIB_HEIGHT);
+    if !height.is_finite() || height <= 0.0 {
+        return Err(format!(
+            "the crush ribs' height must be greater than zero, got {height}"
+        ));
+    }
+    // The pin touches the ribs only: the bore between them clears it.
+    if 2.0 * height <= interference {
+        return Err(format!(
+            "the crush ribs must stand out more than half the interference ({}), or the pin \
+             touches the bore between them; got a height of {height}",
+            interference / 2.0
+        ));
+    }
+    let bore = inner + 2.0 * height;
+    // Each rib's base, twice its height wide, takes 2 asin(h / R) of the
+    // bore; the ribs must not touch.
+    let base = 2.0 * (height / (bore / 2.0)).min(1.0).asin();
+    if f64::from(ribs) * base >= 2.0 * std::f64::consts::PI {
+        return Err(format!(
+            "{ribs} crush ribs {height} high do not fit round a bore of {bore}: use fewer or lower ones"
+        ));
+    }
+    Ok(Section::CrushRibs {
+        ribs,
+        tips: inner,
+        bore,
+        angle,
+    })
+}
+
 fn yes() -> bool {
     true
 }
@@ -313,6 +446,11 @@ pub struct HoleDef<P = ParamId> {
     /// `thread`. Holes saved before have none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clearance: Option<HoleClearance>,
+    /// A press-fit hole for printed parts (mitcad#1517): a hex or square
+    /// hole or crush ribs, sized from `diameter`; a simple hole with a flat
+    /// bottom, no thread, taper or clearance.
+    #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+    pub press_fit: Option<HolePressFit<P>>,
 }
 
 type Mapper<'a, P, Q, E> = dyn FnMut(&str, &P) -> Result<Q, E> + 'a;
@@ -452,6 +590,16 @@ impl<P> HoleDef<P> {
             }),
         };
         let taper = map_option("taper", &self.taper, f)?;
+        let press_fit = match &self.press_fit {
+            None => None,
+            Some(fit) => Some(HolePressFit {
+                shape: fit.shape,
+                interference: f("press_fit.interference", &fit.interference)?,
+                ribs: map_option("press_fit.ribs", &fit.ribs, f)?,
+                rib_height: map_option("press_fit.rib_height", &fit.rib_height, f)?,
+                angle: map_option("press_fit.angle", &fit.angle, f)?,
+            }),
+        };
         Ok(HoleDef {
             placement,
             diameter,
@@ -464,6 +612,7 @@ impl<P> HoleDef<P> {
             participants: self.participants.clone(),
             taper,
             clearance: self.clearance.clone(),
+            press_fit,
         })
     }
 
@@ -638,6 +787,30 @@ impl FeatureInfo for HoleDef {
             }
             super::hole_sizes::lookup(&clearance.size)?;
         }
+        // A press-fit hole is a simple one with its own section (mitcad#1517).
+        if let Some(fit) = &self.press_fit {
+            if self.thread.is_some() || self.clearance.is_some() {
+                return Err(
+                    "a press-fit hole has no thread or clearance size: leave out `press_fit`, \
+                     `thread` or `clearance`"
+                        .to_owned(),
+                );
+            }
+            if !self.kind.is_simple() {
+                return Err(
+                    "a press-fit hole is a simple hole: no counterbore, countersink or counterdrill"
+                        .to_owned(),
+                );
+            }
+            if self.taper.is_some() {
+                return Err("a press-fit hole has no taper".to_owned());
+            }
+            if fit.shape != PressFitShape::CrushRibs
+                && (fit.ribs.is_some() || fit.rib_height.is_some())
+            {
+                return Err("only crush ribs have `ribs` and `rib_height`".to_owned());
+            }
+        }
         check_participants(ctx, Operation::Cut, &self.participants)
     }
 
@@ -744,6 +917,16 @@ impl FeatureInfo for HoleDef {
                     check_starts(starts, &data)?;
                 }
             }
+        }
+        if let (Some(fit), Some(diameter)) = (&self.press_fit, diameter) {
+            press_fit_section(
+                fit.shape,
+                diameter,
+                value(fit.interference),
+                fit.ribs.map(value),
+                fit.rib_height.map(value),
+                fit.angle.map(value),
+            )?;
         }
         Ok(())
     }
@@ -1063,7 +1246,25 @@ impl<K: Kernel> Evaluate<K> for HoleDef {
             }
             None => 0.0,
         };
-        let tip_angle = if self.flat {
+        // A press fit's section (mitcad#1517), from the nominal diameter.
+        let press_fit = match &self.press_fit {
+            Some(fit) => {
+                let mut optional = |id: Option<ParamId>| id.map(|id| ctx.param(id)).transpose();
+                let ribs = optional(fit.ribs)?;
+                let rib_height = optional(fit.rib_height)?;
+                let angle = optional(fit.angle)?;
+                Some(press_fit_section(
+                    fit.shape,
+                    diameter,
+                    ctx.param(fit.interference)?,
+                    ribs,
+                    rib_height,
+                    angle,
+                )?)
+            }
+            None => None,
+        };
+        let tip_angle = if self.flat || press_fit.is_some() {
             None
         } else {
             Some(match self.tip_angle {
@@ -1092,7 +1293,13 @@ impl<K: Kernel> Evaluate<K> for HoleDef {
         // body stays a sheet (mitcad#211); its tool is still the hole's,
         // which patterns and mirrors of it repeat.
         let sheet_depth = match &end {
-            _ if thread.is_some() || !matches!(shape, HoleShape::Simple) || taper != 0.0 => None,
+            _ if thread.is_some()
+                || !matches!(shape, HoleShape::Simple)
+                || taper != 0.0
+                || press_fit.is_some() =>
+            {
+                None
+            }
             HoleEnd::Distance(d) => Some(Some(*d)),
             HoleEnd::ThroughAll => Some(None),
             HoleEnd::Target(_) => None,
@@ -1110,6 +1317,7 @@ impl<K: Kernel> Evaluate<K> for HoleDef {
             end,
             bodies: participants.iter().map(|(_, s)| s.clone()).collect(),
             taper,
+            press_fit,
         };
         let tool = ctx.kernel.hole_tool(&spec).map_err(|e| e.to_string())?;
         if let (Some(depth), Some(body)) = (sheet_depth, sheet_body)
@@ -1344,5 +1552,99 @@ mod tests {
         let mut wrong = before;
         wrong["clearance"] = serde_json::json!({"size": "M6", "fit": "loose"});
         assert!(serde_json::from_value::<HoleDef<String>>(wrong).is_err());
+    }
+
+    #[test]
+    fn press_fits_keep_their_values_and_size_their_sections() {
+        // mitcad#1517: a hole saved before has no `press_fit` and writes
+        // none; a press fit writes what it was given.
+        let before = serde_json::json!({
+            "placement": {"type": "sketch_points", "sketch": "F3", "points": ["c5"]},
+            "diameter": "d4", "extent": {"type": "through_all"}});
+        let def: HoleDef<String> = serde_json::from_value(before.clone()).unwrap();
+        assert_eq!(def.press_fit, None);
+        assert_eq!(serde_json::to_value(&def).unwrap(), before);
+        let mut ribbed = before;
+        ribbed["press_fit"] = serde_json::json!({"shape": "crush_ribs",
+            "interference": "press_fit_interference", "ribs": "d5", "rib_height": "d6"});
+        let def: HoleDef<String> = serde_json::from_value(ribbed.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&def).unwrap(), ribbed);
+        let mut slots = Vec::new();
+        let mapped = def
+            .map_params::<String, ()>(&mut |slot, p| {
+                slots.push(slot.to_owned());
+                Ok(p.clone())
+            })
+            .unwrap();
+        assert_eq!(mapped.press_fit, def.press_fit);
+        assert!(slots.contains(&"press_fit.interference".to_owned()));
+        assert!(slots.contains(&"press_fit.ribs".to_owned()));
+        let mut wrong = ribbed;
+        wrong["press_fit"]["shape"] = serde_json::json!("triangle");
+        assert!(serde_json::from_value::<HoleDef<String>>(wrong).is_err());
+
+        // The flats or the rib tips lie the interference under the
+        // nominal diameter.
+        use crate::kernel::HolePressFit as Section;
+        for (shape, angle, sides, inscribed) in [
+            (PressFitShape::Hex, None, 6, 4.8),
+            (PressFitShape::Square, Some(0.5), 4, 4.8),
+        ] {
+            let Ok(Section::Polygon {
+                sides: s,
+                inscribed: d,
+                angle: a,
+            }) = press_fit_section(shape, 5.0, 0.2, None, None, angle)
+            else {
+                panic!("{shape:?}");
+            };
+            assert_eq!(s, sides);
+            assert!((d - inscribed).abs() < 1e-12, "{d}");
+            assert_eq!(a, angle.unwrap_or(0.0));
+        }
+        let Ok(Section::CrushRibs {
+            ribs, tips, bore, ..
+        }) = press_fit_section(PressFitShape::CrushRibs, 8.0, 0.2, None, None, None)
+        else {
+            panic!("crush ribs");
+        };
+        assert_eq!(ribs, DEFAULT_CRUSH_RIBS);
+        assert!((tips - 7.8).abs() < 1e-12 && (bore - 8.4).abs() < 1e-12);
+        for (result, expected) in [
+            (
+                press_fit_section(PressFitShape::Hex, 5.0, 5.0, None, None, None),
+                "less than the hole's diameter",
+            ),
+            (
+                press_fit_section(PressFitShape::Hex, 5.0, 0.2, Some(4.0), None, None),
+                "only crush ribs",
+            ),
+            (
+                press_fit_section(PressFitShape::CrushRibs, 8.0, 0.2, Some(2.0), None, None),
+                "whole number from 3",
+            ),
+            (
+                press_fit_section(PressFitShape::CrushRibs, 8.0, 0.2, Some(3.5), None, None),
+                "whole number from 3",
+            ),
+            (
+                press_fit_section(PressFitShape::CrushRibs, 8.0, 0.4, None, Some(0.2), None),
+                "more than half the interference",
+            ),
+            (
+                press_fit_section(
+                    PressFitShape::CrushRibs,
+                    2.0,
+                    0.2,
+                    Some(12.0),
+                    Some(0.8),
+                    None,
+                ),
+                "do not fit round a bore",
+            ),
+        ] {
+            let error = result.unwrap_err();
+            assert!(error.contains(expected), "'{expected}' not in '{error}'");
+        }
     }
 }

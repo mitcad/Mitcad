@@ -638,7 +638,7 @@ fn conflicts_redundancy_and_patterns_are_refused_without_a_partial_change() {
                "mode": "horizontal", "spacing": 10}),
     );
     assert!(
-        error.contains("over-constrained") || error.contains("cannot be solved"),
+        error.contains("can't hold") || error.contains("cannot be solved"),
         "{error}"
     );
     let after = sketch(&d);

@@ -53,6 +53,14 @@ inline bool accountCheckOffered(bool accountError, ChatAgent::Readiness readines
   return accountError && !agentUnusable(readiness) && !checking;
 }
 
+// Sign in Again (mitcad#1585) is offered beside Check again, and only for an
+// agent whose own sign-out and sign-in MitCad knows (`knownSignIn`:
+// ChatAgent::signInAgainCommands is not empty; Claude Code and Codex, not a
+// custom command or an API agent).
+inline bool signInAgainOffered(bool accountError, ChatAgent::Readiness readiness, bool checking, bool knownSignIn) {
+  return knownSignIn && accountCheckOffered(accountError, readiness, checking);
+}
+
 // The others of `folders` (each agent's ChatAgent::signInFolder) that share
 // the sign-in of the one at `index` (mitcad#1297): the same configuration
 // folder, its path cleaned (on Windows in any case). An empty folder, a

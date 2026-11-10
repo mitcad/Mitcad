@@ -22,11 +22,19 @@
 //!   leaves the others' names alone (mitcad#1462); every copy panel in the
 //!   plane of a panel of the sheet that it touches along a seam is united
 //!   with it into one panel (the seam's walls gone, its curves the trim's
-//!   lineage), and the joined sheet is built again from the merged charts.
-//!   It must be one solid with the volume, area and centre of mass of the
-//!   two halves joined; otherwise the halves overlap or meet where no
-//!   coplanar panels share a seam (a bend or a slanted wall across the
-//!   plane), and the join is refused with that reason.
+//!   lineage), every copy bend on the cylinder of a bend of the sheet that
+//!   it touches likewise into one bend (a bend across the mirror plane,
+//!   mitcad#1558: its record's axial interval covering both, the seams of
+//!   the two side by side along each tangent line), and the joined sheet
+//!   is built again from the merged charts. It must be one solid with the
+//!   volume, area and centre of mass of the two halves joined; otherwise
+//!   the halves overlap or meet where no coplanar panels or coaxial bends
+//!   share a seam (a slanted wall across the plane), and the join is
+//!   refused with that reason;
+//! - a Combine's join of a sheet with sheet tools ([`combined`],
+//!   mitcad#1558) merges them as a joined copy, each tool keyed by its
+//!   body; where they are not one sheet, the target is re-derived by the
+//!   sheet-domain adapter or left invalid with the reason ([`not_combined`]).
 //!
 //! A copy the sheet cannot carry (a scaled one: scaling changes the sheet's
 //! thickness) and a join of several bodies at once leave ordinary solids,
@@ -411,19 +419,182 @@ fn mapped_span(regions: &[MaterialRegion], side: &ShapePortSide, map: Isometry2)
     }
 }
 
-/// Every reference to the copy panel `from` made a reference to `to`,
+/// The isometry from the chart of the copy's domain `from` to the chart of
+/// the sheet's domain `to` where both are one material surface: two panels
+/// in one plane with one material side ([`planar_map`]), or two bends of
+/// the same radius, allowance and angle on one cylinder over the same
+/// angle (a bend and its image in a mirror plane across its axis, or a
+/// copy moved along it, mitcad#1558: [`cylinder_map`]); bends opened flat
+/// as panels are. Err where they are not.
+fn chart_map(state: &SheetState, from: &SheetPatch, to: &SheetPatch) -> Result<Isometry2, String> {
+    match (from.domain, to.domain) {
+        (SheetDomainRef::Panel(_), SheetDomainRef::Panel(_)) => {
+            planar_map(&from.embedding, &to.embedding)
+        }
+        (SheetDomainRef::Bend(a), SheetDomainRef::Bend(b)) => {
+            let record = |id: BendId| {
+                state
+                    .bends
+                    .iter()
+                    .find(|r| r.id == id)
+                    .ok_or_else(|| "a joined bend has no record".to_owned())
+            };
+            let (a, b) = (record(a)?, record(b)?);
+            let near = |x: f64, y: f64| (x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1.0);
+            if !near(a.signed_angle, b.signed_angle)
+                || !near(a.radius, b.radius)
+                || !near(a.k_factor, b.k_factor)
+                || !near(a.allowance, b.allowance)
+            {
+                return Err("the bends differ in angle, radius or allowance".into());
+            }
+            match (&from.embedding, &to.embedding) {
+                (SheetEmbedding::Cylinder(x), SheetEmbedding::Cylinder(y)) => cylinder_map(x, y),
+                (SheetEmbedding::Plane { .. }, SheetEmbedding::Plane { .. }) => {
+                    planar_map(&from.embedding, &to.embedding)
+                }
+                _ => Err("one bend is open and the other folded".into()),
+            }
+        }
+        _ => Err("a panel and a bend are not one material domain".into()),
+    }
+}
+
+/// The isometry from the chart of the bend cylinder `from` to that of `to`
+/// (mitcad#1558): both on one axis with the same radii, angle and material
+/// side, `from`'s arc either `to`'s (`u` kept) or `to`'s run the other way
+/// (`u` to `BA - u`), `v` moved along the common axis or reversed with it
+/// (a mirror across the axis turns it). Err where the cylinders differ.
+fn cylinder_map(from: &CylinderEmbedding, to: &CylinderEmbedding) -> Result<Isometry2, String> {
+    use mitcad_vec3::{add, distance, dot, scale, sub};
+    const DIRECTION: f64 = 1.0e-9;
+    let near = |x: f64, y: f64| (x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1.0);
+    if !near(from.inside_radius, to.inside_radius)
+        || !near(from.neutral_radius, to.neutral_radius)
+        || !near(from.angle_extent, to.angle_extent)
+        || from.inner_is_front != to.inner_is_front
+    {
+        return Err("the bends differ in radius or angle".into());
+    }
+    let s = dot(from.axis, to.axis);
+    if (s.abs() - 1.0).abs() > DIRECTION {
+        return Err("the bends are not coaxial".into());
+    }
+    let d = sub(from.centre, to.centre);
+    let along = dot(d, to.axis);
+    if distance(d, scale(to.axis, along)) > TOLERANCE {
+        return Err("the bends are not coaxial".into());
+    }
+    let radial = |c: &CylinderEmbedding, phi: f64| {
+        add(
+            scale(c.radial_start, phi.cos()),
+            scale(c.angular_direction, phi.sin()),
+        )
+    };
+    let theta = to.angle_extent;
+    let same = |phis: [(f64, f64); 3]| {
+        phis.iter()
+            .all(|(a, b)| distance(radial(from, *a), radial(to, *b)) <= DIRECTION)
+    };
+    let middle = theta / 2.0;
+    let (start, sigma) = if same([(0.0, 0.0), (middle, middle), (theta, theta)]) {
+        (0.0, 1.0)
+    } else if same([(0.0, theta), (middle, middle), (theta, 0.0)]) {
+        (to.neutral_radius * theta, -1.0)
+    } else {
+        return Err("the bends turn over different angles about their axis".into());
+    };
+    Ok(Isometry2 {
+        origin: [start, along],
+        x_axis: [sigma, 0.0],
+        y_axis: [0.0, s.signum()],
+    })
+}
+
+/// Every reference to the copy's domain `from` made a reference to `to`,
 /// whose chart now holds `from`'s regions moved by `map`: ports (their
 /// spans moved with the curves), bends' boundaries, opened bends' fixed
 /// panels and the lineage of `from`'s curves (their generations those of
-/// the moved curves).
-fn redirect(state: &mut SheetState, from: PanelId, to: PanelId, map: Isometry2) {
-    let (old, new) = (SheetDomainRef::Panel(from), SheetDomainRef::Panel(to));
+/// the moved curves). A bend's seams take `to`'s axial coordinate (each
+/// seam's whole axial map moved: the seams of the two bends lie side by
+/// side along each united tangent line, all in `to`'s `v`); its record and
+/// open state go into `to`'s, whose axial interval covers both
+/// (mitcad#1558).
+fn redirect(
+    state: &mut SheetState,
+    old: SheetDomainRef,
+    new: SheetDomainRef,
+    map: Isometry2,
+) -> Result<(), String> {
     let regions = state
         .charts
         .iter()
         .find(|p| p.domain == old)
         .map(|p| p.regions.clone())
         .unwrap_or_default();
+    if let (SheetDomainRef::Bend(from), SheetDomainRef::Bend(to)) = (old, new) {
+        // Each seam's axial coordinate `a` becomes `alpha + beta a`, read
+        // from its side on the bend: the bend's `v` at its ends, mapped.
+        let mut moves = Vec::new();
+        for (index, port) in state.joins.iter().enumerate() {
+            let Some(side) = [&port.first, &port.second]
+                .into_iter()
+                .find(|s| s.boundary.domain == old)
+            else {
+                continue;
+            };
+            let (p0, p1) = super::folded::port_ends(state, side)
+                .ok_or("a seam of a joined bend has no material boundary")?;
+            let axial = |t: f64| side.axial.offset + side.axial.scale * t;
+            let (a0, a1) = (axial(side.span.first), axial(side.span.last));
+            let (b0, b1) = (map.point(p0)[1], map.point(p1)[1]);
+            if (a1 - a0).abs() <= TOLERANCE {
+                return Err("a seam of a joined bend has no length".into());
+            }
+            let beta = (b1 - b0) / (a1 - a0);
+            moves.push((index, b0 - beta * a0, beta));
+        }
+        for (index, alpha, beta) in moves {
+            let port = &mut state.joins[index];
+            for side in [&mut port.first, &mut port.second] {
+                side.axial = AxialMap {
+                    offset: alpha + beta * side.axial.offset,
+                    scale: beta * side.axial.scale,
+                };
+            }
+            let (x, y) = (
+                alpha + beta * port.axial_interval.first,
+                alpha + beta * port.axial_interval.last,
+            );
+            port.axial_interval = ParamSpan {
+                first: x.min(y),
+                last: x.max(y),
+            };
+        }
+        let interval = state
+            .bends
+            .iter()
+            .find(|r| r.id == from)
+            .map(|r| r.axial_interval);
+        state.bends.retain(|r| r.id != from);
+        if let (Some(i), Some(record)) = (interval, state.bends.iter_mut().find(|r| r.id == to)) {
+            let (x, y) = (map.point([0.0, i.first])[1], map.point([0.0, i.last])[1]);
+            let own = record.axial_interval;
+            record.axial_interval = ParamSpan {
+                first: own.first.min(own.last).min(x).min(y),
+                last: own.first.max(own.last).max(x).max(y),
+            };
+        }
+        if state.opened.iter().any(|o| o.bend == to) {
+            state.opened.retain(|o| o.bend != from);
+        } else {
+            for opened in &mut state.opened {
+                if opened.bend == from {
+                    opened.bend = to;
+                }
+            }
+        }
+    }
     for port in &mut state.joins {
         for side in [&mut port.first, &mut port.second] {
             if side.boundary.domain == old {
@@ -439,9 +610,11 @@ fn redirect(state: &mut SheetState, from: PanelId, to: PanelId, map: Isometry2) 
             }
         }
     }
-    for opened in &mut state.opened {
-        if opened.stationary == Some(from) {
-            opened.stationary = Some(to);
+    if let (SheetDomainRef::Panel(from), SheetDomainRef::Panel(to)) = (old, new) {
+        for opened in &mut state.opened {
+            if opened.stationary == Some(from) {
+                opened.stationary = Some(to);
+            }
         }
     }
     remap_lineage(&mut state.lineage, old, &regions, map);
@@ -450,11 +623,101 @@ fn redirect(state: &mut SheetState, from: PanelId, to: PanelId, map: Isometry2) 
             record.boundary.domain = new;
         }
     }
+    Ok(())
+}
+
+/// The port side `side` bound by position to the straight boundary of its
+/// domain's chart in `state` that holds both its ends `p0` and `p1`, its
+/// axial coordinates at the ends kept (as `cut::rebind`, on any boundary
+/// curve). None where no boundary holds them.
+fn seat(
+    state: &SheetState,
+    side: &ShapePortSide,
+    p0: [f64; 2],
+    p1: [f64; 2],
+) -> Option<ShapePortSide> {
+    use crate::sketch::geometry::{dist, dot, sub};
+    let patch = state
+        .charts
+        .iter()
+        .find(|p| p.domain == side.boundary.domain)?;
+    for edge in patch
+        .regions
+        .iter()
+        .flat_map(|r| &r.loops)
+        .flat_map(|l| &l.edges)
+    {
+        let SegmentGeometry::Line { start, end } = edge.curve.geometry else {
+            continue;
+        };
+        let d = sub(end, start);
+        let len = dot(d, d);
+        if len <= 0.0 {
+            continue;
+        }
+        let at = |p: [f64; 2]| dot(sub(p, start), d) / len;
+        let (t0, t1) = (at(p0), at(p1));
+        let (lo, hi) = (
+            edge.curve.range.first.min(edge.curve.range.last),
+            edge.curve.range.first.max(edge.curve.range.last),
+        );
+        let on = |t: f64, p: [f64; 2]| {
+            t >= lo - 1e-9
+                && t <= hi + 1e-9
+                && edge.curve.point(t).is_ok_and(|q| dist(p, q) <= TOLERANCE)
+        };
+        if (t1 - t0).abs() > 0.0 && on(t0, p0) && on(t1, p1) {
+            let a0 = side.axial.offset + side.axial.scale * side.span.first;
+            let a1 = side.axial.offset + side.axial.scale * side.span.last;
+            let scale = (a1 - a0) / (t1 - t0);
+            return Some(ShapePortSide {
+                boundary: BoundaryPieceRef {
+                    domain: side.boundary.domain,
+                    piece: edge.piece.clone(),
+                },
+                span: ParamSpan {
+                    first: t0,
+                    last: t1,
+                },
+                axial: AxialMap {
+                    offset: a0 - scale * t0,
+                    scale,
+                },
+            });
+        }
+    }
+    None
+}
+
+/// The port sides on `domain` that its union left on a boundary piece it
+/// no longer has, bound again by position (mitcad#1558). Where the union
+/// returns the tangent line of the sheet and that of the copy as one
+/// boundary, its piece is the first of their identities: the seam on the
+/// other one is found again where its ends lie (`before`: the state the
+/// union was made on), which `trim_with_lineage`'s rebinding, keeping to
+/// one curve, does not do.
+fn reseat(before: &SheetState, after: &mut SheetState, domain: SheetDomainRef) {
+    let mut joins = after.joins.clone();
+    for port in &mut joins {
+        for side in [&mut port.first, &mut port.second] {
+            if side.boundary.domain != domain || super::folded::port_ends(after, side).is_some() {
+                continue;
+            }
+            let Some((p0, p1)) = super::folded::port_ends(before, side) else {
+                continue;
+            };
+            if let Some(found) = seat(after, side, p0, p1) {
+                *side = found;
+            }
+        }
+    }
+    after.joins = joins;
 }
 
 /// Why two halves cannot be one sheet.
-const NO_SEAM: &str = "the halves meet where no coplanar panels share a seam (a bend or a wall \
-                       that is not in a panel's plane crosses where they meet)";
+const NO_SEAM: &str = "the halves meet where no coplanar panels or coaxial bends share a seam \
+                       (a wall that is not in a panel's plane, or a bend that is not on one \
+                       cylinder with the other half's, crosses where they meet)";
 
 /// The sheet `current` of a body joined with a copy
 /// whose sheet is `copy` (from [`image`]) and whose material joined to
@@ -485,24 +748,19 @@ pub(crate) fn joined<K: Kernel>(
     state.lineage.extend(copy.lineage.iter().cloned());
     state.overlays.extend(copy.overlays.iter().cloned());
     // Each copy panel united with a panel of the sheet in its plane that it
-    // touches along a seam.
+    // touches along a seam, and each copy bend with a bend of the sheet on
+    // its cylinder (mitcad#1558: a bend across the mirror plane).
     let mut seams = 0;
     for patch in &copy.charts {
-        let SheetDomainRef::Panel(from) = patch.domain else {
-            continue;
-        };
-        let candidates: Vec<SheetPatch> = state
+        let from = patch.domain;
+        let candidates: Vec<(SheetPatch, Isometry2)> = state
             .charts
             .iter()
-            .filter(|p| matches!(p.domain, SheetDomainRef::Panel(_)) && !own.contains(&p.domain))
-            .filter(|p| planar_map(&patch.embedding, &p.embedding).is_ok())
-            .cloned()
+            .filter(|p| !own.contains(&p.domain))
+            .filter_map(|p| chart_map(&state, patch, p).ok().map(|map| (p.clone(), map)))
             .collect();
-        for target in candidates {
-            let SheetDomainRef::Panel(to) = target.domain else {
-                continue;
-            };
-            let map = planar_map(&patch.embedding, &target.embedding)?;
+        for (target, map) in candidates {
+            let to = target.domain;
             let moved = mapped_regions(&patch.regions, map);
             // Their union first: apart, touching along a seam, or
             // overlapping.
@@ -548,30 +806,36 @@ pub(crate) fn joined<K: Kernel>(
             let expected = area(&target.regions)? + area(&patch.regions)?;
             let got = area(&united)?;
             if got < expected - 1e-6 * expected.abs().max(1.0) {
+                let what = match to {
+                    SheetDomainRef::Panel(_) => "panel",
+                    SheetDomainRef::Bend(_) => "bend",
+                };
                 return Err(format!(
-                    "the halves overlap: {:.3} mm2 of the panel of {} lie in both",
+                    "the halves overlap: {:.3} mm2 of the {what} of {} lie in both",
                     expected - got,
-                    ctx.feature_name(to.feature)
+                    ctx.feature_name(to.feature())
                 ));
             }
             let mut trial = state.clone();
-            redirect(&mut trial, from, to, map);
-            trial.charts.retain(|p| p.domain != patch.domain);
+            redirect(&mut trial, from, to, map)?;
+            trial.charts.retain(|p| p.domain != from);
             let chart = trial
                 .charts
                 .iter_mut()
-                .find(|p| p.domain == target.domain)
-                .ok_or("a joined panel is unavailable")?;
+                .find(|p| p.domain == to)
+                .ok_or("a joined material domain is unavailable")?;
             chart.regions.extend(moved.iter().cloned());
+            let before = trial.clone();
             trim_with_lineage(
                 ctx,
                 &mut trial,
-                &[target.domain],
+                &[to],
                 SheetTrimOperation::Union,
                 &moved,
                 &[Isometry2::IDENTITY],
                 None,
             )?;
+            reseat(&before, &mut trial, to);
             state = trial;
             seams += 1;
             break;
@@ -619,6 +883,78 @@ pub(crate) fn joined<K: Kernel>(
     Ok((state, shape))
 }
 
+/// The sheet of a Combine's join (mitcad#1558): where the target and every
+/// tool are valid sheets (`tools`: their bodies and shapes), each tool is
+/// merged into the target's sheet as a joined copy is ([`joined`], keyed by
+/// the tool's body), in order, each against the generic join of the target
+/// so far and that tool (`whole`, the generic join of them all, for one
+/// tool). The merged sheet and the solid built from it; None where a body
+/// is not a valid sheet (the sheet-domain adapter takes the join, as for
+/// ordinary modelling); Err with the reason the sheets are not one sheet.
+/// A fillet's or chamfer's overlay on a tool keeps reading its change from
+/// the tool.
+pub(crate) fn combined<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    target: (BodyUid, &K::Shape),
+    tools: &[(BodyUid, &K::Shape)],
+    whole: &K::Shape,
+) -> Option<Result<(SheetState, K::Shape), String>> {
+    let mut current = source(ctx, target.0)?;
+    let mut sheets = Vec::new();
+    for (body, shape) in tools {
+        let mut state = source(ctx, *body)?;
+        for overlay in &mut state.overlays {
+            if let SheetOverlayKind::Change { source, .. } = &mut overlay.kind
+                && source.is_none()
+            {
+                *source = Some(*body);
+            }
+        }
+        sheets.push((*body, state, *shape));
+    }
+    let mut shape = target.1.clone();
+    for (body, sheet, tool) in sheets {
+        let result = if tools.len() == 1 {
+            whole.clone()
+        } else {
+            match ctx.unite(&[&shape, tool]) {
+                Ok(result) => result,
+                Err(e) => return Some(Err(e.to_string())),
+            }
+        };
+        if matches!(ctx.kernel.solid_count(&result), Ok(n) if n > 1) {
+            return Some(Err(format!(
+                "{body} does not touch it: sheets are joined where coplanar panels or coaxial \
+                 bends meet at a seam"
+            )));
+        }
+        match joined(ctx, &current, &sheet, &body.to_string(), &result) {
+            Ok((state, rebuilt)) => {
+                current = state;
+                shape = rebuilt;
+            }
+            Err(e) => return Some(Err(format!("{body} cannot be joined to it: {e}"))),
+        }
+    }
+    Some(Ok((current, shape)))
+}
+
+/// The sheet of a Combine's target whose join with sheet tools is not one
+/// sheet (`why`, from [`combined`]): re-derived where the sheet-domain
+/// adapter can (flat material joined in a panel's plane), else invalid
+/// with that reason (mitcad#1558).
+pub(crate) fn not_combined<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    target: BodyUid,
+    shape: &K::Shape,
+    why: &str,
+) -> SheetChange {
+    match super::rederive::rederive_joined(ctx, target, shape) {
+        Some(state) => SheetChange::Set(state),
+        None => SheetChange::Invalidate(format!("the joined bodies are not one sheet: {why}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,6 +986,97 @@ mod tests {
         // A slot taken already gives the next free one.
         let mut taken = BTreeSet::from([1_108_818_023, 1_108_818_024]);
         assert_eq!(slot("F3.b0/1", "F5.p0", &mut taken), 1_108_818_025);
+    }
+
+    /// A 90-degree bend along y from y = 50, r = 3, neutral radius 3.6,
+    /// turning from -z towards +x.
+    fn bend_at(centre: [f64; 3], axis: [f64; 3]) -> CylinderEmbedding {
+        CylinderEmbedding {
+            centre,
+            axis,
+            radial_start: [0.0, 0.0, -1.0],
+            angular_direction: [1.0, 0.0, 0.0],
+            inside_radius: 3.0,
+            neutral_radius: 3.6,
+            angle_extent: std::f64::consts::FRAC_PI_2,
+            inner_is_front: false,
+        }
+    }
+
+    fn assert_map(map: Isometry2, origin: [f64; 2], x_axis: [f64; 2], y_axis: [f64; 2]) {
+        for (got, want) in [
+            (map.origin, origin),
+            (map.x_axis, x_axis),
+            (map.y_axis, y_axis),
+        ] {
+            assert!(
+                (got[0] - want[0]).abs() <= 1e-9 && (got[1] - want[1]).abs() <= 1e-9,
+                "{map:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bend_mirrored_across_its_axis_maps_onto_the_bend() {
+        // mitcad#1558: the bend at y = 50..70 mirrored about y = 70 lies on
+        // y = 70..90, its axis reversed: v runs back from 40.
+        let bend = bend_at([0.0, 50.0, 5.0], [0.0, 1.0, 0.0]);
+        let image = bend_at([0.0, 90.0, 5.0], [0.0, -1.0, 0.0]);
+        let map = cylinder_map(&image, &bend).unwrap();
+        assert_map(map, [0.0, 40.0], [1.0, 0.0], [0.0, -1.0]);
+        // Its strip [0, BA] x [0, 20] lands on [0, BA] x [20, 40].
+        let corner = map.point([0.0, 0.0]);
+        assert!(corner[0].abs() <= 1e-12 && (corner[1] - 40.0).abs() <= 1e-12);
+        assert!((map.point([1.0, 20.0])[1] - 20.0).abs() <= 1e-12);
+        // A copy moved along the axis keeps v's direction.
+        let moved = bend_at([0.0, 70.0, 5.0], [0.0, 1.0, 0.0]);
+        assert_map(
+            cylinder_map(&moved, &bend).unwrap(),
+            [0.0, 20.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+        );
+    }
+
+    #[test]
+    fn a_bend_turning_the_other_way_over_the_same_arc_runs_u_back() {
+        // The arc from +x back to -z: u becomes BA - u.
+        let bend = bend_at([0.0, 50.0, 5.0], [0.0, 1.0, 0.0]);
+        let reversed = CylinderEmbedding {
+            radial_start: [1.0, 0.0, 0.0],
+            angular_direction: [0.0, 0.0, -1.0],
+            ..bend_at([0.0, 30.0, 5.0], [0.0, 1.0, 0.0])
+        };
+        let allowance = 3.6 * std::f64::consts::FRAC_PI_2;
+        assert_map(
+            cylinder_map(&reversed, &bend).unwrap(),
+            [allowance, -20.0],
+            [-1.0, 0.0],
+            [0.0, 1.0],
+        );
+    }
+
+    #[test]
+    fn bends_off_the_axis_or_of_another_radius_or_arc_are_not_one_bend() {
+        let bend = bend_at([0.0, 50.0, 5.0], [0.0, 1.0, 0.0]);
+        // Parallel but 1 mm aside.
+        assert!(cylinder_map(&bend_at([1.0, 90.0, 5.0], [0.0, -1.0, 0.0]), &bend).is_err());
+        // Crossing it.
+        assert!(cylinder_map(&bend_at([0.0, 50.0, 5.0], [1.0, 0.0, 0.0]), &bend).is_err());
+        // Another radius.
+        let wider = CylinderEmbedding {
+            inside_radius: 4.0,
+            neutral_radius: 4.6,
+            ..bend_at([0.0, 90.0, 5.0], [0.0, -1.0, 0.0])
+        };
+        assert!(cylinder_map(&wider, &bend).is_err());
+        // The other quarter of the cylinder.
+        let other = CylinderEmbedding {
+            radial_start: [0.0, 0.0, 1.0],
+            angular_direction: [-1.0, 0.0, 0.0],
+            ..bend_at([0.0, 90.0, 5.0], [0.0, -1.0, 0.0])
+        };
+        assert!(cylinder_map(&other, &bend).is_err());
     }
 
     #[test]

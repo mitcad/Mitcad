@@ -43,6 +43,7 @@
 
 #include "MacChrome.hpp"
 #include "../framework/Icons.hpp"
+#include "../framework/IconSizeStyle.hpp"
 #include "../framework/WindowStyle.hpp"
 #endif
 
@@ -51,13 +52,15 @@ namespace mitcad::mac {
 #ifdef MITCAD_MAC_UI
 // The offscreen platform has no Cocoa theme to supply macOS button order.
 // Keep the actual Qt controls in their platform roles in component tests.
-class OffscreenDialogButtonOrder final : public QProxyStyle {
+// Made from the box's style by its key, with its icon sizes at Icon size
+// (IconSizeStyle, mitcad#1561).
+class OffscreenDialogButtonOrder final : public IconSizeStyle {
 public:
-  explicit OffscreenDialogButtonOrder(QStyle* base) : QProxyStyle(base) {}
+  explicit OffscreenDialogButtonOrder(QStyle* base) : IconSizeStyle(base) {}
   int styleHint(StyleHint hint, const QStyleOption* option = nullptr,
                 const QWidget* widget = nullptr, QStyleHintReturn* result = nullptr) const override {
     if (hint == QStyle::SH_DialogButtonLayout) return QDialogButtonBox::MacLayout;
-    return QProxyStyle::styleHint(hint, option, widget, result);
+    return IconSizeStyle::styleHint(hint, option, widget, result);
   }
 };
 #endif
@@ -79,7 +82,7 @@ inline void styleDialogButtons(QDialogButtonBox* box, QPushButton* primary = nul
   if (QGuiApplication::platformName() == QStringLiteral("offscreen") &&
       !box->property("mitcad.offscreenButtonOrder").toBool()) {
     box->setProperty("mitcad.offscreenButtonOrder", true);
-    auto* style = new OffscreenDialogButtonOrder(QStyleFactory::create(box->style()->name()));
+    auto* style = new OffscreenDialogButtonOrder(QStyleFactory::create(styleKey(box->style())));
     style->setParent(box);
     box->setStyle(style);
   }

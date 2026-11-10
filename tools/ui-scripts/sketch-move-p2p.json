@@ -1,0 +1,13 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY for Sketch Move/Copy (mitcad#1563): two free points that frame the view's fit at (-40, -30) and (40, 30); c3, a horizontal line from (-25, 10) to (-5, 10) held horizontal, for Rotate; a rectangle from (-30, -20) to (-20, -10) and a circle of radius 3 about (20, -10) for Point to Point; a free line from (0, 15) to (10, 15) and a free point at (20, 5) for Translate's handle."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-40,-30]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[40,30]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-25,10],"end":[-5,10]},
+  {"cmd":"sketch.add_constraint","sketch":"F1","constraint":{"type":"horizontal","line":"c3"}},
+  {"cmd":"sketch.rectangle","sketch":"F1","mode":"two_point","a":[-30,-20],"b":[-20,-10]},
+  {"cmd":"sketch.circle","sketch":"F1","mode":"center","center":[20,-10],"radius":3},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[0,15],"end":[10,15]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[20,5]}
+]

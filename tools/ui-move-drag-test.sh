@@ -71,6 +71,25 @@ held_drag() {
   xdotool "${args[@]}" mouseup 1
 }
 
+# ring_drag key degrees: a held drag of a ring's knob (the last "Manipulator
+# Move/Copy <key> at") that turns it by about that many degrees on the
+# screen about its logged centre, the pointer as far from the centre as the
+# knob. Computed from the logged places, not a fixed offset: a fixed offset
+# ended at the centre, where the way is undefined, once Free Move's rings
+# grew (mitcad#1581, mitcad#1593). The chord stays well away from the
+# centre (cos(degrees/2) of the knob's distance).
+ring_drag() {
+  local kx ky cx cy d
+  read -r kx ky <<< "$(ui_logged_at "Manipulator Move/Copy $1")"
+  read -r cx cy <<< "$(ui_logged_at "Ring centre Move/Copy $1")"
+  d=$(awk -v kx="$kx" -v ky="$ky" -v cx="$cx" -v cy="$cy" -v deg="$2" 'BEGIN {
+    a = deg * atan2(1, 1) / 45; x = kx - cx; y = ky - cy
+    if (x * x + y * y < 400) exit 1
+    printf "%d %d\n", x * cos(a) - y * sin(a) - x, x * sin(a) + y * cos(a) - y }') ||
+    ui_fail "the $1 ring's knob ($kx $ky) lies within 20 px of its centre ($cx $cy)"
+  held_drag "Manipulator Move/Copy $1" $d
+}
+
 # drag_summary label key: checks and prints the drag's line.
 #
 # How many of the 180 moves reach the handle, and how often the pointer
@@ -320,9 +339,10 @@ ui_expect_new "Preview Move/Copy: ok" "previewed" 30
 ui_expect_log "Manipulator Move/Copy rz at " "the Z ring" > /dev/null
 ui_focus_main
 ui_mark
-# Across the ring and along it: the angle changes whichever way the ring
-# is seen.
-held_drag "Manipulator Move/Copy rz" 70 40
+# Along the ring, a sixth of a turn from the knob about the ring's centre
+# as the screen shows it: the angle changes whichever way the ring is seen
+# and however large it is drawn.
+ring_drag rz 60
 ui_expect_new "Manipulator Move/Copy rz dragged to " "released" 20
 drag_summary "Z ring" rz
 ui_expect_new "Drag proxy Move/Copy: shown for rz " "the body turns with the ring"
@@ -384,7 +404,7 @@ ui_expect_new "Preview Move/Copy: ok" "previewed" 30
 ui_expect_log "Manipulator Move/Copy angle at " "the ring" > /dev/null
 ui_focus_main
 ui_mark
-held_drag "Manipulator Move/Copy angle" 70 40
+ring_drag angle 60
 ui_expect_new "Manipulator Move/Copy angle dragged to " "released" 20
 drag_summary "Rotate's ring" angle
 ui_expect_new "Drag proxy Move/Copy: shown for angle " "the component turns with the ring"

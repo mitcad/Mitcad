@@ -211,8 +211,7 @@ drawings::DrawingWorkspace* MainWindow::drawingWorkspace() {
           // ribbon tab other than the drawing's), which would leave the
           // drawing (trigger, mitcad#725).
           for (const auto& def : m_registry->commands()) {
-            if ((def->kind == CommandDef::Kind::Feature || (!def->tab.isEmpty() && !isDrawingCommand(*def))) &&
-                m_registry->effectiveShortcuts(def->id).contains(key)) {
+            if (leavesDrawing(*def) && m_registry->effectiveShortcuts(def->id).contains(key)) {
               return true;
             }
           }
@@ -242,6 +241,9 @@ drawings::DrawingWorkspace* MainWindow::drawingWorkspace() {
     if (m_cutLabelsAction != nullptr) {
       m_drawingWorkspace->setCutLabels(m_cutLabelsAction->isChecked());
     }
+    // Edit Parameters one click away while a drawing is open (mitcad#1582;
+    // the navigation bar, which has it in the 3D view, is hidden here).
+    m_drawingWorkspace->addBarAction(m_registry->action(QStringLiteral("solid.parameters")));
     // The tools are the ribbon's (mitcad#1008), the AppKit frontend's too
     // (mitcad#1073): its ribbon shows the retained ribbon's DRAWING tab
     // (MainWindow::refreshNativeActions).
@@ -255,6 +257,18 @@ drawings::DrawingWorkspace* MainWindow::drawingWorkspace() {
 
 bool MainWindow::isDrawingCommand(const CommandDef& def) {
   return def.tab == QStringLiteral("DRAWING") || def.tab == QStringLiteral("CUT SHEET");
+}
+
+bool MainWindow::leavesDrawing(const CommandDef& def) {
+  if (def.kind == CommandDef::Kind::Feature) {
+    return true;
+  }
+  // Edit Parameters opens its table over the drawing (mitcad#1582): the
+  // drawing follows the design's changes.
+  if (def.id == QStringLiteral("solid.parameters")) {
+    return false;
+  }
+  return !def.tab.isEmpty() && !isDrawingCommand(def);
 }
 
 void MainWindow::updateDrawingChrome() {

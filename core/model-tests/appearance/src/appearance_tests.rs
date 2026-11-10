@@ -758,9 +758,9 @@ fn an_appearance_class_is_kept_only_when_set() {
     // An unknown class is refused.
     let error = refused(
         &mut doc,
-        json!({"cmd": "edit_appearance", "id": "red_copy", "class": "wood"}),
+        json!({"cmd": "edit_appearance", "id": "red_copy", "class": "stone"}),
     );
-    assert!(error.contains("wood"), "{error}");
+    assert!(error.contains("stone"), "{error}");
 }
 
 /// mitcad#1133: a design saved before the library's filament colours,

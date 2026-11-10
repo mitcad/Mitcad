@@ -562,6 +562,9 @@ def run_flow(bridge, design, say=print):
     added = bridge.tool("model_command", {"document": document, "command": {
         "cmd": "sketch.add_line", "sketch": "F4", "start": [100, 100], "end": [130, 100]}})
     check(added["applied"] is True and added["sketch"] == "F4", "sketch.add_line: " + repr(added)[:2000])
+    check(any(hint["rule"] == "sketch-underconstrained" for hint in added["hints"])
+          and all(hint["target"] == "F4" and hint["guide"]["topic"] for hint in added["hints"]),
+          "Sketch hints must name only the edited F4: " + repr(added)[:2000])
     check(len(sketch_query()["entities"]) == before + 3, "sketch.add_line did not add a line and its points")
     state = bridge.tool("ui_state", {})
     check(state["undo"] and state["undo"].endswith(" (agent)"), "The agent's change in the undo text: " + repr(state["undo"]))
@@ -570,7 +573,12 @@ def run_flow(bridge, design, say=print):
     check("being edited" in refused["error"], "Another feature's command in a sketch: " + repr(refused))
     bridge.tool("model_command", {"document": document, "command": {"cmd": "undo"}})
     check(len(sketch_query()["entities"]) == before, "Undo did not take the line back")
-    say("ok   sketch.add_line through the sketch session, labelled (agent), then undo")
+    quiet = bridge.tool("model_command", {"document": document, "hints": False, "timeline": "none", "command": {
+        "cmd": "sketch.add_line", "sketch": "F4", "start": [100, 100], "end": [130, 100]}})
+    check("hints" not in quiet, "hints:false must omit feedback: " + repr(quiet))
+    bridge.tool("model_command", {"document": document, "command": {"cmd": "undo"}})
+    check(len(sketch_query()["entities"]) == before, "Quiet edit's undo did not restore the sketch")
+    say("ok   sketch.add_line through the sketch session, scoped optional hints, labelled (agent), then undo")
 
     # The selection, as an agent points at something.
     selected = bridge.tool("ui_select", {"document": document, "items": [

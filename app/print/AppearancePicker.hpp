@@ -38,7 +38,7 @@ namespace mitcad {
 // anchor's native control (showNativePicker, mitcad#1068). Logged as
 // "<logName> picker opened: N appearances", "<logName> picker sections:
 // FDM Plastic 16 | General Plastic 6 | This Design 1 | Metal 8 | Resin 3 |
-// Other 14",
+// Wood 17 | Other 11",
 // "<logName> picker search: <text>, M shown" and "<logName> picker
 // chosen: <name> (<id>)".
 class AppearancePopover : public QFrame {
@@ -87,7 +87,7 @@ private:
 // together, under its title ("FDM Plastic"), for FDM Plastic and Resin
 // then General Plastic's; then the design's others under `designTitle`;
 // then the library's others by class in the lists' order (Metal, General
-// Plastic, FDM Plastic, Resin, Other; materialClasses()). Empty sections
+// Plastic, FDM Plastic, Resin, Wood, Other; materialClasses()). Empty sections
 // are left out; an appearance without a class (or one not known here) is
 // Other. Without a class: the design's, then the library's by class.
 struct AppearanceSection {

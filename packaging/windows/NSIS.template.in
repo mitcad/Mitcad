@@ -16,6 +16,9 @@
 ;   /S                silent; installs for the current user unless
 ;   /AllUsers         installs for all users (elevates when needed),
 ;   /CurrentUser      installs for the current user (the default),
+;   /EndPrograms      silent: ends the programs from <dir>\bin of this session
+;                     except mitcad.exe instead of stopping for them
+;                     (mitcad#1584; the updater, after asking the person),
 ;   /D=<dir>          the folder; last, without quotes. A silent install whose
 ;                     /D is the folder of the all-users installation (what the
 ;                     updater of an earlier release passes) installs for all
@@ -34,12 +37,20 @@
 ; among them (mitcad-cli mcp --connect, which an AI assistant keeps
 ; running) to end, through the event each one waits on
 ; (app/update/RunningPrograms.hpp), and gives them a few seconds. With
-; pages, what still runs is named with Retry and Cancel; silently the
-; installer ends with exit code 3 and changes nothing. AllowSkipFiles is
+; pages, what still runs is named with End Them, Retry and Cancel
+; (mitcad#1584): End Them ends the programs from bin of this session but
+; MitCad, and asks MitCad's design window to close as quitting it does, so
+; that MitCad asks about unsaved changes; a MitCad that still runs then is
+; named with End Anyway, which ends it too. Silently the installer ends
+; with exit code 3 and changes nothing, unless /EndPrograms is given (the
+; updater passes it only after the person chose End Them and Install):
+; then it ends the programs from bin of this session but MitCad first, and
+; ends with exit code 3 only if something still runs. AllowSkipFiles is
 ; off: a file that cannot be written is never skipped (silently: aborted).
 ; Exit codes: 0 done, 1 cancelled, 2 aborted (also: the earlier version
 ; could not be uninstalled, or a file could not be written), 3 programs
-; from the installation are running (silent; nothing was changed), 740
+; from the installation are running (silent; nothing was changed; with
+; /EndPrograms, what it could not end), 740
 ; elevated but still no administrator rights, 1223 the elevation was
 ; refused.
 
@@ -61,6 +72,13 @@
   ; PROCESS_QUERY_LIMITED_INFORMATION, EVENT_MODIFY_STATE.
   !define MITCAD_QUERY_LIMITED 0x1000
   !define MITCAD_EVENT_MODIFY 0x0002
+  ; PROCESS_TERMINATE, WM_CLOSE, GW_OWNER (mitcad#1584).
+  !define MITCAD_PROCESS_TERMINATE 0x0001
+  !define MITCAD_WM_CLOSE 0x0010
+  !define MITCAD_GW_OWNER 4
+  ; The task dialog's buttons: End Them (or End Anyway), and IDRETRY.
+  !define MITCAD_ID_END 101
+  !define MITCAD_ID_RETRY 4
 
 ;--------------------------------
 ; Variables. CPack's generated shortcut commands use STARTMENU_FOLDER and
@@ -87,6 +105,16 @@
   ; 1: MitcadFindRunning also asks the MCP bridges among them to end.
   Var MitcadAskBridges
   Var MitcadWaited
+  ; What MitcadFindRunning does to the programs from $INSTDIR\bin of
+  ; $MitcadSession (mitcad#1584): "" nothing, "helpers" ends all but
+  ; mitcad.exe, "close" also asks mitcad.exe's design window to close,
+  ; "all" ends mitcad.exe too.
+  Var MitcadEndMode
+  Var MitcadSession
+  ; 1 when MitcadFindRunning found bin\mitcad.exe running.
+  Var MitcadAppRunning
+  ; 1 once End Them asked MitCad to close (the folder page's question).
+  Var MitcadAppAsked
 
 ;--------------------------------
 ; General
@@ -103,6 +131,9 @@
 
   ; Runs as the user; elevation only for an installation for all users.
   RequestExecutionLevel user
+  ; The common controls 6 (the manifest's dependency): the task dialog of
+  ; the question about programs still running (mitcad#1584).
+  XPStyle on
   ; A file that cannot be written is never skipped (mitcad#1454): Retry or
   ; Cancel with pages, an abort when silent; a skipped DLL would leave a
   ; mixed installation.
@@ -297,6 +328,14 @@ Function MitcadElevate
   ${If} ${Silent}
     StrCpy $MitcadTemp "/S $MitcadTemp"
   ${EndIf}
+  ; The person's End Them and Install goes on to the elevated copy, which
+  ; has the rights to end the programs (mitcad#1584).
+  Push "/EndPrograms"
+  Call MitcadHasSwitch
+  Pop $MitcadResult
+  ${If} $MitcadResult == 1
+    StrCpy $MitcadTemp "$MitcadTemp /EndPrograms"
+  ${EndIf}
   ${If} $MitcadDirGiven == 1
     StrCpy $MitcadTemp "$MitcadTemp /D=$INSTDIR"
   ${EndIf}
@@ -314,6 +353,10 @@ FunctionEnd
 ; Local\MitcadBridgeQuit-<pid> and ends (app/update/RunningPrograms.hpp);
 ; other programs have no such event. A process this installer may not
 ; query (another user's, without administrator rights) is not seen.
+; $MitcadAppRunning: 1 when bin\mitcad.exe is among them. With
+; $MitcadEndMode (mitcad#1584) it also ends the programs from bin of
+; $MitcadSession: "helpers" all but mitcad.exe; "close" those, and asks
+; mitcad.exe to close (MitcadCloseWindow); "all" every one.
 Function MitcadFindRunning
   Push $0
   Push $1
@@ -325,7 +368,11 @@ Function MitcadFindRunning
   Push $7
   Push $8
   Push $9
+  Push $R0
+  Push $R1
+  Push $R2
   StrCpy $MitcadRunning ""
+  StrCpy $MitcadAppRunning 0
   StrCpy $0 "$INSTDIR\"
   StrLen $1 $0
   ; The ids of up to 4096 processes (K32EnumProcesses: kernel32 since
@@ -363,12 +410,42 @@ Function MitcadFindRunning
               System::Call 'kernel32::CloseHandle(p r4)'
             ${EndIf}
           ${EndIf}
+          ; $R0 "bin\", $R1 the program's path below bin.
+          StrCpy $R0 $6 4 $1
+          StrCpy $R1 $6 "" $1
+          StrCpy $R1 $R1 "" 4
+          ${If} $R0 == "bin\"
+            ${If} $R1 == "mitcad.exe"
+              StrCpy $MitcadAppRunning 1
+            ${EndIf}
+            ${If} $MitcadEndMode != ""
+              StrCpy $R0 ""
+              System::Call 'kernel32::ProcessIdToSessionId(i r7, *i .R0) i .R2'
+              ${If} $R2 != 0
+              ${AndIf} $R0 == $MitcadSession
+                ${If} $R1 != "mitcad.exe"
+                ${OrIf} $MitcadEndMode == "all"
+                  System::Call 'kernel32::OpenProcess(i ${MITCAD_PROCESS_TERMINATE}, i 0, i r7) p .R2'
+                  ${If} $R2 != 0
+                    System::Call 'kernel32::TerminateProcess(p R2, i 1)'
+                    System::Call 'kernel32::CloseHandle(p R2)'
+                  ${EndIf}
+                ${ElseIf} $MitcadEndMode == "close"
+                  Push $7
+                  Call MitcadCloseWindow
+                ${EndIf}
+              ${EndIf}
+            ${EndIf}
+          ${EndIf}
         ${EndIf}
       ${EndIf}
     ${EndIf}
     IntOp $5 $5 + 1
   ${EndWhile}
   System::Free $2
+  Pop $R2
+  Pop $R1
+  Pop $R0
   Pop $9
   Pop $8
   Pop $7
@@ -392,6 +469,12 @@ Function MitcadWaitForPrograms
   StrCpy $MitcadAskBridges 1
   Call MitcadFindRunning
   StrCpy $MitcadAskBridges 0
+  Call MitcadWaitUntilEnded
+FunctionEnd
+
+; Gives what $MitcadRunning lists up to five seconds to end; $MitcadRunning:
+; what still runs.
+Function MitcadWaitUntilEnded
   StrCpy $MitcadWaited 0
   ${DoWhile} $MitcadRunning != ""
     ${If} $MitcadWaited >= 20
@@ -401,6 +484,129 @@ Function MitcadWaitForPrograms
     IntOp $MitcadWaited $MitcadWaited + 1
     Call MitcadFindRunning
   ${Loop}
+FunctionEnd
+
+; Asks MitCad process <pid> (on the stack) to close as quitting it does
+; (mitcad#1584): WM_CLOSE to its first design window, a window without an
+; owner titled "<design> - MitCad <version>", so that MitCad asks about
+; the design's unsaved changes. Its hidden helper windows (titled "MitCad")
+; are never closed.
+Function MitcadCloseWindow
+  Exch $0
+  Push $1
+  Push $2
+  Push $3
+  StrCpy $1 0
+  ${Do}
+    System::Call 'user32::FindWindowExW(p 0, p r1, p 0, p 0) p .r1'
+    ${If} $1 == 0
+      ${Break}
+    ${EndIf}
+    StrCpy $2 0
+    System::Call 'user32::GetWindowThreadProcessId(p r1, *i .r2)'
+    ${If} $2 == $0
+      System::Call 'user32::GetWindow(p r1, i ${MITCAD_GW_OWNER}) p .r2'
+      ${If} $2 == 0
+        System::Call 'user32::GetWindowTextW(p r1, w .r3, i ${NSIS_MAX_STRLEN})'
+        System::Call 'shlwapi::StrStrW(w r3, w " - MitCad ") p .r2'
+        ${If} $2 != 0
+          System::Call 'user32::PostMessageW(p r1, i ${MITCAD_WM_CLOSE}, p 0, p 0)'
+          ${Break}
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${Loop}
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; Ends the programs from $INSTDIR\bin of this session as $MitcadEndMode
+; says (MitcadFindRunning, mitcad#1584) and gives them up to five seconds;
+; $MitcadRunning: what still runs, $MitcadEndMode empty again.
+Function MitcadEndPrograms
+  Push $0
+  System::Call 'kernel32::GetCurrentProcessId() i .r0'
+  System::Call 'kernel32::ProcessIdToSessionId(i r0, *i .r0)'
+  StrCpy $MitcadSession $0
+  Pop $0
+  Call MitcadFindRunning
+  StrCpy $MitcadEndMode ""
+  Call MitcadWaitUntilEnded
+FunctionEnd
+
+; The question with pages about what $MitcadRunning lists (mitcad#1584), a
+; task dialog: End Them, Retry and Cancel; once End Them has asked MitCad
+; to close and it still runs ($MitcadAppAsked, $MitcadAppRunning), End
+; Anyway in place of End Them, naming the risk. $MitcadResult: "end",
+; "endanyway", "retry" or "cancel". Without a task dialog (no common
+; controls 6), a message box: Yes for End Them or End Anyway, No for Retry.
+Function MitcadAskAboutRunning
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  ${If} $MitcadAppAsked == 1
+  ${AndIf} $MitcadAppRunning == 1
+    StrCpy $1 "End &Anyway"
+    StrCpy $6 "End Anyway"
+    StrCpy $2 "MitCad is still running"
+    StrCpy $4 "MitCad was asked to close, as when you quit it, but it is still running. It may be asking whether to save the changes to a design: answer it there, then choose Retry.$\r$\n$\r$\nStill running from $INSTDIR:$\r$\n$MitcadRunning$\r$\n$\r$\nEnd Anyway ends MitCad and the other programs listed without saving: changes MitCad has not saved are lost."
+    StrCpy $5 "endanyway"
+  ${Else}
+    StrCpy $1 "&End Them"
+    StrCpy $6 "End Them"
+    StrCpy $2 "Programs from @CPACK_NSIS_PACKAGE_NAME@ are running"
+    StrCpy $4 "@CPACK_NSIS_PACKAGE_NAME@ cannot be installed while these programs from $INSTDIR are running:$\r$\n$\r$\n$MitcadRunning$\r$\n$\r$\nEnd Them ends them and continues. MitCad is asked to close first, as when you quit it, so that you can save your changes. AI assistant sessions connected to @CPACK_NSIS_PACKAGE_NAME@ run bin\mitcad-cli.exe. Or close them yourself and choose Retry."
+    StrCpy $5 "end"
+  ${EndIf}
+  StrCpy $3 "&Retry"
+  ; TASKDIALOG_BUTTON[2] (commctrl.h, packed): the id and the text.
+  System::Call '*(i ${MITCAD_ID_END}, w r1, i ${MITCAD_ID_RETRY}, w r3) p .r0'
+  StrCpy $3 "@CPACK_NSIS_PACKAGE_NAME@ Setup"
+  ; TASKDIALOGCONFIG (commctrl.h, packed): cbSize, hwndParent, hInstance,
+  ; dwFlags (TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW),
+  ; dwCommonButtons (TDCBF_CANCEL_BUTTON), pszWindowTitle, pszMainIcon
+  ; (TD_WARNING_ICON), pszMainInstruction, pszContent, cButtons, pButtons,
+  ; nDefaultButton, cRadioButtons, pRadioButtons, nDefaultRadioButton,
+  ; pszVerificationText, pszExpandedInformation, pszExpandedControlText,
+  ; pszCollapsedControlText, pszFooterIcon, pszFooter, pfCallback,
+  ; lpCallbackData, cxWidth.
+  System::Call '*(&l4, p $HWNDPARENT, p 0, i 0x1008, i 0x8, w r3, p 65535, w r2, w r4, i 2, p r0, i ${MITCAD_ID_RETRY}, i 0, p 0, i 0, p 0, p 0, p 0, p 0, p 0, p 0, p 0, p 0, i 0) p .r1'
+  StrCpy $2 0
+  System::Call 'comctl32::TaskDialogIndirect(p r1, *i 0 r2, p 0, p 0) i .r3'
+  System::Free $1
+  System::Free $0
+  ${If} $3 == 0
+    ${If} $2 == ${MITCAD_ID_END}
+      StrCpy $MitcadResult $5
+    ${ElseIf} $2 == ${MITCAD_ID_RETRY}
+      StrCpy $MitcadResult "retry"
+    ${Else}
+      StrCpy $MitcadResult "cancel"
+    ${EndIf}
+    Goto mitcad_asked
+  ${EndIf}
+  MessageBox MB_YESNOCANCEL|MB_ICONEXCLAMATION "$4$\r$\n$\r$\nYes: $6. No: Retry." IDYES mitcad_ask_yes IDNO mitcad_ask_no
+  StrCpy $MitcadResult "cancel"
+  Goto mitcad_asked
+mitcad_ask_yes:
+  StrCpy $MitcadResult $5
+  Goto mitcad_asked
+mitcad_ask_no:
+  StrCpy $MitcadResult "retry"
+mitcad_asked:
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
 FunctionEnd
 
 ; Uninstalls an earlier version registered in the chosen scope with its own
@@ -496,6 +702,18 @@ Function .onInit
     ; Nothing is touched while a program from the installation runs
     ; (mitcad#1454): neither the earlier version's files nor this one's.
     Call MitcadWaitForPrograms
+    ${If} $MitcadRunning != ""
+      ; The updater passes /EndPrograms only after the person chose End
+      ; Them and Install (mitcad#1584); MitCad itself it has handled.
+      ; Without it nothing is ended: no one was asked.
+      Push "/EndPrograms"
+      Call MitcadHasSwitch
+      Pop $0
+      ${If} $0 == 1
+        StrCpy $MitcadEndMode "helpers"
+        Call MitcadEndPrograms
+      ${EndIf}
+    ${EndIf}
     ${If} $MitcadRunning != ""
       SetErrorLevel ${MITCAD_FILES_IN_USE}
       Quit
@@ -631,14 +849,23 @@ FunctionEnd
 
 Function MitcadDirectoryLeave
   ; Programs from the installation keep its files (mitcad#1454): named, with
-  ; Retry; Cancel stays on this page.
+  ; End Them (mitcad#1584), Retry, and Cancel, which stays on this page.
+  StrCpy $MitcadAppAsked 0
   ${Do}
     Call MitcadWaitForPrograms
     ${If} $MitcadRunning == ""
       ${Break}
     ${EndIf}
-    ${IfNot} ${Cmd} `MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "@CPACK_NSIS_PACKAGE_NAME@ cannot be installed while programs from $INSTDIR are running:$\r$\n$\r$\n$MitcadRunning$\r$\n$\r$\nClose them, then choose Retry. AI assistant sessions connected to @CPACK_NSIS_PACKAGE_NAME@ run bin\mitcad-cli.exe; Task Manager can end it." IDRETRY`
+    Call MitcadAskAboutRunning
+    ${If} $MitcadResult == "cancel"
       Abort
+    ${ElseIf} $MitcadResult == "end"
+      StrCpy $MitcadEndMode "close"
+      Call MitcadEndPrograms
+      StrCpy $MitcadAppAsked 1
+    ${ElseIf} $MitcadResult == "endanyway"
+      StrCpy $MitcadEndMode "all"
+      Call MitcadEndPrograms
     ${EndIf}
   ${Loop}
   Call MitcadUninstallPrevious

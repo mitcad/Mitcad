@@ -51,6 +51,10 @@ pub fn arguments(request: &Value) -> Result<Value, String> {
     if bridge.is_empty() || bridge.contains('\0') {
         return Err("the chat needs the installed mitcad-cli bridge".to_owned());
     }
+    let guidance_file = text_field(request, "guidance_file");
+    if guidance_file.is_empty() || guidance_file.contains('\0') {
+        return Err("the chat needs a file for its modeling instructions".to_owned());
+    }
     let instance = text_field(request, "instance");
     let chat = text_field(request, "chat");
     if !plain_id(instance, 64) || !plain_id(chat, 64) {
@@ -87,6 +91,8 @@ pub fn arguments(request: &Value) -> Result<Value, String> {
         config.as_str(),
         "--allowedTools",
         "mcp__mitcad",
+        "--append-system-prompt-file",
+        guidance_file,
     ] {
         arguments.push(word.to_owned());
     }
@@ -98,7 +104,7 @@ pub fn arguments(request: &Value) -> Result<Value, String> {
         arguments.push("--model".to_owned());
         arguments.push(model.to_owned());
     }
-    Ok(json!({"arguments": arguments, "mcp_config": config}))
+    Ok(json!({"arguments": arguments, "mcp_config": config, "guidance": super::guidance()}))
 }
 
 /// The model choices the panel offers for Claude Code: the aliases its

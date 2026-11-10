@@ -1005,6 +1005,10 @@ impl<K: Kernel> Document<K> {
             .unwrap_or_else(|| material_class(&new));
         // A filament keeps `plastic`, which older versions read (mitcad#1102).
         new.class = Some(material::stored_class(&new, class));
+        // A new Wood material looks like wood (mitcad#1552).
+        if source_class.is_none() {
+            material::give_class_appearance(&mut new, class, change);
+        }
         new.id = match change.id.as_deref().map(str::trim) {
             Some(id) => id.to_owned(),
             None => free_id(&slug(&new.name), |id| {

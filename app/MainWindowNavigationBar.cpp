@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 // The navigation bar at the bottom of the view (mitcad#1086,
 // view/NavigationBar): Look At, Fit, Visual Style, Layout Grid, Snap to
-// Grid and Comment Pins, the View menu's own actions. In the Floating
+// Grid and Comment Pins, the View menu's own actions, and after a
+// separator the commands the user pinned to it (mitcad#1589: from a group
+// menu row's or a pinned toolbar button's Pin to Navigation Bar; Edit
+// Parameters by default, mitcad#1582). In the Floating
 // layout a capsule card at the bottom centre of the view, above the timeline
 // (FloatingLayout::Anchor::BottomCenter); in the Docked layout in the
 // status bar. It shows in every workspace and in sketches; Preferences ›
@@ -16,6 +19,7 @@
 #include "framework/ChromeStyle.hpp"
 #include "framework/FloatingLayout.hpp"
 #include "framework/GlassCard.hpp"
+#include "framework/Ribbon.hpp"
 #include "view/NavigationBar.hpp"
 #include "view/ViewController.hpp"
 
@@ -53,6 +57,23 @@ void MainWindow::createNavigationBar() {
     statusBar()->insertPermanentWidget(0, m_navigationBar);
   }
   m_viewController->navigationBarChanged = [this](bool) { updateNavigationBar(); };
+  // Pinned from the ribbon's menus (mitcad#1589); a pinned button's Change
+  // Keyboard Shortcut… opens Tools > Keyboard Shortcuts at its command.
+  if (m_ribbon != nullptr) {
+    m_ribbon->setNavigationBarPins(
+        [this](const QString& id) { return m_navigationBar != nullptr && m_navigationBar->isPinned(id); });
+    connect(m_ribbon, &Ribbon::navigationBarPinRequested, this, [this](const QString& id, bool wanted) {
+      if (m_navigationBar == nullptr) {
+        return;
+      }
+      if (wanted) {
+        m_navigationBar->pin(id);
+      } else {
+        m_navigationBar->unpin(id);
+      }
+    });
+  }
+  connect(m_navigationBar, &NavigationBar::shortcutRequested, this, [this](const QString& id) { editShortcuts(id); });
   updateNavigationBar();
 }
 

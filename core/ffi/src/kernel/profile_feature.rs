@@ -82,6 +82,16 @@ pub mod ffi {
         target: TargetInput,
         /// The wall's angle to the axis, positive narrowing (mitcad#4).
         taper: f64,
+        /// A press fit's section (mitcad#1517): 0 none, 1 a regular
+        /// polygon of `press_fit_count` sides whose inscribed diameter is
+        /// `press_fit_inner`, 2 a bore of `press_fit_bore` with
+        /// `press_fit_count` crush ribs whose tips touch `press_fit_inner`;
+        /// turned by `press_fit_angle`.
+        press_fit: u8,
+        press_fit_count: u32,
+        press_fit_inner: f64,
+        press_fit_bore: f64,
+        press_fit_angle: f64,
     }
 
     #[derive(Clone, Debug)]
@@ -189,6 +199,8 @@ use mitcad_model::{
     Axis, Bound, Cylinder, ExtrudeFeatureSpec, ExtrudeSide, ExtrudeStart, HoleEnd, HoleShape,
     HoleSpec, KernelError, Plane, RevolveSpec, SideEnd, Target, ThreadSpec, WallLocation,
 };
+
+use mitcad_model::kernel::HolePressFit;
 
 use super::shape::ffi::{ShapeList, new_shape_list};
 use super::{Shape, occt};
@@ -355,7 +367,37 @@ pub fn hole_input(
         through: 0,
         target: unset(),
         taper: spec.taper,
+        press_fit: 0,
+        press_fit_count: 0,
+        press_fit_inner: 0.0,
+        press_fit_bore: 0.0,
+        press_fit_angle: 0.0,
     };
+    match spec.press_fit {
+        None => {}
+        Some(HolePressFit::Polygon {
+            sides,
+            inscribed,
+            angle,
+        }) => {
+            input.press_fit = 1;
+            input.press_fit_count = sides;
+            input.press_fit_inner = inscribed;
+            input.press_fit_angle = angle;
+        }
+        Some(HolePressFit::CrushRibs {
+            ribs,
+            tips,
+            bore,
+            angle,
+        }) => {
+            input.press_fit = 2;
+            input.press_fit_count = ribs;
+            input.press_fit_inner = tips;
+            input.press_fit_bore = bore;
+            input.press_fit_angle = angle;
+        }
+    }
     match spec.shape {
         HoleShape::Simple => {}
         HoleShape::Counterbore { diameter, depth } => {

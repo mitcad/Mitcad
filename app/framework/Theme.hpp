@@ -121,7 +121,7 @@ enum class ColorRole {
   Component5,
   Component6,
   Component7,
-  AxisX, // the X, Y and Z axes: the view cube and the joint triad (a recorded exception)
+  AxisX, // the X, Y and Z axes: the view cube, the joint triad, Free Move's handles (a recorded exception)
   AxisY,
   AxisZ,
   JointA,

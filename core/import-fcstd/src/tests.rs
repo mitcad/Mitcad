@@ -8412,8 +8412,11 @@ fn assembly_joints_become_joints_where_the_parts_are() {
     assert_eq!(item(&report, "Ground").outcome, ObjectOutcome::Included);
     let joint_def = |name: &str| -> serde_json::Value {
         let it = item(&report, name);
-        assert_eq!(it.outcome, ObjectOutcome::Parametric, "{it:?}");
+        // (Partial: the mock's faces give joints no frame, so the
+        // connectors stay FreeCAD's frames, mitcad#1560.)
+        assert_eq!(it.outcome, ObjectOutcome::Partial, "{it:?}");
         let note = it.note.as_deref().unwrap();
+        assert!(note.contains("fixed in the part"), "{note}");
         let uid = note
             .split_whitespace()
             .find(|w| w.starts_with('F') && w.trim_end_matches(':')[1..].parse::<u32>().is_ok())
@@ -8447,4 +8450,524 @@ fn assembly_joints_become_joints_where_the_parts_are() {
     // file places them.
     let zs: Vec<f64> = centres(&doc, "Block").iter().map(|c| c[2]).collect();
     assert_eq!(zs, [5.0, 5.0, 15.0, 15.0, 35.0]);
+}
+
+// Body placement expressions, joints on the picked elements, joint limits
+// (mitcad#1560).
+
+/// The definitions of the document's `move_occurrence` features, in
+/// timeline order.
+fn occurrence_moves(doc: &Document<MockKernel>) -> Vec<serde_json::Value> {
+    let uids: Vec<String> = doc
+        .features()
+        .filter(|f| matches!(f.def, FeatureDef::MoveOccurrence(_)))
+        .map(|f| f.uid.to_string())
+        .collect();
+    uids.iter().map(|uid| def_json(doc, uid)).collect()
+}
+
+/// Where the design shows a body's first instance.
+fn shown_at(doc: &Document<MockKernel>, name: &str) -> [f64; 3] {
+    doc.instances()
+        .iter()
+        .find(|i| i.name == name)
+        .unwrap_or_else(|| panic!("no instance of {name}"))
+        .transform
+        .translation
+        .map(|v| (v * 1e6).round() / 1e6)
+}
+
+/// A parameter's expression by the name a definition gives it.
+fn expression_of(doc: &Document<MockKernel>, v: &serde_json::Value) -> String {
+    let name = v.as_str().unwrap_or_else(|| panic!("no parameter: {v}"));
+    let id = doc.parameters().find(name).unwrap();
+    doc.parameters().get(id).unwrap().expression().to_owned()
+}
+
+#[test]
+fn a_body_s_position_driven_by_expressions_moves_its_occurrence() {
+    // Body B is placed at x = Off (25) in part Head; Body Still is at the
+    // origin, where an expression that gives 0 drives its z. Each is an
+    // occurrence of its own component, moved by a move_occurrence of the
+    // part by its expressions, and follows the parameter.
+    let xml = document(&[
+        (
+            "App::VarSet",
+            "VarSet",
+            variable("Off", "Length", "<Float value=\"25\"/>"),
+        ),
+        (
+            "App::Part",
+            "Head",
+            links("Group", "App::PropertyLinkList", &["B", "Still"]),
+        ),
+        (
+            "PartDesign::Body",
+            "B",
+            format!(
+                "{}{}{}{}{}",
+                shape("B.brp"),
+                links("Group", "App::PropertyLinkList", &["SketchB", "PadB"]),
+                link("Tip", "PadB"),
+                placement([25.0, 5.0, 0.0], [0.0, 0.0, 1.0], 0.0),
+                expressions(&[(".Placement.Base.x", "VarSet.Off")])
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "SketchB",
+            rectangle_sketch(0.0, 0.0, 40.0, 20.0),
+        ),
+        (
+            "PartDesign::Pad",
+            "PadB",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "SketchB", &[]),
+                float("Length", 5.0),
+                shape("PadB.brp")
+            ),
+        ),
+        (
+            "PartDesign::Body",
+            "Still",
+            // (FreeCAD writes a Body's Placement also at the origin.)
+            format!(
+                "{}{}{}",
+                shape("Still.brp"),
+                placement([0.0; 3], [0.0, 0.0, 1.0], 0.0),
+                expressions(&[(".Placement.Base.z", "VarSet.Off - 25 mm")])
+            ),
+        ),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[
+            ("B.brp", b"6 b"),
+            ("PadB.brp", b"6 padb"),
+            ("Still.brp", b"6 still"),
+        ],
+    );
+    let (mut doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    let row = expression_row(&report, "B", ".Placement.Base.x");
+    assert_eq!(row.outcome, ExpressionOutcome::Expression, "{row:?}");
+    assert_eq!(row.mitcad.as_deref(), Some("Off"), "{row:?}");
+    let row = expression_row(&report, "Still", ".Placement.Base.z");
+    assert_eq!(row.outcome, ExpressionOutcome::Expression, "{row:?}");
+    let moves = occurrence_moves(&doc);
+    assert_eq!(moves.len(), 2, "{moves:?}");
+    // B's x is the parameter itself.
+    let by = &moves[0]["transform"];
+    assert_eq!(by["type"], "translate_xyz", "{by}");
+    assert_eq!(by["x"], "Off", "{by}");
+    assert_eq!(number(&doc, &by["y"]), 0.0, "{by}");
+    assert_eq!(number(&doc, &by["z"]), 0.0, "{by}");
+    let by = &moves[1]["transform"];
+    assert_eq!(number(&doc, &by["z"]), 0.0, "{by}");
+    assert_eq!(expression_of(&doc, &by["z"]), "Off - 25 mm", "{by}");
+    // Where the file places them, and where the parameter moves them.
+    assert_eq!(shown_at(&doc, "B"), [25.0, 5.0, 0.0]);
+    assert_eq!(shown_at(&doc, "Still"), [0.0, 0.0, 0.0]);
+    doc.set_parameter_expression("Off", "40 mm", None).unwrap();
+    assert_eq!(shown_at(&doc, "B"), [40.0, 5.0, 0.0]);
+    assert_eq!(shown_at(&doc, "Still"), [0.0, 0.0, 15.0]);
+}
+
+#[test]
+fn a_clone_of_a_body_moved_by_an_expression_stays_where_the_clone_puts_it() {
+    // A's position (y = Off) moves its occurrence, and the linked copy of
+    // A in B with it: the clone's move takes A's expression off again, so
+    // the copy stays where the clone's own placement (y = Off) puts it.
+    let xml = document(&[
+        (
+            "App::VarSet",
+            "VarSet",
+            variable("Off", "Length", "<Float value=\"10\"/>"),
+        ),
+        (
+            "App::Part",
+            "Head",
+            links("Group", "App::PropertyLinkList", &["A", "B"]),
+        ),
+        (
+            "PartDesign::Body",
+            "A",
+            format!(
+                "{}{}{}{}{}",
+                shape("A.brp"),
+                links("Group", "App::PropertyLinkList", &["SketchA", "PadA"]),
+                link("Tip", "PadA"),
+                placement([0.0, 10.0, 0.0], [0.0, 0.0, 1.0], 0.0),
+                expressions(&[(".Placement.Base.y", "VarSet.Off")])
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "SketchA",
+            rectangle_sketch(0.0, 0.0, 40.0, 20.0),
+        ),
+        (
+            "PartDesign::Pad",
+            "PadA",
+            format!(
+                "{}{}{}",
+                link_sub("Profile", "SketchA", &[]),
+                float("Length", 5.0),
+                shape("PadA.brp")
+            ),
+        ),
+        (
+            "PartDesign::Body",
+            "B",
+            format!(
+                "{}{}{}{}",
+                shape("B.brp"),
+                links("Group", "App::PropertyLinkList", &["Clone"]),
+                link("Tip", "Clone"),
+                placement([0.0, -30.0, 0.0], [0.0, 0.0, 1.0], 0.0)
+            ),
+        ),
+        (
+            "PartDesign::FeatureBase",
+            "Clone",
+            format!(
+                "{}{}{}{}",
+                link("BaseFeature", "A"),
+                placement([0.0, 10.0, 0.0], [0.0, 0.0, 1.0], 0.0),
+                expressions(&[(".Placement.Base.y", "VarSet.Off")]),
+                shape("Clone.brp")
+            ),
+        ),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[
+            ("A.brp", b"6 a"),
+            ("PadA.brp", b"6 pada"),
+            ("B.brp", b"6 b"),
+            ("Clone.brp", b"6 clone"),
+        ],
+    );
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    let row = expression_row(&report, "A", ".Placement.Base.y");
+    assert_eq!(row.outcome, ExpressionOutcome::Expression, "{row:?}");
+    assert_eq!(occurrence_moves(&doc).len(), 1);
+    let defs = defs_of(&doc, &report, "Clone");
+    let moved = &defs[1];
+    assert_eq!(moved["type"], "move", "{moved}");
+    let y = &moved["transform"]["y"];
+    assert_eq!(number(&doc, y), -30.0, "{moved}");
+    assert_eq!(expression_of(&doc, y), "Off - Off - 30 mm", "{moved}");
+}
+
+/// An `App::PropertyAngle` of degrees.
+fn angle(name: &str, degrees: f64) -> String {
+    prop(
+        name,
+        "App::PropertyAngle",
+        &format!("<Float value=\"{degrees}\"/>"),
+    )
+}
+
+#[test]
+fn joint_connectors_follow_their_elements_and_limits_come_along() {
+    // Links of one block: an edge's connector is the edge's frame moved
+    // along the edge to FreeCAD's connector (a shift); faces the mock gives
+    // no frame keep FreeCAD's frames fixed, with why; a slider's length
+    // limits come as they are, a revolute joint's angle limits turned round
+    // (only so do they hold its turn of -30°).
+    let kinds = [
+        "Fixed",
+        "Revolute",
+        "Cylindrical",
+        "Slider",
+        "Ball",
+        "Distance",
+    ];
+    let joint = |kind: usize, a: &str, sub: &str, pa: String, b: &str, pb: String| {
+        format!(
+            "{}{}{}{}{}",
+            custom_enum("JointType", kind, &kinds),
+            xlink_sub("Reference1", a, sub),
+            pa.replacen("name=\"Placement\"", "name=\"Placement1\"", 1),
+            xlink_sub("Reference2", b, sub),
+            pb.replacen("name=\"Placement\"", "name=\"Placement2\"", 1)
+        )
+    };
+    // At x = 5, z along x (and x along -z).
+    let along_x = || placement([5.0, 0.0, 0.0], [0.0, 1.0, 0.0], 90.0);
+    let at = |p: [f64; 3]| placement(p, [0.0, 0.0, 1.0], 0.0);
+    let xml = document(&[
+        ("Part::Feature", "Block", shape("Block.brp")),
+        (
+            "Assembly::AssemblyObject",
+            "Assembly",
+            links(
+                "Group",
+                "App::PropertyLinkList",
+                &["L1", "L2", "L3", "L4", "Joints"],
+            ),
+        ),
+        (
+            "App::Link",
+            "L1",
+            format!("{}{}", xlink("", "Block"), at([0.0; 3])),
+        ),
+        (
+            "App::Link",
+            "L2",
+            format!("{}{}", xlink("", "Block"), at([10.0, 0.0, 0.0])),
+        ),
+        (
+            "App::Link",
+            "L3",
+            format!("{}{}", xlink("", "Block"), at([0.0, 0.0, 30.0])),
+        ),
+        (
+            "App::Link",
+            "L4",
+            format!(
+                "{}{}",
+                xlink("", "Block"),
+                placement([5.0, 5.0, 10.0], [0.0, 0.0, 1.0], 30.0)
+            ),
+        ),
+        (
+            "Assembly::JointGroup",
+            "Joints",
+            links(
+                "Group",
+                "App::PropertyLinkList",
+                &["Ground", "Edge", "Slide", "Turn"],
+            ),
+        ),
+        ("App::FeaturePython", "Ground", link("ObjectToGround", "L1")),
+        (
+            "App::FeaturePython",
+            "Edge",
+            joint(0, "L1", "Edge1", along_x(), "L2", along_x()),
+        ),
+        (
+            "App::FeaturePython",
+            "Slide",
+            format!(
+                "{}{}{}{}{}",
+                joint(
+                    3,
+                    "L1",
+                    "Face1",
+                    at([5.0, 5.0, 0.0]),
+                    "L3",
+                    at([5.0, 5.0, 0.0])
+                ),
+                flag("EnableLengthMin", true),
+                flag("EnableLengthMax", true),
+                float("LengthMin", -50.0),
+                float("LengthMax", 0.0)
+            ),
+        ),
+        (
+            "App::FeaturePython",
+            "Turn",
+            format!(
+                "{}{}{}{}{}",
+                joint(1, "L1", "Face1", at([5.0, 5.0, 10.0]), "L4", at([0.0; 3])),
+                flag("EnableAngleMin", true),
+                flag("EnableAngleMax", true),
+                angle("AngleMin", 10.0),
+                angle("AngleMax", 60.0)
+            ),
+        ),
+    ]);
+    let file = fcstd(&xml, None, &[("Block.brp", b"6 block")]);
+    let (doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    let joint_def = |name: &str| -> (serde_json::Value, String, ObjectOutcome) {
+        let it = item(&report, name);
+        let note = it.note.clone().unwrap_or_default();
+        let uid = note
+            .split_whitespace()
+            .find(|w| w.starts_with('F') && w.trim_end_matches(':')[1..].parse::<u32>().is_ok())
+            .unwrap_or_else(|| panic!("{name} is no joint: {note}"))
+            .trim_end_matches(':')
+            .to_owned();
+        (def_json(&doc, &uid), note, it.outcome)
+    };
+    // On the edge: its frame (at the edge's middle, z along it) shifted
+    // 4.5 mm along z to FreeCAD's connector; the parts 10 mm apart along it.
+    let (edge, note, outcome) = joint_def("Edge");
+    assert_eq!(outcome, ObjectOutcome::Parametric, "{note}");
+    assert_eq!(edge["kind"], "rigid", "{edge}");
+    for side in ["a", "b"] {
+        let origin = &edge[side];
+        assert!(origin["geometry"]["edge"].is_string(), "{edge}");
+        assert_eq!(
+            origin["frame_override"],
+            json!({"shift": [0.0, 0.0, 4.5]}),
+            "{edge}"
+        );
+    }
+    assert_eq!(number(&doc, &edge["offset"]), -10.0, "{edge}");
+    assert!(
+        note.contains("connector 1 on Edge1 of Block, following it"),
+        "{note}"
+    );
+    // On faces the mock gives no frame: FreeCAD's frames, fixed, with why;
+    // the slider's limits as they are.
+    let (slide, note, outcome) = joint_def("Slide");
+    assert_eq!(outcome, ObjectOutcome::Partial, "{note}");
+    assert_eq!(slide["a"]["geometry"], "origin", "{slide}");
+    assert!(
+        note.contains("connector 1 is FreeCAD's frame, fixed in the part (Face1 of Block"),
+        "{note}"
+    );
+    let tz = &slide["limits"]["tz"];
+    assert_eq!(number(&doc, &tz["min"]), -50.0, "{slide}");
+    assert_eq!(number(&doc, &tz["max"]), 0.0, "{slide}");
+    // The revolute joint is turned -30° where the file places the parts:
+    // its limits of 10° to 60° hold it turned round.
+    let (turn, note, _) = joint_def("Turn");
+    assert_eq!(turn["kind"], "revolute", "{turn}");
+    let rz = &turn["limits"]["rz"];
+    assert!(
+        (number(&doc, &rz["min"]) + 60f64.to_radians()).abs() < 1e-9,
+        "{turn} {note}"
+    );
+    assert!(
+        (number(&doc, &rz["max"]) + 10f64.to_radians()).abs() < 1e-9,
+        "{turn} {note}"
+    );
+    // Nothing moved.
+    let centres = centres(&doc, "Block");
+    for c in [[5.0, 5.0, 5.0], [15.0, 5.0, 5.0], [5.0, 5.0, 35.0]] {
+        assert!(centres.contains(&c), "{centres:?}");
+    }
+}
+
+#[test]
+fn a_joint_on_a_face_of_a_body_in_a_linked_part_follows_a_face_on_its_surface() {
+    // The joint picks `Core.Face2` through the link Roll of part RollPart:
+    // a face of the Body Core (an occurrence of its own in the part) whose
+    // boundary MitCad's body has otherwise (the stored face has a point
+    // the body's faces do not, as a face a hole cut has other cut edges).
+    // The connector is on the body's face of the same plane, shifted to
+    // FreeCAD's connector.
+    let kinds = ["Fixed", "Revolute"];
+    let plane = mitcad_model::datum::SurfaceGeometry::Plane {
+        origin: [0.0, 0.0, 10.0],
+        normal: [0.0, 0.0, 1.0],
+    };
+    let kernel = MockKernel::default();
+    // FreeCAD's stored shapes are read as F0; the bodies' base features
+    // get uids of their own.
+    kernel.named_curves.borrow_mut().insert(
+        "F0:import(1)".to_owned(),
+        mitcad_model::Curve3::Point([1.0, 2.0, 3.0]),
+    );
+    for k in 0..40 {
+        kernel
+            .surfaces
+            .borrow_mut()
+            .insert(format!("F{k}:import(1)"), plane.clone());
+    }
+    let xml = document(&[
+        ("Part::Feature", "Block", shape("Block.brp")),
+        (
+            "App::Part",
+            "RollPart",
+            links("Group", "App::PropertyLinkList", &["Core"]),
+        ),
+        (
+            "PartDesign::Body",
+            "Core",
+            format!(
+                "{}{}",
+                shape("Core.brp"),
+                placement([0.0, 0.0, 5.0], [0.0, 0.0, 1.0], 0.0)
+            ),
+        ),
+        (
+            "Assembly::AssemblyObject",
+            "Assembly",
+            links("Group", "App::PropertyLinkList", &["L1", "Roll", "Joints"]),
+        ),
+        (
+            "App::Link",
+            "L1",
+            format!(
+                "{}{}",
+                xlink("", "Block"),
+                placement([0.0; 3], [0.0, 0.0, 1.0], 0.0)
+            ),
+        ),
+        (
+            "App::Link",
+            "Roll",
+            format!(
+                "{}{}",
+                xlink("", "RollPart"),
+                placement([0.0; 3], [0.0, 0.0, 1.0], 0.0)
+            ),
+        ),
+        (
+            "Assembly::JointGroup",
+            "Joints",
+            links("Group", "App::PropertyLinkList", &["Ground", "OnFace"]),
+        ),
+        ("App::FeaturePython", "Ground", link("ObjectToGround", "L1")),
+        (
+            "App::FeaturePython",
+            "OnFace",
+            format!(
+                "{}{}{}{}{}",
+                custom_enum("JointType", 0, &kinds),
+                xlink_sub("Reference1", "L1", "Face1"),
+                named_placement("Placement1", [5.0, 5.0, 10.0], [0.0, 0.0, 1.0], 0.0),
+                xlink_sub("Reference2", "Roll", "Core.Face2"),
+                named_placement("Placement2", [5.0, 5.0, 10.0], [0.0, 0.0, 1.0], 0.0)
+            ),
+        ),
+    ]);
+    let file = fcstd(
+        &xml,
+        None,
+        &[("Block.brp", b"6 block"), ("Core.brp", b"6 core")],
+    );
+    let (doc, report) = import_with(file, Vec::new(), kernel, false);
+    let it = item(&report, "OnFace");
+    let note = it.note.clone().unwrap_or_default();
+    let uid = note
+        .split_whitespace()
+        .find(|w| w.starts_with('F') && w.trim_end_matches(':')[1..].parse::<u32>().is_ok())
+        .unwrap_or_else(|| panic!("no joint: {note}"))
+        .trim_end_matches(':')
+        .to_owned();
+    let def = def_json(&doc, &uid);
+    assert_eq!(def["kind"], "rigid", "{def}");
+    // Side b: the Body's face on the stored face's plane, through the
+    // link's and the Body's occurrences, its frame (the plane's origin, z
+    // up) shifted to FreeCAD's connector at (5, 5, 10).
+    let b = &def["b"];
+    assert_eq!(
+        b["occurrence"].as_str().unwrap().split('/').count(),
+        2,
+        "{def}"
+    );
+    let face = b["geometry"]["face"].as_str().unwrap();
+    assert!(
+        face.ends_with(":import(1)") && !face.starts_with("F0:"),
+        "{def}"
+    );
+    assert_eq!(
+        b["frame_override"],
+        json!({"shift": [5.0, 5.0, 0.0]}),
+        "{def}"
+    );
+    assert!(
+        note.contains("connector 2 on Face2 of Core, following it"),
+        "{note}"
+    );
+    // The parts where the file places them: 5 mm apart along z.
+    assert_eq!(number(&doc, &def["offset"]), -5.0, "{def}");
 }

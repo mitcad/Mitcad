@@ -374,7 +374,7 @@ fn a_dimension_that_would_deform_the_polygon_is_refused() {
             json!({"cmd": "sketch.add_dimension", "sketch": "F1",
                    "dimension": {"type": "length", "line": lines[3]}, "value": 14}),
         );
-        assert!(error.contains("over-constrained"), "{error}");
+        assert!(error.contains("can't hold"), "{error}");
         regular(&corners(&d, &lines));
     }
 }

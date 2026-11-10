@@ -313,6 +313,30 @@ impl<K: Kernel> Document<K> {
         printers: Option<&[PrinterChoice]>,
         merge_separate: bool,
     ) -> Result<Value, ModelError> {
+        self.import_slicer_presets_with_reader(
+            dialect,
+            presets,
+            into,
+            project,
+            printers,
+            merge_separate,
+            |path| installed::resolve_preset(folder, path).map_err(invalid),
+        )
+    }
+
+    /// Imports presets through a caller-supplied reader, including inheritance.
+    /// A design target never opens a print library.
+    #[allow(clippy::too_many_arguments)]
+    pub fn import_slicer_presets_with_reader(
+        &mut self,
+        dialect: Dialect,
+        presets: &[PresetChoice],
+        into: Option<LibraryKind>,
+        project: Option<&Path>,
+        printers: Option<&[PrinterChoice]>,
+        merge_separate: bool,
+        mut reader: impl FnMut(&Path) -> Result<installed::ResolvedPreset, ModelError>,
+    ) -> Result<Value, ModelError> {
         if !dialect.bambu_family() {
             return Err(invalid(format!(
                 "{} keeps no presets MitCad reads from its folder",
@@ -323,14 +347,14 @@ impl<K: Kernel> Document<K> {
             return Err(invalid("no presets to import"));
         }
         if !merge_separate {
-            return self.import_presets_now(dialect, folder, presets, into, project, printers);
+            return self.import_presets_now(dialect, presets, into, project, printers, &mut reader);
         }
         self.as_one_step(|doc| {
             let merged = doc.merge_separate_filaments(into, project)?;
             let mut answer = if presets.is_empty() {
                 json!({"dialect": dialect.id(), "into": into.map_or("design", |l| l.id())})
             } else {
-                doc.import_presets_now(dialect, folder, presets, into, project, printers)?
+                doc.import_presets_now(dialect, presets, into, project, printers, &mut reader)?
             };
             answer["merged"] = merged;
             Ok(answer)
@@ -341,11 +365,11 @@ impl<K: Kernel> Document<K> {
     fn import_presets_now(
         &mut self,
         dialect: Dialect,
-        folder: &Path,
         presets: &[PresetChoice],
         into: Option<LibraryKind>,
         project: Option<&Path>,
         printers: Option<&[PrinterChoice]>,
+        reader: &mut impl FnMut(&Path) -> Result<installed::ResolvedPreset, ModelError>,
     ) -> Result<Value, ModelError> {
         let mut report = ImportReport::default();
         let mut read = Vec::new();
@@ -365,8 +389,7 @@ impl<K: Kernel> Document<K> {
             let imported = crate::reader_guard::catch_panic(
                 &choice.path.to_string_lossy(),
                 || {
-                    let resolved =
-                        installed::resolve_preset(folder, &choice.path).map_err(invalid)?;
+                    let resolved = reader(&choice.path)?;
                     let text = Value::Object(resolved.map).to_string();
                     let mut imported =
                         print_files::read_file(&file, text.as_bytes(), Some(dialect))
@@ -429,7 +452,11 @@ impl<K: Kernel> Document<K> {
                 "none of the presets is for the printers and nozzles chosen",
             ));
         }
-        let libraries = self.print_libraries(project);
+        let libraries = if into.is_some() {
+            self.print_libraries(project)
+        } else {
+            Libraries::default()
+        };
         // Which override an existing item, which come in (copies renamed).
         let mut overrides: Vec<(Existing, PresetItem)> = Vec::new();
         let mut added: Vec<PresetItem> = Vec::new();

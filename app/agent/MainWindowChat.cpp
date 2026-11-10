@@ -7,15 +7,24 @@
 // frontend shows the same panel in its Chat card (mitcad#1075).
 #include "../MainWindow.hpp"
 
+#include <algorithm>
+
 #include <QAction>
 #include <QApplication>
 #include <QDockWidget>
+#include <QEvent>
+#include <QFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QKeySequence>
+#include <QLayout>
 #include <QMenu>
+#include <QResizeEvent>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QSize>
 #include <QStringList>
 #include <QTimer>
 #include <QToolBar>
@@ -40,6 +49,74 @@
 #include "../framework/UiSizes.hpp"
 
 namespace mitcad {
+namespace {
+
+// The chat panel in the Floating card (mitcad#1590). The card is as high as
+// the right column, which a short window makes lower than the panel's
+// minimum; the panel then keeps its minimum height for the card's width
+// and scrolls as a whole instead of being squeezed (a confirmation's text
+// and buttons cut). With the room it fills the card as before.
+class ChatPanelScroll : public QScrollArea {
+public:
+  explicit ChatPanelScroll(QWidget* panel) {
+    setObjectName(QStringLiteral("chatPanelScroll"));
+    setFrameShape(QFrame::NoFrame);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setWidgetResizable(false);
+    setWidget(panel);
+  }
+
+  QSize sizeHint() const override { return widget() != nullptr ? widget()->sizeHint() : QScrollArea::sizeHint(); }
+
+  QSize minimumSizeHint() const override {
+    return {widget() != nullptr ? widget()->minimumSizeHint().width() : 0, 0};
+  }
+
+protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    // The panel's contents changed: its minimum may have too.
+    if (watched == widget() && event->type() == QEvent::LayoutRequest) {
+      place();
+    }
+    return QScrollArea::eventFilter(watched, event);
+  }
+
+  void resizeEvent(QResizeEvent* event) override {
+    QScrollArea::resizeEvent(event);
+    place();
+  }
+
+  bool viewportEvent(QEvent* event) override {
+    // A scroll bar shown or hidden changes the view's width.
+    if (event->type() == QEvent::Resize) {
+      place();
+    }
+    return QScrollArea::viewportEvent(event);
+  }
+
+private:
+  // The view's size, or the panel's minimum height at the view's width
+  // where that is more; then its lower part in view, where its actions
+  // are (the message, Sign in Again's confirmation).
+  void place() {
+    QWidget* panel = widget();
+    if (panel == nullptr) {
+      return;
+    }
+    const int width = viewport()->width();
+    int least = std::max(panel->minimumSizeHint().height(), panel->minimumHeight());
+    if (QLayout* layout = panel->layout(); layout != nullptr && layout->hasHeightForWidth()) {
+      least = std::max(least, layout->minimumHeightForWidth(width));
+    }
+    const QSize size(width, std::max(viewport()->height(), least));
+    if (panel->size() != size) {
+      panel->resize(size);
+      verticalScrollBar()->setValue(verticalScrollBar()->maximum());
+    }
+  }
+};
+
+} // namespace
 
 void MainWindow::registerChatCommands() {
   CommandDef chat;
@@ -198,7 +275,9 @@ void MainWindow::createChat() {
     auto* card = new GlassCard;
     card->setObjectName(QStringLiteral("chatCard"));
     card->setTitle(tr("Chat"));
-    card->setContent(m_chatPanel, QMargins(8, 4, 8, 8));
+    // In a scroll area of its own: a short window scrolls the panel instead
+    // of squeezing it (mitcad#1590).
+    card->setContent(new ChatPanelScroll(m_chatPanel), QMargins(8, 4, 8, 8));
     m_floating->addCard(card, FloatingLayout::Anchor::Right, {340, {}, 1.0, false});
     m_chatContainer = card;
   } else {

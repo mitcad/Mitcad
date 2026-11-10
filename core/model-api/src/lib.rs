@@ -66,6 +66,7 @@ mod materials;
 // Printer and process profiles, print settings and the build volume
 // (mitcad#640).
 mod print_profiles;
+pub use print_profiles::{PrintImportApi, PrintImportReader, validate_print_import_command};
 // Measure's angles and distances with axes (mitcad#647).
 mod measure_axes;
 // Placement by picked geometry, Gear Pair and Belt Drive (mitcad#656).
@@ -151,6 +152,8 @@ mod sketch_loop;
 // Widths and patterns of projected edges, bodies and occurrences in
 // drawing views (mitcad#1546).
 mod drawing_lines;
+// Read-only modeling guidance and per-command hints (mitcad#1513).
+mod design_review;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -414,6 +417,10 @@ named_enum! {
         "rename_parameter" => RenameParameter {
             name: String,
             new_name: String,
+        },
+        // The automatic name back (mitcad#1577).
+        "remove_parameter_name" => RemoveParameterName {
+            name: String,
         },
         "delete_parameter" => DeleteParameter {
             name: String,
@@ -727,6 +734,14 @@ named_enum! {
             // Only this sketch's regions, by uid or name (mitcad#1269).
             #[serde(default)]
             sketch: Option<String>,
+            // Each region's area and centre (mitcad#1587: MCP asks for
+            // them; the application's own queries leave them out).
+            #[serde(default)]
+            measures: bool,
+            // Only the region that holds this point, in sketch coordinates
+            // (mitcad#1587: MCP picks a profile by a point inside it).
+            #[serde(default)]
+            point: Option<[f64; 2]>,
         },
         "autoselect_profiles" => AutoselectProfiles,
         "sheet_state" => SheetState {
@@ -1075,6 +1090,7 @@ named_enum! {
         "feature_curves" => FeatureCurves,
         // The closed loop of a sketch curve (mitcad#1541, `sketch_loop.rs`).
         "sketch_loop" => SketchLoop(sketch_loop::SketchLoopQuery),
+        "design_review" => DesignReview(design_review::ReviewQuery),
     }
 }
 
@@ -1266,7 +1282,12 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                 }
                 bodies
             }
-            Query::Profiles { hashes, sketch } => {
+            Query::Profiles {
+                hashes,
+                sketch,
+                measures,
+                point,
+            } => {
                 // One sketch's regions (mitcad#1269): by uid or name, as
                 // other fields that take a sketch read it (mitcad#1107).
                 let is_sketch = |def: &FeatureDef| matches!(def, FeatureDef::Sketch(_));
@@ -1292,12 +1313,29 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                     self.profiles()
                         .into_iter()
                         .filter(|p| only.is_none_or(|uid| p.sketch == uid))
+                        .filter(|p| {
+                            point.is_none_or(|point| {
+                                self.profile_region(p.sketch, &p.region)
+                                    .is_some_and(|(_, region)| region.contains(point))
+                            })
+                        })
                         .map(|p| {
                             let sketch_name = self.feature(p.sketch).map(|f| f.name.clone());
                             let mut value = json!({"sketch": p.sketch, "sketch_name": sketch_name,
                                                "region": p.region, "consumed": p.consumed});
                             if p.face_bounded {
                                 value["face_bounded"] = json!(true);
+                            }
+                            // Its area and centre (sketch coordinates), to
+                            // tell regions apart without their keys
+                            // (mitcad#1587).
+                            if measures
+                                && let Some((_, region)) = self.profile_region(p.sketch, &p.region)
+                            {
+                                let (area, center) = region.area_and_centre();
+                                let round = |x: f64| (x * 1e6).round() / 1e6 + 0.0;
+                                value["area"] = json!(round(area));
+                                value["center"] = json!([round(center[0]), round(center[1])]);
                             }
                             if hashes {
                                 let hash = self
@@ -1654,6 +1692,7 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::FeatureCurves => feature_curves::feature_curves_json(self),
             // The closed loop of a sketch curve (mitcad#1541).
             Query::SketchLoop(query) => sketch_loop::sketch_loop_json(self, &query)?,
+            Query::DesignReview(query) => design_review::review(self, &query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -1709,6 +1748,12 @@ impl<K: Kernel> DocumentOps<K> for Document<K> {
 trait DocumentLocal<K: Kernel> {
     fn run_checked_command(&mut self, value: Value) -> Result<Value, ApiError>;
 
+    fn run_checked_action(
+        &mut self,
+        value: Value,
+        action: impl FnOnce(&mut Self, Value) -> Result<Value, ApiError>,
+    ) -> Result<Value, ApiError>;
+
     fn run_document_command(&mut self, command: Command) -> Result<Value, ApiError>;
 
     fn checked_preview(&mut self, json: &str) -> Result<String, ApiError>;
@@ -1743,10 +1788,6 @@ trait DocumentLocal<K: Kernel> {
 
 impl<K: Kernel> DocumentLocal<K> for Document<K> {
     fn run_checked_command(&mut self, value: Value) -> Result<Value, ApiError> {
-        let recomputes = self.recompute_count();
-        // What failed before, and the feature the command names (mitcad#401).
-        let before = self.timeline_before();
-        let target = command_target(&value);
         // The family that runs the command (`dispatch.rs`); the document's
         // own commands take every other name.
         let families = Self::command_families();
@@ -1754,13 +1795,27 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
             .get("cmd")
             .and_then(Value::as_str)
             .and_then(|cmd| families.iter().find(|family| family.runs(cmd)));
-        let mut result = if let Some(rules) = inline_face_rules(&value) {
-            self.add_face_with_rules_command(rules, &value)?
-        } else if let Some(family) = family {
-            (family.run)(self, value)?
-        } else {
-            self.run_document_command(parse(value, "command")?)?
-        };
+        self.run_checked_action(value, |doc, value| {
+            if let Some(rules) = inline_face_rules(&value) {
+                doc.add_face_with_rules_command(rules, &value)
+            } else if let Some(family) = family {
+                (family.run)(doc, value)
+            } else {
+                doc.run_document_command(parse(value, "command")?)
+            }
+        })
+    }
+
+    fn run_checked_action(
+        &mut self,
+        value: Value,
+        action: impl FnOnce(&mut Self, Value) -> Result<Value, ApiError>,
+    ) -> Result<Value, ApiError> {
+        let recomputes = self.recompute_count();
+        // What failed before, and the feature the command names (mitcad#401).
+        let before = self.timeline_before();
+        let target = command_target(&value);
+        let mut result = action(self, value)?;
         let stats = self.stats();
         let recomputed = self.recompute_count() != recomputes;
         result["recomputed"] = json!(if recomputed { stats.evaluated.len() } else { 0 });
@@ -2078,6 +2133,10 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
             Command::RenameParameter { name, new_name } => {
                 self.rename_parameter(&name, &new_name)?;
                 json!({})
+            }
+            Command::RemoveParameterName { name } => {
+                let (name, rewritten) = self.remove_parameter_name(&name)?;
+                json!({"name": name, "rewritten": rewritten})
             }
             Command::DeleteParameter { name } => {
                 self.delete_parameter(&name)?;

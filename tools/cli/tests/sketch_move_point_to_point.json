@@ -1,0 +1,33 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch Move/Copy (mitcad#1563): Point to Point moves a line by its start's way to a free point (from and to, both read before the move); Rotate without a pivot turns a horizontal line 90 degrees about its middle, the constraint becoming vertical, instead of collapsing the line to a point."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-30,-20],"end":[-20,-20]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[20,-10]},
+  {"cmd":"sketch.move","sketch":"F1","entities":["c1"],"from":"p2","to":"p4"},
+  {"expect":{"query":{"query":"sketch","uid":"F1"},"result":{"entities":[
+    {"id":"p2","at":[20,-10]},
+    {"id":"p3","at":[30,-10]},
+    {"id":"c1","type":"line"},
+    {"id":"p4","at":[20,-10]}
+  ]},"tolerance":0.000001}},
+  {"cmd":"sketch.move","sketch":"F1","entities":["c1"],"from":[20,-10],"to":[20,10],"copy":true},
+  {"expect":{"query":{"query":"sketch","uid":"F1"},"result":{"entities":[
+    {"id":"p2","at":[20,-10]},
+    {"id":"p3","at":[30,-10]},
+    {"id":"c1","type":"line"},
+    {"id":"p4","at":[20,-10]},
+    {"at":[20,10]},
+    {"at":[30,10]},
+    {"type":"line"}
+  ]},"tolerance":0.000001}},
+  {"cmd":"undo"},
+  {"cmd":"sketch.add_constraint","sketch":"F1","constraint":{"type":"horizontal","line":"c1"}},
+  {"cmd":"sketch.move","sketch":"F1","entities":["c1"],"rotate":{"angle":1.5707963267948966}},
+  {"expect":{"query":{"query":"sketch","uid":"F1"},"result":{"entities":[
+    {"id":"p2","at":[25,-15]},
+    {"id":"p3","at":[25,-5]},
+    {"id":"c1","type":"line"},
+    {"id":"p4","at":[20,-10]}
+  ],"constraints":[{"type":"vertical","line":"c1"}]},"tolerance":0.000001}}
+]

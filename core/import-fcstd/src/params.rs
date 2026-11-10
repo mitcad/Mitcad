@@ -432,8 +432,20 @@ fn unused_reason(object: Option<&Object>, path: &str) -> String {
     }
     if path.starts_with("Placement") {
         if o.type_name == "PartDesign::Body" || super::is_component(&o.type_name) {
-            return "a placement of a Body or part: its occurrence's placement, which MitCad \
-                    keeps as numbers (a move of the occurrence by an expression is not made)"
+            // Positions move the occurrence (mitcad#1560); a turn does not.
+            return if path.starts_with("Placement.Base") {
+                "a position of a Body or part that is not placed as an occurrence of its own: \
+                 FreeCAD's number"
+                    .to_owned()
+            } else {
+                "a turn of a Body's or part's placement: its occurrence moves by the \
+                 expressions of its position only (a move_occurrence) and keeps FreeCAD's turn"
+                    .to_owned()
+            };
+        }
+        if o.type_name == "App::Link" {
+            return "a link's placement: its occurrences keep FreeCAD's numbers (the positions \
+                    of Bodies and parts move by their expressions)"
                 .to_owned();
         }
         if super::is_sketch(&o.type_name) || super::history::is_datum(&o.type_name) {
@@ -1224,6 +1236,10 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 || o.type_name == "App::VarSet"
                 || super::is_sketch(&o.type_name)
                 || self.replay.replayed.contains(object)
+                // A Body's or part's position moves its occurrence
+                // (mitcad#1560).
+                || (o.type_name == "PartDesign::Body" || super::is_component(&o.type_name))
+                    && super::placements::position_driven(o)
         })
     }
 

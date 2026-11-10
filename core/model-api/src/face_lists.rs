@@ -19,6 +19,8 @@ use mitcad_model::kernel::{BoundingBox, Kernel, KernelError};
 /// A face's normal within this angle of a `normal` filter's (radians) when
 /// the query gives no `normal_tolerance`.
 const NORMAL_TOLERANCE: f64 = 1e-6;
+/// A circular edge matches a `radius` filter within this many mm.
+pub(super) const RADIUS_TOLERANCE: f64 = 1e-4;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -62,6 +64,15 @@ pub(super) struct EdgesQuery {
     min_length: Option<f64>,
     #[serde(default)]
     max_length: Option<f64>,
+    /// Only circular edges of this radius, mm, within
+    /// [`RADIUS_TOLERANCE`] (mitcad#1587).
+    #[serde(default)]
+    radius: Option<f64>,
+    /// Only edges between faces of these surface types, in any order
+    /// (`["cylinder", "sphere"]`); one type: at least one face of it
+    /// (mitcad#1587).
+    #[serde(default)]
+    between: Option<Vec<String>>,
     #[serde(default)]
     offset: Option<usize>,
     #[serde(default)]
@@ -83,6 +94,8 @@ impl FacesQuery {
 impl EdgesQuery {
     fn paged(&self) -> bool {
         self.curve.is_some()
+            || self.radius.is_some()
+            || self.between.is_some()
             || self.min_length.is_some()
             || self.max_length.is_some()
             || self.offset.is_some()
@@ -304,16 +317,20 @@ impl<K: Kernel> FaceListsOps<K> for Document<K> {
         let shape = self.require_body(query.body)?;
         let kernel = self.kernel();
         let edges = kernel.edges(shape).map_err(kernel_error)?;
-        let matched: Vec<usize> = (0..edges.len())
-            .filter(|&i| {
-                let edge = &edges[i];
-                query.curve.as_ref().is_none_or(|c| edge.curve == *c)
-                    && query.min_length.is_none_or(|m| edge.length >= m)
-                    && query.max_length.is_none_or(|m| edge.length <= m)
-            })
-            .collect();
-        let chosen = page(&matched, query.offset, query.limit);
-        let geometry = if query.geometry {
+        if let Some(radius) = query.radius
+            && !(radius.is_finite() && radius > 0.0)
+        {
+            return Err(ApiError("radius must be a positive length".to_owned()));
+        }
+        if let Some(types) = &query.between
+            && !(1..=2).contains(&types.len())
+        {
+            return Err(ApiError(
+                "between takes one or two surface types, e.g. [\"cylinder\", \"sphere\"]"
+                    .to_owned(),
+            ));
+        }
+        let curves = if query.geometry || query.radius.is_some() {
             let curves = kernel.edge_geometries(shape).map_err(kernel_error)?;
             if curves.len() != edges.len() {
                 return Err(ApiError(format!(
@@ -322,6 +339,71 @@ impl<K: Kernel> FaceListsOps<K> for Document<K> {
                     edges.len()
                 )));
             }
+            curves
+        } else {
+            Vec::new()
+        };
+        // Each face name's surface type, for `between` (mitcad#1587).
+        let surfaces: std::collections::HashMap<String, String> = if query.between.is_some() {
+            kernel
+                .faces(shape)
+                .map_err(kernel_error)?
+                .into_iter()
+                .flat_map(|face| {
+                    let surface = face.surface;
+                    face.names
+                        .into_iter()
+                        .map(move |name| (name, surface.clone()))
+                })
+                .collect()
+        } else {
+            std::collections::HashMap::new()
+        };
+        let surface_of = |name: &str| {
+            surfaces.get(name).or_else(|| {
+                // A face named with a piece number (`#k`) where the edge
+                // names the whole face, or the other way round.
+                let base = name.split_once('#').map_or(name, |(base, _)| base);
+                surfaces
+                    .iter()
+                    .find(|(face, _)| {
+                        face.split_once('#').map_or(face.as_str(), |(b, _)| b) == base
+                    })
+                    .map(|(_, surface)| surface)
+            })
+        };
+        let between = |name: Option<&String>| {
+            let Some(types) = &query.between else {
+                return true;
+            };
+            let Some((a, b)) = name.and_then(|name| mitcad_model::sheet::pick::edge_faces(name))
+            else {
+                return false;
+            };
+            let (a, b) = (surface_of(&a), surface_of(&b));
+            match types.as_slice() {
+                [one] => a == Some(one) || b == Some(one),
+                [x, y] => (a == Some(x) && b == Some(y)) || (a == Some(y) && b == Some(x)),
+                _ => false,
+            }
+        };
+        let matched: Vec<usize> = (0..edges.len())
+            .filter(|&i| {
+                let edge = &edges[i];
+                query.curve.as_ref().is_none_or(|c| edge.curve == *c)
+                    && query.min_length.is_none_or(|m| edge.length >= m)
+                    && query.max_length.is_none_or(|m| edge.length <= m)
+                    && query.radius.is_none_or(|r| match &curves[i].1 {
+                        CurveGeometry::Circle { radius, .. } => {
+                            (radius - r).abs() <= RADIUS_TOLERANCE
+                        }
+                        _ => false,
+                    })
+                    && between(edge.name.as_ref())
+            })
+            .collect();
+        let chosen = page(&matched, query.offset, query.limit);
+        let geometry = if query.geometry {
             let boxes = kernel
                 .edge_bounding_boxes(shape, chosen)
                 .map_err(kernel_error)?;

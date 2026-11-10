@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: MIT
+# mitcad#1562: New Project in a folder that holds designs and a subfolder
+# (${MITCAD_TEST_WORKSHOP}, made by the runner, tools/ui-remove-project-test.sh
+# and the Windows tools/ui-windows-remove-project-test.ps1) says that the
+# folder and everything below it become the project and offers Create in a
+# New Subfolder; the project is made in the subfolder New Project, then
+# removed from the Projects panel after its confirmation. All designs are
+# synthetic.
+wait-idle
+expect-ever '^Projects panel: ' 30
+
+# 1. New Project on the folder with files: the warning and the offer.
+mark
+command file.new_project
+focus-dialog '^New Project$'
+wait-log '^New Project dialog: ' 10
+key ctrl+a
+type '${MITCAD_TEST_WORKSHOP}'
+wait-log '^New Project dialog: folder ${MITCAD_TEST_WORKSHOP:re}: designs$' 10
+wait-log '^New Project dialog: ${MITCAD_TEST_WORKSHOP:re} holds files: it becomes the project with its subfolders, 2 designs, Create in a New Subfolder offered$' 10
+
+# 2. Create in a New Subfolder, with the name it proposes.
+mark
+button '^Create in a New Subfolder$'
+wait-log '^New Project: Create in a New Subfolder ${MITCAD_TEST_WORKSHOP:re}/New Project$' 10
+wait-log '^New Project: created ${MITCAD_TEST_WORKSHOP:re}/New Project: version ' 30
+focus-main
+expect-file '${MITCAD_TEST_WORKSHOP}/New Project/.mitcad/project.json' 10
+wait-log '^Projects row New Project at ' 30
+
+# 3. Remove Project from the project's row: the confirmation, then the
+# project's files go and the folder stays.
+mark
+context-menu-logged '^Projects row New Project at ' 'Remove Project'
+focus-dialog '^Remove Project$'
+wait-log '^Remove Project dialog: ${MITCAD_TEST_WORKSHOP:re}/New Project \(0 designs, history removed\)$' 10
+button '^Remove Project$'
+wait-log '^Remove Project: removed ${MITCAD_TEST_WORKSHOP:re}/New Project \(history removed, 0 designs stay\)$' 30
+focus-main
+expect-no-log '^Remove Project (failed|refused|cancelled)'
+expect-never 'TestDriver: FAIL'

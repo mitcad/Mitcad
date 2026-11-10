@@ -161,7 +161,26 @@
 //   expect-view-pixel <regex> <#rrggbb> <tolerance>  wait until that
 //                           colour there is within the tolerance (the sum
 //                           of the channels' differences)
-//   expect-navigation-release       synthetic modifier/button/scroll release ordering
+//   expect-view-smooth <most %>  wait until, in the middle of a command's
+//                           see-through preview on the screen, at most that
+//                           share of the framebuffer's pixels have a step in
+//                           brightness (no pattern of its triangles,
+//                           mitcad#1575), counting only pixels away from the
+//                           steps of the frame without the previews (lines
+//                           behind them); logs "TestDriver: view smooth: ..."
+//   expect-view-stepped <least %>  the same, at least that share stepped
+//                           (the old double-sided look caught)
+//   preview-back-faces cull|draw  see-through previews of closed solids
+//                           without their back faces (the fix) or
+//                           double-sided as before it
+//   expect-navigation-release      synthetic modifier/button/scroll release ordering
+//   expect-navigation-gesture-state keys changed during a press, a scroll
+//                           while a button is held and Qt's macOS scroll
+//                           phases, the window deactivated during a drag
+//                           (mitcad#1571-#1573; synthetic)
+//   view-navigation <scheme>  this process's view navigation, not saved:
+//                           middle-pan|alt-buttons|middle-pan-f4|middle-orbit|
+//                           right-orbit|trackpad|trackpad-shift
 //   expect-navigation-runtime       saved navigation bindings and camera gestures
 //   expect-assistant-setup <mode>    isolated real setup controls and config results
 //   agent-menu <row> on|off         the agent indicator's menu filled as it opens,
@@ -213,9 +232,12 @@
 //   expect-pick-offset <regex> <dx> <dy> <item-regex>
 //                           probe fresh viewport picks plus logical pixels
 //   click-pick-offset <regex> <dx> <dy> <item-regex>   probe, then click there
-//   click-edge-release <index> modifier-first|button-first
+//   click-edge-release <index> modifier-first|button-first|key-up-moved|f4-elsewhere
 //                           Cmd/Ctrl-click a fresh visible edge, releasing the
-//                           modifier before or after the button (synthetic)
+//                           modifier before or after the button, or before a
+//                           one-pixel move and the button (mitcad#1571); or
+//                           a plain click after F4 was pressed on the view
+//                           and released elsewhere (mitcad#1573) (synthetic)
 //   click-visible-face      probe fresh visible OCCT face points, click one
 //                           through the viewport input path, then verify the
 //                           actual shared selection contains that exact face
@@ -564,6 +586,19 @@
 //                           where the view places it (io::triangulation_on_face);
 //                           logs "TestDriver: shown body <uid>[ in
 //                           <occurrence>]: N of N faces meshed on their faces"
+//   expect-body-edges-unmeshed <uid> wait until no edge of the shown body's
+//                           own shape has a 3D polygon, which only the view's
+//                           presentations meshing an edge by itself write
+//                           (mitcad#1553); logs "TestDriver: body <uid>: 0 of
+//                           N edges with a 3D polygon"
+//   expect-view-own-shapes  wait until the view shows a sketch profile, a
+//                           sketch entity and a datum plane, and none of the
+//                           shapes they are drawn from (meshed by their
+//                           presentations on the UI thread) has a face, edge
+//                           or vertex of a shown body's shape (mitcad#1586);
+//                           logs "TestDriver: view's own shapes: N profiles,
+//                           N sketch entities and N datum planes shown, 0 of
+//                           the bodies' N faces, edges and vertices shared"
 //   expect-native-dialog-gone <regex> [seconds] assert native window closed
 //                           These native steps require the macOS AppKit UI.
 //                           key/type/button/menu/focus-dialog/screenshot
@@ -598,9 +633,19 @@
 //                           screen's available area (at most w x h), its
 //                           dialog buttons visible outside any scroll area
 //                           and its scroll areas reaching their ends
-//   fit-main-frame <w> <h> resize the Qt main window into an available
-//                           frame using its actual titlebar/border margins
-//   expect-main-frame <w> <h> its real frame fits that process-local area
+//   fit-main-frame <w> <h> [least] resize the Qt main window into an
+//                           available frame using its actual titlebar/border
+//                           margins; `least` raises <h> to the window's own
+//                           minimum where it cannot be that short
+//   expect-main-frame <w> <h> [least] its real frame fits that
+//                           process-local area
+//   expect-widget-whole <object-name> the one visible Qt widget of that name
+//                           as high as its text needs (else its minimum
+//                           height) and cut by none of its parents (in view
+//                           in a scroll area); in its own scroll area (the
+//                           area's widget), that area's view whole, at
+//                           least a line high and scrolling to its end
+//                           (mitcad#1590); logs "TestDriver: widget whole: …"
 //   native-card-width <card> <w> drag a native side card's width handle
 //                           (native.projectsCard, native.sidebar or
 //                           native.inspectorCard) with AppKit mouse events
@@ -784,6 +829,8 @@ private:
   void testTextIconSize(int textPercent, int iconPercent, const QString& family);
   void testNavigationRuntime();
   void testNavigationRelease();
+  void testNavigationGestureState();
+  void setViewNavigation(const QString& scheme);
   void testNavigationControls(const QString& mode);
   void testAssistantSetup(const QString& mode);
   void agentMenuChoice(const QString& row, const QString& state);

@@ -150,6 +150,15 @@ void MainWindow::hoverNoticePlaces(const QString& source, const QJsonArray& plac
   }
 }
 
+void MainWindow::sketchConflict(const QStringList& items, bool hovered) {
+  // The command panel's refusal (mitcad#1566): in the sketch being edited.
+  if (m_sketch == nullptr) {
+    return;
+  }
+  m_sketch->setConflict(QStringLiteral("panel"), items);
+  m_sketch->setConflictHovered(QStringLiteral("panel"), hovered);
+}
+
 void MainWindow::previewNoticePlaces(const QString& source, const QString& feature) {
   const DocumentSnapshot::Feature* found = feature.isEmpty() ? nullptr : m_snapshot.feature(feature);
   hoverNoticePlaces(source, found != nullptr ? found->places : QJsonArray(), {});

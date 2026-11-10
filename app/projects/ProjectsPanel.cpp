@@ -551,15 +551,25 @@ ProjectsPanel::ProjectsPanel(Host host, QWidget* parent) : QWidget(parent), m_ho
       emit removeFromListRequested(rootOf(item));
     }
   });
-  connect(more, &QMenu::aboutToShow, this, [this, show, remove] {
+  // Remove Project... (mitcad#1562): the selected project's folder stops
+  // being a project.
+  QAction* removeEntry = entry(nullptr, tr("Remove Project…"), [this] {
+    QTreeWidgetItem* item = m_tree->currentItem();
+    if (typeOf(item) == RowType::Project) {
+      emit removeProjectRequested(rootOf(item));
+    }
+  });
+  connect(more, &QMenu::aboutToShow, this, [this, show, remove, removeEntry] {
     QTreeWidgetItem* item = m_tree->currentItem();
     show->setEnabled(!rootOf(item).isEmpty() && project(rootOf(item)) != nullptr &&
                      project(rootOf(item))->kind != ProjectRow::Kind::Missing);
     remove->setEnabled(typeOf(item) == RowType::Project);
+    const ProjectRow* row = typeOf(item) == RowType::Project ? project(rootOf(item)) : nullptr;
+    removeEntry->setEnabled(row != nullptr && row->kind != ProjectRow::Kind::Missing &&
+                            row->kind != ProjectRow::Kind::Unreadable);
   });
   m_more = m_toolbar->addAction(themeIcon(QStringLiteral("new-project")), tr("Projects"));
-  m_more->setToolTip(tr("New Project, Open from Cloud, Add Existing Project Folder, Show in Folder, Remove from "
-                        "List"));
+  m_more->setToolTip(tr("New, open or add a project; Show in Folder, Remove from List, Remove Project"));
   m_more->setMenu(more);
   if (auto* button = qobject_cast<QToolButton*>(m_toolbar->widgetForAction(m_more))) {
     button->setPopupMode(QToolButton::InstantPopup);
@@ -1816,6 +1826,11 @@ void ProjectsPanel::contextMenu(const QPoint& at) {
     }
     menu.separator();
     menu.add(QString(), tr("Remove from List"), [this, root] { emit removeFromListRequested(root); });
+    // The folder stops being a project (mitcad#1562); not for a folder
+    // that is gone or cannot be read.
+    if (healthy || row->kind == ProjectRow::Kind::NoHistory) {
+      menu.add(QString(), tr("Remove Project…"), [this, root] { emit removeProjectRequested(root); });
+    }
   }
   menu.separator();
   menu.add(QStringLiteral("new-project"), tr("New Project…"),

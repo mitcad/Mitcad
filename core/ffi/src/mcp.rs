@@ -22,10 +22,15 @@ use crate::kernel::OcctKernel;
 mod raytrace;
 // model_render's fast picture, headless and live (mitcad#1486, mitcad#1487).
 mod render;
+// Workspace-only, design-only print profile sources.
+mod print_import;
 
 const MAX_DOCUMENTS: usize = 64;
 const MAX_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_BLOB_BYTES: u64 = 256 * 1024 * 1024;
+/// The most edges or faces of a failed fillet or chamfer that MCP tries
+/// one at a time to say which fail (mitcad#1587).
+const MAX_ALONE: usize = 100;
 
 /// A pure edit plan: the UI retains consent, policy, backups and atomic writes.
 pub fn plan_codex_mcp_config(
@@ -253,7 +258,289 @@ fn validate_command(request: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// A selection by geometry in an MCP command (mitcad#1587), which the
+/// server turns into names before the command runs: what the stored
+/// definition keeps is the names, as the application's own commands write
+/// them.
+enum Selection<'a> {
+    /// A profile picked by a point inside it, `{"sketch": "F1", "point":
+    /// [u, v]}` in a `profiles` array.
+    Profile { sketch: &'a str, point: &'a Value },
+    /// A fillet's or chamfer's `edges` or `faces` given as a filter of the
+    /// `edges` or `faces` query (`{"between": ["cylinder", "sphere"]}`).
+    Filter {
+        body: &'a str,
+        kind: &'static str,
+        filter: &'a Map<String, Value>,
+    },
+}
+
+/// Replaces each selection by geometry in a command (an `add_feature` or
+/// `edit_feature` definition) with what `resolve` gives for it.
+fn replace_selections(
+    command: &mut Value,
+    resolve: &mut dyn FnMut(Selection<'_>) -> Result<Value, String>,
+) -> Result<(), String> {
+    let Some(def) = command.get_mut("def").filter(|def| def.is_object()) else {
+        return Ok(());
+    };
+    // Profiles by a point.
+    if let Some(Value::Array(profiles)) = def.get_mut("profiles") {
+        for profile in profiles.iter_mut() {
+            let picked = match (profile.get("sketch"), profile.get("point")) {
+                (Some(Value::String(sketch)), Some(point)) if point.is_array() => {
+                    Some(resolve(Selection::Profile { sketch, point })?)
+                }
+                _ => None,
+            };
+            if let Some(picked) = picked {
+                *profile = picked;
+            }
+        }
+    }
+    // A fillet's or chamfer's edges and faces by a filter.
+    let dressup = matches!(
+        def.get("type").and_then(Value::as_str),
+        Some("fillet" | "chamfer")
+    );
+    let Some(body) = def
+        .get("body")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .filter(|_| dressup)
+    else {
+        return Ok(());
+    };
+    let mut one = |set: &mut Value| -> Result<(), String> {
+        for (key, kind) in [("edges", "edges"), ("faces", "faces")] {
+            let names = match set.get(key) {
+                Some(Value::Object(filter)) => Some(resolve(Selection::Filter {
+                    body: &body,
+                    kind,
+                    filter,
+                })?),
+                _ => None,
+            };
+            if let Some(names) = names {
+                set[key] = names;
+            }
+        }
+        Ok(())
+    };
+    one(def)?;
+    if let Some(Value::Array(sets)) = def.get_mut("sets") {
+        for set in sets.iter_mut().filter(|set| set.is_object()) {
+            one(set)?;
+        }
+    }
+    Ok(())
+}
+
 impl Document {
+    /// A command with its selections by geometry (mitcad#1587) turned into
+    /// names on the document as it is now: a profile picked by a point
+    /// inside it becomes that region's key, a fillet's or chamfer's
+    /// `edges` or `faces` filter the names of the edges or faces the
+    /// `edges` or `faces` query finds with it. MCP only: both servers call
+    /// it on each entry right before it runs.
+    pub fn mcp_resolve_command(&self, request: &str) -> Result<String, crate::ApiError> {
+        let mut command: Value = serde_json::from_str(request)
+            .map_err(|error| crate::ApiError(format!("invalid MCP command JSON: {error}")))?;
+        let ask = |request: Value| -> Result<Value, String> {
+            parse_result(
+                &self
+                    .query(&request.to_string())
+                    .map_err(|e| e.to_string())?,
+            )
+        };
+        replace_selections(&mut command, &mut |selection| match selection {
+            Selection::Profile { sketch, point } => {
+                let found = ask(json!({"query": "profiles", "sketch": sketch, "point": point}))?;
+                match found.as_array().map(Vec::as_slice) {
+                    Some([one]) => Ok(json!({"sketch": one["sketch"], "region": one["region"]})),
+                    Some([]) | None => Err(format!(
+                        "no profile region of {sketch} holds the point {point}; model_query {{\"query\": \"profiles\", \"sketch\": \"{sketch}\"}} gives each region's area and center"
+                    )),
+                    Some(many) => Err(format!(
+                        "{} profile regions of {sketch} hold the point {point}; pick a point inside one of them",
+                        many.len()
+                    )),
+                }
+            }
+            Selection::Filter { body, kind, filter } => {
+                let mut request = filter.clone();
+                request.insert("query".to_owned(), json!(kind));
+                request.insert("body".to_owned(), json!(body));
+                let found = ask(Value::Object(request))
+                    .map_err(|error| format!("the {kind} filter {}: {error}", Value::Object(filter.clone())))?;
+                let items = found
+                    .get(kind)
+                    .and_then(Value::as_array)
+                    .or_else(|| found.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                let names: Vec<Value> = items
+                    .iter()
+                    .filter_map(|item| match kind {
+                        "faces" => item["names"].get(0).cloned(),
+                        _ => item.get("name").filter(|name| name.is_string()).cloned(),
+                    })
+                    .collect();
+                if names.is_empty() {
+                    return Err(format!(
+                        "the {kind} filter {} finds no {} of {body}",
+                        Value::Object(filter.clone()),
+                        &kind[..kind.len() - 1]
+                    ));
+                }
+                Ok(Value::Array(names))
+            }
+        })
+        .map_err(crate::ApiError)?;
+        Ok(command.to_string())
+    }
+
+    /// A `model_command` result whose added or edited fillets or chamfers
+    /// fail, with which of their edges (or faces) fail alone (mitcad#1587):
+    /// each is tried on its own in a preview, and the failed feature's
+    /// `error` says which fail and how many succeed, its entry lists them
+    /// in `alone`. MCP only; the application's own error text is
+    /// unchanged. A result without such a feature comes back as it was.
+    pub fn mcp_diagnose_dressups(&mut self, result: &str) -> Result<String, crate::ApiError> {
+        let mut value: Value = serde_json::from_str(result)
+            .map_err(|error| crate::ApiError(format!("invalid MCP result JSON: {error}")))?;
+        let failed: Vec<String> = value
+            .pointer("/result/failed_features")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|f| f["edited"] == true)
+            .filter_map(|f| f["uid"].as_str().map(str::to_owned))
+            .collect();
+        let mut found = Vec::new();
+        for uid in failed {
+            if let Some(alone) = self.dressup_alone(&uid)? {
+                found.push((uid, alone));
+            }
+        }
+        if found.is_empty() {
+            return Ok(result.to_owned());
+        }
+        self.clear_preview();
+        if let Some(entries) = value
+            .pointer_mut("/result/failed_features")
+            .and_then(Value::as_array_mut)
+        {
+            for entry in entries.iter_mut() {
+                let Some((_, alone)) = found
+                    .iter()
+                    .find(|(uid, _)| entry["uid"].as_str() == Some(uid.as_str()))
+                else {
+                    continue;
+                };
+                let fail = alone["fail"].as_array().map_or(0, Vec::len);
+                let succeed = alone["succeed"].as_u64().unwrap_or_default();
+                let said = if fail == 0 {
+                    format!(
+                        "; tried one at a time, each of its {succeed} edges or faces succeeds alone: they fail together"
+                    )
+                } else {
+                    let names: Vec<&str> = alone["fail"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .collect();
+                    format!(
+                        "; tried one at a time, {fail} of its {} edges or faces fail alone ({}) and the other {succeed} succeed",
+                        fail as u64 + succeed,
+                        names.join(", ")
+                    )
+                };
+                let error = entry["error"].as_str().unwrap_or_default().to_owned();
+                entry["error"] = json!(format!("{error}{said}"));
+                entry["alone"] = alone.clone();
+            }
+        }
+        Ok(value.to_string())
+    }
+
+    /// Which edges (or faces) of a failed fillet or chamfer fail alone:
+    /// `{"fail": [names], "succeed": count}`, or None for another feature,
+    /// one with fewer than two or more than [`MAX_ALONE`] of them.
+    fn dressup_alone(&mut self, uid: &str) -> Result<Option<Value>, crate::ApiError> {
+        let feature: Value = serde_json::from_str(
+            &self.query(&json!({"query": "feature", "uid": uid}).to_string())?,
+        )
+        .map_err(|error| crate::ApiError(error.to_string()))?;
+        let def = feature.get("def").cloned().unwrap_or(Value::Null);
+        if !matches!(def["type"].as_str(), Some("fillet" | "chamfer")) {
+            return Ok(None);
+        }
+        // Each selected item: (set index, or None for the short form; key;
+        // name).
+        let mut items: Vec<(Option<usize>, &str, String)> = Vec::new();
+        for key in ["edges", "faces"] {
+            for name in def[key].as_array().into_iter().flatten() {
+                if let Some(name) = name.as_str() {
+                    items.push((None, key, name.to_owned()));
+                }
+            }
+        }
+        for (s, set) in def["sets"].as_array().into_iter().flatten().enumerate() {
+            for key in ["edges", "faces"] {
+                for name in set[key].as_array().into_iter().flatten() {
+                    if let Some(name) = name.as_str() {
+                        items.push((Some(s), key, name.to_owned()));
+                    }
+                }
+            }
+        }
+        if items.len() < 2 || items.len() > MAX_ALONE {
+            return Ok(None);
+        }
+        let mut fail = Vec::new();
+        let mut succeed = 0u64;
+        for (set, key, name) in &items {
+            let mut alone = def.clone();
+            for other in ["edges", "faces"] {
+                if let Some(object) = alone.as_object_mut() {
+                    object.remove(other);
+                }
+            }
+            match set {
+                None => {
+                    alone[*key] = json!([name]);
+                    if let Some(object) = alone.as_object_mut() {
+                        object.remove("sets");
+                    }
+                }
+                Some(s) => {
+                    let mut one = def["sets"][*s].clone();
+                    for other in ["edges", "faces"] {
+                        if let Some(object) = one.as_object_mut() {
+                            object.remove(other);
+                        }
+                    }
+                    one[*key] = json!([name]);
+                    alone["sets"] = json!([one]);
+                }
+            }
+            let preview =
+                self.preview(&json!({"cmd": "edit_feature", "uid": uid, "def": alone}).to_string());
+            let ok = preview
+                .ok()
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                .is_some_and(|answer| answer["status"] == "ok");
+            if ok {
+                succeed += 1;
+            } else {
+                fail.push(name.clone());
+            }
+        }
+        Ok(Some(json!({"fail": fail, "succeed": succeed})))
+    }
+
     /// Audit the actual parsed model before any MCP-open recompute.
     pub fn validate_mcp_features(&self) -> Result<(), crate::ApiError> {
         for feature in self.0.features() {
@@ -273,13 +560,18 @@ impl Document {
         let request: Value = serde_json::from_str(request)
             .map_err(|error| crate::ApiError(format!("invalid MCP command JSON: {error}")))?;
         validate_command(&request).map_err(crate::ApiError)?;
-        if classes::command_class_in(&self.0, &request) != Some(ApiClass::Model) {
-            return Err(crate::ApiError(
-                "command is not available through MCP: it would read a stored font file; use an installed font or stored outlines".to_owned(),
-            ));
-        }
-        Ok(())
+        opened_document_validation(&self.0, &request)
     }
+}
+
+fn opened_document_validation(
+    document: &mitcad_model::Document<OcctKernel>,
+    request: &Value,
+) -> Result<(), crate::ApiError> {
+    if classes::command_class_in(document, request) != Some(ApiClass::Model) {
+        return Err(crate::ApiError("command is not available through MCP: it would read a stored font file; use an installed font or stored outlines".to_owned()));
+    }
+    Ok(())
 }
 
 fn validate_query(request: &Value) -> Result<(), String> {
@@ -458,7 +750,13 @@ impl CadBackend {
 
 impl Backend for CadBackend {
     fn vocabulary(&self) -> Vocabulary {
-        vocabulary().clone()
+        let mut names = vocabulary().clone();
+        names.commands.extend([
+            "import_print_profile".to_owned(),
+            "import_slicer_presets".to_owned(),
+        ]);
+        names.commands.sort();
+        names
     }
 
     fn call(&mut self, name: &str, arguments: &Value) -> Result<ToolResult, String> {
@@ -510,24 +808,72 @@ impl Backend for CadBackend {
                 self.require_writable()?;
                 let id = string(arguments, "document")?;
                 let mode = TimelineMode::of(arguments)?;
+                let hints = mitcad_mcp::command_hints_enabled(arguments)?;
                 let array = arguments["command"].is_array();
                 let entries = command_entries(arguments)?;
-                let opened = self.document_mut(id)?;
-                // Every entry is checked before any runs (mitcad#689).
-                for (i, entry) in entries.iter().enumerate() {
-                    let checked = validate_command(entry).and_then(|()| {
-                        opened
-                            .document
-                            .validate_mcp_document_command(&entry.to_string())
-                            .map_err(|e| e.to_string())
-                    });
-                    match checked {
-                        Ok(()) => {}
-                        Err(error) if !array => return Err(error),
-                        Err(error) => return Ok(refused_entry(id, i, &error, 0)),
+                // Preparation is read-only, but its allocations need the same
+                // memory guard as applying commands. One budget covers every
+                // source and expanded preset in this call, including arrays.
+                let workspace = &self.workspace;
+                let opened = self
+                    .documents
+                    .get_mut(id)
+                    .ok_or_else(|| format!("no open document {id}"))?;
+                let mut refused_at = 0;
+                let mut prepare = |document: &mut mitcad_model::Document<OcctKernel>| {
+                    let mut budget =
+                        print_import::PreparationBudget::new(document.monitor().cloned());
+                    let mut prepared = Vec::with_capacity(entries.len());
+                    let mut commands = Vec::with_capacity(entries.len());
+                    for (i, entry) in entries.iter().enumerate() {
+                        refused_at = i;
+                        budget.check().map_err(crate::ApiError)?;
+                        let (command, reader) = if print_import::is_print_import(entry) {
+                            workspace
+                                .prepare_print_import(entry, &mut budget)
+                                .map(|(command, reader)| (command, Some(reader)))
+                        } else {
+                            validate_command(entry).map(|()| ((*entry).clone(), None))
+                        }
+                        .map_err(crate::ApiError)?;
+                        // The shared state transition can settle bindings even
+                        // for profile edits. Keep the ordinary stale-font guard.
+                        let validation = if reader.is_some() {
+                            json!({"cmd":"recompute"})
+                        } else {
+                            command.clone()
+                        };
+                        opened_document_validation(document, &validation)?;
+                        commands.push(command);
+                        prepared.push(reader);
                     }
-                }
-                run_commands(id, &mut opened.document, &entries, array, mode)
+                    budget.check().map_err(crate::ApiError)?;
+                    Ok((commands, prepared))
+                };
+                let checked = if entries
+                    .iter()
+                    .any(|entry| print_import::is_print_import(entry))
+                {
+                    opened.document.guarded_model_action(prepare)
+                } else {
+                    // Undo/redo must remain available under memory pressure.
+                    prepare(&mut opened.document.0)
+                };
+                let (commands, prepared) = match checked {
+                    Ok(prepared) => prepared,
+                    Err(error) if !array => return Err(error.to_string()),
+                    Err(error) => return Ok(refused_entry(id, refused_at, &error.to_string(), 0)),
+                };
+                let entries: Vec<_> = commands.iter().collect();
+                run_commands(
+                    id,
+                    &mut opened.document,
+                    &entries,
+                    &prepared,
+                    array,
+                    mode,
+                    hints,
+                )
             }
             "document_save" => {
                 self.require_writable()?;
@@ -556,17 +902,18 @@ impl Backend for CadBackend {
             "model_export" => {
                 self.require_writable()?;
                 let id = string(arguments, "document")?;
-                let path = self
-                    .workspace
-                    .write_path(string(arguments, "path")?, false)?;
+                // Existing files only with overwrite (mitcad#1569), each
+                // output checked before any is written.
+                let overwrite = boolean(arguments, "overwrite", false)?;
+                let path = self.export_path(string(arguments, "path")?, overwrite)?;
                 let plan = export_plan(arguments, &path)?;
                 for extra in &plan.extra {
-                    self.workspace.write_path(path_text(extra)?, false)?;
+                    self.export_path(path_text(extra)?, overwrite)?;
                 }
                 let opened = self.document(id)?;
                 // A file per print plate beside the path (mitcad#1490).
                 for output in plate_outputs(&opened.document, &plan.command) {
-                    self.workspace.write_path(path_text(&output)?, false)?;
+                    self.export_path(path_text(&output)?, overwrite)?;
                 }
                 // A drawing's title block names the design by its file;
                 // USDZ texture paths are relative to the design's folder.
@@ -588,7 +935,7 @@ impl Backend for CadBackend {
                         .document
                         .0
                         .export_drawing_checked(&command.to_string(), |output| {
-                            self.workspace.write_path(output, false).map(|_| ())
+                            self.export_path(output, overwrite).map(|_| ())
                         })
                         .map_err(|e| e.to_string())?;
                     return success(json!({"document": id, "path": path, "result": result}));
@@ -611,6 +958,18 @@ impl Backend for CadBackend {
 }
 
 impl CadBackend {
+    /// A file `model_export` writes (mitcad#689): a new file in the
+    /// workspace, or with `overwrite` an existing regular file there
+    /// (mitcad#1569), as `document_save`'s path.
+    fn export_path(&self, path: &str, overwrite: bool) -> Result<PathBuf, String> {
+        self.workspace.write_path(path, overwrite).map_err(|e| {
+            e.replace(
+                "document_save requires overwrite",
+                "model_export requires overwrite",
+            )
+        })
+    }
+
     /// `model_render` (mitcad#1486, docs/mcp.md "Preview images"): the
     /// picture as an image (`image_base64`, which the protocol turns into
     /// an image block), the camera, timing and warnings.
@@ -721,11 +1080,15 @@ fn run_commands(
     id: &str,
     document: &mut Document,
     entries: &[&Value],
+    prepared: &[Option<print_import::PreparedPrintImport>],
     array: bool,
     mode: TimelineMode,
+    hints: bool,
 ) -> Result<ToolResult, String> {
     let before = if mode.needs_before() {
         Some(command_snapshot(document)?)
+    } else if hints {
+        Some(json!({"timeline": query(document, "timeline")?}))
     } else {
         None
     };
@@ -734,12 +1097,32 @@ fn run_commands(
     let mut times = Vec::new();
     let mut stopped = None;
     for (i, entry) in entries.iter().enumerate() {
-        let text = match document.command(&entry.to_string()) {
+        // Selections by geometry become names on the document as the
+        // entries before left it (mitcad#1587); a print import reads the
+        // source prepared for it (mitcad#1570).
+        let ran = document
+            .mcp_resolve_command(&entry.to_string())
+            .and_then(|command| match &prepared[i] {
+                Some(reader) => {
+                    use mitcad_model_api::PrintImportApi;
+                    document.guarded_model_action(|doc| {
+                        if let Some(reason) =
+                            doc.monitor().and_then(|monitor| monitor.cancel_reason())
+                        {
+                            return Err(crate::ApiError(reason));
+                        }
+                        doc.command_with_print_reader(&command, reader)
+                    })
+                }
+                None => document.command(&command),
+            })
+            .map_err(|error| error.to_string());
+        let text = match ran {
             Ok(text) => text,
-            Err(error) if !array => return Err(error.to_string()),
+            Err(error) if !array => return Err(error),
             Err(error) => {
                 let undone = undo_to(document, depth)?;
-                return Ok(refused_entry(id, i, &error.to_string(), undone));
+                return Ok(refused_entry(id, i, &error, undone));
             }
         };
         let result = parse_result(&text)?;
@@ -772,6 +1155,27 @@ fn run_commands(
     value["document"] = json!(id);
     value["applied"] = json!(true);
     value["result"] = results.last().cloned().unwrap_or(Value::Null);
+    if hints {
+        value["hints"] = json!([]);
+        let commands: Vec<Value> = entries.iter().map(|entry| (*entry).clone()).collect();
+        if let Some(request) = mitcad_mcp::command_hint_query(
+            &commands,
+            &results,
+            before.as_ref().unwrap_or(&Value::Null),
+            &after,
+        ) {
+            // Optional feedback must never turn an already applied edit into
+            // a refusal. The query's own tests cover the shared rules.
+            match document.query(&request.to_string()) {
+                Ok(text) => {
+                    if let Ok(review) = parse_result(&text) {
+                        value["hints"] = mitcad_mcp::command_hints(&review);
+                    }
+                }
+                Err(error) => eprintln!("MCP modeling hints unavailable: {error}"),
+            }
+        }
+    }
     if array {
         value["ran"] = json!(results.len());
         value["results"] = Value::Array(results);
@@ -781,6 +1185,12 @@ fn run_commands(
     }
     // An error only when a feature the (last) command added or edited
     // fails; the others are listed (mitcad#401).
+    // Which edges of a failed fillet or chamfer fail alone (mitcad#1587).
+    if let Ok(text) = document.mcp_diagnose_dressups(&value.to_string())
+        && let Ok(diagnosed) = serde_json::from_str(&text)
+    {
+        value = diagnosed;
+    }
     let is_error = mitcad_mcp::command_outcome(&mut value);
     Ok(ToolResult { value, is_error })
 }
@@ -818,7 +1228,7 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
         .into_iter()
         .chain(THREE_MF_FIELDS)
         .chain(BED_FIELDS)
-        .chain(["occurrence"])
+        .chain(["occurrence", "refinement"])
         .find(|k| arguments.get(*k).is_some())
         {
             return Err(format!("cut_sheet does not take {key}"));
@@ -896,12 +1306,19 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
     // 3MF, STL or OBJ (mitcad#1490): passed on to `export` as given, which
     // checks them and refuses what it does not take together (bodies with
     // plates).
+    // A mesh's tolerances (mitcad#1569), checked by `export` as the CLI's
+    // and the application's are.
     let given: Vec<&str> = THREE_MF_FIELDS
         .into_iter()
         .chain(BED_FIELDS)
-        .chain(["occurrence"])
+        .chain(["occurrence", "refinement"])
         .filter(|k| arguments.get(*k).is_some())
         .collect();
+    if given.contains(&"refinement") && !matches!(format, "stl" | "obj" | "3mf" | "usdz") {
+        return Err(format!(
+            "refinement is for the mesh of an STL, OBJ, 3MF or USDZ export, not {format}"
+        ));
+    }
     let body_export = drawing.is_none() && sketch.is_none() && flat.is_none();
     if let Some(key) = given.iter().copied().find(|k| THREE_MF_FIELDS.contains(k))
         && format != "3mf"
@@ -1069,8 +1486,13 @@ impl Document {
 
     /// Writes a live drawing export's files (mitcad#689): each, the further
     /// sheets too, must be a new file beside the first, whose folder the
-    /// application checked; nothing is written before every one is.
-    pub fn mcp_export_drawing(&self, command: &str) -> Result<String, crate::ApiError> {
+    /// application checked, or with `overwrite` an existing regular file
+    /// there (mitcad#1569); nothing is written before every one is.
+    pub fn mcp_export_drawing(
+        &self,
+        command: &str,
+        overwrite: bool,
+    ) -> Result<String, crate::ApiError> {
         let request: Value = serde_json::from_str(command)
             .map_err(|error| crate::ApiError(format!("invalid MCP export JSON: {error}")))?;
         let first = request["path"]
@@ -1087,8 +1509,13 @@ impl Document {
                 match fs::symlink_metadata(output) {
                     Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
                     Err(e) => Err(format!("cannot inspect {}: {e}", output.display())),
+                    // A link is never followed out of the folder.
+                    Ok(metadata) if !metadata.file_type().is_file() => {
+                        Err(format!("{} is not a regular file", output.display()))
+                    }
+                    Ok(_) if overwrite => Ok(()),
                     Ok(_) => Err(format!(
-                        "{} already exists; model_export writes new files only",
+                        "{} already exists: pass overwrite: true to replace it",
                         output.display()
                     )),
                 }
@@ -1166,6 +1593,41 @@ pub fn mcp_command_document(
         &evaluated,
     ))
     .to_string())
+}
+
+/// The scoped review request for a live model_command's direct edits, or
+/// empty when no feature was added or edited. Snapshots are as above.
+pub fn mcp_command_hint_query(
+    commands: &str,
+    results: &str,
+    before: &str,
+    after: &str,
+) -> Result<String, crate::ApiError> {
+    let read = |text: &str| -> Result<Value, crate::ApiError> {
+        serde_json::from_str(text)
+            .map_err(|error| crate::ApiError(format!("invalid MCP hint JSON: {error}")))
+    };
+    let commands = read(commands)?;
+    let results = read(results)?;
+    let before = read(before)?;
+    let after = read(after)?;
+    let array = |value: Value| -> Result<Vec<Value>, crate::ApiError> {
+        value
+            .as_array()
+            .cloned()
+            .ok_or_else(|| crate::ApiError("MCP hint entries must be arrays".to_owned()))
+    };
+    Ok(
+        mitcad_mcp::command_hint_query(&array(commands)?, &array(results)?, &before, &after)
+            .map_or_else(String::new, |query| query.to_string()),
+    )
+}
+
+/// The bounded hints of the shared design_review result.
+pub fn mcp_command_hints(review: &str) -> Result<String, crate::ApiError> {
+    let review: Value = serde_json::from_str(review)
+        .map_err(|error| crate::ApiError(format!("invalid MCP review JSON: {error}")))?;
+    Ok(mitcad_mcp::command_hints(&review).to_string())
 }
 
 /// Whether a live command array stops after an entry whose model result

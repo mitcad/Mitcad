@@ -373,10 +373,17 @@ impl ProjectRepo {
     /// so that the application can show the author git's configuration
     /// gives before the first version is recorded (P12d).
     pub fn create(dir: &Path) -> Result<Self, VcsError> {
-        let (project, _) = Project::init(dir).map_err(|e| io_error("make a project of", dir, e))?;
+        let (project, written) =
+            Project::init(dir).map_err(|e| io_error("make a project of", dir, e))?;
         let root = project.root().to_path_buf();
+        // Whether MitCad makes the repository or the folder's own was there
+        // (mitcad#1562: Remove Project deletes only a repository it made).
+        let mut made = true;
         let repo = match gix::open(&root) {
-            Ok(repo) if repo.workdir().is_some_and(|w| same_folder(w, &root)) => repo,
+            Ok(repo) if repo.workdir().is_some_and(|w| same_folder(w, &root)) => {
+                made = false;
+                repo
+            }
             _ => {
                 // The branch is `main` whatever git's installation sets
                 // (Git for Windows sets `master`).
@@ -392,7 +399,14 @@ impl ProjectRepo {
                 .to_thread_local()
             }
         };
-        Ok(Self::new(repo, root))
+        let this = Self::new(repo, root);
+        // A folder that was a project already keeps what it was marked.
+        if made || written.iter().any(|path| path == PROJECT_MARKER) {
+            // Best effort: without the mark, Remove Project reads the
+            // repository's history instead.
+            let _ = this.mark_repository(made);
+        }
+        Ok(this)
     }
 
     /// The project's folder (absolute).

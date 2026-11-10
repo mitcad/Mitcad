@@ -4,7 +4,8 @@
 // Windows updater's command line carries the SHA-256 of the verified
 // manifest and refuses one without; the updater's check of a file through
 // a reader (hashAll, digestMatches) tells a changed file apart. The
-// start-up check names OCCT DLLs of another build (mitcad#1454).
+// start-up check names OCCT DLLs of another build (mitcad#1454). The
+// updater names the programs it offers to end (mitcad#1584).
 #include "update/BuildStamp.hpp"
 #include "update/UpdateInstaller.hpp"
 #include "update/UpdaterChecks.hpp"
@@ -303,7 +304,26 @@ void digestTests() {
   }, [](const unsigned char*, std::size_t) { return true; }));
 }
 
-// mitcad#921: an update from a test's source (an address, key or
+// mitcad#1584: the programs still running from the installation, as the
+// updater's question names them: what each is and how many, MitCad first,
+// file names in any case, unknown programs by their file name.
+void programDescriptionTests() {
+  using mitcad::updater::describeForPerson;
+  CHECK(describeForPerson({}).empty());
+  CHECK(describeForPerson({L"mitcad-cli.exe", L"MITCAD-CLI.EXE", L"mitcad-cli.exe"}) ==
+        (std::vector<std::wstring>{L"3 MCP bridges of AI assistant sessions (mitcad-cli.exe)"}));
+  CHECK(describeForPerson({L"mitcad-render.exe", L"mitcad-cli.exe", L"mitcad.exe"}) ==
+        (std::vector<std::wstring>{L"MitCad (mitcad.exe)", L"an MCP bridge of an AI assistant session (mitcad-cli.exe)",
+                                   L"a render worker (mitcad-render.exe)"}));
+  CHECK(describeForPerson({L"mitcad.exe", L"Mitcad.exe", L"other.exe", L"mitcad-mcp-launcher.exe", L"other.exe"}) ==
+        (std::vector<std::wstring>{L"2 MitCad processes (mitcad.exe)",
+                                   L"an AI assistant's MitCad launcher (mitcad-mcp-launcher.exe)",
+                                   L"other.exe (2 processes)"}));
+  CHECK(describeForPerson({L"mitcad-render.exe", L"mitcad-render.exe"}) ==
+        (std::vector<std::wstring>{L"2 render workers (mitcad-render.exe)"}));
+}
+
+// mitcad#921:an update from a test's source (an address, key or
 // certificate from the environment) never asks for administrator rights.
 void elevationTests() {
   using namespace mitcad;
@@ -449,6 +469,7 @@ int updateInstallerTests() {
   privateFolderTests();
   updaterArgumentTests();
   digestTests();
+  programDescriptionTests();
   elevationTests();
   buildStampTests();
   QSettings::setDefaultFormat(format);

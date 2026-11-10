@@ -684,6 +684,16 @@ public:
   std::size_t profileCount() const { return m_profiles.size(); }
   void setSketchEntities(const std::vector<SketchEntityDisplay>& entities);
   void setDatums(const std::vector<DatumDisplay>& datums);
+  // The shapes the shown sketch profiles, sketch entities and datums are
+  // drawn from, for UI tests (mitcad#1586): the view's own, built on the
+  // UI thread from the model's numbers, which their presentations mesh
+  // there; none is a shape of the model's (expect-view-own-shapes).
+  struct OwnShapes {
+    std::vector<TopoDS_Shape> profiles;
+    std::vector<TopoDS_Shape> sketchEntities;
+    std::vector<TopoDS_Shape> datums;
+  };
+  OwnShapes ownShapes() const;
   void setHighlights(const std::vector<HighlightDisplay>& highlights);
   // Semi-transparent preview of the active command; null clears it.
   void setPreview(const TopoDS_Shape& shape, PreviewStyle style = PreviewStyle::Add);
@@ -840,6 +850,18 @@ public:
   // The box of the bodies shown as placed (not previews, ghosts, datums,
   // sketches or the grid); void when none is shown.
   Bnd_Box bodiesBox() const;
+  // Where a command's see-through previews are in the view, in widget
+  // coordinates: the box of its new and tool bodies and of its preview
+  // shape, projected; empty when none is shown (UI tests, mitcad#1575).
+  QRectF previewScreenBox() const;
+  // The view's frame without those previews (UI tests, mitcad#1575: what
+  // lies behind them, to tell its lines from their own steps); they are
+  // shown again at once.
+  QImage grabWithoutPreviews();
+  // For UI tests (mitcad#1575): false draws see-through previews
+  // double-sided again, as before the fix, so that a test can show its
+  // check would catch the old look; the bodies are drawn anew.
+  void setSeeThroughCulling(bool on);
   // Ends a camera animation at its end and makes a pending fit now, so that
   // camera() and the next frame are where the view is going (live MCP's
   // replies and screenshots, mitcad#405).
@@ -1055,6 +1077,17 @@ private:
   void resetOrbitWrap();
   Aspect_VKeyMouse viewButtons(Qt::MouseButtons buttons) const;
   Aspect_VKeyFlags viewFlags(Qt::KeyboardModifiers modifiers) const;
+  // The keys that decide a press on the view (mitcad#1571): those of the
+  // press that put the first button down, while a button is held; the keys
+  // held now otherwise.
+  Qt::KeyboardModifiers pressKeys(Qt::KeyboardModifiers live) const { return m_buttonKeys.value_or(live); }
+  // Whether a press, a drag, a held F4 or a scroll's drag is under way:
+  // what a window losing the activation ends (mitcad#1573).
+  bool pointerInteractionHeld() const;
+  // The view's window lost the activation, or the application did: end the
+  // interaction unless the window now active is the same one or one of its
+  // floating panels (mitcad#1573).
+  void deactivated(const QWidget* active);
   void display(const occ::handle<AIS_Shape>& object, int displayMode, PickInfo info,
                bool pickable);
   // Shows a body in the visual style; the entry's objects are made here.
@@ -1327,6 +1360,13 @@ private:
   // The whole bodies highlighted, as last logged ("View body highlights:",
   // for UI tests: the bodies a command's selection input holds).
   QString m_loggedBodyHighlights = QStringLiteral("none");
+  // A see-through preview's look, as last logged ("View new body ...: " and
+  // "View preview (...): transparency ..., back faces culled|both sides
+  // drawn", for UI tests, mitcad#1575).
+  QString m_loggedPreviewBodyLook;
+  QString m_loggedPreviewLook;
+  bool m_cullSeeThrough = true; // setSeeThroughCulling
+  void logPreviewLook(const QString& what, bool culled);
   // The profiles highlighted with their faces, as last logged ("View
   // profile highlights:", for UI tests: every piece of a split region,
   // mitcad#410).
@@ -1410,6 +1450,10 @@ private:
   bool m_cubePress = false; // the left button went down on the cube
   QPointF m_rightPressPosition;
   bool m_orbitKey = false; // F4 held (MiddlePanF4: the left button orbits)
+  // The keys of the press that put the first mouse button down on the view,
+  // until all are up (mitcad#1571): a key pressed or released meanwhile does
+  // not change what the press is.
+  std::optional<Qt::KeyboardModifiers> m_buttonKeys;
   // Dragging components (mitcad#55): the body pressed on, where, and
   // whether the pointer has moved far enough to drag.
   OccurrenceDrag m_occurrenceDrag;
@@ -1424,6 +1468,10 @@ private:
   enum class ScrollMode { None, Pan, Orbit, Zoom };
   ScrollMode m_scrollMode = ScrollMode::None;
   bool m_scrollDragging = false;
+  // A scroll's pan or orbit refused because a mouse button was held on the
+  // view (mitcad#1572): the rest of that scroll stays refused, until a new
+  // one begins, it ends or it pauses.
+  bool m_scrollRefused = false;
   QPointF m_scrollPoint;
   QTimer* m_scrollTimer = nullptr;
 

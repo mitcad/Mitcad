@@ -22,6 +22,7 @@
 #include "ChatSettings.hpp"
 #include "ClaudeCodeAgent.hpp"
 #include "CodexAgent.hpp"
+#include "SignInTerminal.hpp"
 
 namespace mitcad::agent {
 namespace {
@@ -142,6 +143,26 @@ ChatController::ChatController(ChatHost host, QObject* parent)
   for (ChatAgent* candidate : m_agents) {
     adopt(candidate);
   }
+  // Sign in Again's terminal (mitcad#1585): Check again when it ends.
+  m_signInTerminal = new SignInTerminal(this);
+  connect(m_signInTerminal, &SignInTerminal::ended, this, [this] {
+    if (m_signInTerminal->agentId() != m_agent->id() || accountError().isEmpty()) {
+      emit setupChanged();
+      return;
+    }
+    qInfo().noquote() << QStringLiteral("Chat: Sign in Again ended; Check again for %1").arg(m_agent->name());
+    if (m_activity == Activity::Idle && !m_checkingAccount) {
+      checkAccount();
+    } else {
+      emit setupChanged();
+    }
+  });
+  connect(m_signInTerminal, &SignInTerminal::failed, this, [this](const QString& reason) {
+    qInfo().noquote() << QStringLiteral("Chat: Sign in Again failed: %1").arg(reason);
+    notice(tr("Sign in Again: %1 Run the commands under How to fix in a terminal.").arg(reason), NoticeLevel::Warning,
+           false);
+    emit setupChanged();
+  });
   // Preferences cleared every design's history.
   connect(&ChatNotifier::instance(), &ChatNotifier::historyCleared, this, [this] {
     m_unsaved.clear();
@@ -677,6 +698,38 @@ void ChatController::finishAccountProbe(bool success, const QString& reason) {
   m_agent->shutdown();
   setActivity(Activity::Idle);
   emit setupChanged();
+}
+
+QString ChatController::signInTerminal() const {
+  return SignInTerminal::find(SignInTerminal::scriptPath(m_agent->id())).kind;
+}
+
+bool ChatController::signingInAgain() const {
+  return m_signInTerminal->agentId() == m_agent->id() &&
+         (m_signInTerminal->open() || m_signInTerminal->waitingForReturn());
+}
+
+bool ChatController::signInAgainOpen() const {
+  return m_signInTerminal->agentId() == m_agent->id() && m_signInTerminal->open();
+}
+
+bool ChatController::signInAgain(const QString& heading, const QString& closing, QString* error) {
+  const QList<QStringList> commands = m_agent->signInAgainCommands();
+  if (commands.isEmpty() || accountError().isEmpty()) {
+    return false;
+  }
+  qInfo().noquote() << QStringLiteral("Chat: Sign in Again for %1").arg(choiceName(m_agent));
+  QString reason;
+  const bool started = m_signInTerminal->start(m_agent->id(), heading, closing, commands, &reason);
+  if (!started) {
+    notice(tr("Sign in Again: %1 Run the commands under How to fix in a terminal.").arg(reason), NoticeLevel::Warning,
+           false);
+    if (error != nullptr) {
+      *error = reason;
+    }
+  }
+  emit setupChanged();
+  return started;
 }
 
 void ChatController::openInstallPage() {

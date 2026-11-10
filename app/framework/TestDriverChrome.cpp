@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 
 #include <QAbstractButton>
 #include <QAbstractItemView>
@@ -20,12 +21,15 @@
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QStyle>
+#include <QStyleFactory>
 #include <QStringList>
 #include <QToolBar>
 #include <QToolButton>
 #include <QTabBar>
 
 #include "ChromeStyle.hpp"
+#include "IconSizeStyle.hpp"
 #include "Ribbon.hpp"
 #include "TitleBar.hpp"
 #include "UiSizes.hpp"
@@ -274,8 +278,30 @@ void TestDriver::testInterfaceSize(double ratio) {
         panelView = area;
       }
     }
-    if (!shown(panelView) || panel->visibleRegion().isEmpty()) {
-      m_waitDetail = QStringLiteral("no command panel shown");
+    // The view inside the window and the panel's own region not covered.
+    // Not the view's own region: a frameless area (the Docked layout's) is
+    // covered whole by its viewport and the viewport by the panel, so their
+    // own visible regions are empty although the panel shows (mitcad#1574).
+    const bool viewInWindow = panelView != nullptr && panelView->isVisible() && !panelView->size().isEmpty() &&
+                              top->rect().contains(place(panelView));
+    if (!viewInWindow || panel->visibleRegion().isEmpty()) {
+      if (panel == nullptr) {
+        m_waitDetail = QStringLiteral("no command panel shown");
+      } else {
+        // Which of the conditions failed, with the places (mitcad#1574).
+        m_waitDetail = QStringLiteral("no command panel shown (view %1 %2, visible %3, region %4, in %5x%6; panel "
+                                      "%7, region %8)")
+                           .arg(QString::fromLatin1(panelView->metaObject()->className()))
+                           .arg(text(place(panelView)))
+                           .arg(panelView->isVisible() ? QStringLiteral("yes") : QStringLiteral("no"))
+                           .arg(panelView->visibleRegion().isEmpty() ? QStringLiteral("empty")
+                                                                     : QStringLiteral("not empty"))
+                           .arg(top->width())
+                           .arg(top->height())
+                           .arg(text(place(panel)))
+                           .arg(panel->visibleRegion().isEmpty() ? QStringLiteral("empty")
+                                                                 : QStringLiteral("not empty"));
+      }
       return false;
     }
     // In the panel, or under it where a page lays its buttons out itself
@@ -431,17 +457,81 @@ void TestDriver::testTextIconSize(int textPercent, int iconPercent, const QStrin
       m_waitDetail = QStringLiteral("no ribbon command button shown");
       return false;
     }
+    // The icons Qt's style sizes (mitcad#1561): the application's style
+    // inside Icon size's proxy unless Icon size is 100 %; a ribbon group's
+    // menu (else a menu made here) and a combo box without an icon size of
+    // its own at the style's small icon size times Icon size, the style
+    // made afresh from its key giving the size at 100 %.
+    const QString styleName = applicationStyleKey();
+    const bool wrapped = applicationStyleScalesIcons();
+    if (wrapped != (iconPercent != kDefaultUiSize)) {
+      m_waitDetail = QStringLiteral("the style %1 %2 inside Icon size's proxy at Icon size %3%")
+                         .arg(styleName, wrapped ? QStringLiteral("is") : QStringLiteral("is not"))
+                         .arg(iconPercent);
+      return false;
+    }
+    const std::unique_ptr<QStyle> unscaled(QStyleFactory::create(styleName));
+    if (unscaled == nullptr) {
+      m_waitDetail = QStringLiteral("no style of the key '%1'").arg(styleName);
+      return false;
+    }
+    QMenu* menu = nullptr;
+    for (QToolButton* button : ribbon->findChildren<QToolButton*>()) {
+      if (button->objectName().startsWith(QLatin1String("ribbonMenu_")) && button->menu() != nullptr) {
+        menu = button->menu();
+        break;
+      }
+    }
+    std::unique_ptr<QMenu> madeMenu;
+    if (menu == nullptr) {
+      madeMenu = std::make_unique<QMenu>(ribbon);
+      menu = madeMenu.get();
+    }
+    const int menuBase = unscaled->pixelMetric(QStyle::PM_SmallIconSize, nullptr, menu);
+    const int menuIcon = menu->style()->pixelMetric(QStyle::PM_SmallIconSize, nullptr, menu);
+    if (menuIcon != scaled(menuBase)) {
+      m_waitDetail = QStringLiteral("menu %1's icons %2 px, expected %3 (the style's %4 times Icon size)")
+                         .arg(menu->objectName())
+                         .arg(menuIcon)
+                         .arg(scaled(menuBase))
+                         .arg(menuBase);
+      return false;
+    }
+    // Not shown: a child of the ribbon, so that it takes the style the
+    // window's widgets take.
+    QComboBox combo(ribbon);
+    combo.setObjectName(QStringLiteral("textIconSizeProbe"));
+    const int comboBase = unscaled->pixelMetric(QStyle::PM_SmallIconSize, nullptr, &combo);
+    const QSize comboIcon = combo.iconSize();
+    if (comboIcon != QSize(scaled(comboBase), scaled(comboBase))) {
+      m_waitDetail = QStringLiteral("a combo box's icons %1x%2, expected %3x%3 (the style's %4 times Icon size)")
+                         .arg(comboIcon.width())
+                         .arg(comboIcon.height())
+                         .arg(scaled(comboBase))
+                         .arg(comboBase);
+      return false;
+    }
+    const QString styleIcons = QStringLiteral("style %1, menu icons %2x%2 (the style's %3 px), combo box icons %4x%5 "
+                                              "(the style's %6 px)")
+                                   .arg(styleName)
+                                   .arg(menuIcon)
+                                   .arg(menuBase)
+                                   .arg(comboIcon.width())
+                                   .arg(comboIcon.height())
+                                   .arg(comboBase);
     qInfo().noquote() << QStringLiteral("Text and icon size layout: font %1, %2 pt; browser icons %3x%4; ribbon %5 "
-                                        "buttons, icons %6x%6; quick access %7 buttons")
+                                        "buttons, icons %6x%6; quick access %7 buttons; %8")
                              .arg(drawn)
                              .arg(font.pointSizeF())
                              .arg(browserIcon.width())
                              .arg(browserIcon.height())
                              .arg(buttons)
                              .arg(ribbonSide)
-                             .arg(quick);
+                             .arg(quick)
+                             .arg(styleIcons);
     return true;
-  }, 10, QStringLiteral("the application font, the Browser's or the ribbon's icons are not at Text and Icon size"));
+  }, 10, QStringLiteral("the application font, the Browser's, the ribbon's or the style's icons are not at Text and "
+                        "Icon size"));
 }
 
 void TestDriver::testSketchFinishLayout() {

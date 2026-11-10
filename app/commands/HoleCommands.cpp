@@ -757,6 +757,99 @@ void startTap(CommandState& state, const CommandContext& model) {
   followSizeAgain(state, model);
 }
 
+// ---------------------------------------------------------------------------
+// Press-fit holes for printed parts (mitcad#1517): Hole Tap Type Press
+// Fit, a hex or square hole or crush ribs whose flats or tips lie the
+// Interference (the printed fit press_fit_interference) under the
+// Diameter, the pin's; a simple hole with a flat bottom.
+const QString kPressFit = QStringLiteral("press_fit");
+const QString kPressShape = QStringLiteral("press_shape");
+const QString kInterference = QStringLiteral("interference");
+const QString kRibs = QStringLiteral("ribs");
+const QString kRibHeight = QStringLiteral("rib_height");
+const QString kPressAngle = QStringLiteral("press_angle");
+
+const QVector<QPair<QString, QString>> kPressShapes{{QStringLiteral("hex"), QStringLiteral("Hex")},
+                                                    {QStringLiteral("square"), QStringLiteral("Square")},
+                                                    {QStringLiteral("crush_ribs"), QStringLiteral("Crush Ribs")}};
+
+bool pressFit(const CommandState& state) { return state.choice(QStringLiteral("tap")) == kPressFit; }
+
+bool crushRibs(const CommandState& state) {
+  return pressFit(state) && state.choice(kPressShape) == QStringLiteral("crush_ribs");
+}
+
+// The press fit's inputs, shown for Hole Tap Type Press Fit.
+QVector<InputDef> pressFitInputs() {
+  return {
+      choiceInput(kPressShape, QObject::tr("Press Fit Shape"), kPressShapes, QStringLiteral("hex"))
+          .withTooltip(QObject::tr("Hex or Square: flats grip the pin; Crush Ribs: ribs the pin crushes, for parts assembled once"))
+          .withVisible(pressFit),
+      valueInput(kInterference, QObject::tr("Interference"), ValueKind::Length, QStringLiteral("0.1 mm"))
+          .withPrintedFit(QStringLiteral("hole"))
+          .withTooltip(QObject::tr("How much smaller than the Diameter, on the diameter, the flats or the ribs' "
+                                   "tips are"))
+          .withVisible(pressFit),
+      valueInput(kRibs, QObject::tr("Ribs"), ValueKind::Unitless, QStringLiteral("3"))
+          .withStepMinimum(3.0)
+          .withTooltip(QObject::tr("The number of crush ribs, evenly spaced round the bore"))
+          .withVisible(crushRibs),
+      valueInput(kRibHeight, QObject::tr("Rib Height"), ValueKind::Length, QStringLiteral("0.3 mm"))
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("How far each rib stands out of the bore; the bore is the tips' diameter plus "
+                                   "twice this"))
+          .withVisible(crushRibs),
+      valueInput(kPressAngle, QObject::tr("Rotation"), ValueKind::Angle, QStringLiteral("0") + QChar(0x00B0))
+          .withTooltip(QObject::tr("The shape turned about the hole's axis"))
+          .withVisible(pressFit),
+  };
+}
+
+// The press fit in a hole's definition.
+QJsonObject pressFitOf(const CommandState& state) {
+  QJsonObject fit{{QStringLiteral("shape"), state.choice(kPressShape)},
+                  {kInterference, state.expression(kInterference)}};
+  if (crushRibs(state)) {
+    fit.insert(kRibs, state.expression(kRibs));
+    fit.insert(kRibHeight, state.expression(kRibHeight));
+  }
+  if (nonZero(state, kPressAngle)) {
+    fit.insert(QStringLiteral("angle"), state.expression(kPressAngle));
+  }
+  return fit;
+}
+
+// Choosing Press Fit offers the printed fit in Interference, as a new
+// hole's field starts with it (withPrintedFit), also in a hole being
+// edited, whose field starts at the plain default: a value typed in it
+// stays. Typing the name would open the field's suggestions, whose Enter
+// creates a parameter rather than confirming the hole.
+const QString kPressFitInterference = QStringLiteral("press_fit_interference");
+
+void offerPrintedFit(CommandState& state) {
+  if (!pressFit(state)) {
+    return;
+  }
+  const QString text = state.text(kInterference).trimmed();
+  if (!text.isEmpty() && text != QStringLiteral("0.1 mm")) {
+    return;
+  }
+  state.setText(kInterference, kPressFitInterference);
+  state.setValue(kInterference, std::numeric_limits<double>::quiet_NaN());
+  qDebug().noquote() << QStringLiteral("Hole interference: the printed fit %1").arg(kPressFitInterference);
+}
+
+// Fills the press fit's inputs from a hole's `press_fit`.
+void loadPressFit(const QJsonObject& fit, const QJsonObject& feature, CommandState& state,
+                  const CommandContext& context) {
+  state.setChoice(QStringLiteral("tap"), kPressFit);
+  state.setChoice(kPressShape, str(fit, "shape"));
+  loadValue(state, kInterference, fit.value(kInterference), feature, context);
+  loadValue(state, kRibs, fit.value(kRibs), feature, context);
+  loadValue(state, kRibHeight, fit.value(kRibHeight), feature, context);
+  loadValue(state, kPressAngle, fit.value(QStringLiteral("angle")), feature, context);
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -774,10 +867,16 @@ CommandDef holeCommand(const CommandContext& context) {
   def.pinned = true;
   def.keywords = {QStringLiteral("drill"), QStringLiteral("tap"), QStringLiteral("counterbore"),
                   QStringLiteral("countersink"), QStringLiteral("counterdrill"), QStringLiteral("taper"),
-                  QStringLiteral("clearance")};
+                  QStringLiteral("clearance"), QStringLiteral("press fit"), QStringLiteral("hex"),
+                  QStringLiteral("crush ribs")};
   def.featureType = QStringLiteral("hole");
   const auto tapped = choiceIs(QStringLiteral("tap"), QStringLiteral("tapped"));
-  const auto type = [](const char* kind) { return choiceIs(QStringLiteral("type"), QString::fromLatin1(kind)); };
+  // (A press-fit hole is a simple one, mitcad#1517.)
+  const auto type = [](const char* kind) {
+    return [is = choiceIs(QStringLiteral("type"), QString::fromLatin1(kind))](const CommandState& s) {
+      return is(s) && !pressFit(s);
+    };
+  };
   // One hole where a pick puts it (mitcad#656, PlaceInputs.hpp): on a face
   // at distances from two of its edges, at a point, or into a shaft or a
   // hole along its axis. The hole has its own Flip, on the Placement line.
@@ -831,19 +930,28 @@ CommandDef holeCommand(const CommandContext& context) {
   def.inputs += {
       valueInput(QStringLiteral("offset"), QObject::tr("Offset"), ValueKind::Length, QStringLiteral("0 mm"))
           .withVisible(choiceIs(QStringLiteral("extent"), QStringLiteral("to_object"))),
+      // A press-fit hole is a simple one (mitcad#1517).
       choiceInput(QStringLiteral("type"), QObject::tr("Hole Type"), kHoleTypes, QStringLiteral("simple"))
-          .withOnChange(fillSized),
-      // Clearance (mitcad#903): the hole and its recesses for a screw size.
+          .withOnChange(fillSized)
+          .withVisible([](const CommandState& s) { return !pressFit(s); }),
+      // Clearance (mitcad#903): the hole and its recesses for a screw size;
+      // Press Fit (mitcad#1517): flats or crush ribs that grip a pin.
       choiceInput(QStringLiteral("tap"), QObject::tr("Hole Tap Type"),
                   {{QStringLiteral("simple"), QStringLiteral("Simple")},
                    {QStringLiteral("tapped"), QStringLiteral("Tapped")},
-                   {kClearance, QStringLiteral("Clearance")}},
+                   {kClearance, QStringLiteral("Clearance")},
+                   {kPressFit, QStringLiteral("Press Fit")}},
                   QStringLiteral("simple"))
-          .withTooltip(QObject::tr("Simple, Tapped (threaded), or Clearance: sized for a screw, with its recesses"))
-          .withOnChange(startTap),
+          .withTooltip(QObject::tr("Simple, Tapped (threaded), Clearance (sized for a screw) or Press Fit: a hole that grips a pin"))
+          .withOnChange([](CommandState& state, const CommandContext& model) {
+            startTap(state, model);
+            offerPrintedFit(state);
+          }),
+      // A press-fit hole has a flat bottom (mitcad#1517).
       choiceInput(QStringLiteral("drill"), QObject::tr("Drill Point"),
                   {{QStringLiteral("angle"), QStringLiteral("Angle")}, {QStringLiteral("flat"), QStringLiteral("Flat")}},
-                  QStringLiteral("angle")),
+                  QStringLiteral("angle"))
+          .withVisible([](const CommandState& s) { return !pressFit(s); }),
       choiceInput(kScrewSize, QObject::tr("Screw Size"), {}, holeSizeTable(context).defaultSize)
           .withTooltip(QObject::tr("The ISO metric screw the hole is for; it sizes the hole and its recesses"))
           .withChoices([&context](const CommandState&) {
@@ -863,13 +971,12 @@ CommandDef holeCommand(const CommandContext& context) {
       // A tapered taper pipe thread's hole keeps its diameter, the tap
       // drill (mitcad#733); another thread sets it.
       sizedValueInput(QStringLiteral("diameter"), QObject::tr("Diameter"), ValueKind::Length, QStringLiteral("6 mm")).withStepMinimum(0.0, true)
-          .withTooltip(QObject::tr("The hole's diameter; a tapered pipe thread's tap drill; a clearance hole's "
-                                   "from its screw"))
+          .withTooltip(QObject::tr("Hole diameter; a tapered pipe thread's tap drill; the screw's (Clearance) or pin's (Press Fit)"))
           .withVisible([tapped](const CommandState& s) { return !tapped(s) || tapers(s); }),
-      // A tapped hole has no taper (the model refuses it).
+      // A tapped or press-fit hole has no taper (the model refuses it).
       valueInput(QStringLiteral("taper"), QObject::tr("Taper Angle"), ValueKind::Angle, QStringLiteral("0") + QChar(0x00B0))
           .withTooltip(QObject::tr("The wall's angle to the axis; positive narrows the hole as it goes deeper"))
-          .withVisible([tapped](const CommandState& s) { return !tapped(s); }),
+          .withVisible([tapped](const CommandState& s) { return !tapped(s) && !pressFit(s); }),
       valueInput(QStringLiteral("depth"), QObject::tr("Depth"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0, true)
           .withVisible(choiceIs(QStringLiteral("extent"), QStringLiteral("distance")))
           // Raised to fit a recess the size fills until typed (mitcad#980).
@@ -917,8 +1024,11 @@ CommandDef holeCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("The full angle of the cone at its floor"))
           .withVisible(type("counterdrill")),
       valueInput(QStringLiteral("tip_angle"), QObject::tr("Drill Point Angle"), ValueKind::Angle, QStringLiteral("118") + QChar(0x00B0)).withStepMinimum(0.0, true)
-          .withVisible(choiceIs(QStringLiteral("drill"), QStringLiteral("angle"))),
+          .withVisible([](const CommandState& s) {
+            return s.choice(QStringLiteral("drill")) == QStringLiteral("angle") && !pressFit(s);
+          }),
   };
+  def.inputs += pressFitInputs();
   // A new size: a tapered pipe thread's tap drill, the recesses' values
   // (mitcad#903, mitcad#980).
   def.inputs += threadInputs(context, {QStringLiteral("6"), QStringLiteral("M6x1"), QStringLiteral("6H")}, true, tapped,
@@ -986,7 +1096,8 @@ CommandDef holeCommand(const CommandContext& context) {
                    {QStringLiteral("sketch"), sketch},
                    {QStringLiteral("points"), points}};
     }
-    const QString type = state.choice(QStringLiteral("type"));
+    // A press-fit hole is a simple one (mitcad#1517).
+    const QString type = pressFit(state) ? QStringLiteral("simple") : state.choice(QStringLiteral("type"));
     QJsonObject kind{{QStringLiteral("type"), type}};
     if (type == QStringLiteral("counterbore")) {
       kind.insert(QStringLiteral("diameter"), state.expression(QStringLiteral("cb_diameter")));
@@ -1021,12 +1132,16 @@ CommandDef holeCommand(const CommandContext& context) {
                   {QStringLiteral("diameter"), state.expression(QStringLiteral("diameter"))},
                   {QStringLiteral("kind"), kind},
                   {QStringLiteral("extent"), extent}};
-    if (state.choice(QStringLiteral("drill")) == QStringLiteral("flat")) {
+    // A press-fit hole: its shape, with a flat bottom (mitcad#1517).
+    if (pressFit(state)) {
+      result.def.insert(QStringLiteral("flat"), true);
+      result.def.insert(kPressFit, pressFitOf(state));
+    } else if (state.choice(QStringLiteral("drill")) == QStringLiteral("flat")) {
       result.def.insert(QStringLiteral("flat"), true);
     } else {
       result.def.insert(QStringLiteral("tip_angle"), state.expression(QStringLiteral("tip_angle")));
     }
-    if (!tapped && nonZero(state, QStringLiteral("taper"))) {
+    if (!tapped && !pressFit(state) && nonZero(state, QStringLiteral("taper"))) {
       result.def.insert(QStringLiteral("taper"), state.expression(QStringLiteral("taper")));
     }
     if (tapped) {
@@ -1180,6 +1295,11 @@ CommandDef holeCommand(const CommandContext& context) {
       state.setChoice(kScrewSize, str(clearance, "size"));
       state.setChoice(kFit, clearance.value(QStringLiteral("fit")).toString(QStringLiteral("normal")));
     }
+    // A press-fit hole's shape and fit (mitcad#1517).
+    const QJsonObject fit = feature.value(kPressFit).toObject();
+    if (!fit.isEmpty()) {
+      loadPressFit(fit, feature, state, context);
+    }
     markLoaded(feature, state, context);
     state.setChecked(QStringLiteral("flip"), feature.value(QStringLiteral("flip")).toBool());
     state.setItems(QStringLiteral("objects"), bodiesOf(feature.value(QStringLiteral("participants")).toArray()));
@@ -1233,7 +1353,13 @@ CommandDef holeCommand(const CommandContext& context) {
     if (state.choice(QStringLiteral("tap")) == kClearance) {
       tap += QStringLiteral(" (clearance %1 %2)").arg(state.choice(kScrewSize), state.choice(kFit));
     }
-    return QStringLiteral("Added %1 hole(s) (%2), %3%4").arg(count).arg(state.choice(QStringLiteral("type")), tap, taper);
+    // (A press fit's shape and interference, mitcad#1517.)
+    if (pressFit(state)) {
+      tap += QStringLiteral(" (press fit %1, interference %2)")
+                 .arg(state.choice(kPressShape), number(state.value(kInterference)));
+    }
+    const QString type = pressFit(state) ? QStringLiteral("simple") : state.choice(QStringLiteral("type"));
+    return QStringLiteral("Added %1 hole(s) (%2), %3%4").arg(count).arg(type, tap, taper);
   };
   // The hover text's key line (mitcad#1235): the Hole Type and the size, a
   // tapped hole's thread as a Thread shows it (`Simple hole, M6x1 6H,
@@ -1243,6 +1369,14 @@ CommandDef holeCommand(const CommandContext& context) {
     for (const auto& option : kHoleTypes) {
       if (option.first == holeType) {
         holeType = option.second;
+      }
+    }
+    // A press fit by its shape (mitcad#1517): `Hex press-fit hole, Ø5 mm`.
+    if (pressFit(state)) {
+      for (const auto& option : kPressShapes) {
+        if (option.first == state.choice(kPressShape)) {
+          holeType = QObject::tr("%1 press-fit").arg(option.second);
+        }
       }
     }
     const QString holeSize =

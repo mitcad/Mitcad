@@ -472,3 +472,135 @@ fn bodies_give_their_boxes_and_a_split_leaves_both_pieces_boxes() {
     // Without the other properties.
     assert!(bodies[0].get("volume").is_none());
 }
+
+/// mitcad#1587: edges by the radius of their circle and by the surfaces
+/// of the faces they lie between.
+#[test]
+fn edges_filter_by_radius_and_by_the_surfaces_they_lie_between() {
+    let doc = box_document();
+    let plain = query(&doc, json!({"query": "edges", "body": "F1.b0"}));
+    let plain = plain.as_array().unwrap();
+    let second = plain[1]["name"].as_str().unwrap().to_owned();
+    doc.kernel().edge_curves.borrow_mut().insert(
+        second.clone(),
+        CurveGeometry::Circle {
+            center: [15.0, 10.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            radius: 5.0,
+            start: [20.0, 10.0, 0.0],
+            end: [20.0, 10.0, 0.0],
+        },
+    );
+    let round = query(
+        &doc,
+        json!({"query": "edges", "body": "F1.b0", "radius": 5.00001}),
+    );
+    assert_eq!(round["total"], 1);
+    assert_eq!(round["edges"][0]["name"], second.as_str());
+    let none = query(
+        &doc,
+        json!({"query": "edges", "body": "F1.b0", "radius": 4}),
+    );
+    assert_eq!(none["total"], 0);
+    // Every edge of the box lies between two of its faces, of the types
+    // the faces query names.
+    let surfaces: Vec<String> = query(&doc, json!({"query": "faces", "body": "F1.b0"}))
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|face| face["surface"].as_str().unwrap().to_owned())
+        .collect();
+    let some = surfaces[0].clone();
+    let between = query(
+        &doc,
+        json!({"query": "edges", "body": "F1.b0", "between": [some]}),
+    );
+    assert!(between["total"].as_u64().unwrap() > 0, "{between}");
+    let between = query(
+        &doc,
+        json!({"query": "edges", "body": "F1.b0", "between": ["torus", "torus"]}),
+    );
+    assert_eq!(between["total"], 0);
+    assert!(
+        refused(
+            &doc,
+            json!({"query": "edges", "body": "F1.b0", "radius": -1})
+        )
+        .contains("positive")
+    );
+    assert!(
+        refused(
+            &doc,
+            json!({"query": "edges", "body": "F1.b0", "between": ["a", "b", "c"]})
+        )
+        .contains("one or two")
+    );
+}
+
+/// mitcad#1587: a profile's area and centre on request, and the region
+/// that holds a point.
+#[test]
+fn profiles_give_their_area_and_centre_and_the_region_at_a_point() {
+    let mut doc = Document::new(MockKernel::default());
+    command(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy",
+            "entities": [
+                {"id": "p1", "type": "point", "at": [0, 0]},
+                {"id": "p2", "type": "point", "at": [10, 0]},
+                {"id": "p3", "type": "point", "at": [10, 20]},
+                {"id": "p4", "type": "point", "at": [0, 20]},
+                {"id": "c5", "type": "line", "start": "p1", "end": "p2"},
+                {"id": "c6", "type": "line", "start": "p2", "end": "p3"},
+                {"id": "c7", "type": "line", "start": "p3", "end": "p4"},
+                {"id": "c8", "type": "line", "start": "p4", "end": "p1"},
+                {"id": "p9", "type": "point", "at": [30, 0]},
+                {"id": "c10", "type": "circle", "center": "p9", "radius": 2}]}}),
+    );
+    let plain = query(&doc, json!({"query": "profiles", "sketch": "F1"}));
+    assert_eq!(plain.as_array().unwrap().len(), 2);
+    assert!(plain[0].get("area").is_none());
+    let measured = query(
+        &doc,
+        json!({"query": "profiles", "sketch": "F1", "measures": true}),
+    );
+    let mut found = 0;
+    for region in measured.as_array().unwrap() {
+        let area = region["area"].as_f64().unwrap();
+        let center = &region["center"];
+        if (area - 200.0).abs() < 1e-6 {
+            assert!((center[0].as_f64().unwrap() - 5.0).abs() < 1e-6, "{region}");
+            assert!(
+                (center[1].as_f64().unwrap() - 10.0).abs() < 1e-6,
+                "{region}"
+            );
+            found += 1;
+        } else {
+            // The sampled circle.
+            assert!((area - std::f64::consts::PI * 4.0).abs() < 0.7, "{region}");
+            assert!(
+                (center[0].as_f64().unwrap() - 30.0).abs() < 1e-3,
+                "{region}"
+            );
+            assert!(center[1].as_f64().unwrap().abs() < 1e-3, "{region}");
+            found += 1;
+        }
+    }
+    assert_eq!(found, 2);
+    let at = query(
+        &doc,
+        json!({"query": "profiles", "sketch": "F1", "point": [5, 5]}),
+    );
+    assert_eq!(at.as_array().unwrap().len(), 1);
+    assert!(at[0]["region"].as_str().unwrap().contains("c5"), "{at}");
+    let at = query(
+        &doc,
+        json!({"query": "profiles", "sketch": "F1", "point": [30.5, 0.5]}),
+    );
+    assert!(at[0]["region"].as_str().unwrap().contains("c10"), "{at}");
+    let nowhere = query(
+        &doc,
+        json!({"query": "profiles", "sketch": "F1", "point": [50, 50]}),
+    );
+    assert_eq!(nowhere, json!([]));
+}

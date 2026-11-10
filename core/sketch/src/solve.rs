@@ -16,6 +16,7 @@ use mitcad_solver::{
 // Equal spacing (mitcad#221).
 use mitcad_solver::{Anchor as SolverAnchor, SpacingMode as SolverSpacing};
 
+use super::conflict;
 use super::geometry::{
     Curve2, Nurbs, P2, angle_after, angle_on_side, cross, dist, dot, norm, sub, unit,
 };
@@ -243,15 +244,6 @@ struct Built {
     degenerate: Vec<EntityId>,
     /// [`Extra::restating`].
     restating: BTreeSet<ConstraintUid>,
-}
-
-fn list(items: &[SolverItem]) -> String {
-    let names: Vec<String> = items.iter().map(ToString::to_string).collect();
-    match names.as_slice() {
-        [] => String::new(),
-        [one] => one.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-    }
 }
 
 impl Built {
@@ -797,7 +789,9 @@ impl Built {
         self.items(&ids)
     }
 
-    fn solve(&mut self) -> Result<(), SolveError> {
+    /// Solves; a conflict is told in words from `words` (mitcad#1566),
+    /// its items by id in the status.
+    fn solve(&mut self, words: &conflict::Context<'_>) -> Result<(), SolveError> {
         let mut result = self.system.solve(&SolveOptions::default());
         if result.status == SolveStatus::NotConverged {
             // Geometry that is fixed but not exact (a linked curve whose
@@ -836,11 +830,10 @@ impl Built {
                 let mut all: Vec<SolverItem> = conflicts.iter().flatten().copied().collect();
                 all.sort();
                 all.dedup();
+                // In the user's words, without ids (mitcad#1566): the ids
+                // are the status' `conflicts`.
                 Err(SolveError {
-                    message: format!(
-                        "the sketch is over-constrained: {} contradict each other",
-                        list(&all)
-                    ),
+                    message: conflict::sentence(words, &all),
                     status: Box::new(SketchStatus {
                         conflicts,
                         ..SketchStatus::default()
@@ -1141,6 +1134,21 @@ pub fn measure_in(
     measure(kind, solved)
 }
 
+/// What a conflict of a solve is told with (mitcad#1566).
+fn words<'a>(
+    entities: &'a [Entity],
+    constraints: &'a [Constraint],
+    dimensions: &'a [DimensionInput<'a>],
+    extra: &'a Extra<'a>,
+) -> conflict::Context<'a> {
+    conflict::Context {
+        entities,
+        constraints,
+        dimensions,
+        bindings: extra.bindings,
+    }
+}
+
 /// Solves the sketch from its stored positions.
 pub fn solve(
     entities: &[Entity],
@@ -1160,7 +1168,7 @@ pub fn solve_extra(
     let mut built =
         Built::new(entities, constraints, dimensions, extra).map_err(SolveError::new)?;
     let violated = built.violated();
-    built.solve()?;
+    built.solve(&words(entities, constraints, dimensions, extra))?;
     let mut solved = built.read(entities, constraints, dimensions);
     built.analyze(&mut solved);
     solved.status.stored_violations = violated;
@@ -1219,7 +1227,8 @@ pub fn drag_extra(
 ) -> Result<Solved, SolveError> {
     let mut built =
         Built::new(entities, constraints, dimensions, extra).map_err(SolveError::new)?;
-    built.solve()?;
+    let told = words(entities, constraints, dimensions, extra);
+    built.solve(&told)?;
     let mut solver_goals = Vec::new();
     for goal in goals {
         solver_goals.push(match *goal {
@@ -1235,7 +1244,7 @@ pub fn drag_extra(
     }
     built.system.drag(&solver_goals, &SolveOptions::default());
     // The drag leaves the constraints satisfied; tighten as after a solve.
-    built.solve()?;
+    built.solve(&told)?;
     let mut solved = built.read(entities, constraints, dimensions);
     built.analyze(&mut solved);
     Ok(solved)

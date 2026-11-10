@@ -6,12 +6,14 @@
 #   MITCAD_TEST_FONT        the family kept, or `system` for none;
 #   MITCAD_TEST_SYSTEM_FONT `true` when none is kept, else `false`;
 #   MITCAD_TEST_ICON_NEXT   the Icon size 5 % above the kept one.
-#   1. The start-up logs the sizes and the font it applied, the application
-#      font and the icon sizes.
+#   1. The start-up logs the sizes and the font it applied, the application's
+#      style inside Icon size's proxy (mitcad#1561; no run's Icon size is
+#      100 %), the application font and the icon sizes.
 #   2. With Box's command panel open: the application font in the family at
 #      the platform's size times Text size, the Browser's and the ribbon's
 #      icons at their sizes times Icon size, each ribbon button as large as
-#      its icon (expect-text-icon-size, which logs "Text and icon size
+#      its icon, a menu's and a combo box's icons at the style's size times
+#      Icon size (expect-text-icon-size, which logs "Text and icon size
 #      layout: ..."); the window, the ribbon's captions, the Browser's rows
 #      and the panel's OK and fields whole (expect-interface-size at the
 #      screen's own ratio).
@@ -20,6 +22,7 @@
 # Run by tools/ui-text-icon-size-test.sh and
 # tools/ui-windows-text-icon-size-test.ps1 with several sizes and fonts.
 expect-ever '^Text and icon size: Text size ${MITCAD_TEST_TEXT_SIZE}%, Icon size ${MITCAD_TEST_ICON_SIZE}%, Font ' 10
+expect-ever '^Style icon size: [^ ]+ with the style.s icons at ${MITCAD_TEST_ICON_SIZE}%$' 10
 expect-ever '^Application font: .+, [0-9.]+ pt [(]Text size ${MITCAD_TEST_TEXT_SIZE}% of ' 30
 expect-ever '^Icon sizes: ${MITCAD_TEST_ICON_SIZE}% ' 30
 wait-idle

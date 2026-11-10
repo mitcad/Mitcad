@@ -522,6 +522,8 @@ pub fn slot_unit(slot: &str) -> Unit {
         || slot == "element_count"
         // A thread's or a tapped hole's starts (mitcad#893).
         || matches!(slot, "starts" | "thread.starts")
+        // A press-fit hole's crush ribs (mitcad#1517).
+        || slot == "press_fit.ribs"
         // A mortise and tenon's tenons (mitcad#1063).
         || slot == "count"
         // Every count, factor and fraction (mitcad#662): pattern quantities,
@@ -555,7 +557,10 @@ pub fn one_turn_slot(feature: &str, slot: &str) -> bool {
         "draft" => matches!(slot, "angle" | "angle2"),
         "chamfer" => field == "angle",
         "extrude" => field == "taper",
-        "hole" => matches!(slot, "taper" | "kind.angle" | "tip_angle"),
+        "hole" => matches!(
+            slot,
+            "taper" | "kind.angle" | "tip_angle" | "press_fit.angle"
+        ),
         "construction_plane" => slot == "definition.angle",
         // A sketch's rotation on its plane (mitcad#787).
         "sketch" => slot == "placement.angle",

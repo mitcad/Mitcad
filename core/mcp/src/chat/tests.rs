@@ -151,7 +151,8 @@ fn other_lines_are_output_or_nothing() {
 #[test]
 fn the_command_line_starts_or_resumes_with_the_bridge_only() {
     let base = json!({"op": "claude_arguments", "session": SESSION, "bridge": "/opt/mitcad/mitcad-cli",
-                      "instance": "4f1d2c", "chat": "a1b2c3"});
+                      "instance": "4f1d2c", "chat": "a1b2c3",
+                      "guidance_file": "/home/u/chat/modeling-guidance.md"});
     let fresh = request(&base).unwrap();
     let arguments: Vec<&str> = fresh["arguments"]
         .as_array()
@@ -180,6 +181,29 @@ fn the_command_line_starts_or_resumes_with_the_bridge_only() {
         .position(|a| *a == "--allowedTools")
         .unwrap();
     assert_eq!(arguments[allowed + 1], "mcp__mitcad");
+    let prompt_at = arguments
+        .iter()
+        .position(|a| *a == "--append-system-prompt-file")
+        .unwrap();
+    assert_eq!(
+        arguments[prompt_at + 1],
+        base["guidance_file"].as_str().unwrap()
+    );
+    assert_eq!(fresh["guidance"], super::guidance());
+    assert_eq!(
+        fresh["guidance"],
+        format!(
+            "{}\n\n{}",
+            crate::instructions(crate::Profile::Live),
+            crate::guide::index()
+        )
+    );
+    assert!(
+        !fresh["guidance"]
+            .as_str()
+            .unwrap()
+            .contains("name: mitcad-modeling")
+    );
     let config_at = arguments.iter().position(|a| *a == "--mcp-config").unwrap();
     let config: Value = serde_json::from_str(arguments[config_at + 1]).unwrap();
     assert_eq!(
@@ -216,6 +240,8 @@ fn the_command_line_starts_or_resumes_with_the_bridge_only() {
         ("instance", "-x"),
         ("chat", ""),
         ("bridge", ""),
+        ("guidance_file", ""),
+        ("guidance_file", "bad\0path"),
         ("model", "--dangerously"),
     ] {
         let mut bad = base.clone();

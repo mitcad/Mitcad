@@ -7,6 +7,7 @@
 // without a panel that the toolbar, the command search and the shortcuts
 // treat the same way.
 
+#include <array>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -36,6 +37,7 @@
 #include "NoticeLevel.hpp"
 #include "RememberedValues.hpp"
 #include "Selection.hpp"
+#include "Theme.hpp"
 #include "mitcad/geometry/shape.hpp"
 
 namespace mitcad {
@@ -143,6 +145,30 @@ struct Manipulator {
   // box's length, a hole's depth, mitcad#656), not on the line as a
   // distance from a reference does.
   bool boxAtTip = false;
+  // Arrow and Ring: its color in the view while neither hovered nor
+  // dragged (then the selection's blue); Free Move's arrows and rings take
+  // their axis' color (AxisX, AxisY, AxisZ; mitcad#1581).
+  ColorRole color = ColorRole::Handle;
+  // Arrow and Ring: about 1.5 times the usual size, its reach too (Free
+  // Move's, mitcad#1581: 50 px arrows, 100 px rings, 12 px reach); the
+  // other commands' handles keep 34 px, 70 px and 9 px, so that they take
+  // no click they did not take before (a BUILD side click flush with a
+  // part's end).
+  bool large = false;
+};
+
+// A handle a sketch command shows in the sketch (CommandDef::sketchHandle,
+// mitcad#1563: Move/Copy's Translate): an arrow along the sketch's x axis,
+// one along its y axis and a square between them at `at`. Dragging an
+// arrow changes the value input `x` or `y` by how far the pointer goes
+// along it, the square both; the place snaps as the drawing tools' points
+// do, away from the entities in `moves`. Sketch coordinates, millimetres.
+struct SketchHandle {
+  std::array<double, 2> at{};
+  QString x;     // the value input along the sketch's x axis
+  QString y;     // and along its y axis
+  std::array<double, 2> values{}; // their values now
+  QStringList moves; // the entities the values move
 };
 
 // A labelled, non-interactive point from a successful feature preview,
@@ -345,6 +371,13 @@ struct InputDef {
   // (axisPick(): "x_axis", "y_axis"), also where the model made the line.
   // Other inputs never get them.
   bool sketchAxes = false;
+  // Selection of a point in the sketch that sketch mode edits, picked with
+  // the sketch's snaps (mitcad#1563: Move/Copy's Origin and Target Point):
+  // while the input is active, sketch mode snaps the pointer as the
+  // drawing tools do and a click picks the point it snapped to, or the
+  // place (sketch::placePick, "@x,y") where it snapped to no point (a
+  // curve's middle, a quadrant, a crossing, the grid).
+  bool sketchSnaps = false;
   // Selection of bodies the command consumes (Combine's tools without Keep
   // Tools, mitcad#561): while the input is active, a picked body that the
   // preview removes stays drawn where other occurrences show it, as a tool
@@ -1089,6 +1122,10 @@ struct CommandDef {
   // object when it is taken back or failed, e.g. to draw what the command
   // removes (Clean Up Stale Projections, mitcad#252).
   std::function<void(const QJsonObject&)> sketchPreviewShown;
+  // Sketch commands: a handle sketch mode draws in the sketch and drags
+  // (mitcad#1563: Move/Copy's arrow pair), while it is shown; none hides
+  // it.
+  std::function<std::optional<SketchHandle>(const CommandState&)> sketchHandle;
   // Model commands (U4: materials, New Component): `build` gives
   // {"commands": [...]}, run on OK as one undo step named after the
   // command; nothing is previewed.

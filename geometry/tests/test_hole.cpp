@@ -4,6 +4,12 @@
 // models (hole_*).
 
 #include <cmath>
+#include <string>
+
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <TopoDS_Edge.hxx>
+#include <gp_Pnt.hxx>
 
 #include "check.hpp"
 
@@ -147,6 +153,79 @@ void test_queries() {
   CHECK(inside.axis.Direction().IsEqual(gp_Dir(0, 0, -1), 1e-9) && near(inside.axis.Location().Z(), 20));
 }
 
+// Twice the distance from the axis of the hole at (30, 20) to the body it
+// drilled: the diameter its flats or crush ribs' tips touch (mitcad#1517).
+// The axis is taken from 1 to 5 mm below the top, farther from the hole's
+// rim and from a 10 mm deep hole's bottom than from its sides.
+double inner_diameter(const ShapePtr& body, const HoleSpec& spec) {
+  const BooleanResult cut = boolean(BooleanOp::Cut, {body.get()}, *hole_tool(spec));
+  if (cut.pieces.size() != 1) {
+    return -1.0;
+  }
+  const TopoDS_Edge axis = BRepBuilderAPI_MakeEdge(gp_Pnt(30, 20, 19), gp_Pnt(30, 20, 15)).Edge();
+  BRepExtrema_DistShapeShape distance(axis, cut.pieces.front().shape->occt());
+  return distance.IsDone() ? 2.0 * distance.Value() : -1.0;
+}
+
+void test_press_fits() {
+  const ShapePtr body = block();
+  // A 5 mm pin in a hex hole whose flats lie 0.2 mm under it, through the
+  // block.
+  HoleSpec spec = at_top(5);
+  spec.extent = HoleExtent::ThroughAll;
+  spec.bodies = {body};
+  spec.press_fit = PressFit::Polygon;
+  spec.press_fit_count = 6;
+  spec.press_fit_inner = 4.8;
+  const ShapePtr hex = hole_tool(spec);
+  for (int k = 0; k < 6; ++k) {
+    CHECK(faces_named(*hex, "F3:hole0.flat" + std::to_string(k)) == 1);
+  }
+  CHECK(faces_named(*hex, "F3:hole0.top") == 1 && faces_named(*hex, "F3:hole0.tip") == 1);
+  CHECK(hex->face_count() == 8);
+  CHECK(near(cut_volume(body, spec), 48000 - std::sqrt(3.0) / 2.0 * 4.8 * 4.8 * 20));
+  CHECK(near(inner_diameter(body, spec), 4.8));
+  // A square turned 45 degrees, 10 deep with a flat bottom (no drill
+  // point).
+  spec.press_fit_count = 4;
+  spec.press_fit_angle = 45 * kDegree;
+  spec.extent = HoleExtent::Distance;
+  spec.depth = 10;
+  CHECK(faces_named(*hole_tool(spec), "F3:hole0.flat3") == 1);
+  CHECK(near(cut_volume(body, spec), 48000 - 4.8 * 4.8 * 10));
+  CHECK(near(inner_diameter(body, spec), 4.8));
+
+  // An 8 mm pin in three crush ribs: tips 0.2 mm under it, 0.3 mm high, so
+  // the bore is 8.4 mm.
+  HoleSpec ribs = at_top(8);
+  ribs.extent = HoleExtent::ThroughAll;
+  ribs.bodies = {body};
+  ribs.press_fit = PressFit::CrushRibs;
+  ribs.press_fit_count = 3;
+  ribs.press_fit_inner = 7.8;
+  ribs.press_fit_bore = 8.4;
+  const ShapePtr ribbed = hole_tool(ribs);
+  for (int k = 0; k < 3; ++k) {
+    const std::string rib = "F3:hole0.rib" + std::to_string(k);
+    CHECK(faces_named(*ribbed, rib + ".side0") == 1 && faces_named(*ribbed, rib + ".side1") == 1);
+    CHECK(faces_named(*ribbed, "F3:hole0.wall" + std::to_string(k)) == 1);
+  }
+  CHECK(ribbed->face_count() == 11);
+  // Each rib is the bore's sector over its base less the two triangles
+  // from the axis to its flanks.
+  const double r = 4.2;
+  const double half = std::asin(0.3 / r);
+  const double rib_area = r * r * half - 3.9 * r * std::sin(half);
+  CHECK(near(cut_volume(body, ribs), 48000 - (kPi * r * r - 3 * rib_area) * 20));
+  CHECK(near(inner_diameter(body, ribs), 7.8));
+  // Ribs that do not fit, and a bore no wider than the tips.
+  ribs.press_fit_count = 50;
+  CHECK(throws_with([&] { hole_tool(ribs); }, "do not fit round the bore"));
+  ribs.press_fit_count = 3;
+  ribs.press_fit_bore = 7.8;
+  CHECK(throws_with([&] { hole_tool(ribs); }, "bore must be wider"));
+}
+
 } // namespace
 
 void hole_tests() {
@@ -154,6 +233,7 @@ void hole_tests() {
   guarded("test_through_and_types", test_through_and_types);
   guarded("test_targets_and_positions", test_targets_and_positions);
   guarded("test_queries", test_queries);
+  guarded("test_press_fits", test_press_fits);
 }
 
 } // namespace test

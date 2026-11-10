@@ -368,6 +368,9 @@ if(BUILD_TESTING)
   # 6 min, building the bodies takes most of it).
   add_executable(test_exchange tests/test_exchange.cpp)
   target_link_libraries(test_exchange PRIVATE mitcad_ffi mitcad_geometry mitcad_geometry_io mitcad_parallel_runs mitcad_warnings)
+  # The print plate test reads a 3MF's deflated model part (mitcad#1567).
+  find_package(ZLIB REQUIRED)
+  target_link_libraries(test_exchange PRIVATE ZLIB::ZLIB)
   add_test(NAME core.exchange COMMAND test_exchange "${CMAKE_CURRENT_BINARY_DIR}/exchange-files")
   add_test(NAME f3d.corpus_import COMMAND test_exchange --corpus --every 10 --min-valid 97)
   set_tests_properties(f3d.corpus_import PROPERTIES SKIP_RETURN_CODE 77)

@@ -17,9 +17,15 @@
 #      without one, and logs the reason as its last line (mitcad#603).
 #      Files in use (mitcad#1454): while `mitcad-cli mcp` runs from bin,
 #      the silent installer ends with exit code 3 and changes no file, and
-#      the updater names mitcad-cli.exe; a running bridge (`mitcad-cli mcp
+#      the updater asks whether to end it (mitcad#1584): on Cancel it names
+#      mitcad-cli.exe and changes nothing; a running bridge (`mitcad-cli mcp
 #      --connect`) is asked to end, and the install then puts every file of
-#      the package in place.
+#      the package in place; with /EndPrograms the silent installer ends
+#      `mitcad-cli mcp` itself, and on End Them and Install the updater ends
+#      it and installs every file of the package. With -MesaDir: MitCad
+#      from bin with an unsaved design is asked to close by End Them and
+#      Install, asks whether to save, and is not ended; Cancel then changes
+#      nothing.
 #   2. mitcad-cli runs a script of the repository; with the toolchain (Qt,
 #      vcpkg, Rust, Visual Studio) removed from PATH from here on.
 #   3. mitcad.exe --version loads Qt with its plugins. The render worker
@@ -386,12 +392,18 @@ function Test-UpdaterCheck([string]$Install, [string]$Work) {
 # and an update that skipped them once left a new mitcad.exe with the old
 # OCCT. With `mitcad-cli mcp` from bin running (the headless MCP server:
 # it loads TKernel.dll and the rest of OCCT and, unlike a bridge, has no
-# quit event), the silent installer ends with exit code 3 and changes no
-# file (not even the uninstaller's, nor a file the old uninstall would
-# delete), and the installed updater ends with 1 and names mitcad-cli.exe
-# in its log's last line. With it ended and a bridge (`mitcad-cli mcp
-# --connect`) running instead, the installer asks the bridge to end and
-# installs, and every file is the package's again.
+# quit event, as a bridge of a release before mitcad#1454 has none), the
+# installed updater asks whether to end it (mitcad#1584: End Them and
+# Install or Cancel); on Cancel it ends with 1, names mitcad-cli.exe in its
+# log's last line and changes nothing. The silent installer on its own
+# ends with exit code 3 and changes no file (not even the uninstaller's,
+# nor a file the old uninstall would delete), and ends no program: no one
+# was asked. With it ended and a bridge (`mitcad-cli mcp --connect`)
+# running instead, the installer asks the bridge to end and installs. With
+# `/EndPrograms` the silent installer ends a `mitcad-cli mcp` itself (the
+# function the installer's pages run for End Them) and installs; and on
+# End Them and Install the updater ends it and installs. Then every file
+# is the package's again.
 function Start-FromBin([string]$Bin, [string]$Arguments, [string]$Discovery) {
   $info = New-Object Diagnostics.ProcessStartInfo
   $info.FileName = Join-Path $Bin 'mitcad-cli.exe'
@@ -407,6 +419,16 @@ function Start-FromBin([string]$Bin, [string]$Arguments, [string]$Discovery) {
   return [Diagnostics.Process]::Start($info)
 }
 
+# `mitcad-cli mcp` from bin on a workspace of its own (no quit event: it
+# stands for a bridge of a release before mitcad#1454), checked to run.
+function Start-Holder([string]$Bin, [string]$Workspace, [string]$Discovery) {
+  New-Item -ItemType Directory -Force $Workspace | Out-Null
+  $process = Start-FromBin $Bin "mcp --workspace `"$Workspace`"" $Discovery
+  Start-Sleep -Seconds 2
+  if ($process.HasExited) { Fail "mitcad-cli mcp ended at once (exit code $($process.ExitCode))" }
+  return $process
+}
+
 # The files below $Folder: relative path -> length, write time, content hash.
 function Get-Files([string]$Folder) {
   $files = @{}
@@ -415,6 +437,147 @@ function Get-Files([string]$Folder) {
       "$($_.Length) $($_.LastWriteTimeUtc.Ticks) $((Get-FileHash -Algorithm SHA256 $_.FullName).Hash)"
   }
   return $files
+}
+
+# The paths whose entry differs between two Get-Files.
+function Get-Changed([hashtable]$Before, [hashtable]$After) {
+  return @($Before.Keys + $After.Keys | Sort-Object -Unique | Where-Object { $Before[$_] -ne $After[$_] })
+}
+
+# The questions of mitcad-updater about programs still running (mitcad#1584)
+# are a task dialog, or a message box without the common controls 6, of
+# its own process titled "MitCad Update"; the test answers them as a click
+# would: TDM_CLICK_BUTTON with the button's id to the task dialog, a
+# WM_COMMAND with the button's id to the message box. Session 0 shows no
+# window, but the windows exist and take posted messages
+# (tools/ui-windows-lib.ps1).
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class UpdaterQuestion {
+    public delegate bool EnumProc(IntPtr hwnd, IntPtr lparam);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr lparam);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, StringBuilder text, int max);
+    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wparam, IntPtr lparam);
+    [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hwnd);
+
+    // The dialog window (#32770) titled "MitCad Update" of process pid, or zero.
+    public static IntPtr Find(int pid) {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows((h, l) => {
+            uint owner;
+            GetWindowThreadProcessId(h, out owner);
+            if (owner != (uint)pid) return true;
+            var name = new StringBuilder(64);
+            GetClassName(h, name, name.Capacity);
+            var title = new StringBuilder(256);
+            GetWindowText(h, title, title.Capacity);
+            if (name.ToString() == "#32770" && title.ToString() == "MitCad Update") { found = h; return false; }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    // TDM_CLICK_BUTTON (WM_USER + 102) to a task dialog, WM_COMMAND to a message box.
+    public static bool Click(IntPtr hwnd, int id, bool taskDialog) {
+        return PostMessage(hwnd, taskDialog ? 0x0466u : 0x0111u, new IntPtr(id), IntPtr.Zero);
+    }
+
+    public static bool Exists(IntPtr hwnd) { return IsWindow(hwnd); }
+}
+'@
+
+# The answers: the task dialog's button id (app/update/UpdaterWindows.cpp)
+# and the message box's (IDOK, IDYES, IDNO, IDCANCEL).
+$UpdaterAnswers = @{
+  'End Them and Install' = @(101, 1)
+  'End Anyway'           = @(102, 6)
+  'Wait'                 = @(103, 7)
+  'Cancel'               = @(2, 2)
+}
+
+# Starts the copy $Updater of the installed mitcad-updater as an update
+# runs it, without --wait (a stand-in restarts in place of MitCad).
+function Start-Updater([string]$Updater, [string]$Copy, [string]$Install, [string]$Log) {
+  Remove-Item $Log -ErrorAction SilentlyContinue
+  $hash = (Get-FileHash -Algorithm SHA256 $Copy).Hash.ToLowerInvariant()
+  $stand = Join-Path $env:SystemRoot 'System32\hostname.exe'
+  $proc = Start-Process -FilePath $Updater -PassThru -ArgumentList (
+    @('--installer', "`"$Copy`"", '--sha256', $hash, '--dir', "`"$Install`"", '--scope', 'user',
+      '--restart', "`"$stand`"", '--log', "`"$Log`""))
+  # The handle now, so that the exit code can be read once it has ended.
+  $null = $proc.Handle
+  return $proc
+}
+
+# The log's last line that is not empty.
+function Get-LastLine([string]$Log) {
+  return @(Get-Content $Log -ErrorAction SilentlyContinue) | Where-Object { $_.Trim() } | Select-Object -Last 1
+}
+
+# Waits for question $Number of the updater (its log's lines "Asking (task
+# dialog): <question> [<choices>]"), checks it is $Question and answers
+# $Answer. False when it was not asked.
+function Answer-Updater($Process, [string]$Log, [int]$Number, [string]$Question, [string]$Answer, [int]$Seconds = 60) {
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  $asked = $null
+  while (-not $asked -and $clock.Elapsed.TotalSeconds -lt $Seconds -and -not $Process.HasExited) {
+    $lines = @(Get-Content $Log -ErrorAction SilentlyContinue | Where-Object { $_.StartsWith('Asking (') })
+    if ($lines.Count -ge $Number) { $asked = $lines[$Number - 1] } else { Start-Sleep -Milliseconds 250 }
+  }
+  if (-not $asked) {
+    Fail "mitcad-updater did not ask '$Question' (exited: $($Process.HasExited); last line '$(Get-LastLine $Log)')"
+    return $false
+  }
+  if (-not $asked.Contains("): $Question [")) { Fail "mitcad-updater asked '$asked', not '$Question'"; return $false }
+  $taskDialog = $asked.StartsWith('Asking (task dialog)')
+  $window = [IntPtr]::Zero
+  while ($window -eq [IntPtr]::Zero -and $clock.Elapsed.TotalSeconds -lt $Seconds -and -not $Process.HasExited) {
+    $window = [UpdaterQuestion]::Find($Process.Id)
+    if ($window -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 100 }
+  }
+  if ($window -eq [IntPtr]::Zero) { Fail "the question '$Question' has no window"; return $false }
+  # The task dialog makes its buttons once its window is there.
+  Start-Sleep -Milliseconds 500
+  $id = $UpdaterAnswers[$Answer][$(if ($taskDialog) { 0 } else { 1 })]
+  [void][UpdaterQuestion]::Click($window, $id, $taskDialog)
+  for ($i = 0; $i -lt 100 -and [UpdaterQuestion]::Exists($window); $i++) { Start-Sleep -Milliseconds 100 }
+  if ([UpdaterQuestion]::Exists($window)) { Fail "the question '$Question' did not take $Answer"; return $false }
+  Pass "mitcad-updater asks '$Question' ($(if ($taskDialog) { 'task dialog' } else { 'message box' })): $Answer"
+  return $true
+}
+
+# Every file of the package is installed as the package has it: CPack's
+# staging folder of the installer, else the .zip's files.
+function Test-PackageFiles([string]$Install, [string]$Work) {
+  $package = Join-Path $Build "_CPack_Packages\win64\NSIS\$($installer.BaseName)"
+  if (-not (Test-Path (Join-Path $package 'bin\mitcad.exe'))) {
+    $zip = Join-Path $Build "$($installer.BaseName).zip"
+    $package = $null
+    if (Test-Path $zip) {
+      $unpacked = Join-Path $Work 'package'
+      Expand-Archive -Path $zip -DestinationPath $unpacked -Force
+      $package = Get-ChildItem $unpacked -Recurse -Filter 'mitcad.exe' | Where-Object { $_.Directory.Name -eq 'bin' } |
+        Select-Object -First 1 | ForEach-Object { $_.Directory.Parent.FullName }
+    }
+  }
+  if (-not $package) { Fail "no package files to compare with (neither CPack's staging folder nor $zip)"; return }
+  $mismatched = @()
+  $count = 0
+  Get-ChildItem $package -Recurse -File | ForEach-Object {
+    $count++
+    $installed = Join-Path $Install $_.FullName.Substring($package.Length + 1)
+    if (-not (Test-Path $installed) -or
+        (Get-FileHash -Algorithm SHA256 $installed).Hash -ne (Get-FileHash -Algorithm SHA256 $_.FullName).Hash) {
+      $mismatched += $_.FullName.Substring($package.Length + 1)
+    }
+  }
+  if ($count -gt 0 -and $mismatched.Count -eq 0) { Pass "every file of the package is installed ($count files)" }
+  else { Fail "installed files that differ from the package's: $(($mismatched | Select-Object -First 10) -join ', ')" }
 }
 
 function Test-FilesInUse([string]$Install, [string]$Work) {
@@ -443,31 +606,36 @@ function Test-FilesInUse([string]$Install, [string]$Work) {
     Set-Content -Encoding ascii $license 'files in use test'
     $before = Get-Files $Install
 
-    # The installed updater, as an update runs it (a stand-in restarts).
+    # The installed updater, as an update runs it (a stand-in restarts):
+    # it asks whether to end mitcad-cli (mitcad#1584); Cancel.
     $updater = Join-Path $Work 'mitcad-updater.exe'
     $copy = Join-Path $Work $installer.Name
     Copy-Item (Join-Path $bin 'mitcad-updater.exe') $updater
     Copy-Item $installer.FullName $copy
-    $hash = (Get-FileHash -Algorithm SHA256 $copy).Hash.ToLowerInvariant()
     $log = Join-Path $Work 'updater.log'
-    $stand = Join-Path $env:SystemRoot 'System32\hostname.exe'
-    $proc = Start-Process -FilePath $updater -Wait -PassThru -ArgumentList (
-      @('--installer', "`"$copy`"", '--sha256', $hash, '--dir', "`"$Install`"", '--scope', 'user',
-        '--restart', "`"$stand`"", '--log', "`"$log`""))
-    $last = @(Get-Content $log -ErrorAction SilentlyContinue) | Where-Object { $_.Trim() } | Select-Object -Last 1
-    if ($proc.ExitCode -eq 1 -and $last -and $last.StartsWith('programs from the installation are still running') -and
-        $last.Contains('mitcad-cli.exe')) {
-      Pass "mitcad-updater reports the program in use: $last"
+    $proc = Start-Updater $updater $copy $Install $log
+    $asked = Answer-Updater $proc $log 1 'Programs from MitCad are still running' 'Cancel'
+    if (-not $proc.WaitForExit(60000)) { $proc.Kill(); Fail 'mitcad-updater did not end after Cancel' }
+    $last = Get-LastLine $log
+    if ($asked -and $proc.ExitCode -eq 1 -and $last -and
+        $last.StartsWith('programs from the installation are still running') -and $last.Contains('mitcad-cli.exe') -and
+        $last.Contains('cancelled')) {
+      Pass "mitcad-updater, cancelled, installs nothing: $last"
     } else {
-      Fail "mitcad-updater with mitcad-cli running: exit code $($proc.ExitCode), last line '$last'"
+      Fail "mitcad-updater cancelled with mitcad-cli running: exit code $($proc.ExitCode), last line '$last'"
     }
+    if (Select-String -Path $log -Pattern '^Running .* /S ' -Quiet) { Fail 'mitcad-updater ran the installer after Cancel' }
+    $changed = Get-Changed $before (Get-Files $Install)
+    if ($changed.Count -eq 0 -and -not $holder.HasExited) { Pass 'Cancel changes no file and ends no program' }
+    else { Fail "after Cancel: files changed: $(($changed | Select-Object -First 10) -join ', '); mitcad-cli ended: $($holder.HasExited)" }
 
-    # The installer on its own, silently, as the updater runs it.
+    # The installer on its own, silently, as the updater runs it: no one was
+    # asked, so nothing is ended (mitcad#1584).
     $proc = Start-Process -FilePath $installer.FullName -ArgumentList '/S', '/CurrentUser', "/D=$Install" -Wait -PassThru
     if ($proc.ExitCode -eq 3) { Pass 'the silent installer ends with exit code 3 while mitcad-cli runs from bin' }
     else { Fail "the silent installer with mitcad-cli running: exit code $($proc.ExitCode), expected 3" }
     $after = Get-Files $Install
-    $changed = @($before.Keys + $after.Keys | Sort-Object -Unique | Where-Object { $before[$_] -ne $after[$_] })
+    $changed = Get-Changed $before $after
     if ($changed.Count -eq 0) { Pass "no file of the installation changed ($($before.Count) files)" }
     else { Fail "files changed while mitcad-cli ran: $(($changed | Select-Object -First 10) -join ', ')" }
     if ($holder.HasExited) { Fail 'mitcad-cli mcp was ended: only bridges are asked to end' }
@@ -494,37 +662,124 @@ function Test-FilesInUse([string]$Install, [string]$Work) {
     if ((Get-Content $license -Raw) -eq $packageLicense) { Pass 'LICENSE is the package''s again' }
     else { Fail 'LICENSE was not installed again' }
 
-    # Every file of the package is installed as the package has it: CPack's
-    # staging folder of the installer, else the .zip's files.
-    $package = Join-Path $Build "_CPack_Packages\win64\NSIS\$($installer.BaseName)"
-    if (-not (Test-Path (Join-Path $package 'bin\mitcad.exe'))) {
-      $zip = Join-Path $Build "$($installer.BaseName).zip"
-      $package = $null
-      if (Test-Path $zip) {
-        $unpacked = Join-Path $Work 'package'
-        Expand-Archive -Path $zip -DestinationPath $unpacked -Force
-        $package = Get-ChildItem $unpacked -Recurse -Filter 'mitcad.exe' | Where-Object { $_.Directory.Name -eq 'bin' } |
-          Select-Object -First 1 | ForEach-Object { $_.Directory.Parent.FullName }
-      }
-    }
-    if (-not $package) { Fail "no package files to compare with (neither CPack's staging folder nor $zip)"; return }
-    $mismatched = @()
-    $count = 0
-    Get-ChildItem $package -Recurse -File | ForEach-Object {
-      $count++
-      $installed = Join-Path $Install $_.FullName.Substring($package.Length + 1)
-      if (-not (Test-Path $installed) -or
-          (Get-FileHash -Algorithm SHA256 $installed).Hash -ne (Get-FileHash -Algorithm SHA256 $_.FullName).Hash) {
-        $mismatched += $_.FullName.Substring($package.Length + 1)
-      }
-    }
-    if ($count -gt 0 -and $mismatched.Count -eq 0) { Pass "every file of the package is installed ($count files)" }
-    else { Fail "installed files that differ from the package's: $(($mismatched | Select-Object -First 10) -join ', ')" }
+    # /EndPrograms (mitcad#1584; the updater passes it after End Them and
+    # Install, and the installer's pages end the same way for End Them):
+    # the silent installer ends a `mitcad-cli mcp` from bin itself and
+    # installs.
+    Set-Content -Encoding ascii $license 'files in use test'
+    $holder = Start-Holder $bin (Join-Path $Work 'workspace-end-programs') $discovery
+    $proc = Start-Process -FilePath $installer.FullName -ArgumentList '/S', '/CurrentUser', '/EndPrograms', "/D=$Install" `
+      -Wait -PassThru
+    if ($proc.ExitCode -eq 0) { Pass 'the silent installer with /EndPrograms installs while mitcad-cli runs' }
+    else { Fail "the silent installer with /EndPrograms: exit code $($proc.ExitCode), expected 0" }
+    if ($holder.WaitForExit(10000)) { Pass 'the installer ended mitcad-cli mcp' }
+    else { Fail 'mitcad-cli mcp still runs after the installer with /EndPrograms' }
+    if ((Get-Content $license -Raw) -eq $packageLicense) { Pass 'LICENSE is the package''s again' }
+    else { Fail 'LICENSE was not installed again with /EndPrograms' }
+
+    # The updater's End Them and Install (mitcad#1584): it ends mitcad-cli
+    # mcp, runs the installer, and the update replaces every file.
+    Set-Content -Encoding ascii $license 'files in use test'
+    $holder = Start-Holder $bin (Join-Path $Work 'workspace-end-them') $discovery
+    $proc = Start-Updater $updater $copy $Install $log
+    $asked = Answer-Updater $proc $log 1 'Programs from MitCad are still running' 'End Them and Install'
+    if (-not $proc.WaitForExit(180000)) { $proc.Kill(); Fail 'mitcad-updater did not end after End Them and Install' }
+    $last = Get-LastLine $log
+    if ($asked -and $proc.ExitCode -eq 0) { Pass "mitcad-updater ended the programs and installed: $last" }
+    else { Fail "mitcad-updater after End Them and Install: exit code $($proc.ExitCode), last line '$last'" }
+    if (Select-String -Path $log -SimpleMatch -Pattern "Ended mitcad-cli.exe (process $($holder.Id))" -Quiet) {
+      Pass 'its log names the program it ended'
+    } else { Fail "the updater's log does not say it ended mitcad-cli.exe (process $($holder.Id))" }
+    if (Select-String -Path $log -Pattern '^Running .* /EndPrograms /D=' -Quiet) { Pass 'the installer ran with /EndPrograms' }
+    else { Fail 'the installer did not run with /EndPrograms' }
+    if ($holder.WaitForExit(10000)) { Pass 'mitcad-cli mcp was ended' } else { Fail 'mitcad-cli mcp still runs' }
+    if ((Get-Content $license -Raw) -eq $packageLicense) { Pass 'LICENSE is the package''s again' }
+    else { Fail 'LICENSE was not installed again by the update' }
+
+    Test-PackageFiles $Install $Work
   } finally {
     foreach ($process in $holder, $bridge) {
       if ($process -and -not $process.HasExited) { $process.Kill() }
     }
   }
+}
+
+# 1d. MitCad from bin with an unsaved design (mitcad#1584): the updater's
+# End Them and Install asks it to close as quitting it does, and MitCad
+# asks whether to save the design; it is not ended. Left unanswered, the
+# updater asks again after its wait (End Anyway, Wait, Cancel); Cancel
+# installs nothing, changes no file, and MitCad still runs. Needs -MesaDir
+# (the app's window in session 0, tools/ui-windows-lib.ps1).
+function Test-EndMitcad([string]$Install, [string]$Work) {
+  New-Item -ItemType Directory -Force $Work | Out-Null
+  $bin = Join-Path $Install 'bin'
+  $script:UiApp = Join-Path $bin 'mitcad.exe'
+  $script:UiOut = $Work
+  $script:UiSettings = Join-Path $Work 'settings'
+  $script:UiAutosave = Join-Path $Work 'autosave'
+  $script:UiResults = Join-Path $Work 'results'
+  $script:UiThumbnails = Join-Path $Work 'thumbnails'
+  Remove-Item -Recurse -Force $script:UiSettings -ErrorAction SilentlyContinue
+  $design = Join-Path $Work 'block.mitcad'
+  Write-BlockDesign $design
+  $updater = Join-Path $Work 'mitcad-updater.exe'
+  $copy = Join-Path $Work $installer.Name
+  Copy-Item (Join-Path $bin 'mitcad-updater.exe') $updater
+  Copy-Item $installer.FullName $copy
+  $log = Join-Path $Work 'updater.log'
+  $proc = $null
+  try {
+    Ui-StartApp 'end-mitcad' @('--open', $design, '--set', 'd3=35')
+    # The question to save is titled "MitCad", as the app's hidden windows
+    # are: it is the new one.
+    $hidden = Ui-Windows '^MitCad$'
+    $before = Get-Files $Install
+    $proc = Start-Updater $updater $copy $Install $log
+    if (-not (Answer-Updater $proc $log 1 'Programs from MitCad are still running' 'End Them and Install')) {
+      return
+    }
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    while (-not (Select-String -Path $log -SimpleMatch -Pattern "Asked MitCad (process $($script:UiProcess.Id)) to close" -Quiet) -and
+           $clock.Elapsed.TotalSeconds -lt 20) { Start-Sleep -Milliseconds 250 }
+    if ($clock.Elapsed.TotalSeconds -lt 20) { Pass 'the updater asks MitCad to close its window' }
+    else { Fail 'the updater did not ask MitCad to close'; return }
+    Ui-FocusDialog '^MitCad$' -Except $hidden
+    Pass 'MitCad asks whether to save the changed design'
+    # Unanswered: after its wait the updater asks again; Cancel.
+    if (-not (Answer-Updater $proc $log 2 'MitCad is still running' 'Cancel' 90)) { return }
+    if (-not $proc.WaitForExit(60000)) { $proc.Kill(); Fail 'mitcad-updater did not end after Cancel'; return }
+    $last = Get-LastLine $log
+    if ($proc.ExitCode -eq 1 -and $last -and $last.Contains('mitcad.exe') -and $last.Contains('cancelled')) {
+      Pass "mitcad-updater, cancelled, installs nothing: $last"
+    } else { Fail "mitcad-updater cancelled with MitCad running: exit code $($proc.ExitCode), last line '$last'" }
+    if ($script:UiProcess.HasExited) { Fail 'MitCad was ended' } else { Pass 'MitCad still runs: it was not ended' }
+    if (Select-String -Path $log -Pattern '^Ended MitCad' -Quiet) { Fail 'the updater says it ended MitCad' }
+    $changed = Get-Changed $before (Get-Files $Install)
+    if ($changed.Count -eq 0) { Pass 'no file of the installation changed' }
+    else { Fail "files changed: $(($changed | Select-Object -First 10) -join ', ')" }
+  } finally {
+    if ($proc -and -not $proc.HasExited) { $proc.Kill() }
+    Ui-StopApp
+  }
+}
+
+# The block of the update tests: a sketch and an extrusion, with d3.
+function Write-BlockDesign([string]$Path) {
+  @'
+{
+  "format": "mitcad",
+  "version": 1,
+  "parameters": [
+    { "name": "d1", "value": 60.0 }, { "name": "d2", "value": 40.0 }, { "name": "d3", "value": 20.0 }
+  ],
+  "features": [
+    { "type": "sketch", "name": "Sketch1", "shapes": [
+      { "type": "rectangle", "corner": [0.0, 0.0], "width": "d1", "height": "d2" } ] },
+    { "type": "extrude", "name": "Extrude1", "sketch": "Sketch1", "profile": 0,
+      "distance": "d3", "operation": "new_body" }
+  ]
+}
+'@ | Set-Content -Encoding ascii $Path
 }
 
 # 5. The automatic update of the installation in $Install, installed in
@@ -664,21 +919,7 @@ function Test-Update([string]$In, [string]$Install, [string]$Work, [switch]$Full
     # The release: a changed design open, saved when asked; the installer
     # puts back the file removed here.
     $design = Join-Path $Work 'block.mitcad'
-    @'
-{
-  "format": "mitcad",
-  "version": 1,
-  "parameters": [
-    { "name": "d1", "value": 60.0 }, { "name": "d2", "value": 40.0 }, { "name": "d3", "value": 20.0 }
-  ],
-  "features": [
-    { "type": "sketch", "name": "Sketch1", "shapes": [
-      { "type": "rectangle", "corner": [0.0, 0.0], "width": "d1", "height": "d2" } ] },
-    { "type": "extrude", "name": "Extrude1", "sketch": "Sketch1", "profile": 0,
-      "distance": "d3", "operation": "new_body" }
-  ]
-}
-'@ | Set-Content -Encoding ascii $design
+    Write-BlockDesign $design
     Remove-Item (Join-Path $bin 'mitcad-cli.exe')
     Remove-Item -Recurse -Force $script:UiSettings -ErrorAction SilentlyContinue
     $env:MITCAD_UPDATE_URL = "$base/good/update-manifest.json"
@@ -782,6 +1023,10 @@ function Test-Scope([string]$In) {
     Test-Programs $install
     Test-UpdaterCheck $install (Join-Path $root 'updater-check')
     Test-FilesInUse $install (Join-Path $root 'in-use')
+    if ($MesaDir -and -not $NoUpdate) {
+      try { Test-EndMitcad $install (Join-Path $root 'end-mitcad') }
+      catch { if ($_.Exception.Message -ne 'the update test failed') { throw } }
+    }
   } else {
     # What an earlier release's updater runs: /S /D=<its folder>, no scope.
     $proc = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$install" -Wait -PassThru

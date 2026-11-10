@@ -84,7 +84,8 @@ pub struct Material {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub based_on: Option<String>,
     /// Its class (mitcad#655, mitcad#1102): metal, plastic (General
-    /// Plastic), fdm_plastic, resin or other, the group it is listed in.
+    /// Plastic), fdm_plastic, resin, wood (mitcad#1552) or other, the
+    /// group it is listed in.
     /// A material with print settings is an FDM plastic whatever it stores
     /// (a filament keeps `plastic`, which older versions read); without
     /// one (designs and library files before it) `material_class` works it
@@ -366,7 +367,7 @@ impl PropertiesChange {
 
 /// A material's class (mitcad#655, mitcad#1102): what it is made of, by
 /// which the lists group it: Metal, General Plastic (`plastic`), FDM
-/// Plastic (the filaments), Resin, Other.
+/// Plastic (the filaments), Resin, Wood, Other.
 pub use mitcad_model_base::material_class::MaterialClass;
 
 /// Where a design's material came from: the library (`base`, `user`,
@@ -829,6 +830,21 @@ pub fn stored_class(material: &Material, class: MaterialClass) -> MaterialClass 
     }
 }
 
+/// A new material's look by its class (mitcad#1552): a material made from
+/// nothing (no `based_on`, no `dataset`) of a class with a default
+/// appearance (oak for Wood) starts with it, unless the command names an
+/// appearance or a list of them.
+pub fn give_class_appearance(
+    material: &mut Material,
+    class: MaterialClass,
+    change: &MaterialChange,
+) {
+    if material.appearance.is_none() && change.appearance.is_none() && change.appearances.is_none()
+    {
+        material.appearance = class.default_appearance().map(str::to_owned);
+    }
+}
+
 /// Bodies and components without a material of their own are the default
 /// material's, steel.
 pub use analysis::DEFAULT_MATERIAL;
@@ -938,8 +954,8 @@ pub fn material_class(material: &Material) -> MaterialClass {
 }
 
 /// The group a material is listed in (mitcad#655): its class's, `metals`,
-/// `plastics` (General Plastic), `fdm_plastics` (the filaments), `resins`
-/// or `other`. Print settings make it an FDM plastic (mitcad#1102).
+/// `plastics` (General Plastic), `fdm_plastics` (the filaments), `resins`,
+/// `wood` or `other`. Print settings make it an FDM plastic (mitcad#1102).
 pub fn material_group(material: &Material) -> &'static str {
     material_class(material).group()
 }

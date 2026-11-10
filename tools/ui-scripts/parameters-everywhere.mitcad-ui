@@ -1,0 +1,112 @@
+# SPDX-License-Identifier: MIT
+# Edit Parameters one click away in every workspace (mitcad#1582, GitHub
+# mitcad/Mitcad#222) on parameters-everywhere.json (Sketch1, its extrusion,
+# the user parameter width = 40 mm, Drawing1), in the layout the runner
+# chose (Floating, Docked):
+#   1. The navigation bar ends with Edit Parameters, its tooltip the
+#      command's (solid.parameters).
+#   2. In the SOLID, BUILD and MAKE workspaces one click on it opens the
+#      parameter table, which lists width; OK closes it.
+#   3. In Sketch1 the button is the sketch's entry (sketch.parameters, its
+#      tooltip saying the sketch stays open): a click opens the table, the
+#      sketch stays open, OK goes back to it.
+#   4. In Drawing1, where the navigation bar is hidden, the drawing's bar
+#      has Edit Parameters after Add Revision: a click opens the table over
+#      the drawing, which stays open.
+# Run by tools/ui-parameters-everywhere-test.sh (Linux) and
+# tools/ui-windows-parameters-everywhere-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+expect-ever '^Navigation bar Edit Parameters at '
+expect-ever '^Navigation bar tooltips: .*[|] Edit Parameters: User and model parameters: names'
+
+# 1-2. SOLID.
+mark
+click-logged '^Ribbon tab SOLID at '
+wait-idle
+mark
+click-logged '^Navigation bar Edit Parameters at '
+wait-log '^Navigation bar: Edit Parameters$'
+wait-log '^Parameters dialog opened$'
+focus-dialog '^Parameters$'
+expect-parameter-cell width 2 '^40 mm$' visible
+button '^OK$'
+focus-main
+expect-dialog-gone '^Parameters$'
+
+# 2. BUILD.
+mark
+click-logged '^Ribbon tab BUILD at '
+wait-log '^Ribbon tab shown: BUILD$'
+wait-idle
+mark
+click-logged '^Navigation bar Edit Parameters at '
+wait-log '^Navigation bar: Edit Parameters$'
+wait-log '^Parameters dialog opened$'
+focus-dialog '^Parameters$'
+expect-parameter-cell width 2 '^40 mm$' visible
+button '^OK$'
+focus-main
+expect-dialog-gone '^Parameters$'
+
+# 2. MAKE.
+mark
+click-logged '^Ribbon tab MAKE at '
+wait-log '^Ribbon tab shown: MAKE$'
+wait-idle
+mark
+click-logged '^Navigation bar Edit Parameters at '
+wait-log '^Navigation bar: Edit Parameters$'
+wait-log '^Parameters dialog opened$'
+focus-dialog '^Parameters$'
+expect-parameter-cell width 2 '^40 mm$' visible
+button '^OK$'
+focus-main
+expect-dialog-gone '^Parameters$'
+
+# 3. In a sketch: the sketch's entry, the sketch kept.
+mark
+click-logged '^Ribbon tab SOLID at '
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+wait-log '^Navigation bar tooltips: .*[|] Edit Parameters: User and model parameters; the sketch stays open' 10
+wait-idle
+mark
+click-logged '^Navigation bar Edit Parameters at '
+wait-log '^Navigation bar: Edit Parameters$'
+wait-log '^Parameters dialog opened$'
+focus-dialog '^Parameters$'
+expect-parameter-cell width 2 '^40 mm$' visible
+button '^OK$'
+focus-main
+wait-log '^Parameters closed: back to Sketch1$'
+expect-no-log '^Sketch finished'
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+wait-log '^Navigation bar tooltips: .*[|] Edit Parameters: User and model parameters: names' 10
+wait-idle
+
+# 4. In a drawing: the drawing bar's button, the drawing kept.
+mark
+dblclick-logged '^Browser Root/Drawings/Drawing1 at '
+wait-log '^Drawing opened: D1 Drawing1, sheet 1 of 1'
+wait-log '^Drawing Edit Parameters at '
+wait-idle
+mark
+click-logged '^Drawing Edit Parameters at '
+wait-log '^Drawing bar: Edit Parameters$'
+wait-log '^Parameters dialog opened$'
+focus-dialog '^Parameters$'
+expect-parameter-cell width 2 '^40 mm$' visible
+button '^OK$'
+focus-main
+expect-dialog-gone '^Parameters$'
+wait-idle
+expect-no-log '^Drawing closed'
+mark
+command drawing.close
+wait-log '^Drawing closed'
+expect-never 'TestDriver: FAIL'

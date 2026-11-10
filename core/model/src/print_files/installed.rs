@@ -54,7 +54,7 @@
 //!   (`compatible_printers`) are shown, and a filament only for the
 //!   printers it is compatible with.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
@@ -797,8 +797,53 @@ fn resolve_in(
     name: String,
     set: Option<PrintSet>,
     account: Option<&Path>,
-    mut vendor: Option<PathBuf>,
+    vendor: Option<PathBuf>,
 ) -> Result<ResolvedPreset, String> {
+    resolve_in_files(folder, own, name, set, account, vendor, None)
+}
+
+/// Resolves a preset using only an in-memory snapshot supplied by the caller.
+/// No installed slicers, libraries or filesystem paths are consulted.
+pub fn resolve_preset_from_files(
+    folder: &Path,
+    path: &Path,
+    files: &BTreeMap<PathBuf, Map<String, Value>>,
+) -> Result<ResolvedPreset, String> {
+    let own = files
+        .get(path)
+        .cloned()
+        .ok_or_else(|| format!("{} is no preset file", path.display()))?;
+    let account = path
+        .strip_prefix(folder.join(USER_DIR))
+        .ok()
+        .and_then(|r| r.components().next())
+        .map(|c| folder.join(USER_DIR).join(c.as_os_str()));
+    let name = preset_name(&own, path);
+    resolve_in_files(
+        folder,
+        own,
+        name,
+        set_of(folder, path),
+        account.as_deref(),
+        vendor_dir(folder, path),
+        Some(files),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_in_files(
+    folder: &Path,
+    own: Map<String, Value>,
+    name: String,
+    set: Option<PrintSet>,
+    account: Option<&Path>,
+    mut vendor: Option<PathBuf>,
+    files: Option<&BTreeMap<PathBuf, Map<String, Value>>>,
+) -> Result<ResolvedPreset, String> {
+    let read = |path: &Path| match files {
+        Some(files) => files.get(path).cloned(),
+        None => read_preset_file(path),
+    };
     let mut chain = vec![own];
     let mut names = Vec::new();
     let mut bases: Option<Bases> = None;
@@ -809,9 +854,30 @@ fn resolve_in(
                 "{name}: the presets it inherits from inherit in a loop"
             ));
         }
-        let index = bases.get_or_insert_with(|| Bases::of(folder, account));
+        let index = bases.get_or_insert_with(|| match files {
+            None => Bases::of(folder, account),
+            Some(files) => {
+                let in_tree = |path: &Path, root: &Path, depth: usize| {
+                    path.strip_prefix(root)
+                        .is_ok_and(|p| p.components().count() <= depth + 1)
+                };
+                let eligible = |path: &Path| {
+                    account.is_some_and(|a| in_tree(path, a, 2))
+                        || in_tree(path, &folder.join(SYSTEM_DIR), 4)
+                };
+                // Match the native resolver's account-before-system order.
+                let mut paths: Vec<_> = files.keys().filter(|p| eligible(p)).collect();
+                paths.sort_by_key(|p| (!account.is_some_and(|a| p.starts_with(a)), *p));
+                Bases {
+                    presets: paths
+                        .into_iter()
+                        .filter_map(|p| Some((text_of(files.get(p)?, "name")?, p.clone())))
+                        .collect(),
+                }
+            }
+        });
         let found = index.find(&base, vendor.as_deref()).map(Path::to_path_buf);
-        match found.as_deref().and_then(read_preset_file) {
+        match found.as_deref().and_then(read) {
             Some(map) => {
                 // A system preset's bases in its own vendor's folder first.
                 if let Some(dir) = found.as_deref().and_then(|p| vendor_dir(folder, p)) {
@@ -939,6 +1005,36 @@ mod tests {
             .into_iter()
             .map(|s| (s.dialect, s.folder))
             .collect()
+    }
+
+    #[test]
+    fn snapshot_resolution_uses_only_supplied_files() {
+        let folder = Path::new("confined-presets");
+        let path = folder.join("user/default/machine/child.json");
+        let mut files = BTreeMap::new();
+        let object = |value: Value| value.as_object().unwrap().clone();
+        files.insert(
+            path.clone(),
+            object(json!({"name":"Child", "inherits":"Base", "height":"190"})),
+        );
+        files.insert(
+            folder.join("system/vendor/machine/base.json"),
+            object(json!({"name":"Base", "nozzle_diameter":["0.6"]})),
+        );
+        // A matching logical name outside the supplied data folder cannot
+        // take part, even if a caller included it in the snapshot.
+        files.insert(
+            PathBuf::from("elsewhere/base.json"),
+            object(json!({"name":"Base", "nozzle_diameter":["9"]})),
+        );
+        let resolved = resolve_preset_from_files(folder, &path, &files).unwrap();
+        assert_eq!(resolved.chain, vec!["Base"]);
+        assert_eq!(resolved.map["nozzle_diameter"], json!(["0.6"]));
+        assert_eq!(resolved.map["height"], "190");
+        assert_eq!(resolved.map["type"], "machine");
+        files.remove(&folder.join("system/vendor/machine/base.json"));
+        let missing = resolve_preset_from_files(folder, &path, &files).unwrap();
+        assert_eq!(missing.missing.as_deref(), Some("Base"));
     }
 
     #[test]

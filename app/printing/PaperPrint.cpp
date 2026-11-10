@@ -8,6 +8,8 @@
 
 #include <QDebug>
 #include <QDir>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFileInfo>
 #include <QFont>
 #include <QMarginsF>
@@ -18,8 +20,11 @@
 #include <QPen>
 #include <QPrintDialog>
 #include <QPrinter>
+#include <QProgressDialog>
 #include <QStringList>
 #include <QSvgRenderer>
+#include <QThread>
+#include <QTimer>
 #include <QtGlobal>
 
 namespace mitcad::printing {
@@ -527,6 +532,50 @@ bool pageWanted(const QPrinter& printer, int number) {
   }
   const QPageRanges ranges = printer.pageRanges();
   return ranges.isEmpty() || ranges.contains(number);
+}
+
+void waitForWork(QWidget* parent, const QString& title, const QString& note, const std::function<void()>& work,
+                 int noteAfterMs) {
+  QEventLoop loop;
+  const std::unique_ptr<QThread> thread(QThread::create(work));
+  QObject::connect(thread.get(), &QThread::finished, &loop, &QEventLoop::quit, Qt::QueuedConnection);
+  // A busy note without a button: the work cannot be stopped, and the
+  // window is not frozen meanwhile.
+  QProgressDialog shown(note, QString(), 0, 0, parent);
+  shown.setWindowTitle(title);
+  shown.setWindowModality(parent != nullptr ? Qt::WindowModal : Qt::ApplicationModal);
+  shown.setCancelButton(nullptr);
+  shown.setMinimumDuration(noteAfterMs);
+  QTimer later;
+  later.setSingleShot(true);
+  QObject::connect(&later, &QTimer::timeout, &shown, [&shown] { shown.show(); });
+  thread->start();
+  later.start(noteAfterMs);
+  // Input waits until the work is done: the command that started it is
+  // still on the stack, and nothing may close its window or start another.
+  loop.exec(QEventLoop::ExcludeUserInputEvents);
+  thread->wait();
+  later.stop();
+}
+
+std::unique_ptr<QPrinter> newPrinter(QWidget* parent) {
+#if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
+  QElapsedTimer took;
+  took.start();
+  std::unique_ptr<QPrinter> printer;
+  waitForWork(parent, QObject::tr("Print"), QObject::tr("Looking for printers…"),
+              [&printer] { printer = std::make_unique<QPrinter>(QPrinter::HighResolution); });
+  if (took.elapsed() >= 500) {
+    qInfo().noquote() << QStringLiteral("Printer found in %1 ms: %2")
+                             .arg(took.elapsed())
+                             .arg(printer->outputFormat() == QPrinter::PdfFormat ? QStringLiteral("PDF")
+                                                                                 : printer->printerName());
+  }
+  return printer;
+#else
+  Q_UNUSED(parent);
+  return std::make_unique<QPrinter>(QPrinter::HighResolution);
+#endif
 }
 
 bool askPrinter(QPrinter& printer, QWidget* parent, int pages) {

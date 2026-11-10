@@ -309,6 +309,12 @@ vcpkg_from_github(
         1657-chfi3d-corner-of-three-curves-marched-the-way-keeping-inside-the-contacts.patch
         1658-chfi3d-the-rounding-whose-contact-lies-nearer-its-edge-rides-a-ride-of-no-width-drops-the-rider.patch
         1659-chfi3d-corner-of-three-cut-by-each-other-where-a-stripe-is-cut-at-a-ride-line-at-both-ends.patch
+        1661-brepfill-trim-shell-corner-each-seam-ends-where-it-crosses-the-other-side.patch
+        1662-brepoffsetapi-pipe-shell-mitred-corners-from-a-ten-thousandth-radian.patch
+        1663-brepfill-trim-shell-corner-mitre-along-the-bisector-plane-where-the-sides-intersection-breaks-up.patch
+        1664-brepfill-sweep-sides-extended-past-a-corner-as-the-prisms-of-their-end-sections.patch
+        1665-bopds-paves-of-an-edge-whose-blocks-do-not-chain.patch
+        1666-brepfill-trim-shell-corner-round-along-the-bisector-plane-where-the-sides-intersection-breaks-up.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

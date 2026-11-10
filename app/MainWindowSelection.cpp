@@ -175,6 +175,52 @@ QStringList MainWindow::sketchAxisPicks() const {
   return axes;
 }
 
+// A command's inputs that pick points with the sketch's snaps
+// (InputDef::sketchSnaps, mitcad#1563: Move/Copy's Point to Point).
+bool MainWindow::sketchSnapsPickable() const {
+  return m_session && m_commandInSketch && m_session->activeTakesSketchSnaps();
+}
+
+QStringList MainWindow::sketchSnapPicks() const {
+  QStringList picks;
+  if (!m_session || !m_commandInSketch) {
+    return picks;
+  }
+  for (const InputDef& input : m_session->def().inputs) {
+    if (input.type != InputDef::Type::Selection || !input.sketchSnaps ||
+        (input.visible && !input.visible(m_session->state()))) {
+      continue;
+    }
+    for (const SelectionItem& item : m_session->state().items(input.id)) {
+      if (item.owner == m_sketch->uid()) {
+        picks << item.name;
+      }
+    }
+  }
+  return picks;
+}
+
+// The running command's handle in the sketch (CommandDef::sketchHandle,
+// mitcad#1563: Move/Copy's arrow pair).
+std::optional<SketchHandle> MainWindow::sketchHandle() const {
+  if (!m_session || !m_commandInSketch) {
+    return std::nullopt;
+  }
+  return m_session->sketchHandle();
+}
+
+void MainWindow::dragSketchHandle(const SketchHandle& handle, double x, double y) {
+  if (!m_session || !m_commandInSketch) {
+    return;
+  }
+  if (!handle.x.isEmpty()) {
+    m_session->handleDragged(handle.x, x);
+  }
+  if (!handle.y.isEmpty() && m_session) {
+    m_session->handleDragged(handle.y, y);
+  }
+}
+
 Selection MainWindow::sketchWindowItems(const Selection& items) const {
   Selection taken = items;
   if (m_sketchScope.state(FilterRow::Annotations) == FilterState::Window) {

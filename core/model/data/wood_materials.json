@@ -1,0 +1,25 @@
+{
+  "about": "Typical densities and Young's moduli of common woods and wood-based panels for MitCad's bundled material dataset (mitcad#1552). MitCad's own data (MIT licence): each value was checked against the public source its reference names, as docs/material-files.md lists them with their addresses (9.11.2026). A value the source does not give is left out.",
+  "format": "mitcad-materials",
+  "version": 1,
+  "units": {"density": "kg/m3", "stress": "GPa"},
+  "materials": [
+    {"id": "panel/chipboard", "name": "Chipboard", "class": "wood", "density": 611, "reference": {"source": "OEKOBAUDAT", "material": "Sonae uncoated particleboard", "revision": "00.02.000"}},
+    {"id": "panel/mdf_raw", "name": "MDF - raw", "class": "wood", "density": 736, "reference": {"source": "OEKOBAUDAT", "material": "EGGER raw MDF", "revision": "00.07.000"}},
+    {"id": "panel/osb3", "name": "OSB/3", "class": "wood", "density": 610, "reference": {"source": "EGGER", "material": "EGGER OSB 3 JAS TOP", "grade": "15 mm"}},
+    {"id": "panel/plywood_birch", "name": "Plywood - birch", "class": "wood", "density": 680, "reference": {"source": "WISA", "material": "WISA birch plywood"}},
+    {"id": "panel/plywood_eucalyptus", "name": "Plywood - eucalyptus", "class": "wood", "density": 600, "reference": {"source": "S&J Woods", "material": "S&J Eucalyptus Throughout Hardwood Plywood"}},
+    {"id": "panel/plywood_pine", "name": "Plywood - pine", "class": "wood", "density": 500, "reference": {"source": "Plytech", "material": "Plytech Teco Radiata Structural"}},
+    {"id": "panel/plywood_spruce", "name": "Plywood - spruce", "class": "wood", "density": 460, "reference": {"source": "WISA", "material": "WISA spruce plywood"}},
+    {"id": "wood/birch", "name": "Wood - Birch", "class": "wood", "density": 690, "youngs_modulus": 13.86, "reference": {"source": "The Wood Database", "material": "Yellow birch (Betula alleghaniensis)"}},
+    {"id": "wood/cedar", "name": "Wood - Cedar", "class": "wood", "density": 370, "youngs_modulus": 7.66, "reference": {"source": "The Wood Database", "material": "Western red cedar (Thuja plicata)"}},
+    {"id": "wood/cherry", "name": "Wood - Cherry", "class": "wood", "density": 560, "youngs_modulus": 10.3, "reference": {"source": "The Wood Database", "material": "Black cherry (Prunus serotina)"}},
+    {"id": "wood/douglas_fir", "name": "Wood - Douglas Fir", "class": "wood", "density": 510, "youngs_modulus": 12.17, "reference": {"source": "The Wood Database", "material": "Douglas fir (Pseudotsuga menziesii)"}},
+    {"id": "wood/eucalyptus", "name": "Wood - Eucalyptus", "class": "wood", "density": 820, "youngs_modulus": 18.76, "reference": {"source": "The Wood Database", "material": "Blue gum (Eucalyptus globulus)"}},
+    {"id": "wood/maple", "name": "Wood - Maple", "class": "wood", "density": 705, "youngs_modulus": 12.62, "reference": {"source": "The Wood Database", "material": "Hard maple (Acer saccharum)"}},
+    {"id": "wood/oak", "name": "Wood - Oak", "class": "wood", "density": 755, "youngs_modulus": 12.15, "reference": {"source": "The Wood Database", "material": "American white oak (Quercus alba)"}},
+    {"id": "wood/pine", "name": "Wood - Pine", "class": "wood", "density": 550, "youngs_modulus": 10.08, "reference": {"source": "The Wood Database", "material": "Scots pine (Pinus sylvestris)"}},
+    {"id": "wood/teak", "name": "Wood - Teak", "class": "wood", "density": 655, "youngs_modulus": 12.28, "reference": {"source": "The Wood Database", "material": "Teak (Tectona grandis)"}},
+    {"id": "wood/walnut", "name": "Wood - Walnut", "class": "wood", "density": 610, "youngs_modulus": 11.59, "reference": {"source": "The Wood Database", "material": "Black walnut (Juglans nigra)"}}
+  ]
+}

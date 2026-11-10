@@ -65,3 +65,9 @@ mod sketch_line_arcs_1393_tests;
 mod sketch_tangent_dimensions_1540_tests;
 // The closed loop a double-click on a sketch curve selects (mitcad#1541).
 mod sketch_loop_1541_tests;
+// Move/Copy Point to Point, and Rotate about the middle that turns what
+// holds the geometry to the axes (mitcad#1563).
+mod sketch_move_1563_tests;
+// Conflicting constraints in the user's words, the blocking one named
+// (mitcad#1566).
+mod sketch_conflict_message_1566_tests;

@@ -129,6 +129,8 @@ Start-Sleep -Milliseconds 800
 Write-Host '--- Activate refused while the vertical distance holds the line up'
 Choose-Entry 'Constraint k1 glyph' 'Activate'
 Ui-ExpectNew 'Sketch items not activated: k1 cannot be activated' 'refused with the reason'
+# What blocks it is painted, not named by id (mitcad#1566).
+Ui-ExpectNew 'Sketch conflict painted: k2 on p1, p3' 'the vertical distance that blocks it is painted'
 if ((Ui-LogLines | Select-Object -Skip $script:UiMark) | Where-Object { $_.Contains('Sketch items activated: k1') }) {
   Ui-Fail 'k1 was activated'
 }

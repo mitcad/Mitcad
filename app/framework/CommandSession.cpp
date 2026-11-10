@@ -24,6 +24,7 @@
 #include <QWidget>
 #include <QtLogging>
 
+#include "../sketch/SketchConflict.hpp"
 #include "../sketch/SketchModel.hpp"
 #include "Diagnostics.hpp"
 #include "DisplayMeshes.hpp"
@@ -1255,6 +1256,18 @@ bool CommandSession::activeAccepts(const SelectionItem& item) const {
 bool CommandSession::activeTakesSketchAxes() const {
   const InputDef* input = activeInput();
   return input != nullptr && !m_done && input->sketchAxes;
+}
+
+bool CommandSession::activeTakesSketchSnaps() const {
+  const InputDef* input = activeInput();
+  return input != nullptr && !m_done && input->sketchSnaps;
+}
+
+std::optional<SketchHandle> CommandSession::sketchHandle() const {
+  if (m_done || !m_def.sketchHandle) {
+    return std::nullopt;
+  }
+  return m_def.sketchHandle(m_state);
 }
 
 void CommandSession::activateFirstNeeded() {
@@ -2956,6 +2969,25 @@ void CommandSession::hoverMessage(bool on) {
   m_messageHovered = on;
   m_host.hoverNoticePlaces(QStringLiteral("panel"), on ? m_messagePlaces : QJsonArray(),
                            on ? m_messageBodies : std::vector<BodyDisplay>());
+  // A sketch command's blocking constraints in the hover's colour
+  // (mitcad#1566).
+  if (!m_sketchConflict.isEmpty()) {
+    m_host.sketchConflict(m_sketchConflict, on);
+  }
+}
+
+QString CommandSession::sketchProblem(const QString& error) {
+  const sketch::ConflictText conflict = sketch::splitConflict(error);
+  setSketchConflict(conflict.items);
+  return conflict.message;
+}
+
+void CommandSession::setSketchConflict(const QStringList& items) {
+  if (items == m_sketchConflict) {
+    return;
+  }
+  m_sketchConflict = items;
+  m_host.sketchConflict(items, m_messageHovered && !items.isEmpty());
 }
 
 QString CommandSession::okMessage(const QJsonObject& report) {
@@ -3377,6 +3409,7 @@ void CommandSession::showSketchPreview(const Built& built, bool keep) {
     // Not applied: OK applies it (commit).
     m_previewOk = true;
     m_failed = false;
+    setSketchConflict({});
     m_host.refreshScene();
     m_presenter->setMessage(tr("Preview canceled; change an input to preview again."), NoticeLevel::Information);
     m_presenter->setOkEnabled(true);
@@ -3440,11 +3473,15 @@ void CommandSession::showSketchPreview(const Built& built, bool keep) {
     // information.
     m_presenter->setMessage(shown.join(QLatin1Char('\n')),
                             warnings.isEmpty() ? NoticeLevel::Information : NoticeLevel::Warning);
+    setSketchConflict({});
     m_host.showHint(selectionHint(tr("%1: Enter to confirm, Esc to cancel.").arg(m_def.name)));
     qDebug().noquote() << QStringLiteral("Preview %1: ok%2%3").arg(m_def.name, warningsLog(warnings), notesLog(notes));
   } else {
-    m_presenter->setMessage(problem, NoticeLevel::Error);
-    qDebug().noquote() << QStringLiteral("Preview %1: failed: %2").arg(m_def.name, problem);
+    // A conflict in words, what blocks it painted; the log keeps the
+    // model's ids (mitcad#1566).
+    m_presenter->setMessage(sketchProblem(problem), NoticeLevel::Error);
+    qDebug().noquote() << QStringLiteral("Preview %1: failed: %2")
+                              .arg(m_def.name, QString(problem).replace(QLatin1Char('\n'), QLatin1Char(' ')));
   }
   m_presenter->setOkEnabled(m_previewOk);
   updateHighlights();
@@ -3933,16 +3970,23 @@ void CommandSession::showSketchPreviewAsync(const Built& built) {
                                   : !warnings.isEmpty() ? NoticeLevel::Warning
                                   : notes.isEmpty()     ? NoticeLevel::Hint
                                                         : NoticeLevel::Information;
+        // A conflict in words, what blocks it painted; the log keeps the
+        // model's ids (mitcad#1566).
+        const QString problem = m_previewOk ? QString() : sketchProblem(result.error);
+        if (m_previewOk) {
+          setSketchConflict({});
+        }
         m_presenter->setMessage(result.cancelled ? tr("Preview canceled; change an input to preview again.")
                                                  : (m_previewOk ? (warnings + notes).join(QLatin1Char('\n'))
-                                                                : result.error),
+                                                                : problem),
                                 level);
         m_presenter->setOkEnabled(m_previewOk);
         updateHighlights();
         qDebug().noquote() << QStringLiteral("Preview %1: %2").arg(m_def.name,
             result.cancelled ? QStringLiteral("cancelled")
                              : (m_previewOk ? QStringLiteral("ok") + warningsLog(warnings) + notesLog(notes)
-                                            : QStringLiteral("failed: ") + result.error));
+                                            : QStringLiteral("failed: ") +
+                                                  QString(result.error).replace(QLatin1Char('\n'), QLatin1Char(' '))));
         resumePendingCommit();
       };
       if (!result.succeeded() || generation != m_generation || m_cancelRequested) {
@@ -3986,7 +4030,9 @@ void CommandSession::recoverFailedCommit(const CommandHost::AsyncResult& result)
     }
     m_host.refreshScene();
     if (m_presenter) { m_presenter->refresh(m_state); }
-    m_presenter->setMessage(result.cancelled ? tr("Computation canceled.") : result.error,
+    // A sketch command's conflict in words, what blocks it painted
+    // (mitcad#1566).
+    m_presenter->setMessage(result.cancelled ? tr("Computation canceled.") : sketchProblem(result.error),
                             result.cancelled ? NoticeLevel::Information : NoticeLevel::Error);
     m_presenter->setOkEnabled(true);
     qDebug().noquote() << QStringLiteral("%1: OK %2").arg(m_def.name,
@@ -4906,6 +4952,9 @@ bool CommandSession::rollForward() {
 
 void CommandSession::finish(bool committed) {
   if (m_done) { return; }
+  // A refused sketch command's blocking items no longer painted
+  // (mitcad#1566).
+  setSketchConflict({});
   // Before the checkpoint is restored or released: nothing provisional
   // stays drawn over what the command leaves (mitcad#636).
   hideDragProxy(committed ? QStringLiteral("the command was committed") : QStringLiteral("the command was cancelled"),

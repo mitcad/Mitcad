@@ -684,9 +684,11 @@ pub(super) fn material_property_rows(
 }
 
 /// The `material_dataset` query (mitcad#1213): the bundled dataset's name,
-/// licence and caution, and its materials a search finds, each with its
-/// `id`, `name`, `class`, `density`, `properties`, `filament` and
-/// `reference`, in the model's units.
+/// licence and caution, its `sources` (`{name, license}`: the third-party
+/// dataset and MitCad's own woods and panels, mitcad#1552), and its
+/// materials a search finds, each with its `id`, `name`, `class`,
+/// `density`, `properties`, `filament` and `reference`, in the model's
+/// units.
 pub(super) fn material_dataset_json(query: &MaterialDatasetQuery) -> Value {
     let rows: Vec<&MaterialRow> = material_dataset::search(query.search.as_deref().unwrap_or(""));
     let materials: Vec<Value> = rows
@@ -707,6 +709,10 @@ pub(super) fn material_dataset_json(query: &MaterialDatasetQuery) -> Value {
         "name": material_dataset::NAME,
         "license": material_dataset::LICENSE_ID,
         "caution": material_dataset::CAUTION,
+        "sources": material_dataset::sources()
+            .iter()
+            .map(|(name, license)| json!({"name": name, "license": license}))
+            .collect::<Vec<_>>(),
         "count": material_dataset::entries().len(),
         "materials": materials,
     })

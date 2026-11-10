@@ -353,7 +353,7 @@ impl MaterialRow {
             Kind::Class => {
                 self.class = Some(MaterialClass::from_id(text).ok_or_else(|| {
                     format!(
-                        "class: {text} is no class: metal, plastic, fdm_plastic, resin or other"
+                        "class: {text} is no class: metal, plastic, fdm_plastic, resin, wood or other"
                     )
                 })?);
             }

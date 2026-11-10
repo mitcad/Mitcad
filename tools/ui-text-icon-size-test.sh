@@ -6,6 +6,7 @@
 # check-all sources: app/framework/FloatingLayout.cpp app/framework/GlassCard.cpp app/framework/TitleBar.cpp
 # check-all sources: app/framework/WindowStyle.cpp app/browser/TimelineWidget.cpp app/MainWindow.cpp
 # check-all sources: tools/ui-scripts/text-icon-size.mitcad-ui
+# check-all sources: app/framework/IconSizeStyle.cpp app/framework/IconSizeStyle.hpp
 # Preferences › Display › Text size, Icon size and Font (mitcad#1556,
 # GitHub mitcad/Mitcad#207) through the real UI, the input script
 # tools/ui-scripts/text-icon-size.mitcad-ui: MitCad started with the
@@ -18,7 +19,9 @@
 # Each time the start-up logs the sizes, the application font and the icon
 # sizes; with Box's command panel open the application font is in that
 # family at the platform's size times Text size, the Browser's and the
-# ribbon's icons at their sizes times Icon size, and the window, the
+# ribbon's icons at their sizes times Icon size, the icons Qt's style sizes
+# (a menu's and a combo box's, mitcad#1561) at the style's sizes times Icon
+# size, the application's style inside Icon size's proxy, and the window, the
 # ribbon, the Browser and the panel lay out whole, no input of the panel
 # clipped; Preferences shows the
 # sizes, and Icon size one step up is saved for the next start.
@@ -38,6 +41,29 @@ UI_SCREEN_HEIGHT=1080
 CONF=$XDG_CONFIG_HOME/Mitcad/Mitcad.conf
 # A family every Linux test host has (the fonts the UI tests draw with).
 FONT='DejaVu Sans'
+
+# style_icons name icon: the icons Qt's style sizes (mitcad#1561): the
+# application's style inside Icon size's proxy, and the menu's and the combo
+# box's icons in expect-text-icon-size's line at the style's sizes times
+# Icon size, rounded to whole pixels (counted here).
+style_icons() {
+  local name=$1 icon=$2 line menu menuBase combo comboHigh comboBase
+  grep -qE "^Style icon size: [^ ]+ with the style's icons at $icon%\$" "$UI_LOG" ||
+    ui_fail "$name: the application's style is not inside Icon size's proxy"
+  line=$(grep -E '^Text and icon size layout: ' "$UI_LOG" | tail -1)
+  local re="menu icons ([0-9]+)x([0-9]+) \\(the style's ([0-9]+) px\\), "
+  re+="combo box icons ([0-9]+)x([0-9]+) \\(the style's ([0-9]+) px\\)"
+  [[ $line =~ $re ]] || ui_fail "$name: no menu and combo box icons in: $line"
+  [ "${BASH_REMATCH[1]}" = "${BASH_REMATCH[2]}" ] || ui_fail "$name: the menu's icons are not square: $line"
+  menu=${BASH_REMATCH[1]} menuBase=${BASH_REMATCH[3]}
+  combo=${BASH_REMATCH[4]} comboHigh=${BASH_REMATCH[5]} comboBase=${BASH_REMATCH[6]}
+  [ "$menu" -eq $(((menuBase * icon + 50) / 100)) ] ||
+    ui_fail "$name: the menu's icons $menu px, not the style's $menuBase px times $icon%"
+  if [ "$combo" -ne $(((comboBase * icon + 50) / 100)) ] || [ "$comboHigh" -ne "$combo" ]; then
+    ui_fail "$name: the combo box's icons ${combo}x$comboHigh, not the style's $comboBase px times $icon%"
+  fi
+  echo "ok   $name: menu icons ${menu} px and combo box icons ${combo} px (the style's $menuBase and $comboBase px)"
+}
 
 # run layout text icon font: one start of MitCad with those settings; the
 # app ends with the script's steps.
@@ -67,7 +93,9 @@ run() {
     ui_fail "$name: the text and icon size driver failed: $(grep -E 'TestDriver|Text and icon size' "$UI_LOG" | tail -8)"
   UI_RUNNER=""
   ui_expect_log 'TestDriver: done' "$name: the font, the Browser's and the ribbon's icons, and the layout whole"
-  grep -E '^Text and icon size|^Application font: |^Icon sizes: |^Interface size layout: ' "$UI_LOG" | sed 's/^/     /'
+  grep -E '^Text and icon size|^Style icon size: |^Application font: |^Icon sizes: |^Interface size layout: ' \
+    "$UI_LOG" | sed 's/^/     /'
+  style_icons "$name" "$icon"
   # No label or choice of Box's panel cut at these sizes (CommandPanel's
   # "Panel Box inputs: ..." lines).
   grep -E '^Panel [^ ]+ inputs clipped: ' "$UI_LOG" | sort -u | sed 's/^/     /' | grep . &&

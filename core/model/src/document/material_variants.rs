@@ -297,7 +297,11 @@ impl<K: Kernel> Document<K> {
         into: Option<LibraryKind>,
         project: Option<&Path>,
     ) -> Result<Value, ModelError> {
-        let libraries = self.print_libraries(project);
+        let libraries = if into.is_some() {
+            self.print_libraries(project)
+        } else {
+            crate::print_library::Libraries::default()
+        };
         let groups = self.separate_filament_groups(&libraries, into);
         let mut merged = Vec::new();
         for group in groups {

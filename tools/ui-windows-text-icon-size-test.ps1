@@ -3,6 +3,8 @@
 # check-all sources: app/view/ViewController.cpp app/framework/TestDriver.cpp app/framework/TestDriverChrome.cpp
 # check-all sources: app/framework/Ribbon.cpp app/framework/CommandPanel.cpp app/browser/BrowserPanel.cpp
 # check-all sources: app/framework/WindowStyle.cpp tools/ui-scripts/text-icon-size.mitcad-ui
+# check-all sources: app/framework/IconSizeStyle.cpp app/framework/IconSizeStyle.hpp
+# check-all sources: app/platform/windows/WindowsTheme.cpp
 # Preferences > Display > Text size, Icon size and Font (mitcad#1556,
 # GitHub mitcad/Mitcad#207) on Windows, the shared input script
 # tools/ui-scripts/text-icon-size.mitcad-ui as
@@ -12,7 +14,9 @@
 # then Docked), and 120 % and 120 % in the font Arial (Floating). Each time
 # the application font is in that family at the platform's size times Text
 # size, the Browser's and the ribbon's icons at their sizes times Icon size,
-# the window, the ribbon, the Browser and Box's panel lay out whole with no
+# the icons Qt's style sizes (a menu's and a combo box's, mitcad#1561) at
+# the style's sizes times Icon size with the application's style inside Icon
+# size's proxy, the window, the ribbon, the Browser and Box's panel lay out whole with no
 # input clipped, and
 # Icon size one step up in Preferences is saved for the next start.
 #
@@ -32,6 +36,31 @@ $env:MITCAD_TEST_INPUT = Join-Path $PSScriptRoot 'ui-scripts/text-icon-size.mitc
 # The sizes alone: no scale factor of the environment's.
 Remove-Item Env:QT_SCALE_FACTOR -ErrorAction SilentlyContinue
 Remove-Item Env:MITCAD_USER_QT_SCALE_FACTOR -ErrorAction SilentlyContinue
+
+# Check-StyleIcons name icon: the icons Qt's style sizes (mitcad#1561): the
+# application's style inside Icon size's proxy, and the menu's and the combo
+# box's icons in expect-text-icon-size's line at the style's sizes times
+# Icon size, rounded to whole pixels (counted here).
+function Check-StyleIcons([string]$Name, [int]$Icon) {
+  $wrapped = @(Ui-LogLines | Where-Object { $_ -match "Style icon size: \S+ with the style's icons at $Icon%" })
+  if ($wrapped.Count -eq 0) { Ui-Fail "$($Name): the application's style is not inside Icon size's proxy" }
+  $pattern = "menu icons (\d+)x(\d+) \(the style's (\d+) px\), combo box icons (\d+)x(\d+) \(the style's (\d+) px\)"
+  $line = @(Ui-LogLines | Where-Object { $_ -match 'Text and icon size layout: ' }) | Select-Object -Last 1
+  $match = [regex]::Match("$line", $pattern)
+  if (-not $match.Success) { Ui-Fail "$($Name): no menu and combo box icons in: $line" }
+  $menu = [int]$match.Groups[1].Value
+  $menuBase = [int]$match.Groups[3].Value
+  $combo = [int]$match.Groups[4].Value
+  $comboHigh = [int]$match.Groups[5].Value
+  $comboBase = [int]$match.Groups[6].Value
+  if ([int]$match.Groups[2].Value -ne $menu -or $menu -ne [math]::Floor(($menuBase * $Icon + 50) / 100)) {
+    Ui-Fail "$($Name): the menu's icons $menu px, not the style's $menuBase px times $Icon%"
+  }
+  if ($comboHigh -ne $combo -or $combo -ne [math]::Floor(($comboBase * $Icon + 50) / 100)) {
+    Ui-Fail "$($Name): the combo box's icons $($combo)x$comboHigh, not the style's $comboBase px times $Icon%"
+  }
+  Write-Host "ok   $($Name): menu icons $menu px and combo box icons $combo px (the style's $menuBase and $comboBase px)"
+}
 
 # Run-Sizes layout text icon font: one start of MitCad with those settings
 # (font 'system': none kept); the app ends with the script's steps.
@@ -56,6 +85,7 @@ function Run-Sizes([string]$Layout, [int]$Text, [int]$Icon, [string]$Font) {
   }
   Ui-ExpectLog "Text and icon size: Text size $Text%, Icon size $Icon%" "$($name): the sizes applied at start"
   Ui-ExpectLog 'Text and icon size layout: font ' "$($name): the font and the Browser's and the ribbon's icons"
+  Check-StyleIcons $name $Icon
   Ui-ExpectLog 'Interface size layout: ' "$($name): the window, the ribbon, the Browser and Box's panel whole"
   Ui-ExpectLog 'TestDriver: done' "$($name): Preferences shows the sizes"
   # No label or choice of Box's panel cut at these sizes.

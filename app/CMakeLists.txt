@@ -720,8 +720,11 @@ if(WIN32)
   add_dependencies(mitcad mitcad-updater)
   # The programs still running from the installation (mitcad#1454): the
   # updater asks the MCP bridges to end and names what runs when the
-  # installer refuses to replace files in use.
+  # installer refuses to replace files in use. What still runs it offers to
+  # end in a task dialog (mitcad#1584): comctl32 6 is loaded at run time,
+  # user32 asks MitCad's windows to close.
   target_sources(mitcad-updater PRIVATE update/RunningPrograms.hpp)
+  target_link_libraries(mitcad-updater PRIVATE user32)
 endif()
 
 # A mixed installation at start-up (mitcad#1454): the OCCT DLLs loaded
@@ -969,8 +972,11 @@ if(BUILD_TESTING)
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   # Check renderer device policy and fallback independently of UI helpers.
   add_test(NAME app.render_devices COMMAND test_app --render-devices)
+  # No print server (mitcad#1591): the print tests' QPrinters print to PDF
+  # files and must not wait for the machine's printers (CUPS sets up a queue
+  # for a network printer it found and waits for that printer to answer).
   set_tests_properties(app.unit app.render_devices PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;CUPS_SERVER=/nonexistent/mitcad-test-cups.sock"
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()
 
@@ -1534,6 +1540,14 @@ target_sources(mitcad PRIVATE sketch/SketchTextPicks.cpp)
 if(BUILD_TESTING)
   # On the sketch model's data: plain Qt Core.
   target_sources(test_app PRIVATE tests/sketch_text_picks.cpp sketch/SketchTextPicks.cpp)
+endif()
+# Sketch Move/Copy (mitcad#1563): Point to Point's points picked with the
+# sketch's snaps while the panel runs, Translate's handle, and the places
+# they name and the objects' middle.
+target_sources(mitcad PRIVATE sketch/SketchPlaces.cpp sketch/SketchCommandPicks.cpp)
+if(BUILD_TESTING)
+  # The places on the sketch model's data: plain Qt Core.
+  target_sources(test_app PRIVATE tests/sketch_places.cpp sketch/SketchPlaces.cpp)
 endif()
 # Chains of sketch curves: Offset's Chain Selection and a double-click on a
 # curve, its closed loop or open chain (mitcad#1541).
@@ -2225,6 +2239,9 @@ target_sources(mitcad PRIVATE agent/AccountCheck.hpp)
 target_sources(mitcad PRIVATE agent/ApiAgent.cpp agent/ApiAgent.hpp)
 # A custom command over the Agent Client Protocol in the chat (mitcad#1198).
 target_sources(mitcad PRIVATE agent/AcpAgent.cpp agent/AcpAgent.hpp)
+# Sign in Again (mitcad#1585): the agent's own sign-out and sign-in in a
+# terminal window, the terminal and the script chosen by plain functions.
+target_sources(mitcad PRIVATE agent/SignInCommands.hpp agent/SignInTerminal.cpp agent/SignInTerminal.hpp)
 # The AppKit frontend's Chat card (mitcad#1075): the same panel through the
 # presenter bridge, in a card whose host keeps the conversation's end in
 # sight.
@@ -2239,6 +2256,8 @@ if(BUILD_TESTING)
                  agent/ChatSettings.cpp agent/ChatSettings.hpp)
   # Check again's decisions after the agent's check (mitcad#1155).
   target_sources(test_app PRIVATE tests/chat_account_check.cpp agent/AccountCheck.hpp)
+  # Sign in Again's commands, scripts and terminals per platform (mitcad#1585).
+  target_sources(test_app PRIVATE agent/SignInCommands.hpp)
   # The chat's UI tests' scripted agent (tools/ui-chat-test.py): Claude
   # Code's stream-json (as `claude`), Codex's app server (as `codex`) or the
   # Agent Client Protocol (as `acp-test-agent`, mitcad#1198) on stdin and
@@ -2850,4 +2869,48 @@ if(BUILD_TESTING)
   # The kept sizes and family, their fallbacks, uiIconSize and the
   # application font they give.
   target_sources(test_app PRIVATE tests/ui_sizes.cpp framework/UiSizes.cpp framework/UiSizes.hpp)
+endif()
+# Icon size for the icons Qt's style sizes (mitcad#1561): the application's
+# style inside IconSizeStyle, a proxy that multiplies the style's icon pixel
+# metrics; WindowStyle's own style and the macOS ones derive from it.
+target_sources(mitcad PRIVATE framework/IconSizeStyle.cpp framework/IconSizeStyle.hpp)
+if(BUILD_TESTING)
+  # The metrics it scales (once, not again through the base style's own
+  # queries), the style keys through it and the application's style it
+  # sets (also used by WindowStyle and MacToolButtonStyle in test_app).
+  target_sources(test_app PRIVATE tests/icon_size_style.cpp framework/IconSizeStyle.cpp
+                 framework/IconSizeStyle.hpp)
+endif()
+
+# A sketch edit refused for conflicting constraints (mitcad#1566,
+# app/COMMANDS.md "Conflicting constraints"): the message shown without the
+# model's ids line, the constraints and dimensions that block the change
+# painted in the view while it shows.
+target_sources(mitcad PRIVATE sketch/SketchConflict.cpp sketch/SketchConflict.hpp)
+if(BUILD_TESTING)
+  # The message and the blocking items read from the model's text: plain
+  # Qt Core.
+  target_sources(test_app PRIVATE tests/sketch_conflict.cpp sketch/SketchConflict.cpp sketch/SketchConflict.hpp)
+endif()
+
+# Commands pinned to the navigation bar (mitcad#1589, app/COMMANDS.md
+# "Pinned to the navigation bar"): the user's pins for every workspace, kept
+# in the settings, Edit Parameters by default; the navigation bar shows each
+# after a separator at its end.
+target_sources(mitcad PRIVATE framework/NavigationBarPins.cpp framework/NavigationBarPins.hpp)
+if(BUILD_TESTING)
+  # The default, pin, reorder, unpin and the settings read back: plain Qt
+  # Core.
+  target_sources(test_app PRIVATE tests/navigation_bar_pins.cpp framework/NavigationBarPins.cpp
+                 framework/NavigationBarPins.hpp)
+endif()
+
+# Where the sketch overlay's constraint symbols go (mitcad#1594): a row of
+# symbols moves clear of the dimensions' texts, the rows before it and the
+# curves, so that a symbol never covers a curve and takes its clicks.
+target_sources(mitcad PRIVATE sketch/GlyphRows.cpp sketch/GlyphRows.hpp)
+if(BUILD_TESTING)
+  # Two close parallel lines, a line through a row, a text over it: plain
+  # Qt Core.
+  target_sources(test_app PRIVATE tests/sketch_glyph_rows.cpp sketch/GlyphRows.cpp sketch/GlyphRows.hpp)
 endif()

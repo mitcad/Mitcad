@@ -1012,6 +1012,28 @@ Decisions made while closing the import gaps of mitcad#211:
   the flat pattern its outline, opened and folded back;
   `sheet_fold_oblique_polygon`: a reported seven-sided panel folded at 40
   and 90 degrees with the line past both edges it crosses, the same.
+- **Flanges on edges with oblique sides (mitcad#1576).** A flange set back
+  into its panel (Inside, Outside, Bend Line, the side tangent) cut the
+  panel with a rectangle over the selected boundary only. Where a side met
+  the boundary at less than 90 degrees, the panel's new boundary along the
+  setback line was shorter than the bend ("one side of the seam ends at
+  2.8868 mm and the other at 0.0000 mm" for a 60 degree side and Inside);
+  at more than 90 degrees the cut left a sliver of the panel beside the
+  bend's end, a step in the outline. An end of the whole boundary (no
+  offset, no overhang) now follows the panel's outline from that end while
+  it runs straight inward (a side, or a short side and the next one) to
+  its crossing of the setback line: the cut reaches as far past the end as
+  that outline does, so the side runs on to the line at its own angle, and
+  the bend and its wall span the panel's new boundary along the line (the
+  developed width is the panel's width there, not the boundary's). An
+  outline that turns before the line (an arc, a joined boundary, a side
+  parallel to the boundary) is cut as before. CLI `sheet_flange_oblique`:
+  plates whose edge meets a side at 60, 75, 105 or 120 degrees at one end
+  or both, a 3 mm square side before a side that narrows the plate, and a
+  short side at more than 90 degrees before one; Inside, Outside and Bend
+  Line each: volume `2 A + 4 pi w + 30 w` (t 2, r 3, a 15 mm wall; `A` the
+  plate's area past the setback line, `w` its width there) and the flat
+  pattern `A + (BA + 15) w` in one outline whose sides run straight.
 - **Patterns of straight cuts with many copies.** A pattern whose copies
   are all of one straight sheet cut cuts the copies that keep clear of the
   bends' seams (the box of each copy's tool does not reach a seam's line on
@@ -1308,6 +1330,44 @@ the joint sets the wall's end from the thickness `t`:
   `sheet_copy_scaled`, `sheet_copy_patterns`, `sheet_copy_join_any` (see
   the [API section](../core/model-api/src/commands.md#mirrors-and-patterns-of-sheet-metal-bodies-mitcad1450));
   the slots and the overlay's `source` in `body_copy.rs`'s unit tests.
+
+### Implementation notes (mitcad#1558)
+
+- **Bends across the mirror plane.** `body_copy::joined` united only
+  coplanar panels, so a bend that crosses the mirror plane and its image
+  stayed two bend domains whose end walls met in the plane, and the
+  construction failed ("sheet chart produced an empty material solid").
+  The merge now goes over every copy chart: `chart_map` gives the copy
+  chart's map into a sheet chart, `planar_map` for panels (and for bends
+  opened flat), `cylinder_map` for folded bends whose records agree
+  (angle, radius, K, allowance): one axis within the modelling tolerance,
+  the same radii, angle and material side, and the same arc (`u` kept) or
+  that arc run back (`u -> BA - u`); `v` moves along the axis, reversed
+  where the axes are opposite (a mirror across the axis). The union then
+  decides as for panels. `redirect` takes any domain: a bend's seams are
+  moved into the target bend's axial coordinate (each seam's axial map and
+  interval by the affine map that takes its ends on the copy bend to the
+  mapped `v`), the copy's bend record is dropped and the target's axial
+  interval covers both, an open state goes with the bend.
+- **Seams side by side.** The planar union keeps collinear edges split
+  (`SimplifyResult(false, true)` in `sheet_trim.cpp`), so along a united
+  tangent line the sheet's and the copy's stretches stay two boundary
+  pieces, each with its own seam to the bend; the construction pairs each
+  and joins them at their common vertex. Where a union does return them
+  as one piece, its rebinding (one curve only) leaves the other seam on a
+  piece that is gone: `reseat` binds such sides again by position.
+- **Combine.** `features/combine.rs` gives a join of sheets to
+  `body_copy::combined`: every body a valid sheet (its own component), each
+  tool merged in order by `joined` (the generic union so far and the tool
+  as the halves' join; a tool's own fillet or chamfer overlay reads its
+  change from the tool). A refusal keeps the generic join and gives
+  `body_copy::not_combined`: the adapter's re-derivation
+  (`rederive_joined`), else an invalid sheet naming the reason, where
+  before the adapter's "material added" said nothing of it.
+- **Tests.** CLI `sheet_mirror_bend_join`, `sheet_mirror_bend_reported`
+  (see the
+  [API section](../core/model-api/src/commands.md#mirrors-and-patterns-of-sheet-metal-bodies-mitcad1450));
+  the bend charts' maps in `body_copy.rs`'s unit tests.
 
 ## Kernel seam
 

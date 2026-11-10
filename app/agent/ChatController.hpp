@@ -74,6 +74,8 @@ struct ChatHost {
   std::function<QString()> lengthUnit;
 };
 
+class SignInTerminal;
+
 class ChatController : public QObject, public mcp::ChatGate {
   Q_OBJECT
 
@@ -148,6 +150,19 @@ public:
   bool checkingAccount() const { return m_checkingAccount; }
   // Recheck sign-in and one bounded, context-free turn in a fresh process.
   void checkAccount();
+  // Sign in Again (mitcad#1585, SignInTerminal): the agent's own sign-out
+  // and sign-in (ChatAgent::signInAgainCommands) in a terminal, for its
+  // known account error; Check again runs when the terminal ends (or the
+  // user comes back where the terminal returned at once). The terminal this
+  // computer offers (its kind as logged; empty: none found, a file check);
+  // whether the terminal runs or its end is awaited for the chosen agent,
+  // and whether its window is still open (the button waits for it).
+  QString signInTerminal() const;
+  bool signingInAgain() const;
+  bool signInAgainOpen() const;
+  // Starts it, the script showing `heading` and `closing` around the
+  // commands; false with `error` when it could not.
+  bool signInAgain(const QString& heading, const QString& closing, QString* error);
   void openInstallPage();
   bool needsPrivacyNotice() const;
   void acceptPrivacyNotice();
@@ -267,6 +282,7 @@ private:
   bool m_accountProbe = false;
   bool m_checkSawAccountError = false; // the check itself reported an account error
   int m_probeGeneration = 0;
+  SignInTerminal* m_signInTerminal = nullptr; // Sign in Again (mitcad#1585)
 
   QString m_documentId;
   QString m_path;

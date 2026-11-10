@@ -163,6 +163,7 @@ fn the_thread_config_uses_only_keys_the_current_codex_knows() {
     ] {
         assert!(config.get(stale).is_none(), "{stale}");
     }
+    assert_eq!(config["developer_instructions"], super::guidance());
     let server = &config["mcp_servers"]["mitcad"];
     assert_eq!(server["startup_timeout_sec"], 60);
     assert_eq!(server["tool_timeout_sec"], 900);
@@ -452,6 +453,10 @@ fn a_thread_is_resumed_or_a_new_one_starts() {
     let sent = written(&feed(&mut stream, initialized()));
     assert_eq!(sent[1]["method"], "thread/resume");
     assert_eq!(sent[1]["params"]["threadId"], "019a0b1c-thread");
+    assert_eq!(
+        sent[1]["params"]["config"]["developer_instructions"],
+        super::guidance()
+    );
     assert_eq!(
         sent[1]["params"]["config"]["mcp_servers"]["mitcad"]["command"],
         BRIDGE

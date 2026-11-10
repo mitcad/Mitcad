@@ -95,7 +95,10 @@ use mcp::{
     validate_mcp_command, validate_mcp_query, verify_codex_mcp_config,
 };
 // Live MCP's compact command results and command arrays (mitcad#689).
-use mcp::{mcp_command_document, mcp_entry_failed, mcp_recomputed, mcp_snapshot_queries};
+use mcp::{
+    mcp_command_document, mcp_command_hint_query, mcp_command_hints, mcp_entry_failed,
+    mcp_recomputed, mcp_snapshot_queries,
+};
 // The rolled-back features evaluated in the background (mitcad#1267).
 mod background;
 use background::BackgroundRun;
@@ -160,6 +163,12 @@ mod ffi {
         fn validate_mcp_command(request: &str) -> Result<()>;
         fn validate_mcp_features(self: &Document) -> Result<()>;
         fn validate_mcp_document_command(self: &Document, request: &str) -> Result<()>;
+        /// An MCP command with its selections by geometry turned into
+        /// names (mitcad#1587), right before it runs.
+        fn mcp_resolve_command(self: &Document, request: &str) -> Result<String>;
+        /// An MCP command result with which edges of its failed fillets
+        /// or chamfers fail alone (mitcad#1587).
+        fn mcp_diagnose_dressups(self: &mut Document, result: &str) -> Result<String>;
         fn validate_mcp_query(request: &str) -> Result<()>;
         /// Live MCP's command results, arrays and export (mitcad#689).
         fn mcp_snapshot_queries() -> String;
@@ -169,6 +178,13 @@ mod ffi {
             after: &str,
             times: &str,
         ) -> Result<String>;
+        fn mcp_command_hint_query(
+            commands: &str,
+            results: &str,
+            before: &str,
+            after: &str,
+        ) -> Result<String>;
+        fn mcp_command_hints(review: &str) -> Result<String>;
         fn mcp_entry_failed(result: &str) -> bool;
         fn mcp_recomputed(result: &str) -> bool;
         fn mcp_export_plan(
@@ -178,7 +194,8 @@ mod ffi {
             title: &str,
             design_folder: &str,
         ) -> Result<String>;
-        fn mcp_export_drawing(self: &Document, command: &str) -> Result<String>;
+        /// `overwrite`: existing sheet files are replaced (mitcad#1569).
+        fn mcp_export_drawing(self: &Document, command: &str, overwrite: bool) -> Result<String>;
         /// The live server's model_render (mitcad#1487): the headless
         /// server's picture of the design; `path` empty for none.
         fn mcp_render(

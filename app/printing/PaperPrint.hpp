@@ -19,6 +19,7 @@
 // the system's dialog and prints to that PDF file instead (the UI tests).
 
 #include <functional>
+#include <memory>
 #include <vector>
 
 #include <QLineF>
@@ -158,6 +159,25 @@ PrintPicture svgPicture(const QString& path, QString* error = nullptr);
 // Whether page `number` (from 1) is to be printed: the printer's page
 // range, or every page when it has none.
 bool pageWanted(const QPrinter& printer, int number);
+
+// Runs `work` on a worker thread and waits for it while the application
+// keeps painting and running its timers but takes no input, so that no
+// other command starts meanwhile. When the work takes longer than
+// `noteAfterMs`, a note with `note` (and the title `title`) shows over
+// `parent` until it ends.
+void waitForWork(QWidget* parent, const QString& title, const QString& note, const std::function<void()>& work,
+                 int noteAfterMs = 500);
+
+// The printer to print on, at high resolution: the system's default printer,
+// or its first one when none is the default (Qt's choice), or a PDF printer
+// when the system has none. Finding it can keep the print system busy for a
+// minute (mitcad#1591: CUPS sets up a queue for a network printer it found
+// but has not used lately and waits for that printer to answer, which a
+// sleeping one does not), so where CUPS answers (Linux and the other Unix
+// systems but macOS) it is found on a worker thread with waitForWork, the
+// note "Looking for printers…" after half a second instead of a frozen
+// window. Logged ("Printer found in <n> ms: <name>") when it took longer.
+std::unique_ptr<QPrinter> newPrinter(QWidget* parent);
 
 // The system's print dialog for a document of `pages` pages (0: unknown,
 // then without a page range): printer, paper, copies. False when it was

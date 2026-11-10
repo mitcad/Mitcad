@@ -14,11 +14,13 @@
 #include "printing/SketchPicture.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
+#include <memory>
 #include <vector>
 
 #include <QColor>
@@ -37,10 +39,13 @@
 #include <QRectF>
 #include <QRegularExpression>
 #include <QSize>
+#include <QElapsedTimer>
 #include <QSizeF>
 #include <QString>
 #include <QStringList>
 #include <QTemporaryDir>
+#include <QThread>
+#include <QTimer>
 #include <QTranslator>
 #include <QVector>
 #include <QTransform>
@@ -697,6 +702,39 @@ void drawingPdfTests() {
   CHECK(boxIs(one, 0, 420.0, 297.0));
 }
 
+// mitcad#1591: finding the printer waited on the print system with the
+// window frozen (a network printer that does not answer: a minute). The
+// work runs on another thread while the application's timers still fire,
+// and waitForWork returns when it is done.
+void waitForWorkTests() {
+  std::atomic<bool> fired{false};
+  QTimer::singleShot(0, [&fired] { fired = true; });
+  std::atomic<bool> otherThread{false};
+  std::atomic<bool> firedMeanwhile{false};
+  std::atomic<bool> done{false};
+  QThread* const uiThread = QThread::currentThread();
+  waitForWork(nullptr, QStringLiteral("Print"), QStringLiteral("Looking for printers…"),
+              [&fired, &otherThread, &firedMeanwhile, &done, uiThread] {
+                otherThread = QThread::currentThread() != uiThread;
+                // The timer fires while this waits (at most 10 s).
+                QElapsedTimer waited;
+                waited.start();
+                while (!fired && waited.elapsed() < 10000) {
+                  QThread::msleep(5);
+                }
+                firedMeanwhile = fired.load();
+                done = true;
+              },
+              100);
+  CHECK(otherThread);
+  CHECK(firedMeanwhile);
+  CHECK(done);
+  // The printer itself: here a PDF one (no print server in the test,
+  // app/CMakeLists.txt), found the same way.
+  const std::unique_ptr<QPrinter> printer = newPrinter(nullptr);
+  CHECK(printer != nullptr);
+}
+
 } // namespace
 
 int paperPrintTests() {
@@ -709,5 +747,6 @@ int paperPrintTests() {
   pageRangeMapTests();
   paperSettingTests();
   drawingPdfTests();
+  waitForWorkTests();
   return failures;
 }

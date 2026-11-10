@@ -72,6 +72,8 @@ if(BUILD_TESTING)
   add_test(NAME cli.f1_thin_curves COMMAND mitcad-cli run "${scripts}/f1_thin_curves.json")
   # A taper that closes the profile partway names the walls that meet (mitcad#1186).
   add_test(NAME cli.f1_taper_closes COMMAND mitcad-cli run "${scripts}/f1_taper_closes.json")
+  # Press-fit holes for printed parts: hex, square and crush ribs (mitcad#1517).
+  add_test(NAME cli.press_fit_holes COMMAND mitcad-cli run "${scripts}/press_fit_holes.json")
   # Assembly cut scope preserves component-local geometry and split ownership.
   set(cut_scope "${CMAKE_CURRENT_BINARY_DIR}/extrude-cut-scope.mitcad")
   add_test(NAME cli.extrude_cut_scope COMMAND mitcad-cli run "${scripts}/extrude_cut_scope.json" --save "${cut_scope}")
@@ -1186,6 +1188,8 @@ if(BUILD_TESTING)
   # Folds across edges oblique to their lines (mitcad#1424).
   add_test(NAME cli.sheet_fold_oblique COMMAND mitcad-cli run "${scripts}/sheet_fold_oblique.json")
   add_test(NAME cli.sheet_fold_oblique_polygon COMMAND mitcad-cli run "${scripts}/sheet_fold_oblique_polygon.json")
+  # Flanges on edges whose sides meet them at other angles than 90 degrees (mitcad#1576).
+  add_test(NAME cli.sheet_flange_oblique COMMAND mitcad-cli run "${scripts}/sheet_flange_oblique.json")
   # A fold whose sides an earlier fold's bend joins too, refused naming it (mitcad#1442).
   add_test(NAME cli.sheet_fold_loop COMMAND mitcad-cli run "${scripts}/sheet_fold_loop.json")
   # A pattern of a straight sheet cut with many copies, cut at once (mitcad#288).
@@ -1323,6 +1327,13 @@ if(BUILD_TESTING)
   add_test(NAME cli.wrap COMMAND mitcad-cli run "${scripts}/wrap.json")
 endif()
 
+# Sketch Move/Copy (mitcad#1563): Point to Point from a rectangle's corner to
+# a circle's center, and a constrained line turned 90 degrees about its middle
+# without a pivot keeps its length.
+if(BUILD_TESTING)
+  add_test(NAME cli.sketch_move_point_to_point COMMAND mitcad-cli run "${scripts}/sketch_move_point_to_point.json")
+endif()
+
 # mitcad-cli loads Qt's DLLs (mitcad-cli render): on Windows its tests find
 # them through PATH, as app.unit does.
 if(BUILD_TESTING AND WIN32)
@@ -1348,6 +1359,14 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/mcp-results-test.cmake")
   if(WIN32)
     set_property(TEST cli.mcp_results APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+  # Selections by geometry and the edges of a failed fillet (mitcad#1587).
+  add_test(NAME cli.mcp_selections
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/mcp-selections"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/mcp-selections-test.cmake")
+  if(WIN32)
+    set_property(TEST cli.mcp_selections APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
   # The memory guard of model commands with a lowered limit (mitcad#1480):
@@ -1744,6 +1763,29 @@ if(BUILD_TESTING)
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endif()
   endforeach()
+endif()
+
+# A sheet joined with its mirror image where a bend crosses the mirror plane
+# (mitcad#1558): a folded Face mirrored with Join about its wall the bend
+# crosses, and the same pair joined with Combine, one valid sheet each with
+# its Flat Pattern; overlaps refused. Then the reported design of GitHub
+# #209 under MITCAD_MITCAD_REPORTED (skipped without the report's file).
+if(BUILD_TESTING)
+  add_test(NAME cli.sheet_mirror_bend_join
+    COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/sheet_mirror_bend_join.json")
+  add_test(NAME cli.sheet_mirror_bend_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/sheet-mirror-bend-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/sheet-mirror-bend-reported-test.cmake")
+  set_tests_properties(cli.sheet_mirror_bend_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "sheet mirror bend reported: skipped" TIMEOUT 600)
+  if(WIN32)
+    foreach(test cli.sheet_mirror_bend_join cli.sheet_mirror_bend_reported)
+      set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
+  endif()
 endif()
 
 # Emboss's Taper Angle (mitcad#1547): a 10 x 10 square wrapped 45 deep onto

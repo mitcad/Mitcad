@@ -1,0 +1,179 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Pipe shells' mitred corners: the sides extended past the corner as the
+prisms of their end sections (mitcad#1559).
+
+For a mitred corner (BRepFill_Right) BRepFill_Sweep::BuildShell extends
+the surface of each side past the corner by EvalExtrapol's length, by
+GeomLib::ExtendSurfByLength at C1 continuity: from the approximated
+surface's derivatives at its end. Along a curved piece whose frame turns
+about it those derivatives lean, and the extensions of the two sides of a
+3 degree corner between two B-spline pieces, 0.22 mm long, passed each
+other by up to 0.026 mm where they cross the bisector plane: the mitre cut
+there (1663) could not join them. A B-spline side is now extended
+straight along the normal of its section at the law's end: rows of poles
+of the end row translated along it (with the end row's weights), so the
+extension is the prism of the end section, as a mitre's sides are. The
+extension joins the surface at C0 (a knot of the surface's degree in
+multiplicity). Other surfaces (the analytic ones of lines and circles)
+are extended as before.
+
+With it the cuts of that corner's sides lie 2.7e-5 mm apart and the pipe
+is mitred square to its path (it leaned by 3 degrees). The corners of the
+existing mitred pipes and sweeps keep their volumes.
+
+diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx
+--- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx
++++ b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx
+@@ -54,6 +54,7 @@
+ #include <GeomFill_SectionLaw.hxx>
+ #include <GeomFill_Sweep.hxx>
+ #include <GeomLib.hxx>
++#include <Geom_BSplineSurface.hxx>
+ #include <GeomLib_IsPlanarSurface.hxx>
+ #include <gp_Pnt2d.hxx>
+ #include <gp_Vec2d.hxx>
+@@ -93,6 +94,113 @@
+ 
+ //=================================================================================================
+ 
++//=======================================================================
++// function : ExtendAlong
++// purpose  : The B-spline surface S extended by L beyond its first or
++//            last iso-line across the path (the path along U when InU),
++//            straight along T: the end section moved along T (rows of
++//            poles translated, with the end row's weights), so that the
++//            extensions of a corner's two sides are the prisms of their
++//            end sections. Other surfaces as GeomLib::ExtendSurfByLength
++//            extends them.
++//=======================================================================
++static void ExtendAlong(occ::handle<Geom_BoundedSurface>& S,
++                        const double                      L,
++                        const bool                        InU,
++                        const bool                        After,
++                        const gp_Vec&                     T)
++{
++  occ::handle<Geom_BSplineSurface> B = occ::down_cast<Geom_BSplineSurface>(S);
++  if (B.IsNull() || T.Magnitude() < gp::Resolution())
++  {
++    GeomLib::ExtendSurfByLength(S, L, 1, InU, After);
++    return;
++  }
++  B = occ::down_cast<Geom_BSplineSurface>(B->Copy());
++  if (InU)
++  {
++    B->ExchangeUV();
++  }
++  if (B->IsVPeriodic())
++  {
++    GeomLib::ExtendSurfByLength(S, L, 1, InU, After);
++    return;
++  }
++  const gp_Dir D(T);
++  const int    q   = B->VDegree();
++  const int    nu  = B->NbUPoles();
++  const int    nv  = B->NbVPoles();
++  const int    nvk = B->NbVKnots();
++  double       u0, u1, v0, v1;
++  B->Bounds(u0, u1, v0, v1);
++  gp_Pnt P;
++  gp_Vec Du, Dv;
++  B->D1((u0 + u1) / 2., After ? v1 : v0, P, Du, Dv);
++  const double speed = Dv.Magnitude() > gp::Resolution() ? Dv.Magnitude() : 1.;
++  const double delta = L / speed;
++  NCollection_Array1<double> vk(1, nvk + 1);
++  NCollection_Array1<int>    vm(1, nvk + 1);
++  NCollection_Array2<gp_Pnt> poles(1, nu, 1, nv + q);
++  NCollection_Array2<double> weights(1, nu, 1, nv + q);
++  const int                  shift = After ? 0 : q;
++  for (int k = 1; k <= nvk; ++k)
++  {
++    vk(k + (After ? 0 : 1)) = B->VKnot(k);
++    vm(k + (After ? 0 : 1)) = B->VMultiplicity(k);
++  }
++  if (After)
++  {
++    vm(nvk)     = q;
++    vk(nvk + 1) = v1 + delta;
++    vm(nvk + 1) = q + 1;
++  }
++  else
++  {
++    vm(2) = q;
++    vk(1) = v0 - delta;
++    vm(1) = q + 1;
++  }
++  for (int i = 1; i <= nu; ++i)
++  {
++    for (int j = 1; j <= nv; ++j)
++    {
++      poles(i, j + shift)   = B->Pole(i, j);
++      weights(i, j + shift) = B->Weight(i, j);
++    }
++    for (int j = 1; j <= q; ++j)
++    {
++      const double f = L * j / q;
++      if (After)
++      {
++        poles(i, nv + j)   = B->Pole(i, nv).Translated(gp_Vec(D) * f);
++        weights(i, nv + j) = B->Weight(i, nv);
++      }
++      else
++      {
++        poles(i, q + 1 - j)   = B->Pole(i, 1).Translated(gp_Vec(D) * -f);
++        weights(i, q + 1 - j) = B->Weight(i, 1);
++      }
++    }
++  }
++  const NCollection_Array1<double>& uk = B->UKnots();
++  const NCollection_Array1<int>&    um = B->UMultiplicities();
++  occ::handle<Geom_BSplineSurface>  E = new Geom_BSplineSurface(poles,
++                                                              weights,
++                                                              uk,
++                                                              vk,
++                                                              um,
++                                                              vm,
++                                                              B->UDegree(),
++                                                              q,
++                                                              B->IsUPeriodic(),
++                                                              false);
++  if (InU)
++  {
++    E->ExchangeUV();
++  }
++  S = occ::handle<Geom_BoundedSurface>(E);
++}
++
+ static int NumberOfPoles(const TopoDS_Wire& W)
+ {
+   int NbPoints = 0;
+@@ -2331,14 +2439,26 @@
+       {
+         occ::handle<Geom_BoundedSurface> BndS;
+         BndS = occ::down_cast<Geom_BoundedSurface>(TabS(isec, ipath));
+-        GeomLib::ExtendSurfByLength(BndS, ExtendFirst, 1, Sweep.ExchangeUV(), false);
++        // Back along the normal of the section at the start of the law.
++        double aFirst = 0., aLast = 0.;
++        gp_Mat aM;
++        gp_Vec aV;
++        myLoc->Law(IPath)->GetDomain(aFirst, aLast);
++        myLoc->Law(IPath)->D0(aFirst, aM, aV);
++        ExtendAlong(BndS, ExtendFirst, Sweep.ExchangeUV(), false, gp_Vec(aM.Column(3)));
+         TabS(isec, ipath) = BndS;
+       }
+       if ((ipath == NbPath) && (ExtendLast > 0))
+       {
+         occ::handle<Geom_BoundedSurface> BndS;
+         BndS = occ::down_cast<Geom_BoundedSurface>(TabS(isec, ipath));
+-        GeomLib::ExtendSurfByLength(BndS, ExtendLast, 1, Sweep.ExchangeUV(), true);
++        // On along the normal of the section at the end of the law.
++        double aFirst = 0., aLast = 0.;
++        gp_Mat aM;
++        gp_Vec aV;
++        myLoc->Law(IPath)->GetDomain(aFirst, aLast);
++        myLoc->Law(IPath)->D0(aLast, aM, aV);
++        ExtendAlong(BndS, ExtendLast, Sweep.ExchangeUV(), true, gp_Vec(aM.Column(3)));
+         TabS(isec, ipath) = BndS;
+       }
+     }

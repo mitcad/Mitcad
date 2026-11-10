@@ -1,0 +1,28 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "mitcad#1566: two lines between two arcs of radius 7.5 whose centres p1 and p2 are fixed 35.36 mm apart, both parallel to the construction centre line c3, Equal (k14), the upper one c6 2 mm from the centre line. A fillet of R 2 at the corner of c6 and the left arc c10 shortens c6 below the 20.36 mm the lower line c9 needs: the Equal blocks it. Two fixed points frame the view so that the clicks stay in its free part (also in session 0's 1024x768 window on Windows)."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy",
+    "entities": [
+      {"id": "p1", "type": "point", "at": [0, 0], "fixed": true},
+      {"id": "p2", "type": "point", "at": [35.36, 0], "fixed": true},
+      {"id": "c3", "type": "line", "start": "p1", "end": "p2", "construction": true},
+      {"id": "p4", "type": "point", "at": [7.228416147400479, 2]},
+      {"id": "p5", "type": "point", "at": [28.131583852599521, 2]},
+      {"id": "c6", "type": "line", "start": "p4", "end": "p5"},
+      {"id": "p7", "type": "point", "at": [7.228416147400479, -2]},
+      {"id": "p8", "type": "point", "at": [28.131583852599521, -2]},
+      {"id": "c9", "type": "line", "start": "p7", "end": "p8"},
+      {"id": "c10", "type": "arc", "center": "p1", "start": "p4", "end": "p7"},
+      {"id": "c11", "type": "arc", "center": "p2", "start": "p8", "end": "p5"},
+      {"id": "p18", "type": "point", "at": [-25, -30], "fixed": true},
+      {"id": "p19", "type": "point", "at": [70, 30], "fixed": true}],
+    "constraints": [
+      {"id": "k12", "type": "parallel", "a": "c6", "b": "c3"},
+      {"id": "k13", "type": "parallel", "a": "c9", "b": "c3"},
+      {"id": "k14", "type": "equal", "a": "c6", "b": "c9"}],
+    "dimensions": [
+      {"id": "k15", "type": "radius", "curve": "c10", "value": 7.5},
+      {"id": "k16", "type": "radius", "curve": "c11", "value": 7.5},
+      {"id": "k17", "type": "line_distance", "a": "c6", "b": "c3", "value": 2}]}},
+  {"expect": {"query": {"query": "sketch", "uid": "F1"}, "result": {"solved": true, "conflicts": []}}}
+]

@@ -16,6 +16,7 @@
 #include <QStyleHints>
 #include <QtLogging>
 
+#include "../../framework/IconSizeStyle.hpp"
 #include "../../framework/Theme.hpp"
 
 namespace mitcad::win {
@@ -61,21 +62,23 @@ void follow(bool again = false) {
     return;
   }
   current.dark = dark;
+  // The styles by their keys, inside Icon size's proxy when Icon size is not
+  // 100 % (IconSizeStyle, mitcad#1561), as the start wrapped the first one.
   if (dark) {
-    QApplication::setStyle(paletteStyleKey());
+    setApplicationStyle(paletteStyleKey());
     // The theme's neutral roles of a dark theme (mitcad#1041), as the Docked
     // and Floating chrome draw them on Windows 11 and macOS.
     const QPalette palette = themePalette(true);
     QApplication::setPalette(palette);
     qInfo().noquote() << QStringLiteral("Windows 10 app mode: dark, the style %1 with a dark palette (window %2)")
-                             .arg(QApplication::style()->name(), palette.color(QPalette::Window).name());
+                             .arg(applicationStyleKey(), palette.color(QPalette::Window).name());
   } else {
-    QApplication::setStyle(current.defaultStyle);
+    setApplicationStyle(current.defaultStyle);
     // A palette that sets no role: the application's resolves from the
     // style and the platform theme again.
     QApplication::setPalette(QPalette());
     qInfo().noquote() << QStringLiteral("Windows 10 app mode: light, the style %1 with its own palette")
-                             .arg(QApplication::style()->name());
+                             .arg(applicationStyleKey());
   }
 }
 
@@ -89,7 +92,7 @@ void followAppColorScheme() {
     qInfo().noquote() << QStringLiteral("Windows 10 app mode: not followed (Windows build %1)").arg(build);
     return;
   }
-  const QString style = QApplication::style()->name();
+  const QString style = applicationStyleKey();
   if (!forced && style.compare(QLatin1String("windowsvista"), Qt::CaseInsensitive) != 0) {
     qInfo().noquote() << QStringLiteral("Windows 10 app mode: not followed (the style %1)").arg(style);
     return;

@@ -1549,8 +1549,9 @@ void MaterialsPanel::newMaterial() {
   }
   // The model names it (Material 1). Its density is its class's typical
   // one (mitcad#655): steel's for a metal, PLA's for a plastic, the
-  // built-in Resin - Standard's for a resin (mitcad#1102); another
-  // material has none typical, so Density takes the keyboard to be set.
+  // built-in Resin - Standard's for a resin (mitcad#1102); a wood (mitcad#1552,
+  // its class's look given by the model) or another material has none
+  // typical, so Density takes the keyboard to be set.
   const QString materialClass = chosen->data().toString();
   QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("create_material")},
                       {QStringLiteral("class"), materialClass}};
@@ -1571,7 +1572,7 @@ void MaterialsPanel::newMaterial() {
   if (created) {
     m_currentKey = place + QLatin1Char('/') + text(result, "id");
     m_pendingFocus = m_currentKey;
-    m_pendingDensity = materialClass == QStringLiteral("other");
+    m_pendingDensity = materialClass == QStringLiteral("other") || materialClass == QStringLiteral("wood");
     qDebug().noquote() << QStringLiteral("Material created: %1 in %2").arg(text(result, "id"), place);
   }
   refresh();

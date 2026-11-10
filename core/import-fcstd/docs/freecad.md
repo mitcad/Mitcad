@@ -616,9 +616,10 @@ A reported assembly's last fallbacks and partial sketches.
   that moves it along its normal makes it lie on an offset plane from the
   origin plane, by that expression; its attachment offset FreeCAD does not
   apply (kept as a number, with that reason). Expressions that stay
-  unused say why: a scripted object's, a placement of a Body or part (its
-  occurrence's placement, numbers), a placement FreeCAD computes from the
-  attachment.
+  unused say why: a scripted object's, a turn of a Body's or part's
+  placement or a link's placement (their occurrences' placements,
+  numbers; a position moves the occurrence since mitcad#1560, below), a
+  placement FreeCAD computes from the attachment.
 - Assembly joints (`joints.rs`): Fixed, Revolute, Cylindrical, Slider and
   Ball joints are MitCad joints of the same free motions (rigid,
   revolute, cylindrical, slider along z, ball) in the assembly's
@@ -630,11 +631,56 @@ A reported assembly's last fallbacks and partial sketches.
   placements along the path that are not occurrences. Where the file
   places the parts, opposed z axes are the joint's `flip`, and what the
   kind holds fixed its `angle` and `offset`; a joint that would move a part
-  is not added. The connectors are fixed in the parts (not linked to the
-  picked elements); limits are left out with a note. Distance, Angle,
+  is not added. The connectors are on the picked elements where they can
+  be and the limits are carried (mitcad#1560, below). Distance, Angle,
   Parallel, Perpendicular, gear, belt, rack and screw joints have no MitCad
   kind and are skipped with that reason. Grounded joints ground their
   occurrences, as before, and count as `included`.
+
+## Body positions, joints on their elements, joint limits (mitcad#1560)
+
+- Positions driven by expressions (`placements.rs`): a Body with a
+  placement of its own and a part are each an occurrence of a component
+  of their own at the object's placement (a Body whose position an
+  expression drives gets one even at the origin). Where expressions drive
+  `.Placement.Base.x`, `.y` or `.z`, the occurrence starts without those
+  coordinates and a `move_occurrence` of its parent component (named
+  `<label> placement`, after the bodies and before the history) adds
+  them by the translated expressions (a bare parameter, `Off`, or an
+  expression, `Off - 25 mm`); the occurrence is where the file places the
+  object and follows the parameters. A turn by an expression, a grounded
+  occurrence, an expression that does not translate or a move that does
+  not land where the file places the object keep FreeCAD's number, each
+  with its reason in the expression's row. Links keep their numbers.
+- A clone of such a Body (a base feature) is a linked copy that follows
+  the Body's occurrence: its move takes the Body's driven coordinates off
+  again (`Off - Off - 30 mm`), so that the copy stays where the clone's
+  own placement puts it, as FreeCAD places it, when the parameters change.
+- Joint connectors on their elements (`joints.rs`): a side whose
+  reference picks a face, an edge or a vertex of a body the import made in
+  the component the side's path ends in is that element (`{"body",
+  "face"}`, …), as MitCad's joints take a frame from it (a planar face's
+  middle, a round face's or a circular edge's axis, a straight edge's
+  middle along it, a vertex), with `frame_override.shift` moving that
+  frame along its own axes to FreeCAD's connector, so the connector
+  follows the element when the part changes. Where the element's z axis
+  is not along the connector's (a vertex's), the override also gives
+  FreeCAD's axes. A face whose boundary MitCad's body has otherwise (a
+  face a hole or pocket cut, its cut edges not the same) is found by its
+  surface: a face of the body's solids on the same plane, cylinder, cone,
+  sphere or torus. A side on an element of a sketch, of a part's compound,
+  of another document, or one MitCad gives no frame stays FreeCAD's frame
+  fixed in the part (`joint` is then `partial`), the note says why per
+  connector; a joint that does not hold on its elements where the file
+  places the parts is tried on FreeCAD's frames.
+- Joint limits: `EnableLengthMin`/`Max` with `LengthMin`/`Max` bound the
+  slide (`tz`) of a slider or a cylindrical joint, `EnableAngleMin`/`Max`
+  with `AngleMin`/`Max` the turn (`rz`) of a revolute or a cylindrical
+  joint, with their expressions. They are taken as they are where they
+  hold the value at which the file places the parts, else turned round
+  (FreeCAD's other sense: `-max` to `-min`), else left out with the
+  reason; limits of a kind without that motion (a ball's, a rigid
+  joint's) are left out with that reason.
 
 ## Not translated (fallback)
 

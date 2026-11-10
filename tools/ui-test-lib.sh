@@ -43,6 +43,14 @@ unset EMAIL GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EM
 # its portal's colour scheme and file dialogs instead of the test's.
 unset XDG_CURRENT_DESKTOP GNOME_DESKTOP_SESSION_ID DESKTOP_SESSION KDE_FULL_SESSION WAYLAND_DISPLAY
 export DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/mitcad-ui-test-bus
+# No printers of the machine's either (mitcad#1591): Qt's QPrinter takes the
+# print system's default printer, or its first one, and CUPS lists the
+# network printers it finds on the local network. For one it has not used
+# lately it sets up a queue first and waits for that printer to answer, up
+# to a minute when it sleeps, so File › Print waited on the network. With
+# no print server the tests' printer is a PDF one at once
+# (MITCAD_TEST_PRINT_PDF names its file).
+export CUPS_SERVER=/nonexistent/mitcad-ui-test-cups.sock
 # Where faces, edges and vertices can be clicked, logged when a command's
 # input takes them ("Pick face F2.b0/F2:end(...) at x,y"; ui_click_pick).
 export MITCAD_LOG_PICKS=1

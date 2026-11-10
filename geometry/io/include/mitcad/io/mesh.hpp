@@ -18,6 +18,8 @@
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 
+#include "mitcad/io/body.hpp"
+
 namespace mitcad::io {
 
 // Mesh refinement presets for export.
@@ -406,8 +408,33 @@ struct IndexedMesh {
   std::vector<std::array<std::uint32_t, 3>> triangles;
 };
 
+// A face that a meshing left without a triangulation (mitcad#1568): its
+// index among the shape's faces (TopExp::MapShapes order, 0-based, as
+// geometry::Shape numbers them) and its surface's kind (surface_name). The
+// message is "a face could not be triangulated: face <index> (<surface>)";
+// a caller that knows the faces' names says which face it is instead
+// (face_error_message).
+class FaceError : public Error {
+public:
+  FaceError(int index, std::string surface);
+  int index() const { return m_index; }
+  const std::string& surface() const { return m_surface; }
+
+private:
+  int m_index;
+  std::string m_surface;
+};
+
+// FaceError's message with `face` naming the face (its index or its names).
+std::string face_error_message(const std::string& face, const std::string& surface);
+
+// The FaceError of `face`, a face of `shape` (of a copy that triangulate
+// made: the copy's faces are in the shape's order).
+FaceError untriangulated_face(const TopoDS_Shape& shape, const TopoDS_Face& face);
+
 // The shape triangulated with `options` on a copy (see triangulate); a
-// mesh body's own triangles. Throws Error when a face has no triangulation.
+// mesh body's own triangles. Throws FaceError when a face has no
+// triangulation.
 IndexedMesh indexed_mesh(const TopoDS_Shape& shape, const MeshOptions& options);
 
 } // namespace mitcad::io

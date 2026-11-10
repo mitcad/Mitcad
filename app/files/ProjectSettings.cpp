@@ -125,6 +125,7 @@ public:
   ProjectSettingsDialog(QWidget* parent, QString root, const ProjectSettingsHost& host);
 
   bool syncRequested() const { return m_syncRequested; }
+  bool removeRequested() const { return m_removeRequested; }
 
 protected:
   void changeEvent(QEvent* event) override;
@@ -168,6 +169,7 @@ private:
   QString m_remoteName;
   QStringList m_remotes; // every remote's name (remote_info's remotes)
   bool m_syncRequested = false;
+  bool m_removeRequested = false;
   bool m_reading = false;
   QPointer<RemoteTask> m_task;
 
@@ -323,6 +325,20 @@ ProjectSettingsDialog::ProjectSettingsDialog(QWidget* parent, QString root, cons
   layout->addWidget(m_problem);
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
   m_close = buttons->button(QDialogButtonBox::Close);
+  // Remove Project... (mitcad#1562): its confirmation comes after the
+  // dialog closed.
+  if (m_host.removeProject) {
+    QPushButton* removeButton = buttons->addButton(Text::tr("Remove Project…"), QDialogButtonBox::ResetRole);
+    removeButton->setObjectName(QStringLiteral("projectSettingsRemove"));
+    removeButton->setAutoDefault(false);
+    removeButton->setToolTip(
+        Text::tr("The folder stops being a project and keeps its designs; you confirm what goes first"));
+    connect(removeButton, &QPushButton::clicked, this, [this] {
+      m_removeRequested = true;
+      qInfo().noquote() << QStringLiteral("Project Settings: Remove Project");
+      QDialog::accept();
+    });
+  }
   layout->addWidget(buttons);
   mac::styleDialogButtons(buttons, nullptr, true);
   mac::styleDialog(this);
@@ -1160,13 +1176,17 @@ QJsonObject ProjectSettingsFields::localChosen(bool includeName) const {
 
 void showProjectSettings(QWidget* parent, const QString& root, const ProjectSettingsHost& host) {
   bool sync = false;
+  bool remove = false;
   {
     ProjectSettingsDialog dialog(parent, root, host);
     prepareModal(&dialog);
     execDialog(&dialog);
     sync = dialog.syncRequested();
+    remove = dialog.removeRequested();
   }
-  if (sync && host.sync) {
+  if (remove && host.removeProject) {
+    host.removeProject();
+  } else if (sync && host.sync) {
     host.sync();
   }
 }

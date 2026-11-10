@@ -899,6 +899,93 @@ fn cut_back<K: Kernel>(
     )
 }
 
+/// How far the panel's outline reaches past the ends of the selected
+/// boundary between it and the setback line `tangent` (port frame
+/// coordinates: `u` across the boundary, `v` axial over `0..width`), before
+/// its start and after its end (mitcad#1576). From each end the outline is
+/// followed while it runs straight inward until it crosses the setback line;
+/// where a side meets the boundary at more than 90 degrees, its material
+/// beside the bend's end (a sliver the cut would leave) reaches past the
+/// end. Zero at an end whose outline runs square, narrows, or turns before
+/// the line (an arc, a joined boundary, a side parallel to the boundary).
+fn outline_overreach(
+    state: &SheetState,
+    reference: &BoundaryRef,
+    frame: &PortFrame,
+    tangent: f64,
+) -> Result<(f64, f64), String> {
+    let selected = boundary(state, reference)?;
+    let patch = chart(state, reference.panel)?;
+    let Some(edges) = patch
+        .regions
+        .iter()
+        .flat_map(|r| &r.loops)
+        .map(|l| &l.edges)
+        .find(|l| l.iter().any(|e| std::ptr::eq(e, selected)))
+    else {
+        return Ok((0.0, 0.0));
+    };
+    let at = edges
+        .iter()
+        .position(|e| std::ptr::eq(e, selected))
+        .expect("the selected edge is in its loop");
+    let map = frame.to_operation;
+    let joined = |e: &MaterialEdge| {
+        state.joins.iter().any(|p| {
+            [&p.first, &p.second]
+                .iter()
+                .any(|s| s.boundary.domain == patch.domain && s.boundary.piece == e.piece)
+        })
+    };
+    let near = |p: [f64; 2], q: [f64; 2]| g2::dist(p, q) <= 1e3 * TOLERANCE;
+    // The axial coordinates the outline reaches from the boundary's end at
+    // `from` to its crossing of the setback line, or none.
+    let walk = |from: [f64; 2]| -> Option<Vec<f64>> {
+        let n = edges.len();
+        let ends = |i: usize| {
+            line(&edges[i])
+                .ok()
+                .map(|(a, b)| (map.point(a), map.point(b)))
+        };
+        let step = [1, n - 1]
+            .into_iter()
+            .find(|s| ends((at + s) % n).is_some_and(|(a, b)| near(a, from) || near(b, from)))?;
+        let mut reached = Vec::new();
+        let mut p = from;
+        let mut i = (at + step) % n;
+        for _ in 1..n {
+            if joined(&edges[i]) {
+                return None;
+            }
+            let (a, b) = ends(i)?;
+            let q = if near(a, p) {
+                b
+            } else if near(b, p) {
+                a
+            } else {
+                return None;
+            };
+            if q[0] >= p[0] - TOLERANCE {
+                return None;
+            }
+            if q[0] <= tangent + TOLERANCE {
+                let t = (tangent - p[0]) / (q[0] - p[0]);
+                reached.push(p[1] + t * (q[1] - p[1]));
+                return Some(reached);
+            }
+            reached.push(q[1]);
+            p = q;
+            i = (i + step) % n;
+        }
+        None
+    };
+    let before = walk([0.0, 0.0]).map_or(0.0, |v| v.into_iter().fold(0.0, |m: f64, x| m.max(-x)));
+    let after = walk([0.0, frame.width]).map_or(0.0, |v| {
+        v.into_iter().fold(0.0, |m: f64, x| m.max(x - frame.width))
+    });
+    Ok((before, after))
+}
+
 pub(crate) fn flange<K: Kernel>(
     d: &SheetFlangeDef<f64>,
     ctx: &mut EvalContext<'_, K>,
@@ -919,8 +1006,25 @@ pub(crate) fn flange<K: Kernel>(
             "a sheet flange's width passes its boundary only with one bend and a wall".into(),
         );
     }
-    let width = frame.width - start - end;
     let tangent = metrics.offset(d.position)?;
+    // An end of the whole boundary (no offset, no overhang) follows the
+    // panel's side on to the setback line at the side's own angle
+    // (mitcad#1576): the cut takes the material beside the bend's end where
+    // the side meets the boundary at more than 90 degrees, and the bend and
+    // its wall span the panel's new boundary along the line.
+    let whole = (
+        start <= TOLERANCE && overhang.0 <= 0.0,
+        end <= TOLERANCE && overhang.1 <= 0.0,
+    );
+    let reach = if d.position == SheetPosition::Edge {
+        (0.0, 0.0)
+    } else {
+        outline_overreach(&state, &d.boundary, &frame, tangent)?
+    };
+    let reach = (
+        if whole.0 { reach.0 } else { 0.0 },
+        if whole.1 { reach.1 } else { 0.0 },
+    );
     let relief = d.relief.as_ref().unwrap_or(&rules.bend_relief);
     // Where the overhangs start along the wall: cut back by the relief
     // depth, or by the width's own `root` (mitcad#242).
@@ -942,7 +1046,7 @@ pub(crate) fn flange<K: Kernel>(
         &d.boundary,
         &frame,
         tangent,
-        (start, end),
+        (start - reach.0, end - reach.1),
         |far| {
             let mut tools = Vec::new();
             if start > TOLERANCE {
@@ -965,6 +1069,19 @@ pub(crate) fn flange<K: Kernel>(
         None,
         "the flange's trim",
     )?;
+    // The new boundary's axial interval: a whole end where the panel's side
+    // crosses the setback line, an offset end where the cut ends.
+    let port = coverage(&side(
+        chart(&state, d.boundary.panel)?,
+        &tangent_piece,
+        frame.to_operation,
+    )?);
+    let start = if whole.0 { port[0] } else { start };
+    let end = if whole.1 { frame.width - port[1] } else { end };
+    let width = frame.width - start - end;
+    if width <= TOLERANCE {
+        return Err("the flange's setback line leaves no material along its boundary".into());
+    }
     let mut axial = frame.to_operation;
     axial.origin[1] -= start;
     let stationary = side(chart(&state, d.boundary.panel)?, &tangent_piece, axial)?;

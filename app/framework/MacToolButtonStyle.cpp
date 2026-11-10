@@ -12,13 +12,17 @@
 #include <QStyleOptionToolButton>
 #include <QToolButton>
 
+#include "IconSizeStyle.hpp"
+
 namespace mitcad {
 #ifdef MITCAD_MAC_UI
 namespace {
 
-class MacToolButtonStyle final : public QProxyStyle {
+// The application's style by its key, with its icon sizes at Icon size
+// (IconSizeStyle, mitcad#1561).
+class MacToolButtonStyle final : public IconSizeStyle {
 public:
-  MacToolButtonStyle() : QProxyStyle(QStyleFactory::create(QApplication::style()->name())) {
+  MacToolButtonStyle() : IconSizeStyle(QStyleFactory::create(applicationStyleKey())) {
     setObjectName(QStringLiteral("macToolButtonStyle"));
   }
 
@@ -26,7 +30,7 @@ public:
                           QPainter* painter, const QWidget* widget) const override {
     const auto* button = qstyleoption_cast<const QStyleOptionToolButton*>(option);
     if (control != CC_ToolButton || button == nullptr) {
-      QProxyStyle::drawComplexControl(control, option, painter, widget);
+      IconSizeStyle::drawComplexControl(control, option, painter, widget);
       return;
     }
 

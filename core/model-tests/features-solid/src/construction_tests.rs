@@ -912,6 +912,44 @@ fn planes_tangent_to_faces_and_along_paths() {
     assert_near(&normal["normal"], [1.0, 0.0, 0.0]);
 }
 
+#[test]
+fn a_circle_path_runs_one_turn_from_its_start_angle() {
+    // A circle that starts a quarter turn round (an imported seam, its
+    // `start_angle`): the path is one whole turn from there, so its half
+    // is opposite the start and its end is back at the start (the length
+    // was once taken from the start angle plus a turn).
+    let mut doc = Document::new(GeoKernel::default());
+    command(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+            {"id": "p1", "type": "point", "at": [0.0, 0.0]},
+            {"id": "c2", "type": "circle", "center": "p1", "radius": 10.0,
+             "start_angle": std::f64::consts::FRAC_PI_2}]}}),
+    );
+    let path = json!({"type": "sketch_curve", "sketch": "F1", "curve": "c2"});
+    let start = point(
+        &mut doc,
+        json!({"type": "along_path", "path": path, "distance": 0.0}),
+    );
+    assert_near(&start["point"], [0.0, 10.0, 0.0]);
+    let half = point(
+        &mut doc,
+        json!({"type": "along_path", "path": path, "distance": 0.5}),
+    );
+    assert_near(&half["point"], [0.0, -10.0, 0.0]);
+    let end = point(
+        &mut doc,
+        json!({"type": "along_path", "path": path, "distance": 1.0}),
+    );
+    assert_near(&end["point"], [0.0, 10.0, 0.0]);
+    let quarter = point(
+        &mut doc,
+        json!({"type": "along_path", "path": path, "distance": 0.25 * 20.0 * std::f64::consts::PI,
+               "physical": true}),
+    );
+    assert_near(&quarter["point"], [-10.0, 0.0, 0.0]);
+}
+
 // Axes.
 
 #[test]

@@ -6,11 +6,19 @@
 //! and the solution is stored. A sketch that no longer solves rejects the
 //! edit, as an over-constraining constraint is refused.
 
-use super::solve::{SketchStatus, Solved, SolverItem, measure_in};
+use std::collections::BTreeSet;
+
+use super::conflict;
+use super::geometry::dist;
+use super::solve::{SketchStatus, SolveError, Solved, SolverItem, measure_in};
 use super::{
     Constraint, ConstraintKind, ConstraintUid, Dimension, DimensionKind, Entity, EntityKind, Ref,
 };
 use crate::def::SketchDef;
+
+/// The most constraints of a conflict that a refused edit leaves out one by
+/// one to find those that block it (mitcad#1566); more are all named.
+const MAX_TRIED: usize = 24;
 use crate::ids::{EntityUid, FeatureUid};
 use crate::parameters::{ParamId, Parameters};
 use crate::values::ValueInput;
@@ -77,6 +85,13 @@ pub struct SketchEdit<'a> {
     /// The last drag's solve with the definition it left (mitcad#679):
     /// finishing takes it instead of solving that definition again.
     pub(crate) dragged: Option<Box<(SketchDef, Parameters, Solved)>>,
+    /// What the edit does, as a refusal for a conflict names it ("the
+    /// fillet", mitcad#1566); "the change" unless the command says.
+    pub change: String,
+    /// The constraints and dimensions there before that the edit changes
+    /// (a new value, activated): a refusal counts them as the change, not
+    /// as what blocks it (mitcad#1566).
+    pub changing: Vec<ConstraintUid>,
 }
 
 impl<'a> SketchEdit<'a> {
@@ -100,7 +115,15 @@ impl<'a> SketchEdit<'a> {
             report: EditReport::default(),
             solve: true,
             dragged: None,
+            change: "the change".to_owned(),
+            changing: Vec::new(),
         }
+    }
+
+    /// Whether the sketch has a constraint or a dimension of this id.
+    fn has_item(&self, id: ConstraintUid) -> bool {
+        self.def.constraints.iter().any(|c| c.id == id)
+            || self.def.dimensions.iter().any(|d| d.id == id)
     }
 
     pub fn owner(&self) -> FeatureUid {
@@ -217,19 +240,131 @@ impl<'a> SketchEdit<'a> {
         id
     }
 
-    /// The current geometry solved with the current values.
+    /// The current geometry solved with the current values. A conflict is
+    /// told as [`SketchEdit::refusal`] tells it, every user constraint and
+    /// dimension of it named.
     pub fn solved(&self) -> Result<Solved, String> {
+        self.solve_def(&self.def)
+            .map_err(|e| self.refusal(&e, false))
+    }
+
+    /// Whether the sketch solves now; a conflict told by what blocks the
+    /// change ([`SketchEdit::refusal`], narrowed).
+    pub fn check_solves(&self) -> Result<(), String> {
+        self.solve_def(&self.def)
+            .map(|_| ())
+            .map_err(|e| self.refusal(&e, true))
+    }
+
+    /// A definition solved with the edit's values.
+    fn solve_def(&self, def: &SketchDef) -> Result<Solved, SolveError> {
         let params = &*self.params;
-        self.def
-            .solve_with(
-                &mut |id| {
-                    params
-                        .value(id)
-                        .ok_or_else(|| format!("parameter {} does not exist", params.name(id)))
-                },
-                &|id| params.name(id),
-            )
-            .map_err(|e| e.message)
+        def.solve_with(
+            &mut |id| {
+                params
+                    .value(id)
+                    .ok_or_else(|| format!("parameter {} does not exist", params.name(id)))
+            },
+            &|id| params.name(id),
+        )
+    }
+
+    /// Why the edit does not solve (mitcad#1566): a conflict in the user's
+    /// words, the constraints and dimensions that block the change named
+    /// ([`conflict::blocked`]) and listed by id on the last line
+    /// ([`conflict::trailer`]); any other failure as the solve tells it.
+    /// The blocking items are the user's own: not fixed geometry, not what
+    /// the edit itself adds (a fillet's tangents and its radius). With
+    /// `narrow`, only those whose leaving out lets the sketch solve with the
+    /// least movement of what was there ([`SketchEdit::blocking`]); else, or
+    /// when none or too many are found, all of them.
+    pub fn refusal(&self, error: &SolveError, narrow: bool) -> String {
+        if error.status.conflicts.is_empty() {
+            return error.message.clone();
+        }
+        let mut items: Vec<SolverItem> = error.status.conflicts.iter().flatten().copied().collect();
+        items.sort();
+        items.dedup();
+        let own: BTreeSet<ConstraintUid> = self
+            .report
+            .constraints
+            .iter()
+            .chain(&self.report.dimensions)
+            .chain(&self.changing)
+            .copied()
+            .collect();
+        let candidates: Vec<ConstraintUid> = conflict::user_items(&items)
+            .into_iter()
+            .filter(|k| !own.contains(k) && self.has_item(*k))
+            .collect();
+        let mut blockers = if narrow && candidates.len() <= MAX_TRIED {
+            self.blocking(&candidates)
+        } else {
+            Vec::new()
+        };
+        if blockers.is_empty() {
+            blockers = candidates;
+        }
+        let params = &*self.params;
+        let inputs = self
+            .def
+            .dimension_inputs(&mut |id| params.value(id).ok_or_else(String::new), &|id| {
+                params.name(id)
+            })
+            .unwrap_or_default();
+        let words = conflict::Context {
+            entities: &self.def.entities,
+            constraints: &self.def.constraints,
+            dimensions: &inputs,
+            bindings: &[],
+        };
+        let fixed = conflict::fixed_words(&words, &items);
+        format!(
+            "{}{}",
+            conflict::blocked(&words, &blockers, &self.change, fixed),
+            conflict::trailer(&blockers)
+        )
+    }
+
+    /// Of the conflict's `candidates`, those that block the change
+    /// (mitcad#1566): each left out in turn, those whose leaving out lets
+    /// the sketch solve, and of them the ones that move the points that were
+    /// there the least (the change's own new points left out). An Equal
+    /// that a fillet shortens its line against is found so rather than the
+    /// dimension or the parallel that would let the line move away.
+    fn blocking(&self, candidates: &[ConstraintUid]) -> Vec<ConstraintUid> {
+        let made: BTreeSet<EntityUid> = self.report.entities.iter().map(|r| r.uid()).collect();
+        let mut found: Vec<(f64, ConstraintUid)> = Vec::new();
+        for &k in candidates {
+            let mut def = self.def.clone();
+            if let Some(c) = def.constraints.iter_mut().find(|c| c.id == k) {
+                c.active = false;
+            } else if let Some(d) = def.dimensions.iter_mut().find(|d| d.id == k) {
+                d.active = false;
+            } else {
+                continue;
+            }
+            let Ok(solved) = self.solve_def(&def) else {
+                continue;
+            };
+            let moved: f64 = def
+                .entities
+                .iter()
+                .filter(|e| !made.contains(&e.id))
+                .filter_map(|e| match e.kind {
+                    EntityKind::Point { at } => solved.points.get(&e.id).map(|p| dist(*p, at)),
+                    _ => None,
+                })
+                .sum();
+            found.push((moved, k));
+        }
+        let least = found.iter().map(|f| f.0).fold(f64::INFINITY, f64::min);
+        let within = least + (least * 1e-3).max(1e-6);
+        found
+            .into_iter()
+            .filter(|(moved, _)| *moved <= within)
+            .map(|(_, k)| k)
+            .collect()
     }
 
     /// Adds a dimension: driven, or driving with a value (a number, a
@@ -335,11 +470,20 @@ impl<'a> SketchEdit<'a> {
         Ok(self.solved()?.status.redundant.len())
     }
 
-    pub fn require_needed(&self, before: usize, what: &str) -> Result<(), String> {
-        if self.redundancy()? > before {
+    /// Refuses a new constraint or driving dimension the others imply, and
+    /// one that conflicts with them: then by the constraints that block it
+    /// (mitcad#1566, [`SketchEdit::refusal`]). Named by the change ("the
+    /// new constraint would over-constrain the sketch"), not by its id.
+    pub fn require_needed(&self, before: usize) -> Result<(), String> {
+        let redundant = match self.solve_def(&self.def) {
+            Ok(solved) => solved.status.redundant.len(),
+            Err(error) => return Err(self.refusal(&error, true)),
+        };
+        if redundant > before {
             return Err(format!(
-                "{what} would over-constrain the sketch: the others already fix what it \
-                 constrains (a dimension can be added as driven)"
+                "{} would over-constrain the sketch: the others already fix what it \
+                 constrains (a dimension can be added as driven)",
+                self.change
             ));
         }
         Ok(())
@@ -519,6 +663,16 @@ impl<'a> SketchEdit<'a> {
         implied
     }
 
+    /// A failed finish's `error`, a conflict told by
+    /// [`SketchEdit::refusal`] with the constraints that block the change
+    /// narrowed down (mitcad#1566); any other as it is.
+    fn narrowed(&self, error: String) -> String {
+        match self.solve_def(&self.def) {
+            Err(e) if !e.status.conflicts.is_empty() => self.refusal(&e, true),
+            _ => error,
+        }
+    }
+
     /// Checks the values, solves from the edited positions and stores the
     /// solution.
     pub fn finish(mut self) -> Result<(SketchDef, EditReport), String> {
@@ -544,7 +698,8 @@ impl<'a> SketchEdit<'a> {
             });
             let solved = match dragged {
                 Some(dragged) => dragged.2,
-                None => self.settle_offsets()?,
+                // A conflict names what blocks the change (mitcad#1566).
+                None => self.settle_offsets().map_err(|e| self.narrowed(e))?,
             };
             solved.store(&mut self.def.entities);
             // Texts in frames keep their frame's corner and direction.

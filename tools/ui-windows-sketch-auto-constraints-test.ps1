@@ -117,7 +117,7 @@ Ui-Step 'first corner'                   { Ui-SketchClick 25 -10 }
 Ui-Step 'opposite corner'                { Ui-SketchClick 45 -30 }
 Ui-ExpectNew 'Added rectangle' 'a rectangle afterwards'
 Ui-Sync
-$refused = Ui-NewLines | Where-Object { $_ -match 'not added|over-constrain' } | Select-Object -First 1
+$refused = Ui-NewLines | Where-Object { $_ -match 'not added|over-constrain|can''t hold' } | Select-Object -First 1
 if ($refused) { Ui-Fail "the rectangle met a refused constraint or an over-constrained sketch: '$refused'" }
 Write-Host 'ok   no refused constraint, no over-constrained sketch'
 Ui-Step 'end the tool (Esc)'             { Ui-Key 'Escape' }

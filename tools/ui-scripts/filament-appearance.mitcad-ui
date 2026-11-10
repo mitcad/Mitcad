@@ -72,7 +72,7 @@ expect-log '^Materials list: [0-9]+ names, none cut$'
 wait-idle
 mark
 button '^New'
-expect-log '^Materials new menu: Metal \| General Plastic \| FDM Plastic \| Resin \| Other \| Browse Material Dataset…$'
+expect-log '^Materials new menu: Metal \| General Plastic \| FDM Plastic \| Resin \| Wood \| Other \| Browse Material Dataset…$'
 popup 'FDM Plastic'
 # Then where (mitcad#1135): This design first.
 expect-log '^Materials new menu: This design \| My library$'
@@ -112,7 +112,7 @@ expect-log '^Materials add appearance picker opened: [0-9]+ appearances$'
 # others and the library's by class (mitcad#1102, mitcad#1133): Bright
 # Green is an FDM plastic's look beside the library's 15 filament colours,
 # Translucent Blue the design's other.
-expect-log '^Materials add appearance picker sections: FDM Plastic 16 \| General Plastic 6 \| This Design 1 \| Metal 8 \| Resin 3 \| Other 14$'
+expect-log '^Materials add appearance picker sections: FDM Plastic 16 \| General Plastic 6 \| This Design 1 \| Metal 8 \| Resin 3 \| Wood 17 \| Other 11$'
 focus-widget appearancePickerSearch
 # Plastic - Orange, not Filament - Orange, which comes first.
 type 'Plastic - Orange'
@@ -160,12 +160,13 @@ focus-main
 
 # 3. The Appearances window grouped by class (mitcad#1133): the design's
 # own first, then the library's under Metal, General Plastic, FDM Plastic
-# (the filament colours), Resin and Other, each heading with its count.
+# (the filament colours), Resin, Wood (mitcad#1552) and Other, each
+# heading with its count.
 wait-idle
 mark
 command solid.appearances
 focus-dialog '^Appearances$'
-expect-log '^Appearances groups: This Design [0-9]+ \| Metal 8 \| General Plastic 6 \| FDM Plastic 15 \| Resin 3 \| Other 14$'
+expect-log '^Appearances groups: This Design [0-9]+ \| Metal 8 \| General Plastic 6 \| FDM Plastic 15 \| Resin 3 \| Wood 17 \| Other 11$'
 expect-log '^Appearances group FDM Plastic: filament_white, filament_black, filament_grey, filament_silver, filament_red, filament_orange, filament_yellow, filament_green, filament_blue, filament_light_blue, filament_purple, filament_pink, filament_brown, filament_beige, filament_translucent$'
 expect-log '^Appearances group design at '
 expect-log '^Appearances group metal at '
@@ -211,7 +212,7 @@ expect-log '^Panel Appearance input value at '
 wait-idle
 mark
 click-logged '^Panel Appearance input value at '
-expect-log '^Appearance picker sections: FDM Plastic 16 \| General Plastic 6 \| This Design [0-9]+ \| Metal 8 \| Resin 3 \| Other 14$'
+expect-log '^Appearance picker sections: FDM Plastic 16 \| General Plastic 6 \| This Design [0-9]+ \| Metal 8 \| Resin 3 \| Wood 17 \| Other 11$'
 expect-log '^Appearance picker opened: '
 focus-dialog '^Appearance Picker$'
 wait-idle

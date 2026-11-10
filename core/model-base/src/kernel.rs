@@ -2654,6 +2654,38 @@ pub struct HoleSpec<'a, S> {
     /// The wall's angle to the axis, radians: positive narrows the hole as
     /// it goes deeper (0: a cylinder).
     pub taper: f64,
+    /// A press-fit hole for printed parts (mitcad#1517): its section
+    /// instead of the round one, along the whole hole with a flat bottom
+    /// (`diameter`, `shape`, `tip_angle` and `taper` are then not used).
+    pub press_fit: Option<HolePressFit>,
+}
+
+/// The section of a press-fit hole (mitcad#1517), swept from the start
+/// along the hole. `angle` turns it about the axis (radians) from where the
+/// first flat's normal or the first rib lies along the model's x axis
+/// projected onto the start plane (its y axis for a hole along x). Faces:
+/// `hole<i>.flat<k>` (a polygon's flats, counterclockwise about the hole's
+/// direction), `hole<i>.wall<k>` (the bore after rib k),
+/// `hole<i>.rib<k>.side0` and `.side1` (rib k's flanks before and after its
+/// tip), `hole<i>.tip` (the flat bottom) and `hole<i>.top`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HolePressFit {
+    /// A regular polygon of `sides` sides (6: hex, 4: square) whose flats
+    /// touch a circle of the diameter `inscribed`.
+    Polygon {
+        sides: u32,
+        inscribed: f64,
+        angle: f64,
+    },
+    /// A round bore of the diameter `bore` with `ribs` triangular ribs
+    /// evenly spaced round it, their tips on a circle of the diameter
+    /// `tips`; each rib's base on the bore is twice its height wide.
+    CrushRibs {
+        ribs: u32,
+        tips: f64,
+        bore: f64,
+        angle: f64,
+    },
 }
 
 /// Input of [`Kernel::modeled_thread`]: the profile of `pitch` whose

@@ -12,6 +12,7 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
@@ -21,6 +22,8 @@
 #include <IntCurvesFace_ShapeIntersector.hxx>
 #include <Precision.hxx>
 #include <TopoDS_Compound.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Circ.hxx>
 #include <gp_Lin.hxx>
 
 #include "face_select.hpp"
@@ -259,6 +262,99 @@ ShapePtr one_hole(const HoleSpec& spec, int index, const gp_Ax1& at, double dept
   return detail::with_swept_names(*namer.shape(), named, gp_Ax1(at.Location(), along), kTwoPi);
 }
 
+// A press-fit hole (mitcad#1517): its section in the start plane, a
+// polygon or a bore with crush ribs, swept along the hole to `depth`, flat
+// at the bottom.
+ShapePtr press_fit_hole(const HoleSpec& spec, int index, const gp_Ax1& at, double depth) {
+  const int count = spec.press_fit_count;
+  if (count < 3) {
+    throw std::invalid_argument(spec.press_fit == PressFit::Polygon ? "a press fit's polygon needs at least 3 sides"
+                                                                    : "a press fit needs at least 3 crush ribs");
+  }
+  detail::require_positive("press fit inner diameter", spec.press_fit_inner);
+  detail::require_finite("press fit angle", spec.press_fit_angle);
+  // The turn is measured from the x axis on the start plane (y for a hole
+  // along x), counterclockwise about the hole's direction.
+  const gp_Dir along = at.Direction();
+  const auto onto = [&along](const gp_Vec& axis) { return axis - gp_Vec(along) * axis.Dot(gp_Vec(along)); };
+  gp_Vec from = onto(gp_Vec(1, 0, 0));
+  if (from.Magnitude() < 0.5) {
+    from = onto(gp_Vec(0, 1, 0));
+  }
+  const gp_Dir ref(from);
+  const gp_Dir side = along.Crossed(ref);
+  const gp_Pnt origin = at.Location();
+  const auto point = [&](double r, double angle) {
+    return origin.Translated(gp_Vec(ref) * (r * std::cos(angle)) + gp_Vec(side) * (r * std::sin(angle)));
+  };
+  const std::string prefix = "hole" + std::to_string(index) + ".";
+  BRepBuilderAPI_MakeWire wire;
+  std::vector<std::pair<TopoDS_Edge, std::string>> named;
+  const auto add = [&](const TopoDS_Edge& edge, const std::string& part) {
+    wire.Add(edge);
+    if (!wire.IsDone()) {
+      throw std::runtime_error("the press fit's section could not be built");
+    }
+    named.emplace_back(wire.Edge(), face_name(spec.feature, prefix + part));
+  };
+  const auto line = [](const gp_Pnt& from_point, const gp_Pnt& to_point) {
+    BRepBuilderAPI_MakeEdge edge(from_point, to_point);
+    if (!edge.IsDone()) {
+      throw std::runtime_error("the press fit's section could not be built");
+    }
+    return edge.Edge();
+  };
+  const double step = kTwoPi / count;
+  if (spec.press_fit == PressFit::Polygon) {
+    // The corners lie on the circumscribed circle.
+    const double corner = spec.press_fit_inner / 2.0 / std::cos(step / 2.0);
+    for (int k = 0; k < count; ++k) {
+      const double middle = spec.press_fit_angle + k * step;
+      add(line(point(corner, middle - step / 2.0), point(corner, middle + step / 2.0)), "flat" + std::to_string(k));
+    }
+  } else {
+    const double tips = spec.press_fit_inner / 2.0;
+    const double bore = spec.press_fit_bore / 2.0;
+    if (!(bore > tips)) {
+      throw std::invalid_argument("the crush ribs' bore must be wider than their tips");
+    }
+    // Each rib's base on the bore is twice its height wide.
+    const double half = std::asin(std::min(1.0, (bore - tips) / bore));
+    if (!(2.0 * half < step)) {
+      throw std::invalid_argument("the crush ribs do not fit round the bore");
+    }
+    const gp_Circ circle(gp_Ax2(origin, along, ref), bore);
+    for (int k = 0; k < count; ++k) {
+      const double tip = spec.press_fit_angle + k * step;
+      const std::string rib = "rib" + std::to_string(k);
+      add(line(point(bore, tip - half), point(tips, tip)), rib + ".side0");
+      add(line(point(tips, tip), point(bore, tip + half)), rib + ".side1");
+      BRepBuilderAPI_MakeEdge arc(circle, point(bore, tip + half), point(bore, tip + step - half));
+      if (!arc.IsDone()) {
+        throw std::runtime_error("the press fit's section could not be built");
+      }
+      add(arc.Edge(), "wall" + std::to_string(k));
+    }
+  }
+  BRepBuilderAPI_MakeFace face(wire.Wire(), true);
+  if (!face.IsDone()) {
+    throw std::runtime_error("the press fit's section could not be built");
+  }
+  BRepPrimAPI_MakePrism prism(face.Face(), gp_Vec(along) * depth);
+  prism.Build();
+  if (!prism.IsDone()) {
+    throw std::runtime_error("the hole could not be built");
+  }
+  detail::FaceNamer namer(prism.Shape());
+  for (const auto& [edge, name] : named) {
+    namer.generated(prism, edge, name);
+  }
+  namer.add(prism.FirstShape(), face_name(spec.feature, prefix + "top"));
+  namer.add(prism.LastShape(), face_name(spec.feature, prefix + "tip"));
+  namer.finish();
+  return namer.shape();
+}
+
 } // namespace
 
 ShapePtr hole_tool(const HoleSpec& spec) {
@@ -287,7 +383,9 @@ ShapePtr hole_tool(const HoleSpec& spec) {
       } else if (spec.extent == HoleExtent::Target) {
         depth = depth_to(*spec.target, at);
       }
-      const ShapePtr hole = one_hole(spec, static_cast<int>(i), at, depth, drill_point);
+      const ShapePtr hole = spec.press_fit != PressFit::None
+                                ? press_fit_hole(spec, static_cast<int>(i), at, depth)
+                                : one_hole(spec, static_cast<int>(i), at, depth, drill_point);
       builder.Add(compound, hole->occt());
       for (int f = 0; f < hole->face_count(); ++f) {
         names.push_back({hole->face(f), hole->face_names(f)});

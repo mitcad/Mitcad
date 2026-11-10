@@ -5,6 +5,8 @@ description: How to model well in MitCad through its MCP tools, so that a design
 
 # Modeling in MitCad
 
+<!-- SPDX-License-Identifier: MIT -->
+
 These guides say how to model well in MitCad. What exists (the commands,
 queries and feature types, and their fields) is in the reference:
 `model_reference` with section, query, command, feature or search.
@@ -15,4 +17,9 @@ or, as a skill, the file `references/<id>.md`.
 
 ## Topics
 
-- [principles](references/principles.md): before any modeling task; how to plan, place and constrain a design so that it stays editable.
+- [principles](references/principles.md): before any modeling task; intent, parameters, feature order, names and groups.
+- [choosing-features](references/choosing-features.md): when several features could make the shape; choose the one that preserves its purpose.
+- [sketches](references/sketches.md): before the first sketch or a sketch edit; joined geometry, constraints, dimensions and projections.
+- [references](references/references.md): before placing a sketch, component or feature; stable parents and geometry that follows edits.
+- [verification](references/verification.md): after every modeling change; status, dimensions, bodies, pictures and recovery.
+- [3d-printing](references/3d-printing.md): when a component is to be FDM/FFF printed; orientation, fits, printable details and manufacturing checks.

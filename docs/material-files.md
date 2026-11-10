@@ -5,7 +5,9 @@ the Materials window's **Export…** and **Import…**, the commands
 `export_materials` and `import_materials`
 ([commands.md](../core/model-api/src/commands.md), "Material properties").
 The bundled material dataset is kept in the same JSON format
-([third_party/material-properties](../third_party/material-properties/README.md)).
+([third_party/material-properties](../third_party/material-properties/README.md)),
+and so are MitCad's own woods and panels beside it
+(`core/model/data/wood_materials.json`, [below](#the-woods-and-panels)).
 The model reads and writes them in `core/model/src/material_exchange.rs`;
 [examples/materials.json](examples/materials.json) and
 [examples/materials.csv](examples/materials.csv) are example files (the
@@ -23,7 +25,7 @@ design MPa, g/cm³ and µm/(m·°C), an inch design psi, lb/in³ and
 |---|---|---|
 | `id` | | The material's id where it was exported from. Written for people and tools; an import names materials by their names and makes ids of its own. |
 | `name` | | The material's name (required). |
-| `class` | | `metal`, `plastic` (General Plastic), `fdm_plastic`, `resin` or `other`. |
+| `class` | | `metal`, `plastic` (General Plastic), `fdm_plastic`, `resin`, `wood` (mitcad#1552) or `other`. |
 | `density` | density | Required for a material the import adds. |
 | `youngs_modulus` | stress | Young's modulus, above 0. |
 | `poissons_ratio` | | Poisson's ratio, above -1 and at most 0.5. |
@@ -111,3 +113,61 @@ for the file: keep the one that is there, replace its values with the
 file's (the values the file does not give stay; a built-in one gets a
 material of the design in its place) or keep both (the file's numbered,
 `Steel (2)`). The import is one undo step, "Import Materials".
+
+## The woods and panels
+
+MitCad's own part of the bundled dataset (mitcad#1552, GitHub
+mitcad/Mitcad#211): 10 solid woods and 7 wood-based panels in the class
+Wood, `core/model/data/wood_materials.json`, MIT like MitCad's code,
+compiled into the model beside the third-party dataset
+(`core/model/src/material_dataset.rs`). The entries came from a user's
+contribution; each value was checked against the public source its
+`reference` names (9.11.2026) before it went in, and a value the source
+does not give is left out (no Young's modulus for the panels, no other
+property for any of them). The values are typical: the application says
+so, to be checked against the supplier's data.
+
+| Id | Name | Density | Young's modulus | Source |
+|---|---|---|---|---|
+| `panel/chipboard` | Chipboard | 611 kg/m³ | | OEKOBAUDAT, "Particleboard, uncoated" (Sonae Arauco, EPD-SON-20160209-IBA1-EN, dataset `184c72f0-002d-42d3-895f-4f2b0f7e7de5`, version 00.02.000): gross density |
+| `panel/mdf_raw` | MDF - raw | 736 kg/m³ | | OEKOBAUDAT, "Medium Density Fibreboards EGGER MDF" (EPD-EGG-20200250-IBC3-DE, dataset `d539acfd-9bcf-439d-9c38-18223eac7def`, version 00.07.000): gross density, uncoated |
+| `panel/osb3` | OSB/3 | 610 kg/m³ | | EGGER OSB 3 JAS TOP brochure, technical data: mean density of a 15 mm board (±20 kg/m³) |
+| `panel/plywood_birch` | Plywood - birch | 680 kg/m³ | | WISA, sizes, thicknesses and weights (wisa.com): birch plywood, ±50 kg/m³ |
+| `panel/plywood_eucalyptus` | Plywood - eucalyptus | 600 kg/m³ | | S&J Woods (sj-woods.co), Eucalyptus Throughout Hardwood Plywood: average density, approx. |
+| `panel/plywood_pine` | Plywood - pine | 500 kg/m³ | | Plytech, Teco Radiata Structural data sheet (plytech.co.nz): average density |
+| `panel/plywood_spruce` | Plywood - spruce | 460 kg/m³ | | WISA, sizes, thicknesses and weights (wisa.com): spruce plywood, ±50 kg/m³ |
+| `wood/birch` | Wood - Birch | 690 kg/m³ | 13.86 GPa | The Wood Database (wood-database.com), yellow birch (Betula alleghaniensis) |
+| `wood/cedar` | Wood - Cedar | 370 kg/m³ | 7.66 GPa | The Wood Database, western red cedar (Thuja plicata) |
+| `wood/cherry` | Wood - Cherry | 560 kg/m³ | 10.3 GPa | The Wood Database, black cherry (Prunus serotina) |
+| `wood/douglas_fir` | Wood - Douglas Fir | 510 kg/m³ | 12.17 GPa | The Wood Database, Douglas fir (Pseudotsuga menziesii) |
+| `wood/eucalyptus` | Wood - Eucalyptus | 820 kg/m³ | 18.76 GPa | The Wood Database, blue gum (Eucalyptus globulus) |
+| `wood/maple` | Wood - Maple | 705 kg/m³ | 12.62 GPa | The Wood Database, hard maple (Acer saccharum) |
+| `wood/oak` | Wood - Oak | 755 kg/m³ | 12.15 GPa | The Wood Database, American white oak (Quercus alba) |
+| `wood/pine` | Wood - Pine | 550 kg/m³ | 10.08 GPa | The Wood Database, Scots pine (Pinus sylvestris) |
+| `wood/teak` | Wood - Teak | 655 kg/m³ | 12.28 GPa | The Wood Database, teak (Tectona grandis) |
+| `wood/walnut` | Wood - Walnut | 610 kg/m³ | 11.59 GPa | The Wood Database, black walnut (Juglans nigra) |
+
+The Wood Database gives a wood's average dried weight and elastic modulus
+at 12 % moisture content. The contribution named the particleboard
+"Chipboard P5"; its source is an average of uncoated particleboard of all
+use classes, not of class P5, so the entry is named Chipboard.
+
+Each entry has a look of its own in the appearance library, colours only
+(no textures): `panel_chipboard`, `panel_mdf`, `panel_osb`,
+`plywood_birch`, `plywood_eucalyptus`, `plywood_pine`, `plywood_spruce`,
+`wood_birch`, `wood_cedar`, `wood_cherry`, `wood_douglas_fir`,
+`wood_eucalyptus`, `wood_maple`, `wood_oak`, `wood_pine`, `wood_teak`,
+`wood_walnut`; all of the class Wood.
+
+**Licence policy** ([development.md](development.md#licence-policy)): the
+file holds single published figures, a density and a modulus per material,
+with the source each comes from; no text, table layout or image of a source
+is copied. The two OEKOBAUDAT datasets state their licence type as free
+of charge for all users and uses, without access or use restrictions, and
+OEKOBAUDAT allows its data to be passed on with the source credited, which
+each entry's `reference` does. The manufacturers' figures (EGGER, WISA,
+S&J Woods, Plytech) are the published properties of their products, cited
+as such. The Wood Database reserves the rights to its pages and gives no
+licence for its data; what the file takes from it is two measured physical
+values per species (facts, not its expression), credited, not its text,
+pictures or arrangement.

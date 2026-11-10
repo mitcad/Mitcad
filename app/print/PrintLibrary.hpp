@@ -40,8 +40,8 @@ struct LibraryItem {
   QString inDesign; // the design's copy's id; empty without one
   bool changed = false; // its library item was changed elsewhere (another design)
   bool chosen = false; // the design's printer or process
-  QString group;       // materials: metals, plastics, fdm_plastics (the filaments), resins, other
-  QString materialClass; // materials: metal, plastic, fdm_plastic, resin, other (mitcad#655, mitcad#1102)
+  QString group;       // materials: metals, plastics, fdm_plastics (the filaments), resins, wood, other
+  QString materialClass; // materials: metal, plastic, fdm_plastic, resin, wood, other (mitcad#655, mitcad#1102, mitcad#1552)
   bool classFixed = false; // materials: print settings make it an FDM plastic (mitcad#1102)
   QColor displayColor; // materials; invalid without one
   // By place (queryPlaceItems, mitcad#1135): a library item a nearer
@@ -114,8 +114,9 @@ QString editingLine(const LibraryItem& item);
 // every item for an empty text.
 bool matchesSearch(const LibraryItem& item, const QString& text);
 // A material group's title (Metals, General Plastics, FDM Plastics, Resins,
-// Other), a class's (Metal, General Plastic, FDM Plastic, Resin, Other) and
-// the classes and the groups in their order (mitcad#655, mitcad#1102).
+// Wood, Other), a class's (Metal, General Plastic, FDM Plastic, Resin, Wood,
+// Other) and the classes and the groups in their order (mitcad#655,
+// mitcad#1102, mitcad#1552).
 QString materialGroupTitle(const QString& group);
 QString materialClassTitle(const QString& materialClass);
 const QStringList& materialClasses();

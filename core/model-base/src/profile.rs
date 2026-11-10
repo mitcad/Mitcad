@@ -191,6 +191,91 @@ impl ProfileRegion {
         (min, max)
     }
 
+    /// Each loop as a closed polygon of sampled points in sketch
+    /// coordinates (mitcad#1587): its segments joined end to end, each
+    /// turned round where its own direction runs against the loop's.
+    pub fn polygons(&self) -> Vec<Vec<[f64; 2]>> {
+        let distance = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+        self.loops
+            .iter()
+            .map(|l| {
+                let mut points: Vec<[f64; 2]> = Vec::new();
+                for (i, segment) in l.segments.iter().enumerate() {
+                    let mut samples = segment.geometry.sample();
+                    let (Some(&first), Some(&last)) = (samples.first(), samples.last()) else {
+                        continue;
+                    };
+                    let reverse = match points.last() {
+                        Some(&end) => distance(end, last) < distance(end, first),
+                        // The first segment runs toward the second.
+                        None => l.segments.get(i + 1).is_some_and(|next| {
+                            let next = next.geometry.sample();
+                            let near = |p: [f64; 2]| {
+                                next.first()
+                                    .zip(next.last())
+                                    .map_or(f64::INFINITY, |(a, b)| {
+                                        distance(p, *a).min(distance(p, *b))
+                                    })
+                            };
+                            near(first) < near(last)
+                        }),
+                    };
+                    if reverse {
+                        samples.reverse();
+                    }
+                    points.extend(samples);
+                }
+                points
+            })
+            .collect()
+    }
+
+    /// The region's area (mm², the outer loop less the holes) and centre
+    /// of area in sketch coordinates, from sampled loops (mitcad#1587).
+    pub fn area_and_centre(&self) -> (f64, [f64; 2]) {
+        let mut area = 0.0;
+        let mut moment = [0.0; 2];
+        for (i, polygon) in self.polygons().iter().enumerate() {
+            let (mut a, mut mx, mut my) = (0.0, 0.0, 0.0);
+            for (j, p) in polygon.iter().enumerate() {
+                let q = polygon[(j + 1) % polygon.len()];
+                let cross = p[0] * q[1] - q[0] * p[1];
+                a += cross;
+                mx += (p[0] + q[0]) * cross;
+                my += (p[1] + q[1]) * cross;
+            }
+            // Outer loop counts positive, holes negative, whatever their
+            // turning direction.
+            let sign = if (i == 0) == (a >= 0.0) { 1.0 } else { -1.0 };
+            area += sign * a / 2.0;
+            moment[0] += sign * mx / 6.0;
+            moment[1] += sign * my / 6.0;
+        }
+        if area.abs() < 1e-12 {
+            return (0.0, [0.0; 2]);
+        }
+        (area, [moment[0] / area, moment[1] / area])
+    }
+
+    /// Whether a point in sketch coordinates lies inside the region (in
+    /// its outer loop and outside its holes, by the sampled loops;
+    /// mitcad#1587).
+    pub fn contains(&self, point: [f64; 2]) -> bool {
+        let mut inside = false;
+        for polygon in self.polygons() {
+            for (j, p) in polygon.iter().enumerate() {
+                let q = polygon[(j + 1) % polygon.len()];
+                if (p[1] > point[1]) != (q[1] > point[1]) {
+                    let x = p[0] + (point[1] - p[1]) / (q[1] - p[1]) * (q[0] - p[0]);
+                    if point[0] < x {
+                        inside = !inside;
+                    }
+                }
+            }
+        }
+        inside
+    }
+
     /// The region turned by `angle` (radians, counter-clockwise) about
     /// `centre` in sketch coordinates (mitcad#1259: an emboss's Rotation);
     /// its keys unchanged.

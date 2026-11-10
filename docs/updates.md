@@ -51,11 +51,34 @@ Programs from the installation keep its files locked (mitcad#1454). Once
 MitCad has quit, the updater asks the MCP bridges that run from the
 installation (`mitcad-cli mcp --connect`, started by AI assistants) to
 end and waits a few seconds; the installer does the same. If a program
-from the installation still runs, the installer replaces no file and
-ends with exit code 3. MitCad starts again and says that the update was
-not installed, naming the programs that still run (AI assistant sessions
-connected to MitCad run `mitcad-cli.exe`; Task Manager can end them).
-*Try Again* in that notice checks for the update again and offers it.
+from the installation still runs, the updater asks what to do before it
+runs the installer (mitcad#1584), in a window titled *MitCad Update*. It
+names the programs and how many run, for example "3 MCP bridges of AI
+assistant sessions (mitcad-cli.exe)", "MitCad (mitcad.exe)" or "a render
+worker (mitcad-render.exe)", with *End Them and Install* and *Cancel*:
+
+- *End Them and Install* first asks another MitCad (`mitcad.exe` from
+  the installation) to close, as quitting it does: one design window at
+  a time gets a close request, so MitCad asks about unsaved changes. If
+  MitCad still runs after 30 s, the updater says so with *End Anyway*,
+  *Wait* and *Cancel*; only *End Anyway* ends MitCad, and its unsaved
+  changes are lost. Then the updater ends the other programs from the
+  installation's `bin` folder of your session (the bridges, render
+  workers, the assistant's launcher) and runs the installer with
+  `/EndPrograms`, which ends what the updater could not with the
+  installer's rights (elevated for an installation for all users). The
+  log lists what was found, asked, ended and what remained.
+- *Cancel* runs no installer and ends nothing.
+
+The installer's exit code 3 stays the safety net: if a program from the
+installation still runs (one of another user's session, or a MitCad that
+was not ended), the installer replaces no file and ends with exit code 3.
+After a *Cancel* or an exit code 3, MitCad starts again and says that the
+update was not installed, naming the programs that still run (AI
+assistant sessions connected to MitCad run `mitcad-cli.exe`; Task
+Manager can end them). *Try Again* in that notice checks for the update
+again and offers it. The silent installer run on its own (`/S` without
+`/EndPrograms`) ends no program: nobody was asked.
 Should an installation still be left with files of another build, MitCad
 says so at start-up and does nothing else
 ([development.md](development.md#windows-installer)).
@@ -533,10 +556,17 @@ MitCad at their own server only in a test build
   skipped otherwise. The installed `mitcad-updater.exe` does not run an
   installer with a SHA-256 that is not the given one, or without one,
   and it logs the reason as its last line. With a `mitcad-cli mcp` from
-  the installation running, the silent installer and the updater end with
-  code 3 and change no file, and the updater's last line names
-  `mitcad-cli.exe`; a `mitcad-cli mcp --connect` is asked to end, and the
-  install then replaces every file (mitcad#1454). An installation just for the
+  the installation running, the silent installer ends with code 3 and
+  changes no file, and the updater asks whether to end it: on *Cancel* it
+  changes no file and its last line names `mitcad-cli.exe`; a
+  `mitcad-cli mcp --connect` is asked to end, and the install then
+  replaces every file (mitcad#1454). The silent installer with
+  `/EndPrograms` ends a `mitcad-cli mcp` itself and installs; the updater's
+  *End Them and Install* ends it and the update replaces every file. A
+  MitCad from the installation with an unsaved design is asked to close,
+  asks whether to save and is not ended; *Cancel* in the updater's next
+  question then changes nothing (mitcad#1584; the test answers the
+  updater's task dialog with `TDM_CLICK_BUTTON`). An installation just for the
   current user refuses a tampered download. The download goes to a
   private folder. Then the installation updates itself from a local manifest
   served over HTTPS, as an installation for all users also does. It

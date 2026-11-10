@@ -3,8 +3,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 
+#include "bridge/mesh.hpp"
 #include "mitcad/io/face_mesh.hpp"
+#include "mitcad/io/mesh.hpp"
 #include "mitcad_bridge/kernel/face_mesh.h"
 
 namespace mitcad::bridge {
@@ -15,7 +18,12 @@ FaceMeshes face_meshes(const geometry::Shape& shape, double deviation, double an
   options.linear_deflection = deviation;
   options.angular_deflection = angle;
   options.face_triangles = static_cast<std::size_t>(face_triangles);
-  const io::FaceMeshes mesh = io::face_meshes(shape.occt(), options);
+  io::FaceMeshes mesh;
+  try {
+    mesh = io::face_meshes(shape.occt(), options);
+  } catch (const io::FaceError& error) {
+    throw std::runtime_error(untriangulated_face_message(shape, error.index(), error.surface()));
+  }
   FaceMeshes out;
   out.vertices.reserve(mesh.vertices.size() * 3);
   out.normals.reserve(mesh.normals.size() * 3);

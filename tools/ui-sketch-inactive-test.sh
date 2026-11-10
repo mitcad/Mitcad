@@ -127,6 +127,8 @@ ui_expect_new "Constraint tooltip k1: Not applied: not met in the imported file"
 echo "--- Activate refused while the vertical distance holds the line up"
 right_click_choose "Constraint k1 glyph" "Activate"
 ui_expect_new "Sketch items not activated: k1 cannot be activated" "refused with the reason"
+# What blocks it is painted, not named by id (mitcad#1566).
+ui_expect_new "Sketch conflict painted: k2 on p1, p3" "the vertical distance that blocks it is painted"
 grep -q "Sketch items activated: k1" "$UI_LOG" && ui_fail "k1 was activated"
 echo "ok   k1 stays inactive"
 

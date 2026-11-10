@@ -15,7 +15,8 @@ holds the notes, stage by stage, and the corpus test (`freecad.corpus`).
 | `params` | Spreadsheets, VarSets, named constraints and bound expressions as parameters (stage 4). |
 | `report`, `notes` | The report, and the timeline notes made from it (mitcad#170). |
 | `appearances` | FreeCAD's body and face colours as document appearances on the bodies made, stored or rebuilt (mitcad#793). |
-| `bases`, `joints` | Base features and clones of Bodies as linked copies; assembly joints as MitCad joints (mitcad#1557). |
+| `bases`, `joints` | Base features and clones of Bodies as linked copies; assembly joints as MitCad joints on the picked elements, with their limits (mitcad#1557, mitcad#1560). |
+| `placements` | Positions of Bodies and parts that expressions drive, as `move_occurrence` features of their occurrences (mitcad#1560). |
 
 It depends on `mitcad-import-base` (vector helpers, planar faces, the
 candidate core, free names, notes' texts, the sketch helpers and inactive

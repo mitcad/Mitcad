@@ -142,6 +142,24 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND TARGET test_chat_ag
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 endif()
 
+# Sign in Again in the chat panel (mitcad#1585): the scripted test agent and
+# a copy of it as the terminal (MITCAD_TEST_TERMINAL); the confirmation shown
+# whole in both layouts (mitcad#1590). Linux runs the same
+# script as tools/ui-chat-sign-in-again-test.sh among check-all's UI tests.
+if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND TARGET test_chat_agent
+   AND Python3_Interpreter_FOUND AND selection_ui_platform AND NOT selection_ui_platform STREQUAL "linux")
+  set(chat_sign_in_ui_test "app.ui-${selection_ui_platform}-chat-sign-in-again")
+  selection_ui_command_prefix(300)
+  add_test(NAME "${chat_sign_in_ui_test}"
+    COMMAND ${selection_ui_prefix} "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/tools/ui-chat-sign-in-again-test.py"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:test_chat_agent>"
+            "${CMAKE_BINARY_DIR}/ui-${selection_ui_platform}-chat-sign-in-again"
+            "$<TARGET_FILE_DIR:Qt6::Core>")
+  set_tests_properties("${chat_sign_in_ui_test}" PROPERTIES TIMEOUT 450 ${selection_ui_alone}
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+endif()
+
 # Read-only BOM grouping and actual shown CSV/PDF on the default Qt frontend.
 if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter_FOUND
    AND selection_ui_platform)

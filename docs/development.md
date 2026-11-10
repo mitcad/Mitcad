@@ -656,14 +656,27 @@ is in the installation folder (`K32EnumProcesses`,
 bridges among them to end (each waits on the event
 `Local\MitcadBridgeQuit-<pid>`, [app/update/RunningPrograms.hpp](../app/update/RunningPrograms.hpp))
 and gives everything up to five seconds. With pages, what still runs is
-named, with *Retry* and *Cancel* (back to the folder page); a silent
-install ends with exit code 3 and changes no file. `AllowSkipFiles off`:
+named in a task dialog (`XPStyle on` for the common controls 6; a message
+box with *Yes*, *No* and *Cancel* without them), with *End Them*, *Retry*
+and *Cancel* (back to the folder page), mitcad#1584: *End Them* ends the
+programs from `bin` of the installer's session except `mitcad.exe`
+(`TerminateProcess`) and asks each MitCad to close as quitting it does
+(`WM_CLOSE` to its first design window, titled `<design> - MitCad
+<version>`), so that MitCad asks about unsaved changes; a MitCad that
+still runs then is named with *End Anyway*, which ends it too. A silent
+install ends with exit code 3 and changes no file, and ends no program,
+unless `/EndPrograms` is given: the updater passes it only after the
+person chose *End Them and Install* ([updates.md](updates.md)), and the
+installer then ends the programs from `bin` of its session except
+`mitcad.exe` first, with its own rights (elevated for all users; the
+elevation passes the switch on). `AllowSkipFiles off`:
 a file that cannot be written is never skipped (*Retry* or *Cancel*; a
 silent install aborts). Exit codes: 0 done, 1 cancelled, 2 aborted (also
 when the earlier version could not be uninstalled or a file could not be
 written), 3 programs from the installation are running (silent; nothing
-changed), 740 elevated but still without administrator rights, 1223
-elevation refused.
+changed; with `/EndPrograms`, programs it could not end, such as a
+MitCad or another session's program), 740 elevated but still without
+administrator rights, 1223 elevation refused.
 
 `mitcad.exe` and `mitcad-cli.exe` check at start-up that the OCCT DLLs
 they loaded are the ones they were built with
@@ -698,11 +711,17 @@ other scope). Just for the current user it checks the files, runs
 checks that the installed `mitcad-updater.exe` does not run an installer
 whose SHA-256 is not the given `--sha256`, or without one (mitcad#603),
 checks files in use (mitcad#1454: with a `mitcad-cli mcp` from `bin`
-running, the silent installer and the updater end with code 3 and no
-file of `bin` changes, the updater's log names `mitcad-cli.exe`; a running
+running, the silent installer ends with code 3, ends nothing and no file
+of `bin` changes; the updater asks whether to end it, and on *Cancel*
+changes nothing and its log names `mitcad-cli.exe`; a running
 `mitcad-cli mcp --connect` is asked to end and the install replaces every
-file with the package's), and,
-with `-MesaDir`, renders a screenshot; for all users it reinstalls with
+file with the package's; mitcad#1584: the silent installer with
+`/EndPrograms` ends a `mitcad-cli mcp` and installs, and the updater's
+*End Them and Install* ends it and installs every file of the package;
+the test answers the updater's task dialog by posting `TDM_CLICK_BUTTON`),
+and, with `-MesaDir`, renders a screenshot and checks that *End Them and
+Install* asks a MitCad with an unsaved design to close, which asks to
+save and is not ended (*Cancel* then changes nothing); for all users it reinstalls with
 only `/D=` as an earlier release's updater does. With `-MesaDir` it tests
 the automatic update in both scopes ([updates.md](updates.md#tests);
 `-NoUpdate` skips it) in a build configured with
@@ -2199,6 +2218,15 @@ runs one step after another. Build and lint use half the cores unless
   and the Materials window's dataset browser says where the values come
   from and that they are typical. The vendor's name appears only in that
   attribution (the source's address).
+- The woods and panels beside it (mitcad#1552,
+  `core/model/data/wood_materials.json`): MitCad's own data under MIT,
+  single published figures (densities, the woods' Young's moduli), each
+  credited to its source in its `reference`; the sources and why their
+  terms allow it are in
+  [material-files.md](material-files.md#the-woods-and-panels) (OEKOBAUDAT's
+  datasets free of charge for all users and uses, manufacturers'
+  published product data, measured values of The Wood Database, facts
+  without its text or arrangement).
 - This is not a legal review; licence combinations are checked before a
   release.
 

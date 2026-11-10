@@ -9,7 +9,10 @@
 // the motion of its inputs (moveMotion), and of Rotate's and the point
 // types' inputs from the basis an exact preview reports (basisMotion), and
 // Rotate's ring about the reported axis (keptRotateAxis), Move Face's ring
-// too (rotateBasisToKeep, rotateRingAxis; mitcad#854). No
+// too (rotateBasisToKeep, rotateRingAxis; mitcad#854); Free Move's
+// handles meeting at the moved middle (freeArrowOrigin, freeMovedMiddle;
+// mitcad#1580) and its matrix split about a pivot and made again
+// (freeMoveOf, freeMatrixOf; mitcad#1583). No
 // window and no model: the tools are OCCT boxes meshed here.
 #include <algorithm>
 #include <array>
@@ -621,6 +624,123 @@ void testMoveFaceRing() {
   CHECK(!rotateRingAxis(QJsonObject(), rim, QString(), gp_Trsf(), {}, middle));
 }
 
+// Free Move's handles meet at the moved middle (freeMovedMiddle,
+// freeArrowOrigin; mitcad#1580): with X Distance 510 mm the Y and Z arrows
+// start there, beside the moved body, not at the start where they seemed
+// to vanish; a drag of the Z arrow then goes along Z from there.
+void testFreeHandles() {
+  using mitcad::cmd::freeArrowOrigin;
+  using mitcad::cmd::freeMovedMiddle;
+  CommandState state;
+  state.setChoice(QStringLiteral("type"), QStringLiteral("free"));
+  for (const char* id : {"tx", "ty", "tz", "rx", "ry", "rz"}) {
+    state.setValue(QString::fromLatin1(id), 0.0);
+  }
+  const gp_Pnt pivot(10, 20, 30);
+  // Nothing moved: all at the pivot.
+  for (int axis = 0; axis < 3; ++axis) {
+    const auto origin = freeArrowOrigin(state, pivot, axis);
+    CHECK(origin && at(*origin, 10, 20, 30));
+  }
+  // X Distance 510 mm.
+  state.setValue(QStringLiteral("tx"), 510.0);
+  auto middle = freeMovedMiddle(state, pivot);
+  CHECK(middle && at(*middle, 520, 20, 30));
+  auto x = freeArrowOrigin(state, pivot, 0);
+  auto y = freeArrowOrigin(state, pivot, 1);
+  auto z = freeArrowOrigin(state, pivot, 2);
+  // The X arrow from the start, its knob (start + 510 along X) at the
+  // moved middle; the Y and Z arrows from the moved middle.
+  CHECK(x && at(*x, 10, 20, 30));
+  CHECK(x && at(x->Translated(gp_Vec(510, 0, 0)), 520, 20, 30));
+  CHECK(y && at(*y, 520, 20, 30));
+  CHECK(z && at(*z, 520, 20, 30));
+  // The Z arrow dragged to 40 mm: it starts where it did (exactly, so
+  // that the drag keeps its grab), its knob 40 up; the X and Y arrows
+  // and the rings go up with what moves.
+  const gp_Pnt zBefore = z ? *z : gp_Pnt();
+  state.setValue(QStringLiteral("tz"), 40.0);
+  z = freeArrowOrigin(state, pivot, 2);
+  CHECK(z && z->X() == zBefore.X() && z->Y() == zBefore.Y() && z->Z() == zBefore.Z());
+  CHECK(z && at(z->Translated(gp_Vec(0, 0, 40)), 520, 20, 70));
+  x = freeArrowOrigin(state, pivot, 0);
+  y = freeArrowOrigin(state, pivot, 1);
+  middle = freeMovedMiddle(state, pivot);
+  CHECK(x && at(*x, 10, 20, 70));
+  CHECK(y && at(*y, 520, 20, 70));
+  CHECK(middle && at(*middle, 520, 20, 70));
+  // Not an axis: none.
+  CHECK(!freeArrowOrigin(state, pivot, 3));
+  // A distance that is not a number yet (a minus sign typed alone): no
+  // arrows and no rings until it is one.
+  state.setValue(QStringLiteral("ty"), std::numeric_limits<double>::quiet_NaN());
+  CHECK(!freeMovedMiddle(state, pivot));
+  for (int axis = 0; axis < 3; ++axis) {
+    CHECK(!freeArrowOrigin(state, pivot, axis));
+  }
+}
+
+// A free move's matrix split into the panel's values about a pivot and
+// made again (freeMoveOf, freeMatrixOf; mitcad#1583): any pivot gives the
+// same matrix back, so an edit that splits it about the middle of what
+// moves as the feature finds it keeps the result; the handles, at the
+// pivot moved by the distances, are where the feature puts that middle.
+void testFreeSplit() {
+  using mitcad::cmd::FreeMove;
+  using mitcad::cmd::freeMatrixOf;
+  using mitcad::cmd::freeMoveOf;
+  const double degree = std::atan(1.0) / 45.0;
+  const auto rowsOf = [](const gp_Trsf& motion) {
+    QJsonArray rows;
+    for (int r = 1; r <= 3; ++r) {
+      rows.append(QJsonArray{motion.Value(r, 1), motion.Value(r, 2), motion.Value(r, 3),
+                             motion.TranslationPart().Coord(r)});
+    }
+    return rows;
+  };
+  const auto same = [](const QJsonArray& a, const QJsonArray& b) {
+    for (int r = 0; r < 3; ++r) {
+      for (int c = 0; c < 4; ++c) {
+        if (!near(a.at(r).toArray().at(c).toDouble(), b.at(r).toArray().at(c).toDouble(), 1e-9)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+  // 8650 mm along Y (GitHub mitcad/Mitcad#223): the component's middle
+  // (75, 10, 5) as the feature finds it, the moved one (75, 8660, 5).
+  const QJsonArray along = rowsOf(moved(0, 8650, 0));
+  const gp_Pnt before(75, 10, 5);
+  FreeMove move = freeMoveOf(along, before);
+  CHECK(near(move.moved.X(), 0) && near(move.moved.Y(), 8650) && near(move.moved.Z(), 0));
+  CHECK(near(move.rx, 0) && near(move.ry, 0) && near(move.rz, 0));
+  CHECK(at(gp_Pnt(before.XYZ() + move.moved), 75, 8660, 5));
+  CHECK(same(freeMatrixOf(move, before), along));
+  // Split about the moved middle instead (the model after the feature, as
+  // an edit's `load` sees it): the same distances, but the handles then
+  // sit 8650 mm beyond the component, the move counted twice.
+  const gp_Pnt after(75, 8660, 5);
+  const FreeMove twice = freeMoveOf(along, after);
+  CHECK(near(twice.moved.Y(), 8650));
+  CHECK(at(gp_Pnt(after.XYZ() + twice.moved), 75, 17310, 5));
+
+  // Turned 20 deg about X and 30 deg about Z (R = Rz Ry Rx) and moved
+  // (100, 8650, -5): about any pivot the same matrix back, and the moved
+  // middle where the matrix takes the pivot.
+  const gp_Trsf turn = mitcad::cmd::freeRotation(20 * degree, 0, 30 * degree);
+  gp_Trsf shift;
+  shift.SetTranslation(gp_Vec(100, 8650, -5));
+  const QJsonArray turned = rowsOf(shift * turn);
+  for (const gp_Pnt& pivot : {gp_Pnt(0, 0, 0), gp_Pnt(-90, 5, 5), gp_Pnt(1e4, -3e3, 7)}) {
+    move = freeMoveOf(turned, pivot);
+    CHECK(near(move.rx, 20 * degree, 1e-12) && near(move.ry, 0, 1e-12) && near(move.rz, 30 * degree, 1e-12));
+    CHECK(same(freeMatrixOf(move, pivot), turned));
+    const gp_Pnt there = pivot.Transformed(shift * turn);
+    CHECK(gp_Pnt(pivot.XYZ() + move.moved).Distance(there) < 1e-9);
+  }
+}
+
 } // namespace
 
 int main() {
@@ -632,6 +752,8 @@ int main() {
   testBasisMotions();
   testRingAxis();
   testMoveFaceRing();
+  testFreeHandles();
+  testFreeSplit();
   if (failures > 0) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

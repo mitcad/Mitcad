@@ -25,6 +25,15 @@ const QString kEnglish = QStringLiteral("en");
 constexpr const char* kNameContext = "LanguageName";
 //: The name of this language in itself, as Preferences › General › Language lists it ("Suomi", "Deutsch").
 constexpr const char* kOwnName = QT_TRANSLATE_NOOP("LanguageName", "English");
+// Qt's own texts whose translation in Qt's catalogue differs from MitCad's
+// terms (Finnish: Qt's "Peru" for Cancel, MitCad's "Peruuta"). MitCad's
+// catalogue is asked before Qt's (startInterfaceLanguage), so its entries
+// in Qt's contexts win; marked here so that lupdate keeps them.
+[[maybe_unused]] constexpr const char* kQtTextsInMitCadTerms[] = {
+    QT_TRANSLATE_NOOP("QPlatformTheme", "Cancel"),  // the Cancel of every standard button box
+    QT_TRANSLATE_NOOP("QProgressDialog", "Cancel"),
+    QT_TRANSLATE_NOOP("QWizard", "Cancel"),
+};
 // The context-free copy of every translated message that the build adds to
 // a catalogue (tools/translations, "prepare"): a text whose context at run
 // time is not the one lupdate saw in the source (a class without Q_OBJECT

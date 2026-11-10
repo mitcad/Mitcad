@@ -73,6 +73,15 @@ pub(crate) const FITS: &[Fit] = &[
         millimetres: 0.5,
         comment: "Printed bearing fit on shafts or in holes; depends on dimensional accuracy",
     },
+    // A press-fit hole's flats or crush ribs under its pin (mitcad#1517).
+    Fit {
+        name: "press_fit_interference",
+        field: "interference",
+        features: &["hole"],
+        millimetres: 0.1,
+        comment: "Printed press fit on the diameter, flats or crush rib tips under the pin; \
+                  depends on dimensional accuracy",
+    },
 ];
 
 /// The existing parameter always wins, including its unit and comment.

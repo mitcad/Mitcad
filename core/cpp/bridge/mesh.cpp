@@ -15,13 +15,28 @@
 
 namespace mitcad::bridge {
 
+std::string untriangulated_face_message(const geometry::Shape& shape, int index, const std::string& surface) {
+  std::string names;
+  if (index >= 0 && index < shape.face_count()) {
+    for (const std::string& name : shape.face_names(index)) {
+      names += (names.empty() ? "" : ", ") + name;
+    }
+  }
+  return io::face_error_message(names.empty() ? "face " + std::to_string(index) : names, surface);
+}
+
 TriangleMesh triangle_mesh(const geometry::Shape& shape, double deviation, double angle,
                            std::uint64_t face_triangles) {
   io::MeshOptions options;
   options.linear_deflection = deviation;
   options.angular_deflection = angle;
   options.face_triangles = static_cast<std::size_t>(face_triangles);
-  const io::IndexedMesh mesh = io::indexed_mesh(shape.occt(), options);
+  io::IndexedMesh mesh;
+  try {
+    mesh = io::indexed_mesh(shape.occt(), options);
+  } catch (const io::FaceError& error) {
+    throw std::runtime_error(untriangulated_face_message(shape, error.index(), error.surface()));
+  }
   TriangleMesh out;
   out.vertices.reserve(mesh.vertices.size() * 3);
   for (const auto& vertex : mesh.vertices) {

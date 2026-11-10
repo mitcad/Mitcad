@@ -383,6 +383,15 @@ fn invalid_argument_fields_are_rejected_before_backend_execution() {
             "model_export",
             json!({"document": "doc1", "path": "part.step", "format": "step", "bodies": [4]}),
         ),
+        // The mesh and replacing a file (mitcad#1569).
+        (
+            "model_export",
+            json!({"document": "doc1", "path": "part.stl", "format": "stl", "overwrite": "yes"}),
+        ),
+        (
+            "model_export",
+            json!({"document": "doc1", "path": "part.stl", "format": "stl", "refinement": 1}),
+        ),
     ] {
         let response = session.handle(call(name, arguments)).unwrap();
         assert_eq!(response["error"]["code"], -32602);
@@ -781,6 +790,65 @@ fn assert_plate_fields(export: &Value) {
         "whole",
     ] {
         assert!(properties.get(field).is_some(), "{field}");
+    }
+    assert_export_mesh_and_overwrite(export);
+}
+
+/// `model_export` takes the `export` command's `refinement` and replaces
+/// existing files with `overwrite`, as `document_save` (mitcad#1569).
+fn assert_export_mesh_and_overwrite(export: &Value) {
+    let description = export["description"].as_str().unwrap();
+    for text in ["overwrite: true", "refinement", "Mesh refinement"] {
+        assert!(description.contains(text), "{text}: {description}");
+    }
+    assert!(!description.contains("is refused"), "{description}");
+    let properties = &export["inputSchema"]["properties"];
+    assert_eq!(properties["overwrite"]["type"], "boolean");
+    assert_eq!(properties["overwrite"]["default"], false);
+    let refinement = &properties["refinement"];
+    assert_eq!(refinement["type"], json!(["string", "object"]));
+    for field in ["deviation", "angle", "face_triangles", "max_edge"] {
+        assert!(refinement["properties"].get(field).is_some(), "{field}");
+    }
+    let schema = &export["inputSchema"];
+    // With a document handle, which the headless server requires.
+    let check = |arguments: &Value| {
+        let mut arguments = arguments.clone();
+        arguments["document"] = json!("doc1");
+        catalog::validate(&arguments, schema, "arguments")
+    };
+    for arguments in [
+        json!({"path": "a.stl", "format": "stl", "refinement": "high", "overwrite": true}),
+        json!({"path": "a.stl", "format": "stl",
+               "refinement": {"deviation": 0.03, "angle": 0.052}}),
+        json!({"path": "a.stl", "format": "stl",
+               "refinement": {"deviation": 0.03, "angle": 0.052,
+                              "face_triangles": 0, "max_edge": 2}}),
+    ] {
+        if let Err(error) = check(&arguments) {
+            panic!("{arguments}: {error}");
+        }
+    }
+    for (arguments, error) in [
+        (
+            json!({"path": "a.stl", "format": "stl", "overwrite": "yes"}),
+            "arguments.overwrite",
+        ),
+        (
+            json!({"path": "a.stl", "format": "stl", "refinement": 0.03}),
+            "arguments.refinement",
+        ),
+        (
+            json!({"path": "a.stl", "format": "stl", "refinement": ""}),
+            "arguments.refinement",
+        ),
+        (
+            json!({"path": "a.stl", "format": "stl", "refinement": {"tolerance": 0.03}}),
+            "Unknown argument arguments.refinement.tolerance",
+        ),
+    ] {
+        let refused = check(&arguments).unwrap_err();
+        assert!(refused.contains(error), "{arguments}: {refused}");
     }
 }
 
@@ -1315,6 +1383,8 @@ fn model_command_takes_an_object_or_an_array_and_a_timeline_mode() {
         json!({"document": "doc1", "command": [{"cmd": "recompute"}, 4]}),
         json!({"document": "doc1", "command": "recompute"}),
         json!({"document": "doc1", "command": {"cmd": "recompute"}, "timeline": "all"}),
+        json!({"document": "doc1", "command": {"cmd": "recompute"}, "hints": "false"}),
+        json!({"document": "doc1", "command": {"cmd": "recompute"}, "hints": null}),
     ] {
         let response = session.handle(call("model_command", arguments)).unwrap();
         assert_eq!(response["error"]["code"], -32602, "{response}");

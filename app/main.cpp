@@ -42,6 +42,7 @@
 #include "framework/DisplayMeshes.hpp"
 #include "framework/InterfaceSize.hpp"
 #include "framework/UiSizes.hpp"
+#include "framework/IconSizeStyle.hpp"
 #include "framework/Language.hpp"
 #include "framework/Numbers.hpp"
 #include "framework/ProcessEnd.hpp"
@@ -476,7 +477,7 @@ int runApplication(int argc, char* argv[]) {
   if (parser.isSet(noGlassOption)) {
     mitcad::setGlassRequested(false);
   }
-  qInfo().noquote() << "Style:" << QApplication::style()->name() << "Chrome:"
+  qInfo().noquote() << "Style:" << mitcad::applicationStyleKey() << "Chrome:"
                     << mitcad::chromeStyleName(mitcad::chromeStyle()) << QStringLiteral("(%1)").arg(chromeSource);
   // Windows 10's dark app mode (mitcad#1282): Qt's own style with a dark palette
   // while it is dark, before the first window; nothing elsewhere.
@@ -491,6 +492,10 @@ int runApplication(int argc, char* argv[]) {
   const mitcad::TextAndIconSize textAndIconSize = mitcad::applyTextAndIconSize();
   qInfo().noquote() << QStringLiteral("Text and icon size: %1")
                            .arg(mitcad::textAndIconSizeDescription(textAndIconSize));
+  // The icons Qt's style sizes (menus, tool and combo boxes, line edits'
+  // actions) at Icon size too (mitcad#1561): the application's style inside
+  // Icon size's proxy, also before the first window.
+  qInfo().noquote() << QStringLiteral("Style icon size: %1").arg(mitcad::applyIconSizeToApplicationStyle());
   // What a restart keeps of this run's arguments (framework/Restart.hpp): its
   // settings, not its start actions nor --chrome.
   {

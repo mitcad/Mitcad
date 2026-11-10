@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: MIT
+# A Sketch Fillet refused for conflicting constraints (mitcad#1566), on
+# sketch-conflict.json's Sketch1: the upper line c6 (x 7.23 to 28.13 at y 2) and
+# the left arc c10 (its far point (-7.5, 0)) between two arcs whose centres
+# are fixed, the lines Equal (k14), the upper one 2 mm from the centre line.
+#   1. The two curves selected (Ctrl adds in a sketch), Sketch Fillet with
+#      its default radius of 2: the preview fails; the panel says what
+#      cannot hold in words, without ids, the log keeps the Equal's id.
+#   2. The Equal's symbol and the lines it is on are painted in the view
+#      while the message shows; in the hover's colour while the pointer is
+#      over the message, in the error's again when it leaves.
+#   3. Esc: the command cancelled, nothing painted.
+# The clicks stay within the free part of the view after the fit, also in
+# session 0's 1024x768 window on Windows. The upper line is clicked at
+# x 23.5, not in its middle (mitcad#1591): the Parallel k12 has a symbol
+# beside the centre line c3 too, at c3's middle, 14 px above it, and after
+# the fit the upper line is only about 12 px above c3, so that symbol covers
+# the upper line's middle (and the 2 mm dimension's text its left part).
+# Run by
+# tools/ui-sketch-conflict-test.sh (Linux) and
+# tools/ui-windows-sketch-conflict-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+expect-ever '^Timeline Sketch1 at '
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)' 30
+key F6
+wait-idle
+
+# 1. The upper line and the left arc, then Sketch Fillet.
+mark
+sketch-click 23.5 2
+expect-selection 1 0
+mark
+sketch-click -7.5 0 ctrl
+expect-selection 2 0
+mark
+command sketch.fillet
+wait-log '^Command Sketch Fillet started' 10
+wait-log '^Preview Sketch Fillet: failed: the Equal between two lines can.t hold with the fillet \[conflicts: k14\]$' 60
+wait-log '^Panel Sketch Fillet error: the Equal between two lines can.t hold with the fillet$' 10
+expect-never '^Panel Sketch Fillet error: .*[kpc][0-9]'
+
+# 2. The Equal and its lines painted; in the hover's colour over the message.
+wait-log '^Sketch conflict painted: k14 on c6, c9$' 10
+screenshot '${MITCAD_TEST_WORK}/sketch-conflict.png'
+wait-log '^Panel Sketch Fillet message at ' 10
+mark
+hover-logged '^Panel Sketch Fillet message at '
+wait-log '^Sketch conflict painted: k14 on c6, c9 \(hovered\)$' 10
+mark
+leave-widget commandMessage
+wait-log '^Sketch conflict painted: k14 on c6, c9$' 10
+
+# 3. Esc: nothing painted any more.
+mark
+key Escape
+wait-log '^Sketch conflict painted: none$' 20
+wait-idle

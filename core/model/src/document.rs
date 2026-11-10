@@ -259,6 +259,14 @@ fn invalid(message: impl Into<String>) -> ModelError {
     ModelError::Invalid(message.into())
 }
 
+/// `d12` and the like: the names the model gives new dimension parameters
+/// (`d` and a number without a leading zero, mitcad#1577).
+fn is_automatic_name(name: &str) -> bool {
+    name.strip_prefix('d').is_some_and(|digits| {
+        !digits.is_empty() && !digits.starts_with('0') && digits.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
 /// The definition state: everything a design file saves.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DocState {
@@ -3178,6 +3186,48 @@ impl<K: Kernel> Document<K> {
             // Configurations follow in `apply_inner`.
             state.parameters.rename(id, new_name)?;
             Ok((format!("Rename {name} to {new_name}"), (), false))
+        })
+    }
+
+    /// Gives a parameter its automatic name back (mitcad#1577): the next
+    /// free `d<n>`, as a new dimension parameter gets one, renamed as
+    /// [`Document::rename_parameter`] renames (the expressions that use it
+    /// are rewritten, configurations, bindings and comments follow, and
+    /// features refer to it by id). A name that is automatic already
+    /// (`d3`) stays as it is, with no undo step; a user parameter has no
+    /// automatic name and is refused. Returns the name it has now and the
+    /// parameters whose expressions or limits were rewritten.
+    pub fn remove_parameter_name(
+        &mut self,
+        name: &str,
+    ) -> Result<(String, Vec<String>), ModelError> {
+        let id = self.param_id(name)?;
+        let user = self
+            .state
+            .parameters
+            .get(id)
+            .is_some_and(|p| p.kind() == crate::expr::ParamKind::User);
+        if user {
+            return Err(invalid(format!(
+                "{name} is a user parameter: only the parameter of a dimension or a \
+                 feature has an automatic name (rename it instead)"
+            )));
+        }
+        if is_automatic_name(name) {
+            return Ok((name.to_owned(), Vec::new()));
+        }
+        let automatic = self.state.parameters.table().unused_name("d");
+        self.apply_with(|state| {
+            let rewritten = state.parameters.rename(id, &automatic)?;
+            let names = rewritten
+                .iter()
+                .map(|id| state.parameters.name(*id))
+                .collect::<Vec<_>>();
+            Ok((
+                format!("Remove Name {name}"),
+                (automatic.clone(), names),
+                false,
+            ))
         })
     }
 

@@ -55,3 +55,7 @@ mod mcp_reference_tests;
 // A feature value that uses the field's own parameter keeps it as a user
 // parameter (mitcad#1536).
 mod feature_own_parameter_tests;
+// Read-only modeling guidance and bounded print analysis (mitcad#1513).
+mod design_review_tests;
+// Occurrence-specific print context in design review (mitcad#1513).
+mod design_review_print_context_tests;

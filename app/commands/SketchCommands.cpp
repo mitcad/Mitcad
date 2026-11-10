@@ -754,10 +754,25 @@ QString pointPositions(const sketch::SketchModel& model, const QStringList& enti
   return shown.isEmpty() ? QStringLiteral("none") : shown.join(QStringLiteral(", "));
 }
 
+// A point input of a sketch command picked with the sketch's snaps
+// (mitcad#1563): an existing point by its id, a place where the snap found
+// no point (sketch::placePick) as [x, y].
+QJsonValue snapPickInput(const SelectionItem& item) {
+  if (const auto at = sketch::pickedPlace(item.name)) {
+    return QJsonArray{at->x, at->y};
+  }
+  return item.name;
+}
+
 // Move/Copy starts at 0 (mitcad#1163): X and Y Distance 0 mm, so the
 // preview that runs as the panel opens leaves the objects where they are
 // until a distance is typed. Rotate's Angle keeps its 90 deg (a separate
-// type the user chooses).
+// type the user chooses). Point to Point (mitcad#1563) moves by the Target
+// Point less the Origin Point, both picked with the sketch's snaps; the
+// model reads where they are before the move, so a point of the moved
+// objects is where the preview has not moved it yet. Translate shows a
+// handle at the objects' middle that drags X and Y Distance, and Rotate
+// turns about that middle when no Pivot Point is picked.
 void addMove(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.move", QObject::tr("Move/Copy"), "move", "MODIFY",
                                  CommandDef::Kind::Feature);
@@ -765,10 +780,27 @@ void addMove(CommandRegistry& registry, SketchController& c) {
   def.shortcut = QKeySequence(Qt::Key_M);
   def.tooltip = QObject::tr("Moves or copies sketch geometry; a move keeps its constraints");
   const QVector<QPair<QString, QString>> types = {{QStringLiteral("translate"), QObject::tr("Translate")},
-                                                   {QStringLiteral("rotate"), QObject::tr("Rotate")}};
-  const auto rotating = [](const CommandState& s) { return s.choice(QStringLiteral("type")) == QStringLiteral("rotate"); };
-  const auto translating = [](const CommandState& s) {
-    return s.choice(QStringLiteral("type")) != QStringLiteral("rotate");
+                                                   {QStringLiteral("rotate"), QObject::tr("Rotate")},
+                                                   {QStringLiteral("point_to_point"), QObject::tr("Point to Point")}};
+  const auto typeIs = [](const char* type) {
+    const QString wanted = QString::fromLatin1(type);
+    return [wanted](const CommandState& s) {
+      // Translate also before the choice has a value.
+      const QString chosen = s.choice(QStringLiteral("type"));
+      return chosen == wanted || (chosen.isEmpty() && wanted == QStringLiteral("translate"));
+    };
+  };
+  // The points of Point to Point: a point of the sketch, or a place the
+  // snaps found (a line's middle, a quadrant, a crossing, the grid).
+  const auto snapPick = [&c](const QString& id, const QString& label, const QString& tip) {
+    InputDef input = selectionInput(id, label, SelectKind::SketchPoint, 1, 1)
+                         .withAccepts([&c](const SelectionItem& item) {
+                           return item.owner == c.uid() &&
+                                  (c.model().point(item.name) != nullptr || sketch::pickedPlace(item.name));
+                         })
+                         .withTooltip(tip);
+    input.sketchSnaps = true;
+    return input;
   };
   def.inputs = {
       selectionInput(QStringLiteral("entities"), QObject::tr("Objects"),
@@ -776,14 +808,21 @@ void addMove(CommandRegistry& registry, SketchController& c) {
           .withAccepts(ofSketch(c)),
       choiceInput(QStringLiteral("type"), QObject::tr("Move Type"), types, QStringLiteral("translate")),
       valueInput(QStringLiteral("dx"), QObject::tr("X Distance"), ValueKind::Length, QStringLiteral("0 mm"))
-          .withVisible(translating),
+          .withVisible(typeIs("translate")),
       valueInput(QStringLiteral("dy"), QObject::tr("Y Distance"), ValueKind::Length, QStringLiteral("0 mm"))
-          .withVisible(translating),
+          .withVisible(typeIs("translate")),
+      snapPick(QStringLiteral("from"), QObject::tr("Origin Point"),
+               QObject::tr("Where the objects move from: a point, an end, a middle or a center the pointer snaps to"))
+          .withVisible(typeIs("point_to_point")),
+      snapPick(QStringLiteral("to"), QObject::tr("Target Point"),
+               QObject::tr("Where the Origin Point moves to: a point, an end, a middle or a center"))
+          .withVisible(typeIs("point_to_point")),
       selectionInput(QStringLiteral("center"), QObject::tr("Pivot Point"), SelectKind::SketchPoint, 0, 1)
           .withAccepts(ofSketch(c))
-          .withVisible(rotating),
+          .withTooltip(QObject::tr("The point to turn about; none: the middle of the objects"))
+          .withVisible(typeIs("rotate")),
       valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("90 deg"))
-          .withVisible(rotating),
+          .withVisible(typeIs("rotate")),
       checkInput(QStringLiteral("copy"), QObject::tr("Create Copy"), false),
   };
   // The objects of the last definition built, for the preview's log line.
@@ -796,17 +835,58 @@ void addMove(CommandRegistry& registry, SketchController& c) {
       *objects << item.name;
     }
     cmd.insert(QStringLiteral("entities"), names(entities));
-    if (s.choice(QStringLiteral("type")) == QStringLiteral("rotate")) {
+    const QString type = s.choice(QStringLiteral("type"));
+    if (type == QStringLiteral("rotate")) {
+      // No Pivot Point: the model turns about the objects' middle
+      // (mitcad#1563; the sketch's origin before, which could turn them
+      // out of sight).
+      QJsonObject rotate{{QStringLiteral("angle"), s.value(QStringLiteral("angle"))}};
       const Selection& center = s.items(QStringLiteral("center"));
-      cmd.insert(QStringLiteral("rotate"),
-                 QJsonObject{{QStringLiteral("center"), center.isEmpty() ? QJsonValue(QJsonArray{0.0, 0.0})
-                                                                         : QJsonValue(center.first().name)},
-                             {QStringLiteral("angle"), s.value(QStringLiteral("angle"))}});
+      if (!center.isEmpty()) {
+        rotate.insert(QStringLiteral("center"), center.first().name);
+      }
+      cmd.insert(QStringLiteral("rotate"), rotate);
+    } else if (type == QStringLiteral("point_to_point")) {
+      const Selection& from = s.items(QStringLiteral("from"));
+      const Selection& to = s.items(QStringLiteral("to"));
+      if (from.isEmpty() || to.isEmpty()) {
+        return Built::failure(QObject::tr("Pick the Origin Point and the Target Point."),
+                              from.isEmpty() ? QStringLiteral("from") : QStringLiteral("to"));
+      }
+      cmd.insert(QStringLiteral("from"), snapPickInput(from.first()));
+      cmd.insert(QStringLiteral("to"), snapPickInput(to.first()));
     } else {
       cmd.insert(QStringLiteral("by"), QJsonArray{s.value(QStringLiteral("dx")), s.value(QStringLiteral("dy"))});
     }
     cmd.insert(QStringLiteral("copy"), s.checked(QStringLiteral("copy")));
     return Built::of(cmd);
+  };
+  // Translate's handle (mitcad#1563): an arrow pair at the objects' middle
+  // where the preview shows them, which drags X and Y Distance.
+  def.sketchHandle = [&c](const CommandState& s) -> std::optional<SketchHandle> {
+    const QString type = s.choice(QStringLiteral("type"));
+    if (!type.isEmpty() && type != QStringLiteral("translate")) {
+      return std::nullopt;
+    }
+    QStringList moved;
+    for (const SelectionItem& item : s.items(QStringLiteral("entities"))) {
+      moved << item.name;
+    }
+    const auto middle = sketch::middleOf(c.model(), moved);
+    if (!middle) {
+      return std::nullopt;
+    }
+    const auto valueOf = [&s](const char* key) {
+      const double value = s.value(QString::fromLatin1(key));
+      return std::isfinite(value) ? value : 0.0;
+    };
+    SketchHandle handle;
+    handle.at = {middle->x, middle->y};
+    handle.x = QStringLiteral("dx");
+    handle.y = QStringLiteral("dy");
+    handle.values = {valueOf("dx"), valueOf("dy")};
+    handle.moves = moved;
+    return handle;
   };
   // Where the objects' points are once a preview is shown (the sketch read
   // again), for UI tests: "Preview Move/Copy positions: p2 (-20.000,

@@ -127,9 +127,9 @@ Write-Host '--- 2. Browse Material Dataset...: Aluminum 6061, T6 into This desig
 Ui-ExpectLog 'Materials new at ' 'New has its place'
 Ui-Mark
 Ui-Step 'New'                            { Click-InWindow 'Materials new' }
-Ui-ExpectNew 'Materials new menu: Metal | General Plastic | FDM Plastic | Resin | Other | Browse Material Dataset' 'New ends with Browse Material Dataset...'
-Ui-Step 'Browse Material Dataset...'     { Ui-Key 'Down', 'Down', 'Down', 'Down', 'Down', 'Down', 'Return' }
-Ui-ExpectNew 'Material dataset opened: 119 materials' 'the dataset opened, offline'
+Ui-ExpectNew 'Materials new menu: Metal | General Plastic | FDM Plastic | Resin | Wood | Other | Browse Material Dataset' 'New ends with Browse Material Dataset...'
+Ui-Step 'Browse Material Dataset...'     { Ui-Key 'Down', 'Down', 'Down', 'Down', 'Down', 'Down', 'Down', 'Return' }
+Ui-ExpectNew 'Material dataset opened: 136 materials' 'the dataset opened, offline'
 Ui-FocusDialog '^Material Dataset$'
 Ui-Mark
 Ui-Step 'search 6061 t6'                 { Ui-Type '6061 t6' }

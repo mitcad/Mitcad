@@ -49,7 +49,7 @@ FaceMeshes face_meshes(const TopoDS_Shape& shape, const MeshOptions& options) {
     TopLoc_Location location;
     const occ::handle<Poly_Triangulation> triangulation = BRep_Tool::Triangulation(face, location);
     if (triangulation.IsNull()) {
-      throw Error("a face could not be triangulated");
+      throw untriangulated_face(meshed, face);
     }
     const gp_Trsf placement = location.Transformation();
     const bool reversed = face.Orientation() == TopAbs_REVERSED;

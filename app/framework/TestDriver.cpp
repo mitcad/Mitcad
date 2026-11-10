@@ -7,7 +7,19 @@
 #include <cmath>
 #include <cstdlib>
 #include <memory>
+#include <unordered_set>
 #include <utility>
+#include <vector>
+
+#include <BRep_Tool.hxx>
+#include <NCollection_IndexedMap.hxx>
+#include <Poly_Polygon3D.hxx>
+#include <TopExp.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopLoc_Location.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_TShape.hxx>
 
 #include <QAbstractButton>
 #include <QAbstractItemView>
@@ -260,6 +272,10 @@ const StepSpec kSpecs[] = {
     {"capture-view-target", 1, 1, kIdle},
     {"capture-view-pixel", 2, 2, kIdle},
     {"expect-view-pixel", 3, 3, kIdle},
+    // A see-through preview without a pattern of its triangles (mitcad#1575).
+    {"expect-view-smooth", 1, 1, kIdle},
+    {"expect-view-stepped", 1, 1, kIdle},
+    {"preview-back-faces", 1, 1, kIdle},
     {"expect-view-pan", 2, 2, kIdle},
     {"expect-viewport", 0, 0, kIdle},
     {"window-state", 1, 1, kIdle},
@@ -271,6 +287,8 @@ const StepSpec kSpecs[] = {
     {"expect-selection", 2, 2, kIdle},
     {"expect-navigation-runtime", 0, 0, kIdle},
     {"expect-navigation-release", 0, 0, kIdle},
+    {"expect-navigation-gesture-state", 0, 0, kIdle},
+    {"view-navigation", 1, 1, kIdle},
     {"expect-assistant-setup", 1, 1, kIdle},
     {"agent-menu", 2, 2, kIdle},
     {"expect-formula-builder", 0, 0, kIdle},
@@ -310,6 +328,8 @@ const StepSpec kSpecs[] = {
     {"expect-shown-body", 3, 9, kIdle},
     {"capture-shown-body", 3, 3, kIdle},
     {"expect-shown-body-meshes", 3, 3, kIdle},
+    {"expect-body-edges-unmeshed", 1, 1, kIdle},
+    {"expect-view-own-shapes", 0, 0, kIdle},
     {"expect-native-dialog-gone", 1, 2, kPlain},
     {"focus-dialog", 1, 2, kPlain},
     {"focus-main", 0, 0, kPlain},
@@ -359,8 +379,9 @@ const StepSpec kSpecs[] = {
     {"stay", 0, 0, kPlain},
     // Card widths and windows within the screen (mitcad#818, TestDriverWindowFit.cpp).
     {"expect-dialog-fits", 0, 2, kIdle},
-    {"fit-main-frame", 2, 2, kInputOfMain},
-    {"expect-main-frame", 2, 2, kIdle},
+    {"fit-main-frame", 2, 3, kInputOfMain},
+    {"expect-main-frame", 2, 3, kIdle},
+    {"expect-widget-whole", 1, 1, kIdle},
     {"native-card-width", 2, 2, kInputOfMain},
     {"expect-native-card-width", 2, 3, kIdle},
     {"expect-native-name-fits", 2, 2, kIdle},
@@ -2299,6 +2320,86 @@ void TestDriver::run(const Step& step) {
       m_waitDetail = QStringLiteral("no displayed shape for %1").arg(where);
       return false;
     }, 6, QStringLiteral("display meshes differ for %1").arg(where));
+  } else if (name == QLatin1String("expect-body-edges-unmeshed")) {
+    // The body's own edges (not a stand-in's) without a 3D polygon: a job's
+    // display meshing gives a solid's edges polygons on their faces' meshes
+    // only, and a 3D polygon is what the view's presentations wrote when
+    // they meshed an edge by itself (an edge highlight), on the UI thread,
+    // while the model's threads read the edge (mitcad#1553).
+    const QString uid = a.at(0);
+    whenReady([this, uid] {
+      auto* window = qobject_cast<MainWindow*>(m_main.data());
+      if (!window || window->modelBusy()) return false;
+      for (const BodyDisplay& body : window->viewer().shownBodies()) {
+        if (QString::fromStdString(body.uid) != uid || !body.shape) continue;
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+        TopExp::MapShapes(body.shape->occt(), TopAbs_EDGE, edges);
+        int polygons = 0;
+        for (int i = 1; i <= edges.Extent(); ++i) {
+          TopLoc_Location location;
+          if (!BRep_Tool::Polygon3D(TopoDS::Edge(edges(i)), location).IsNull()) ++polygons;
+        }
+        const QString counts = QStringLiteral("%1 of %2 edges with a 3D polygon").arg(polygons).arg(edges.Extent());
+        m_waitDetail = QStringLiteral("body %1: %2").arg(uid, counts);
+        if (polygons != 0) return false;
+        qInfo().noquote() << QStringLiteral("TestDriver: body %1: %2").arg(uid, counts);
+        return true;
+      }
+      m_waitDetail = QStringLiteral("no displayed shape for %1").arg(uid);
+      return false;
+    }, 6, QStringLiteral("the view meshed edges of %1").arg(uid));
+  } else if (name == QLatin1String("expect-view-own-shapes")) {
+    // The sketch profiles, sketch entities and datum planes the view shows
+    // are drawn from shapes of its own: their presentations mesh them on
+    // the UI thread, so none of their faces, edges or vertices may be one
+    // of the shown bodies', which the model's threads read meanwhile
+    // (mitcad#1586, as mitcad#1553 for the bodies' own presentations).
+    whenReady([this] {
+      auto* window = qobject_cast<MainWindow*>(m_main.data());
+      if (!window || window->modelBusy()) return false;
+      const auto subShapes = [](const TopoDS_Shape& shape) {
+        std::vector<const TopoDS_TShape*> found;
+        if (shape.IsNull()) return found;
+        for (const TopAbs_ShapeEnum kind : {TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX}) {
+          for (TopExp_Explorer it(shape, kind); it.More(); it.Next()) {
+            found.push_back(it.Current().TShape().get());
+          }
+        }
+        return found;
+      };
+      std::unordered_set<const TopoDS_TShape*> bodyParts;
+      for (const BodyDisplay& body : window->viewer().shownBodies()) {
+        if (!body.shape) continue;
+        for (const TopoDS_TShape* part : subShapes(body.shape->occt())) bodyParts.insert(part);
+      }
+      const OcctViewer::OwnShapes own = window->viewer().ownShapes();
+      int shared = 0;
+      const auto countShared = [&subShapes, &bodyParts, &shared](const std::vector<TopoDS_Shape>& shapes) {
+        for (const TopoDS_Shape& shape : shapes) {
+          for (const TopoDS_TShape* part : subShapes(shape)) {
+            if (bodyParts.count(part) != 0) ++shared;
+          }
+        }
+      };
+      countShared(own.profiles);
+      countShared(own.sketchEntities);
+      countShared(own.datums);
+      int planes = 0;
+      for (const TopoDS_Shape& datum : own.datums) {
+        if (!datum.IsNull() && TopExp_Explorer(datum, TopAbs_FACE).More()) ++planes;
+      }
+      const QString counts =
+          QStringLiteral("%1 profiles, %2 sketch entities and %3 datum planes shown, %4 of the bodies' %5 faces, edges and vertices shared")
+              .arg(static_cast<int>(own.profiles.size()))
+              .arg(static_cast<int>(own.sketchEntities.size()))
+              .arg(planes)
+              .arg(shared)
+              .arg(static_cast<int>(bodyParts.size()));
+      m_waitDetail = counts;
+      if (own.profiles.empty() || own.sketchEntities.empty() || planes == 0 || shared != 0) return false;
+      qInfo().noquote() << QStringLiteral("TestDriver: view's own shapes: %1").arg(counts);
+      return true;
+    }, 6, QStringLiteral("the view shows no profile, sketch entity or datum plane, or shares a body's shape"));
   } else if (name == QLatin1String("expect-native-history-wheel")) {
     QString error;
     if (!mac::test::historyWheel(error)) { fail(line, error); }
@@ -2499,6 +2600,10 @@ void TestDriver::run(const Step& step) {
     testNavigationRuntime();
   } else if (name == QLatin1String("expect-navigation-release")) {
     testNavigationRelease();
+  } else if (name == QLatin1String("expect-navigation-gesture-state")) {
+    testNavigationGestureState();
+  } else if (name == QLatin1String("view-navigation")) {
+    setViewNavigation(a.at(0));
   } else if (name == QLatin1String("expect-assistant-setup")) {
     testAssistantSetup(a.at(0));
   } else if (name == QLatin1String("agent-menu")) {
@@ -2818,6 +2923,138 @@ void TestDriver::run(const Step& step) {
             m_vars.insert(variable, seen->name());
           }
           qDebug().noquote() << QStringLiteral("TestDriver: view pixel %1").arg(m_waitDetail);
+        });
+  } else if (name == QLatin1String("preview-back-faces")) {
+    // preview-back-faces cull|draw: see-through previews drawn as the fix
+    // draws them, or double-sided as before it (mitcad#1575), so that a
+    // test shows its expect-view-stepped catches the old look.
+    auto* view = qobject_cast<OcctViewer*>(viewer());
+    if (view == nullptr || (a.at(0) != QLatin1String("cull") && a.at(0) != QLatin1String("draw"))) {
+      fail(line, QStringLiteral("preview-back-faces cull|draw requires a 3D view"));
+      return;
+    }
+    view->setSeeThroughCulling(a.at(0) == QLatin1String("cull"));
+  } else if (name == QLatin1String("expect-view-smooth") || name == QLatin1String("expect-view-stepped")) {
+    // expect-view-smooth <most %> | expect-view-stepped <least %>: a
+    // command's see-through preview drawn without (with) a pattern of its
+    // mesh's triangles (mitcad#1575, GitHub #219). In the view's own frame,
+    // the middle of the preview's box on the screen (a square of 0.4 times
+    // its smaller side, inside a sphere's outline from any side): the share
+    // of pixels where the brightness steps, its second difference across or
+    // down over kStep levels, among those where the frame without the
+    // previews is flat. Shading varies smoothly, with no such steps; the
+    // edges of triangles blended over a flat background have them. What
+    // lies behind the preview (a picked plane's axis lines and outline, the
+    // grid) steps in both frames: a pixel within kNear pixels of a step of
+    // the frame without the previews is not counted, whatever direction
+    // that line runs in.
+    const bool smooth = name == QLatin1String("expect-view-smooth");
+    double limit = 0.0;
+    if (!toNumber(a.at(0), limit) || limit < 0.0) {
+      fail(line, smooth ? QStringLiteral("expect-view-smooth <most stepped pixels, %>")
+                        : QStringLiteral("expect-view-stepped <least stepped pixels, %>"));
+      return;
+    }
+    whenReady(
+        [this, limit, smooth] {
+          constexpr double kStep = 4.0;
+          constexpr double kBehindStep = 2.0;
+          constexpr int kNear = 2;
+          auto* view = qobject_cast<OcctViewer*>(viewer());
+          if (view == nullptr) {
+            m_waitDetail = QStringLiteral("no 3D view");
+            return false;
+          }
+          view->settleCamera();
+          const QRectF box = view->previewScreenBox();
+          if (box.isEmpty()) {
+            m_waitDetail = QStringLiteral("no preview shown");
+            return false;
+          }
+          const QImage behind = view->grabWithoutPreviews().convertToFormat(QImage::Format_RGB32);
+          const QImage frame = view->grabFramebuffer().convertToFormat(QImage::Format_RGB32);
+          const qreal scale = view->devicePixelRatioF();
+          const double half = 0.2 * std::min(box.width(), box.height()) * scale;
+          const QPointF middle = box.center() * scale;
+          const QRect area = QRectF(middle.x() - half, middle.y() - half, 2.0 * half, 2.0 * half)
+                                 .toAlignedRect()
+                                 .intersected(frame.rect().adjusted(kNear + 1, kNear + 1, -kNear - 1, -kNear - 1));
+          if (frame.isNull() || behind.size() != frame.size() || area.width() < 40 || area.height() < 40) {
+            m_waitDetail = QStringLiteral("the preview's middle is %1 x %2 pixels in the frame")
+                               .arg(area.width())
+                               .arg(area.height());
+            return false;
+          }
+          const auto brightness = [](const QImage& image, int x, int y) {
+            const QRgb c = image.pixel(x, y);
+            return 0.299 * qRed(c) + 0.587 * qGreen(c) + 0.114 * qBlue(c);
+          };
+          const auto step = [&brightness](const QImage& image, int x, int y) {
+            const double here = brightness(image, x, y);
+            const double across = std::abs(brightness(image, x - 1, y) - 2.0 * here + brightness(image, x + 1, y));
+            const double down = std::abs(brightness(image, x, y - 1) - 2.0 * here + brightness(image, x, y + 1));
+            return std::max(across, down);
+          };
+          // The steps of what lies behind, kNear pixels wide on each side.
+          const int width = area.width() + 2 * kNear;
+          const int height = area.height() + 2 * kNear;
+          std::vector<char> busy(static_cast<std::size_t>(width) * static_cast<std::size_t>(height), 0);
+          for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+              if (step(behind, area.left() - kNear + x, area.top() - kNear + y) <= kBehindStep) {
+                continue;
+              }
+              for (int dy = -kNear; dy <= kNear; ++dy) {
+                for (int dx = -kNear; dx <= kNear; ++dx) {
+                  const int nx = x + dx;
+                  const int ny = y + dy;
+                  if (nx >= 0 && ny >= 0 && nx < width && ny < height) {
+                    busy[static_cast<std::size_t>(ny) * static_cast<std::size_t>(width) + static_cast<std::size_t>(nx)] = 1;
+                  }
+                }
+              }
+            }
+          }
+          long long stepped = 0;
+          long long counted = 0;
+          double sum = 0.0;
+          for (int y = area.top(); y <= area.bottom(); ++y) {
+            for (int x = area.left(); x <= area.right(); ++x) {
+              const std::size_t at = static_cast<std::size_t>(y - area.top() + kNear) * static_cast<std::size_t>(width) +
+                                     static_cast<std::size_t>(x - area.left() + kNear);
+              if (busy[at] != 0) {
+                continue;
+              }
+              stepped += step(frame, x, y) > kStep ? 1 : 0;
+              ++counted;
+              sum += brightness(frame, x, y);
+            }
+          }
+          const long long all = static_cast<long long>(area.width()) * area.height();
+          if (counted * 5 < all) {
+            m_waitDetail = QStringLiteral("only %1 of %2 pixels have a flat background").arg(counted).arg(all);
+            return false;
+          }
+          const double share = 100.0 * static_cast<double>(stepped) / static_cast<double>(counted);
+          m_waitDetail = QStringLiteral("%1 % of %2 pixels stepped (%3 %4 %), brightness %5, "
+                                        "%6 x %7 pixels at %8,%9")
+                             .arg(share, 0, 'f', 3)
+                             .arg(counted)
+                             .arg(smooth ? QStringLiteral("most") : QStringLiteral("least"))
+                             .arg(limit)
+                             .arg(sum / static_cast<double>(counted), 0, 'f', 1)
+                             .arg(area.width())
+                             .arg(area.height())
+                             .arg(area.left())
+                             .arg(area.top());
+          return smooth ? share <= limit : share >= limit;
+        },
+        6,
+        smooth ? QStringLiteral("the see-through preview's brightness steps (a pattern of triangles)")
+               : QStringLiteral("the see-through preview's brightness does not step (no pattern of triangles)"),
+        [this, smooth] {
+          qDebug().noquote() << QStringLiteral("TestDriver: view %1: %2")
+                                    .arg(smooth ? QStringLiteral("smooth") : QStringLiteral("stepped"), m_waitDetail);
         });
   } else if (name == QLatin1String("expect-view-pan")) {
     const QStringList coordinates = a.at(0).split(QLatin1Char(','));
@@ -4049,9 +4286,17 @@ void TestDriver::run(const Step& step) {
   } else if (name == QLatin1String("click-edge-release")) {
     bool ok = false;
     const int index = a.at(0).toInt(&ok);
-    const bool modifierFirst = a.at(1) == QLatin1String("modifier-first");
-    if (!ok || index < 1 || (!modifierFirst && a.at(1) != QLatin1String("button-first"))) {
-      fail(line, QStringLiteral("click-edge-release <positive index> modifier-first|button-first"));
+    const QString order = a.at(1);
+    const bool modifierFirst = order == QLatin1String("modifier-first");
+    // key-up-moved (mitcad#1571): Ctrl released while the button is down,
+    // then a one-pixel move before the release. f4-elsewhere (mitcad#1573):
+    // F4 pressed on the view, the keyboard taken elsewhere and F4 released
+    // there, then a plain click.
+    const bool keyUpMoved = order == QLatin1String("key-up-moved");
+    const bool f4Elsewhere = order == QLatin1String("f4-elsewhere");
+    if (!ok || index < 1 ||
+        (!modifierFirst && !keyUpMoved && !f4Elsewhere && order != QLatin1String("button-first"))) {
+      fail(line, QStringLiteral("click-edge-release <positive index> modifier-first|button-first|key-up-moved|f4-elsewhere"));
       return;
     }
     const auto point = std::make_shared<QPoint>();
@@ -4071,7 +4316,42 @@ void TestDriver::run(const Step& step) {
       m_waitDetail = QStringLiteral("only %1 clean visible edges for index %2").arg(seen.size()).arg(index);
       return false;
     }, 6, QStringLiteral("no fresh visible edge for the release-order click"),
-        [this, point, modifierFirst] {
+        [this, point, modifierFirst, keyUpMoved, f4Elsewhere] {
+      if (f4Elsewhere) {
+        queue([this] {
+          auto* view = viewer();
+          if (!view) return;
+          QKeyEvent press(QEvent::KeyPress, Qt::Key_F4, Qt::NoModifier);
+          QCoreApplication::sendEvent(view, &press);
+        });
+        queue([this] {
+          // The keyboard leaves the view (a panel's field takes it) and
+          // F4's release goes to that other widget, never to the view.
+          auto* view = viewer();
+          QWidget* other = topWindow();
+          if (!view || !other || other == view) return;
+          QFocusEvent out(QEvent::FocusOut, Qt::TabFocusReason);
+          QCoreApplication::sendEvent(view, &out);
+          QKeyEvent release(QEvent::KeyRelease, Qt::Key_F4, Qt::NoModifier);
+          QCoreApplication::sendEvent(other, &release);
+        });
+        queue([this, point] { sendMouse(QEvent::MouseMove, *point, Qt::NoButton, Qt::NoButton, Qt::NoModifier); });
+        queue([this, point] { sendMouse(QEvent::MouseButtonPress, *point, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier); });
+        queue([this, point] { sendMouse(QEvent::MouseButtonRelease, *point, Qt::LeftButton, Qt::NoButton, Qt::NoModifier); });
+        return;
+      }
+      if (keyUpMoved) {
+        const QPoint moved = *point + QPoint(1, 0);
+        queue([this, point] { sendMouse(QEvent::MouseMove, *point, Qt::NoButton, Qt::NoButton, Qt::ControlModifier); });
+        queue([this, point] { sendMouse(QEvent::MouseButtonPress, *point, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier); });
+        queue([this] {
+          QKeyEvent event(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
+          if (auto* view = viewer()) QCoreApplication::sendEvent(view, &event);
+        });
+        queue([this, moved] { sendMouse(QEvent::MouseMove, moved, Qt::NoButton, Qt::LeftButton, Qt::NoModifier); });
+        queue([this, moved] { sendMouse(QEvent::MouseButtonRelease, moved, Qt::LeftButton, Qt::NoButton, Qt::NoModifier); });
+        return;
+      }
       queue([this, point] { sendMouse(QEvent::MouseMove, *point, Qt::NoButton, Qt::NoButton, Qt::ControlModifier); });
       queue([this, point] { sendMouse(QEvent::MouseButtonPress, *point, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier); });
       queue([this, point, modifierFirst] {

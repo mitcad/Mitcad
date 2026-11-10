@@ -1,0 +1,130 @@
+# SPDX-License-Identifier: MIT
+# A name given to a sketch dimension's parameter taken off again
+# (mitcad#1577), on sketch-remove-dimension-name.json (Sketch1: the width
+# k5 is d1 = 20 mm, the height k6 d2 = 10 mm):
+#   1. k5 named width = 20 mm in its value editor, and k6 set to
+#      width / 2.
+#   2. k5's editor shows width = 20 mm; the name deleted (the value alone,
+#      20 mm) and Enter: the parameter is d1 again and k6 is d1 / 2, in one
+#      undo step, which Undo and Redo take back and forth.
+#   3. Named again; Remove Name from the value editor's right-click menu
+#      leaves 20 mm, and Enter gives d1 back.
+#   4. Named again; Remove Name width from k5's context menu in the sketch
+#      gives d1 back at once.
+# Run by tools/ui-sketch-remove-dimension-name-test.sh (Linux).
+expect-ever 'View area'
+wait-idle
+
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+wait-log '^Dimension k5 text at '
+wait-log '^Dimension k6 text at '
+
+# 1. k5 named width = 20 mm, as `width` and Name this value give it.
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at .* with d1 = 20 mm$'
+key ctrl+a
+type width
+wait-log '^Parameter suggestions for dimension d1 "width": none; actions: name'
+key Return
+wait-log '^Parameter naming for dimension d1: width = $'
+type '20 mm'
+key Return
+wait-log '^Dimension k5 = width = 20 mm [(]width[)]$'
+expect-model-parameter width 20 model
+expect-model-parameter d1 absent
+# k6 uses width.
+mark
+dblclick-logged '^Dimension k6 text at '
+wait-log '^Sketch value editor at .* with d2 = 10 mm$'
+key ctrl+a
+type wid
+wait-log '^Parameter suggestions for dimension d2 "wid": width'
+key Return
+wait-log '^Parameter suggestion inserted width into dimension d2: width$'
+type ' / 2'
+key Return
+wait-log '^Dimension k6 = width / 2 [(]d2[)]$'
+expect-model-parameter d2 10 model
+
+# 2. The name deleted in k5's editor: the value alone, and Enter.
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at .* with width = 20 mm$'
+key ctrl+a
+type '20 mm'
+key Return
+wait-log '^Dimension k5: name width removed, now d1 [(]rewritten: d2[)]$'
+wait-log '^Dimension k5 = 20 mm [(]d1[)]$'
+expect-model-parameter d1 20 model
+expect-model-parameter width absent
+expect-model-parameter d2 10 model
+# k6 follows: its expression is d1 / 2.
+mark
+dblclick-logged '^Dimension k6 text at '
+wait-log '^Editing dimension k6 [(]d1 / 2[)]$'
+key Escape
+wait-log '^Sketch value editor closed$'
+# One undo step, back and forth.
+mark
+key ctrl+z
+wait-log '^Undo: Remove Name width$'
+expect-model-parameter width 20 model
+expect-model-parameter d1 absent
+mark
+key ctrl+y
+wait-log '^Redo: Remove Name width$'
+expect-model-parameter d1 20 model
+expect-model-parameter width absent
+
+# 3. Named again; Remove Name from the value editor's own menu.
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at .* with d1 = 20 mm$'
+key ctrl+a
+type width
+wait-log '^Parameter suggestions for dimension d1 "width": none; actions: name'
+key Return
+wait-log '^Parameter naming for dimension d1: width = $'
+type '20 mm'
+key Return
+wait-log '^Dimension k5 = width = 20 mm [(]width[)]$'
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at .* with width = 20 mm$'
+context-menu-logged '^Sketch value editor at ' 'Remove Name'
+wait-log '^Parameter name width removed for dimension width: 20 mm$'
+key Return
+wait-log '^Dimension k5: name width removed, now d1 [(]rewritten: d2[)]$'
+expect-model-parameter d1 20 model
+expect-model-parameter width absent
+
+# 4. Named again; Remove Name width from k5's context menu in the sketch.
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at .* with d1 = 20 mm$'
+key ctrl+a
+type width
+wait-log '^Parameter suggestions for dimension d1 "width": none; actions: name'
+key Return
+wait-log '^Parameter naming for dimension d1: width = $'
+type '20 mm'
+key Return
+wait-log '^Dimension k5 = width = 20 mm [(]width[)]$'
+expect-model-parameter width 20 model
+mark
+click-logged '^Dimension k5 text at ' right
+wait-log '^Context menu: '
+expect-log '^Context menu: .*Remove Name width'
+popup 'Remove Name width'
+wait-log '^Dimension k5: name width removed, now d1 [(]rewritten: d2[)]$'
+expect-model-parameter d1 20 model
+expect-model-parameter width absent
+expect-model-parameter d2 10 model
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

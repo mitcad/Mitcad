@@ -6,7 +6,7 @@
 //! constraints.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::f64::consts::TAU;
+use std::f64::consts::{FRAC_PI_2, TAU};
 
 use super::edit::DRIVEN_SUFFIX;
 use super::edit::{KeptParameter, PointInput, SketchEdit};
@@ -97,6 +97,16 @@ impl Map2 {
 
     fn reverses(&self) -> bool {
         self.m[0][0] * self.m[1][1] - self.m[0][1] * self.m[1][0] < 0.0
+    }
+
+    /// The angle a turning map turns by (mitcad#1563), counter-clockwise;
+    /// None for a translation or a mirror.
+    fn turn(&self) -> Option<f64> {
+        let identity = (self.m[0][0] - 1.0).abs() <= 1e-12
+            && self.m[0][1].abs() <= 1e-12
+            && self.m[1][0].abs() <= 1e-12
+            && (self.m[1][1] - 1.0).abs() <= 1e-12;
+        (!identity && !self.reverses()).then(|| self.m[1][0].atan2(self.m[0][0]))
     }
 }
 
@@ -745,11 +755,246 @@ impl SketchEdit<'_> {
             self.entity(r.uid())?;
             points.extend(self.moved_points(r.uid())?);
         }
-        let mut goals = Vec::new();
+        // A turn first turns the directions the moved geometry is held to
+        // (mitcad#1563): kept, a horizontal line pulled to a vertical
+        // place collapsed to a point.
+        let turned = match map.turn() {
+            Some(angle) => self.turn_directions(&points, angle)?,
+            None => false,
+        };
+        let mut places = Vec::new();
         for p in points {
-            goals.push(Goal::Point(p, map.apply(self.at(p)?)));
+            places.push((p, map.apply(self.at(p)?)));
         }
+        if turned {
+            // When the turn turned what holds the geometry to the axes, the
+            // solve starts where the turn puts the points: from where they
+            // were, the turned directions held them and the drag settled
+            // elsewhere (a rectangle's corners swapped, a line stopped
+            // short). Otherwise it starts where they are, as before, so
+            // that geometry held by what does not move (a polygon about its
+            // fixed centre) comes as near as its constraints let it. Not
+            // fixed or projected points, nor those of fixed or projected
+            // curves: they stay for the solve to hold.
+            for &(p, to) in &places {
+                let held = |e: &Entity| e.fixed || e.reference;
+                if self.def.entity(p).is_none_or(held)
+                    || self
+                        .users(p)
+                        .iter()
+                        .any(|c| self.def.entity(*c).is_some_and(held))
+                {
+                    continue;
+                }
+                if let Some(e) = self.def.entity_mut(p)
+                    && let EntityKind::Point { at } = &mut e.kind
+                {
+                    *at = to;
+                }
+            }
+        }
+        let goals: Vec<Goal> = places
+            .into_iter()
+            .map(|(p, to)| Goal::Point(p, to))
+            .collect();
         self.drag_goals(&goals)
+    }
+
+    /// The middle of entities (mitcad#1563): the center of the box round
+    /// their points, a circle's whole round included. Rotate turns about
+    /// it when no pivot is given.
+    pub fn middle_of(&self, entities: &[Ref]) -> Result<P2, String> {
+        let mut low = [f64::INFINITY; 2];
+        let mut high = [f64::NEG_INFINITY; 2];
+        let mut include = |p: P2| {
+            low = [low[0].min(p[0]), low[1].min(p[1])];
+            high = [high[0].max(p[0]), high[1].max(p[1])];
+        };
+        for r in entities {
+            if let EntityKind::Circle { center, radius, .. } = self.entity(r.uid())?.kind {
+                let c = self.at(center)?;
+                include(sub(c, [radius, radius]));
+                include(add(c, [radius, radius]));
+            }
+        }
+        for p in self.points_of(entities)? {
+            include(self.at(p)?);
+        }
+        if !(low[0].is_finite() && high[0].is_finite()) {
+            return Err("\"entities\" is empty".to_owned());
+        }
+        Ok([(low[0] + high[0]) / 2.0, (low[1] + high[1]) / 2.0])
+    }
+
+    /// Turns what holds moved geometry to the sketch's axes by a rotation
+    /// (mitcad#1563), for the constraints and dimensions whose geometry
+    /// all moves (`moved`: the points that move). By a quarter turn (or
+    /// three) a horizontal one becomes vertical and the other way round; a
+    /// half turn keeps them; a signed distance's points swap where the
+    /// turn would change its sign. By any other angle the horizontal and
+    /// vertical lines are held parallel or perpendicular to the first of
+    /// them instead, a horizontal or vertical distance between two points
+    /// level or plumb becomes their distance, and the other directional
+    /// constraints and dimensions are deactivated, each said in the edit's
+    /// notes. Kept as they were, they pulled the turned geometry back onto
+    /// the axes: a horizontal line turned by 90 degrees collapsed to a
+    /// point.
+    fn turn_directions(&mut self, moved: &BTreeSet<EntityUid>, angle: f64) -> Result<bool, String> {
+        use ConstraintKind as K;
+        let quarters = angle / FRAC_PI_2;
+        let exact = (quarters - quarters.round()).abs() <= 1e-9;
+        let turns = (quarters.round() as i64).rem_euclid(4);
+        let curves: BTreeSet<EntityUid> = self
+            .def
+            .entities
+            .iter()
+            .filter(|e| {
+                let points = e.kind.points();
+                !e.is_point() && !points.is_empty() && points.iter().all(|p| moved.contains(p))
+            })
+            .map(|e| e.id)
+            .collect();
+        let inside = |r: &Ref| match r {
+            Ref::Point(p) => moved.contains(p),
+            Ref::Curve(c) => curves.contains(c),
+        };
+        // Horizontal and vertical lines (true: horizontal) and the other
+        // directional constraints, by an angle that is no quarter turn.
+        let mut lines: Vec<(ConstraintUid, EntityUid, bool)> = Vec::new();
+        let mut off: Vec<ConstraintUid> = Vec::new();
+        // Whether anything was turned, replaced or deactivated.
+        let mut changed = false;
+        for c in &mut self.def.constraints {
+            if !c.kind.refs().iter().all(&inside) {
+                continue;
+            }
+            let swapped = match &c.kind {
+                K::Horizontal { line } => K::Vertical { line: *line },
+                K::Vertical { line } => K::Horizontal { line: *line },
+                K::HorizontalPoints { a, b } => K::VerticalPoints { a: *a, b: *b },
+                K::VerticalPoints { a, b } => K::HorizontalPoints { a: *a, b: *b },
+                K::EqualSpacing {
+                    anchors,
+                    mode: mode @ (SpacingMode::Horizontal | SpacingMode::Vertical),
+                    direction,
+                } => K::EqualSpacing {
+                    anchors: anchors.clone(),
+                    mode: if *mode == SpacingMode::Horizontal {
+                        SpacingMode::Vertical
+                    } else {
+                        SpacingMode::Horizontal
+                    },
+                    direction: *direction,
+                },
+                _ => continue,
+            };
+            if exact {
+                if turns % 2 == 1 {
+                    c.kind = swapped;
+                    changed = true;
+                }
+            } else if !c.active {
+                // It holds nothing now; its meaning is the user's.
+            } else if let K::Horizontal { line } | K::Vertical { line } = c.kind {
+                lines.push((c.id, line, matches!(c.kind, K::Horizontal { .. })));
+            } else {
+                off.push(c.id);
+            }
+        }
+        // Horizontal and vertical distances between moved points.
+        let mut changes: Vec<(usize, DimensionKind)> = Vec::new();
+        let mut aligned: Vec<String> = Vec::new();
+        for (i, d) in self.def.dimensions.iter().enumerate() {
+            let (a, b, horizontal, signed) = match d.kind {
+                DimensionKind::HorizontalDistance { a, b, signed } => (a, b, true, signed),
+                DimensionKind::VerticalDistance { a, b, signed } => (a, b, false, signed),
+                _ => continue,
+            };
+            if !(moved.contains(&a) && moved.contains(&b)) {
+                continue;
+            }
+            if exact {
+                // A quarter turn counter-clockwise takes (dx, dy) to
+                // (-dy, dx), three of them to (dy, -dx): where the new
+                // offset is the old one negated, a signed distance
+                // measures from its other point.
+                let (now_horizontal, negated) = match turns {
+                    1 => (!horizontal, !horizontal),
+                    2 => (horizontal, true),
+                    3 => (!horizontal, horizontal),
+                    _ => (horizontal, false),
+                };
+                let (a, b) = if negated && signed { (b, a) } else { (a, b) };
+                let kind = if now_horizontal {
+                    DimensionKind::HorizontalDistance { a, b, signed }
+                } else {
+                    DimensionKind::VerticalDistance { a, b, signed }
+                };
+                if kind != d.kind {
+                    changes.push((i, kind));
+                }
+            } else if d.active {
+                let (pa, pb) = (self.at(a)?, self.at(b)?);
+                let (along, across) = if horizontal {
+                    (pb[0] - pa[0], pb[1] - pa[1])
+                } else {
+                    (pb[1] - pa[1], pb[0] - pa[0])
+                };
+                if !signed && across.abs() <= 1e-9 * along.abs().max(1.0) {
+                    changes.push((i, DimensionKind::Distance { a, b }));
+                    aligned.push(d.id.to_string());
+                } else {
+                    off.push(d.id);
+                }
+            }
+        }
+        changed = changed || !changes.is_empty() || !lines.is_empty() || !off.is_empty();
+        for (i, kind) in changes {
+            self.def.dimensions[i].kind = kind;
+        }
+        if let Some(&(_, first, first_horizontal)) = lines.first() {
+            let removed: BTreeSet<ConstraintUid> = lines.iter().map(|l| l.0).collect();
+            self.def.constraints.retain(|c| !removed.contains(&c.id));
+            let mut held = BTreeSet::from([first]);
+            for &(_, line, horizontal) in &lines {
+                if !held.insert(line) {
+                    continue;
+                }
+                self.add_constraint(if horizontal == first_horizontal {
+                    K::Parallel { a: first, b: line }
+                } else {
+                    K::Perpendicular { a: first, b: line }
+                });
+            }
+            let names: Vec<String> = removed.iter().map(ToString::to_string).collect();
+            self.report.removed.extend(names.iter().cloned());
+            self.report.notes.push(format!(
+                "the rotation turned {} off the sketch's axes: {} held parallel or \
+                 perpendicular to {} instead",
+                names.join(", "),
+                if names.len() == 1 {
+                    "its line"
+                } else {
+                    "their lines"
+                },
+                Ref::Curve(first)
+            ));
+        }
+        if !aligned.is_empty() {
+            self.report.notes.push(format!(
+                "the rotation turned {} off the sketch's axes: now an aligned distance",
+                aligned.join(", ")
+            ));
+        }
+        if !off.is_empty() {
+            let reason = "turned off the sketch's axes by a rotation";
+            self.set_active(&off, false, Some(reason))?;
+            let names: Vec<String> = off.iter().map(ToString::to_string).collect();
+            self.report
+                .notes
+                .push(format!("{} deactivated: {reason}", names.join(", ")));
+        }
+        Ok(changed)
     }
 
     /// Copies entities mapped by `map`: points and curves, and the

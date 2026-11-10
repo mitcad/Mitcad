@@ -257,28 +257,15 @@ fn an_over_constrained_sketch_with_held_corners_names_only_what_contradicts() {
         .map(|r| panic!("the dimension must be refused, got {r}"))
         .unwrap_err()
         .to_string();
-    // The new dimension (an id the sketch does not have) and fixed
-    // geometry, nothing else.
-    let named = message
-        .strip_prefix("the sketch is over-constrained: ")
-        .and_then(|m| m.strip_suffix(" contradict each other"))
-        .unwrap_or_else(|| panic!("{message}"));
-    let named: Vec<&str> = named.split(", ").flat_map(|n| n.split(" and ")).collect();
-    let constraints: Vec<&str> = named
-        .iter()
-        .copied()
-        .filter(|n| !n.ends_with(" (fixed)"))
-        .collect();
-    assert_eq!(constraints.len(), 1, "{message}");
+    // The new dimension against the line's fixed end points (the projected
+    // curves made only of fixed points are held by their points,
+    // mitcad#1171), nothing of the offsets: in words, without ids, and no
+    // constraint of the sketch blocks it (mitcad#1566).
+    let (words, blocking) = mitcad_model::sketch::conflict::split(&message);
     assert!(
-        !s.to_string().contains(&format!("\"{}\"", constraints[0])),
+        words.starts_with("the new dimension can't hold with ") && words.ends_with(" geometry"),
         "{message}"
     );
-    // The line's fixed end points (the projected curves made only of fixed
-    // points are held by their points, mitcad#1171).
-    let (a_fixed, b_fixed) = (format!("{a} (fixed)"), format!("{b} (fixed)"));
-    assert!(
-        named.iter().any(|n| *n == a_fixed || *n == b_fixed),
-        "{message}"
-    );
+    assert_eq!(blocking, Some(Vec::new()), "{message}");
+    assert!(!words.contains(&a) && !words.contains(&b), "{message}");
 }

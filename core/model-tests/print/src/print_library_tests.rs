@@ -745,8 +745,38 @@ fn a_material_class_is_stored_kept_by_a_copy_and_groups_the_rows() {
     command(&mut doc, json!({"cmd": "undo"}));
     assert_eq!(group_of(&doc, &project, &copy), "metals");
     // An unknown class is refused.
-    let wood = json!({"cmd": "create_material", "class": "wood"});
-    assert!(doc.command(&wood.to_string()).is_err());
+    let stone = json!({"cmd": "create_material", "class": "stone"});
+    assert!(doc.command(&stone.to_string()).is_err());
+    // Wood (mitcad#1552): stored and grouped as its own, before Other; in
+    // My library too, with the class's look.
+    let create =
+        json!({"cmd": "create_material", "name": "Beech", "class": "wood", "density": 0.7});
+    let beech = created(&mut doc, create);
+    assert_eq!(group_of(&doc, &project, &beech), "wood");
+    let beech = doc
+        .custom_materials()
+        .iter()
+        .find(|m| m.id == beech)
+        .unwrap()
+        .clone();
+    assert_eq!(beech.class, Some(MaterialClass::Wood));
+    assert_eq!(beech.appearance.as_deref(), Some("wood_oak"));
+    let path = project.to_string_lossy().to_string();
+    let create = json!({"cmd": "create_material", "library": "project", "project": path,
+                        "name": "Ash", "class": "wood", "density": 0.68});
+    let answer = command(&mut doc, create);
+    let ash = answer["id"].as_str().unwrap();
+    let materials = rows(&doc, "material", &project);
+    assert_eq!(row(&materials, "project", ash)["group"], "wood");
+    assert_eq!(row(&materials, "project", ash)["class"], "wood");
+    let libraries = doc.print_libraries(Some(&project));
+    let made = libraries
+        .find(Some(LibraryKind::Project), ItemKind::Material, ash)
+        .unwrap();
+    let ItemData::Material { material, .. } = &made.data else {
+        unreachable!()
+    };
+    assert_eq!(material.appearance.as_deref(), Some("wood_oak"));
 }
 
 /// The `changed` mark of the project's draft in `library_items`.

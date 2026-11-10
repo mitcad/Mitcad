@@ -1,0 +1,9 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/sketch-remove-dimension-name.mitcad-ui (mitcad#1577): Sketch1 on XY holds a construction line across the place the steps look at and a 20 x 10 rectangle whose width k5 is d1 = 20 mm and whose height k6 is d2 = 10 mm, both with automatic names."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_line", "sketch": "F1", "start": [-40, -40], "end": [60, 60], "construction": true},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 10},
+  {"cmd": "sketch.set_dimension_text", "sketch": "F1", "dimension": "k5", "text": [10, -8]},
+  {"cmd": "sketch.set_dimension_text", "sketch": "F1", "dimension": "k6", "text": [28, 5]}
+]

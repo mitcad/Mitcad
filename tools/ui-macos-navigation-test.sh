@@ -37,6 +37,11 @@ for chrome in floating docked; do
       echo 'expect-navigation-runtime' >> "$script"
       cat "$here/ui-scripts/navigation-release.mitcad-ui" >> "$script"
     fi
+    # Keys, scrolls and the activation during a press (mitcad#1571-#1573),
+    # in both layouts: the shared steps of the Linux and Windows tests.
+    if [ "$appearance" = light ]; then
+      cat "$here/ui-scripts/navigation-gesture-state.mitcad-ui" >> "$script"
+    fi
     MITCAD_TEST_COLOR_SCHEME=$appearance MITCAD_TEST_INPUT=$script \
       ui_run_app "$name-configure" --ui=qt --chrome="$chrome" --no-recovery --no-mcp --demo
     ui_expect_log 'Navigation controls: configure' "$name: custom bindings and speeds apply immediately"
@@ -45,6 +50,10 @@ for chrome in floating docked; do
     if [ "$name" = floating-light ]; then
       ui_expect_log 'Navigation runtime: actual pan, orbit, wheel zoom and trackpad camera motion follows speed' \
         'speed controls change the actual camera through real input events'
+    fi
+    if [ "$appearance" = light ]; then
+      ui_expect_log 'Navigation gesture state: a deactivated window ended F4, Option and scroll drags' \
+        "$name: keys, scrolls and deactivation during a press keep or end it as they should"
     fi
     [ "$UI_FAILURES" = 0 ] || exit 1
     MITCAD_TEST_COLOR_SCHEME=$appearance MITCAD_TEST_INPUT=$here/ui-scripts/navigation-restored.mitcad-ui \

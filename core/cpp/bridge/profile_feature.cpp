@@ -149,6 +149,14 @@ std::shared_ptr<geometry::Shape> hole_tool(rust::Str feature, const HoleInput& i
     spec.tip_angle = input.tip_angle;
   }
   spec.depth = input.depth;
+  // A press fit's section (mitcad#1517).
+  spec.press_fit = input.press_fit == 1   ? geometry::PressFit::Polygon
+                   : input.press_fit == 2 ? geometry::PressFit::CrushRibs
+                                          : geometry::PressFit::None;
+  spec.press_fit_count = static_cast<int>(input.press_fit_count);
+  spec.press_fit_inner = input.press_fit_inner;
+  spec.press_fit_bore = input.press_fit_bore;
+  spec.press_fit_angle = input.press_fit_angle;
   switch (input.extent) {
   case 1:
     spec.extent = geometry::HoleExtent::ThroughAll;

@@ -170,6 +170,13 @@ impl<K: Kernel> HoleCalloutsLocal<K> for Document<K> {
         units: Units,
     ) -> Result<Vec<String>, String> {
         let missing = || "the hole's size is not known".to_owned();
+        // A press-fit hole (mitcad#1517) is not round: its flats or crush
+        // ribs are dimensioned as they are.
+        if def.press_fit.is_some() {
+            return Err(
+                "a press-fit hole is not round: dimension its flats or its ribs' tips".to_owned(),
+            );
+        }
         let thread: Option<&HoleThread> = def.thread.as_ref();
         let sized = thread.and_then(|t| {
             let custom = t.custom.as_ref().map(|c| (c.major, c.pitch));

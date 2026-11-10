@@ -1,0 +1,48 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Pipe shells: a turn of the spine's tangent between two of its edges is a
+mitred corner from 1e-4 rad on, no longer from 1e-2 rad (mitcad#1559).
+
+BRepOffsetAPI_MakePipeShell::SetTransitionMode set BRepFill_PipeShell's
+transition with its default angles. Under Angmin, two edges' laws are
+joined by turning the second's whole frame onto the first's end frame
+(BRepFill_LocationLaw::TransformInCompatibleLaw), so through a kink of up
+to 1e-2 rad (0.57 degrees) the section kept the first edge's frame and
+leaned from square by the kink all along the second edge: 0.05 and 0.3
+degrees along two B-spline pieces meeting at those angles. For mitred
+corners (BRepBuilderAPI_RightCorner) a kink from 1e-4 rad (0.0057
+degrees) on is now a corner, and the section is square to each edge.
+Joints of pieces meant to be tangent, whose tangents differ by the noise
+of their approximation (an intersection curve's pieces of chains joined
+tangentially: some 2e-6 rad), stay under it.
+
+Rounded corners keep 1e-2 rad: the turn of a section about a slight kink
+is a sliver that does not close (a closed stirrup of lines and arcs whose
+arcs meet two lines at 0.12 degrees came out invalid with rounded corners
+there, where a pipe's mitre elsewhere had failed).
+
+diff --git a/src/ModelingAlgorithms/TKOffset/BRepOffsetAPI/BRepOffsetAPI_MakePipeShell.cxx b/src/ModelingAlgorithms/TKOffset/BRepOffsetAPI/BRepOffsetAPI_MakePipeShell.cxx
+--- a/src/ModelingAlgorithms/TKOffset/BRepOffsetAPI/BRepOffsetAPI_MakePipeShell.cxx
++++ b/src/ModelingAlgorithms/TKOffset/BRepOffsetAPI/BRepOffsetAPI_MakePipeShell.cxx
+@@ -193,7 +193,19 @@
+ 
+ void BRepOffsetAPI_MakePipeShell::SetTransitionMode(const BRepBuilderAPI_TransitionMode Mode)
+ {
+-  myPipe->SetTransition((BRepFill_TransitionStyle)Mode);
++  // A mitred corner from a turn of the spine's tangent of 1e-4 rad on:
++  // through a smaller turn than the angle given the section keeps its frame
++  // and leans by the turn. A rounded corner from 1e-2 rad on, as before:
++  // the turn of a section about a slight kink is a sliver that does not
++  // close.
++  if (Mode == BRepBuilderAPI_RightCorner)
++  {
++    myPipe->SetTransition((BRepFill_TransitionStyle)Mode, 1.0e-4);
++  }
++  else
++  {
++    myPipe->SetTransition((BRepFill_TransitionStyle)Mode);
++  }
+ }
+ 
+ //=================================================================================================

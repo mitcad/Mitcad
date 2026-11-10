@@ -5,7 +5,8 @@
 // it takes the place of the 3D view, as a workspace does, until Close
 // Drawing leads back. Its bar has the sheets as tabs (and + for another),
 // Sheet… for the sheet's size, projection method, units, template and
-// title block, Add Revision… for a row of the drawing's revision table, and
+// title block, Add Revision… for a row of the drawing's revision table,
+// the window's Edit Parameters… (addBarAction, mitcad#1582), and
 // under them the drawing tools (DrawingTools.hpp, each also a command of
 // the window: drawing.*) in captioned groups with Export… (PDF, SVG, DXF)
 // last; beside the sheet a panel shows the active tool's options or the
@@ -82,6 +83,7 @@
 class QAction;
 class QComboBox;
 class QFormLayout;
+class QHBoxLayout;
 class QKeyEvent;
 class QVBoxLayout;
 class QLabel;
@@ -164,6 +166,12 @@ public:
   // is not in sight. Unset (the AppKit frontend, which has no DRAWING tab
   // yet): the bar's own two rows.
   void setRibbonTools(std::function<QWidget*(const QString&)> buttonOf);
+  // A command of the window on the bar's first row, after Add Revision…
+  // (mitcad#1582: Edit Parameters, the design's parameter table one click
+  // away while a drawing is open): its icon, name, tooltip and enabled
+  // state are the action's, a click triggers it. Logged as "Drawing <name>
+  // at x,y" (the name without its "…").
+  void addBarAction(QAction* action);
   // The places logged again (the ribbon's moved), when they changed.
   void logPlaces();
 
@@ -428,6 +436,9 @@ private:
   QToolButton* m_sheetButton = nullptr;
   QToolButton* m_export = nullptr;
   QToolButton* m_addRevision = nullptr;
+  // The bar's first row and the window's commands on it (addBarAction).
+  QHBoxLayout* m_barRow = nullptr;
+  QList<QToolButton*> m_barActions;
   QHash<QString, QToolButton*> m_toolButtons;
   // The groups' captions under the tools, logged with their places.
   QList<QLabel*> m_groupCaptions;

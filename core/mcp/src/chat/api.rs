@@ -453,7 +453,7 @@ impl ApiStream {
             phase: Phase::Connecting,
             next_mcp: 0,
             mcp: HashMap::new(),
-            system: PREFACE.to_owned(),
+            system: format!("{PREFACE}\n\n{}", super::guidance()),
             tools: Vec::new(),
             messages: Vec::new(),
             waiting: Vec::new(),
@@ -593,7 +593,11 @@ impl ApiStream {
                         .and_then(Value::as_str)
                         .unwrap_or_default();
                     if !instructions.is_empty() {
-                        self.system = format!("{PREFACE}\n\n{}", cut(instructions, 32000));
+                        self.system = format!(
+                            "{PREFACE}\n\n{}\n\n{}",
+                            cut(instructions, 32000),
+                            crate::guide::index()
+                        );
                     }
                     let initialized =
                         mcp_line(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));

@@ -3,13 +3,21 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <string>
+#include <typeinfo>
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <BRepCheck_Result.hxx>
+#include <BRepCheck_Status.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
@@ -46,6 +54,7 @@
 #include <Geom_Surface.hxx>
 #include <ShapeConstruct_ProjectCurveOnSurface.hxx>
 #include <Standard_Failure.hxx>
+#include <Standard_Type.hxx>
 #include <Geom_Plane.hxx>
 #include <NCollection_Array1.hxx>
 #include <NCollection_List.hxx>
@@ -53,6 +62,7 @@
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Iterator.hxx>
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Solid.hxx>
 #include <gp_Circ.hxx>
@@ -1004,6 +1014,167 @@ bool sound(const Shape& shape) {
   return props.Mass() > 0.0;
 }
 
+// (mitcad#1564) Whether pipe_shell says what each try of the corners gave
+// on the standard error, as port patch 1666's corners do: while
+// MITCAD_TRACE_PIPE_CORNERS is set (read each time, so that a test can set
+// it round one pipe).
+bool tracing_corners() {
+#ifdef _MSC_VER
+  char* value = nullptr;
+  std::size_t length = 0;
+  if (_dupenv_s(&value, &length, "MITCAD_TRACE_PIPE_CORNERS") != 0 || value == nullptr) {
+    return false;
+  }
+  const bool on = value[0] != '\0';
+  std::free(value);
+  return on;
+#else
+  const char* value = std::getenv("MITCAD_TRACE_PIPE_CORNERS");
+  return value != nullptr && value[0] != '\0';
+#endif
+}
+
+// The trace of a try that built a shape: the checker's first problem with
+// it (what makes it unsound) and its volume.
+void trace_try(const char* what, const Shape& shape) {
+  if (!tracing_corners()) {
+    return;
+  }
+  std::string verdict = "valid";
+  try {
+    require_valid(shape.occt(), "it");
+  } catch (const Cancelled&) {
+    throw;
+  } catch (const std::exception& problem) {
+    verdict = problem.what();
+  }
+  GProp_GProps props;
+  BRepGProp::VolumeProperties(shape.occt(), props);
+  std::fprintf(stderr, "pipe try, %s corners: %s, volume %.6f\n", what, verdict.c_str(), props.Mass());
+  if (verdict != "valid") {
+    // The edges whose curves on a face the checker refuses: where they lie,
+    // their curve's and the face's surface's types, their tolerance and how
+    // far the curve on the face lies from the edge's curve.
+    const BRepCheck_Analyzer analyzer(shape.occt(), true, true);
+    int listed = 0;
+    for (TopExp_Explorer f(shape.occt(), TopAbs_FACE); f.More() && listed < 8; f.Next()) {
+      const TopoDS_Face face = TopoDS::Face(f.Current());
+      for (TopExp_Explorer e(face, TopAbs_EDGE); e.More() && listed < 8; e.Next()) {
+        const TopoDS_Edge edge = TopoDS::Edge(e.Current());
+        const occ::handle<BRepCheck_Result>& result = analyzer.Result(edge);
+        if (result.IsNull() || !result->IsStatusOnShape(face)) {
+          continue;
+        }
+        bool bad = false;
+        for (const BRepCheck_Status status : result->StatusOnShape(face)) {
+          bad = bad || status != BRepCheck_NoError;
+        }
+        if (!bad) {
+          continue;
+        }
+        ++listed;
+        const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face);
+        double first = 0.0;
+        double last = 0.0;
+        const occ::handle<Geom_Curve> curve = BRep_Tool::Curve(edge, first, last);
+        double off = 0.0;
+        gp_Pnt middle;
+        if (!curve.IsNull() && !BRep_Tool::Degenerated(edge)) {
+          const BRepAdaptor_Curve on_face(edge, face);
+          const BRepAdaptor_Curve in_space(edge);
+          middle = in_space.Value(0.5 * (in_space.FirstParameter() + in_space.LastParameter()));
+          for (int k = 0; k <= 16; ++k) {
+            const double t =
+                in_space.FirstParameter() + (in_space.LastParameter() - in_space.FirstParameter()) * k / 16.0;
+            off = std::max(off, in_space.Value(t).Distance(on_face.Value(t)));
+          }
+        }
+        const Geom_Curve *curve_object = curve.get();
+        const Geom_Surface *surface_object = surface.get();
+        std::fprintf(stderr,
+                     "  refused edge on a face: middle (%.4f, %.4f, %.4f), "
+                     "curve %s%s, face %s, tolerance %.3e, "
+                     "curve on the face off by %.3e\n",
+                     middle.X(), middle.Y(), middle.Z(),
+                     curve.IsNull() ? "none" : typeid(*curve_object).name(),
+                     BRep_Tool::Degenerated(edge) ? " (degenerated)" : "",
+                     surface.IsNull() ? "none" : typeid(*surface_object).name(),
+                     BRep_Tool::Tolerance(edge), off);
+      }
+    }
+    // The wires the checker refuses on their face: the face's surface, and
+    // each edge's ends (as the wire runs it) in space and on the face.
+    int wires = 0;
+    for (TopExp_Explorer f(shape.occt(), TopAbs_FACE); f.More() && wires < 3; f.Next()) {
+      const TopoDS_Face face = TopoDS::Face(f.Current());
+      for (TopExp_Explorer w(face, TopAbs_WIRE); w.More() && wires < 3; w.Next()) {
+        const occ::handle<BRepCheck_Result>& result = analyzer.Result(w.Current());
+        if (result.IsNull() || !result->IsStatusOnShape(face)) {
+          continue;
+        }
+        bool bad = false;
+        for (const BRepCheck_Status status : result->StatusOnShape(face)) {
+          bad = bad || status != BRepCheck_NoError;
+        }
+        if (!bad) {
+          continue;
+        }
+        ++wires;
+        const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face);
+        const Geom_Surface *surface_object = surface.get();
+        std::fprintf(stderr, "  refused wire on a face %s (%s):\n",
+                     surface.IsNull() ? "none" : typeid(*surface_object).name(),
+                     face.Orientation() == TopAbs_REVERSED ? "reversed"
+                                                           : "forward");
+        for (TopoDS_Iterator e(w.Current()); e.More(); e.Next()) {
+          const TopoDS_Edge edge = TopoDS::Edge(e.Value());
+          double first = 0.0;
+          double last = 0.0;
+          const occ::handle<Geom2d_Curve> pcurve = BRep_Tool::CurveOnSurface(edge, face, first, last);
+          TopoDS_Vertex start;
+          TopoDS_Vertex end;
+          TopExp::Vertices(edge, start, end, true);
+          const bool reversed = edge.Orientation() == TopAbs_REVERSED;
+          gp_Pnt2d uv0;
+          gp_Pnt2d uv1;
+          if (!pcurve.IsNull()) {
+            uv0 = pcurve->Value(reversed ? last : first);
+            uv1 = pcurve->Value(reversed ? first : last);
+          }
+          const gp_Pnt p0 = start.IsNull() ? gp_Pnt() : BRep_Tool::Pnt(start);
+          const gp_Pnt p1 = end.IsNull() ? gp_Pnt() : BRep_Tool::Pnt(end);
+          std::fprintf(stderr,
+                       "    edge%s%s: from (%.4f, %.4f, %.4f) tol %.2e to (%.4f, %.4f, %.4f) tol %.2e, on the face "
+                       "(%.6f, %.6f) to (%.6f, %.6f)%s\n",
+                       BRep_Tool::Degenerated(edge) ? " (degenerated)" : "", reversed ? " reversed" : "", p0.X(),
+                       p0.Y(), p0.Z(), start.IsNull() ? 0.0 : BRep_Tool::Tolerance(start), p1.X(), p1.Y(), p1.Z(),
+                       end.IsNull() ? 0.0 : BRep_Tool::Tolerance(end), uv0.X(), uv0.Y(), uv1.X(), uv1.Y(),
+                       pcurve.IsNull() ? " (no curve on the face)" : "");
+        }
+      }
+    }
+  }
+  std::fflush(stderr);
+}
+
+// The trace of a try that threw.
+void trace_try_error(const char* what, const std::exception_ptr& error) {
+  if (!tracing_corners() || !error) {
+    return;
+  }
+  std::string message = "an unknown error";
+  try {
+    std::rethrow_exception(error);
+  } catch (const Standard_Failure& failure) {
+    message = std::string(typeid(failure).name()) + ": " + failure.what();
+  } catch (const std::exception& failure) {
+    message = failure.what();
+  } catch (...) {
+  }
+  std::fprintf(stderr, "pipe try, %s corners: threw %s\n", what, message.c_str());
+  std::fflush(stderr);
+}
+
 // The loop of one closed edge on a periodic curve as two halves of it,
 // their joints a quarter of the period on from its seam, each half with
 // the edge's name; none for another loop.
@@ -1071,10 +1242,11 @@ ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeM
   // (mitcad#1555) Turning through a corner, the section keeps the frame it
   // had before it, so along the next edge it leans from square by the
   // corner's angle. OCCT's mitres and roundings trim the two sides against
-  // each other from where their seams cross, which the sides swept along
-  // B-spline edges seldom do (their seams miss each other by up to tenths
-  // of a millimetre), so B-spline pieces that meet at an angle (an
-  // intersection curve of chains with corners) often end up here.
+  // each other; between sides swept along curves other than lines and
+  // circles this works since port patch 1661 (mitcad#1559) where their
+  // intersection comes whole, and since 1663 and 1664 a mitre is cut along
+  // the bisector plane where it does not; since 1666 (mitcad#1564) a
+  // rounded corner's sides likewise where they overlap inside the corner.
   const bool rounded = corners == PipeCorners::Rounded;
   const BRepBuilderAPI_TransitionMode asked = rounded ? BRepBuilderAPI_RoundCorner : BRepBuilderAPI_RightCorner;
   const BRepBuilderAPI_TransitionMode instead = rounded ? BRepBuilderAPI_RightCorner : BRepBuilderAPI_RoundCorner;
@@ -1083,8 +1255,10 @@ ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeM
   }
   ShapePtr built;
   std::exception_ptr error;
+  const char* const first_try = rounded ? "rounded" : "mitred";
   try {
     built = pipe_shell_with(loop, spine, mode, first, last, tolerance, asked);
+    trace_try(first_try, *built);
     if (sound(*built)) {
       return built;
     }
@@ -1093,6 +1267,7 @@ ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeM
   } catch (...) {
     throw_if_cancelled();
     error = std::current_exception();
+    trace_try_error(first_try, error);
   }
   // (mitcad#385) The mitres of a section of one closed edge can fail to
   // build from it (an ellipse whose seam vertex, at an end of its major
@@ -1100,8 +1275,10 @@ ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeM
   // two halves joined a quarter turn from that seam builds them (the
   // corners asked for, rounded ones too).
   if (const std::optional<NamedWire> other = halved(loop)) {
+    const char* const halved_try = rounded ? "rounded, halved section" : "mitred, halved section";
     try {
       ShapePtr again = pipe_shell_with(*other, spine, mode, first, last, tolerance, asked);
+      trace_try(halved_try, *again);
       if (sound(*again)) {
         return again;
       }
@@ -1109,11 +1286,16 @@ ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeM
       throw;
     } catch (...) {
       throw_if_cancelled();
+      trace_try_error(halved_try, std::current_exception());
     }
   }
   for (const BRepBuilderAPI_TransitionMode transition : {instead, BRepBuilderAPI_Transformed}) {
+    const char* const next_try = transition == BRepBuilderAPI_RoundCorner   ? "rounded"
+                                 : transition == BRepBuilderAPI_RightCorner ? "mitred"
+                                                                            : "turned through";
     try {
       ShapePtr other = pipe_shell_with(loop, spine, mode, first, last, tolerance, transition);
+      trace_try(next_try, *other);
       if (sound(*other)) {
         return other;
       }
@@ -1121,6 +1303,7 @@ ShapePtr pipe_shell(const NamedWire& loop, const TopoDS_Wire& spine, const PipeM
       throw;
     } catch (...) {
       throw_if_cancelled();
+      trace_try_error(next_try, std::current_exception());
     }
   }
   if (error) {

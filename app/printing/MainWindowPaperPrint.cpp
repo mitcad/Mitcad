@@ -12,6 +12,7 @@
 // (printing::askPrinter, which a UI test replaces with a PDF file).
 #include "../MainWindow.hpp"
 
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -144,7 +145,9 @@ void MainWindow::printCurrent() {
       sizes << QStringLiteral("%1 x %2 mm").arg(millimetres(sheet.size.width()), millimetres(sheet.size.height()));
       sheets << sheet;
     }
-    QPrinter printer(QPrinter::HighResolution);
+    // Found without freezing the window (mitcad#1591).
+    const std::unique_ptr<QPrinter> made = printing::newPrinter(this);
+    QPrinter& printer = *made;
     printer.setDocName(name);
     printer.setCreator(QStringLiteral("MitCad"));
     printer.setFullPage(true);
@@ -232,7 +235,8 @@ void MainWindow::printCurrent() {
     return;
   }
   const printing::PrintPicture picture = panel.picture();
-  QPrinter printer(QPrinter::HighResolution);
+  const std::unique_ptr<QPrinter> made = printing::newPrinter(this);
+  QPrinter& printer = *made;
   printer.setDocName(picture.name);
   printer.setCreator(QStringLiteral("MitCad"));
   printer.setPageLayout(panel.pageLayout());

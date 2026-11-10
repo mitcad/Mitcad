@@ -10,6 +10,7 @@
 #include <functional>
 #include <optional>
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QString>
@@ -17,6 +18,7 @@
 #include <gp_Ax1.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
+#include <gp_XYZ.hxx>
 
 #include "../framework/Command.hpp"
 
@@ -31,6 +33,32 @@ gp_Trsf freeRotation(double rx, double ry, double rz);
 // move types, whose motions depend on picked geometry, and while a value
 // is not a number.
 std::optional<gp_Trsf> moveMotion(const CommandState& state, const gp_Pnt& pivot);
+
+// Free Move's handles (mitcad#1580): its rings turn about the moved
+// middle, `pivot` moved by the X, Y and Z distances; none while one of them
+// is not a number (a minus sign typed alone). An arrow along `axis` (0, 1,
+// 2: X, Y, Z) starts from that middle without its own distance, so that its
+// knob, at the start plus its value, is at the moved middle as well, where
+// all three arrows and the rings meet; none while a distance is not a
+// number.
+std::optional<gp_Pnt> freeMovedMiddle(const CommandState& state, const gp_Pnt& pivot);
+std::optional<gp_Pnt> freeArrowOrigin(const CommandState& state, const gp_Pnt& pivot, int axis);
+
+// A free move as the panel holds it (mitcad#1583): its X, Y and Z
+// distances (mm) and its angles about X, then Y, then Z (radians), about a
+// pivot. The model's matrix (`free`'s three rows of a rotation and a
+// translation, commands.md) is p -> R (p - c) + c + t about the pivot c.
+struct FreeMove {
+  gp_XYZ moved{0.0, 0.0, 0.0};
+  double rx = 0.0;
+  double ry = 0.0;
+  double rz = 0.0;
+};
+// The matrix split about a pivot: any pivot gives the same matrix back
+// (freeMatrixOf), but the handles sit at the pivot moved by `moved`, so an
+// edit splits it about the middle of what moves as the feature finds it.
+FreeMove freeMoveOf(const QJsonArray& rows, const gp_Pnt& pivot);
+QJsonArray freeMatrixOf(const FreeMove& move, const gp_Pnt& pivot);
 
 // The motion of Rotate, Point to Point and Point to Position (mitcad#838)
 // from what the model worked it out of, an exact preview's `motion`

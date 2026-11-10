@@ -32,6 +32,14 @@ const char* const kProjectsUsage = R"(  mitcad-cli project inspect <folder> [--j
       recorded as a version) and this computer's (live updates, sync, the
       display name in the Projects panel).
       --set takes {"shared": {...}, "local": {...}}, merged into them.
+  mitcad-cli project remove <folder> [--yes] [--author "Name <email>"] [--json]
+      The folder stops being a project and keeps its designs. Without --yes
+      only what would happen is shown. Removes .mitcad and MitCad's lines
+      of .gitattributes and .gitignore, and .git with the version history
+      when MitCad made the repository; a repository that was there before
+      keeps its history and records a version without the project's files.
+      Designs that keep B-rep data in the project are written as single
+      files first. A Cloud project's remote is not changed.
   mitcad-cli remote check <url> [--json]
       What a remote holds, without a project: reachable, empty, a Mitcad
       project, the names at its root, its versions and the latest one.
@@ -273,11 +281,11 @@ int project(const std::vector<std::string>& args) {
   }
   Parsed a;
   std::string error;
-  if (!parse(args, {"--author", "--url", "--design", "--set"}, {"--json", "--no-push"}, a, error)) {
+  if (!parse(args, {"--author", "--url", "--design", "--set"}, {"--json", "--no-push", "--yes"}, a, error)) {
     return problem(error);
   }
   if (a.positional.size() != 2) {
-    return problem("project needs inspect, create or settings and a folder");
+    return problem("project needs inspect, create, settings or remove and a folder");
   }
   const std::string& what = a.positional[0];
   const std::string& folder = a.positional[1];
@@ -288,6 +296,24 @@ int project(const std::vector<std::string>& args) {
       return problem("project inspect takes only --json");
     }
     return run(R"({"cmd": "inspect_folder", "dir": )" + json_text(folder) + "}", json);
+  }
+  if (a.flag("--yes") && what != "remove") {
+    return problem("--yes goes with project remove");
+  }
+  // Remove Project (mitcad#1562): the plan, or with --yes the removal.
+  if (what == "remove") {
+    if (a.one("--url") != nullptr || a.one("--design") != nullptr || a.one("--set") != nullptr ||
+        a.flag("--no-push")) {
+      return problem("project remove takes --yes, --author and --json");
+    }
+    std::string command = R"({"cmd": "remove_project", "dir": )" + json_text(folder);
+    if (!a.flag("--yes")) {
+      command += R"(, "dry_run": true)";
+    }
+    if (author != nullptr) {
+      command += R"(, "author": )" + json_text(*author);
+    }
+    return run(command + "}", json);
   }
   if (what == "create") {
     if (author == nullptr) {

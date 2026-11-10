@@ -26,11 +26,14 @@
 // For UI tests the panel's "chatState" property and the log line "Chat
 // panel: <state>" give its state (unavailable, checking, missing,
 // outdated, signed-out, signing-in, ready, starting, working, stopping,
-// notice); its controls have object names (chatInput, chatSend,
+// notice, account-error, checking-account, signing-in-again); its controls
+// have object names (chatInput, chatSend,
 // chatAttachSelection, chatAttachComments, chatAttachView, chatSetup,
 // chatNew, chatAllowOnce,
 // chatAlwaysAllow, chatDeny, chatContinue, chatAgentChoice,
-// chatModelChoice, chatToolGroupHead); the log lines "Chat tool group: 3
+// chatModelChoice, chatToolGroupHead, chatCheckAccount, chatSignInAgain,
+// chatSignInAgainConfirm, chatSignInAgainStart, chatSignInAgainCancel,
+// chatSignInCommands, chatSignInCommandsCopy); the log lines "Chat tool group: 3
 // calls, 1 failed" (when a group's counts change) and "Chat tool group
 // opened: 3 calls, 1 failed, 3 rows shown" ("closed") follow the groups.
 //
@@ -130,6 +133,8 @@ private:
   // The switcher's agents and the model choice's items, when they changed.
   void updateChoices();
   void applyModel();
+  // Sign in Again's confirmation for the chosen agent (mitcad#1585).
+  QString signInAgainText() const;
 
   ChatController& m_chat;
   QLabel* m_agentName = nullptr;
@@ -165,6 +170,17 @@ private:
   QPushButton* m_checkAccount = nullptr;
   QFrame* m_accountHelp = nullptr;
   QLabel* m_accountHelpText = nullptr;
+  // Sign in Again (mitcad#1585): the button beside Check again, its
+  // confirmation, and in How to fix the commands it runs with Copy.
+  QPushButton* m_signInAgain = nullptr;
+  QFrame* m_signInConfirm = nullptr;
+  QLabel* m_signInConfirmText = nullptr;
+  QScrollArea* m_signInConfirmScroll = nullptr; // the text's own scroll area (mitcad#1590)
+  QWidget* m_signInCommandsRow = nullptr;
+  QLabel* m_signInCaption = nullptr;
+  QLabel* m_signInCommands = nullptr;
+  QPushButton* m_copyCommands = nullptr;
+  QString m_loggedTerminal; // the terminal Sign in Again was last logged with
   QWidget* m_inputRow = nullptr;
   QPlainTextEdit* m_input = nullptr;
   QToolButton* m_attachSelection = nullptr;

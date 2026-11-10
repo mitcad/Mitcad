@@ -845,14 +845,17 @@ private:
       ok = op.run(cmd, &result);
     }
     if (!ok) {
-      if (chosenDriven || !op.error().contains(QStringLiteral("over-constrain"))) {
+      // Implied by the others, or in conflict with them (mitcad#1566).
+      if (chosenDriven || !(op.conflicted() || op.error().contains(QStringLiteral("over-constrain")))) {
         const QString reason = op.error();
         op.rollback();
         m_c.error(QObject::tr("Dimension not added: %1").arg(reason));
         reset();
         return;
       }
-      // A driven dimension instead of over-constraining.
+      // A driven dimension instead of over-constraining: nothing refused
+      // to paint then.
+      m_c.setConflict(QStringLiteral("action"), {});
       cmd.remove(QStringLiteral("value"));
       cmd.insert(QStringLiteral("driven"), true);
       driven = true;

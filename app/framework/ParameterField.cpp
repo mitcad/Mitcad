@@ -73,6 +73,7 @@ constexpr int kFunction = 4;
 constexpr int kTemplate = 5;
 constexpr int kTable = 6;  // a table's name (mitcad#667): puts `Screws.` in
 constexpr int kColumn = 7; // a column after `Screws.`
+constexpr int kRemoveName = 8; // the leading `name =` taken off (mitcad#1577)
 
 constexpr int kMaxRows = 10;
 constexpr int kPageRows = 8;
@@ -804,6 +805,12 @@ bool ParameterField::fill() {
                                               : tr("Name this value: %1 = …").arg(name),
            tr("names this field's own parameter"), QStringLiteral("name"));
   }
+  // The name before the value taken off, which gives the parameter its
+  // automatic name back (mitcad#1577).
+  if (m_options.removeName && browsing && !namedPrefix(at.text).isEmpty()) {
+    action(kRemoveName, tr("Remove Name"), tr("gives this parameter its automatic name back"),
+           QStringLiteral("remove name"));
+  }
   const ParameterSource* source = parameterSourceOf(m_edit);
   if (m_options.create && source != nullptr && source->addParameter && (browsing || !name.isEmpty())) {
     action(kCreate,
@@ -946,9 +953,10 @@ void ParameterField::logPlaces() {
     }
     const QPoint at = m_list->viewport()->mapToGlobal(rect.center()) - origin;
     const int kind = item->data(0, kActionRole).toInt();
-    const QString what = kind == kCreate ? QStringLiteral("action create")
-                         : kind == kName ? QStringLiteral("action name")
-                                         : item->data(0, kNameRole).toString();
+    const QString what = kind == kCreate       ? QStringLiteral("action create")
+                         : kind == kName       ? QStringLiteral("action name")
+                         : kind == kRemoveName ? QStringLiteral("action remove-name")
+                                               : item->data(0, kNameRole).toString();
     lines << QStringLiteral("Parameter suggestion %1 at %2,%3").arg(what).arg(at.x()).arg(at.y());
   }
   const QString logged = lines.join(QLatin1Char('\n'));
@@ -1126,6 +1134,9 @@ void ParameterField::activate(QTreeWidgetItem* item) {
     return;
   case kName:
     startNaming();
+    return;
+  case kRemoveName:
+    removeName();
     return;
   case kFormula:
     QTimer::singleShot(0,this,[this] { openFormulaEditor(); });
@@ -1332,6 +1343,28 @@ void ParameterField::startNaming() {
   qDebug().noquote() << QStringLiteral("Parameter naming for %1: %2").arg(m_options.label, shown);
 }
 
+bool ParameterField::removeName() {
+  const Anchor at = anchor();
+  close();
+  const QString name = namedPrefix(at.text);
+  if (name.isEmpty()) {
+    return false;
+  }
+  // The value alone, as if the `name = ` had been deleted: it goes in as
+  // typed, with the field's undo.
+  const QString value = at.text.mid(expressionStart(at.text)).trimmed();
+  m_inserting = true;
+  m_edit->selectAll();
+  m_edit->insert(value);
+  m_edit->setCursorPosition(static_cast<int>(value.size()));
+  m_inserting = false;
+  if (!m_edit->hasFocus()) {
+    m_edit->setFocus(Qt::OtherFocusReason);
+  }
+  qDebug().noquote() << QStringLiteral("Parameter name %1 removed for %2: %3").arg(name, m_options.label, value);
+  return true;
+}
+
 void ParameterField::close(const QString& why) {
   if (m_mode == Mode::Closed && !(m_popup && m_popup->isVisible())) {
     return;
@@ -1357,6 +1390,10 @@ void ParameterField::showMenu(const QPoint& at) {
   QAction* formula = menu->addAction(tr("Edit Formula…"));
   formula->setEnabled(parameterSourceOf(m_edit) && parameterSourceOf(m_edit)->query);
   QAction* naming = m_options.naming ? menu->addAction(tr("Name This Value (name = value)")) : nullptr;
+  // The `name =` taken off: the parameter's automatic name back (mitcad#1577).
+  QAction* unnaming = m_options.removeName && !namedPrefix(m_edit->text()).isEmpty()
+                          ? menu->addAction(tr("Remove Name"))
+                          : nullptr;
   const ParameterSource* source = parameterSourceOf(m_edit);
   QAction* create = m_options.create && source != nullptr && source->addParameter
                         ? menu->addAction(tr("Create User Parameter…"))
@@ -1372,6 +1409,8 @@ void ParameterField::showMenu(const QPoint& at) {
     QTimer::singleShot(0,this,[this] { openFormulaEditor(); });
   } else if (chosen == naming) {
     QTimer::singleShot(0, this, [this] { startNaming(); });
+  } else if (chosen == unnaming) {
+    QTimer::singleShot(0, this, [this] { removeName(); });
   } else if (chosen == create) {
     QTimer::singleShot(0, this, [this] { openCreateEditor(); });
   }

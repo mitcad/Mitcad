@@ -1,0 +1,17 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "mitcad#1594: two close parallel lines, a construction centre line c3 between the fixed points p1 and p2 and the line c6 2 mm above it, Parallel k12 between them: its first symbol beside c6, its second beside c3's middle, under c6's middle. Two fixed points frame the view so that after a fit the lines are about 12 px apart (fewer in session 0's 1024x768 window on Windows)."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy",
+    "entities": [
+      {"id": "p1", "type": "point", "at": [0, 0], "fixed": true},
+      {"id": "p2", "type": "point", "at": [35.36, 0], "fixed": true},
+      {"id": "c3", "type": "line", "start": "p1", "end": "p2", "construction": true},
+      {"id": "p4", "type": "point", "at": [7.23, 2]},
+      {"id": "p5", "type": "point", "at": [28.13, 2]},
+      {"id": "c6", "type": "line", "start": "p4", "end": "p5"},
+      {"id": "p18", "type": "point", "at": [-25, -30], "fixed": true},
+      {"id": "p19", "type": "point", "at": [70, 30], "fixed": true}],
+    "constraints": [
+      {"id": "k12", "type": "parallel", "a": "c6", "b": "c3"}]}},
+  {"expect": {"query": {"query": "sketch", "uid": "F1"}, "result": {"solved": true, "conflicts": []}}}
+]

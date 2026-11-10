@@ -22,3 +22,5 @@ mod intersection_curve_tests;
 mod pipe_corners_tests;
 // A pipe whose path bends tighter than its section warns (mitcad#1497).
 mod pipe_tight_bends_tests;
+// Press-fit holes for printed parts: hex, square, crush ribs (mitcad#1517).
+mod press_fit_hole_tests;

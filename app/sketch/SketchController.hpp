@@ -72,6 +72,16 @@ public:
   // selected: the view does not show the axes.
   virtual bool sketchAxesPickable() const { return false; }
   virtual QStringList sketchAxisPicks() const { return {}; }
+  // Whether the input a command's panel picks for now takes points with
+  // the sketch's snaps (InputDef::sketchSnaps, mitcad#1563: Move/Copy's
+  // Origin and Target Point), and the picks those inputs hold (point ids
+  // and placePick ids), in the inputs' order.
+  virtual bool sketchSnapsPickable() const { return false; }
+  virtual QStringList sketchSnapPicks() const { return {}; }
+  // The running command's handle in the sketch (CommandDef::sketchHandle,
+  // mitcad#1563), and a drag of it setting its value inputs (mm).
+  virtual std::optional<SketchHandle> sketchHandle() const { return std::nullopt; }
+  virtual void dragSketchHandle(const SketchHandle& /*handle*/, double /*x*/, double /*y*/) {}
   // Handles the picks of the view that were handed over by a queued call
   // and not delivered yet, so that the selection and a command that starts
   // next are in the order of the clicks (mitcad#488).
@@ -182,7 +192,12 @@ public:
   bool axisInputs(QStringList& picks);
   // The sketch after the commands so far.
   const SketchModel& model();
+  // The model's reason for the last refusal, in words: a refusal for
+  // conflicting constraints without its ids line (mitcad#1566), whose
+  // blocking items the view paints until the next action.
   const QString& error() const { return m_error; }
+  // Whether the last refusal was for conflicting constraints.
+  bool conflicted() const { return m_conflicted; }
   // Names the undo step in place of its first command's label ("Cut in
   // Sketch1", mitcad#788): commit() then relabels even a single step.
   void setLabel(const QString& label) {
@@ -207,6 +222,7 @@ private:
   QString m_label;
   bool m_relabel = false; // setLabel() named the step
   QString m_error;
+  bool m_conflicted = false;
   // What the action is to tell when it ends: refused attempts, constraints
   // a new one replaced (mitcad#287).
   QStringList m_notices;
@@ -240,9 +256,10 @@ public:
   // Logs where the sketch origin and axes are in the window, when that
   // changed ("Sketch view x,y x,y x,y" for (0, 0), (100, 0) and (0, 100)).
   void logView();
-  // Logs where each inactive constraint's symbol is in the window
-  // ("Constraint k1 glyph at x,y"), when the view or the sketch moved it
-  // (mitcad#721, mitcad#723).
+  // Logs where each inactive constraint's symbols are in the window, a line
+  // for each ("Constraint k1 glyph at x,y (horizontal by c2)"), when the
+  // view or the sketch moved them (mitcad#721, mitcad#723, mitcad#1578,
+  // mitcad#1594).
   void logGlyphs();
 
   // --- Tools
@@ -281,6 +298,15 @@ public:
   // own parameter becomes a user parameter, which the dimension uses at the
   // same value (`sketch.set_dimension` with its bare name), one undo step.
   void keepAsUserParameter(const QString& id);
+  // The parameter of driving dimension `id` when the sketch owns it and it
+  // has a name given to it (not an automatic `d<n>`): its value editor shows
+  // `width = 20 mm` as text, whose `width = ` can be deleted, and Remove
+  // Name offers to give it its automatic name back (mitcad#1577); empty
+  // otherwise.
+  QString namedParameter(const QString& id) const;
+  // Remove Name (mitcad#1577): dimension `id`'s parameter gets its automatic
+  // name back (`remove_parameter_name`), one undo step; the uses follow.
+  void removeDimensionName(const QString& id);
   // Activates or deactivates constraints and dimensions (`sketch.set_active`,
   // mitcad#721). An activation the sketch does not solve with is refused
   // with the model's reason; nothing changes then.
@@ -384,6 +410,21 @@ public:
   // Millimetres per pixel near the sketch origin.
   double pixel() const;
   const Snap& snapped() const { return m_snap; }
+  // Whether the snap is a command input's (mitcad#1563: Point to Point's
+  // points, the drag of Move/Copy's handle), which the overlay marks as a
+  // tool's.
+  bool commandSnapping() const { return m_snapPicking || m_handleDrag.has_value(); }
+  // A running command's handle in the sketch (CommandDef::sketchHandle,
+  // mitcad#1563) as the view shows it: its square and the tips of its
+  // arrows along the sketch's x and y axes, and the part dragged ('x',
+  // 'y', 'b' for the square, else 0).
+  struct HandleShape {
+    QPointF center;
+    QPointF xTip;
+    QPointF yTip;
+    char dragged = 0;
+  };
+  std::optional<HandleShape> handleShape() const;
   const QPointF& cursor() const { return m_cursor; }
   bool cursorInView() const { return m_cursorValid; }
   // The pointer's place in sketch coordinates and the document's length
@@ -398,6 +439,27 @@ public:
   void setPicked(const QStringList& entities);
   const QStringList& picked() const { return m_picked; }
   QString hoverAnnotation() const { return m_hoverAnnotation; }
+  // The constraints and dimensions that block a refused edit (mitcad#1566,
+  // SketchConflict.hpp), painted in the view while its message shows:
+  // their symbols and values and the curves and points they are on, in the
+  // error's colour; in the hover's while the pointer is over the message
+  // (`hovered`). `source` keeps the command panel's ("panel") apart from a
+  // sketch action's ("action"), which the next action clears. A sketch that
+  // does not solve paints its own conflicts as well (the Sketch Palette's
+  // status, conflicts()). Logged when what is painted changes ("Sketch
+  // conflict painted: k5 on c3, c6", "Sketch conflict painted: none").
+  void setConflict(const QString& source, const QStringList& items);
+  void setConflictHovered(const QString& source, bool hovered);
+  QStringList conflictItems(const QString& source) const { return m_conflicts.value(source); }
+  // Every item painted, each once: the sources' and the sketch's own
+  // (SketchModel::conflicts, its constraints and dimensions).
+  QStringList conflicts() const;
+  bool conflictHovered() const { return !m_conflictHovered.isEmpty(); }
+  // The curves and points the painted items are on.
+  QStringList conflictEntities() const;
+  // Selects the painted constraints and dimensions (the Sketch Palette's
+  // status link), as clicks on them would; how many it selected.
+  int selectConflicts();
   // The dimensions and constraints a window holds (view pixels; with
   // `crossing` also those it touches), as selection items (mitcad#217).
   Selection annotationsIn(const QRectF& area, bool crossing) const;
@@ -435,10 +497,14 @@ public:
   // Shows what the cursor gives, while nothing is typed.
   void setLive(const QString& id, double value);
   // A value editor at a view position (a dimension's value); Up, Down and
-  // the wheel step its value down to `stepLimit` (mitcad#1254).
+  // the wheel step its value down to `stepLimit` (mitcad#1254). `name` is
+  // the parameter's, shown before the text; with `nameInText` the text
+  // starts with it (`width = 20 mm`), to be edited or deleted, and Remove
+  // Name is offered (mitcad#1577).
   void openValueEditor(const QPointF& at, const QString& text, FieldSpec::Kind kind,
                        std::function<void(const QString&)> accept,
-                       const QString& name = QString(), const ValueStepLimit& stepLimit = {});
+                       const QString& name = QString(), const ValueStepLimit& stepLimit = {},
+                       bool nameInText = false);
   // Inserts a parameter's name at the open value editor's cursor.
   void insertIntoEditor(const QString& name);
   bool valueEditorOpen() const { return m_editor != nullptr; }
@@ -590,8 +656,30 @@ private:
   QString axisSelectionAt(const QPointF& screen);
   // Whether the hover is an axis or the origin's pick.
   bool axisHovered() const;
+  // While a command's panel runs (SketchCommandPicks.cpp, mitcad#1563):
+  // the input that picks points with the sketch's snaps (the pointer snaps
+  // as the drawing tools' does, a click picks the point or place it
+  // snapped to) and the command's handle (a press on it drags its values).
+  // True when the event was taken.
+  bool snapPickEvent(QEvent* event);
+  bool handleEvent(QEvent* event);
+  // The snap for a command at the view position `screen` (`raw` its place
+  // on the sketch plane), as the drawing tools snap, away from `moves`
+  // (entities and their points).
+  Snap commandSnap(const V2& raw, const QPointF& screen, const QStringList& moves);
+  // The handle's part under a view position: 'x', 'y', 'b' or 0.
+  char handlePartAt(const QPointF& screen) const;
+  // The handle dragged to the view position `screen` with `modifiers`
+  // held: its values set by how far it went, snapped.
+  void dragHandle(const QPointF& screen, Qt::KeyboardModifiers modifiers);
+  // Ends what the command's picks and handle hold (a panel closed).
+  void endCommandPicks();
+  // For UI tests: where the command's handle is, when that changes.
+  void logHandle();
   int fieldIndex(const QString& id) const;
   QString describeStatus() const;
+  // Logs what setConflict() paints when it changed, and draws it.
+  void conflictChanged();
 
   CommandRegistry& m_registry;
   SketchHost& m_host;
@@ -604,11 +692,30 @@ private:
   QString m_loggedProjections; // the linked projections last logged
   QString m_loggedView;     // last logged view placement
   QString m_loggedGlyphs;   // the inactive constraints' symbol places last logged
+  // The blocking items of refused edits by source (setConflict), the
+  // sources whose message the pointer is over, and the line last logged.
+  QHash<QString, QStringList> m_conflicts;
+  QSet<QString> m_conflictHovered;
+  QString m_loggedConflict;
   SketchOverlay* m_overlay = nullptr;
   std::unique_ptr<SketchTool> m_tool;
   QHash<QString, QString> m_toolIcons; // by tool name
 
   bool m_paused = false;
+  // A command input's snaps and handle (mitcad#1563): whether m_snap is a
+  // snap input's, a press for it, the handle as its drag started with the
+  // part dragged and the sketch place pressed, the values last sent, and
+  // the handle's place last logged.
+  bool m_snapPicking = false;
+  bool m_snapPressed = false;
+  QPointF m_snapPress;
+  std::optional<SketchHandle> m_handleDrag;
+  char m_handlePart = 0;
+  V2 m_handlePress;
+  QPointF m_handlePressScreen;
+  bool m_handleMoved = false; // further than a click from the press
+  std::array<double, 2> m_handleSent{};
+  QString m_loggedHandle;
   bool m_construction = false;
   bool m_signedDistances = false;
   bool m_gridSnap = true;
@@ -687,6 +794,7 @@ private:
   QPointer<QLabel> m_editorLabel; // "d3 =" before the editor (mitcad#231)
   QString m_editorDimension;       // the dimension it edits
   QString m_editorText;            // the text it opened with
+  QString m_editorName;            // the name its text opened with (mitcad#1577)
   QString m_tooltipDimension;      // the dimension or constraint whose tooltip is shown
   // Logs what each dimension shows ("Dimension texts: k5 d1 = 60.00, ...").
   void logDimensionTexts() const;

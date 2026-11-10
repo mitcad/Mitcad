@@ -59,6 +59,10 @@ struct ProjectSettingsHost {
   // (lock_probe, once per remote): `done` gets it unless `context` is gone;
   // a remote that does not disables the Edit locks row with the message.
   std::function<void(QObject* context, std::function<void(bool accepted, const QString& message)> done)> probeLocks;
+  // Remove Project... (mitcad#1562), after the dialog closed: the folder
+  // stops being a project and keeps its designs (the host confirms it);
+  // empty: no such button.
+  std::function<void()> removeProject;
 };
 
 // The dialog for the project in `root` (a project with versions): the

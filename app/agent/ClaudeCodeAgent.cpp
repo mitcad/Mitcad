@@ -10,6 +10,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QTimer>
 #include <QtLogging>
 
@@ -101,6 +102,17 @@ bool ClaudeCodeAgent::installedNow() const { return !findProgram(nullptr).isEmpt
 
 QString ClaudeCodeAgent::signedOutText() const {
   return tr("Claude Code is not signed in: sign in here, or run claude in a terminal and type /login.");
+}
+
+QList<QStringList> ClaudeCodeAgent::signInAgainCommands() const {
+  // The executable the chat runs (the one checked last), else the one it
+  // would find now.
+  const QString program = QDir::toNativeSeparators(m_program.isEmpty() ? findProgram(nullptr) : m_program);
+  if (program.isEmpty()) {
+    return {};
+  }
+  return {{program, QStringLiteral("auth"), QStringLiteral("logout")},
+          {program, QStringLiteral("auth"), QStringLiteral("login")}};
 }
 
 QString ClaudeCodeAgent::signInFolder() const {
@@ -274,7 +286,10 @@ bool ClaudeCodeAgent::start(const Start& start, QString* error) {
       return false;
     }
   }
+  const QString data = chatDataDirectory();
+  const QString guidanceFile = QDir(data).absoluteFilePath(QStringLiteral("modeling-guidance.md"));
   const QJsonObject answer = chatRequest({{QStringLiteral("op"), QStringLiteral("claude_arguments")},
+                                         {QStringLiteral("guidance_file"), guidanceFile},
                                          {QStringLiteral("session"), start.session},
                                          {QStringLiteral("resume"), start.resume},
                                          {QStringLiteral("bridge"), start.bridge},
@@ -295,6 +310,15 @@ bool ClaudeCodeAgent::start(const Start& start, QString* error) {
   if (folder.isEmpty() || !QDir().mkpath(folder)) {
     if (error != nullptr) {
       *error = tr("The chat's working folder could not be made.");
+    }
+    return false;
+  }
+  const QByteArray guidance = answer.value(QStringLiteral("guidance")).toString().toUtf8();
+  QSaveFile instructions(guidanceFile);
+  if (data.isEmpty() || !QDir().mkpath(data) || guidance.isEmpty() || !instructions.open(QIODevice::WriteOnly) ||
+      instructions.write(guidance) != guidance.size() || !instructions.commit()) {
+    if (error != nullptr) {
+      *error = tr("The chat's instructions could not be written.");
     }
     return false;
   }

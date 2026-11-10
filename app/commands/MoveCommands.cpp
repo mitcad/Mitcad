@@ -60,8 +60,63 @@ std::optional<gp_Pnt> pivotOf(const CommandState& state, const CommandContext& c
   return centerOf(state.items(movedKey(state)), context);
 }
 
-// The rotation of a free move: about X, then Y, then Z.
-gp_Trsf rotationOf(double rx, double ry, double rz) { return freeRotation(rx, ry, rz); }
+// An edited free move as it was loaded (mitcad#1583): the feature's
+// matrix (`rows`) and the texts of the inputs that hold it (`texts`). While
+// the texts are those, OK gives the model that matrix back as it was,
+// not the one their rounded values make.
+const QString kFreeLoaded = QStringLiteral("free_loaded");
+
+// The texts of a free move's inputs, its hidden pivot's too.
+QJsonObject freeTexts(const CommandState& state) {
+  QJsonObject texts;
+  for (const char* id : {"tx", "ty", "tz", "rx", "ry", "rz", "pivot"}) {
+    texts.insert(QLatin1String(id), state.text(QLatin1String(id)));
+  }
+  return texts;
+}
+
+// The panel's free move from the model's matrix, split about `pivot`
+// (freeMoveOf), and kept as loaded.
+void setFreeMove(const QJsonArray& rows, const gp_Pnt& pivot, CommandState& state, const CommandContext& context) {
+  const FreeMove move = freeMoveOf(rows, pivot);
+  // The pivot in full: the handles sit at it moved by the distances.
+  const auto full = [](double value) { return QString::number(value, 'g', 17); };
+  state.setText(QStringLiteral("pivot"), QStringLiteral("%1,%2,%3").arg(full(pivot.X()), full(pivot.Y()), full(pivot.Z())));
+  const auto deg = [](double radians) { return degrees(radians) + QStringLiteral(" deg"); };
+  state.setText(QStringLiteral("tx"), lengthText(move.moved.X(), context));
+  state.setText(QStringLiteral("ty"), lengthText(move.moved.Y(), context));
+  state.setText(QStringLiteral("tz"), lengthText(move.moved.Z(), context));
+  state.setText(QStringLiteral("rx"), deg(move.rx));
+  state.setText(QStringLiteral("ry"), deg(move.ry));
+  state.setText(QStringLiteral("rz"), deg(move.rz));
+  state.setObject(kFreeLoaded, {{QStringLiteral("rows"), rows}, {QStringLiteral("texts"), freeTexts(state)}});
+}
+
+// An edited free move split again once the timeline is rolled back to the
+// feature (CommandDef::rolledBack, mitcad#1583): `load` ran on the model
+// after the feature, where what moves is already moved, so the pivot it
+// took was the moved middle and the handles, at the pivot moved by the
+// distances, counted the move twice. Now the pivot is the middle of what
+// moves as the feature finds it, where the handles start; the matrix, and
+// so the preview and the result, stay the same.
+void splitFreeMoveRolledBack(CommandState& state, const CommandContext& context) {
+  if (state.choice(QStringLiteral("type")) != QStringLiteral("free")) {
+    return;
+  }
+  const QJsonArray rows = state.object(kFreeLoaded).value(QStringLiteral("rows")).toArray();
+  if (rows.size() != 3) {
+    return;
+  }
+  const auto pivot = centerOf(state.items(movedKey(state)), context);
+  if (!pivot) {
+    return;
+  }
+  setFreeMove(rows, *pivot, state, context);
+  qDebug().noquote() << QStringLiteral("Free move pivot where the feature finds what moves: %1,%2,%3")
+                            .arg(pivot->X(), 0, 'f', 6)
+                            .arg(pivot->Y(), 0, 'f', 6)
+                            .arg(pivot->Z(), 0, 'f', 6);
+}
 
 // The occurrence path ("O1/O4") of an occurrence given by its uid or path.
 QString occurrencePath(const QString& occurrence, const CommandContext& context) {
@@ -442,27 +497,28 @@ QString combineNote(const CommandState& state, const CommandContext& context) {
   return lines.join(QLatin1Char('\n'));
 }
 
-// A free move's handles: an arrow along a model axis or a ring about it.
+// A free move's handles: an arrow along a model axis or a ring about it,
+// in the axis' color (mitcad#1581). All of them meet at the moved middle
+// (mitcad#1580): the rings turn about it, and each arrow starts from it
+// without its own distance, so that its knob is there too and the arrows
+// of the other axes go along with what moves; none while a distance is no
+// number yet (a minus sign typed alone).
 std::function<std::optional<Manipulator>(const CommandState&, const CommandContext&)>
 freeHandle(int axis, bool turn) {
   return [axis, turn](const CommandState& state, const CommandContext& context) -> std::optional<Manipulator> {
-    auto pivot = pivotOf(state, context);
+    const auto pivot = pivotOf(state, context);
     if (!pivot) {
       return std::nullopt;
     }
     const gp_Dir direction(axis == 0 ? 1 : 0, axis == 1 ? 1 : 0, axis == 2 ? 1 : 0);
-    if (turn) {
-      // About the moved middle; none while a move is no number yet (a
-      // minus sign typed alone).
-      const gp_XYZ moved(state.value(QStringLiteral("tx")), state.value(QStringLiteral("ty")),
-                         state.value(QStringLiteral("tz")));
-      if (!std::isfinite(moved.X()) || !std::isfinite(moved.Y()) || !std::isfinite(moved.Z())) {
-        return std::nullopt;
-      }
-      pivot->Translate(gp_Vec(moved));
-      return ring(*pivot, direction);
+    const std::optional<gp_Pnt> at = turn ? freeMovedMiddle(state, *pivot) : freeArrowOrigin(state, *pivot, axis);
+    if (!at) {
+      return std::nullopt;
     }
-    return arrow(*pivot, direction);
+    Manipulator handle = turn ? ring(*at, direction) : arrow(*at, direction);
+    handle.color = axis == 0 ? ColorRole::AxisX : axis == 1 ? ColorRole::AxisY : ColorRole::AxisZ;
+    handle.large = true;
+    return handle;
   };
 }
 
@@ -528,19 +584,20 @@ QJsonObject transformOf(const CommandState& state, const CommandContext& context
       error = Built::failure(QObject::tr("Select what moves."), movedKey(state));
       return {};
     }
-    // Turn about the pivot, then move: p -> R (p - c) + c + t.
-    gp_Trsf move = rotationOf(state.value(QStringLiteral("rx")), state.value(QStringLiteral("ry")),
-                              state.value(QStringLiteral("rz")));
-    const gp_XYZ c = pivot->XYZ();
-    gp_XYZ rc = c;
-    move.Transforms(rc);
-    const gp_XYZ t = c - rc +
-                     gp_XYZ(state.value(QStringLiteral("tx")), state.value(QStringLiteral("ty")), state.value(QStringLiteral("tz")));
-    QJsonArray rows;
-    for (int r = 1; r <= 3; ++r) {
-      rows.append(QJsonArray{move.Value(r, 1), move.Value(r, 2), move.Value(r, 3), t.Coord(r)});
+    // An edit's inputs as loaded: the feature's own matrix, unchanged by
+    // the rounding of the values the panel shows (mitcad#1583).
+    const QJsonObject loaded = state.object(kFreeLoaded);
+    if (!loaded.isEmpty() && loaded.value(QStringLiteral("texts")).toObject() == freeTexts(state)) {
+      return {{QStringLiteral("type"), type}, {QStringLiteral("matrix"), loaded.value(QStringLiteral("rows"))}};
     }
-    return {{QStringLiteral("type"), type}, {QStringLiteral("matrix"), rows}};
+    // Turn about the pivot, then move: p -> R (p - c) + c + t.
+    FreeMove move;
+    move.moved = gp_XYZ(state.value(QStringLiteral("tx")), state.value(QStringLiteral("ty")),
+                        state.value(QStringLiteral("tz")));
+    move.rx = state.value(QStringLiteral("rx"));
+    move.ry = state.value(QStringLiteral("ry"));
+    move.rz = state.value(QStringLiteral("rz"));
+    return {{QStringLiteral("type"), type}, {QStringLiteral("matrix"), freeMatrixOf(move, *pivot)}};
   }
   if (type == QStringLiteral("translate")) {
     return {{QStringLiteral("type"), QStringLiteral("translate_xyz")},
@@ -593,27 +650,14 @@ bool loadTransform(const QJsonObject& transform, CommandState& state, const QJso
   const QString type = str(transform, "type");
   if (type == QStringLiteral("free")) {
     state.setChoice(QStringLiteral("type"), type);
-    const QJsonArray rows = transform.value(QStringLiteral("matrix")).toArray();
-    const auto at = [&rows](int r, int c) { return rows.at(r).toArray().at(c).toDouble(); };
-    // R = Rz Ry Rx.
-    const double ry = std::asin(std::clamp(-at(2, 0), -1.0, 1.0));
-    const double rx = std::atan2(at(2, 1), at(2, 2));
-    const double rz = std::atan2(at(1, 0), at(0, 0));
-    // The pivot is the middle of what moves as it is now; t = t' - c + R c.
+    // About the middle of what moves in the model at the marker. When the
+    // feature is before the marker, what moves is already moved there: the
+    // edit rolls the timeline back to the feature next and splits the
+    // matrix again about the middle the feature finds (mitcad#1583,
+    // splitFreeMoveRolledBack).
     const auto pivot = centerOf(state.items(movedKey(state)), context);
-    const gp_XYZ c = pivot ? pivot->XYZ() : gp_XYZ(0, 0, 0);
-    gp_XYZ rc = c;
-    rotationOf(rx, ry, rz).Transforms(rc);
-    const gp_XYZ t = gp_XYZ(at(0, 3), at(1, 3), at(2, 3)) - c + rc;
-    state.setText(QStringLiteral("pivot"),
-                  QStringLiteral("%1,%2,%3").arg(number(c.X()), number(c.Y()), number(c.Z())));
-    const auto deg = [](double radians) { return degrees(radians) + QStringLiteral(" deg"); };
-    state.setText(QStringLiteral("tx"), lengthText(t.X(), context));
-    state.setText(QStringLiteral("ty"), lengthText(t.Y(), context));
-    state.setText(QStringLiteral("tz"), lengthText(t.Z(), context));
-    state.setText(QStringLiteral("rx"), deg(rx));
-    state.setText(QStringLiteral("ry"), deg(ry));
-    state.setText(QStringLiteral("rz"), deg(rz));
+    setFreeMove(transform.value(QStringLiteral("matrix")).toArray(), pivot ? *pivot : gp_Pnt(0, 0, 0), state,
+                context);
     return true;
   }
   if (type == QStringLiteral("translate_xyz")) {
@@ -1016,6 +1060,8 @@ CommandDef moveCommand(const CommandContext& context) {
     }
     loadTransform(feature.value(QStringLiteral("transform")).toObject(), state, feature, context);
   };
+  // A free move's handles where the feature finds what moves (mitcad#1583).
+  def.rolledBack = splitFreeMoveRolledBack;
 
   def.canEdit = [&context](const QJsonObject& feature) {
     return transformEditable(feature.value(QStringLiteral("transform")).toObject(), context);
@@ -1152,6 +1198,8 @@ CommandDef moveFaceCommand(const CommandContext& context) {
     state.setItems(QStringLiteral("faces"), movedFacesOf(feature, context));
     loadTransform(feature.value(QStringLiteral("transform")).toObject(), state, feature, context);
   };
+  // A free move's handles where the feature finds the faces (mitcad#1583).
+  def.rolledBack = splitFreeMoveRolledBack;
   def.canEdit = [&context](const QJsonObject& feature) {
     return transformEditable(feature.value(QStringLiteral("transform")).toObject(), context, true);
   };

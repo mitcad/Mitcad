@@ -8,7 +8,8 @@
 // Formula… keeping the `name =` (mitcad#755), and the context menu acting
 // on the field's caret and selection (mitcad#756); Up and Down stepping a
 // plain value with the list closed (mitcad#1254), and not while the model
-// computes (mitcad#1360).
+// computes (mitcad#1360); Remove Name in the browser and the menu
+// (mitcad#1577).
 #include "framework/FormulaEditor.hpp"
 #include "framework/ModelBusy.hpp"
 #include "framework/ParameterField.hpp"
@@ -40,6 +41,8 @@
 #include <QStringList>
 #include <QTimer>
 #include <QToolTip>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QWheelEvent>
 #include <QWidget>
 #include <QtLogging>
@@ -163,6 +166,18 @@ void insertionTests() {
   CHECK(expressionStart(QStringLiteral(" w=3")) == 3);
   CHECK(expressionStart(QStringLiteral("d1 == 2")) == 0);
   CHECK(expressionStart(QStringLiteral("  2 * d1")) == 2);
+  // The leading name and automatic names (mitcad#1577).
+  CHECK(namedPrefix(QStringLiteral("width = 20 mm")) == QStringLiteral("width"));
+  CHECK(namedPrefix(QStringLiteral(" w=3")) == QStringLiteral("w"));
+  CHECK(namedPrefix(QStringLiteral("20 mm")).isEmpty());
+  CHECK(namedPrefix(QStringLiteral("d1 == 2")).isEmpty());
+  CHECK(isAutomaticName(QStringLiteral("d1")));
+  CHECK(isAutomaticName(QStringLiteral("d120")));
+  CHECK(!isAutomaticName(QStringLiteral("d")));
+  CHECK(!isAutomaticName(QStringLiteral("d01")));
+  CHECK(!isAutomaticName(QStringLiteral("d1a")));
+  CHECK(!isAutomaticName(QStringLiteral("width")));
+  CHECK(!isAutomaticName(QStringLiteral("D1")));
 }
 
 void nameTests() {
@@ -947,6 +962,93 @@ void stepTests() {
   QToolTip::hideText();
 }
 
+// Remove Name (mitcad#1577): a field that may take its `name =` off offers
+// it in the fx browser and the right-click menu while its text has one; the
+// value stays alone, as typed.
+void removeNameTests() {
+  QWidget window;
+  window.resize(640, 480);
+  setParameterSource(&window, {[] { return designParameters(); },
+                               [](const QJsonObject&, QString*) { return true; },
+                               [] { return QStringLiteral("mm"); }});
+  auto* edit = new QLineEdit(&window);
+  edit->setGeometry(20, 20, 200, 24);
+  ParameterFieldOptions options;
+  options.label = QStringLiteral("test dimension");
+  options.own = QStringLiteral("gap");
+  options.naming = true;
+  options.removeName = true;
+  options.create = false;
+  ParameterField* field = ParameterField::attach(edit, options);
+  int edits = 0;
+  QObject::connect(edit, &QLineEdit::textEdited, edit, [&edits] { ++edits; });
+  window.show();
+  window.activateWindow();
+  QApplication::processEvents();
+  edit->setFocus(Qt::OtherFocusReason);
+  QApplication::processEvents();
+
+  // Directly: the value stays, as typed.
+  edit->setText(QStringLiteral("gap = 20 mm"));
+  CHECK(field->removeName());
+  CHECK(edit->text() == QStringLiteral("20 mm"));
+  CHECK(edits > 0);
+  // Nothing to take off.
+  CHECK(!field->removeName());
+  CHECK(edit->text() == QStringLiteral("20 mm"));
+
+  // The fx browser's action, highlighted and taken with Enter.
+  edit->setText(QStringLiteral("gap = width / 2"));
+  field->openBrowser();
+  CHECK(field->isOpen());
+  QTreeWidgetItem* action = nullptr;
+  const QList<QTreeWidget*> lists = window.findChildren<QTreeWidget*>();
+  for (QTreeWidget* list : lists) {
+    for (int i = 0; i < list->topLevelItemCount(); ++i) {
+      if (list->topLevelItem(i)->text(0) == QStringLiteral("Remove Name")) {
+        action = list->topLevelItem(i);
+        list->setCurrentItem(action);
+      }
+    }
+  }
+  CHECK(action != nullptr);
+  CHECK(press(*edit, Qt::Key_Return));
+  CHECK(edit->text() == QStringLiteral("width / 2"));
+  CHECK(!field->isOpen());
+
+  // The right-click menu's.
+  edit->setText(QStringLiteral("gap = 7"));
+  whileOpen([edit] { openContextMenu(edit); },
+            [](QWidget* shown) { choose(qobject_cast<QMenu*>(shown), QStringLiteral("Remove Name")); });
+  QApplication::processEvents(); // the menu's choice runs after it closes
+  CHECK(edit->text() == QStringLiteral("7"));
+
+  // Not offered without a name, nor in a field that does not take it off.
+  const auto offered = [edit] {
+    bool found = false;
+    whileOpen([edit] { openContextMenu(edit); },
+              [&found](QWidget* shown) {
+                auto* menu = qobject_cast<QMenu*>(shown);
+                CHECK(menu != nullptr);
+                if (menu == nullptr) {
+                  shown->close();
+                  return;
+                }
+                const QList<QAction*> actions = menu->actions();
+                for (QAction* entry : actions) {
+                  found = found || entry->text() == QStringLiteral("Remove Name");
+                }
+                menu->close();
+              });
+    return found;
+  };
+  CHECK(!offered());
+  edit->setText(QStringLiteral("gap = 7"));
+  options.removeName = false;
+  ParameterField::attach(edit, options);
+  CHECK(!offered());
+}
+
 int parameterSuggestTests() {
   failures = 0;
   fragmentTests();
@@ -959,5 +1061,6 @@ int parameterSuggestTests() {
   tooltipTests();
   tableTests();
   stepTests();
+  removeNameTests();
   return failures;
 }

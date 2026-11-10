@@ -314,6 +314,10 @@ public:
   bool sketchClickable(const SelectionItem& item, bool expanded) const override; // mitcad#217
   bool sketchAxesPickable() const override;                                      // mitcad#876
   QStringList sketchAxisPicks() const override;                                  // mitcad#876
+  bool sketchSnapsPickable() const override;                                     // mitcad#1563
+  QStringList sketchSnapPicks() const override;                                  // mitcad#1563
+  std::optional<SketchHandle> sketchHandle() const override;                     // mitcad#1563
+  void dragSketchHandle(const SketchHandle& handle, double x, double y) override; // mitcad#1563
   void deliverPendingPicks() override;                                           // mitcad#488
 
   // DocumentHost (the browser, the timeline and the parameters dialog)
@@ -356,6 +360,9 @@ public:
                          const std::vector<BodyDisplay>& preview) override;
   std::vector<HighlightDisplay> noticeHighlights() const override;
   void previewNoticePlaces(const QString& source, const QString& feature) override;
+  // A sketch command's blocking constraints, painted in the edited sketch
+  // (mitcad#1566; MainWindowNoticeHover.cpp).
+  void sketchConflict(const QStringList& items, bool hovered) override;
   // Motion studies and contact sets (mitcad#454; MainWindowMotion.cpp).
   void openMotionStudy(const QString& name) override;
   void editContactSet(const QString& name) override;
@@ -1108,6 +1115,11 @@ private:
   // in the background when versions are sent at once.
   void sendPanelProjectVersions(const QString& root);
   void addExistingProjectFolder();
+  // Remove Project (mitcad#1562): after a confirmation of what goes (the
+  // core's remove_project dry run), the folder stops being a project and
+  // keeps its designs; the project's open designs close in every window
+  // (saving asked first), and it leaves the Projects panel.
+  void removeProject(const QString& root);
   // A command that changes a project's tree (create_folder, new_design,
   // move, delete) as a version, by the project's author, pushed as Save's
   // versions are; none when it was refused or cancelled. A refusal is told,
@@ -1320,6 +1332,11 @@ private:
   // Whether a command is one of an open drawing's (the DRAWING and CUT
   // SHEET tabs'): it does not lead back to the 3D view.
   static bool isDrawingCommand(const CommandDef& def);
+  // Whether a command leads from an open drawing back to the 3D view: a
+  // feature, a command of a ribbon tab other than the drawing's; not Edit
+  // Parameters (mitcad#1582: the table edits the design the drawing shows,
+  // over the drawing).
+  static bool leavesDrawing(const CommandDef& def);
   // The navigation bar at the bottom of the view (mitcad#1086,
   // MainWindowNavigationBar.cpp): a capsule card at the bottom centre in
   // the Floating layout, in the status bar in the Docked layout; the

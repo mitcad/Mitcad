@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "MoveDragMotion.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include <QJsonArray>
@@ -57,6 +58,57 @@ std::optional<gp_Trsf> moveMotion(const CommandState& state, const gp_Pnt& pivot
     return motion;
   }
   return std::nullopt;
+}
+
+std::optional<gp_Pnt> freeMovedMiddle(const CommandState& state, const gp_Pnt& pivot) {
+  const gp_XYZ moved(state.value(QStringLiteral("tx")), state.value(QStringLiteral("ty")),
+                     state.value(QStringLiteral("tz")));
+  if (!std::isfinite(moved.X()) || !std::isfinite(moved.Y()) || !std::isfinite(moved.Z())) {
+    return std::nullopt;
+  }
+  return gp_Pnt(pivot.XYZ() + moved);
+}
+
+std::optional<gp_Pnt> freeArrowOrigin(const CommandState& state, const gp_Pnt& pivot, int axis) {
+  if (axis < 0 || axis > 2) {
+    return std::nullopt;
+  }
+  gp_XYZ moved(state.value(QStringLiteral("tx")), state.value(QStringLiteral("ty")), state.value(QStringLiteral("tz")));
+  if (!std::isfinite(moved.X()) || !std::isfinite(moved.Y()) || !std::isfinite(moved.Z())) {
+    return std::nullopt;
+  }
+  // Its own distance left out exactly (not added and taken off again):
+  // the start stays the same while its own value is dragged, and the drag
+  // keeps its grab (ManipulatorOverlay::setHandles).
+  moved.SetCoord(axis + 1, 0.0);
+  return gp_Pnt(pivot.XYZ() + moved);
+}
+
+FreeMove freeMoveOf(const QJsonArray& rows, const gp_Pnt& pivot) {
+  const auto at = [&rows](int r, int c) { return rows.at(r).toArray().at(c).toDouble(); };
+  // R = Rz Ry Rx.
+  FreeMove move;
+  move.ry = std::asin(std::clamp(-at(2, 0), -1.0, 1.0));
+  move.rx = std::atan2(at(2, 1), at(2, 2));
+  move.rz = std::atan2(at(1, 0), at(0, 0));
+  // t' = c - R c + t, so t = t' - c + R c.
+  gp_XYZ turned = pivot.XYZ();
+  freeRotation(move.rx, move.ry, move.rz).Transforms(turned);
+  move.moved = gp_XYZ(at(0, 3), at(1, 3), at(2, 3)) - pivot.XYZ() + turned;
+  return move;
+}
+
+QJsonArray freeMatrixOf(const FreeMove& move, const gp_Pnt& pivot) {
+  // Turn about the pivot, then move: p -> R (p - c) + c + t.
+  const gp_Trsf rotation = freeRotation(move.rx, move.ry, move.rz);
+  gp_XYZ turned = pivot.XYZ();
+  rotation.Transforms(turned);
+  const gp_XYZ t = pivot.XYZ() - turned + move.moved;
+  QJsonArray rows;
+  for (int r = 1; r <= 3; ++r) {
+    rows.append(QJsonArray{rotation.Value(r, 1), rotation.Value(r, 2), rotation.Value(r, 3), t.Coord(r)});
+  }
+  return rows;
 }
 
 namespace {

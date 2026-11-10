@@ -3,16 +3,20 @@
 
 #include "../MainWindow.hpp"
 #include "../view/NavigationPreferences.hpp"
+#include "GlassCard.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <memory>
+#include <utility>
 
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QMouseEvent>
 #include <QKeyEvent>
+#include <QPointer>
 #include <QPushButton>
 #include <QSlider>
 #include <QWheelEvent>
@@ -395,6 +399,362 @@ void TestDriver::testNavigationRelease() {
     state->view->settleCamera();
     qInfo() << "Navigation release: both modifier/button orders, Cmd after orbit, hover and phase-only scroll end passed";
     qInfo() << "Navigation momentum: orbit retained with no modifier and Cmd, phase-only end released the button";
+  });
+}
+
+// view-navigation <scheme>: the view's navigation in this test process only
+// (Preferences keep theirs), without camera animations.
+void TestDriver::setViewNavigation(const QString& scheme) {
+  static const std::array<std::pair<const char*, NavigationScheme>, 7> schemes = {{
+      {"middle-pan", NavigationScheme::MiddlePan},
+      {"alt-buttons", NavigationScheme::AltButtons},
+      {"middle-pan-f4", NavigationScheme::MiddlePanF4},
+      {"middle-orbit", NavigationScheme::MiddleOrbit},
+      {"right-orbit", NavigationScheme::RightOrbit},
+      {"trackpad", NavigationScheme::Trackpad},
+      {"trackpad-shift", NavigationScheme::TrackpadShift},
+  }};
+  auto* window = qobject_cast<MainWindow*>(m_main.data());
+  const auto found = std::find_if(schemes.cbegin(), schemes.cend(), [&scheme](const auto& entry) {
+    return scheme == QLatin1String(entry.first);
+  });
+  if (!window || found == schemes.cend()) {
+    fail(m_line, QStringLiteral("view-navigation middle-pan|alt-buttons|middle-pan-f4|middle-orbit|right-orbit|"
+                                "trackpad|trackpad-shift requires a document window"));
+    return;
+  }
+  const QPointer<MainWindow> target = window;
+  const NavigationScheme value = found->second;
+  queue([target, value, scheme] {
+    if (!target) return;
+    NavigationSettings settings = target->viewer().navigation();
+    settings.scheme = value;
+    settings.animate = false;
+    target->viewer().setNavigation(settings);
+    qInfo().noquote() << QStringLiteral("View navigation: %1").arg(scheme);
+  });
+}
+
+// Keys changed while a button is held (mitcad#1571), a trackpad scroll
+// while a button is held and the scroll phases Qt makes of macOS's
+// (mitcad#1572), and the window deactivated during a drag (mitcad#1573).
+// Application events only, as testNavigationRelease: physical input is the
+// checklist's (docs/macos-trackpad-checklist.md).
+void TestDriver::testNavigationGestureState() {
+  auto* window = qobject_cast<MainWindow*>(m_main.data());
+  if (!window || window->modelBusy()) {
+    fail(m_line, QStringLiteral("navigation gesture state requires an idle document"));
+    return;
+  }
+  struct State {
+    QPointer<OcctViewer> view;
+    QPointer<QWidget> host; // the view's window, which the panels' windows belong to
+    NavigationSettings original;
+    CameraState camera;
+    CameraState before;
+    QPointF at;
+    int clicks = 0;      // picks the view reported as clicks
+    int windowPicks = 0; // and as window selections
+    QMetaObject::Connection picked;
+  };
+  auto state = std::make_shared<State>();
+  state->view = &window->viewer();
+  state->host = GlassCard::hostWindow(state->view);
+  state->view->settleCamera();
+  state->original = state->view->navigation();
+  state->camera = state->view->camera();
+  const std::weak_ptr<State> weak = state;
+  state->picked = QObject::connect(state->view.data(), &OcctViewer::picked, state->view.data(),
+                                   [weak](const Selection&, Qt::KeyboardModifiers, bool windowPick) {
+    if (const auto alive = weak.lock()) {
+      ++(windowPick ? alive->windowPicks : alive->clicks);
+    }
+  });
+  const auto use = [state](NavigationScheme scheme) {
+    auto settings = state->original;
+    settings.scheme = scheme;
+    settings.animate = false;
+    state->view->setNavigation(settings);
+    state->view->setCamera(state->camera);
+    state->view->settleCamera();
+    state->at = QPointF(state->view->width() * 0.48, state->view->height() * 0.50);
+    state->before = state->view->camera();
+    state->clicks = 0;
+    state->windowPicks = 0;
+  };
+  const auto mouse = [state](QEvent::Type type, QPointF offset, Qt::MouseButtons buttons,
+                             Qt::KeyboardModifiers modifiers) {
+    const QPointF point = state->at + offset;
+    QMouseEvent event(type, point, QPointF(state->view->mapToGlobal(point.toPoint())),
+                      type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton, buttons, modifiers);
+    QCoreApplication::sendEvent(state->view, &event);
+  };
+  const auto key = [state](QEvent::Type type, int code, Qt::KeyboardModifiers modifiers) {
+    QKeyEvent event(type, code, modifiers);
+    QCoreApplication::sendEvent(state->view, &event);
+  };
+  const auto scroll = [state](Qt::ScrollPhase phase, QPoint delta, Qt::KeyboardModifiers modifiers,
+                              Qt::MouseButtons buttons) {
+    QWheelEvent event(state->at, QPointF(state->view->mapToGlobal(state->at.toPoint())), delta, {}, buttons,
+                      modifiers, phase, false);
+    QCoreApplication::sendEvent(state->view, &event);
+  };
+  // A frame now, in this turn of the event loop: OCCT applies the input
+  // (camera moves, picks) without the scroll's 150 ms quiet time passing.
+  const auto frame = [state] { state->view->grabFramebuffer(); };
+  const auto sameCamera = [](const CameraState& a, const CameraState& b) {
+    return a.eye.Distance(b.eye) < 1e-6 && a.target.Distance(b.target) < 1e-6 &&
+           a.up.Angle(b.up) < 1e-9 && std::abs(a.height - b.height) < 1e-6;
+  };
+  const auto held = [state](Aspect_VKeyMouse buttons) { return state->view->PressedMouseButtons() == buttons; };
+  // Qt's own activation state, as keyReceiver sets it where the system
+  // activates nothing (a session without a desktop).
+  const auto activate = [](QWidget* active) {
+    QT_WARNING_PUSH
+    QT_WARNING_DISABLE_DEPRECATED
+    QApplication::setActiveWindow(active);
+    QT_WARNING_POP
+  };
+  const auto check = [this](bool ok, const QString& why) {
+    if (!ok) fail(m_line, why);
+    return ok;
+  };
+
+  // --- mitcad#1571: the keys of the press decide it until the button is up.
+  for (const auto scheme : {NavigationScheme::Trackpad, NavigationScheme::TrackpadShift,
+                            NavigationScheme::AltButtons}) {
+    const int number = static_cast<int>(scheme);
+    // Option pressed during a plain select: still a window selection.
+    queue([use, mouse, scheme] {
+      use(scheme);
+      mouse(QEvent::MouseButtonPress, {}, Qt::LeftButton, Qt::NoModifier);
+    });
+    queue([state, key, mouse, frame, sameCamera, held, check, number] {
+      key(QEvent::KeyPress, Qt::Key_Alt, Qt::AltModifier);
+      mouse(QEvent::MouseMove, {24, 12}, Qt::LeftButton, Qt::AltModifier);
+      mouse(QEvent::MouseMove, {48, 24}, Qt::LeftButton, Qt::AltModifier);
+      frame();
+      check(sameCamera(state->before, state->view->camera()) && held(Aspect_VKeyMouse_LeftButton),
+            QStringLiteral("Option pressed during a select turned it into an orbit (scheme %1)").arg(number));
+    });
+    queue([state, key, mouse, frame, sameCamera, held, check, number] {
+      mouse(QEvent::MouseButtonRelease, {48, 24}, Qt::NoButton, Qt::AltModifier);
+      key(QEvent::KeyRelease, Qt::Key_Alt, Qt::NoModifier);
+      frame();
+      check(state->windowPicks == 1 && held(Aspect_VKeyMouse_NONE) && sameCamera(state->before, state->view->camera()),
+            QStringLiteral("a select with Option pressed during it did not end as a window selection: "
+                           "%1 window picks, buttons %2 (scheme %3)")
+                .arg(state->windowPicks).arg(static_cast<int>(state->view->PressedMouseButtons())).arg(number));
+    });
+    // Option released during an orbit: the orbit goes on, nothing picked.
+    queue([use, mouse, scheme] {
+      use(scheme);
+      mouse(QEvent::MouseButtonPress, {}, Qt::LeftButton, Qt::AltModifier);
+    });
+    queue([state, mouse, frame, sameCamera, check, number] {
+      mouse(QEvent::MouseMove, {24, 12}, Qt::LeftButton, Qt::AltModifier);
+      frame();
+      if (check(!sameCamera(state->before, state->view->camera()),
+                QStringLiteral("Option+drag did not orbit (scheme %1)").arg(number))) {
+        state->before = state->view->camera();
+      }
+    });
+    queue([state, key, mouse, frame, sameCamera, check, number] {
+      key(QEvent::KeyRelease, Qt::Key_Alt, Qt::NoModifier);
+      mouse(QEvent::MouseMove, {48, 24}, Qt::LeftButton, Qt::NoModifier);
+      frame();
+      check(!sameCamera(state->before, state->view->camera()),
+            QStringLiteral("the orbit stopped when Option was released before the button (scheme %1)").arg(number));
+    });
+    queue([state, mouse, frame, held, check, number] {
+      mouse(QEvent::MouseButtonRelease, {48, 24}, Qt::NoButton, Qt::NoModifier);
+      frame();
+      check(state->windowPicks == 0 && state->clicks == 0 && held(Aspect_VKeyMouse_NONE),
+            QStringLiteral("an orbit with Option released before the button picked: %1 window picks, %2 clicks "
+                           "(scheme %3)").arg(state->windowPicks).arg(state->clicks).arg(number));
+    });
+  }
+
+  // --- mitcad#1572: a scroll while a button is held, and the phases Qt
+  // gives macOS's (qnsview_mouse.mm, scrollWheel:): MayBegin is a
+  // zero-delta ScrollBegin, Cancelled a zero-delta ScrollEnd; Ended is a
+  // ScrollEnd that keeps its delta when Qt sees no momentum queued, and
+  // a momentum Began after it is a new ScrollBegin; the momentum keeps the
+  // keys of the scroll's last event. Each in one turn: no quiet time.
+  for (const auto scheme : {NavigationScheme::Trackpad, NavigationScheme::TrackpadShift}) {
+    const int number = static_cast<int>(scheme);
+    const Qt::KeyboardModifiers orbit =
+        scheme == NavigationScheme::TrackpadShift ? Qt::ShiftModifier : Qt::AltModifier;
+    queue([state, use, mouse, scroll, frame, sameCamera, held, check, scheme, orbit, number] {
+      use(scheme);
+      mouse(QEvent::MouseButtonPress, {}, Qt::LeftButton, Qt::NoModifier);
+      scroll(Qt::ScrollBegin, {}, orbit, Qt::LeftButton);
+      scroll(Qt::ScrollUpdate, {18, 9}, orbit, Qt::LeftButton);
+      frame();
+      if (!check(held(Aspect_VKeyMouse_LeftButton) && sameCamera(state->before, state->view->camera()),
+                 QStringLiteral("an orbit scroll replaced the held button's press (scheme %1)").arg(number))) {
+        return;
+      }
+      mouse(QEvent::MouseButtonRelease, {}, Qt::NoButton, Qt::NoModifier);
+      frame();
+      if (!check(state->clicks == 1 && state->windowPicks == 0 && held(Aspect_VKeyMouse_NONE),
+                 QStringLiteral("the press held during an orbit scroll was not a click: %1 clicks, %2 window "
+                                "picks (scheme %3)").arg(state->clicks).arg(state->windowPicks).arg(number))) {
+        return;
+      }
+      scroll(Qt::ScrollUpdate, {18, 9}, orbit, Qt::NoButton);
+      frame();
+      check(held(Aspect_VKeyMouse_NONE) && sameCamera(state->before, state->view->camera()),
+            QStringLiteral("the scroll went on orbiting after the click (scheme %1)").arg(number));
+      scroll(Qt::ScrollEnd, {}, orbit, Qt::NoButton);
+    });
+    queue([state, use, scroll, frame, sameCamera, held, check, scheme, orbit, number] {
+      use(scheme);
+      // Ended with a delta: applied, and the button up at once.
+      scroll(Qt::ScrollBegin, {}, orbit, Qt::NoButton);
+      scroll(Qt::ScrollUpdate, {18, 9}, orbit, Qt::NoButton);
+      frame();
+      if (!check(held(Aspect_VKeyMouse_LeftButton) && !sameCamera(state->before, state->view->camera()),
+                 QStringLiteral("an orbit scroll did not orbit (scheme %1)").arg(number))) {
+        return;
+      }
+      scroll(Qt::ScrollUpdate, {18, 9}, orbit, Qt::NoButton);
+      scroll(Qt::ScrollEnd, {12, 6}, orbit, Qt::NoButton);
+      if (!check(held(Aspect_VKeyMouse_NONE),
+                 QStringLiteral("a ScrollEnd with a delta left the trackpad button held (scheme %1)").arg(number))) {
+        return;
+      }
+      frame();
+      // Resting fingers: MayBegin, then Cancelled.
+      state->before = state->view->camera();
+      scroll(Qt::ScrollBegin, {}, orbit, Qt::NoButton);
+      scroll(Qt::ScrollEnd, {}, orbit, Qt::NoButton);
+      frame();
+      if (!check(held(Aspect_VKeyMouse_NONE) && sameCamera(state->before, state->view->camera()),
+                 QStringLiteral("resting fingers moved the camera or held the button (scheme %1)").arg(number))) {
+        return;
+      }
+      // Ended with a delta, then the momentum Qt did not see coming.
+      scroll(Qt::ScrollBegin, {}, orbit, Qt::NoButton);
+      scroll(Qt::ScrollUpdate, {18, 9}, orbit, Qt::NoButton);
+      scroll(Qt::ScrollEnd, {12, 6}, orbit, Qt::NoButton);
+      if (!check(held(Aspect_VKeyMouse_NONE),
+                 QStringLiteral("Ended with a delta left the button held (scheme %1)").arg(number))) {
+        return;
+      }
+      scroll(Qt::ScrollBegin, {12, 6}, orbit, Qt::NoButton);
+      scroll(Qt::ScrollMomentum, {9, 4}, orbit, Qt::NoButton);
+      if (!check(held(Aspect_VKeyMouse_LeftButton),
+                 QStringLiteral("a momentum begun as a new scroll did not orbit (scheme %1)").arg(number))) {
+        return;
+      }
+      scroll(Qt::ScrollEnd, {}, orbit, Qt::NoButton);
+      check(held(Aspect_VKeyMouse_NONE),
+            QStringLiteral("the momentum's end left the trackpad button held (scheme %1)").arg(number));
+    });
+  }
+
+  // --- mitcad#1573: the window deactivated during a drag ends it.
+  // An F4 orbit (the cube's flags) and an Option orbit, then a click.
+  for (const auto scheme : {NavigationScheme::MiddlePanF4, NavigationScheme::AltButtons}) {
+    const bool f4 = scheme == NavigationScheme::MiddlePanF4;
+    const Qt::KeyboardModifiers keys = f4 ? Qt::NoModifier : Qt::AltModifier;
+    queue([state, use, key, mouse, activate, check, scheme, f4, keys] {
+      use(scheme);
+      activate(state->host);
+      if (f4) key(QEvent::KeyPress, Qt::Key_F4, Qt::NoModifier);
+      mouse(QEvent::MouseButtonPress, {}, Qt::LeftButton, keys);
+      check(!f4 || state->view->cubeInteraction(), QStringLiteral("F4 and the left button did not start an F4 orbit"));
+    });
+    queue([state, mouse, frame, sameCamera, held, activate, check, f4, keys] {
+      mouse(QEvent::MouseMove, {24, 12}, Qt::LeftButton, keys);
+      frame();
+      if (!check(!sameCamera(state->before, state->view->camera()) && held(Aspect_VKeyMouse_LeftButton),
+                 QStringLiteral("the %1 orbit did not move the camera").arg(f4 ? QStringLiteral("F4") : QStringLiteral("Option")))) {
+        return;
+      }
+      activate(nullptr); // Cmd-Tab: the release and F4's release go elsewhere
+      check(held(Aspect_VKeyMouse_NONE) && !state->view->cubeInteraction(),
+            QStringLiteral("the window deactivated during the %1 orbit left it held")
+                .arg(f4 ? QStringLiteral("F4") : QStringLiteral("Option")));
+      activate(state->host);
+      state->before = state->view->camera();
+    });
+    queue([state, mouse, frame, sameCamera, held, check, f4] {
+      state->clicks = 0;
+      state->windowPicks = 0;
+      mouse(QEvent::MouseButtonPress, {}, Qt::LeftButton, Qt::NoModifier);
+      check(!state->view->cubeInteraction(), QStringLiteral("after the deactivation a click was an F4 orbit"));
+      mouse(QEvent::MouseButtonRelease, {}, Qt::NoButton, Qt::NoModifier);
+      frame();
+      check(state->clicks == 1 && held(Aspect_VKeyMouse_NONE) && sameCamera(state->before, state->view->camera()),
+            QStringLiteral("after the window was deactivated during the %1 orbit, a click did not pick: %2 clicks")
+                .arg(f4 ? QStringLiteral("F4") : QStringLiteral("Option")).arg(state->clicks));
+    });
+  }
+  // A trackpad scroll's drag, and the window deactivated.
+  queue([use, scroll, held, activate, check, state] {
+    use(NavigationScheme::Trackpad);
+    activate(state->host);
+    scroll(Qt::ScrollBegin, {}, Qt::AltModifier, Qt::NoButton);
+    scroll(Qt::ScrollUpdate, {18, 9}, Qt::AltModifier, Qt::NoButton);
+    if (!check(held(Aspect_VKeyMouse_LeftButton), QStringLiteral("an orbit scroll did not start its drag"))) return;
+    activate(nullptr);
+    check(held(Aspect_VKeyMouse_NONE), QStringLiteral("the window deactivated during a scroll's orbit left it held"));
+    activate(state->host);
+  });
+  // The keyboard taken by a panel during a drag (a field of the view's own
+  // window, or a floating panel's own window) does not end the drag.
+  const auto panelTakes = std::make_shared<QString>();
+  queue([use, mouse, frame, sameCamera, held, check, state] {
+    use(NavigationScheme::AltButtons);
+    mouse(QEvent::MouseButtonPress, {}, Qt::LeftButton, Qt::AltModifier);
+    mouse(QEvent::MouseMove, {24, 12}, Qt::LeftButton, Qt::AltModifier);
+    frame();
+    if (check(!sameCamera(state->before, state->view->camera()) && held(Aspect_VKeyMouse_LeftButton),
+              QStringLiteral("Option+drag did not orbit"))) {
+      state->before = state->view->camera();
+    }
+  });
+  queue([mouse, frame, sameCamera, held, activate, check, state, panelTakes] {
+    QFocusEvent out(QEvent::FocusOut, Qt::TabFocusReason);
+    QCoreApplication::sendEvent(state->view, &out);
+    QWidget* card = nullptr;
+    for (QWidget* top : QApplication::topLevelWidgets()) {
+      if (top != state->host && top->isVisible() && qobject_cast<GlassCard*>(top) != nullptr &&
+          GlassCard::hostWindow(top) == state->host) {
+        card = top;
+        break;
+      }
+    }
+    if (card != nullptr) {
+      activate(state->host);
+      activate(card);
+      *panelTakes = QStringLiteral("a floating panel's window took the activation");
+    } else {
+      *panelTakes = QStringLiteral("no floating panel window in this layout");
+    }
+    if (!check(held(Aspect_VKeyMouse_LeftButton),
+               QStringLiteral("the keyboard taken by a panel ended the drag on the view (%1)").arg(*panelTakes))) {
+      activate(state->host);
+      return;
+    }
+    mouse(QEvent::MouseMove, {48, 24}, Qt::LeftButton, Qt::AltModifier);
+    frame();
+    activate(state->host);
+    check(!sameCamera(state->before, state->view->camera()),
+          QStringLiteral("the orbit stopped when a panel took the keyboard (%1)").arg(*panelTakes));
+    mouse(QEvent::MouseButtonRelease, {48, 24}, Qt::NoButton, Qt::AltModifier);
+  });
+  queue([state, panelTakes] {
+    QObject::disconnect(state->picked);
+    state->view->setNavigation(state->original);
+    state->view->setCamera(state->camera);
+    state->view->settleCamera();
+    qInfo() << "Navigation gesture state: keys changed during a press kept its gesture and its click";
+    qInfo() << "Navigation gesture state: a scroll with a button held, ScrollEnd with a delta and Qt's macOS phases released the button";
+    qInfo().noquote() << QStringLiteral("Navigation gesture state: a deactivated window ended F4, Option and scroll drags; %1 kept the drag")
+                             .arg(*panelTakes);
   });
 }
 

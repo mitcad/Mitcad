@@ -11,12 +11,14 @@ import os
 from pathlib import Path
 import queue
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
+import zipfile
 
 
 CLI = str(Path(sys.argv[1]).resolve())
@@ -122,6 +124,60 @@ BOX = {"cmd": "add_feature", "def": {
     "type": "box", "plane": {"type": "origin", "plane": "xy"},
     "corner": [0, 0], "length": 30, "width": 20, "height": 10,
     "operation": "new_body"}}
+
+
+def print_project(path):
+    """A synthetic 3MF carrying printer, process and filament settings."""
+    settings = {
+        "printer_settings_id": "Fixture printer",
+        "printer_model": "Fixture machine",
+        "printable_area": ["0x0", "180x0", "180x180", "0x180"],
+        "printable_height": "190", "nozzle_diameter": ["0.6"],
+        "print_settings_id": "Fixture process", "layer_height": "0.28",
+        "wall_loops": "4", "sparse_infill_density": "18%",
+        "filament_settings_id": ["Fixture PLA"], "filament_type": ["PLA"],
+        "filament_colour": ["#2080C0"], "nozzle_temperature": ["223"],
+        "filament_density": ["1.24"]}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", '<?xml version="1.0"?>'
+                         '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                         '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>'
+                         '</Types>')
+        package.writestr("3D/3dmodel.model", '<?xml version="1.0"?>'
+                         '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">'
+                         '<metadata name="Application">OrcaSlicer-2.3.0</metadata>'
+                         '<resources/><build/></model>')
+        package.writestr("Metadata/project_settings.config", json.dumps(settings))
+    return settings
+
+
+def slicer_fixture(root):
+    """Only test-owned user presets and their two-level system inheritance."""
+    files = {
+        "system/Fixture/machine/Base.json": {
+            "type": "machine", "name": "Fixture base", "instantiation": "false",
+            "nozzle_diameter": ["0.6"], "printable_height": "200"},
+        "system/Fixture/machine/Bench.json": {
+            "type": "machine", "name": "Fixture bench", "inherits": "Fixture base",
+            "printer_model": "Fixture machine",
+            "printable_area": ["0x0", "180x0", "180x180", "0x180"]},
+        "system/Fixture/filament/Base PLA.json": {
+            "type": "filament", "name": "Fixture base PLA", "filament_type": ["PLA"],
+            "filament_density": ["1.24"], "nozzle_temperature": ["210"]},
+        "user/default/machine/Printer.json": {
+            "name": "Fixture printer", "inherits": "Fixture bench", "from": "User",
+            "printable_height": "190"},
+        "user/default/process/Process.json": {
+            "name": "Fixture process", "from": "User", "layer_height": "0.28"},
+        "user/default/filament/PLA.json": {
+            "name": "Fixture PLA", "inherits": "Fixture base PLA", "from": "User",
+            "nozzle_temperature": ["228"]}}
+    for relative, value in files.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value), encoding="utf-8")
+    return [root / relative for relative in files if relative.startswith("user/")]
 
 
 def make_private(path, directory):
@@ -1072,6 +1128,298 @@ class McpTest(unittest.TestCase):
             self.assertEqual(len(result["files"]), 2)
             client.finish()
 
+    def print_import_state(self, client, document):
+        """Document and imported items: a refused preflight must change neither."""
+        return {name: client.tool("model_query", {
+            "document": document, "query": {"query": name}})["result"]
+                for name in ("document", "print_profiles", "materials", "bodies")}
+
+    def test_workspace_print_settings_are_used_by_plate_export(self):
+        """mitcad#1570: all three imported layers reach the actual 3MF output."""
+        source = self.workspace / "profiles" / "source.3mf"
+        expected = print_project(source)
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            imported = client.tool("model_command", {"document": document, "command": {
+                "cmd": "import_print_profile", "path": "profiles/source.3mf",
+                "into": "design", "dialect": "orcaslicer"}})["result"]
+            for key, name in (("printers", "Fixture printer"),
+                              ("processes", "Fixture process"), ("materials", "Fixture PLA")):
+                self.assertEqual([item["name"] for item in imported[key]], [name], imported)
+            self.assertTrue(imported["chosen"], imported)
+            client.tool("model_command", {"document": document, "command": BOX})
+            client.tool("model_command", {"document": document, "command": [
+                {"cmd": "set_body_material", "uid": "F1.b0", "material": imported["materials"][0]["id"]},
+                {"cmd": "add_print_plate", "name": "Fixture plate"},
+                {"cmd": "place_on_plate", "plate": "Fixture plate", "items": [{"body": "F1.b0"}]}]})
+            exported = client.tool("model_export", {
+                "document": document, "path": "imported.3mf", "format": "3mf",
+                "plates": "one_file", "dialect": "orcaslicer"})["result"]
+            self.assertEqual(exported["dialect"], "orcaslicer")
+            self.assertEqual(exported["plates"][0]["pieces"], 1)
+            with zipfile.ZipFile(self.workspace / "imported.3mf") as package:
+                written = json.loads(package.read("Metadata/project_settings.config"))
+            self.assertEqual(written["printer_settings_id"], expected["printer_settings_id"])
+            self.assertEqual(written["print_settings_id"], expected["print_settings_id"])
+            self.assertAlmostEqual(float(written["nozzle_diameter"][0]), 0.6)
+            self.assertAlmostEqual(float(written["layer_height"]), 0.28)
+            self.assertEqual(written["filament_settings_id"], expected["filament_settings_id"])
+            self.assertAlmostEqual(float(written["nozzle_temperature"][0]), 223)
+            client.finish()
+
+    def test_workspace_slicer_presets_keep_confined_inherited_values(self):
+        root = self.workspace / "presets"
+        choices = slicer_fixture(root)
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            imported = client.tool("model_command", {"document": document, "command": {
+                "cmd": "import_slicer_presets", "dialect": "orcaslicer", "folder": "presets",
+                "presets": [{"path": str(path.relative_to(self.workspace))} for path in choices],
+                "into": "design"}})["result"]
+            self.assertEqual(len(imported["printers"]), 1, imported)
+            self.assertEqual(len(imported["processes"]), 1, imported)
+            self.assertEqual(len(imported["materials"]), 1, imported)
+            profiles = client.tool("model_query", {"document": document,
+                "query": {"query": "print_profiles"}})["result"]
+            printer = next(item for item in profiles if item["name"] == "Fixture printer")
+            process = next(item for item in profiles if item["name"] == "Fixture process")
+            self.assertAlmostEqual(printer["values"]["nozzle_diameter"], 0.6)
+            self.assertAlmostEqual(printer["values"]["max_print_height"], 190)
+            self.assertEqual(printer["values"]["bed_shape"], [[0, 0], [180, 0], [180, 180], [0, 180]])
+            self.assertAlmostEqual(process["values"]["layer_height"], 0.28)
+            materials = client.tool("model_query", {"document": document,
+                "query": {"query": "materials"}})["result"]
+            material = next(item for item in materials if item["name"] == "Fixture PLA")
+            self.assertAlmostEqual(material["density"], 1.24)
+            self.assertAlmostEqual(material["filament"]["temperature"], 228)
+            client.finish()
+
+    def test_profile_import_inheritance_needs_a_confined_source_tree(self):
+        root = self.workspace / "presets"
+        choices = slicer_fixture(root)
+        standalone = self.workspace / "standalone.json"
+        standalone.write_text(json.dumps({"type": "machine", "name": "Standalone child",
+                                         "inherits": "External base", "nozzle_diameter": ["0.6"]}),
+                              encoding="utf-8")
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            before = self.print_import_state(client, document)
+            client.tool("model_command", {"document": document, "command": {
+                "cmd": "import_print_profile", "path": "standalone.json", "into": "design"}}, error=True)
+            self.assertEqual(self.print_import_state(client, document), before)
+            # The same import API may resolve a known tree inside the workspace.
+            imported = client.tool("model_command", {"document": document, "command": {
+                "cmd": "import_print_profile", "path": str(choices[0].relative_to(self.workspace)),
+                "into": "design", "dialect": "orcaslicer"}})["result"]
+            self.assertEqual([item["name"] for item in imported["printers"]], ["Fixture printer"])
+            profiles = client.tool("model_query", {"document": document,
+                "query": {"query": "print_profiles"}})["result"]
+            self.assertAlmostEqual(profiles[0]["values"]["nozzle_diameter"], 0.6)
+            # A missing parent must be refused, not accepted as a partial profile.
+            child = json.loads(choices[0].read_text(encoding="utf-8"))
+            child["inherits"] = "Missing system base"
+            choices[0].write_text(json.dumps(child), encoding="utf-8")
+            before = self.print_import_state(client, document)
+            for command in (
+                    {"cmd": "import_print_profile", "path": str(choices[0]), "into": "design"},
+                    {"cmd": "import_slicer_presets", "dialect": "orcaslicer", "folder": "presets",
+                     "presets": [{"path": str(choices[1])}, {"path": str(choices[0])}], "into": "design"}):
+                client.tool("model_command", {"document": document, "command": command}, error=True)
+                self.assertEqual(self.print_import_state(client, document), before)
+            client.finish()
+
+    def test_profile_import_paths_and_arrays_are_preflighted(self):
+        """A bad later source must not import earlier settings or create a body."""
+        source = self.workspace / "profiles" / "source.3mf"
+        print_project(source)
+        with tempfile.TemporaryDirectory(prefix="outside-profile-", dir=WORK) as outside:
+            outside_file = Path(outside) / "outside.3mf"
+            print_project(outside_file)
+            outside_before = outside_file.read_bytes()
+            traversal = os.path.relpath(outside_file, self.workspace)
+            with Session(self.workspace) as client:
+                client.initialize()
+                document = client.tool("document_create", {})["document"]
+                before = self.print_import_state(client, document)
+                for path in (str(outside_file), traversal, "profiles", "missing.3mf"):
+                    with self.subTest(path=path):
+                        refused = client.tool("model_command", {"document": document, "command": [
+                            {"cmd": "import_print_profile", "path": "profiles/source.3mf"},
+                            BOX, {"cmd": "import_print_profile", "path": path}]}, error=True)
+                        self.assertNotEqual(refused.get("applied"), True, refused)
+                        self.assertEqual(self.print_import_state(client, document), before)
+                client.finish()
+            self.assertEqual(outside_file.read_bytes(), outside_before)
+
+    def test_print_import_array_has_a_shared_source_budget(self):
+        """Small valid files cannot bypass the call's budget through repetition."""
+        source = self.workspace / "padded.json"
+        source.write_text(json.dumps({
+            "type": "process", "name": "Padded process", "layer_height": "0.28",
+            "notes": "A" * (768 * 1024)}), encoding="utf-8")
+        small = self.workspace / "small.json"
+        small.write_text(json.dumps({"type": "process", "name": "Follow-up process",
+                                    "layer_height": "0.2"}), encoding="utf-8")
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            before = self.print_import_state(client, document)
+            command = {"cmd": "import_print_profile", "path": "padded.json",
+                       "dialect": "orcaslicer", "into": "design", "choose": False}
+            refused = client.tool("model_command", {"document": document,
+                "command": [command] * 100}, error=True)
+            self.assertIn("limit", refused["error"].lower(), refused)
+            self.assertNotEqual(refused.get("applied"), True, refused)
+            self.assertEqual(self.print_import_state(client, document), before)
+            # Refusal releases the per-call budget and preserves writability.
+            imported = client.tool("model_command", {"document": document, "command": {
+                "cmd": "import_print_profile", "path": "small.json",
+                "dialect": "orcaslicer", "into": "design"}})["result"]
+            self.assertEqual([item["name"] for item in imported["processes"]], ["Follow-up process"])
+            profiles = client.tool("model_query", {"document": document,
+                "query": {"query": "print_profiles"}})["result"]
+            self.assertEqual([item["name"] for item in profiles], ["Follow-up process"])
+            self.assertEqual(client.tool("model_query", {"document": document,
+                "query": {"query": "document"}})["result"]["undo_depth"],
+                before["document"]["undo_depth"] + 1)
+            client.finish()
+
+    def test_print_imports_never_write_user_or_project_libraries(self):
+        """Both native import commands are confined to the current design."""
+        print_project(self.workspace / "source.3mf")
+        choices = slicer_fixture(self.workspace / "presets")
+        with tempfile.TemporaryDirectory(prefix="profile-libraries-", dir=WORK) as outside:
+            user = Path(outside) / "user-library"
+            project = Path(outside) / "project"
+            for folder in (user, project / "print-library"):
+                folder.mkdir(parents=True)
+                (folder / "sentinel.txt").write_bytes(b"keep the existing library\n")
+            def snapshot():
+                return {str(path.relative_to(outside)): path.read_bytes()
+                        for path in Path(outside).rglob("*") if path.is_file()}
+            original = snapshot()
+            env = dict(os.environ, MITCAD_PRINT_LIBRARY_DIR=str(user))
+            with Session(self.workspace, env=env) as client:
+                client.initialize()
+                document = client.tool("document_create", {})["document"]
+                before = self.print_import_state(client, document)
+                commands = [
+                    {"cmd": "import_print_profile", "path": "source.3mf"},
+                    {"cmd": "import_slicer_presets", "dialect": "orcaslicer", "folder": "presets",
+                     "presets": [{"path": str(path)} for path in choices]}]
+                for command in commands:
+                    for changes in ({"into": "user"}, {"into": "project", "project": str(project)},
+                                    {"into": "design", "project": str(project)}):
+                        with self.subTest(command=command["cmd"], target=changes):
+                            client.tool("model_command", {"document": document,
+                                "command": dict(command, **changes)}, error=True)
+                            self.assertEqual(self.print_import_state(client, document), before)
+                            self.assertEqual(snapshot(), original)
+                client.finish()
+
+    def test_print_imports_respect_read_only_documents(self):
+        print_project(self.workspace / "source.3mf")
+        choices = slicer_fixture(self.workspace / "presets")
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            client.tool("document_save", {"document": document, "path": "read-only.mitcad"})
+            client.finish()
+        with Session(self.workspace, read_only=True) as client:
+            client.initialize()
+            document = client.tool("document_open", {"path": "read-only.mitcad"})["document"]
+            before = self.print_import_state(client, document)
+            for command in (
+                    {"cmd": "import_print_profile", "path": "source.3mf", "into": "design"},
+                    {"cmd": "import_slicer_presets", "dialect": "orcaslicer", "folder": "presets",
+                     "presets": [{"path": str(path)} for path in choices], "into": "design"}):
+                client.tool("model_command", {"document": document, "command": command}, error=True)
+                self.assertEqual(self.print_import_state(client, document), before)
+            client.finish()
+
+    def test_profile_import_symlinks_cannot_escape_the_workspace(self):
+        with tempfile.TemporaryDirectory(prefix="outside-profile-", dir=WORK) as outside:
+            outside_file = Path(outside) / "source.3mf"
+            print_project(outside_file)
+            try:
+                os.symlink(outside_file, self.workspace / "linked.3mf")
+                os.symlink(outside, self.workspace / "linked-folder", target_is_directory=True)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest("symlinks unavailable: " + str(error))
+            with Session(self.workspace) as client:
+                client.initialize()
+                document = client.tool("document_create", {})["document"]
+                before = self.print_import_state(client, document)
+                for path in ("linked.3mf", "linked-folder/source.3mf"):
+                    client.tool("model_command", {"document": document, "command": {
+                        "cmd": "import_print_profile", "path": path, "into": "design"}}, error=True)
+                    self.assertEqual(self.print_import_state(client, document), before)
+                client.finish()
+
+    def test_slicer_presets_cannot_read_outside_choices_or_nested_sources(self):
+        root = self.workspace / "presets"
+        choices = slicer_fixture(root)
+        with tempfile.TemporaryDirectory(prefix="outside-presets-", dir=WORK) as outside:
+            outside_choices = slicer_fixture(Path(outside))
+            with Session(self.workspace) as client:
+                client.initialize()
+                document = client.tool("document_create", {})["document"]
+                before = self.print_import_state(client, document)
+                for folder, selected in ((str(outside), outside_choices),
+                                         ("presets", [choices[1], outside_choices[0]]),
+                                         ("presets", [Path(os.path.relpath(outside_choices[0], self.workspace))])):
+                    client.tool("model_command", {"document": document, "command": {
+                        "cmd": "import_slicer_presets", "dialect": "orcaslicer", "folder": folder,
+                        "presets": [{"path": str(path)} for path in selected], "into": "design"}}, error=True)
+                    self.assertEqual(self.print_import_state(client, document), before)
+                client.finish()
+            inherited = root / "system" / "Fixture" / "machine" / "Base.json"
+            inherited.unlink()
+            try:
+                os.symlink(Path(outside) / "system" / "Fixture" / "machine" / "Base.json", inherited)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest("symlinks unavailable: " + str(error))
+            with Session(self.workspace) as client:
+                client.initialize()
+                document = client.tool("document_create", {})["document"]
+                before = self.print_import_state(client, document)
+                for command in (
+                        {"cmd": "import_slicer_presets", "dialect": "orcaslicer", "folder": "presets",
+                         "presets": [{"path": str(path)} for path in choices], "into": "design"},
+                        {"cmd": "import_print_profile", "path": str(choices[0]), "into": "design"}):
+                    client.tool("model_command", {"document": document, "command": command}, error=True)
+                    self.assertEqual(self.print_import_state(client, document), before)
+                client.finish()
+
+    def test_slicer_preset_inherited_directories_cannot_leave_workspace(self):
+        root = self.workspace / "presets"
+        choices = slicer_fixture(root)
+        with tempfile.TemporaryDirectory(prefix="outside-presets-", dir=WORK) as outside:
+            slicer_fixture(Path(outside))
+            machine = root / "system" / "Fixture" / "machine"
+            for child in machine.iterdir():
+                child.unlink()
+            machine.rmdir()
+            try:
+                os.symlink(Path(outside) / "system" / "Fixture" / "machine", machine,
+                           target_is_directory=True)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest("directory symlinks unavailable: " + str(error))
+            with Session(self.workspace) as client:
+                client.initialize()
+                document = client.tool("document_create", {})["document"]
+                before = self.print_import_state(client, document)
+                for command in (
+                        {"cmd": "import_print_profile", "path": str(choices[0]), "into": "design"},
+                        {"cmd": "import_slicer_presets", "dialect": "orcaslicer", "folder": "presets",
+                         "presets": [{"path": str(path)} for path in choices], "into": "design"}):
+                    client.tool("model_command", {"document": document, "command": command}, error=True)
+                    self.assertEqual(self.print_import_state(client, document), before)
+                client.finish()
+
     def test_print_plates_are_exported_with_their_files_checked(self):
         """mitcad#1490: a plate per box, one file or a file per plate."""
         with Session(self.workspace) as client:
@@ -1129,7 +1477,137 @@ class McpTest(unittest.TestCase):
             for name in ("cura - Red.3mf", "cura - Blue.3mf"):
                 self.assertTrue((self.workspace / name).is_file())
             self.assertFalse((self.workspace / "cura.3mf").exists())
+            # Again over the same plate files: only with overwrite (mitcad#1569).
+            arguments = {"document": document, "path": "cura.3mf", "format": "3mf",
+                         "plates": "file_per_plate", "dialect": "cura"}
+            refused = client.tool("model_export", arguments, error=True)
+            self.assertIn("overwrite", refused["error"])
+            result = client.tool("model_export", dict(arguments, overwrite=True))["result"]
+            self.assertEqual(sorted(Path(path).name for path in result["files"]),
+                             ["cura - Blue.3mf", "cura - Red.3mf"])
             client.tool("document_close", {"document": document, "discard": True})
+            client.finish()
+
+    def test_export_refinement_and_overwrite(self):
+        """mitcad#1569: the mesh's tolerances, and replacing existing files."""
+        def triangles(name):
+            # A binary STL: an 80-byte header, then the triangles' count.
+            return struct.unpack_from("<I", (self.workspace / name).read_bytes(), 80)[0]
+
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            client.tool("model_command", {"document": document, "command": CYLINDER})
+            # A finer mesh than the default for a small printed part.
+            client.tool("model_export", {"document": document, "path": "default.stl", "format": "stl"})
+            client.tool("model_export", {"document": document, "path": "fine.stl", "format": "stl",
+                                         "refinement": {"deviation": 0.03, "angle": 0.052}})
+            self.assertGreater(triangles("fine.stl"), triangles("default.stl"))
+            client.tool("model_export", {"document": document, "path": "high.obj", "format": "obj",
+                                         "refinement": "high"})
+            self.assertTrue((self.workspace / "high.obj").is_file())
+            # export checks the values; the mesh formats only.
+            client.tool("model_export", {"document": document, "path": "coarse.stl", "format": "stl",
+                                         "refinement": "coarse"}, error=True)
+            self.assertFalse((self.workspace / "coarse.stl").exists())
+            refused = client.tool("model_export", {"document": document, "path": "mesh.step",
+                                                   "format": "step", "refinement": "high"}, error=True)
+            self.assertIn("refinement", refused["error"])
+            self.assertFalse((self.workspace / "mesh.step").exists())
+            # An existing file: refused without overwrite, replaced with it.
+            existing = self.workspace / "part.stl"
+            existing.write_bytes(b"existing part")
+            refused = client.tool("model_export", {"document": document, "path": "part.stl",
+                                                   "format": "stl"}, error=True)
+            self.assertIn("model_export requires overwrite", refused["error"])
+            self.assertEqual(existing.read_bytes(), b"existing part")
+            client.tool("model_export", {"document": document, "path": "part.stl", "format": "stl",
+                                         "overwrite": False}, error=True)
+            self.assertEqual(existing.read_bytes(), b"existing part")
+            exported = client.tool("model_export", {"document": document, "path": "part.stl",
+                                                    "format": "stl", "overwrite": True})
+            self.assertEqual(Path(exported["path"]).name, "part.stl")
+            self.assertGreater(triangles("part.stl"), 0)
+            # An OBJ's .mtl beside it likewise.
+            (self.workspace / "part.mtl").write_text("existing material\n", encoding="utf-8")
+            client.tool("model_export", {"document": document, "path": "part.obj", "format": "obj"},
+                        error=True)
+            self.assertFalse((self.workspace / "part.obj").exists())
+            client.tool("model_export", {"document": document, "path": "part.obj", "format": "obj",
+                                         "overwrite": True})
+            self.assertTrue((self.workspace / "part.obj").is_file())
+            # A drawing's sheets likewise.
+            client.tool("model_export", {"document": document, "path": "part.svg", "format": "svg"})
+            client.tool("model_export", {"document": document, "path": "part.svg", "format": "svg"},
+                        error=True)
+            client.tool("model_export", {"document": document, "path": "part.svg", "format": "svg",
+                                         "overwrite": True})
+            # Outside the workspace: refused with overwrite too.
+            with tempfile.TemporaryDirectory(prefix="outside-export-", dir=WORK) as outside:
+                target = Path(outside) / "outside.stl"
+                target.write_bytes(b"outside part")
+                for path in (str(target), "../" + Path(outside).name + "/outside.stl"):
+                    client.tool("model_export", {"document": document, "path": path, "format": "stl",
+                                                 "overwrite": True}, error=True)
+                self.assertEqual(target.read_bytes(), b"outside part")
+                try:
+                    os.symlink(target, self.workspace / "linked.stl")
+                except (OSError, NotImplementedError):
+                    pass
+                else:
+                    client.tool("model_export", {"document": document, "path": "linked.stl",
+                                                 "format": "stl", "overwrite": True}, error=True)
+                    self.assertEqual(target.read_bytes(), b"outside part")
+                    (self.workspace / "linked.stl").unlink()
+            client.tool("document_close", {"document": document, "discard": True})
+            client.finish()
+
+    def test_modeling_hints_are_scoped_optional_and_work_with_every_timeline_mode(self):
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            def command(value, **options):
+                return client.tool("model_command", {"document": document, "command": value, **options})
+            command({"cmd": "sketch.create"})
+            sketch = command({"cmd": "sketch.add_point", "sketch": "F1", "at": [8, 4]})
+            self.assertGreater(sketch["result"]["status"]["dof"], 0)
+            self.assertTrue(any(h["rule"] == "sketch-underconstrained" and h["target"] == "F1"
+                                for h in sketch["hints"]), sketch)
+            # The untouched, underconstrained F1 must not leak into a clean edit.
+            clean = command(BOX)
+            self.assertEqual(clean["hints"], [])
+            fixed = copy.deepcopy(BOX)
+            fixed["def"]["plane"] = {"origin": [0, 0, 0], "normal": [0, 0, 1]}
+            made = command(fixed)
+            self.assertEqual([h["rule"] for h in made["hints"]], ["fixed-placement"])
+            self.assertEqual([h["target"] for h in made["hints"]], ["F3"])
+            for mode in ("changed", "full", "none"):
+                renamed = command({"cmd": "rename_feature", "uid": "F3", "name": "Fixed " + mode}, timeline=mode)
+                self.assertEqual([h["target"] for h in renamed["hints"]], ["F3"])
+                self.assertTrue(renamed["hints"][0]["guide"]["topic"])
+            quiet = command({"cmd": "rename_feature", "uid": "F3", "name": "Quiet"}, hints=False, timeline="none")
+            self.assertNotIn("hints", quiet)
+            recomputed = command({"cmd": "recompute"})
+            self.assertEqual(recomputed["hints"], [])
+            invalid = client.request("tools/call", {"name": "model_command", "arguments": {
+                "document": document, "command": {"cmd": "recompute"}, "hints": "false"}})
+            self.assertEqual(invalid["error"]["code"], -32602)
+            # A real picked cylindrical fillet face is a volatile parent even
+            # when it is valid geometry for a construction axis.
+            document = client.tool("document_create", {})["document"]
+            region = "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"
+            command({"cmd": "sketch.create"})
+            command({"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40})
+            command({"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": region}],
+                    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}})
+            command({"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+                    "edges": ["E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"], "radius": 5}})
+            faces = client.tool("model_query", {"document": document, "query": {"query": "faces", "body": "F2.b0"}})["result"]
+            face = next(name for row in faces for name in row["names"] if name.startswith("F3:fillet("))
+            made = command({"cmd": "add_feature", "def": {"type": "construction_axis", "definition": {
+                    "type": "normal_to_face_at_point", "face": {"body": "F2.b0", "face": face},
+                    "point": {"point": [60, 0, 10]}}}})
+            self.assertTrue(any(h["rule"] == "volatile-parent" and h["target"] == "F4" for h in made["hints"]), made)
             client.finish()
 
     def test_compact_results_and_command_arrays(self):
@@ -1501,11 +1979,17 @@ class McpTest(unittest.TestCase):
             self.assertIn('"type": "construction_plane"', plane["example"])
             found = client.tool("model_reference", {"search": "bbox"})
             self.assertGreater(found["total"], 0)
-            long = client.tool("model_reference", {"section": "Feature definitions"})
+            # In brief by default, whole on request (mitcad#1587).
+            brief = client.tool("model_reference", {"section": "Feature definitions"})
+            self.assertTrue(brief["brief"])
+            self.assertIn("extended: true", brief["note"])
+            long = client.tool("model_reference", {"section": "Feature definitions",
+                                                   "extended": True})
             self.assertTrue(long["truncated"])
             self.assertLessEqual(len(long["text"].encode("utf-8")), 64 * 1024)
             rest = client.tool("model_reference", {"section": "Feature definitions",
-                                                   "offset": long["next_offset"]})
+                                                   "offset": long["next_offset"],
+                                                   "extended": True})
             self.assertTrue(rest["text"])
             client.tool("model_reference", {"section": "No such section"}, error=True)
 

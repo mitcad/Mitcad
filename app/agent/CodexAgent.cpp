@@ -119,6 +119,16 @@ QString CodexAgent::signedOutText() const {
   return tr("Codex is not signed in: sign in here, or run codex logout, then codex login in a terminal.");
 }
 
+QList<QStringList> CodexAgent::signInAgainCommands() const {
+  // The executable the chat runs (the one checked last), else the one it
+  // would find now.
+  const QString program = QDir::toNativeSeparators(m_program.isEmpty() ? findProgram(nullptr) : m_program);
+  if (program.isEmpty()) {
+    return {};
+  }
+  return {{program, QStringLiteral("logout")}, {program, QStringLiteral("login")}};
+}
+
 void CodexAgent::setReadiness(Readiness readiness, const QString& detail) {
   if (readiness == m_readiness && detail == m_detail) {
     return;

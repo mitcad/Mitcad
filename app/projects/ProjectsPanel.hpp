@@ -197,6 +197,8 @@ signals:
   void commandRequested(const QString& id);
   void addFolderRequested();
   void removeFromListRequested(const QString& root);
+  // Remove Project... (mitcad#1562): the window confirms and removes it.
+  void removeProjectRequested(const QString& root);
   // A message for the status bar (a name refused).
   void statusMessage(const QString& message, bool error);
   void contentHeightChanged();

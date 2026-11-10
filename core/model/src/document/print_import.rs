@@ -90,7 +90,25 @@ impl<K: Kernel> Document<K> {
         project: Option<&Path>,
         choose: bool,
     ) -> Result<Value, ModelError> {
-        let mut imported = read_print_file(path, dialect)?;
+        self.import_print_settings_read(
+            path,
+            read_print_file(path, dialect)?,
+            into,
+            project,
+            choose,
+        )
+    }
+
+    /// Imports already read settings. The caller controls all source reads;
+    /// passing no library target changes only the document.
+    pub fn import_print_settings_read(
+        &mut self,
+        path: &str,
+        mut imported: Imported,
+        into: Option<LibraryKind>,
+        project: Option<&Path>,
+        choose: bool,
+    ) -> Result<Value, ModelError> {
         // One filament's presets (a bundle's) as one material with a
         // variant per printer and nozzle (mitcad#1054).
         imported.merge_filaments(None);

@@ -132,16 +132,19 @@ fn lines_with_shared_points_constraints_and_dimensions() {
         json!({"cmd": "set_parameter", "name": "d1", "value": 80}),
     );
     assert_area_close(&d, 80.0 * 60.0 / 2.0);
-    // An over-constraining constraint is refused, naming the conflict.
+    // An over-constraining constraint is refused, naming what blocks it in
+    // words, its ids on the last line (mitcad#1566).
     let error = rejected(
         &mut d,
         json!({"cmd": "sketch.add_constraint", "sketch": "F1",
                "constraint": {"type": "vertical", "line": "c1"}}),
     );
+    let (words, blocking) = mitcad_model::sketch::conflict::split(&error);
     assert!(
-        error.contains("over-constrained") && error.contains("k1"),
+        words.contains("can't hold with the new constraint") && !words.contains("k1"),
         "{error}"
     );
+    assert!(blocking.is_some_and(|ids| !ids.is_empty()), "{error}");
     // A driven dimension measures; making it driving keeps the value.
     let driven = command(
         &mut d,
@@ -1440,7 +1443,9 @@ fn a_coincident_against_a_dimension_is_still_refused() {
                "constraint": {"type": "coincident", "point": right, "entity": "p2"}}),
     );
     assert!(
-        error.contains("over-constrain") || error.contains("cannot be solved"),
+        error.contains("over-constrain")
+            || error.contains("can't hold")
+            || error.contains("cannot be solved"),
         "{error}"
     );
     let s = sketch(&d, "F1");

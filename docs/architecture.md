@@ -349,7 +349,9 @@ design in a project.
   ([material-files.md](material-files.md)), each row checked on its own;
   `document/material_import.rs` imports into the design or a library as
   one undo step. The bundled material dataset (`material_dataset.rs`,
-  third-party data under Apache-2.0 in `third_party/material-properties`)
+  third-party data under Apache-2.0 in `third_party/material-properties`,
+  and MitCad's own woods and panels of the class Wood, mitcad#1552, in
+  `core/model/data/wood_materials.json`)
   is compiled in and read through the same import; a material made from
   it is the user's own copy that remembers the entry.
 - **Print settings key map** (mitcad#640, `core/print-keys`):
@@ -397,7 +399,7 @@ design in a project.
   source, mitcad#313; an embedded image is kept once per design by its
   SHA-256, shared in memory and in the file), and a class, the
   materials' (`core/model-base/src/material_class.rs`, mitcad#1102:
-  Metal, General Plastic, FDM Plastic, Resin, Other; a library
+  Metal, General Plastic, FDM Plastic, Resin, Wood (mitcad#1552), Other; a library
   appearance's from its id, never written), by which the pickers offer a
   material's class first.
   The library is built into the model; a document's own appearances are
@@ -1663,6 +1665,13 @@ is the crate `core/sketch`, mitcad#780) is stored; its evaluation
   constraints it makes redundant (never a dimension, a fixed entity or a
   constraint on projected geometry), in one undo step (mitcad#287,
   `SketchEdit::drop_implied`).
+- **Conflicts in words** (mitcad#1566, `sketch/conflict.rs`): a conflict
+  is told by constraint types, the entities they are on and dimension
+  values, never by ids; fixed geometry summarised. An edit refused for a
+  conflict names the user's constraints and dimensions that block it
+  (`SketchEdit::refusal`: each left out in turn, those that let the sketch
+  solve with the least movement) and lists their ids on a last line
+  (`[conflicts: k5]`) that the application takes off and paints.
 
 Evaluation: resolve the frame; compute projections (linked ones follow
 their sources by topological name); solve from the stored positions;
@@ -2229,7 +2238,19 @@ not recompute.
   operations stop inside an evaluation, P7e), since a job may mesh new
   bodies that share their faces; and no run starts after a job that was
   asked to stop, whose meshing may have left bodies the view meshes on
-  its own thread. A command or a sketch that opens cancels it at once
+  its own thread. The view itself, which goes on while a run reads the
+  bodies, never meshes a model shape (mitcad#1553): highlights, the hover
+  chain and the hidden-edge styles' edges are drawn from the meshes the
+  jobs made (a shape without faces from its curves), plates draw bodies
+  no job meshed through a copy, and the section clips made on the UI
+  thread clip detached copies (`prepare_clips`); an edge highlight that
+  meshed the body's own edge there damaged the heap under a run's join
+  (`tools/ui-view-mesh-writes-test.sh`). What the view does mesh on its
+  thread is its own: sketch profiles, sketch curves and datums are built
+  there anew from the model's numbers (`Document::profile_shape`, the
+  sketch and datums queries) and handed to no model thread (mitcad#1586,
+  the test's driver check `expect-view-own-shapes`). A command or a sketch that
+  opens cancels it at once
   without waiting (`cancelBackgroundEvaluation`). When it ends (or a job
   stops it), the document adopts what it evaluated on the session's
   thread while no job runs (`Document::adopt_rolled_back`): only when its
@@ -2355,7 +2376,23 @@ not recompute.
   FFI prepares a validated tool and wraps its completed result. What MCP
   allows follows each command's and query's class in the model's API
   (`core/model-api/src/classes.rs`: model, file IO, remote, internal),
-  not a list of names. Commands follow the ordinary window workflow and run
+  with a narrow headless exception: `import_print_profile` and
+  `import_slicer_presets` remain file-IO commands, but the workspace backend
+  permits their design-only form. It snapshots every selected and inherited
+  source through the workspace's canonical path checks before any array
+  entry runs. A caller-supplied Rust reader then feeds the ordinary import
+  logic from memory; installed slicer discovery and print-library reads are
+  excluded. Preparation shares the command memory guard and one call-wide
+  limit of 4,096 file reads, 4,096 directory entries and 64 MiB of source
+  bytes plus expanded preset snapshots. Document-aware stored-font checks
+  still apply. Live mode keeps the file-IO refusal.
+  The read-only `design_review` query lives in the
+  Rust model API and reports stable rules with guide topic/anchor links.
+  Print checks reuse the existing analyses and the effective printer of
+  the selected body's shown placement. Both MCP profiles collect direct
+  command targets and reuse the same query for at most three short hints;
+  `hints: false` avoids that query. No new geometry or undo step is created.
+  Commands follow the ordinary window workflow and run
   on the same model worker; in an open sketch its own commands go through
   `SketchOp` as the user's would, and an agent's undo steps are labelled
   "(agent)". Queries are refused only while the model computes (a busy
@@ -2395,7 +2432,13 @@ not recompute.
   interface, one class per agent behind `agent::ChatAgent` (Claude Code's
   print mode with stream-json, `agent::ClaudeCodeAgent`; Codex's app server
   with JSON-RPC, `agent::CodexAgent`, the bridge given as the thread's
-  configuration overrides). The agent's
+  configuration overrides). The built-in agents receive the live server's
+  instructions and the compiled guide index before the first message:
+  Claude Code through an atomically written file in the chat data folder
+  and `--append-system-prompt-file`, Codex through the thread's
+  `developer_instructions` configuration, and API agents in their system
+  prompt. The guide index comes from `core/mcp/src/guide.rs`, so changes to
+  its topics reach all three paths from one source. The agent's
   only tool source is the live server of its window, through the installed
   bridge with the chat's marker (`mitcad-cli mcp --connect --chat-session`);
   the listener asks the panel (`mcp::ChatGate`, `agent::ChatController`)
@@ -3236,7 +3279,20 @@ commands ([commands.md](../core/model-api/src/commands.md), "Projects").
   beside its files, then a push. A failure before the first version puts
   the folder back as it was; a failed push leaves the versions waiting.
   `clone_project` with `adopt` makes a repository with files a project;
-  `init_bare` makes a shared folder a remote.
+  `init_bare` makes a shared folder a remote. The repository's own
+  configuration says who made it (`mitcad.repository`: `created` or
+  `existing`).
+- **Removed in one step** (`remove_project`, mitcad#1562,
+  `core/vcs/src/projects/remove.rs`): the folder stops being a project and
+  keeps its designs. Everything is checked before anything changes (a
+  `dry_run` gives the plan the confirmation shows); designs that refer to
+  the B-rep store are written as single files first
+  (`mitcad_model::file::single_file_text`), the others stay byte for
+  byte; then MitCad's lines of `.gitattributes` and `.gitignore`, `.git`
+  only when MitCad made the repository (its mark, else a history whose
+  first versions hold the marker), and `.mitcad`. A repository that was
+  there before keeps its history and records a version without the
+  project's files; a remote is never touched.
 - **Onto a repository's files** (`connect` with `onto_files`, Local →
   Cloud): the sync's replay (`remote/sync.rs`) puts all of the project's
   versions after the remote's, with `.gitignore` and `.gitattributes`

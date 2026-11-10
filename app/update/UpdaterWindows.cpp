@@ -19,10 +19,20 @@
 // for all users (Program Files) with /S /AllUsers /D=<dir>, elevated (verb
 // runas, UAC asks) unless this process has administrator rights already.
 // Before that it asks the MCP bridges that run from the installation to
-// end and waits a few seconds (mitcad#1454); an installer that still finds
-// programs from the installation running replaces nothing and ends with
-// exit code 3, and the log's last line names those programs and asks to
-// close them and try again. Then it starts Mitcad again, also when the
+// end and waits a few seconds (mitcad#1454). Whatever from the installation
+// still runs it names in a question, End Them and Install or Cancel
+// (mitcad#1584), once the installer has passed its check: on End Them and
+// Install it asks MitCad (another mitcad.exe from bin) to close as quitting
+// it does, one design window at a time, so that MitCad asks about unsaved
+// changes; a MitCad still running after that is ended only when the person
+// chooses End Anyway. The other programs from bin of this session (the
+// bridges, render workers) it ends, and it runs the installer with
+// /EndPrograms, which ends the rest the same way with the installer's own
+// rights (elevated for all users). Every step is a line of the log. On
+// Cancel it runs no installer. An installer that still finds programs from
+// the installation running replaces nothing and ends with exit code 3, and
+// the log's last line names those programs and asks to close them and try
+// again. Then it starts Mitcad again, also when the
 // check or the installer failed or the elevation was refused: Mitcad then
 // tells so from the log's last line. Win32 only, with the C++ runtime
 // linked statically, so that it runs on its own in the temp folder; never
@@ -31,22 +41,44 @@
 #include <windows.h>
 
 #include <bcrypt.h>
+#include <commctrl.h>
 #include <shellapi.h>
 
 #include <array>
 #include <cstddef>
 #include <cwchar>
+#include <map>
 #include <string>
 #include <vector>
 
 #include "RunningPrograms.hpp"
 #include "UpdaterChecks.hpp"
 
+#ifdef _MSC_VER
+// The common controls 6, which have the task dialog of the question
+// (mitcad#1584); the linker writes the dependency into the manifest. It is
+// loaded at run time (ask()), so that the updater starts without it too.
+#pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' "  \
+                        "version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' " \
+                        "language='*'\"")
+#endif
+
 namespace {
 
 // The installer's exit code when programs from the installation still run
 // (mitcad#1454, packaging/windows/NSIS.template.in): it changed no file.
 constexpr DWORD kInstallerFilesInUse = 3;
+
+// The answers of the questions about programs still running (mitcad#1584):
+// the ids of the task dialog's buttons, which the installer test
+// (tools/installer-windows-test.ps1) clicks with TDM_CLICK_BUTTON; Cancel
+// is IDCANCEL.
+constexpr int kEndThemAndInstall = 101;
+constexpr int kEndAnyway = 102;
+constexpr int kWait = 103;
+
+// How long MitCad, asked to close, gets before the updater asks again.
+constexpr int kCloseSeconds = 30;
 
 using Digest = std::array<unsigned char, mitcad::updater::kSha256Size>;
 
@@ -217,10 +249,329 @@ bool isAdministrator() {
   return member != FALSE;
 }
 
-// Checks the installer again and runs it, and waits for it. True when it
-// ran and ended with exit code 0; otherwise `outcome` says why not (each
-// step is also in the log). The scope: "user", "all" or empty (the
-// installer decides, as for an updater of an earlier release).
+// A choice of a question besides Cancel: its button's id and label (an &
+// before its access key).
+struct Choice {
+  int id;
+  const wchar_t* label;
+};
+
+// `label` without the & of its access key.
+std::wstring plainLabel(const wchar_t* label) {
+  std::wstring text;
+  for (const wchar_t* c = label; *c != L'\0'; ++c) {
+    if (*c != L'&') {
+      text += *c;
+    }
+  }
+  return text;
+}
+
+using TaskDialogIndirectFunction = HRESULT(WINAPI*)(const TASKDIALOGCONFIG*, int*, int*, BOOL*);
+
+// Asks the person (mitcad#1584): a task dialog titled "MitCad Update" with
+// the choices and Cancel, `preselected` the default button. Without the
+// common controls 6 (no task dialog), a message box: OK for one choice, Yes
+// and No for two. The id of the choice, IDCANCEL for Cancel. The question
+// and the answer are lines of the log; the question's line says which
+// window asked ("(task dialog)" or "(message box)"), for the installer test.
+int ask(const std::wstring& instruction, const std::wstring& content, const std::vector<Choice>& choices,
+        int preselected) {
+  std::wstring offered;
+  for (const Choice& choice : choices) {
+    offered += plainLabel(choice.label) + L", ";
+  }
+  offered += L"Cancel";
+  // The system's comctl32, through the manifest's dependency the common
+  // controls 6; never one from the updater's folder.
+  const HMODULE controls = LoadLibraryExW(L"comctl32.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+  const auto taskDialog =
+      controls == nullptr
+          ? nullptr
+          : reinterpret_cast<TaskDialogIndirectFunction>(GetProcAddress(controls, "TaskDialogIndirect"));
+  int answer = IDCANCEL;
+  bool asked = false;
+  if (taskDialog != nullptr) {
+    std::vector<TASKDIALOG_BUTTON> buttons;
+    for (const Choice& choice : choices) {
+      buttons.push_back({choice.id, choice.label});
+    }
+    TASKDIALOGCONFIG config = {};
+    config.cbSize = sizeof(config);
+    config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
+    config.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+    config.pszWindowTitle = L"MitCad Update";
+    config.pszMainIcon = TD_WARNING_ICON;
+    config.pszMainInstruction = instruction.c_str();
+    config.pszContent = content.c_str();
+    config.cButtons = static_cast<UINT>(buttons.size());
+    config.pButtons = buttons.data();
+    config.nDefaultButton = preselected;
+    note(L"Asking (task dialog): " + instruction + L" [" + offered + L"]");
+    int pressed = IDCANCEL;
+    const HRESULT result = taskDialog(&config, &pressed, nullptr, nullptr);
+    if (SUCCEEDED(result)) {
+      answer = pressed;
+      asked = true;
+    } else {
+      note(L"The task dialog could not be shown (error " + std::to_wstring(static_cast<long>(result)) + L")");
+    }
+  }
+  if (!asked) {
+    std::wstring text = instruction + L"\n\n" + content + L"\n\n";
+    UINT type = MB_ICONWARNING | MB_SETFOREGROUND;
+    if (choices.size() == 1) {
+      text += L"OK: " + plainLabel(choices[0].label) + L".";
+      type |= MB_OKCANCEL | (preselected == IDCANCEL ? MB_DEFBUTTON2 : MB_DEFBUTTON1);
+    } else {
+      text += L"Yes: " + plainLabel(choices[0].label) + L". No: " + plainLabel(choices[1].label) + L".";
+      type |= MB_YESNOCANCEL |
+              (preselected == choices[0].id ? MB_DEFBUTTON1 : preselected == choices[1].id ? MB_DEFBUTTON2 : MB_DEFBUTTON3);
+    }
+    note(L"Asking (message box): " + instruction + L" [" + offered + L"]");
+    const int pressed = MessageBoxW(nullptr, text.c_str(), L"MitCad Update", type);
+    if (pressed == IDOK || pressed == IDYES) {
+      answer = choices[0].id;
+    } else if (pressed == IDNO && choices.size() > 1) {
+      answer = choices[1].id;
+    }
+  }
+  if (controls != nullptr) {
+    FreeLibrary(controls);
+  }
+  std::wstring chosen = L"Cancel";
+  for (const Choice& choice : choices) {
+    if (choice.id == answer) {
+      chosen = plainLabel(choice.label);
+    }
+  }
+  note(L"Answer: " + chosen);
+  return answer;
+}
+
+// The session this updater runs in: the programs it may end are its own
+// session's (the person's who was asked).
+DWORD currentSession() {
+  DWORD session = 0;
+  if (!ProcessIdToSessionId(GetCurrentProcessId(), &session)) {
+    session = 0xffffffff;
+  }
+  return session;
+}
+
+bool inSession(DWORD pid, DWORD session) {
+  DWORD its = 0;
+  return ProcessIdToSessionId(pid, &its) && its == session;
+}
+
+// " (process 1234)".
+std::wstring processText(DWORD pid) { return L" (process " + std::to_wstring(pid) + L")"; }
+
+// Ends process `pid` (TerminateProcess) and waits up to five seconds until
+// it has; the reason in `failure` when it could not.
+bool endProcess(DWORD pid, std::wstring& failure) {
+  const HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
+  if (process == nullptr) {
+    failure = L"error " + std::to_wstring(GetLastError());
+    return false;
+  }
+  const bool ended = TerminateProcess(process, 1) != FALSE;
+  if (ended) {
+    WaitForSingleObject(process, 5000);
+  } else {
+    failure = L"error " + std::to_wstring(GetLastError());
+  }
+  CloseHandle(process);
+  return ended;
+}
+
+// A design window of MitCad process `pid`: a window without an owner
+// titled "<design> - MitCad <version>" (MainWindow::updateTitle), a
+// visible one first; nullptr when it has none. Its hidden helper windows
+// (the 3D view's offscreen surfaces, titled "MitCad") are never closed.
+HWND designWindow(DWORD pid, std::wstring& title) {
+  struct Search {
+    DWORD pid;
+    HWND visible;
+    HWND hidden;
+  } search = {pid, nullptr, nullptr};
+  EnumWindows(
+      [](HWND window, LPARAM data) -> BOOL {
+        Search& found = *reinterpret_cast<Search*>(data);
+        DWORD owner = 0;
+        GetWindowThreadProcessId(window, &owner);
+        if (owner != found.pid || GetWindow(window, GW_OWNER) != nullptr) {
+          return TRUE;
+        }
+        std::array<wchar_t, 512> text = {};
+        GetWindowTextW(window, text.data(), static_cast<int>(text.size()));
+        if (std::wcsstr(text.data(), L" - MitCad ") == nullptr) {
+          return TRUE;
+        }
+        if (IsWindowVisible(window)) {
+          found.visible = window;
+          return FALSE;
+        }
+        if (found.hidden == nullptr) {
+          found.hidden = window;
+        }
+        return TRUE;
+      },
+      reinterpret_cast<LPARAM>(&search));
+  const HWND window = search.visible != nullptr ? search.visible : search.hidden;
+  if (window != nullptr) {
+    std::array<wchar_t, 512> text = {};
+    GetWindowTextW(window, text.data(), static_cast<int>(text.size()));
+    title = text.data();
+  }
+  return window;
+}
+
+// The MitCad processes (mitcad.exe) from `bin` of `session`.
+std::vector<mitcad::installation::RunningProgram> mitcadProcesses(const std::wstring& dir, const std::wstring& bin,
+                                                                   DWORD session) {
+  std::vector<mitcad::installation::RunningProgram> found;
+  for (const mitcad::installation::RunningProgram& program : mitcad::installation::runningPrograms(dir)) {
+    if (mitcad::installation::isBelow(program.path, bin) && mitcad::installation::runs(program, L"mitcad.exe") &&
+        inSession(program.pid, session)) {
+      found.push_back(program);
+    }
+  }
+  return found;
+}
+
+// Asks the MitCad processes from `bin` of `session` to close as quitting
+// them does (mitcad#1584): WM_CLOSE to one design window at a time, so
+// that MitCad asks about the design's unsaved changes; the next window once
+// that one is gone. A MitCad still running after kCloseSeconds is named
+// in a question: End Anyway ends it (its unsaved changes are lost), Wait
+// gives it as long again, Cancel gives up. True when no MitCad of the
+// session runs any more; false with the reason in `outcome` on Cancel.
+bool closeMitcad(const std::wstring& dir, const std::wstring& bin, DWORD session, std::wstring& outcome) {
+  std::map<DWORD, HWND> asked;
+  for (;;) {
+    std::vector<mitcad::installation::RunningProgram> apps;
+    for (int tick = 0; tick < 4 * kCloseSeconds; ++tick) {
+      apps = mitcadProcesses(dir, bin, session);
+      if (apps.empty()) {
+        return true;
+      }
+      for (const mitcad::installation::RunningProgram& app : apps) {
+        HWND& window = asked[app.pid];
+        if (window != nullptr && IsWindow(window)) {
+          continue;
+        }
+        std::wstring title;
+        window = designWindow(app.pid, title);
+        if (window != nullptr) {
+          PostMessageW(window, WM_CLOSE, 0, 0);
+          note(L"Asked MitCad" + processText(app.pid) + L" to close its window \"" + title + L"\"");
+        }
+      }
+      Sleep(250);
+    }
+    const std::wstring running = mitcad::installation::describePrograms(apps);
+    note(L"MitCad still runs: " + running);
+    const int answer =
+        ask(L"MitCad is still running",
+            L"MitCad was asked to close, as when you quit it, but it is still running. It may be asking whether to "
+            L"save the changes to a design: answer it there, then choose Wait.\n\nEnd Anyway ends MitCad without "
+            L"saving: changes it has not saved are lost.",
+            {{kEndAnyway, L"End &Anyway"}, {kWait, L"&Wait"}}, kWait);
+    if (answer == kWait) {
+      continue;
+    }
+    if (answer != kEndAnyway) {
+      outcome = L"programs from the installation are still running (" + running +
+                L") and ending them was cancelled, so no file was replaced. Close them, then choose Try Again";
+      return false;
+    }
+    for (const mitcad::installation::RunningProgram& app : mitcadProcesses(dir, bin, session)) {
+      std::wstring failure;
+      if (endProcess(app.pid, failure)) {
+        note(L"Ended MitCad" + processText(app.pid) + L"; its unsaved changes are lost");
+      } else {
+        note(L"Could not end MitCad" + processText(app.pid) + L" (" + failure + L")");
+      }
+    }
+    return true;
+  }
+}
+
+// What still runs from the installation once the MCP bridges were asked to
+// end (askProgramsToEnd), named in a question (mitcad#1584): End Them and
+// Install or Cancel. On End Them and Install, MitCad is asked to close
+// (closeMitcad) and the other programs from bin of this session are ended;
+// true, and the installer gets /EndPrograms for what this updater could not
+// end. False with the reason in `outcome` on Cancel. `ending` is true when
+// anything ran.
+bool offerToEndPrograms(const std::wstring& dir, bool& ending, std::wstring& outcome) {
+  using mitcad::installation::RunningProgram;
+  ending = false;
+  const std::vector<RunningProgram> running = mitcad::installation::runningPrograms(dir);
+  if (running.empty()) {
+    return true;
+  }
+  ending = true;
+  const std::wstring bin = mitcad::installation::folderPrefix(mitcad::installation::folderPrefix(dir) + L"bin");
+  const DWORD session = currentSession();
+  std::vector<std::wstring> names;
+  bool appRuns = false;
+  for (const RunningProgram& program : running) {
+    names.push_back(mitcad::installation::programName(program.path));
+    appRuns = appRuns || mitcad::installation::runs(program, L"mitcad.exe");
+  }
+  std::wstring list;
+  for (const std::wstring& line : mitcad::updater::describeForPerson(names)) {
+    list += L"\x2022 " + line + L"\n";
+  }
+  std::wstring content = L"These programs from the installation in " + dir + L" are still running:\n\n" + list +
+                         L"\nThe update replaces no file while they run. End Them and Install ends them and "
+                         L"installs the update.";
+  if (appRuns) {
+    content += L" MitCad is asked to close first, as when you quit it, so that you can save your changes.";
+  }
+  if (ask(L"Programs from MitCad are still running", content, {{kEndThemAndInstall, L"&End Them and Install"}},
+          kEndThemAndInstall) != kEndThemAndInstall) {
+    outcome = L"programs from the installation are still running (" +
+              mitcad::installation::describePrograms(running) +
+              L") and ending them was cancelled, so no file was replaced. Close them, then choose Try Again";
+    return false;
+  }
+  if (!closeMitcad(dir, bin, session, outcome)) {
+    return false;
+  }
+  for (const RunningProgram& program : mitcad::installation::runningPrograms(dir)) {
+    const std::wstring name = mitcad::installation::programName(program.path) + processText(program.pid);
+    if (!mitcad::installation::isBelow(program.path, bin)) {
+      note(L"Not ended (not in bin): " + program.path + processText(program.pid));
+    } else if (mitcad::installation::runs(program, L"mitcad.exe")) {
+      // Another session's, or one End Anyway could not end: never here.
+      note(L"Not ended (MitCad): " + name);
+    } else if (!inSession(program.pid, session)) {
+      note(L"Not ended (another session): " + name);
+    } else {
+      std::wstring failure;
+      if (endProcess(program.pid, failure)) {
+        note(L"Ended " + name);
+      } else {
+        note(L"Could not end " + name + L" (" + failure + L")");
+      }
+    }
+  }
+  const std::vector<RunningProgram> remaining = mitcad::installation::runningPrograms(dir);
+  if (!remaining.empty()) {
+    note(L"Still running from the installation: " + mitcad::installation::describePrograms(remaining) +
+         L"; the installer ends what it can of them (/EndPrograms)");
+  }
+  return true;
+}
+
+// Checks the installer again, offers to end what still runs from the
+// installation (offerToEndPrograms), runs the installer and waits for it.
+// True when it ran and ended with exit code 0; otherwise `outcome` says why
+// not (each step is also in the log). The scope: "user", "all" or empty
+// (the installer decides, as for an updater of an earlier release).
 bool runInstaller(const mitcad::updater::Arguments& arguments, std::wstring& outcome) {
   std::wstring installer;
   const HANDLE checked = openChecked(arguments.installer, arguments.sha256, installer, outcome);
@@ -231,6 +582,14 @@ bool runInstaller(const mitcad::updater::Arguments& arguments, std::wstring& out
   note(L"Checked " + installer + L": its SHA-256 is the release's (" + arguments.sha256 +
        L"); it stays open, without write or delete sharing, until the installer has ended");
 
+  // Only an installer that will run is worth ending programs for.
+  bool ending = false;
+  if (!offerToEndPrograms(arguments.dir, ending, outcome)) {
+    CloseHandle(checked);
+    note(outcome);
+    return false;
+  }
+
   const bool allUsers = arguments.scope == L"all";
   const bool elevate = allUsers && !isAdministrator();
   // NSIS: /D must come last and without quotes, also with spaces.
@@ -239,6 +598,11 @@ bool runInstaller(const mitcad::updater::Arguments& arguments, std::wstring& out
     parameters += L"/AllUsers ";
   } else if (arguments.scope == L"user") {
     parameters += L"/CurrentUser ";
+  }
+  if (ending) {
+    // The person chose End Them and Install (mitcad#1584): the installer
+    // ends what still runs from bin, all but MitCad, with its own rights.
+    parameters += L"/EndPrograms ";
   }
   parameters += L"/D=" + arguments.dir;
   note(L"Running " + installer + L" " + parameters +

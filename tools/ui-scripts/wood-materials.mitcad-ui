@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: MIT
+# The bundled dataset's woods and panels in the class Wood (mitcad#1552),
+# through the real Qt controls; shared by tools/ui-wood-materials-test.sh
+# (Linux, Xvfb) and tools/ui-windows-wood-materials-test.ps1. The design is
+# wood-materials.json: one box of the default material. Pictures go to
+# ${MITCAD_TEST_WORK}.
+#   1. The Materials window's New menu has Wood, before Other, and ends
+#      with Browse Material Dataset…, which opens the dataset (136
+#      materials) and names its two sources and their licences.
+#   2. A search for "oak" finds Wood - Oak alone, listed in the class
+#      Wood; selected, its density, Young's modulus and source show.
+#   3. Create into This design: Wood - Oak is a material of the design in
+#      the Materials window's Wood group, its Class Wood, its appearance
+#      the library's Wood - Oak, one undo step.
+wait-idle
+window-resize 1280 860
+focus-main
+capture-undo-depth start
+mark
+
+# 1. New ▸ Browse Material Dataset…
+command solid.materials
+focus-dialog '^Materials$'
+wait-idle
+mark
+button '^New'
+expect-log '^Materials new menu: Metal \| General Plastic \| FDM Plastic \| Resin \| Wood \| Other \| Browse Material Dataset…$'
+popup 'Browse Material Dataset…'
+expect-log '^Material dataset opened: 136 materials$'
+expect-log '^Material dataset sources: material-properties dataset \(Apache-2\.0\) \| MitCad wood and panel materials \(MIT\)$'
+focus-dialog '^Material Dataset$'
+wait-idle
+
+# 2. "oak": Wood - Oak alone, in the class Wood.
+mark
+focus-widget materialDatasetSearch
+type 'oak'
+expect-log '^Material dataset search: oak, 1 shown$'
+expect-log '^Material dataset row: Wood - Oak \| Wood$'
+wait-idle
+mark
+focus-widget materialDatasetList
+key Home
+expect-log '^Material dataset selected: Wood - Oak: Density: 0\.755 g/cm³ \| Young.s modulus: 12150 MPa \| '
+expect-log '^Material dataset selected: Wood - Oak: .*Source: The Wood Database, American white oak \(Quercus alba\)$'
+wait-idle
+screenshot-dialog '${MITCAD_TEST_WORK}/material-dataset-oak.png'
+
+# 3. Create into This design: a Wood material of the design.
+mark
+key Return
+expect-log '^Materials dataset menu: This design'
+popup 'This design'
+expect-log '^Material created from the dataset: Wood - Oak \(wood/oak\) as .+ in design$'
+expect-undo-depth ${start} 1
+focus-dialog '^Materials$'
+wait-idle
+expect-log '^Materials row: wood/.+ Wood - Oak \(design\)$'
+expect-log '^Materials class: Wood$'
+expect-log '^Materials appearances: Wood - Oak \(default\)$'
+expect-log '^Materials source: The Wood Database, American white oak \(Quercus alba\)$'
+wait-idle
+screenshot-dialog '${MITCAD_TEST_WORK}/materials-wood-group.png'
+button '^Close$'
+focus-main
+wait-idle

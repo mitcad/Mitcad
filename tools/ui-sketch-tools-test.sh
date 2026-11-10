@@ -390,7 +390,7 @@ ui_step "first corner"                   ui_sketch_click 25 -10
 ui_step "opposite corner"                ui_sketch_click 45 -30
 ui_expect_new "Added rectangle" "a rectangle afterwards"
 ui_sync
-if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -E "not added|over-constrain"; then
+if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -E "not added|over-constrain|can't hold"; then
   ui_fail "the rectangle after the automatic constraints met a refused constraint or an over-constrained sketch"
 fi
 echo "ok   no refused constraint, no over-constrained sketch"

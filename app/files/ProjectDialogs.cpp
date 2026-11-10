@@ -26,6 +26,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QRegularExpression>
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -336,9 +337,16 @@ private:
   void folderChecked();
   void updateState();
   void createClicked();
-  void create(bool asCloud);
+  // `into`: the project's folder, else the Folder field's.
+  void create(bool asCloud, const QString& into = QString());
   void finished(RemoteTask* task, bool asCloud);
   void setBusy(bool busy);
+  // The folder holds files or folders (mitcad#1562): all of it becomes the
+  // project, unless it is made in a new subfolder.
+  bool holdsFiles() const;
+  // The new subfolder's path, or "" while its name is no folder name (with
+  // why in `why`).
+  QString subfolder(QString* why = nullptr) const;
 
   std::optional<NewProjectResult> m_result;
   std::unique_ptr<FolderCheck> m_check;
@@ -360,9 +368,14 @@ private:
   QPushButton* m_create = nullptr;
   QPushButton* m_openInstead = nullptr;
   QPushButton* m_localForNow = nullptr;
+  // Create in a New Subfolder (mitcad#1562) and the subfolder's name.
+  QWidget* m_subfolderRow = nullptr;
+  QLineEdit* m_subfolder = nullptr;
+  QPushButton* m_inSubfolder = nullptr;
   QPointer<RemoteTask> m_task;
   QString m_loggedFolder;
   bool m_gitMissing = false;
+  bool m_folderFixed = false;
 };
 
 NewProjectDialog::NewProjectDialog(QWidget* parent, const NewProjectOptions& options)
@@ -429,6 +442,21 @@ NewProjectDialog::NewProjectDialog(QWidget* parent, const NewProjectOptions& opt
   layout->addWidget(m_authorNote);
   m_folderNote = note();
   layout->addWidget(m_folderNote);
+  // A folder with files in it (mitcad#1562): the project can go into a new
+  // subfolder of it instead, named here.
+  m_folderFixed = options.folderFixed;
+  m_subfolderRow = new QWidget;
+  auto* subfolderLayout = new QHBoxLayout(m_subfolderRow);
+  subfolderLayout->setContentsMargins(0, 0, 0, 0);
+  auto* subfolderLabel = new QLabel(Text::tr("New subfolder:"));
+  m_subfolder = new QLineEdit(Text::tr("New Project"));
+  m_subfolder->setObjectName(QStringLiteral("newProjectSubfolder"));
+  m_subfolder->setToolTip(Text::tr("The name of the folder Create in a New Subfolder makes for the project"));
+  subfolderLabel->setBuddy(m_subfolder);
+  subfolderLayout->addWidget(subfolderLabel);
+  subfolderLayout->addWidget(m_subfolder, 1);
+  layout->addWidget(m_subfolderRow);
+  m_subfolderRow->hide();
   const GitState git = gitState();
   m_gitMissing = git.missing;
   if (git.missing) {
@@ -444,8 +472,10 @@ NewProjectDialog::NewProjectDialog(QWidget* parent, const NewProjectOptions& opt
   m_buttons = new QDialogButtonBox(QDialogButtonBox::Cancel);
   m_openInstead = m_buttons->addButton(Text::tr("Open It &Instead"), QDialogButtonBox::ActionRole);
   m_localForNow = m_buttons->addButton(Text::tr("Create as Local for &Now"), QDialogButtonBox::ActionRole);
+  m_inSubfolder = m_buttons->addButton(Text::tr("Create in a New Subfolder"), QDialogButtonBox::ActionRole);
+  m_inSubfolder->setObjectName(QStringLiteral("newProjectInSubfolder"));
   m_create = m_buttons->addButton(Text::tr("&Create"), QDialogButtonBox::AcceptRole);
-  for (QPushButton* button : {m_openInstead, m_localForNow}) {
+  for (QPushButton* button : {m_openInstead, m_localForNow, m_inSubfolder}) {
     button->setAutoDefault(false);
     button->hide();
   }
@@ -511,6 +541,17 @@ NewProjectDialog::NewProjectDialog(QWidget* parent, const NewProjectOptions& opt
   connect(m_localForNow, &QPushButton::clicked, this, [this] {
     qInfo().noquote() << QStringLiteral("New Project: Create as Local for Now");
     create(false);
+  });
+  connect(m_subfolder, &QLineEdit::textChanged, this, [this] { updateState(); });
+  connect(m_inSubfolder, &QPushButton::clicked, this, [this] {
+    QString why;
+    const QString dir = subfolder(&why);
+    if (dir.isEmpty()) {
+      m_problem->setText(why);
+      return;
+    }
+    qInfo().noquote() << QStringLiteral("New Project: Create in a New Subfolder %1").arg(dir);
+    create(cloud(), dir);
   });
   connect(m_buttons, &QDialogButtonBox::rejected, this, &NewProjectDialog::reject);
 
@@ -600,10 +641,32 @@ void NewProjectDialog::folderChecked() {
                .arg(dir, QDir::toNativeSeparators(answer.value(QStringLiteral("project_root")).toString()));
   } else if (kind == QLatin1String("repository")) {
     text = Text::tr("%1 is a git repository: the project goes into it.").arg(dir);
-  } else if (kind == QLatin1String("designs")) {
-    text = Text::tr("The designs in %1 become the project's, in its first version.").arg(dir);
-  } else if (kind == QLatin1String("other")) {
-    text = Text::tr("The files in %1 stay where they are, and are not versioned.").arg(dir);
+  }
+  // A folder with files in it (mitcad#1562): all of it, its subfolders too,
+  // becomes the project, which a user who expected a new folder must know.
+  const bool holds = holdsFiles();
+  const int designs = static_cast<int>(answer.value(QStringLiteral("designs")).toArray().size());
+  if (holds) {
+    QString whole;
+    if (answer.value(QStringLiteral("designs_truncated")).toBool()) {
+      whole = Text::tr("%1 and everything below it, its subfolders too, become the project: more than %n "
+                       "design(s) go into its first version.",
+                       nullptr, designs)
+                  .arg(dir);
+    } else if (designs > 0) {
+      whole = Text::tr("%1 and everything below it, its subfolders too, become the project: %n design(s) go "
+                       "into its first version.",
+                       nullptr, designs)
+                  .arg(dir);
+    } else {
+      whole = Text::tr("%1 and everything below it, its subfolders too, become the project.").arg(dir);
+    }
+    text += (text.isEmpty() ? QString() : QStringLiteral(" ")) + whole + QStringLiteral(" ") +
+            Text::tr("Other files stay where they are, not versioned.");
+    if (!m_folderFixed) {
+      text += QStringLiteral(" ") + Text::tr("Create in a New Subfolder makes the project in a new folder inside it "
+                                             "instead.");
+    }
   }
   const QString outer = answer.value(QStringLiteral("outer_repository")).toString();
   if (!outer.isEmpty() && kind != QLatin1String("project") && kind != QLatin1String("inside_project")) {
@@ -613,7 +676,7 @@ void NewProjectDialog::folderChecked() {
                 .arg(QDir::toNativeSeparators(outer));
   }
   m_folderNote->setText(text);
-  if (!outer.isEmpty()) {
+  if (!outer.isEmpty() || holds) {
     setWarningStyleSheet(m_folderNote);
   } else {
     m_folderNote->setStyleSheet(QString());
@@ -624,8 +687,41 @@ void NewProjectDialog::folderChecked() {
   if (logged != m_loggedFolder) {
     m_loggedFolder = logged;
     qInfo().noquote() << QStringLiteral("New Project dialog: folder %1").arg(logged);
+    if (holds) {
+      qInfo().noquote() << QStringLiteral("New Project dialog: %1 holds files: it becomes the project with its "
+                                          "subfolders, %2 designs%3")
+                               .arg(folder())
+                               .arg(designs)
+                               .arg(m_folderFixed ? QString() : QStringLiteral(", Create in a New Subfolder offered"));
+    }
   }
   updateState();
+}
+
+bool NewProjectDialog::holdsFiles() const {
+  if (m_check->folder() != folder()) {
+    return false;
+  }
+  const QString kind = m_check->kind();
+  return kind == QLatin1String("designs") || kind == QLatin1String("other") || kind == QLatin1String("repository");
+}
+
+QString NewProjectDialog::subfolder(QString* why) const {
+  const QString name = m_subfolder->text().trimmed();
+  QString problem;
+  if (name.isEmpty()) {
+    problem = Text::tr("The new subfolder needs a name.");
+  } else if (name == QLatin1String(".") || name == QLatin1String("..") || name.startsWith(QLatin1Char('.')) ||
+             name.contains(QLatin1Char('/')) || name.contains(QLatin1Char('\\')) ||
+             name.contains(QRegularExpression(QStringLiteral("[<>:\"|?*\\x00-\\x1f]")))) {
+    problem = Text::tr("%1 is no folder name: leave out / \\ : * ? \" < > | and a dot at the start.").arg(name);
+  } else if (QFileInfo::exists(QDir(folder()).filePath(name))) {
+    problem = Text::tr("%1 is in the folder already: choose another name.").arg(name);
+  }
+  if (why != nullptr) {
+    *why = problem;
+  }
+  return problem.isEmpty() ? QDir::cleanPath(QDir(folder()).filePath(name)) : QString();
 }
 
 void NewProjectDialog::updateState() {
@@ -655,6 +751,16 @@ void NewProjectDialog::updateState() {
   }
   m_create->setText(opens ? Text::tr("Open &It") : Text::tr("&Create"));
   m_create->setEnabled(can);
+  // Create in a New Subfolder (mitcad#1562) beside Create.
+  const bool offer = !opens && !m_folderFixed && holdsFiles();
+  QString unnamed;
+  const bool named = offer && !subfolder(&unnamed).isEmpty();
+  m_subfolderRow->setVisible(offer);
+  m_inSubfolder->setVisible(offer);
+  m_inSubfolder->setEnabled(can && named);
+  if (offer && can && !named) {
+    why = unnamed;
+  }
   m_problem->setText(why);
   const QString cls = errorClassOf(m_section->answer());
   m_openInstead->setVisible(cloud() && !opens && m_section->answer().value(QStringLiteral("has_project")).toBool());
@@ -688,7 +794,7 @@ void NewProjectDialog::createClicked() {
 void NewProjectDialog::setBusy(bool busy) {
   for (QWidget* widget : std::initializer_list<QWidget*>{m_folder, m_browse, m_local, m_cloudChoice, m_name, m_email,
                                                          m_section, m_fields, m_create, m_openInstead,
-                                                         m_localForNow}) {
+                                                         m_localForNow, m_subfolder, m_inSubfolder}) {
     widget->setEnabled(!busy);
   }
   if (!busy) {
@@ -697,8 +803,8 @@ void NewProjectDialog::setBusy(bool busy) {
   }
 }
 
-void NewProjectDialog::create(bool asCloud) {
-  const QString dir = folder();
+void NewProjectDialog::create(bool asCloud, const QString& into) {
+  const QString dir = into.isEmpty() ? folder() : into;
   const QString author = authorOf(m_name, m_email);
   QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("create_project")},
                       {QStringLiteral("dir"), dir},

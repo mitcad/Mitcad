@@ -11,7 +11,9 @@
 // use; the start-up check (InstallationCheck.cpp) names them when it finds
 // such a mixed installation; the bridge (tools/cli/mcp-connect.cpp) waits
 // for the request. The installer (packaging/windows/NSIS.template.in)
-// does the same with the same event names.
+// does the same with the same event names. What still runs after that the
+// updater offers to end (mitcad#1584): the helpers directly, MitCad itself
+// by asking its windows to close.
 //
 // Windows only, plain Win32 and C++17, so that mitcad-updater.exe (no Qt,
 // its own C++ runtime) uses it too.
@@ -63,9 +65,23 @@ inline bool isBelow(const std::wstring& path, const std::wstring& prefix) {
                               static_cast<int>(prefix.size()), TRUE) == CSTR_EQUAL;
 }
 
+// The file name of a program's path: "mitcad-cli.exe".
+inline std::wstring programName(const std::wstring& path) {
+  const std::size_t slash = path.find_last_of(L"\\/");
+  return slash == std::wstring::npos ? path : path.substr(slash + 1);
+}
+
+// Whether `program` runs the file `name` ("mitcad.exe"), ignoring case.
+inline bool runs(const RunningProgram& program, const wchar_t* name) {
+  const std::wstring file = programName(program.path);
+  return CompareStringOrdinal(file.c_str(), static_cast<int>(file.size()), name, -1, TRUE) == CSTR_EQUAL;
+}
+
 // Every process whose program is in `folder` or below it, except process
 // `except` (this one by default). A process this user may not query (a
-// protected one, another user's without administrator rights) is not seen.
+// protected one, another user's without administrator rights) is not seen,
+// nor one that has ended while a handle keeps it known (mitcad#1584: an
+// ended program has let its files go).
 inline std::vector<RunningProgram> runningPrograms(const std::wstring& folder, DWORD except = GetCurrentProcessId()) {
   std::vector<RunningProgram> programs;
   const std::wstring prefix = folderPrefix(folder);
@@ -81,6 +97,11 @@ inline std::vector<RunningProgram> runningPrograms(const std::wstring& folder, D
     }
     const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
     if (process == nullptr) {
+      continue;
+    }
+    DWORD exitCode = 0;
+    if (GetExitCodeProcess(process, &exitCode) && exitCode != STILL_ACTIVE) {
+      CloseHandle(process);
       continue;
     }
     std::vector<wchar_t> buffer(32768);
@@ -117,8 +138,7 @@ inline int askBridgesToEnd(const std::vector<RunningProgram>& programs) {
 inline std::wstring describePrograms(const std::vector<RunningProgram>& programs) {
   std::map<std::wstring, int> counts;
   for (const RunningProgram& program : programs) {
-    const std::size_t slash = program.path.find_last_of(L"\\/");
-    ++counts[slash == std::wstring::npos ? program.path : program.path.substr(slash + 1)];
+    ++counts[programName(program.path)];
   }
   std::wstring text;
   for (const auto& [name, count] : counts) {

@@ -63,6 +63,8 @@ public:
   QString signInFolder() const override;
   // The fix in a terminal beside Sign in (mitcad#1289).
   QString signedOutText() const override;
+  // `claude auth logout`, then `claude auth login` (mitcad#1585).
+  QList<QStringList> signInAgainCommands() const override;
   // The executable it starts: fixed for another one found, else the
   // lookup's first.
   const QString& fixedProgram() const { return m_fixed; }

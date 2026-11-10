@@ -87,6 +87,11 @@ private:
   void logCleanUp() const;
   // A click on a warning: what it is about selected (mitcad#264).
   void selectWarning(int index);
+  // A click on the status "Conflicting constraints": the conflicting
+  // constraints and dimensions selected (mitcad#1566); and where that link
+  // is, logged once it shows.
+  void selectConflicts();
+  void logConflictLink();
   // A section's command button: the action's icon, tooltip, shortcut and
   // checked state.
   QToolButton* commandButton(const QString& id, const QString& name) const;
@@ -127,6 +132,8 @@ private:
   // that cannot follow (mitcad#252).
   QAbstractButton* m_cleanUp = nullptr;
   bool m_cleanUpOffered = false;
+  // The status's conflict link has been logged since it showed.
+  bool m_conflictLinkShown = false;
   // Project Again beside it, for those whose sources are there
   // (mitcad#1303).
   QAbstractButton* m_projectAgain = nullptr;

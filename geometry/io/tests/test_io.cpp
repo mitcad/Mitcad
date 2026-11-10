@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <new>
@@ -49,6 +50,7 @@
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepPrimAPI_MakeTorus.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
@@ -2457,6 +2459,132 @@ void test_face_meshes(const std::string& dir) {
   CHECK(consistent(faceted));
 }
 
+// A helmet with a pin (mitcad#1567, mitcad#1568): a sphere of 6.9 mm about
+// (0, 0, 1.2), turned `turn` radians about (1, 1, 0) through its centre,
+// cut flat at z = 0 and joined with a cone from radius 3.2344 at z = 0 to
+// 1.2 at z = -2.0344 and a pin of radius 1.2 down to z = -4. The sphere's
+// cut circle has a radius of 3.234579, so a plane ring 0.18 µm wide is
+// left between it and the cone's top circle, much narrower than the
+// chords of either circle sag.
+TopoDS_Shape helmet(double turn) {
+  const gp_Pnt center(0.0, 0.0, 1.2);
+  gp_Trsf up;
+  up.SetTranslation(gp_Vec(0.0, 0.0, 1.2));
+  gp_Trsf turned;
+  turned.SetRotation(gp_Ax1(center, gp_Dir(1.0, 1.0, 0.0)), turn);
+  const TopoDS_Shape sphere =
+      BRepPrimAPI_MakeSphere(gp_Pnt(0.0, 0.0, 0.0), 3.45).Shape().Moved(TopLoc_Location(turned * up));
+  const TopoDS_Shape below = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0.0, 0.0, -5.0), gp_Dir(0.0, 0.0, 1.0)), 5.0, 5.0)
+                                 .Shape();
+  const TopoDS_Shape cut = BRepAlgoAPI_Cut(sphere, below).Shape();
+  BRepBuilderAPI_MakePolygon profile;
+  profile.Add(gp_Pnt(0.0, 0.0, 0.0));
+  profile.Add(gp_Pnt(3.2344, 0.0, 0.0));
+  profile.Add(gp_Pnt(1.2, 0.0, -2.0344));
+  profile.Add(gp_Pnt(1.2, 0.0, -4.0));
+  profile.Add(gp_Pnt(0.0, 0.0, -4.0));
+  profile.Close();
+  const TopoDS_Face section = BRepBuilderAPI_MakeFace(profile.Wire(), true).Face();
+  const TopoDS_Shape pin =
+      BRepPrimAPI_MakeRevol(section, gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0))).Shape();
+  return BRepAlgoAPI_Fuse(cut, pin).Shape();
+}
+
+// The helmet's meshes (mitcad#1568): its ring's two circles, discretized
+// at the meshing's deviation, cross each other where the sphere's seam
+// does not start them at the same angle (the sphere turned), at less than
+// the 5 degrees BRepMesh's check of crossing wires passes over; the ring
+// was left without triangles or with its hole filled. The edges are cut
+// finely enough that they do not cross: every face is triangulated, the
+// mesh closed, its volume within the deviation of the body's, unturned as
+// turned and as the 3D view meshes it (face_meshes).
+void test_close_wires() {
+  using mitcad::io::MeshOptions;
+  using mitcad::io::Refinement;
+  for (const double turn : {0.0, 37.0 * std::atan(1.0) / 45.0}) {
+    const TopoDS_Shape shape = helmet(turn);
+    // The ring is there.
+    double narrowest = std::numeric_limits<double>::infinity();
+    for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+      if (BRepAdaptor_Surface(TopoDS::Face(it.Current()), false).GetType() == GeomAbs_Plane) {
+        narrowest = std::min(narrowest, area(it.Current()));
+      }
+    }
+    CHECK(narrowest < 0.004);
+    for (const Refinement refinement : {Refinement::Low, Refinement::Medium, Refinement::High}) {
+      const MeshOptions options = MeshOptions::from(refinement);
+      std::string error;
+      mitcad::io::IndexedMesh mesh;
+      try {
+        mesh = mitcad::io::indexed_mesh(shape, options);
+      } catch (const mitcad::io::Error& failure) {
+        error = failure.what();
+      }
+      const double exact = volume(shape);
+      const double meshed = mesh_volume(mesh);
+      std::fprintf(stderr, "helmet turned %.3f: %zu triangles, volume %.4f of %.4f %s\n", turn,
+                   mesh.triangles.size(), meshed, exact, error.c_str());
+      CHECK(error.empty());
+      CHECK(closed(mesh));
+      CHECK(near(meshed, exact, area(shape) * options.linear_deflection));
+      bool faces_meshed = true;
+      try {
+        const mitcad::io::FaceMeshes faces = mitcad::io::face_meshes(shape, options);
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> all;
+        TopExp::MapShapes(shape, TopAbs_FACE, all);
+        faces_meshed = faces.face_triangles.size() == static_cast<std::size_t>(all.Extent()) &&
+                       std::all_of(faces.face_triangles.begin(), faces.face_triangles.end(),
+                                   [](std::uint32_t count) { return count > 0; });
+      } catch (const mitcad::io::Error& failure) {
+        std::fprintf(stderr, "helmet face meshes: %s\n", failure.what());
+        faces_meshed = false;
+      }
+      CHECK(faces_meshed);
+    }
+  }
+}
+
+// A face a meshing leaves without a triangulation is named in the error
+// (mitcad#1568): its index among the shape's faces and its surface's kind.
+void test_untriangulated_face_named() {
+  const mitcad::io::MeshOptions options = mitcad::io::MeshOptions::from(mitcad::io::Refinement::Medium);
+  const TopoDS_Shape cylinder = BRepPrimAPI_MakeCylinder(10.0, 30.0).Shape();
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapes(cylinder, TopAbs_FACE, faces);
+  int side = -1;
+  for (int i = 1; i <= faces.Extent(); ++i) {
+    if (BRepAdaptor_Surface(TopoDS::Face(faces(i)), false).GetType() == GeomAbs_Cylinder) {
+      side = i - 1;
+    }
+  }
+  const std::string expected = "a face could not be triangulated: face " + std::to_string(side) + " (cylinder)";
+  mitcad::io::use_face_algorithms_for_tests(new ThrowingCylinders(false));
+  for (int kind = 0; kind < 2; ++kind) {
+    std::string message;
+    int index = -2;
+    std::string surface;
+    try {
+      if (kind == 0) {
+        mitcad::io::indexed_mesh(cylinder, options);
+      } else {
+        mitcad::io::face_meshes(cylinder, options);
+      }
+    } catch (const mitcad::io::FaceError& error) {
+      message = error.what();
+      index = error.index();
+      surface = error.surface();
+    } catch (const std::exception& error) {
+      message = std::string("unexpected ") + error.what();
+    }
+    std::printf("Untriangulated face (%s): %s\n", kind == 0 ? "indexed mesh" : "face meshes", message.c_str());
+    CHECK(message == expected);
+    CHECK(index == side);
+    CHECK(surface == "cylinder");
+  }
+  mitcad::io::use_face_algorithms_for_tests(occ::handle<IMeshTools_MeshAlgoFactory>());
+  CHECK(mitcad::io::face_error_message("F4:top", "plane") == "a face could not be triangulated: F4:top (plane)");
+}
+
 void test_obj(const std::string& dir) {
   const std::vector<Body> bodies = sample_bodies();
   const std::string path = dir + "/bodies.obj";
@@ -2695,6 +2823,8 @@ int main(int argc, char** argv) {
     test_stl(dir);
     test_indexed_mesh(dir);
     test_face_meshes(dir);
+    test_close_wires();
+    test_untriangulated_face_named();
     test_obj(dir);
     test_placements(dir);
     test_dispatch(dir);

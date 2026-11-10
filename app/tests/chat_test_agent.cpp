@@ -60,6 +60,18 @@
 // permissions and the refusal are recorded in acp-checks.jsonl. Copied as
 // `not-acp` it writes a line that is no message of the protocol and ends:
 // a command that does not answer the handshake.
+//
+// Sign in Again (mitcad#1585): `auth logout` (Codex: `logout`) signs out
+// and also ends the work folder's account-blocked (the account signed in
+// again is allowed), `auth login` (`login`) signs in; each of the four is
+// recorded with this copy's path in sign-in-commands.jsonl. Copied as
+// `test-terminal` it stands in for the terminal (MITCAD_TEST_TERMINAL, or
+// $TERMINAL on Linux): it records its arguments in terminal-starts.jsonl,
+// runs its last argument, the script, with sh (Windows: cmd.exe /c) without
+// input, so that the script's wait for Enter ends at once, keeps the
+// script's output in terminal-output.txt, and ends no sooner than 3 s
+// after it started: later than MitCad's "returned at once" (2 s), so that
+// its end is the terminal's end.
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -129,6 +141,51 @@ void appendLine(const QString& name, const QJsonObject& value) {
   if (file.open(QIODevice::WriteOnly | QIODevice::Append)) {
     file.write(QJsonDocument(value).toJson(QJsonDocument::Compact) + '\n');
   }
+}
+
+// Sign in Again's commands (mitcad#1585): recorded with this copy's path.
+void recordSignIn(const QStringList& args) {
+  QJsonObject command;
+  command.insert(QStringLiteral("program"), QDir::toNativeSeparators(QCoreApplication::applicationFilePath()));
+  command.insert(QStringLiteral("argv"), QJsonArray::fromStringList(args));
+  appendLine(QStringLiteral("sign-in-commands.jsonl"), command);
+}
+
+// A sign-out: the account signed in again is an allowed one.
+void signOut(const QString& signedIn) {
+  QFile::remove(signedIn);
+  QFile::remove(QDir(work()).filePath(QStringLiteral("account-blocked")));
+}
+
+// The stand-in terminal: runs the script, its last argument.
+int testTerminal(const QStringList& args) {
+  const auto started = std::chrono::steady_clock::now();
+  QJsonObject start;
+  start.insert(QStringLiteral("argv"), QJsonArray::fromStringList(args));
+  appendLine(QStringLiteral("terminal-starts.jsonl"), start);
+  if (args.isEmpty()) {
+    std::fputs("test terminal: no script\n", stderr);
+    return 2;
+  }
+  const QString script = args.last();
+  QProcess shell;
+#ifdef _WIN32
+  shell.setProgram(qEnvironmentVariable("ComSpec", QStringLiteral("cmd.exe")));
+  shell.setNativeArguments(QStringLiteral("/d /c \"\"%1\"\"").arg(QDir::toNativeSeparators(script)));
+#else
+  shell.setProgram(QStringLiteral("/bin/sh"));
+  shell.setArguments({script});
+#endif
+  shell.setStandardInputFile(QProcess::nullDevice());
+  shell.setProcessChannelMode(QProcess::MergedChannels);
+  shell.start();
+  const bool ran = shell.waitForFinished(60000);
+  QFile output(QDir(work()).filePath(QStringLiteral("terminal-output.txt")));
+  if (output.open(QIODevice::WriteOnly | QIODevice::Append)) {
+    output.write(shell.readAll());
+  }
+  std::this_thread::sleep_until(started + std::chrono::seconds(3));
+  return ran && shell.exitStatus() == QProcess::NormalExit ? shell.exitCode() : 1;
 }
 
 void emitLine(const QJsonObject& message) {
@@ -305,13 +362,19 @@ QJsonObject query(const QString& document, const QString& name) {
 }
 
 int printMode(const QStringList& args) {
-  // Which copy started (mitcad#1289: several Claude Codes found).
-  appendLine(QStringLiteral("chat-starts.jsonl"), {{QStringLiteral("argv"), QJsonArray::fromStringList(args)},
-                                                   {QStringLiteral("program"), QCoreApplication::applicationFilePath()}});
   const auto value = [&args](const QString& option) {
     const qsizetype at = args.indexOf(option);
     return at >= 0 && at + 1 < args.size() ? args.at(at + 1) : QString();
   };
+  QFile instructions(value(QStringLiteral("--append-system-prompt-file")));
+  if (!instructions.open(QIODevice::ReadOnly)) {
+    std::fputs("test agent: no modeling instructions file\n", stderr);
+    return 3;
+  }
+  const QString guidance = QString::fromUtf8(instructions.readAll());
+  appendLine(QStringLiteral("chat-starts.jsonl"), {{QStringLiteral("argv"), QJsonArray::fromStringList(args)},
+                                                   {QStringLiteral("program"), QCoreApplication::applicationFilePath()},
+                                                   {QStringLiteral("guidance"), guidance}});
   // The command line the chat must give: stream-json both ways, no
   // built-in tools, only its own MCP server, MitCad's tools allowed.
   const qsizetype tools = args.indexOf(QStringLiteral("--tools"));
@@ -319,7 +382,9 @@ int printMode(const QStringList& args) {
       value(QStringLiteral("--output-format")) != QStringLiteral("stream-json") || tools < 0 ||
       tools + 1 >= args.size() || !args.at(tools + 1).isEmpty() || !args.contains(QStringLiteral("--strict-mcp-config")) ||
       value(QStringLiteral("--allowedTools")) != QStringLiteral("mcp__mitcad") ||
-      !args.contains(QStringLiteral("--include-partial-messages"))) {
+      !args.contains(QStringLiteral("--include-partial-messages")) ||
+      !guidance.contains(QStringLiteral("# Modeling in MitCad")) ||
+      !guidance.contains(QStringLiteral("Control the documents open"))) {
     std::fputs("test agent: unexpected command line\n", stderr);
     return 3;
   }
@@ -740,7 +805,8 @@ bool expectedThread(const QJsonObject& params, QString* program, QStringList* ar
   return servers.size() == 1 && !program->isEmpty() && arguments->contains(QStringLiteral("--chat-session")) &&
          params.value(QStringLiteral("approvalPolicy")).toString() == QStringLiteral("never") &&
          config.value(QStringLiteral("web_search")).toString() == QStringLiteral("disabled") &&
-         config.value(QStringLiteral("sandbox_mode")).toString() == QStringLiteral("read-only");
+         config.value(QStringLiteral("sandbox_mode")).toString() == QStringLiteral("read-only") &&
+         config.value(QStringLiteral("developer_instructions")).toString().contains(QStringLiteral("# Modeling in MitCad"));
 }
 
 int appServer(const QStringList& args) {
@@ -1256,6 +1322,9 @@ int main(int argc, char** argv) {
   if (called == QStringLiteral("acp-test-agent")) {
     return acpAgent(args);
   }
+  if (called == QStringLiteral("test-terminal")) {
+    return testTerminal(args);
+  }
   if (called == QStringLiteral("not-acp")) {
     // It answers nothing, and ends with its input.
     std::fputs("This program does not speak the Agent Client Protocol.\n", stdout);
@@ -1280,7 +1349,14 @@ int main(int argc, char** argv) {
       std::fputs(in ? "Logged in using ChatGPT\n" : "Not logged in\n", stderr);
       return in ? 0 : 1;
     }
+    if (args == QStringList{QStringLiteral("logout")}) {
+      recordSignIn(args);
+      signOut(codexIn);
+      std::fputs("Successfully logged out\n", stdout);
+      return 0;
+    }
     if (args == QStringList{QStringLiteral("login")}) {
+      recordSignIn(args);
       std::fputs("If your browser did not open, navigate to this URL to authenticate:\n\n"
                  "https://auth.openai.com/oauth/authorize?test\n",
                  stdout);
@@ -1324,7 +1400,14 @@ int main(int argc, char** argv) {
       std::fputs(in ? "{\"loggedIn\": true, \"authMethod\": \"claude.ai\"}\n" : "{\"loggedIn\": false}\n", stdout);
       return in ? 0 : 1;
     }
+    if (args.at(1) == QStringLiteral("logout")) {
+      recordSignIn(args);
+      signOut(signedIn);
+      std::fputs("Successfully logged out from your Anthropic account.\n", stdout);
+      return 0;
+    }
     if (args.at(1) == QStringLiteral("login")) {
+      recordSignIn(args);
       std::fputs("Opening https://claude.ai/oauth/authorize?test in your browser\n", stdout);
       std::fflush(stdout);
       QFile file(signedIn);

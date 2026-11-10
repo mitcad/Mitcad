@@ -1,0 +1,53 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+The paves of an edge whose pave blocks do not chain: no write past the
+array's end (mitcad#1559).
+
+BOPDS_DS::Paves collects the distinct paves of an edge's pave blocks into
+an array of the blocks' number plus one, as a chain of n blocks has n + 1
+paves, and only asserts that (in debug builds). Blocks that do not chain
+(two ending at one vertex at parameters that differ, as on edges of a
+pipe shell's corner where BRepFill_TrimShellCorner intersects its two
+sides) have more distinct paves, and the loop wrote past the array's end:
+the heap was corrupted ("corrupted size vs. prev_size", an IFC file's
+closed stirrup of lines and arcs swept as a pipe, valgrind: an invalid
+write of 8 bytes just after a block of 64 in BOPDS_DS::Paves called from
+MakeFacesSec and FindFromVEdge). The array now holds every distinct pave,
+counted first.
+
+diff --git a/src/ModelingAlgorithms/TKBO/BOPDS/BOPDS_DS.cxx b/src/ModelingAlgorithms/TKBO/BOPDS/BOPDS_DS.cxx
+--- a/src/ModelingAlgorithms/TKBO/BOPDS/BOPDS_DS.cxx
++++ b/src/ModelingAlgorithms/TKBO/BOPDS/BOPDS_DS.cxx
+@@ -1360,9 +1360,19 @@
+     return;
+   }
+ 
+-  NCollection_Array1<BOPDS_Pave> pPaves(1, aPaveBlocks.Length() + 1);
++  // The pave blocks of an edge normally form a chain (n blocks, n + 1
++  // paves), but two blocks can end at one vertex at parameters that differ
++  // (a closed edge's, or one a corner's trim split in its own way): the
++  // array holds every distinct pave, however many there are.
++  NCollection_Map<BOPDS_Pave> aVisitedPaves;
++  for (const auto& aPaveBlock : aPaveBlocks)
++  {
++    aVisitedPaves.Add(aPaveBlock->Pave1());
++    aVisitedPaves.Add(aPaveBlock->Pave2());
++  }
++  NCollection_Array1<BOPDS_Pave> pPaves(1, aVisitedPaves.Extent());
+   int                            i = 1;
+-  NCollection_Map<BOPDS_Pave>    aVisitedPaves;
++  aVisitedPaves.Clear();
+   for (const auto& aPaveBlock : aPaveBlocks)
+   {
+     for (const auto& aPave : {aPaveBlock->Pave1(), aPaveBlock->Pave2()})
+@@ -1375,9 +1385,6 @@
+     }
+   }
+ 
+-  Standard_ASSERT_VOID(aPaveBlocks.Length() + 1 == aVisitedPaves.Length(),
+-                       "Abnormal number of paves");
+-
+   std::sort(pPaves.begin(), pPaves.end());
+   for (const auto& aPave : pPaves)
+   {

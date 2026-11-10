@@ -14,6 +14,8 @@
 #     refused entry undoes the entries before it, results list what changed,
 #     model_export writes a chosen body into the allowed folder, screenshots
 #     come as image blocks or JPEG files of an asked size;
+#   - mitcad#1569: model_export replaces an existing file with overwrite
+#     (never one outside the folder) and takes a mesh refinement;
 #   - mitcad#750: model_export is refused while a sketch with later
 #     features is edited, and writes the design once the sketch is left;
 #   - mitcad#405: ui_camera reads the camera, sets eye, target, up and
@@ -284,9 +286,24 @@ mcp_tool ui_state '{}'
 expect '.modified == ($modified == "true")' "the export does not change the document" --arg modified "$MODIFIED"
 mcp_tool model_export "$(jq -cn --arg d "$DOC" '{document: $d, path: "lid.stl", format: "stl"}')" true
 expect '.error | contains("already exists")' "an existing file is refused"
+# mitcad#1569: replaced with overwrite, the mesh by refinement; outside the
+# folder still refused with overwrite.
+mcp_tool model_export "$(jq -cn --arg d "$DOC" --arg b "$LID" '{document: $d, path: "lid.stl", format: "stl", bodies: [$b],
+  overwrite: true, refinement: {deviation: 0.03, angle: 0.052}}')"
+expect '.exported == true and (.path | endswith("/allowed/lid.stl"))' "overwrite: true replaces it, with a refinement"
+[ -s "$ALLOWED/lid.stl" ] || ui_fail "lid.stl was not written again"
+mcp_tool model_export "$(jq -cn --arg d "$DOC" '{document: $d, path: "coarse.stl", format: "stl", refinement: "coarse"}')" true
+[ -e "$ALLOWED/coarse.stl" ] && ui_fail "an export with an unknown refinement wrote coarse.stl"
+mcp_tool model_export "$(jq -cn --arg d "$DOC" '{document: $d, path: "lid.step", format: "step", refinement: "high"}')" true
+expect '.error | contains("refinement")' "refinement is for the mesh formats"
+[ -e "$ALLOWED/lid.step" ] && ui_fail "a refused export wrote lid.step"
 mcp_tool model_export "$(jq -cn --arg d "$DOC" --arg p "$OUTSIDE/lid.step" '{document: $d, path: $p, format: "step"}')" true
 expect '.error | contains("not in a folder for designs")' "an export outside the folder is refused"
 [ -e "$OUTSIDE/lid.step" ] && ui_fail "a refused export wrote a file outside the folder"
+printf 'outside' > "$OUTSIDE/kept.stl"
+mcp_tool model_export "$(jq -cn --arg d "$DOC" --arg p "$OUTSIDE/kept.stl" '{document: $d, path: $p, format: "stl", overwrite: true}')" true
+expect '.error | contains("not in a folder for designs")' "an export outside the folder is refused with overwrite too"
+[ "$(cat "$OUTSIDE/kept.stl")" = outside ] || ui_fail "an export with overwrite replaced a file outside the folder"
 
 # mitcad#750: editing a sketch with later features rolls them back until
 # it ends, so the export waits for the sketch.

@@ -2181,11 +2181,56 @@ impl Kernel for MockKernel {
         if spec.taper != 0.0 {
             text += &format!(" taper {}", number(spec.taper));
         }
+        // A press fit's section (mitcad#1517) and its faces' parts.
+        let press_fit_parts: Option<Vec<String>> = spec.press_fit.map(|fit| match fit {
+            mitcad_model_base::kernel::HolePressFit::Polygon {
+                sides,
+                inscribed,
+                angle,
+            } => {
+                text += &format!(
+                    " press fit {sides} sides inscribed {:.6} angle {}",
+                    inscribed,
+                    number(angle)
+                );
+                (0..sides).map(|k| format!("flat{k}")).collect()
+            }
+            mitcad_model_base::kernel::HolePressFit::CrushRibs {
+                ribs,
+                tips,
+                bore,
+                angle,
+            } => {
+                text += &format!(
+                    " press fit {ribs} ribs tips {:.6} bore {:.6} angle {}",
+                    tips,
+                    bore,
+                    number(angle)
+                );
+                (0..ribs)
+                    .flat_map(|k| {
+                        [
+                            format!("wall{k}"),
+                            format!("rib{k}.side0"),
+                            format!("rib{k}.side1"),
+                        ]
+                    })
+                    .collect()
+            }
+        });
         self.specs.borrow_mut().push(text);
         let mut faces = Vec::new();
         let mut edges = Vec::new();
         for i in 0..spec.positions.len() {
             let face = |part: &str| FaceName::new(spec.feature, &format!("hole{i}.{part}"), None);
+            if let Some(parts) = &press_fit_parts {
+                for part in parts {
+                    faces.push(face(part));
+                    edges.push((face(part), face("tip")));
+                }
+                faces.push(face("tip"));
+                continue;
+            }
             if spec.taper == 0.0 {
                 self.hole_radii
                     .borrow_mut()

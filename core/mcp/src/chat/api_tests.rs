@@ -201,7 +201,13 @@ fn anthropic_tool_loop_streams_calls_and_keeps_thinking_blocks() {
         body["system"]
             .as_str()
             .unwrap()
-            .ends_with("Use model_command for changes.")
+            .contains("Use model_command for changes.")
+    );
+    assert!(
+        body["system"]
+            .as_str()
+            .unwrap()
+            .ends_with(crate::guide::index())
     );
     assert_eq!(body["tools"][0]["name"], "model_command");
     assert_eq!(body["tools"][0]["input_schema"]["type"], "object");
@@ -364,6 +370,12 @@ fn openai_tool_calls_stream_in_pieces() {
     let body = body_of(http);
     assert_eq!(body["model"], "llama3.1");
     assert_eq!(body["messages"][0]["role"], "system");
+    assert!(
+        body["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .ends_with(crate::guide::index())
+    );
     assert_eq!(body["messages"][1]["content"][0]["text"], "a box");
     assert_eq!(body["tools"][0]["type"], "function");
     assert_eq!(body["tools"][0]["function"]["parameters"]["type"], "object");

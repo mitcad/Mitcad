@@ -9,6 +9,8 @@
 //     fonts, so they follow it.
 //   - Icon size, likewise, scales the code's fixed icon sizes through
 //     uiIconSize(); the icons are drawn from their SVG sources at that size.
+//     The icons Qt's style sizes (menus, combo boxes, line edits' actions)
+//     follow it through IconSizeStyle (IconSizeStyle.hpp, mitcad#1561).
 //   - Font: the system's (empty, the default) or an installed family,
 //     the application font's family at Text size's point size.
 // Kept in the application's settings (appearance/textSize,

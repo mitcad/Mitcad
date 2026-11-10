@@ -79,6 +79,7 @@ fn owner_table_and_virtual_evaluation_do_not_change_a_design() {
         ("bearing_axial_clearance", 0.4),
         ("bearing_element_gap", 0.6),
         ("bearing_fit_clearance", 0.5),
+        ("press_fit_interference", 0.1),
     ];
     assert_eq!(fits.as_array().unwrap().len(), expected.len());
     for (fit, (name, value)) in fits.as_array().unwrap().iter().zip(expected) {

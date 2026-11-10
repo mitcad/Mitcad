@@ -238,6 +238,12 @@ public:
   // The view's highlights of the places hovered, for a command's own
   // highlights (CommandSession::updateHighlights adds them).
   virtual std::vector<HighlightDisplay> noticeHighlights() const { return {}; }
+  // The constraints and dimensions (k5) that block a sketch command the
+  // model refused for conflicting constraints (mitcad#1566,
+  // sketch/SketchConflict.hpp): painted in the edited sketch while the
+  // panel's message shows the refusal, in the hover's colour while the
+  // pointer is over it (`hovered`); none clears them.
+  virtual void sketchConflict(const QStringList& /*items*/, bool /*hovered*/) {}
 };
 
 // A feature command from start to OK or Cancel: its inputs' state and
@@ -299,6 +305,16 @@ public:
   // Whether the active input also takes the edited sketch's axes
   // (InputDef::sketchAxes, mitcad#876).
   bool activeTakesSketchAxes() const;
+  // Whether the active input picks points with the sketch's snaps
+  // (InputDef::sketchSnaps, mitcad#1563).
+  bool activeTakesSketchSnaps() const;
+  // The command's handle in the sketch (CommandDef::sketchHandle,
+  // mitcad#1563) as its inputs are now; none while it has none or the
+  // panel is done.
+  std::optional<SketchHandle> sketchHandle() const;
+  // A drag of that handle set the value input `key` to `value` (mm), as a
+  // drag of a handle in the view does.
+  void handleDragged(const QString& key, double value) { manipulatorDragged(key, value); }
   // For autosave (P8): the timeline marker the edit restores when it rolled
   // it back (else -1), and whether a sketch command's preview is applied to
   // the model now (its commands are taken back when the panel closes).
@@ -741,6 +757,14 @@ private:
   std::vector<BodyDisplay> m_messageBodies;
   bool m_messageHovered = false;
   void hoverMessage(bool on);
+  // The constraints and dimensions that block the sketch command the model
+  // refused, painted while the message shows it (mitcad#1566).
+  QStringList m_sketchConflict;
+  // A sketch command's refusal as the message shows it: a conflict's words
+  // without the model's ids line, whose items are then painted; any other
+  // text as it is, nothing painted.
+  QString sketchProblem(const QString& error);
+  void setSketchConflict(const QStringList& items);
   // The edited feature's profiles that were deleted from their sketch and
   // left out of the selection, and those sketches' names (mitcad#1264).
   int m_missingProfiles = 0;

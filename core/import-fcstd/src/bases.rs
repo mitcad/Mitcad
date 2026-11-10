@@ -85,7 +85,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
             "a linked copy of the bodies of {label} (FreeCAD's base feature)"
         ));
         if !is_identity(&moved) {
-            let spec = self.base_move(o, target, &own, &moved);
+            let spec = self.base_move(o, target, &own, &moved, from.component);
             reading = reading
                 .then(
                     json!({"type": "move", "bodies": copies, "transform": spec}),
@@ -180,14 +180,20 @@ impl<K: Kernel> Importer<'_, '_, K> {
 
     /// The move that takes the copy where FreeCAD places it: a translation
     /// (with the placement's expressions, plus the fixed difference the
-    /// occurrences make) when it turns nothing, else a free move.
+    /// occurrences make) when it turns nothing, else a free move. Where
+    /// expressions move the occurrences between the base's component
+    /// (`from`) and the Body's (mitcad#1560), the copy follows them through
+    /// its link: the move takes them off again, so that the copy stays
+    /// where the FeatureBase's own placement puts it.
     fn base_move(
         &mut self,
         o: &Object,
         target: &Target,
         own: &mitcad_freecad::Placement,
         moved: &Transform,
+        from: mitcad_model::ComponentUid,
     ) -> Value {
+        let terms = self.driven_terms(from, target.place.component);
         let rigid_into = is_identity(&Transform {
             linear: target.place.transform.linear,
             translation: [0.0; 3],
@@ -220,14 +226,29 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     Kind::Length,
                     stored,
                 );
-                let rest = value - stored;
-                if rest.abs() <= NO_MOVE {
+                let driven = &terms[k];
+                let rest = value - stored - driven.iter().map(|(s, t)| s * t.value).sum::<f64>();
+                if rest.abs() <= NO_MOVE && driven.is_empty() {
                     Q { value, ..q }
                 } else {
                     let constant = Q::number(rest.abs(), Kind::Length);
-                    let sign = if rest < 0.0 { "-" } else { "+" };
-                    Q::combine(&[&q, &constant], value, Kind::Length, |ops| {
-                        format!("{} {sign} {}", ops[0], ops[1])
+                    let mut parts: Vec<&Q> = vec![&q];
+                    parts.extend(driven.iter().map(|(_, t)| t));
+                    let with_constant = rest.abs() > NO_MOVE;
+                    if with_constant {
+                        parts.push(&constant);
+                    }
+                    let mut signs: Vec<&str> = driven
+                        .iter()
+                        .map(|(s, _)| if *s < 0.0 { "-" } else { "+" })
+                        .collect();
+                    signs.push(if rest < 0.0 { "-" } else { "+" });
+                    Q::combine(&parts, value, Kind::Length, |ops| {
+                        let mut text = ops[0].clone();
+                        for (op, sign) in ops[1..].iter().zip(&signs) {
+                            text.push_str(&format!(" {sign} {op}"));
+                        }
+                        text
                     })
                 }
             } else {

@@ -38,6 +38,7 @@
 #include "../files/LockController.hpp"
 #include "../files/ProjectIndicator.hpp"
 #include "../files/ProjectSettings.hpp"
+#include "../files/Projects.hpp"
 #include "../files/RemoteController.hpp"
 #include "../files/RemoteTask.hpp"
 #include "../framework/AppSettings.hpp"
@@ -156,6 +157,8 @@ void MainWindow::createProjectsPanel() {
                  .arg(QFileInfo(root).fileName()));
     refreshProjectsPanel();
   });
+  connect(panel, &ProjectsPanel::removeProjectRequested, this,
+          [this](const QString& root) { removeProject(root); }, queued);
   connect(panel, &ProjectsPanel::statusMessage, this, [this](const QString& message, bool error) {
     if (error) {
       showError(message);
@@ -893,6 +896,7 @@ void MainWindow::panelProjectSettings(const QString& root) {
   host.testBroker = [this](QWidget* parent, const QString& broker, const QString& prefix) {
     m_live->testBroker(parent, broker, prefix);
   };
+  host.removeProject = [this, root] { removeProject(root); };
   mitcad::showProjectSettings(this, root, host);
   refreshProjectsPanel();
 }
@@ -919,6 +923,130 @@ void MainWindow::addExistingProjectFolder() {
   execDialog(&box);
   if (box.clickedButton() == make) {
     openProjectFolder(folder, true);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Remove Project (mitcad#1562)
+
+void MainWindow::removeProject(const QString& root) {
+  const QString name = QFileInfo(root).fileName();
+  // What would happen, as the core reads the folder: nothing changes yet.
+  const QJsonObject plan = projectsCommand({{QStringLiteral("cmd"), QStringLiteral("remove_project")},
+                                            {QStringLiteral("dir"), root},
+                                            {QStringLiteral("dry_run"), true}});
+  if (!errorClassOf(plan).isEmpty()) {
+    qInfo().noquote() << QStringLiteral("Remove Project refused (%1): %2").arg(errorClassOf(plan), errorMessageOf(plan));
+    sheetWarning(this, tr("Remove Project"), errorMessageOf(plan));
+    return;
+  }
+  // The windows with a design of the project open, or the project as theirs.
+  QList<MainWindow*> windows;
+  if (WindowManager* manager = WindowManager::instance()) {
+    windows = manager->windows();
+  }
+  if (!windows.contains(this)) {
+    windows << this;
+  }
+  QStringList open;
+  for (MainWindow* window : windows) {
+    if (!window->m_filePath.isEmpty() && atOrInside(window->m_filePath, root)) {
+      open << window->documentName();
+    }
+  }
+  const QString fate = plan.value(QStringLiteral("repository")).toString();
+  const int designs = plan.value(QStringLiteral("designs")).toInt();
+  const int versions = plan.value(QStringLiteral("versions")).toInt();
+  QStringList rewritten;
+  for (const QJsonValue& path : plan.value(QStringLiteral("rewritten")).toArray()) {
+    rewritten << path.toString();
+  }
+  QStringList files;
+  for (const QString& key : {QStringLiteral("removed"), QStringLiteral("edited")}) {
+    for (const QJsonValue& path : plan.value(key).toArray()) {
+      files << path.toString();
+    }
+  }
+  const QString remote = plan.value(QStringLiteral("remote")).toObject().value(QStringLiteral("url")).toString();
+
+  QMessageBox box(QMessageBox::Warning, tr("Remove Project"), tr("Remove the project %1?").arg(name),
+                  QMessageBox::Cancel, this);
+  QStringList info{tr("The folder %1 stays with its %n design(s) and other files: it is no longer a project.",
+                      nullptr, designs)
+                       .arg(QDir::toNativeSeparators(root))};
+  if (fate == QLatin1String("removed")) {
+    info << tr("Its version history (%n version(s)) is deleted: older versions and deleted designs cannot be "
+               "brought back.",
+               nullptr, versions);
+  } else if (fate == QLatin1String("kept")) {
+    info << tr("The folder was a git repository before the project: it keeps its history, and a new version takes "
+               "the project's files out.");
+  }
+  if (!remote.isEmpty()) {
+    info << tr("Only this computer's copy stops being a project: the repository at %1 is not changed.").arg(remote);
+  }
+  if (!rewritten.isEmpty()) {
+    info << tr("%n design(s) keeping data in the project are first saved as single files: %1.", nullptr,
+               static_cast<int>(rewritten.size()))
+                .arg(rewritten.join(QStringLiteral(", ")));
+  }
+  if (!files.isEmpty()) {
+    info << tr("MitCad's files are removed: %1.").arg(files.join(QStringLiteral(", ")));
+  }
+  if (!open.isEmpty()) {
+    info << tr("Open designs of the project close: %1.").arg(open.join(QStringLiteral(", ")));
+  }
+  box.setInformativeText(info.join(QStringLiteral("\n\n")));
+  QPushButton* remove = box.addButton(tr("&Remove Project"), QMessageBox::DestructiveRole);
+  box.setDefaultButton(QMessageBox::Cancel);
+  qInfo().noquote() << QStringLiteral("Remove Project dialog: %1 (%2 designs, history %3%4)")
+                           .arg(root)
+                           .arg(designs)
+                           .arg(fate, open.isEmpty() ? QString() : QStringLiteral(", %1 open").arg(open.size()));
+  prepareModal(&box);
+  execDialog(&box);
+  if (box.clickedButton() != remove) {
+    qInfo().noquote() << QStringLiteral("Remove Project cancelled");
+    return;
+  }
+  // Its designs close (their changes saved or not, as asked), and no window
+  // keeps it as its project: its remote work and edit locks end first.
+  for (MainWindow* window : windows) {
+    if (!window->m_filePath.isEmpty() && atOrInside(window->m_filePath, root) && !window->maybeSave()) {
+      qInfo().noquote() << QStringLiteral("Remove Project cancelled at the question about changes");
+      return;
+    }
+  }
+  for (MainWindow* window : windows) {
+    if (!window->m_filePath.isEmpty() && atOrInside(window->m_filePath, root)) {
+      const QString path = window->m_filePath;
+      if (window->installEmptyDocument(QString())) {
+        qInfo().noquote() << QStringLiteral("Remove Project: closed %1").arg(path);
+      }
+    }
+    if (window->m_project.isProject() && sameFolderPath(window->m_project.root, root)) {
+      window->setCurrentProject(ProjectState(), false);
+    }
+  }
+  const QJsonObject answer =
+      projectsCommand({{QStringLiteral("cmd"), QStringLiteral("remove_project")}, {QStringLiteral("dir"), root}});
+  if (!errorClassOf(answer).isEmpty()) {
+    qInfo().noquote() << QStringLiteral("Remove Project failed (%1): %2")
+                             .arg(errorClassOf(answer), errorMessageOf(answer));
+    sheetWarning(this, tr("Remove Project"), errorMessageOf(answer));
+    refreshProjectsPanel();
+    return;
+  }
+  ProjectsSettings::forget(root);
+  qInfo().noquote() << QStringLiteral("Remove Project: removed %1 (history %2, %3 designs stay)")
+                           .arg(root, answer.value(QStringLiteral("repository")).toString())
+                           .arg(answer.value(QStringLiteral("designs")).toInt());
+  for (const QJsonValue& warning : answer.value(QStringLiteral("warnings")).toArray()) {
+    qInfo().noquote() << QStringLiteral("Remove Project: warning: %1").arg(warning.toString());
+  }
+  showHint(tr("%1 is no longer a project; its designs stay in the folder.").arg(name));
+  for (MainWindow* window : windows) {
+    window->refreshProjectsPanel();
   }
 }
 

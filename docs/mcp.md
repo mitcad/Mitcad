@@ -333,7 +333,10 @@ bridge keeps an update from replacing them (mitcad#1454). On Windows the
 updater (once MitCad has quit for the update) and the installer therefore
 set the event `Local\MitcadBridgeQuit-<pid>` of each bridge that runs from
 the installation, and the bridge then ends without an error. It does not
-end on its own while it waits for MitCad to start.
+end on its own while it waits for MitCad to start. A bridge that does not
+end so (one of a release before that change) the updater names in its
+question before the install, and ends it on *End Them and Install*
+(mitcad#1584).
 
 It says so on stderr. Reconnect MitCad in the assistant after the update
 (Claude Code: `/mcp`).
@@ -528,7 +531,8 @@ relative path is relative to the first folder. An existing file is
 replaced only with `overwrite: true`, and never through a link.
 
 `model_export` (mitcad#689) writes only into these folders too, by the
-same rules, and only a new file: an existing one is refused. It writes
+same rules: an existing file is replaced only with `overwrite: true`
+(mitcad#1569), and never through a link or outside the folders. It writes
 the formats of the headless `model_export` (3MF, STL, STEP, drawings,
 …), with `bodies` choosing what goes in, for example without a hidden
 helper body. The export does not change the document. It is refused
@@ -701,8 +705,8 @@ A new bridge can connect again to the same document. `--workspace`,
 | `document_list` | `{}` | `documents`: the document of the window, with `document`, `path`, `name`, `state`, `busy` and `editable`. `folders`: the folders for designs, which AI assistants can save to and open from. An empty list means no folder. |
 | `model_query` | `document`, `query` | `document`. Native JSON in `result`. |
 | `model_command` | `document`, `command` (an object or an array). Optional `timeline` (`changed` default, `full`, `none`). | `document`, `applied`, native `result`, `failed_features`, `state`, `changes` (with `full` `timeline` and `bodies` instead). For an array also `ran`, `results`, `stopped_at`. In a sketch, also `sketch`. Refer to the command arrays above and [failed features](#transport-errors-and-limits). |
-| `model_export` | `document`, `path` (a new file in a folder for designs), `format`. Optional `bodies`, `sketch`, `flat_pattern`, `drawing`, and the print plates and print bed fields (`plates`, `plate`, `dialect`, `on_bed`, `center`, `drop`, `auto_orient`, `bed_face`, `spacing`, `occurrence`, `occurrences`, `whole`), as in headless mode; each file a `file_per_plate` writes is a new file in a folder for designs. | `document`, `path`, `exported`, native export `result`. |
-| `model_reference` | As in headless mode: none, or one of `section`, `query`, `command`, `feature`, `search`; optional `offset`. | As in headless mode ([Look up the reference](#look-up-the-reference)). The protocol answers it, without the document. |
+| `model_export` | `document`, `path` (a new file in a folder for designs, or an existing one with `overwrite`), `format`. Optional `bodies`, `sketch`, `flat_pattern`, `drawing`, `refinement`, `overwrite` (default false), and the print plates and print bed fields (`plates`, `plate`, `dialect`, `on_bed`, `center`, `drop`, `auto_orient`, `bed_face`, `spacing`, `occurrence`, `occurrences`, `whole`), as in headless mode; each file a `file_per_plate` writes is in a folder for designs, new unless `overwrite` is true. | `document`, `path`, `exported`, native export `result`. |
+| `model_reference` | As in headless mode: none, or one of `section`, `query`, `command`, `feature`, `search`; optional `offset` and `extended`. | As in headless mode ([Look up the reference](#look-up-the-reference)). The protocol answers it, without the document. |
 | `model_render` | As in headless mode, without `quality` and its fields (fast only); `document` optional; `path` a new `.png` file in a folder for designs. | As in headless mode ([Preview images](#preview-images-model_render)): the same picture as the headless server's for the same design and arguments. |
 | `document_save` | `document`. Optional `path`. Optional `overwrite` (default false). | `document`, `path`, `saved`, `status`, `state`. `status` is the text of the status bar, with the recorded version. Refer to the text below the table. |
 | `document_open` | `path`. Optional `discard` (default false). | `document` (the new handle), `path`, `name`, `state`, `busy`, `editable`, `opened`, `replaced` (the old handle). Refer to the text below the table. |
@@ -1066,13 +1070,40 @@ required.
 | `model_command` | `document`, `command` (a native JSON object or an array of them), `timeline` (`changed` default, `full`, `none`) | `document`, `applied`, native `result`, `failed_features`, `state`, `changes` (with `full` `timeline` and `bodies` instead); for an array also `ran`, `results`, `stopped_at`. Refer to the command arrays and results under "Live tools" and [failed features](#transport-errors-and-limits). |
 | `model_query` | `document`, `query` (a native JSON object) | `document`, native JSON in `result` |
 | `document_save` | `document`, `path`, `overwrite` (default false) | `document`, canonical `path`, saved `state` |
-| `model_export` | `document`, `path`, `format`. Optional `bodies` (an array of names or UIDs). Optional `sketch`. For DXF, `flat_pattern`. For a drawing, `drawing`. For 3MF, `plates`, `plate`, `dialect`, `occurrences`, `whole`; on the print bed of 3MF, STL or OBJ, `on_bed`, `center`, `drop`, `auto_orient`, `bed_face`, `spacing`; for the bodies' formats, `occurrence`. Refer to the text below the table. | `document`, canonical `path`, native export `result` |
-| `model_reference` | None, or one of `section`, `query`, `command`, `feature`, `search`. Optional `offset`. Refer to [Look up the reference](#look-up-the-reference). | The contents and the permitted names, or one part of the reference, at most 64 kB of text |
+| `model_export` | `document`, `path`, `format`. Optional `overwrite` (default false: an existing file is refused). Optional `bodies` (an array of names or UIDs). Optional `sketch`. For DXF, `flat_pattern`. For a drawing, `drawing`. For STL, OBJ, 3MF and USDZ, `refinement`. For 3MF, `plates`, `plate`, `dialect`, `occurrences`, `whole`; on the print bed of 3MF, STL or OBJ, `on_bed`, `center`, `drop`, `auto_orient`, `bed_face`, `spacing`; for the bodies' formats, `occurrence`. Refer to the text below the table. | `document`, canonical `path`, native export `result` |
+| `model_reference` | None, or one of `section`, `query`, `command`, `feature`, `search`. Optional `offset` and `extended` (the whole section instead of the brief one). Refer to [Look up the reference](#look-up-the-reference). | The contents and the permitted names, or one part of the reference, at most 64 kB of text |
 | `model_render` | `document`. Optional `view`, `projection`, `fit`, `bodies`, `hidden`, `size`, `edges`, `background`, `path`, `overwrite`, `max_bytes`, `colors`, `highlight`, `section`, `explode`, `views`, `quality` (`"raytrace"` with `samples`, `time_limit_s`, `denoise`: [Ray-traced pictures](#ray-traced-pictures)). Refer to [Preview images](#preview-images-model_render). | An MCP image block (PNG) after the text: `camera`, `width`, `height`, `bytes`, `bodies`, `timing_ms`, `warnings`, ...; with `views` an image block per view and `views` |
 
 `document_open` imports a `.solidcraft` design with its history into a
 new document without a `path`. Save that document with `document_save`
 and a path.
+
+Headless `model_command` also permits `import_print_profile` and
+`import_slicer_presets` with `into` omitted or `"design"`. They change only
+the design; `user`, `project` and `base` library targets and `project` paths
+are refused. For example, copy the slicer's 3MF into the workspace, then:
+
+```json
+{"document":"D1","command":{"cmd":"import_print_profile",
+ "path":"profiles/source.3mf","dialect":"orcaslicer","into":"design"}}
+```
+
+The normal result lists `printers`, `processes` and `materials`; the root
+chooses the imported printer and process unless `choose:false`. Assign the
+material and use these settings with `model_export`'s `plates` and `dialect`.
+For separate presets, copy a slicer data folder into the workspace and use
+`import_slicer_presets` with `folder` and `presets:[{"path":...}]`. Every
+path is relative to the workspace or absolute inside it. The folder,
+selected files and inherited bases are checked for traversal and symlink
+escapes before any array entry runs. Missing bases are refused. Inherited
+JSON passed to `import_print_profile` must lie under that folder's
+`user/<account>/<kind>/` or `system/<vendor>/<kind>/`; for other layouts use
+`import_slicer_presets` with an explicit folder. Installed slicer folders
+and print libraries are never searched. The command memory guard also covers
+preparation. A whole call shares limits of 4,096 file reads, 4,096 directory
+entries and 64 MiB of source bytes plus expanded preset snapshots; repeated
+sources in arrays count again. Archives are parsed in memory, without extracting entries. These two file
+commands remain refused in live mode and under `--read-only`.
 
 `model_export` with `flat_pattern` takes a sheet-metal body and exports
 its Flat Pattern as DXF. With `format` `pdf` or `svg`, or `dxf` with
@@ -1080,6 +1111,28 @@ its Flat Pattern as DXF. With `format` `pdf` or `svg`, or `dxf` with
 hole table and a title block. `drawing` holds the options of
 `export_drawing` (commands.md "Drawings"). The title is the file name
 of the document, unless `drawing` gives one.
+
+`model_export` takes the `export` command's `refinement` for STL, OBJ,
+3MF and USDZ (mitcad#1569, commands.md "Mesh refinement"): a preset,
+`low`, `medium` (the default) or `high`, or the tolerances
+`{"deviation": mm, "angle": radians}` with optional `face_triangles` and
+`max_edge`. The `export` command checks the values; another format with
+`refinement` is refused. A small printed part, a 7 mm part or a 15 mm
+wheel, shows facets at the default and takes for example
+`{"deviation": 0.03, "angle": 0.052}`.
+
+`model_export` writes only new files unless `overwrite` is `true`, as
+`document_save` (mitcad#1569): then an existing regular file in the
+workspace (in a folder for designs, live) is replaced. The rule applies
+to every file the export writes, `path`, an OBJ's `.mtl`, a drawing's
+further sheets and the files of `file_per_plate`, and each is checked
+before the first is written. A path outside the workspace or the
+folders, or a link that leads out of them, is refused with `overwrite`
+too.
+
+```json
+{"name":"model_export","arguments":{"document":"D1","path":"wheel.stl","format":"stl","refinement":{"deviation":0.03,"angle":0.052},"overwrite":true}}
+```
 
 `model_export` writes the design's print plates and a slicer's 3MF
 (mitcad#1490) with the fields of the `export` command (commands.md
@@ -1102,8 +1155,8 @@ beyond the brims"), passed on as given:
 `plates`, `plate`, `dialect`, `occurrences` and `whole` with another
 format than `3mf` are refused with a message naming 3MF. Each file of
 `file_per_plate` must be a new path in the workspace (in a folder for
-designs, live) as `path` is: every one is checked before the first is
-written. The result is the export command's, with `plates` (each
+designs, live) as `path` is, or an existing file there with `overwrite`:
+every one is checked before the first is written. The result is the export command's, with `plates` (each
 plate's `id`, `name`, `path`, `bodies`, `pieces`, `origin`, `bed` and
 `warnings`) and `files`.
 
@@ -1155,6 +1208,39 @@ component refresh, raw save and export commands, disk cache access and
 remote operations.
 Files are accessed through the dedicated document and export tools.
 
+### Selections by geometry
+
+An agent may pick geometry by where it is and what it is instead of by
+its topological name (mitcad#1587), in both servers' `model_command`. The
+server turns each such selection into names on the document as the
+entries before it left it, right before the entry runs; the stored
+definition keeps the names, as the application's own commands write
+them, so a later change of the design follows the names as it always
+does. These forms are MCP's only: the application's commands and panels
+never take them.
+
+- A profile in a `profiles` array as `{"sketch": "F1", "point": [u, v]}`:
+  the region of that sketch that holds the point (sketch coordinates)
+  becomes `{"sketch": "F1", "region": "r{…}"}`. A point in no region, or
+  on a boundary that two regions share, is refused. `model_query`'s
+  `profiles` gives each region's `area` and `center` to agents
+  (`measures`, which MCP sets).
+- A fillet's or chamfer's `edges` or `faces` (in the short form and in
+  each of its `sets`) as an object: the filter of the `edges` or `faces`
+  query on the definition's `body`, e.g. `{"edges": {"between":
+  ["cylinder", "sphere"]}}`, `{"edges": {"curve": "circle", "radius":
+  2}}`, `{"faces": {"surface": "cylinder"}}`; it becomes the names the
+  query finds (a face by its first name). A filter that finds nothing is
+  refused.
+
+```json
+{"cmd": "add_feature", "def": {"type": "revolve",
+ "profiles": [{"sketch": "F1", "point": [30, 20]}], "axis": {"sketch": "F1", "curve": "c6"},
+ "extent": {"type": "full"}, "operation": "new_body"}}
+{"cmd": "add_feature", "def": {"type": "fillet", "body": "F2.b0",
+ "sets": [{"edges": {"between": ["cylinder", "sphere"]}, "size": {"type": "constant", "radius": 2}}]}}
+```
+
 ### Look up the reference
 
 `model_reference` (mitcad#714) is in both servers. It is read-only and
@@ -1166,9 +1252,9 @@ descriptions of `model_query` and `model_command` point to it.
 | Arguments | Result |
 |---|---|
 | none | `contents`: the `##` and `###` headings of the reference, one a line (`###` indented); `guides`: each guide topic's `id` and `read_when` (below); `queries`, `commands`, `features`: every query, command and feature type the server permits; `usage` |
-| `section` | One section with its subsections: `section` (its heading), `path` (the headings above it), `text`. The name is a heading (`"Values"`, `"Sketch commands"`, in any case), a name a heading lists (`"split_body"` finds *Face features: shell, …, split_body, split_face*) or a part of a heading, in that order; `other_sections` names the other matches |
+| `section` | One section with its subsections: `section` (its heading), `path` (the headings above it), `text`. In brief by default (below); `"extended": true` gives the whole text. The name is a heading (`"Values"`, `"Sketch commands"`, in any case), a name a heading lists (`"split_body"` finds *Face features: shell, …, split_body, split_face*) or a part of a heading, in that order; `other_sections` names the other matches |
 | `query`, `command` | The reference rows of that query or command, each table with its header and the headings above it, in `text`; `sections`: the headings that list the name; `permitted`. A name without rows gives the lines that name it |
-| `feature` | The section of that feature type (the heading that lists it, or the section of its first example definition), as `section` gives it, with `feature`, `example` (its first example definition) and `permitted` |
+| `feature` | The section of that feature type (the heading that lists it, or the section of its first example definition), as `section` gives it, with `feature`, `example` (its first example definition) and `permitted`; in brief by default like `section` |
 | `search` | `headings` that contain the text, and `hits`: `section` (the headings above the line) and `excerpt` (240 characters around the text) of each line that contains it, in any case; `total` |
 | `guide` | A guide on how to model well (below): `guide` (its id) and `text`. `"index"` gives the index |
 
@@ -1179,6 +1265,19 @@ true`, `next_offset` and a `note`: call again with the same argument and
 number of hits to skip; a page holds at most 200 hits. An unknown
 section, query, command or feature type is an error (`isError`) that
 lists the names there are. Give one argument at a time.
+
+A `section` or `feature` comes in brief (mitcad#1587): the heading, the
+first code block, the tables and each paragraph or top-level list item up
+to 800 bytes, cut after a sentence, without nested list items, later
+code blocks, the subsections' texts and parenthesized issue numbers. The
+answer then has `brief: true`, `subsections` (their headings, each one to
+ask for with `section`) and a `note` with the whole section's size; the
+same call with `"extended": true` gives the whole text (a section that
+loses nothing comes whole without them). A refused command whose error
+names a missing or an unknown field gets its feature type's or command's
+brief reference in `reference`; a definition's `name` says that a name
+goes beside `def` or with `rename_feature`, and a parameter named like a
+unit, a function or a constant (`Round`) says to choose another name.
 
 The tool and the resource give the reference as agents see it
 (mitcad#1509), without what an agent cannot use: the sections whose
@@ -1804,6 +1903,14 @@ remove it with undo or delete_feature` (`was changed` for an edit). In an
 array the entry is named first (`commands[1]: …`), and when the array
 stopped there, `the entries after it did not run` follows.
 
+A failed fillet or chamfer that the command added or edited (mitcad#1587)
+is tried in previews with each of its edges (or faces) alone, up to 100
+of them: its entry gets `alone`, `{"fail": [names], "succeed": n}`, and
+its `error` ends with `tried one at a time, 1 of its 40 edges or faces
+fail alone (E{…}) and the other 39 succeed`, or says that each succeeds
+alone and they fail together. Only MCP results say this; the
+application's own error text is unchanged.
+
 A failure elsewhere in the timeline is listed in `failed_features` but
 leaves `isError` false.
 Such a failure is an earlier failure, or one that this command caused in
@@ -1977,3 +2084,17 @@ computations can still use much time and memory.
 
 Run these CTests only in the approved isolated environments, as
 [development.md](development.md#mcp-validation) describes.
+
+## Modeling feedback
+
+Use `model_query` with `{"query":"design_review","print":false}` for a
+read-only review of model health, sketch intent, references, parameters
+and organisation. Findings include stable rule ids, severity, targets,
+advice and guide links. Print analysis is optional; an unavailable check
+is reported separately from a clean result. See the reference's
+"Design review" section for scopes, filters and print contexts.
+
+Both profiles return up to three modeling hints with `model_command`
+about features that call added or edited. They share the review's rules
+and guide links. Set `"hints": false` beside `command` to omit them and
+avoid the review query, independently of the timeline response mode.

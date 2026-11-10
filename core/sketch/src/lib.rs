@@ -96,6 +96,9 @@ pub mod again;
 mod fillet;
 // The closed loop a double-click on a curve selects (mitcad#1541).
 pub mod loops;
+// Conflicting constraints in words, and the blocking ones of a refused
+// edit (mitcad#1566).
+pub mod conflict;
 
 #[cfg(test)]
 mod tests;

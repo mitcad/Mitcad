@@ -683,7 +683,7 @@ pub(super) fn trim_with_lineage<K: Kernel>(
 
 /// The chart points at the ends of a port side, on the boundary piece that
 /// contains its span.
-fn port_ends(state: &SheetState, side: &ShapePortSide) -> Option<([f64; 2], [f64; 2])> {
+pub(super) fn port_ends(state: &SheetState, side: &ShapePortSide) -> Option<([f64; 2], [f64; 2])> {
     let edge = state
         .charts
         .iter()

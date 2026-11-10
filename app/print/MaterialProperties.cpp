@@ -67,6 +67,9 @@ QString classTitle(const QString& id) {
   if (id == QStringLiteral("resin")) {
     return QObject::tr("Resin");
   }
+  if (id == QStringLiteral("wood")) {
+    return QObject::tr("Wood");
+  }
   return QObject::tr("Other");
 }
 
@@ -399,7 +402,8 @@ MaterialDatasetDialog::MaterialDatasetDialog(const CommandContext& model, const 
   middle->addWidget(m_details, 2);
   layout->addLayout(middle, 1);
   // Where the values come from, and that they are typical (mitcad#1213):
-  // the dataset's name and licence as the query gives them.
+  // the dataset's sources and their licences as the query gives them (the
+  // third-party dataset and MitCad's woods and panels, mitcad#1552).
   auto* source = new QLabel;
   source->setObjectName(QStringLiteral("materialDatasetSource"));
   source->setWordWrap(true);
@@ -426,11 +430,27 @@ MaterialDatasetDialog::MaterialDatasetDialog(const CommandContext& model, const 
     }
   });
   search(QString());
-  source->setText(tr("Values from the %1 (%2), converted into the design's units. Values are typical: "
+  QStringList sources;
+  QStringList logged;
+  const QJsonArray listed = m_about.value(QStringLiteral("sources")).toArray();
+  for (const QJsonValue& value : listed) {
+    const QJsonObject named = value.toObject();
+    sources << tr("the %1 (%2)").arg(text(named, "name"), text(named, "license"));
+    logged << QStringLiteral("%1 (%2)").arg(text(named, "name"), text(named, "license"));
+  }
+  if (sources.isEmpty()) {
+    sources << tr("the %1 (%2)").arg(m_about.value(QStringLiteral("name")).toString(QStringLiteral("material dataset")),
+                                     m_about.value(QStringLiteral("license")).toString(QStringLiteral("Apache-2.0")));
+  }
+  QString from = sources.takeLast();
+  if (!sources.isEmpty()) {
+    from = tr("%1 and %2").arg(sources.join(QStringLiteral(", ")), from);
+  }
+  source->setText(tr("Values from %1, converted into the design's units. Values are typical: "
                      "check them against the supplier's data.")
-                      .arg(m_about.value(QStringLiteral("name")).toString(QStringLiteral("material dataset")),
-                           m_about.value(QStringLiteral("license")).toString(QStringLiteral("Apache-2.0"))));
+                      .arg(from));
   qDebug().noquote() << QStringLiteral("Material dataset opened: %1 materials").arg(m_entries.size());
+  qDebug().noquote() << QStringLiteral("Material dataset sources: %1").arg(logged.join(QStringLiteral(" | ")));
 }
 
 QString MaterialDatasetDialog::chosenId() const {
@@ -468,6 +488,11 @@ void MaterialDatasetDialog::search(const QString& wanted) {
   showSelected();
   if (!wanted.isEmpty()) {
     qDebug().noquote() << QStringLiteral("Material dataset search: %1, %2 shown").arg(wanted).arg(m_entries.size());
+    // Each row found with its class as the list shows it (mitcad#1552).
+    for (int i = 0; i < m_list->topLevelItemCount(); ++i) {
+      const QTreeWidgetItem* row = m_list->topLevelItem(i);
+      qDebug().noquote() << QStringLiteral("Material dataset row: %1 | %2").arg(row->text(0), row->text(1));
+    }
   }
   TestSync::singleShot(0, this, [this] { logPlaces(); });
 }

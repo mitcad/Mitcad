@@ -256,7 +256,7 @@ platform requires it (a system menu item such as *Show Sidebar*).
 | **Sketch Palette** | The panel of a sketch's settings and solve state while it is open. | `SketchPalette` |
 | **Preferences** | The program's settings: *Tools › Preferences…* on Windows and Linux, *MitCad › Settings…* on macOS (the platform's word). Documents write *Tools › Preferences* and note the macOS name once. | `PreferencesDialog`, `ViewController` |
 | **3D View** | The view of the design; the shortcut context of keys that work in it. | `OcctViewer`, `ModelShortcutContext` |
-| **Navigation bar** | The View menu's Look At, Fit, Visual Style, Layout Grid and Snap to Grid at the bottom of the view: a card in the Floating layout, in the status bar in the Docked layout (mitcad#1086). Not "view toolbar". | `NavigationBar` |
+| **Navigation bar** | The View menu's Look At, Fit, Visual Style, Layout Grid and Snap to Grid at the bottom of the view, and after a separator the commands pinned to it, Edit Parameters by default (mitcad#1582, mitcad#1589: *Pin to Navigation Bar*, *Unpin from Navigation Bar*): a card in the Floating layout, in the status bar in the Docked layout (mitcad#1086). Not "view toolbar". | `NavigationBar`, `NavigationBarPins` |
 
 ### States
 
@@ -551,7 +551,8 @@ writes a color literal (see [The checks](#5-the-checks)).
 2. **Recorded exceptions**: the cut / remove preview stays red (a CAD
    convention; it is a fill, the error is a dashed outline with a
    message); the X / Y / Z axes stay red / green / blue, one set for
-   the view cube and the joint triad; the favorite star is yellow and
+   the view cube, the joint triad and Free Move's arrows and rings
+   (mitcad#1581); the favorite star is yellow and
    told apart from a warning by its shape; the cut sheet's red and blue
    are a file convention, not UI; the command inputs' green and the
    components' green are categories with a legend (the panel's swatches,
@@ -613,7 +614,7 @@ dynamic value.
 | View | `Body`, `Edge`, `HiddenEdge`, `Thread`, `BuildVolume`, `PrintBed`, `SectionCap`, `DatumPlane`, `DatumAxis`, `ProfileFill` | | the view's own objects | |
 | Sketch | `SketchFree`, `SketchFixed`, `SketchCenterline`, `SketchConstruction`, `SketchProjected`, `SketchInactive`, `SketchDriven`, `SketchDimension`, `SketchAxis`, `SketchPicked`, `SketchPreview`, `SketchGuide`, `SketchTrim`, `SketchHalo` | one value for the view and the overlay, by the background | the sketch's states | |
 | Domain | `Component0`–`Component7` | #e0892a, #3aa35b, #8e5bd0, #2aa7a7, #5560c8, #8d6e63, #c45a9a, #3d8bd9 | the components: timeline bands, section caps, Component Colors (no red, no olive) | |
-| | `AxisX`, `AxisY`, `AxisZ` | #e84f4f, #4cb05e, #3f8cff | the axes: view cube and joint triad | |
+| | `AxisX`, `AxisY`, `AxisZ` | #e84f4f, #4cb05e, #3f8cff | the axes: view cube, joint triad, Free Move's arrows and rings (mitcad#1581) | |
 | | `JointA`, `JointB`, `JointOrigin` | #f28c28, #2ab57d, #17a2b8 | a joint's sides and motion origin | |
 | | `PrintOverhang`, `PrintThin` | #7e3fd0 / #b48cff, #c2188b / #ff6ec7 | Print Analysis' categories (violet, magenta), by the view's background, with the legend | |
 | | `RuleFrame` … `RuleAction`, `RuleText` | see [configurations.md](configurations.md) | the rule blocks' categories under white text | |

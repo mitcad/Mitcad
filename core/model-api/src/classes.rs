@@ -74,6 +74,7 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("set_parameter", Model),
     ("set_units", Model),
     ("rename_parameter", Model),
+    ("remove_parameter_name", Model),
     ("delete_parameter", Model),
     ("undo", Model),
     ("redo", Model),
@@ -591,6 +592,8 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("feature_curves", Model),
     // The closed loop of a sketch curve (mitcad#1541).
     ("sketch_loop", Model),
+    // Read-only guidance from existing modeling results (mitcad#1513).
+    ("design_review", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

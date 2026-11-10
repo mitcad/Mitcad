@@ -563,7 +563,10 @@ void MainWindow::showProjectSettings() {
   host.testBroker = [this](QWidget* parent, const QString& broker, const QString& prefix) {
     m_live->testBroker(parent, broker, prefix);
   };
-  mitcad::showProjectSettings(this, m_project.root, host);
+  // Remove Project (mitcad#1562), after the dialog closed.
+  const QString root = m_project.root;
+  host.removeProject = [this, root] { removeProject(root); };
+  mitcad::showProjectSettings(this, root, host);
   updateProjectIndicator();
 }
 

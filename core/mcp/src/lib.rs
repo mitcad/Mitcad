@@ -14,6 +14,8 @@ mod changes;
 pub use changes::{
     SNAPSHOT_QUERIES, TimelineMode, command_document, entry_failed, evaluated_features, recomputed,
 };
+mod hints;
+pub use hints::{command_hint_query, command_hints, command_hints_enabled};
 // The command reference in parts, errors that give the choices (mitcad#714).
 mod reference;
 pub use reference::{
@@ -505,6 +507,15 @@ fn mcp_defaults(name: &str, arguments: &Value) -> Value {
         && !query.contains_key("triangles")
     {
         query.insert("triangles".to_owned(), json!(false));
+    }
+    // A profile's area and centre for agents only (mitcad#1587): the
+    // application's own profiles queries leave them out.
+    if name == "model_query"
+        && let Some(query) = arguments.get_mut("query").and_then(Value::as_object_mut)
+        && query.get("query").and_then(Value::as_str) == Some("profiles")
+        && !query.contains_key("measures")
+    {
+        query.insert("measures".to_owned(), json!(true));
     }
     arguments
 }

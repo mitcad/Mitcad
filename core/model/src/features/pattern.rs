@@ -2068,7 +2068,8 @@ pub(crate) fn repeat<K: Kernel>(
                             (None, Some(_)) => {
                                 return Err(format!(
                                     "the copy of sheet {body} does not touch it: a sheet is \
-                                     joined to its copy where coplanar panels meet at a seam"
+                                     joined to its copy where coplanar panels or coaxial bends \
+                                     meet at a seam"
                                 ));
                             }
                             (None, None) => {}

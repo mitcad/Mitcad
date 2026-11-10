@@ -116,6 +116,21 @@ message: the agent starts again with it and goes on with the same
 conversation. Beside the choice, dimmed, is the model the agent reports
 it uses.
 
+### Modeling guidance
+
+The chat gives every built-in agent the live server's core instructions and
+modeling-guide index before the first message. Topics remain on demand through
+`model_reference {"guide": "<id>"}`; the index names them and says when to read
+each one. The index is the body of the same compiled `SKILL.md` that the MCP
+server serves, without its metadata.
+
+Claude Code receives it through `--append-system-prompt-file`: MitCad writes
+the text atomically in the chat data folder before starting the process.
+Codex receives the same text in the thread's `developer_instructions`
+configuration, for both new and resumed threads. API agents receive the index
+alongside the listener's instructions in their system prompt. These paths add
+no tools and do not write the user's agent configuration.
+
 ### API endpoints and local models
 
 Instead of an agent program, the chat can use a model's service directly:
@@ -246,6 +261,25 @@ administrator to enable access. For Codex, use `codex logout`, then `codex
 login`, or configure its API key. For an API agent, enter a valid key in
 Preferences (**New API key**). Check billing or wait for a usage limit to
 reset where applicable.
+
+**Sign in Again…** (Claude Code and Codex, beside **Check again**) does the
+sign-out and sign-in for you in a terminal window, with the same program
+the chat runs: `claude auth logout`, then `claude auth login` for Claude
+Code; `codex logout`, then `codex login` for Codex. A short confirmation
+first names the commands, says that signing Claude Code out also signs
+Claude Desktop out (they share one sign-in), and that signing in again
+helps only with an account allowed to use the agent: an organization that
+disabled access is not fixed by signing in again with the same account.
+The terminal shows each command and its result and stays open until you
+close it (press Enter on Linux and macOS). When the terminal ends, or,
+where the terminal program returns at once (Windows Terminal, Terminal.app),
+when you come back to MitCad's window, the panel runs **Check again** by
+itself. The terminal is Windows Terminal, else a Command Prompt window, on
+Windows; Terminal.app on macOS; on Linux `$TERMINAL`, then
+`x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal` or
+`xterm`. With none of them, the button is disabled and **How to fix** shows
+the commands with **Copy**. A custom command and the API agents have no
+**Sign in Again…**: MitCad does not know their sign-in.
 
 Choose **Check again** after correcting the account. It checks sign-in and
 sends one short request in a fresh process, with no design, conversation,
@@ -472,8 +506,8 @@ connection to its listener, with the listener's token and the chat's
 marker as the bridge would, so the listener's approvals for the chat
 apply exactly as they do for Claude Code and Codex. Over it MitCad sends
 `initialize` and `tools/list`, and gives the model the tools and the
-listener's instructions (after one paragraph of its own) as the system
-prompt. Each message is a streamed request with the whole conversation:
+listener's instructions and the compiled modeling-guide index (after one
+paragraph of its own) as the system prompt. Each message is a streamed request with the whole conversation:
 
 - the Anthropic Messages API: `POST /v1/messages` with `x-api-key`,
   `anthropic-version: 2026-10-21`, `stream: true`, `max_tokens` 32000 and

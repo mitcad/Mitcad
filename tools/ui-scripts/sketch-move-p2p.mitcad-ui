@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: MIT
+# Sketch Move/Copy (mitcad#1563, GitHub mitcad/Mitcad#212) on
+# sketch-move-p2p.json's Sketch1 (two framing points at (-40, -30) and
+# (40, 30), a horizontal line from (-25, 10) to (-5, 10), a rectangle from
+# (-30, -20) to (-20, -10), a circle about (20, -10), a free line from
+# (0, 15) to (10, 15) and a free point at (20, 5)):
+#   1. Point to Point: the rectangle from its corner to the circle's
+#      center, both picked with the sketch's snaps; the corner's logged
+#      position is the center's.
+#   2. Translate's handle at the free line's middle dragged by its square
+#      onto the free point: X and Y Distance 15 mm and -10 mm.
+#   3. Rotate without a Pivot Point: the horizontal line turns 90 degrees
+#      about its middle, its length kept (it collapsed to a point and
+#      disappeared before).
+# The wrapper replaces ENTER_SKETCH with the frontend's ordinary timeline
+# activation. The clicks stay within x -30..30 mm, y -25..25 mm: the free
+# part of the view after the fit also in session 0's 1024x768 window on
+# Windows. Run by tools/ui-sketch-move-p2p-test.sh (Linux) and
+# tools/ui-windows-sketch-move-p2p-test.ps1 (Windows).
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+
+# 1. Point to Point: the rectangle's four sides selected, the corner at
+# (-30, -20) to the circle's center at (20, -10).
+mark
+sketch-click -25 -20
+sketch-click -20 -15 ctrl
+sketch-click -25 -10 ctrl
+sketch-click -30 -15 ctrl
+expect-selection 4 0
+mark
+command sketch.move
+wait-log '^Command Move/Copy started'
+expect-log '^Move/Copy Objects: 4 sketch curves'
+wait-log '^Preview Move/Copy: ok'
+mark
+qt-choice input_type 'Point to Point'
+wait-idle
+mark
+sketch-click -30 -20
+wait-log '^Sketch point picked for the command: p[0-9]+ at \(-30\.000, -20\.000\), point p[0-9]+$'
+wait-log '^Move/Copy Origin Point: '
+mark
+sketch-click 20 -10
+wait-log '^Sketch point picked for the command: p[0-9]+ at \(20\.000, -10\.000\), (center|point) p[0-9]+$'
+wait-log '^Preview Move/Copy positions: .*\(20\.000, -10\.000\)'
+expect-log '^Preview Move/Copy positions: .*\(30\.000, 0\.000\)'
+expect-no-log '^Preview Move/Copy positions: .*\(-30\.000, -20\.000\)'
+screenshot '${MITCAD_TEST_WORK}/sketch-move-p2p-points.png'
+mark
+button '^OK$'
+wait-log '^Added Move/Copy'
+wait-idle
+
+# 2. Translate's handle: the free line selected, the handle at its middle
+# (5, 15); its square dragged onto the free point at (20, 5).
+mark
+sketch-click 2 15
+expect-selection 1 0
+mark
+command sketch.move
+wait-log '^Command Move/Copy started'
+wait-log '^Preview Move/Copy: ok'
+wait-log '^Sketch handle at \(5\.000, 15\.000\)$'
+wait-idle
+mark
+sketch-pointer press 5 15
+wait-log '^Sketch handle drag started on its square$'
+sketch-pointer move 10 12
+sketch-pointer move 15 8
+sketch-pointer move 20 5
+sketch-pointer release 20 5
+wait-log '^Sketch handle dropped: dx 15\.000, dy -10\.000$'
+wait-log '^Preview Move/Copy positions: p[0-9]+ \(15\.000, 5\.000\), p[0-9]+ \(25\.000, 5\.000\)$'
+expect-input-text dx '^15 mm$'
+expect-input-text dy '^-10 mm$'
+screenshot '${MITCAD_TEST_WORK}/sketch-move-p2p-handle.png'
+mark
+button '^OK$'
+wait-log '^Added Move/Copy'
+wait-idle
+
+# 3. Rotate without a Pivot Point: the horizontal line about its middle
+# (-15, 10), 90 degrees, its length kept.
+mark
+sketch-click -20 10
+expect-selection 1 0
+mark
+command sketch.move
+wait-log '^Command Move/Copy started'
+wait-log '^Preview Move/Copy: ok'
+mark
+qt-choice input_type Rotate
+wait-log '^Preview Move/Copy positions: p[0-9]+ \(-15\.000, 0\.000\), p[0-9]+ \(-15\.000, 20\.000\)$'
+expect-no-log '^Preview Move/Copy positions: p[0-9]+ \(-15\.000, 10\.000\), p[0-9]+ \(-15\.000, 10\.000\)$'
+screenshot '${MITCAD_TEST_WORK}/sketch-move-p2p-rotate.png'
+mark
+button '^OK$'
+wait-log '^Added Move/Copy'
+wait-idle
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'Recompute failed|TestDriver: FAIL'

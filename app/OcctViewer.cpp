@@ -23,6 +23,7 @@
 #include "framework/ChromeStyle.hpp"
 #include "framework/Icons.hpp"
 #include "framework/Cursors.hpp"
+#include "framework/GlassCard.hpp"
 #include "framework/Theme.hpp"
 #include "platform/MacChrome.hpp"
 #include "framework/Diagnostics.hpp"
@@ -52,6 +53,7 @@
 #include <typeinfo>
 #include <utility>
 
+#include <QApplication>
 #include <QCursor>
 #include <QGuiApplication>
 #include <QHelpEvent>
@@ -80,6 +82,7 @@
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepTools.hxx>
@@ -772,6 +775,62 @@ void behindSection(const occ::handle<AIS_Shape>& body, bool sectioned) {
                                                        kSectionedBodyOffsetUnits);
 }
 
+// Whether a shape is closed solids only: every face in a solid's shell and
+// every shell closed (its flag, or its edges each shared by two of its
+// faces). The inside of such a shape is never seen but through its front
+// faces.
+bool closedSolidsOnly(const TopoDS_Shape& shape) {
+  if (shape.IsNull() || TopExp_Explorer(shape, TopAbs_FACE, TopAbs_SOLID).More()) {
+    return false;
+  }
+  bool any = false;
+  for (TopExp_Explorer solid(shape, TopAbs_SOLID); solid.More(); solid.Next()) {
+    if (TopExp_Explorer(solid.Current(), TopAbs_FACE, TopAbs_SHELL).More()) {
+      return false;
+    }
+    for (TopExp_Explorer shell(solid.Current(), TopAbs_SHELL); shell.More(); shell.Next()) {
+      if (!shell.Current().Closed() && !BRep_Tool::IsClosed(shell.Current())) {
+        return false;
+      }
+      any = true;
+    }
+  }
+  return any;
+}
+
+// A see-through body or preview drawn double-sided showed a pattern of
+// triangles on a sphere and other doubly curved faces at some view angles
+// (mitcad#1575, GitHub #219): OCCT blends transparent triangles in their
+// order in the mesh and writes their depth, so where a near triangle was
+// drawn first the far side's triangle behind it failed the depth test,
+// and where it was drawn later it was blended in. A closed solid's back
+// faces are only ever seen through its front faces: they are left out
+// (culled), so that one layer is blended wherever the body is, in any
+// order. Open shapes (surfaces, a section's cut body) stay double-sided, as
+// their back faces are seen. OCCT's own culling of closed shapes (the
+// aspect's Auto) is off for transparent ones; the culling asked for here
+// is not. Order-independent transparency (Graphic3d_RTM_BLEND_OIT) was not
+// chosen: it changes how every transparent object of the view blends.
+// Whether the back faces are culled.
+bool cullHiddenBackFaces(const occ::handle<AIS_Shape>& object) {
+  if (!closedSolidsOnly(object->Shape())) {
+    return false;
+  }
+  const occ::handle<Prs3d_Drawer>& drawer = object->Attributes();
+  if (!drawer->HasOwnShadingAspect()) {
+    drawer->SetupOwnShadingAspect();
+  }
+  drawer->ShadingAspect()->Aspect()->SetFaceCulling(Graphic3d_TypeOfBackfacingModel_BackCulled);
+  return true;
+}
+
+// For UI tests (mitcad#1575): a see-through look as the log names it.
+QString seeThroughLook(const occ::handle<AIS_Shape>& object, bool culled) {
+  return QStringLiteral("transparency %1, %2")
+      .arg(object->Transparency())
+      .arg(culled ? QStringLiteral("back faces culled") : QStringLiteral("both sides drawn"));
+}
+
 occ::handle<AIS_Shape> makeBodyObject(const geometry::Shape& named, BodyDisplay::Style style, const QColor& color,
                                       const std::vector<BodyDisplay::FaceLook>& faceLooks, VisualStyle visual,
                                       const QColor& paper, bool sectioned) {
@@ -867,6 +926,29 @@ bool hasAnyTriangulation(const TopoDS_Shape& shape) {
     }
   }
   return false;
+}
+
+// Draws a shape of the model's (a body's faces and edges, a highlight, the
+// hidden edges) without meshing it here (mitcad#1553). The model's worker
+// and the background evaluation read the same faces and edges on their own
+// threads (an input copy walks each edge's curve records), and a
+// presentation that meshed one here added a 3D polygon to an edge's records
+// meanwhile (an edge highlight at the view's deviation): that damaged the
+// heap, and a join crashed later where memory was freed. A shape with no
+// faces is drawn from its curves, and one whose faces a job meshed (each
+// face triangulated, each edge with its polygon on it) from those meshes;
+// only a shape with a face left without a triangulation (a body no job
+// meshed, and the view's own sketch profiles and datum planes, which no
+// model thread reads: setProfiles, setDatums, mitcad#1586) is still meshed
+// by its presentation, as before.
+void drawWithoutMeshing(const occ::handle<AIS_Shape>& object) {
+  const TopoDS_Shape& shape = object->Shape();
+  if (shape.IsNull()) {
+    return;
+  }
+  if (!TopExp_Explorer(shape, TopAbs_FACE).More() || BRepTools::Triangulation(shape, Precision::Infinite(), true)) {
+    object->Attributes()->SetAutoTriangulation(false);
+  }
 }
 
 occ::handle<AIS_Shape> makeBody(const geometry::Shape& named, BodyDisplay::Style style, const QColor& color,
@@ -1228,6 +1310,10 @@ TopoDS_Shape hatchOf(const TopoDS_Shape& caps, const gp_Ax3& plane, bool mirrore
   return any ? TopoDS_Shape(lines) : TopoDS_Shape();
 }
 
+// A sketch profile's presentation. Its face has no triangulation, and the
+// presentation meshes it here, on the UI thread, with auto-triangulation on
+// (its faces and their edges): that is safe because the face is the view's
+// own, not shared with a model thread (mitcad#1586, see setProfiles).
 occ::handle<AIS_Shape> makeProfile(const TopoDS_Shape& face) {
   occ::handle<AIS_Shape> profile = new AIS_Shape(face);
   profile->SetColor(kProfileFill);
@@ -1606,7 +1692,19 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   m_scrollTimer = new QTimer(this);
   m_scrollTimer->setSingleShot(true);
   m_scrollTimer->setInterval(kScrollEndMilliseconds);
-  connect(m_scrollTimer, &QTimer::timeout, this, &OcctViewer::endScrollDrag);
+  connect(m_scrollTimer, &QTimer::timeout, this, [this] {
+    m_scrollRefused = false; // the refused scroll paused: the next one may pan or orbit
+    endScrollDrag();
+  });
+  // The application left (Cmd-Tab, another application's window): the
+  // releases and the keys' releases go elsewhere, so the view's drag and F4
+  // end here, as the AppKit frontend does when its window resigns key
+  // (mitcad#1573).
+  connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
+    if (state != Qt::ApplicationActive) {
+      deactivated(nullptr);
+    }
+  });
   m_navigationClock.start();
   m_navigationTimer = new QTimer(this);
   m_navigationTimer->setSingleShot(true);
@@ -2393,6 +2491,21 @@ void OcctViewer::showBody(BodyEntry& entry) {
     drawer->SetFaceBoundaryDraw(true);
     drawer->SetFaceBoundaryAspect(new Prs3d_LineAspect(kEdgeColor, Aspect_TOL_SOLID, 1.0));
   }
+  // A command's new body and tool previews are see-through: a closed one
+  // without its back faces (mitcad#1575).
+  if (entry.style == BodyDisplay::Style::New || entry.style == BodyDisplay::Style::Tool ||
+      entry.style == BodyDisplay::Style::CutTool) {
+    const bool culled = m_cullSeeThrough && cullHiddenBackFaces(entry.object);
+    const QString look = QStringLiteral("View %1 %2: %3")
+                             .arg(entry.style == BodyDisplay::Style::New ? QStringLiteral("new body")
+                                                                         : QStringLiteral("tool body"))
+                             .arg(QString::fromStdString(entry.uid))
+                             .arg(seeThroughLook(entry.object, culled));
+    if (look != m_loggedPreviewBodyLook) {
+      m_loggedPreviewBodyLook = look;
+      qDebug().noquote() << look;
+    }
+  }
   const bool placed = !entry.placement.IsIdentity();
   if (placed) {
     entry.object->SetLocalTransformation(entry.placement.Transformation());
@@ -2422,8 +2535,10 @@ void OcctViewer::showBody(BodyEntry& entry) {
   }
   const TopoDS_Shape edges = edgesOf(shape);
   entry.hiddenEdges = new AIS_Shape(edges);
+  drawWithoutMeshing(entry.hiddenEdges);
   setEdgeStyle(entry.hiddenEdges, kHiddenEdgeColor, 1.0, Aspect_TOL_DASH);
   entry.visibleEdges = new AIS_Shape(edges);
+  drawWithoutMeshing(entry.visibleEdges);
   setEdgeStyle(entry.visibleEdges,
                m_visualStyle == VisualStyle::WireframeHiddenEdges ? wireColor(color) : kEdgeColor,
                1.0);
@@ -2498,6 +2613,14 @@ void OcctViewer::setProfiles(const std::vector<std::pair<ProfileKey, TopoDS_Shap
   ScopedTiming timing("display profiles");
   // A profile whose face is the one shown keeps its display (the main
   // window passes the same face while the region stays the same).
+  // The faces are meshed here by their presentations (makeProfile) and no
+  // model thread reads them (mitcad#1586): MainWindow::showProfiles builds
+  // each anew on the UI thread (Document::profile_shape, from the sketch's
+  // region as numbers: geometry::profile_shape makes new curves, edges and
+  // faces) and keeps it only in its own cache (m_profileFaces). The faces a
+  // feature extrudes or lofts are made by the model's threads from the same
+  // numbers, never these; so the background evaluation, a worker's job or a
+  // fork shares no face, edge or curve record with them.
   std::map<ProfileKey, occ::handle<AIS_Shape>> shown = std::move(m_profiles);
   m_profiles.clear();
   int made = 0;
@@ -2557,6 +2680,11 @@ void OcctViewer::removeSketchProfiles(const QString& sketch) {
 void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entities) {
   ScopedTiming timing("display sketch entities");
   // An entity with the signature it was shown with keeps its display.
+  // The entities' edges and vertices are meshed by their presentations (a
+  // free edge gets a 3D polygon) on the UI thread, and no model thread reads
+  // them (mitcad#1586): sketchEntities (framework/ModelShapes) builds each
+  // anew from the sketch query's numbers, projected and intersected curves
+  // too (their geometry comes as numbers, not as the bodies' edges).
   std::map<QString, std::pair<QString, occ::handle<AIS_Shape>>> shown = std::move(m_sketchEntityKeys);
   m_sketchEntityKeys.clear();
   m_sketchEntities.clear();
@@ -2818,6 +2946,12 @@ void OcctViewer::restyleSketchEntities() {
 void OcctViewer::setDatums(const std::vector<DatumDisplay>& datums) {
   ScopedTiming timing("display datums");
   timing.setDetail(QStringLiteral("%1 datums").arg(datums.size()));
+  // A datum plane's square face (and an axis's edge, an Intersection
+  // Curve's polyline) is meshed by its presentation on the UI thread, and
+  // no model thread reads it (mitcad#1586): MainWindow::showDatums builds
+  // each anew from the datums query's numbers (datumShape, polylineShape).
+  // A construction plane the model uses (a sketch's plane, a split's tool)
+  // is made by the model's threads from its definition, never this face.
   for (const occ::handle<AIS_Shape>& datum : m_datums) {
     remove(datum);
   }
@@ -2837,6 +2971,20 @@ void OcctViewer::setDatums(const std::vector<DatumDisplay>& datums) {
     m_datums.push_back(object);
   }
   sceneChanged();
+}
+
+OcctViewer::OwnShapes OcctViewer::ownShapes() const {
+  OwnShapes shapes;
+  for (const auto& [key, profile] : m_profiles) {
+    shapes.profiles.push_back(profile->Shape());
+  }
+  for (const occ::handle<AIS_Shape>& entity : m_sketchEntities) {
+    shapes.sketchEntities.push_back(entity->Shape());
+  }
+  for (const occ::handle<AIS_Shape>& datum : m_datums) {
+    shapes.datums.push_back(datum->Shape());
+  }
+  return shapes;
 }
 
 int OcctViewer::styleDatum(const occ::handle<AIS_Shape>& object, SelectKind kind) const {
@@ -2968,6 +3116,9 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
     if (boundaryPicks && !highlight.shape.Location().IsIdentity()) {
       object->SetLocalTransformation(highlight.shape.Location().Transformation());
     }
+    // A body's faces and edges, a sketch's curves: drawn as they are, never
+    // meshed here (drawWithoutMeshing, mitcad#1553).
+    drawWithoutMeshing(object);
     const Quantity_Color color = occtColor(highlight.color);
     int mode = AIS_WireFrame;
     // A feature's inputs where they were (mitcad#957): lines, as the
@@ -3028,6 +3179,7 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
       // the scene's depth: the lines stand apart from the background and
       // from the amber faces of their feature.
       occ::handle<AIS_Shape> halo = new AIS_Shape(highlight.shape);
+      drawWithoutMeshing(halo);
       setEdgeStyle(halo, kSketchHaloDark, kSketchHaloWidth);
       PickInfo haloInfo;
       haloInfo.item = highlight.item;
@@ -3041,6 +3193,7 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
       // the faces fainter in the layer without a depth test, their
       // boundaries opaque, so that a part hidden inside shows its outline.
       occ::handle<AIS_Shape> through = new AIS_Shape(highlight.shape);
+      drawWithoutMeshing(through);
       through->SetColor(color);
       through->SetMaterial(flatMaterial(0.0f));
       through->SetTransparency(kBrowserHoverThroughTransparency);
@@ -3062,6 +3215,7 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
       // drawn after it, covers its copy, so only the hidden parts show
       // dashed, over the model's own edges.
       occ::handle<AIS_Shape> hidden = new AIS_Shape(highlight.shape);
+      drawWithoutMeshing(hidden);
       if (highlight.inputLines) {
         setEdgeStyle(hidden, color, kInputLineHiddenWidth, Aspect_TOL_DASH);
       } else {
@@ -3205,6 +3359,7 @@ void OcctViewer::setPreview(const TopoDS_Shape& shape, PreviewStyle style) {
       // The cut faces of the pieces lie on the tool: pull it towards the
       // viewer so that it wins the depth test there.
       drawer->ShadingAspect()->Aspect()->SetPolygonOffsets(Aspect_POM_Fill, -1.0f, -2.0f);
+      logPreviewLook(QStringLiteral("extended tool"), m_cullSeeThrough && cullHiddenBackFaces(m_preview));
       m_context->Display(m_preview, AIS_Shaded, -1, false);
     } else {
       m_preview->SetColor(style == PreviewStyle::Remove         ? kCutPreviewColor
@@ -3215,6 +3370,11 @@ void OcctViewer::setPreview(const TopoDS_Shape& shape, PreviewStyle style) {
       // cut hole); pull it towards the viewer so it wins the depth test there.
       m_preview->Attributes()->ShadingAspect()->Aspect()->SetPolygonOffsets(Aspect_POM_Fill, -1.0f,
                                                                             -2.0f);
+      // Closed, without its back faces (mitcad#1575, cullHiddenBackFaces).
+      logPreviewLook(style == PreviewStyle::Remove         ? QStringLiteral("remove")
+                     : style == PreviewStyle::Interference ? QStringLiteral("interference")
+                                                           : QStringLiteral("add"),
+                     m_cullSeeThrough && cullHiddenBackFaces(m_preview));
       m_context->Display(m_preview, AIS_Shaded, -1, false);
     }
     if (!m_provisional.IsNull()) {
@@ -3384,6 +3544,7 @@ void OcctViewer::setHoverChain(const TopoDS_Shape& shape) {
     // see-through in a colour light does not change, with their boundaries,
     // and edges opaque, in the top layer, which keeps the scene's depth.
     m_hoverChain = new AIS_Shape(shape);
+    drawWithoutMeshing(m_hoverChain);
     const Quantity_Color color = occtColor(m_hoverColor);
     bool faces = false;
     for (TopExp_Explorer it(shape, TopAbs_FACE); it.More() && !faces; it.Next()) {
@@ -4654,6 +4815,65 @@ Bnd_Box OcctViewer::bodiesBox() const {
     BRepBndLib::Add(entry.object->Shape().Moved(entry.placement), box);
   }
   return box;
+}
+
+QRectF OcctViewer::previewScreenBox() const {
+  Bnd_Box box;
+  for (const auto& [key, entry] : m_bodies) {
+    const bool preview = entry.style == BodyDisplay::Style::New || entry.style == BodyDisplay::Style::Tool ||
+                         entry.style == BodyDisplay::Style::CutTool;
+    if (preview && !entry.object.IsNull() && m_context->IsDisplayed(entry.object)) {
+      BRepBndLib::Add(entry.object->Shape().Moved(entry.placement), box);
+    }
+  }
+  if (!m_preview.IsNull() && m_context->IsDisplayed(m_preview)) {
+    BRepBndLib::Add(m_preview->Shape(), box);
+  }
+  return box.IsVoid() ? QRectF() : screenBox(box);
+}
+
+QImage OcctViewer::grabWithoutPreviews() {
+  std::vector<std::pair<occ::handle<AIS_Shape>, int>> hidden;
+  for (const auto& [key, entry] : m_bodies) {
+    const bool preview = entry.style == BodyDisplay::Style::New || entry.style == BodyDisplay::Style::Tool ||
+                         entry.style == BodyDisplay::Style::CutTool;
+    if (preview && !entry.object.IsNull() && m_context->IsDisplayed(entry.object)) {
+      hidden.emplace_back(entry.object, static_cast<int>(AIS_Shaded));
+    }
+  }
+  if (!m_preview.IsNull() && m_context->IsDisplayed(m_preview)) {
+    hidden.emplace_back(m_preview, m_previewMode);
+  }
+  for (const auto& [object, mode] : hidden) {
+    m_context->Erase(object, false);
+  }
+  m_view->Invalidate();
+  const QImage frame = grabFramebuffer();
+  for (const auto& [object, mode] : hidden) {
+    m_context->Display(object, mode, -1, false);
+    activatePicking(object);
+  }
+  m_view->Invalidate();
+  requestFrame();
+  return frame;
+}
+
+void OcctViewer::setSeeThroughCulling(bool on) {
+  if (on == m_cullSeeThrough) {
+    return;
+  }
+  m_cullSeeThrough = on;
+  qDebug().noquote() << QStringLiteral("View see-through culling %1 (test)")
+                            .arg(on ? QStringLiteral("on") : QStringLiteral("off"));
+  redrawBodies();
+}
+
+void OcctViewer::logPreviewLook(const QString& what, bool culled) {
+  const QString look = QStringLiteral("View preview (%1): %2").arg(what, seeThroughLook(m_preview, culled));
+  if (look != m_loggedPreviewLook) {
+    m_loggedPreviewLook = look;
+    qDebug().noquote() << look;
+  }
 }
 
 void OcctViewer::settleCamera() {
@@ -5957,10 +6177,13 @@ void OcctViewer::setPlateView(const TopoDS_Shape& bed, const TopoDS_Shape& bodie
     m_context->Display(m_plateBed, AIS_WireFrame, -1, false);
   }
   if (!bodies.IsNull()) {
-    m_plateBodies = new AIS_Shape(bodies);
     // The bodies' own triangulations (the shapes are moved, not copied):
-    // never meshed again here.
-    if (hasAnyTriangulation(bodies)) {
+    // never meshed again here. Bodies no job meshed (hidden ones) are drawn
+    // through a copy meshed by its presentation, never meshed themselves
+    // here: the model's threads read them (drawWithoutMeshing, mitcad#1553).
+    const bool meshed = hasAnyTriangulation(bodies);
+    m_plateBodies = new AIS_Shape(meshed ? bodies : BRepBuilderAPI_Copy(bodies, false, false).Shape());
+    if (meshed) {
       m_plateBodies->Attributes()->SetAutoTriangulation(false);
     }
     m_plateBodies->SetColor(viewRole(ColorRole::Body, m_backgroundDark));
@@ -6673,12 +6896,33 @@ void OcctViewer::cancelPointerInteraction() {
   m_windowSelecting = false;
   restoreWindowDecided();
   m_orbitKey = false;
+  m_buttonKeys.reset();
+  m_scrollRefused = false;
   m_navigationState.setButtons(false);
   m_pointerInputPending = false;
   if (m_dragItem) {
     endOccurrenceDrag(QPointF(), true);
   }
   requestFrame();
+}
+
+bool OcctViewer::pointerInteractionHeld() const {
+  return m_orbitKey || m_cubePress || m_f4Press || m_dragItem || m_scrollDragging || m_scrollRefused ||
+         m_buttonKeys || m_navigationState.buttons() || PressedMouseButtons() != Aspect_VKeyMouse_NONE;
+}
+
+void OcctViewer::deactivated(const QWidget* active) {
+  // A floating panel's own window taking the activation (the keyboard into
+  // its field) is still this window's: a drag on the view goes on, as
+  // CommandSession::previewHoldRefusal counts it.
+  const QWidget* host = GlassCard::hostWindow(this);
+  if (active != nullptr && (active == host || GlassCard::hostWindow(active) == host)) {
+    return;
+  }
+  if (pointerInteractionHeld()) {
+    qDebug().noquote() << QStringLiteral("View interaction cancelled: the window was deactivated");
+    cancelPointerInteraction();
+  }
 }
 
 void OcctViewer::buttonsReleased() {
@@ -6719,6 +6963,18 @@ bool OcctViewer::event(QEvent* event) {
     // progress ends here, without a pick.
     cancelPointerInteraction();
   }
+  if (event->type() == QEvent::WindowDeactivate) {
+    // Another window took the activation (Cmd-Tab, Mission Control, another
+    // application's panel): the release and the keys' releases go there
+    // (mitcad#1573). Qt has made the new window the active one already.
+    deactivated(QApplication::activeWindow());
+  }
+  if (event->type() == QEvent::FocusOut) {
+    // The keyboard went elsewhere (a panel's field, mitcad#338): F4's
+    // release goes there too, so F4 counts as up, and the next left press
+    // picks (mitcad#1573). A drag in progress goes on.
+    m_orbitKey = false;
+  }
   if (event->type() == QEvent::Leave) {
     emit pointerLeft(); // mitcad#1196
   }
@@ -6751,6 +7007,14 @@ void OcctViewer::mousePressEvent(QMouseEvent* event) {
   if (event->buttons() == event->button()) {
     resetOrbitWrap(); // the first button: a new drag
   }
+  // The keys of the first button's press decide the whole press, also for
+  // a button pressed while it is held (mitcad#1571): OCCT looks up the
+  // gesture again whenever the keys it is given change, and with a button
+  // down it then stops taking the press as a click.
+  if (event->buttons() == event->button() || !m_buttonKeys) {
+    m_buttonKeys = event->modifiers();
+  }
+  const Qt::KeyboardModifiers keys = *m_buttonKeys;
   endScrollDrag();
   // Any button held may orbit, pan or drag: a navigation until it goes up
   // (a click without a move leaves the camera as it was).
@@ -6760,20 +7024,20 @@ void OcctViewer::mousePressEvent(QMouseEvent* event) {
     m_rightPressPosition = event->position();
   }
   // Shift with a click widens a selection scope (mitcad#217).
-  setShiftHeld(event->modifiers().testFlag(Qt::ShiftModifier), false);
+  setShiftHeld(keys.testFlag(Qt::ShiftModifier), false);
   if (event->button() == Qt::LeftButton) {
     m_windowSelecting = false;
     restoreWindowDecided(); // a window not reported yet: OCCT picks them all
     const bool onCube = isOnOrientationCube(event->position());
     m_f4Press = !onCube && m_orbitKey &&
-                navigationAction(m_navigation, NavigationInput::LeftButton, event->modifiers(), true) !=
+                navigationAction(m_navigation, NavigationInput::LeftButton, keys, true) !=
                     NavigationAction::None;
     m_cubePress = onCube || m_f4Press;
     if (m_sketchInput && !m_cubePress) {
       return;
     }
     m_pressPosition = event->position();
-    m_pressModifiers = event->modifiers();
+    m_pressModifiers = keys;
     m_windowPick = false;
     const NCollection_Vec2<int> pixel = toDevicePixels(event->position());
     m_context->MoveTo(pixel.x(), pixel.y(), m_view, false);
@@ -6793,7 +7057,7 @@ void OcctViewer::mousePressEvent(QMouseEvent* event) {
     // on a body that cannot be dragged say why (mitcad#150): the button is
     // not the view's then, so no window selection starts; a release
     // without a drag is passed on as a click.
-    if (!m_cubePress && !m_cubeClick && event->modifiers() == Qt::NoModifier && m_occurrenceDrag.accepts) {
+    if (!m_cubePress && !m_cubeClick && keys == Qt::NoModifier && m_occurrenceDrag.accepts) {
       const occ::handle<SelectMgr_EntityOwner> owner = m_context->DetectedOwner();
       const auto item = itemFor(owner);
       const auto grabbed = pickedWorldPoint(owner);
@@ -6811,7 +7075,7 @@ void OcctViewer::mousePressEvent(QMouseEvent* event) {
   const bool wasPending = m_pointerInputPending;
   m_pointerInputPending = true;
   if (UpdateMouseButtons(toDevicePixels(m_orbitWrap.position(event->position(), event->globalPosition())),
-                         viewButtons(event->buttons()), viewFlags(event->modifiers()), false)) {
+                         viewButtons(event->buttons()), viewFlags(keys), false)) {
     requestFrame();
   } else {
     m_pointerInputPending = wasPending; // no new input to flush
@@ -6880,8 +7144,12 @@ void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
   // Where the view has the release: after an orbit past the edge of the
   // screen, as far from the press as the whole drag went.
   const QPointF released = m_orbitWrap.position(event->position(), event->globalPosition());
+  // The release belongs to the press: its keys, not the ones held now
+  // (mitcad#1571); the live keys count again once every button is up.
+  const Qt::KeyboardModifiers keys = pressKeys(event->modifiers());
   if (event->buttons() == Qt::NoButton) {
     resetOrbitWrap();
+    m_buttonKeys.reset();
   }
   if (event->buttons() == Qt::NoButton && m_navigationState.buttons()) {
     buttonsReleased();
@@ -6930,11 +7198,11 @@ void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
       // OCCT's pick on the next frame.
       decideWindowByBounds();
     } else {
-      setShiftHeld(event->modifiers().testFlag(Qt::ShiftModifier), false);
+      setShiftHeld(keys.testFlag(Qt::ShiftModifier), false);
       m_clickPosition = event->position();
     }
   }
-  const Aspect_VKeyFlags flags = viewFlags(event->modifiers());
+  const Aspect_VKeyFlags flags = viewFlags(keys);
   if (cube) {
     m_cubePress = false;
     m_f4Press = false;
@@ -7005,6 +7273,9 @@ void OcctViewer::mouseMoveEvent(QMouseEvent* event) {
   if (event->buttons() == Qt::NoButton && m_navigationState.buttons()) {
     buttonsReleased(); // a release this widget did not get
   }
+  if (event->buttons() == Qt::NoButton) {
+    m_buttonKeys.reset(); // no press any more: the keys held now count
+  }
   if (m_dragItem) {
     // A component dragged (mitcad#55): the owner moves it, the view only
     // follows; a refused one stays, and the owner says why (mitcad#150).
@@ -7034,8 +7305,12 @@ void OcctViewer::mouseMoveEvent(QMouseEvent* event) {
       emit pointerMoved(event->position());
     }
   }
+  // While a button is held, the press's keys (mitcad#1571): OCCT would take
+  // other keys for a new gesture of the held button (Option pressed during
+  // a select turning it into an orbit, released during an orbit turning it
+  // into a window selection) and stop taking the press as a click.
   if (UpdateMousePosition(toDevicePixels(m_orbitWrap.position(event->position(), event->globalPosition())),
-                          viewButtons(event->buttons()), viewFlags(event->modifiers()), false)) {
+                          viewButtons(event->buttons()), viewFlags(pressKeys(event->modifiers())), false)) {
     requestFrame();
   }
   wrapOrbitCursor(event);
@@ -7108,18 +7383,28 @@ void OcctViewer::wheelEvent(QWheelEvent* event) {
 // lasts until the scroll pauses, momentum included: the view handles it as a
 // mouse drag, about the same centre and with the orbit's Z lock, and no
 // step between two frames is lost. Each event asks for a frame; it is not
-// drawn here.
+// drawn here. A scroll's end lets the button up at once, whether or not it
+// moves too (macOS: an end without momentum keeps its delta, mitcad#1572).
+//
+// A real mouse button held on the view owns OCCT's buttons (mitcad#1572: a
+// trackpad clicked with one finger and scrolled with another, a Magic
+// Mouse's surface): a pan or orbit scroll then would replace the press with
+// the scroll's drag, dropping the click. It is refused, and so is the rest
+// of that scroll, also after the button is up; a zoom goes on.
 void OcctViewer::trackpadScroll(QWheelEvent* event) {
   event->accept();
+  const bool ends = event->phase() == Qt::ScrollEnd;
   if (event->phase() == Qt::ScrollBegin) {
     endScrollDrag(); // a new gesture: the momentum of the last one ends
+    m_scrollRefused = false;
   }
   const QPointF delta = scrollPixels(event) * m_navigation.trackpadSpeed;
   if (delta.isNull()) {
     // A trackpad ends with a phase-only event: its synthetic button must
     // go up now, rather than waiting for the quiet-time fallback.
-    if (event->phase() == Qt::ScrollEnd) {
+    if (ends) {
       endScrollDrag();
+      m_scrollRefused = false;
     }
     return;
   }
@@ -7130,6 +7415,16 @@ void OcctViewer::trackpadScroll(QWheelEvent* event) {
                     : action == NavigationAction::Zoom ? ScrollMode::Zoom : ScrollMode::None;
   if (event->phase() == Qt::ScrollMomentum && m_scrollMode != ScrollMode::None) {
     mode = m_scrollMode; // the inertia goes on as it began, whatever the keys do now
+  }
+  if ((mode == ScrollMode::Pan || mode == ScrollMode::Orbit) &&
+      (m_scrollRefused || m_buttonKeys || event->buttons() != Qt::NoButton)) {
+    endScrollDrag();
+    // Refused until this scroll ends or pauses (the quiet time clears it).
+    m_scrollRefused = !ends;
+    if (m_scrollRefused) {
+      m_scrollTimer->start();
+    }
+    return;
   }
   if (mode != m_scrollMode) {
     endScrollDrag();
@@ -7150,6 +7445,9 @@ void OcctViewer::trackpadScroll(QWheelEvent* event) {
     if (zoomed) {
       requestFrame();
     }
+    if (ends) {
+      endScrollDrag();
+    }
     return;
   }
   const Aspect_VKeyFlags flags = mode == ScrollMode::Orbit ? kScrollOrbit : kScrollPan;
@@ -7167,6 +7465,9 @@ void OcctViewer::trackpadScroll(QWheelEvent* event) {
   m_scrollPoint += delta * ratio * gain;
   UpdateMousePosition(devicePixel(m_scrollPoint), Aspect_VKeyMouse_LeftButton, flags, false);
   cameraMoved();
+  if (ends) {
+    endScrollDrag(); // the last step is applied, the button goes up now
+  }
   requestFrame();
 }
 

@@ -24,6 +24,7 @@
 #include <QList>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 
 namespace mitcad::agent {
 
@@ -127,6 +128,11 @@ public:
   // How to fix an account failure (the panel's help); empty: the panel's
   // own text for the agent.
   virtual QString accountHelp() const { return QString(); }
+  // Sign in Again (mitcad#1585): the agent's own sign-out and sign-in, each
+  // a command line whose program is the executable the chat runs, run in a
+  // terminal for a known account error. Empty: not offered (a custom
+  // command, whose sign-in MitCad does not know; an API agent's key).
+  virtual QList<QStringList> signInAgainCommands() const { return {}; }
   // Whether it is started with MitCad's mitcad-cli bridge (a program of
   // its own); an agent whose tool loop runs in MitCad connects to the
   // listener itself.

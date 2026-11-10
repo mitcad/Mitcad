@@ -1124,6 +1124,18 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-move-zero"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-sketch-move-zero PROPERTIES TIMEOUT 300)
+    # Move/Copy's Free Move handles (mitcad#1580, #1581, #1583): an edit's
+    # rings where the feature moves what it moves (a body, a component, a
+    # linked component, a turned body), OK without changes keeps the
+    # matrix, the arrows meet at the moved middle, the axis colors; the
+    # Linux test's shared input script.
+    add_test(NAME app.ui-windows-move-handles
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-move-handles-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-move-handles"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-move-handles PROPERTIES TIMEOUT 360)
     # Lengths in the design's unit (mitcad#1165), the steps of
     # tools/ui-units-inch-test.sh: in a design in inches the sheet-rules
     # row, Extrude's default distance and Measure in inches.
@@ -1902,6 +1914,17 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-emboss-taper"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-emboss-taper PROPERTIES TIMEOUT 240)
+    # The bundled dataset's woods and panels in the class Wood
+    # (mitcad#1552): "oak" found in Material Dataset in the class Wood and
+    # created into the Materials window's Wood group. The Linux test's
+    # shared input script (tools/ui-wood-materials-test.sh).
+    add_test(NAME app.ui-windows-wood-materials
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-wood-materials-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-wood-materials"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-wood-materials PROPERTIES TIMEOUT 300)
     # Preferences' Text size, Icon size and Font (mitcad#1556, GitHub
     # mitcad/Mitcad#207): four starts at other sizes and in another font,
     # the font, the icons and the layout checked. The Linux test's shared
@@ -1913,6 +1936,113 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-text-icon-size"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-text-icon-size PROPERTIES TIMEOUT 600)
+    # Remove Project and New Project's Create in a New Subfolder
+    # (mitcad#1562, GitHub mitcad/Mitcad#213): a folder with designs made a
+    # project in a new subfolder, which the Projects panel then removes,
+    # the designs kept. The Linux test's shared input script
+    # (tools/ui-remove-project-test.sh).
+    add_test(NAME app.ui-windows-remove-project
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-remove-project-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-remove-project"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-remove-project PROPERTIES TIMEOUT 300)
+    # Sketch Move/Copy (mitcad#1563, GitHub mitcad/Mitcad#212): Point to
+    # Point from a rectangle's corner to a circle's center, Translate's
+    # handle dragged onto a point, and Rotate without a pivot about a
+    # line's middle. The Linux test's shared input script
+    # (tools/ui-sketch-move-p2p-test.sh).
+    add_test(NAME app.ui-windows-sketch-move-p2p
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-move-p2p-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-move-p2p"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-move-p2p PROPERTIES TIMEOUT 300)
+    # A Sketch Fillet refused for conflicting constraints (mitcad#1566): the
+    # panel says in words, without ids, that the Equal can't hold with the
+    # fillet, and the Equal's symbol and lines are painted in the view, in
+    # the hover's color over the message. The Linux test's shared input
+    # script (tools/ui-sketch-conflict-test.sh).
+    add_test(NAME app.ui-windows-sketch-conflict
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-conflict-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-conflict"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-conflict PROPERTIES TIMEOUT 300)
+    # A press on the view stays what it began as until its button is up
+    # (mitcad#1571, #1572, #1573): keys changed during it, a trackpad scroll
+    # while a button is held, the window deactivated during a drag and F4
+    # released elsewhere, in the Floating and the Docked layout. The Linux
+    # test's shared input script (tools/ui-navigation-gesture-state-test.sh).
+    add_test(NAME app.ui-windows-navigation-gesture-state
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-navigation-gesture-state-test.ps1"
+              -App "$<TARGET_FILE:mitcad>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-navigation-gesture-state"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-navigation-gesture-state PROPERTIES TIMEOUT 420)
+    # A new sphere's see-through preview without a pattern of triangles
+    # (mitcad#1575, GitHub mitcad/Mitcad#219) on Mesa's software renderer:
+    # the shared steps of tools/ui-preview-transparency-test.sh.
+    add_test(NAME app.ui-windows-preview-transparency
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-preview-transparency-test.ps1"
+              -App "$<TARGET_FILE:mitcad>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-preview-transparency"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-preview-transparency PROPERTIES TIMEOUT 180)
+    # Edit Parameters one click away in every workspace (mitcad#1582,
+    # GitHub mitcad/Mitcad#222): the navigation bar's button in SOLID,
+    # BUILD, MAKE and a sketch, the drawing bar's in a drawing, Floating and
+    # Docked. The Linux test's shared input script
+    # (tools/ui-parameters-everywhere-test.sh).
+    add_test(NAME app.ui-windows-parameters-everywhere
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-parameters-everywhere-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-parameters-everywhere"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-parameters-everywhere PROPERTIES TIMEOUT 420)
+    # Any command pinned to the navigation bar (mitcad#1589, GitHub
+    # mitcad/Mitcad#224): Edit Parameters by default, Measure pinned from
+    # its INSPECT row, run from the bar in BUILD, dragged first, read back
+    # after a restart and unpinned from its right-click, Floating and
+    # Docked (tools/ui-nav-bar-pins-test.sh on Linux).
+    add_test(NAME app.ui-windows-nav-bar-pins
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-nav-bar-pins-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-nav-bar-pins"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-nav-bar-pins PROPERTIES TIMEOUT 420)
+
+    # The view never meshes the model's shapes itself (mitcad#1553,
+    # mitcad#1586): picks while the background evaluation runs leave the
+    # body's edges unmeshed, and the construction planes, sketch profiles
+    # and curves the view meshes are shapes of its own. The Linux test's
+    # shared input script (tools/ui-view-mesh-writes-test.sh).
+    add_test(NAME app.ui-windows-view-mesh-writes
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-view-mesh-writes-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-view-mesh-writes"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-view-mesh-writes PROPERTIES TIMEOUT 420)
+
+    # A constraint symbol keeps clear of the curves (mitcad#1594): with two
+    # close parallel lines, a click on the upper line's middle selects the
+    # line, not the Parallel whose second symbol covered it, and both of its
+    # symbols are in the glyph log. The Linux test's shared input script
+    # (tools/ui-sketch-glyph-clear-test.sh).
+    add_test(NAME app.ui-windows-sketch-glyph-clear
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-glyph-clear-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-glyph-clear"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-glyph-clear PROPERTIES TIMEOUT 300)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

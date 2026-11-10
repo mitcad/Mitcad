@@ -35,8 +35,11 @@ const ERROR_LIMIT: usize = 12 * 1024;
 const MAX_HITS: usize = 200;
 /// A search hit's excerpt, in characters.
 const EXCERPT: usize = 240;
+/// The most of one paragraph or list item a brief answer keeps, in bytes
+/// (mitcad#1587).
+const BRIEF_ITEM: usize = 800;
 
-const USAGE: &str = "model_reference with section (a heading, or a name a heading lists), query, command, feature (a feature type) or search gives that part of the reference; with guide, a guide on how to model well here (guides lists them, \"index\" says when to read each); offset continues a truncated answer from its next_offset (for search: the hits to skip).";
+const USAGE: &str = "model_reference with section (a heading, or a name a heading lists), query, command, feature (a feature type) or search gives that part of the reference; a section or a feature type comes in brief (the example, the tables, each field's text, the subsections' headings), and extended: true gives its whole text; with guide, a guide on how to model well here (guides lists them, \"index\" says when to read each); offset continues a truncated answer from its next_offset (for search: the hits to skip).";
 
 /// The names MCP permits, which the backend supplies
 /// (`mitcad_model_api::classes`): the reference does not tell them.
@@ -793,36 +796,215 @@ impl Reference {
 
     /// A section as an answer: its text from `offset`, at most `limit`
     /// bytes; when cut, its subsections, which are smaller to ask for.
+    ///
+    /// Without `extended` the section comes in brief (mitcad#1587, see
+    /// [`Reference::brief`]) when that is shorter, with `brief: true`, its
+    /// subsections and a note of the whole text's size.
     fn section_answer(
         &self,
         heading: &Heading,
         offset: usize,
         limit: usize,
+        extended: bool,
     ) -> Result<Value, String> {
-        let (text, next) = cut(&self.text(heading), offset, limit)?;
+        let whole = self.text(heading);
+        let brief = (!extended)
+            .then(|| self.brief(heading))
+            .filter(|brief| brief.len() < whole.len());
+        let (text, next) = cut(brief.as_deref().unwrap_or(&whole), offset, limit)?;
         let mut answer = json!({
             "section": heading.title,
             "path": self.path(heading.line),
             "text": text,
         });
-        if next.is_some() {
-            let subsections: Vec<&str> = self
-                .headings
-                .iter()
-                .filter(|sub| {
-                    sub.line > heading.line
-                        && sub.line < heading.end
-                        && sub.level == heading.level + 1
-                })
-                .map(|sub| sub.title.as_str())
-                .collect();
-            if !subsections.is_empty() {
-                answer["subsections"] = json!(subsections);
-            }
+        let subsections = self.subsections(heading);
+        if (brief.is_some() || next.is_some()) && !subsections.is_empty() {
+            answer["subsections"] = json!(subsections);
+        }
+        if brief.is_some() {
+            answer["brief"] = json!(true);
+            answer["note"] = json!(format!(
+                "in brief: the example, the tables and each field's text up to {BRIEF_ITEM} bytes; nested details, later examples and the subsections' texts are left out. The same call with extended: true gives the whole section ({} kB), and section with a subsection's heading gives that one",
+                whole.len().div_ceil(1024)
+            ));
         }
         mark_cut(&mut answer, next);
         Ok(answer)
     }
+
+    /// The headings one level below a section's.
+    fn subsections(&self, heading: &Heading) -> Vec<&str> {
+        self.headings
+            .iter()
+            .filter(|sub| {
+                sub.line > heading.line && sub.line < heading.end && sub.level == heading.level + 1
+            })
+            .map(|sub| sub.title.as_str())
+            .collect()
+    }
+
+    /// A section in brief (mitcad#1587): its heading and its own text (not
+    /// its subsections') with the first code block, the tables, and each
+    /// paragraph and top-level list item up to [`BRIEF_ITEM`] bytes, cut
+    /// after a sentence; nested list items and later code blocks are left
+    /// out, and so are parenthesized issue numbers.
+    fn brief(&self, heading: &Heading) -> String {
+        let index = self
+            .headings
+            .iter()
+            .position(|other| other.line == heading.line)
+            .unwrap_or_default();
+        let own = heading.line..self.own_end(index).min(heading.end);
+        let mut out = String::new();
+        // The paragraph or top-level list item being read.
+        let mut item = String::new();
+        let mut nested = false;
+        let mut blocks = 0;
+        let mut fenced = false;
+        let flush = |item: &mut String, out: &mut String| {
+            if !item.is_empty() {
+                out.push_str(&shorten(&without_issue_numbers(item)));
+                out.push('\n');
+                item.clear();
+            }
+        };
+        for i in own {
+            let line = &self.lines[i];
+            let trimmed = line.trim_start();
+            let indent = line.len() - trimmed.len();
+            if self.code[i] {
+                flush(&mut item, &mut out);
+                if trimmed.starts_with("```") {
+                    if !fenced {
+                        blocks += 1;
+                    }
+                    fenced = !fenced;
+                }
+                if blocks == 1 {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+                continue;
+            }
+            if i == heading.line {
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            if trimmed.is_empty() {
+                flush(&mut item, &mut out);
+                if !out.ends_with("\n\n") {
+                    out.push('\n');
+                }
+                continue;
+            }
+            if trimmed.starts_with('|') {
+                flush(&mut item, &mut out);
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            let bullet = trimmed.starts_with("- ") || trimmed.starts_with("* ");
+            if bullet && indent >= 2 {
+                flush(&mut item, &mut out);
+                nested = true;
+                continue;
+            }
+            if bullet {
+                flush(&mut item, &mut out);
+                nested = false;
+                item.push_str(trimmed);
+                continue;
+            }
+            if nested && indent >= 3 {
+                continue;
+            }
+            nested = false;
+            if !item.is_empty() {
+                item.push(' ');
+            }
+            item.push_str(trimmed);
+        }
+        flush(&mut item, &mut out);
+        let subsections = self.subsections(heading);
+        if !subsections.is_empty() {
+            out.push_str("\nSubsections (ask for one by its heading with section): ");
+            out.push_str(&subsections.join("; "));
+            out.push('\n');
+        }
+        out.trim_end().to_owned() + "\n"
+    }
+}
+
+/// A paragraph or list item cut to [`BRIEF_ITEM`] bytes, after the last
+/// sentence that ends before that (else after a clause or a word), with
+/// an ellipsis.
+fn shorten(item: &str) -> String {
+    if item.len() <= BRIEF_ITEM {
+        return item.to_owned();
+    }
+    let mut end = BRIEF_ITEM;
+    while !item.is_char_boundary(end) {
+        end -= 1;
+    }
+    let head = &item[..end];
+    let mut sentence = None;
+    let mut clause = None;
+    let mut code = false;
+    let mut depth = 0i32;
+    let bytes = head.as_bytes();
+    for (i, &byte) in bytes.iter().enumerate() {
+        match byte {
+            b'`' => code = !code,
+            b'(' | b'[' | b'{' if !code => depth += 1,
+            b')' | b']' | b'}' if !code => depth -= 1,
+            b'.' | b':' if !code && depth <= 0 => {
+                let next = bytes.get(i + 1).copied();
+                let before = &head[..i];
+                let abbreviation = before.ends_with("e.g") || before.ends_with("i.e");
+                if next == Some(b' ') && !abbreviation {
+                    sentence = Some(i + 1);
+                }
+            }
+            b';' | b',' if !code && depth <= 0 => clause = Some(i + 1),
+            _ => {}
+        }
+    }
+    let at = sentence
+        .filter(|&at| at >= BRIEF_ITEM / 3)
+        .or(clause.filter(|&at| at >= BRIEF_ITEM / 2))
+        .unwrap_or_else(|| head.rfind(' ').unwrap_or(end));
+    format!("{} …", head[..at].trim_end())
+}
+
+/// Text without its parenthesized issue numbers: `(mitcad#714)`,
+/// `(mitcad#547; mitcad#539)`.
+fn without_issue_numbers(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('(') {
+        let Some(close) = rest[open..].find(')').map(|close| open + close) else {
+            break;
+        };
+        let inner = &rest[open + 1..close];
+        let only_issues = inner.contains("mitcad#")
+            && inner
+                .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
+                .filter(|word| !word.is_empty() && *word != "and")
+                .all(|word| {
+                    word.strip_prefix("mitcad#")
+                        .is_some_and(|number| number.chars().all(|c| c.is_ascii_digit()))
+                });
+        if only_issues {
+            out.push_str(rest[..open].trim_end_matches(' '));
+            rest = &rest[close + 1..];
+        } else {
+            out.push_str(&rest[..=open]);
+            rest = &rest[open + 1..];
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The answer of `model_reference` to its (validated) arguments.
@@ -831,6 +1013,11 @@ pub(crate) fn answer(arguments: &Value, vocabulary: &Vocabulary) -> Result<Value
         .get("offset")
         .and_then(Value::as_u64)
         .map_or(0, |offset| usize::try_from(offset).unwrap_or(usize::MAX));
+    // A section or a feature type in brief unless asked whole (mitcad#1587).
+    let extended = arguments
+        .get("extended")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let given: Vec<&str> = ["section", "query", "command", "feature", "search", "guide"]
         .into_iter()
         .filter(|key| arguments.get(*key).is_some())
@@ -846,7 +1033,7 @@ pub(crate) fn answer(arguments: &Value, vocabulary: &Vocabulary) -> Result<Value
     let reference: &Reference = &reference;
     match given.as_slice() {
         [] => contents(reference, vocabulary, offset),
-        ["section"] => section(reference, &text("section"), offset),
+        ["section"] => section(reference, &text("section"), offset, extended),
         ["query"] => item(
             reference,
             "query",
@@ -863,7 +1050,7 @@ pub(crate) fn answer(arguments: &Value, vocabulary: &Vocabulary) -> Result<Value
             vocabulary,
             offset,
         ),
-        ["feature"] => feature(reference, &text("feature"), vocabulary, offset),
+        ["feature"] => feature(reference, &text("feature"), vocabulary, offset, extended),
         ["search"] => search(reference, &text("search"), offset),
         // How to model well rather than what exists (mitcad#1508).
         ["guide"] => crate::guide::answer(&text("guide"), offset),
@@ -913,14 +1100,19 @@ fn contents(
     Ok(answer)
 }
 
-fn section(reference: &Reference, name: &str, offset: usize) -> Result<Value, String> {
+fn section(
+    reference: &Reference,
+    name: &str,
+    offset: usize,
+    extended: bool,
+) -> Result<Value, String> {
     let found = reference.find_sections(name);
     let Some(heading) = found.first() else {
         return Err(format!(
             "no section {name} in the reference; model_reference without arguments lists the sections, and with search finds a text"
         ));
     };
-    let mut answer = reference.section_answer(heading, offset, LIMIT)?;
+    let mut answer = reference.section_answer(heading, offset, LIMIT, extended)?;
     if found.len() > 1 {
         let others: Vec<&str> = found[1..]
             .iter()
@@ -994,6 +1186,7 @@ fn feature(
     name: &str,
     vocabulary: &Vocabulary,
     offset: usize,
+    extended: bool,
 ) -> Result<Value, String> {
     let Some(heading) = reference.feature_section(name) else {
         return Err(unknown(
@@ -1003,7 +1196,7 @@ fn feature(
             &vocabulary.features,
         ));
     };
-    let mut answer = reference.section_answer(heading, offset, LIMIT)?;
+    let mut answer = reference.section_answer(heading, offset, LIMIT, extended)?;
     answer["feature"] = json!(name);
     if let Some(example) = reference.example(heading, name) {
         answer["example"] = json!(example);
@@ -1058,12 +1251,27 @@ fn search(reference: &Reference, text: &str, skip: usize) -> Result<Value, Strin
     Ok(answer)
 }
 
+/// The name of a refused parameter that is a unit, a function or a
+/// constant, from the model's error (`Round is a unit, function or
+/// constant and cannot name a parameter`).
+fn reserved_parameter_name(error: &str) -> Option<&str> {
+    let (before, _) =
+        error.split_once(" is a unit, function or constant and cannot name a parameter")?;
+    let name = before
+        .rsplit(|c: char| c.is_whitespace() || c == ':')
+        .next()?;
+    (!name.is_empty()).then_some(name)
+}
+
 /// Adds the reference to a refused `model_command`'s result (`value`)
-/// whose error is a missing field: the section of the feature type its
-/// definition names, with an example definition, or the rows of its
-/// command when the missing field is one of the command's own. The model's
-/// error names only the first missing field; the reference gives them all
-/// in one answer. From the reference as the agents of `vocabulary` see it.
+/// whose error is a missing or an unknown field (mitcad#1587: unknown ones
+/// too): the section of the feature type its definition names, in brief,
+/// with an example definition, or the rows of its command when the field
+/// is one of the command's own. The model's error names only the first
+/// such field; the reference gives them all in one answer. From the
+/// reference as the agents of `vocabulary` see it. A few refusals say
+/// where the thing asked for is instead (a definition's `name`, a
+/// parameter named like a function).
 pub(crate) fn explain_refusal(arguments: &Value, value: &mut Value, vocabulary: &Vocabulary) {
     let Some(error) = value
         .get("error")
@@ -1072,13 +1280,25 @@ pub(crate) fn explain_refusal(arguments: &Value, value: &mut Value, vocabulary: 
     else {
         return;
     };
-    let Some(field) = error
-        .split("missing field `")
-        .nth(1)
-        .and_then(|rest| rest.split('`').next())
-        .map(str::to_owned)
-    else {
+    if let Some(name) = reserved_parameter_name(&error) {
+        value["error"] = json!(format!(
+            "{error}; parameter names may not be units, functions or constants (round, min, mm, pi, …): choose another, e.g. {name}Value"
+        ));
         return;
+    }
+    let field = |marker: &str| {
+        error
+            .split(marker)
+            .nth(1)
+            .and_then(|rest| rest.split('`').next())
+            .map(str::to_owned)
+    };
+    let (field, unknown) = match field("missing field `") {
+        Some(field) => (field, false),
+        None => match field("unknown field `") {
+            Some(field) => (field, true),
+            None => return,
+        },
     };
     let command = match &arguments["command"] {
         Value::Array(entries) => value
@@ -1100,7 +1320,13 @@ pub(crate) fn explain_refusal(arguments: &Value, value: &mut Value, vocabulary: 
     } else {
         reference.rows("command", name).join("\n\n")
     };
-    let of_command = rows.contains(&format!("`{field}`"));
+    // A missing field the command's rows name is the command's; an unknown
+    // one is the command's when the command itself has it.
+    let of_command = if unknown {
+        command.get(&field).is_some()
+    } else {
+        rows.contains(&format!("`{field}`"))
+    };
     let feature = command
         .pointer("/def/type")
         .and_then(Value::as_str)
@@ -1111,13 +1337,20 @@ pub(crate) fn explain_refusal(arguments: &Value, value: &mut Value, vocabulary: 
         if let Some(example) = reference.example(heading, kind) {
             entry["example"] = json!(example);
         }
-        (
-            format!(
-                "the fields of the feature type {kind} and an example are in reference; model_reference {{\"feature\": \"{kind}\"}} gives its whole section"
-            ),
-            entry,
-            reference.text(heading),
-        )
+        let mut hint = format!(
+            "the fields of the feature type {kind} and an example are in reference; model_reference {{\"feature\": \"{kind}\"}} gives its section"
+        );
+        if unknown && field == "name" {
+            hint = format!(
+                "a feature's name is not part of its definition: give it beside def ({{\"cmd\": \"add_feature\", \"name\": \"…\", \"def\": {{…}}}}), {}or later with rename_feature; {hint}",
+                if kind == "sketch" {
+                    "with sketch.create's name, "
+                } else {
+                    ""
+                }
+            );
+        }
+        (hint, entry, reference.brief(heading))
     } else if !rows.is_empty() {
         (
             format!(

@@ -23,6 +23,7 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepMesh_Context.hxx>
 #include <BRepMesh_Deflection.hxx>
 #include <BRepMesh_DiscretAlgoFactory.hxx>
@@ -38,6 +39,7 @@
 #include <BRep_TEdge.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
+#include <Bnd_Box2d.hxx>
 #include <Geom2d_Curve.hxx>
 #include <Geom_Curve.hxx>
 #include <Geom_Plane.hxx>
@@ -65,6 +67,8 @@
 #include <Standard_ErrorHandler.hxx>
 #include <Standard_Failure.hxx>
 #include <Standard_OutOfMemory.hxx>
+#include <NCollection_IndexedMap.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
@@ -414,6 +418,204 @@ void widen_small_circle_edges(const occ::handle<IMeshData_Model>& model, const I
         }
       },
       !parameters.InParallel || model->EdgesNb() < 8);
+}
+
+// A segment of a wire's polygon in a face's parameter plane, and its edge.
+struct WireSegment {
+  IMeshData::IEdgePtr edge;
+  gp_XY a;
+  gp_XY b;
+};
+
+// Whether two segments cross each other at a point inside both (not where
+// one ends: wires meet at their vertices).
+bool segments_cross(const WireSegment& s, const WireSegment& t) {
+  const auto side = [](const gp_XY& from, const gp_XY& to, const gp_XY& p) { return (to - from) ^ (p - from); };
+  const double d1 = side(t.a, t.b, s.a);
+  const double d2 = side(t.a, t.b, s.b);
+  const double d3 = side(s.a, s.b, t.a);
+  const double d4 = side(s.a, s.b, t.b);
+  return ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0)) && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0));
+}
+
+// The pairs of edges of different wires of a face whose polygons cross in
+// the face's parameter plane, each pair once.
+std::vector<std::pair<IMeshData::IEdgePtr, IMeshData::IEdgePtr>> crossing_wire_edges(
+    const IMeshData::IFaceHandle& face) {
+  std::vector<std::pair<IMeshData::IEdgePtr, IMeshData::IEdgePtr>> pairs;
+  const int wires = face->WiresNb();
+  if (wires < 2) {
+    return pairs;
+  }
+  std::vector<std::vector<WireSegment>> segments(static_cast<std::size_t>(wires));
+  std::vector<Bnd_Box2d> boxes(static_cast<std::size_t>(wires));
+  for (int w = 0; w < wires; ++w) {
+    const IMeshData::IWireHandle& wire = face->GetWire(w);
+    for (int e = 0; e < wire->EdgesNb(); ++e) {
+      const IMeshData::IEdgePtr& edge = wire->GetEdge(e);
+      const IMeshData::IPCurveHandle& pcurve = edge->GetPCurve(face.get(), wire->GetEdgeOrientation(e));
+      for (int p = 1; p < pcurve->ParametersNb(); ++p) {
+        const gp_XY a = pcurve->GetPoint(p - 1).XY();
+        const gp_XY b = pcurve->GetPoint(p).XY();
+        segments[static_cast<std::size_t>(w)].push_back({edge, a, b});
+        boxes[static_cast<std::size_t>(w)].Add(gp_Pnt2d(a));
+        boxes[static_cast<std::size_t>(w)].Add(gp_Pnt2d(b));
+      }
+    }
+  }
+  const auto box_of = [](const WireSegment& s) {
+    Bnd_Box2d box;
+    box.Add(gp_Pnt2d(s.a));
+    box.Add(gp_Pnt2d(s.b));
+    return box;
+  };
+  for (std::size_t w1 = 0; w1 < segments.size(); ++w1) {
+    for (std::size_t w2 = w1 + 1; w2 < segments.size(); ++w2) {
+      if (boxes[w1].IsVoid() || boxes[w2].IsVoid() || boxes[w1].IsOut(boxes[w2])) {
+        continue;
+      }
+      // The segments of each wire within the other's box.
+      std::vector<const WireSegment*> near1;
+      std::vector<const WireSegment*> near2;
+      for (const WireSegment& s : segments[w1]) {
+        if (!boxes[w2].IsOut(box_of(s))) {
+          near1.push_back(&s);
+        }
+      }
+      for (const WireSegment& s : segments[w2]) {
+        if (!boxes[w1].IsOut(box_of(s))) {
+          near2.push_back(&s);
+        }
+      }
+      for (const WireSegment* s : near1) {
+        for (const WireSegment* t : near2) {
+          if (!segments_cross(*s, *t)) {
+            continue;
+          }
+          const auto known = [s, t](const std::pair<IMeshData::IEdgePtr, IMeshData::IEdgePtr>& pair) {
+            return (pair.first == s->edge && pair.second == t->edge) ||
+                   (pair.first == t->edge && pair.second == s->edge);
+          };
+          if (std::none_of(pairs.begin(), pairs.end(), known)) {
+            pairs.emplace_back(s->edge, t->edge);
+          }
+        }
+      }
+    }
+  }
+  return pairs;
+}
+
+// How many times separate_close_wires cuts the edges of wires that still
+// cross more finely, at most.
+constexpr int kSeparationRounds = 4;
+
+// The edges of a face's wires that lie closer together than their
+// polygons' deviation (mitcad#1568): BRepMesh's healer looks for crossing
+// polygons (BRepMesh_FaceChecker) and cuts their edges more finely, but it
+// passes over segments that cross at less than 5 degrees, as two curves
+// that touch would. Two wires that do not touch, a hole's edge 0.18 µm
+// inside a plane's outer edge (a ring left between a cut circle and a
+// circle joined to it), then cross each other wherever the chords of the
+// outer one sag inside the inner one, and the face cannot be triangulated:
+// BRepMesh leaves it without triangles, or with the outer wire's polygon
+// filled and the hole's points unused. Here each pair of edges of
+// different wires of a face whose polygons cross, the curves themselves
+// apart (more than twice their tolerances in the model's space), is
+// discretized again at a quarter of their distance (no finer than
+// Precision::Confusion), so that neither polygon sags as far as the other
+// curve; pairs that still cross (a curved face's parameters) are cut a
+// third as finely again, at most kSeparationRounds times. Curves that touch
+// are left as BRepMesh has them. After BRepMesh's healer, before the faces'
+// deviations are set: the faces at an edge discretized again take its new
+// polygon as their boundary.
+void separate_close_wires(const occ::handle<IMeshData_Model>& model, const IMeshTools_Parameters& parameters) {
+  if (model.IsNull()) {
+    return;
+  }
+  std::vector<int> faces;
+  for (int i = 0; i < model->FacesNb(); ++i) {
+    const IMeshData::IFaceHandle& face = model->GetFace(i);
+    if (face->WiresNb() > 1 && !face->IsSet(IMeshData_Failure)) {
+      faces.push_back(i);
+    }
+  }
+  // The distances of the pairs of edges found, by their pair.
+  std::map<std::pair<const IMeshData_Edge*, const IMeshData_Edge*>, double> apart;
+  for (int pass = 0; pass < kSeparationRounds && !faces.empty(); ++pass) {
+    std::vector<std::vector<std::pair<IMeshData::IEdgePtr, IMeshData::IEdgePtr>>> found(faces.size());
+    OSD_Parallel::For(
+        0, static_cast<int>(faces.size()),
+        [&model, &faces, &found](int i) {
+          try {
+            found[static_cast<std::size_t>(i)] = crossing_wire_edges(model->GetFace(faces[static_cast<std::size_t>(i)]));
+          } catch (const Standard_Failure&) {
+            // As BRepMesh has the face.
+          }
+        },
+        !parameters.InParallel || faces.size() < 8);
+    // The finest deviation each edge is to have.
+    std::map<const IMeshData_Edge*, std::pair<IMeshData::IEdgePtr, double>> finer;
+    std::vector<int> again;
+    for (std::size_t i = 0; i < faces.size(); ++i) {
+      bool changed = false;
+      for (const auto& [first, second] : found[i]) {
+        const IMeshData_Edge* a = first;
+        const IMeshData_Edge* b = second;
+        const auto key = a < b ? std::make_pair(a, b) : std::make_pair(b, a);
+        auto known = apart.find(key);
+        if (known == apart.end()) {
+          double distance = 0.0;
+          try {
+            BRepExtrema_DistShapeShape extrema(first->GetEdge(), second->GetEdge());
+            if (extrema.IsDone() && extrema.NbSolution() > 0) {
+              distance = extrema.Value();
+            }
+          } catch (const Standard_Failure&) {
+            distance = 0.0;
+          }
+          const double touching =
+              2.0 * std::max(BRep_Tool::Tolerance(first->GetEdge()), BRep_Tool::Tolerance(second->GetEdge()));
+          known = apart.emplace(key, distance > touching ? distance : 0.0).first;
+        }
+        if (!(known->second > 0.0)) {
+          continue; // the curves touch
+        }
+        for (const IMeshData::IEdgePtr& edge : {first, second}) {
+          const double now = edge->GetDeflection();
+          const double wanted =
+              std::max(pass == 0 ? std::min(now, 0.25 * known->second) : now / 3.0, Precision::Confusion());
+          if (!(wanted < now)) {
+            continue;
+          }
+          auto at = finer.find(edge);
+          if (at == finer.end()) {
+            finer.emplace(edge, std::make_pair(edge, wanted));
+          } else {
+            at->second.second = std::min(at->second.second, wanted);
+          }
+          changed = true;
+        }
+      }
+      if (changed) {
+        again.push_back(faces[i]);
+      }
+    }
+    for (const auto& entry : finer) {
+      const IMeshData::IEdgeHandle edge = entry.second.first;
+      const double own = edge->GetDeflection();
+      try {
+        rediscretize(edge, entry.second.second, parameters);
+      } catch (const Standard_Failure&) {
+        try {
+          rediscretize(edge, own, parameters);
+        } catch (const Standard_Failure&) {
+          edge->SetStatus(IMeshData_Failure);
+        }
+      }
+    }
+    faces = std::move(again);
+  }
 }
 
 // The largest radius round a cone, torus or sphere face (a torus's major
@@ -1297,6 +1499,7 @@ public:
       return false;
     }
     const occ::handle<IMeshData_Model>& model = GetModel();
+    separate_close_wires(model, GetParameters());
     m_floored.assign(model.IsNull() ? 0 : static_cast<std::size_t>(model->FacesNb()), 0);
     if (m_faceTriangles == 0 || model.IsNull()) {
       add(&MeshReport::heal, start);
@@ -2331,6 +2534,26 @@ private:
 
 } // namespace
 
+FaceError::FaceError(int index, std::string surface)
+    : Error(face_error_message("face " + std::to_string(index), surface)), m_index(index),
+      m_surface(std::move(surface)) {}
+
+std::string face_error_message(const std::string& face, const std::string& surface) {
+  return "a face could not be triangulated: " + face + " (" + surface + ")";
+}
+
+FaceError untriangulated_face(const TopoDS_Shape& shape, const TopoDS_Face& face) {
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapes(shape, TopAbs_FACE, faces);
+  std::string surface = "unknown";
+  try {
+    surface = surface_name(BRepAdaptor_Surface(face, false).GetType());
+  } catch (const Standard_Failure&) {
+    // Its kind cannot be told.
+  }
+  return FaceError(faces.FindIndex(face) - 1, surface);
+}
+
 IndexedMesh indexed_mesh(const TopoDS_Shape& shape, const MeshOptions& options) {
   const TopoDS_Shape meshed = triangulate(shape, options);
   IndexedMesh mesh;
@@ -2341,7 +2564,7 @@ IndexedMesh indexed_mesh(const TopoDS_Shape& shape, const MeshOptions& options) 
     TopLoc_Location location;
     const occ::handle<Poly_Triangulation> triangulation = BRep_Tool::Triangulation(face, location);
     if (triangulation.IsNull()) {
-      throw Error("a face could not be triangulated");
+      throw untriangulated_face(meshed, face);
     }
     const gp_Trsf placement = location.Transformation();
     nodes.resize(static_cast<std::size_t>(triangulation->NbNodes()));

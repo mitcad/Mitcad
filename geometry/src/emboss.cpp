@@ -418,8 +418,7 @@ void tapered_tops(const Wrap& wrap, const detail::SweepFace& profile, EdgeMap& e
     } else if (!wrap.cone) {
       // An affine map of a B-spline moves its poles.
       const occ::handle<Geom2d_BSplineCurve> spline =
-          occ::down_cast<Geom2d_BSplineCurve>(Geom2dConvert::CurveToBSplineCurve(
-              new Geom2d_TrimmedCurve(uv.curve, uv.first, uv.last)));
+          Geom2dConvert::CurveToBSplineCurve(new Geom2d_TrimmedCurve(uv.curve, uv.first, uv.last));
       for (int i = 1; i <= spline->NbPoles(); ++i) {
         spline->SetPole(i, top_development(wrap, spline->Pole(i)));
       }

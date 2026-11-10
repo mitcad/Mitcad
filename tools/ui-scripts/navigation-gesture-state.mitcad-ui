@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: MIT
+# What a press on the view is stays its own until its button is up, on the
+# demo block (application events only: a physical trackpad is checked by
+# docs/macos-trackpad-checklist.md). Run by
+# tools/ui-navigation-gesture-state-test.sh (Linux),
+# tools/ui-windows-navigation-gesture-state-test.ps1 (Windows) and
+# tools/ui-macos-navigation-test.sh (macOS), in the Floating and the Docked
+# layout:
+#   - mitcad#1571: Option pressed during a select keeps it a window
+#     selection, Option released during an orbit keeps it an orbit and
+#     picks nothing; Ctrl released during a click, then a one-pixel move,
+#     is still a Ctrl click that adds the edge.
+#   - mitcad#1572: a pan or orbit scroll while the button is held leaves
+#     the press a click; a ScrollEnd with a delta lets the trackpad's button
+#     up at once; the phases Qt makes of macOS's (resting fingers, Ended
+#     with a delta, a momentum begun as a new scroll).
+#   - mitcad#1573: the window deactivated during an F4, Option or scroll
+#     drag ends it and the next click picks; a panel taking the keyboard
+#     does not end it; F4 released after the keyboard went to a panel
+#     leaves the next left click a pick (MiddlePanF4).
+wait-idle
+expect-viewport
+expect-navigation-gesture-state
+key Escape
+expect-selection 0 0
+capture-view-orientation picks
+click-edge-release 1 modifier-first
+expect-selection 1 0
+click-edge-release 2 key-up-moved
+expect-selection 2 0
+expect-view-buttons none
+expect-view-orientation ${picks} unchanged
+key Escape
+expect-selection 0 0
+view-navigation middle-pan-f4
+capture-view-orientation f4
+click-edge-release 1 f4-elsewhere
+expect-selection 1 0
+expect-view-buttons none
+expect-view-orientation ${f4} unchanged
+view-navigation middle-pan
+key Escape
+expect-never '^(TestDriver: FAIL|OCCT view event failed)'

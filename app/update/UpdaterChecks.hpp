@@ -8,10 +8,13 @@
 // right before it runs the installer, compares the SHA-256 of the file,
 // read through the handle it then keeps open, with the one Mitcad passes
 // from the verified release manifest; Mitcad (UpdateInstaller.cpp) checks
-// the hash it passes with the same rule.
+// the hash it passes with the same rule. It also names the programs still
+// running from the installation when it asks whether to end them
+// (describeForPerson, mitcad#1584).
 
 #include <cstddef>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace mitcad::updater {
@@ -123,6 +126,73 @@ template <class Read, class Add> bool hashAll(Read&& read, Add&& add) {
       return false;
     }
   }
+}
+
+// `text` with the letters A-Z in lower case (file names compare so on
+// Windows for the names below).
+inline std::wstring lowerAscii(std::wstring text) {
+  for (wchar_t& c : text) {
+    if (c >= L'A' && c <= L'Z') {
+      c = static_cast<wchar_t>(c - L'A' + L'a');
+    }
+  }
+  return text;
+}
+
+// The programs still running from an installation, for the question
+// whether to end them (mitcad#1584): one line for each program, what it is
+// and how many run, MitCad first: "MitCad (mitcad.exe)", "3 MCP bridges of
+// AI assistant sessions (mitcad-cli.exe)", "a render worker
+// (mitcad-render.exe)". `names` are the programs' file names, one for each
+// process.
+inline std::vector<std::wstring> describeForPerson(const std::vector<std::wstring>& names) {
+  struct Kind {
+    const wchar_t* file;
+    const wchar_t* one;
+    const wchar_t* many; // after the count
+  };
+  static const Kind kinds[] = {
+      {L"mitcad.exe", L"MitCad", L"MitCad processes"},
+      {L"mitcad-cli.exe", L"an MCP bridge of an AI assistant session", L"MCP bridges of AI assistant sessions"},
+      {L"mitcad-mcp-launcher.exe", L"an AI assistant's MitCad launcher", L"AI assistants' MitCad launchers"},
+      {L"mitcad-render.exe", L"a render worker", L"render workers"},
+  };
+  std::vector<std::pair<std::wstring, int>> counts; // in the order first seen
+  for (const std::wstring& name : names) {
+    const std::wstring key = lowerAscii(name);
+    bool counted = false;
+    for (auto& [file, count] : counts) {
+      if (lowerAscii(file) == key) {
+        ++count;
+        counted = true;
+        break;
+      }
+    }
+    if (!counted) {
+      counts.emplace_back(name, 1);
+    }
+  }
+  std::vector<std::wstring> known;
+  std::vector<std::wstring> others;
+  for (const Kind& kind : kinds) {
+    for (const auto& [file, count] : counts) {
+      if (lowerAscii(file) == kind.file) {
+        known.push_back((count == 1 ? std::wstring(kind.one) : std::to_wstring(count) + L" " + kind.many) + L" (" +
+                        kind.file + L")");
+      }
+    }
+  }
+  for (const auto& [file, count] : counts) {
+    bool isKnown = false;
+    for (const Kind& kind : kinds) {
+      isKnown = isKnown || lowerAscii(file) == kind.file;
+    }
+    if (!isKnown) {
+      others.push_back(count == 1 ? file : file + L" (" + std::to_wstring(count) + L" processes)");
+    }
+  }
+  known.insert(known.end(), others.begin(), others.end());
+  return known;
 }
 
 } // namespace mitcad::updater

@@ -29,10 +29,57 @@ namespace {
 const QColor kHandleColor = viewColor(ColorRole::Handle, false);
 const QColor kActiveColor = viewColor(ColorRole::Select, false);
 const QColor kInk = viewColor(ColorRole::ViewInk, false);
-constexpr double kArrowPixels = 34.0;
-constexpr double kRingPixels = 70.0;
-constexpr double kGrabPixels = 9.0;
+// The dark halo under an arrow's or a ring's strokes and round its knob
+// and head (mitcad#1581): the handle stays visible on a light and a dark
+// background and over the highlighted bodies it moves.
+const QColor kHalo = [] {
+  QColor halo = viewColor(ColorRole::ViewInk, false);
+  halo.setAlpha(175);
+  return halo;
+}();
+// An arrow's or a ring's sizes in the view's pixels (Qt's
+// device-independent ones: scaled by the screen's device pixel ratio): its
+// length or radius, how far from it a press takes it, a ring's knob, and
+// its strokes. Free Move's handles (Manipulator::large, mitcad#1581) are
+// about 1.5 times larger; the other commands' keep the sizes they had, so
+// that their handles take no click they did not take before (a BUILD side
+// click flush with a part's end, beside a Profile's tilt ring).
+struct HandleSize {
+  double arrow;
+  double ring;
+  double grab;
+  double knob;  // a ring's knob's radius
+  double shaft; // an arrow's shaft
+  double line;  // a ring's line, one more hovered or dragged
+  double scale; // an arrow's head and knob
+};
+HandleSize sizeOf(const Manipulator& m) {
+  return m.large ? HandleSize{50.0, 100.0, 12.0, 8.0, 4.5, 2.6, 1.5} : HandleSize{34.0, 70.0, 9.0, 6.0, 3.0, 1.8, 1.0};
+}
+constexpr double kToggleReach = 13.0; // a pattern's instance (P9)
+constexpr double kHaloExtra = 2.5;    // the halo's width beyond a stroke
 constexpr double kPi = 3.14159265358979323846;
+
+// An arrow's or a ring's color while neither hovered nor dragged: its
+// role's (Manipulator::color; Free Move's by its axis, mitcad#1581).
+QColor handleColor(const Manipulator& manipulator) {
+  return manipulator.color == ColorRole::Handle ? kHandleColor : viewColor(manipulator.color, false);
+}
+
+// A stroke drawn over its halo (mitcad#1581).
+template <typename Draw> void haloed(QPainter& painter, const QPen& pen, Draw draw) {
+  QPen halo(pen);
+  halo.setColor(kHalo);
+  halo.setStyle(Qt::SolidLine);
+  halo.setWidthF(pen.widthF() + kHaloExtra);
+  painter.setPen(halo);
+  draw();
+  painter.setPen(pen);
+  draw();
+}
+
+// A coordinate of the design for the log: 6 decimals, no "-0".
+QString worldNumber(double value) { return QString::number(std::abs(value) < 5e-7 ? 0.0 : value, 'f', 6); }
 
 QPointF unit(const QPointF& p) {
   const double n = std::hypot(p.x(), p.y());
@@ -162,8 +209,8 @@ void ManipulatorOverlay::publishBoxes() {
   }
   m_viewer.setHandleBoxes(boxes);
   // Nor where a press stays with a handle (mitcad#1105), as handleAt()
-  // measures: within kGrabPixels of an arrow, of a ring or of a knob's edge.
-  // None once hidden (the command ended; deleted later).
+  // measures: within its reach (sizeOf) of an arrow, of a ring or of a
+  // knob's edge. None once hidden (the command ended; deleted later).
   std::vector<OcctViewer::HandleArea> areas;
   for (const Handle& handle : m_handles) {
     if (isHidden()) {
@@ -181,22 +228,23 @@ void ManipulatorOverlay::publishBoxes() {
     if (!drawn.valid) {
       continue;
     }
+    const HandleSize size = sizeOf(handle.manipulator);
     OcctViewer::HandleArea knob;
     knob.line.append(drawn.handle);
     if (handle.manipulator.kind == Manipulator::Kind::Toggle) {
-      knob.reach = kGrabPixels + 4.0;
+      knob.reach = kToggleReach;
       areas.push_back(knob);
     } else if (handle.manipulator.kind == Manipulator::Kind::Arrow) {
       knob.line.append(drawn.tip); // the whole arrow
-      knob.reach = kGrabPixels;
+      knob.reach = size.grab;
       areas.push_back(knob);
     } else {
-      knob.reach = kGrabPixels + 3.0; // a ring's knob
+      knob.reach = size.grab + size.knob / 2.0; // a ring's knob
       areas.push_back(knob);
       if (drawn.ring.size() > 1) {
         OcctViewer::HandleArea ring;
         ring.line = drawn.ring;
-        ring.reach = kGrabPixels;
+        ring.reach = size.grab;
         areas.push_back(ring);
       }
     }
@@ -319,7 +367,7 @@ ManipulatorOverlay::Drawn ManipulatorOverlay::draw(const Handle& handle) const {
     drawn.origin = m_viewer.toWidgetF(m.origin);
     drawn.handle = m_viewer.toWidgetF(end);
     const QPointF along = m_viewer.toWidgetF(end.Translated(gp_Vec(m.direction))) - drawn.handle;
-    drawn.tip = drawn.handle + unit(along) * kArrowPixels;
+    drawn.tip = drawn.handle + unit(along) * sizeOf(m).arrow;
     if (boxed) {
       // A dimension's value on its line: at its middle, or, where the
       // dimension is too short on the screen to hold it, on the line
@@ -341,7 +389,7 @@ ManipulatorOverlay::Drawn ManipulatorOverlay::draw(const Handle& handle) const {
   if (cross.Magnitude() < 1e-9) {
     return drawn; // a ring without a reference across its axis
   }
-  const double radius = kRingPixels * pixelSize(m.origin);
+  const double radius = sizeOf(m).ring * pixelSize(m.origin);
   const gp_Dir side(cross);
   const auto at = [&](double angle) {
     return m_viewer.toWidgetF(m.origin.Translated(
@@ -379,8 +427,10 @@ int ManipulatorOverlay::boxAt(const QPointF& position) const {
 }
 
 int ManipulatorOverlay::handleAt(const QPointF& position) const {
+  // The handle the position is the most within the reach of (sizeOf: a
+  // larger handle reaches further, mitcad#1581).
   int best = -1;
-  double nearest = kGrabPixels;
+  double nearest = 0.0; // how far within its reach; none outside it
   for (std::size_t i = 0; i < m_handles.size(); ++i) {
     if (m_handles[i].manipulator.kind == Manipulator::Kind::Marker) {
       continue; // annotations never intercept point selection or dragging
@@ -389,21 +439,23 @@ int ManipulatorOverlay::handleAt(const QPointF& position) const {
     if (!drawn.valid) {
       continue;
     }
-    double distance = 0.0;
+    const HandleSize size = sizeOf(m_handles[i].manipulator);
+    double beyond = 0.0; // the distance less the reach
     if (m_handles[i].manipulator.kind == Manipulator::Kind::Toggle) {
       const QPointF d = position - drawn.handle;
-      distance = std::hypot(d.x(), d.y()) - 4.0;
+      beyond = std::hypot(d.x(), d.y()) - kToggleReach;
     } else if (m_handles[i].manipulator.kind == Manipulator::Kind::Arrow) {
-      distance = distanceToSegment(position, drawn.handle, drawn.tip);
+      beyond = distanceToSegment(position, drawn.handle, drawn.tip) - size.grab;
     } else {
       const QPointF d = position - drawn.handle;
-      distance = std::hypot(d.x(), d.y()) - 3.0; // the handle's knob is the easiest to grab
+      double distance = std::hypot(d.x(), d.y()) - size.knob / 2.0; // the handle's knob is the easiest to grab
       for (int k = 0; k + 1 < drawn.ring.size(); ++k) {
         distance = std::min(distance, distanceToSegment(position, drawn.ring[k], drawn.ring[k + 1]));
       }
+      beyond = distance - size.grab;
     }
-    if (distance < nearest) {
-      nearest = distance;
+    if (beyond < nearest) {
+      nearest = beyond;
       best = static_cast<int>(i);
     }
   }
@@ -472,7 +524,7 @@ double ManipulatorOverlay::ringAngle(const Handle& handle, const QPointF& positi
   if (m.kind != Manipulator::Kind::Ring || cross.Magnitude() < 1e-9) {
     return std::numeric_limits<double>::quiet_NaN();
   }
-  const double radius = kRingPixels * pixelSize(m.origin);
+  const double radius = sizeOf(m).ring * pixelSize(m.origin);
   const gp_Dir side(cross);
   const QPointF c = m_viewer.toWidgetF(m.origin);
   const QPointF r = m_viewer.toWidgetF(m.origin.Translated(gp_Vec(m.reference) * radius)) - c;
@@ -729,7 +781,7 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
       continue;
     }
     const bool active = static_cast<int>(i) == m_drag || static_cast<int>(i) == m_hover;
-    const QColor color = active ? kActiveColor : kHandleColor;
+    const QColor color = active ? kActiveColor : handleColor(m_handles[i].manipulator);
     if (m_handles[i].manipulator.kind == Manipulator::Kind::Marker) {
       const QPointF at = drawn.handle;
       painter.setPen(QPen(kInk, 2.0));
@@ -763,33 +815,38 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
         painter.setPen(QPen(color, 1.0, Qt::DashLine));
         painter.drawLine(drawn.origin, drawn.handle);
       }
-      painter.setPen(QPen(color, 3.0, Qt::SolidLine, Qt::RoundCap));
-      painter.drawLine(drawn.handle, drawn.tip);
+      // The shaft, its head and its knob over a dark halo (mitcad#1581).
+      const HandleSize size = sizeOf(m_handles[i].manipulator);
+      painter.setBrush(Qt::NoBrush);
+      haloed(painter, QPen(color, size.shaft, Qt::SolidLine, Qt::RoundCap),
+             [&painter, &drawn] { painter.drawLine(drawn.handle, drawn.tip); });
       const QPointF along = unit(drawn.tip - drawn.handle);
       const QPointF across(-along.y(), along.x());
       QPolygonF head;
-      head << drawn.tip + along * 10.0 << drawn.tip + across * 6.0 << drawn.tip - across * 6.0;
-      painter.setPen(QPen(color, 1.0));
+      head << drawn.tip + along * (10.0 * size.scale) << drawn.tip + across * (6.0 * size.scale)
+           << drawn.tip - across * (6.0 * size.scale);
+      painter.setPen(QPen(kHalo, 1.5));
       painter.setBrush(color);
       painter.drawPolygon(head);
-      painter.drawEllipse(drawn.handle, 3.5, 3.5);
+      painter.drawEllipse(drawn.handle, 3.5 * size.scale, 3.5 * size.scale);
     } else {
+      const HandleSize size = sizeOf(m_handles[i].manipulator);
       painter.setBrush(Qt::NoBrush);
-      painter.setPen(QPen(color, active ? 2.5 : 1.8));
-      painter.drawPolyline(drawn.ring);
+      haloed(painter, QPen(color, active ? size.line + 1.0 : size.line),
+             [&painter, &drawn] { painter.drawPolyline(drawn.ring); });
       if (!drawn.arc.isEmpty()) {
         // An angle's dimension (mitcad#656): the zero line along the
         // reference, the arc to the knob.
         painter.setPen(QPen(color, 1.4));
         painter.drawLine(drawn.origin, drawn.zero);
-        painter.setPen(QPen(color, 3.0, Qt::SolidLine, Qt::RoundCap));
-        painter.drawPolyline(drawn.arc);
+        haloed(painter, QPen(color, std::max(size.shaft - 1.0, 3.0), Qt::SolidLine, Qt::RoundCap),
+               [&painter, &drawn] { painter.drawPolyline(drawn.arc); });
       }
       painter.setPen(QPen(color, 1.0, Qt::DashLine));
       painter.drawLine(drawn.origin, drawn.handle);
-      painter.setPen(QPen(color.darker(130), 1.0));
+      painter.setPen(QPen(kHalo, 1.5));
       painter.setBrush(color);
-      painter.drawEllipse(drawn.handle, 6.0, 6.0);
+      painter.drawEllipse(drawn.handle, size.knob, size.knob);
     }
     if (i < m_boxes.size() && !m_boxes[i].isEmpty()) {
       // The value, where a click edits it (mitcad#656), as the layout
@@ -898,6 +955,22 @@ void ManipulatorOverlay::logPlaces() {
       // the way the pointer does from here (mitcad#1459).
       const QPoint centre = mapTo(window(), m_viewer.toWidgetF(handle.manipulator.origin).toPoint());
       lines << QStringLiteral("Ring centre %1 %2 at %3,%4").arg(m_command, key).arg(centre.x()).arg(centre.y());
+    }
+    if (handle.manipulator.kind == Manipulator::Kind::Arrow || handle.manipulator.kind == Manipulator::Kind::Ring) {
+      // Where it is in the design and its color, for UI tests (mitcad#1580,
+      // mitcad#1581, mitcad#1583): an arrow's start and knob, a ring's
+      // center.
+      const Manipulator& m = handle.manipulator;
+      const auto point = [](const gp_Pnt& p) {
+        return QStringLiteral("%1,%2,%3").arg(worldNumber(p.X()), worldNumber(p.Y()), worldNumber(p.Z()));
+      };
+      const QString place =
+          m.kind == Manipulator::Kind::Arrow
+              ? QStringLiteral("origin %1, knob %2")
+                    .arg(point(m.origin),
+                         point(m.origin.Translated(gp_Vec(m.direction) * ((handle.value - m.base) * m.factor))))
+              : QStringLiteral("center %1").arg(point(m.origin));
+      lines << QStringLiteral("Handle world %1 %2: %3, color %4").arg(m_command, key, place, colorRoleName(m.color));
     }
     if (index < m_boxes.size() && !m_boxes[index].isEmpty()) {
       // Where a click edits the value (mitcad#656).

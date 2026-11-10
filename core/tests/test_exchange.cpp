@@ -55,10 +55,13 @@
 // core/f3d/CORPUS_REPORT.md.
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -68,9 +71,17 @@
 #include <string>
 #include <vector>
 
+#include <BRepMesh_MeshAlgoFactory.hxx>
+#include <GeomAbs_SurfaceType.hxx>
+#include <IMeshTools_MeshAlgo.hxx>
+#include <IMeshTools_MeshAlgoFactory.hxx>
+#include <IMeshTools_Parameters.hxx>
+#include <zlib.h>
+
 #include "bridge/exchange.hpp"
 #include "mitcad/geometry/query.hpp"
 #include "mitcad/io/body.hpp"
+#include "mitcad/io/mesh.hpp"
 #include "mitcad_bridge/brep_import.h"
 #include "mitcad_bridge/kernel/exchange.h"
 #include "mitcad_bridge/lib.h"
@@ -693,6 +704,344 @@ void test_usdz_export(const fs::path& dir) {
   CHECK(data[start + 8] == 0 && data[start + 9] == 8 && data[start + 10] == 0);
 }
 
+// A triangle mesh read back from a file: its corners, and the triangles by
+// their corners' indices.
+struct ReadMesh {
+  std::vector<std::array<double, 3>> vertices;
+  std::vector<std::array<std::size_t, 3>> triangles;
+};
+
+// A binary STL file's triangles, their corners shared where the file's
+// numbers are the same (the bits of the floats).
+ReadMesh read_binary_stl(const fs::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  const std::string data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  ReadMesh mesh;
+  if (data.size() < 84) {
+    return mesh;
+  }
+  std::uint32_t count = 0;
+  std::memcpy(&count, data.data() + 80, 4);
+  if (data.size() < 84 + 50 * static_cast<std::size_t>(count)) {
+    return mesh;
+  }
+  std::map<std::array<std::uint32_t, 3>, std::size_t> corners;
+  for (std::size_t t = 0; t < count; ++t) {
+    std::array<std::size_t, 3> triangle{};
+    for (std::size_t k = 0; k < 3; ++k) {
+      std::array<std::uint32_t, 3> bits{};
+      std::array<float, 3> xyz{};
+      for (std::size_t c = 0; c < 3; ++c) {
+        const char* at = data.data() + 84 + 50 * t + 12 * (k + 1) + 4 * c;
+        std::memcpy(&bits[c], at, 4);
+        std::memcpy(&xyz[c], at, 4);
+      }
+      const auto found = corners.emplace(bits, mesh.vertices.size());
+      if (found.second) {
+        mesh.vertices.push_back({xyz[0], xyz[1], xyz[2]});
+      }
+      triangle[k] = found.first->second;
+    }
+    mesh.triangles.push_back(triangle);
+  }
+  return mesh;
+}
+
+// Text between `open` and the next `close` from `at`, `at` moved past it;
+// empty at the end.
+std::string next_between(const std::string& text, const std::string& open, const std::string& close,
+                         std::size_t& at) {
+  const std::size_t begin = text.find(open, at);
+  if (begin == std::string::npos) {
+    at = text.size();
+    return {};
+  }
+  const std::size_t end = text.find(close, begin + open.size());
+  if (end == std::string::npos) {
+    at = text.size();
+    return {};
+  }
+  at = end + close.size();
+  return text.substr(begin + open.size(), end - begin - open.size());
+}
+
+double xml_number(const std::string& element, const std::string& name) {
+  const std::string marker = " " + name + "=\"";
+  const std::size_t at = element.find(marker);
+  return at == std::string::npos ? std::nan("") : std::strtod(element.c_str() + at + marker.size(), nullptr);
+}
+
+// The meshes of a 3MF package's model part (3D/3dmodel.model, deflated or
+// stored), one per mesh object.
+std::vector<ReadMesh> read_3mf_meshes(const fs::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  const std::string data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  const auto u16 = [&data](std::size_t at) {
+    return static_cast<std::size_t>(static_cast<unsigned char>(data[at])) |
+           (static_cast<std::size_t>(static_cast<unsigned char>(data[at + 1])) << 8);
+  };
+  const auto u32 = [&u16](std::size_t at) { return u16(at) | (u16(at + 2) << 16); };
+  std::vector<ReadMesh> meshes;
+  const std::size_t end = data.rfind(std::string("PK\x05\x06", 4));
+  if (end == std::string::npos || end + 22 > data.size()) {
+    return meshes;
+  }
+  std::string model;
+  std::size_t entry = u32(end + 16);
+  for (std::size_t i = 0; i < u16(end + 10) && entry + 46 <= data.size(); ++i) {
+    const std::size_t method = u16(entry + 10);
+    const std::size_t packed = u32(entry + 20);
+    const std::size_t size = u32(entry + 24);
+    const std::size_t name_length = u16(entry + 28);
+    const std::string name = data.substr(entry + 46, name_length);
+    const std::size_t local = u32(entry + 42);
+    entry += 46 + name_length + u16(entry + 30) + u16(entry + 32);
+    if (name != "3D/3dmodel.model" || local + 30 > data.size()) {
+      continue;
+    }
+    const std::size_t start = local + 30 + u16(local + 26) + u16(local + 28);
+    if (start + packed > data.size()) {
+      break;
+    }
+    if (method == 0) {
+      model = data.substr(start, packed);
+      break;
+    }
+    model.assign(size, '\0');
+    z_stream stream{};
+    if (inflateInit2(&stream, -MAX_WBITS) != Z_OK) {
+      break;
+    }
+    stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data() + start));
+    stream.avail_in = static_cast<uInt>(packed);
+    stream.next_out = reinterpret_cast<Bytef*>(&model[0]);
+    stream.avail_out = static_cast<uInt>(size);
+    const int status = inflate(&stream, Z_FINISH);
+    inflateEnd(&stream);
+    if (status != Z_STREAM_END) {
+      model.clear();
+    }
+    break;
+  }
+  std::size_t at = 0;
+  for (std::string mesh_text = next_between(model, "<mesh>", "</mesh>", at); !mesh_text.empty();
+       mesh_text = next_between(model, "<mesh>", "</mesh>", at)) {
+    ReadMesh mesh;
+    std::size_t in_mesh = 0;
+    for (std::string vertex = next_between(mesh_text, "<vertex ", "/>", in_mesh); !vertex.empty();
+         vertex = next_between(mesh_text, "<vertex ", "/>", in_mesh)) {
+      mesh.vertices.push_back({xml_number(" " + vertex, "x"), xml_number(" " + vertex, "y"),
+                               xml_number(" " + vertex, "z")});
+    }
+    in_mesh = 0;
+    for (std::string triangle = next_between(mesh_text, "<triangle ", "/>", in_mesh); !triangle.empty();
+         triangle = next_between(mesh_text, "<triangle ", "/>", in_mesh)) {
+      mesh.triangles.push_back({static_cast<std::size_t>(xml_number(" " + triangle, "v1")),
+                                static_cast<std::size_t>(xml_number(" " + triangle, "v2")),
+                                static_cast<std::size_t>(xml_number(" " + triangle, "v3"))});
+    }
+    meshes.push_back(std::move(mesh));
+  }
+  return meshes;
+}
+
+// Whether a mesh is closed: each edge used by two triangles, once in each
+// direction, and no triangle without an area (corners all apart and not in
+// a line).
+bool closed_mesh(const ReadMesh& mesh, const char* what) {
+  std::map<std::pair<std::size_t, std::size_t>, int> edges;
+  std::size_t flat = 0;
+  for (const auto& t : mesh.triangles) {
+    if (t[0] >= mesh.vertices.size() || t[1] >= mesh.vertices.size() || t[2] >= mesh.vertices.size()) {
+      std::fprintf(stderr, "%s: a corner out of range\n", what);
+      return false;
+    }
+    for (std::size_t k = 0; k < 3; ++k) {
+      ++edges[{t[k], t[(k + 1) % 3]}];
+    }
+    const auto& a = mesh.vertices[t[0]];
+    const auto& b = mesh.vertices[t[1]];
+    const auto& c = mesh.vertices[t[2]];
+    const double u[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+    const double v[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+    const double n[3] = {u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
+    if (!(n[0] * n[0] + n[1] * n[1] + n[2] * n[2] > 0.0)) {
+      ++flat;
+    }
+  }
+  std::size_t open = 0;
+  for (const auto& [edge, uses] : edges) {
+    const auto back = edges.find({edge.second, edge.first});
+    if (uses != 1 || back == edges.end() || back->second != 1) {
+      ++open;
+    }
+  }
+  std::fprintf(stderr, "%s: %zu triangles, %zu without area, %zu edges not shared by two\n", what,
+               mesh.triangles.size(), flat, open);
+  return !mesh.triangles.empty() && flat == 0 && open == 0;
+}
+
+double read_mesh_volume(const ReadMesh& mesh) {
+  double six = 0.0;
+  for (const auto& t : mesh.triangles) {
+    const auto& a = mesh.vertices[t[0]];
+    const auto& b = mesh.vertices[t[1]];
+    const auto& c = mesh.vertices[t[2]];
+    six += a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) +
+           a[2] * (b[0] * c[1] - b[1] * c[0]);
+  }
+  return six / 6.0;
+}
+
+// The helmet of mitcad#1567 (a user's report): a sphere of 6.9 mm moved to
+// (0, 0, 1.2) (Sphere1, Move1), with `turned` turned 37 degrees about
+// (1, 1, 0) through its centre first (mitcad#1568), cut flat at z = 0 by a
+// cylinder below (Cylinder1, Move, Combine), and joined with a revolved
+// cone of radius 3.2344 at z = 0 and a pin of radius 1.2 down to z = -4.
+// The sphere's cut circle has a radius of 3.234579: a plane ring 0.18 µm
+// wide is left between the two circles. Body1 (F1.b0), its print bed face
+// the pin's end.
+rust::Box<mitcad::Document> helmet(bool turned) {
+  auto document = mitcad::new_document();
+  run(*document, R"({"cmd": "add_feature", "def": {"type": "sphere", "plane": {"type": "origin", "plane": "xy"},
+                      "center": [0, 0], "diameter": 6.9, "operation": "new_body"}})");
+  run(*document, R"({"cmd": "add_feature", "def": {"type": "move", "bodies": ["F1.b0"], "copy": false,
+                      "transform": {"type": "translate_xyz", "x": 0, "y": 0, "z": 1.2}}})");
+  int next = 3;
+  if (turned) {
+    // 37 degrees about (1, 1, 0) / sqrt(2) through (0, 0, 1.2).
+    const double angle = 37.0 * kPi / 180.0;
+    const double c = std::cos(angle);
+    const double s = std::sin(angle);
+    const double k = 1.0 / std::sqrt(2.0);
+    const double r[3][3] = {{c + k * k * (1.0 - c), k * k * (1.0 - c), k * s},
+                            {k * k * (1.0 - c), c + k * k * (1.0 - c), -k * s},
+                            {-k * s, k * s, c}};
+    std::string matrix = "[";
+    for (int i = 0; i < 3; ++i) {
+      char row[160];
+      std::snprintf(row, sizeof(row), "%s[%.17g, %.17g, %.17g, %.17g]", i > 0 ? ", " : "", r[i][0], r[i][1],
+                    r[i][2], 1.2 * (i == 2 ? 1.0 : 0.0) - r[i][2] * 1.2);
+      matrix += row;
+    }
+    matrix += "]";
+    run(*document, R"({"cmd": "add_feature", "def": {"type": "move", "bodies": ["F1.b0"], "copy": false,
+                        "transform": {"type": "free", "matrix": )" + matrix + "}}}");
+    next = 4;
+  }
+  const std::string cylinder = "F" + std::to_string(next);
+  const std::string sketch = "F" + std::to_string(next + 3);
+  const std::string revolve = "F" + std::to_string(next + 4);
+  run(*document, R"({"cmd": "add_feature", "def": {"type": "cylinder", "plane": {"type": "origin", "plane": "xy"},
+                      "center": [0, 0], "diameter": 10, "height": 5, "operation": "new_body"}})");
+  run(*document, R"({"cmd": "add_feature", "def": {"type": "move", "bodies": [")" + cylinder +
+                     R"(.b0"], "copy": false, "transform": {"type": "translate_xyz", "x": 0, "y": 0, "z": -5}}})");
+  run(*document, R"({"cmd": "add_feature", "def": {"type": "combine", "target": "F1.b0", "tools": [")" + cylinder +
+                     R"(.b0"], "operation": "cut"}})");
+  // The sketch on XZ: its y runs along -Z.
+  run(*document, R"({"cmd": "sketch.create", "plane": "xz"})");
+  const double points[5][2] = {{0, 0}, {3.2344, 0}, {1.2, 2.0344}, {1.2, 4}, {0, 4}};
+  for (int i = 0; i < 5; ++i) {
+    char line[200];
+    std::snprintf(line, sizeof(line), R"({"cmd": "sketch.add_line", "sketch": "%s", "start": [%g, %g], "end": [%g, %g]})",
+                  sketch.c_str(), points[i][0], points[i][1], points[(i + 1) % 5][0], points[(i + 1) % 5][1]);
+    run(*document, line);
+  }
+  run(*document, R"({"cmd": "add_feature", "def": {"type": "revolve", "profiles": [{"sketch": ")" + sketch +
+                     R"(", "region": "r{c1[c13,c4],c4[c1,c7],c7[c4,c10],c10[c7,c13],c13[c10,c1]}"}],
+                      "axis": "z", "extent": {"type": "full"}, "operation": "new_body"}})");
+  run(*document, R"({"cmd": "add_feature", "def": {"type": "combine", "target": "F1.b0", "tools": [")" + revolve +
+                     R"(.b0"], "operation": "join"}})");
+  run(*document, R"({"cmd": "set_print_bed_face", "uid": "F1.b0", "face": ")" + revolve +
+                     R"x(:side(c10[c7,c13])"})x");
+  return document;
+}
+
+// The helmet on the print bed (mitcad#1567, mitcad#1568): its STL in the
+// design's place and with `on_bed` (turned onto the pin's end, centred on
+// the plate) are closed, with no triangle without an area, the same
+// triangles and the same volume, that of the body within the refinement's
+// deviation; the sphere turned too, whose ring could not be triangulated
+// (mitcad#1568). So is a 3MF of a print plate it is on.
+void test_mesh_on_bed(const fs::path& dir) {
+  for (const bool turned : {false, true}) {
+    auto document = helmet(turned);
+    const char* kind = turned ? "turned" : "plain";
+    const std::string revolve = turned ? "F8" : "F7";
+    const double exact = volume(*document, "F1.b0");
+    CHECK(near(exact, 171.58102641, 1e-8));
+    const std::string name = std::string("helmet-") + kind;
+    for (const char* refinement : {R"("medium")", R"({"deviation": 0.03, "angle": 0.052})"}) {
+      const fs::path in_place = dir / (name + ".stl");
+      const fs::path on_bed = dir / (name + "-bed.stl");
+      run(*document, R"({"cmd": "export", "path": )" + json_path(in_place) +
+                         R"(, "bodies": ["F1.b0"], "refinement": )" + refinement + "}");
+      const std::string bed = run(*document, R"({"cmd": "export", "path": )" + json_path(on_bed) +
+                                                 R"(, "bodies": ["F1.b0"], "on_bed": true, "refinement": )" +
+                                                 refinement + "}");
+      // Laid on the pin's end.
+      CHECK(contains(bed, R"x("face":")x" + revolve + R"x(:side(c10[c7,c13])")x"));
+      CHECK(contains(bed, R"("auto":false)"));
+      const ReadMesh placed = read_binary_stl(in_place);
+      const ReadMesh laid = read_binary_stl(on_bed);
+      CHECK(closed_mesh(placed, (name + " STL in place").c_str()));
+      CHECK(closed_mesh(laid, (name + " STL on the bed").c_str()));
+      CHECK(placed.triangles.size() == laid.triangles.size());
+      const double v1 = read_mesh_volume(placed);
+      const double v2 = read_mesh_volume(laid);
+      std::fprintf(stderr, "%s %s: volume %.5f in place, %.5f on the bed, %.5f modelled\n", name.c_str(), refinement,
+                   v1, v2, exact);
+      CHECK(near(v1, v2, 1e-5));
+      // Medium: 0.03 mm times the area (160 mm2).
+      CHECK(std::abs(v1 - exact) <= 0.03 * 160.3);
+    }
+    // A print plate's 3MF (on the bed by its rules).
+    run(*document, R"({"cmd": "add_print_plate", "name": "Helmet"})");
+    run(*document, R"({"cmd": "place_on_plate", "plate": "Helmet", "items": [{"body": "F1.b0"}]})");
+    const fs::path plate = dir / (name + "-plate.3mf");
+    const std::string written = run(*document, R"({"cmd": "export", "path": )" + json_path(plate) +
+                                                   R"(, "plate": "Helmet"})");
+    CHECK(contains(written, R"("format":"3mf")"));
+    const std::vector<ReadMesh> meshes = read_3mf_meshes(plate);
+    CHECK(meshes.size() == 1);
+    for (const ReadMesh& mesh : meshes) {
+      CHECK(closed_mesh(mesh, (name + " 3MF plate").c_str()));
+      CHECK(std::abs(read_mesh_volume(mesh) - exact) <= 0.03 * 160.3);
+    }
+  }
+}
+
+// A face the kernel cannot triangulate is named in the export's error by
+// its topological name (mitcad#1568): here every cylinder's face fails.
+class FailingCylinders : public IMeshTools_MeshAlgoFactory {
+public:
+  occ::handle<IMeshTools_MeshAlgo> GetAlgo(const GeomAbs_SurfaceType type,
+                                           const IMeshTools_Parameters& parameters) const override {
+    if (type == GeomAbs_Cylinder) {
+      return occ::handle<IMeshTools_MeshAlgo>();
+    }
+    return BRepMesh_MeshAlgoFactory().GetAlgo(type, parameters);
+  }
+};
+
+void test_untriangulated_face_named(const fs::path& dir) {
+  auto document = mitcad::new_document();
+  run(*document, R"({"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [0, 0],
+                      "diameter": 20, "height": 30, "operation": "new_body"}})");
+  mitcad::io::use_face_algorithms_for_tests(new FailingCylinders());
+  for (const char* file : {"failing.stl", "failing.3mf", "failing.usdz"}) {
+    std::string message;
+    try {
+      document->command(R"({"cmd": "export", "path": )" + json_path(dir / file) + "}");
+    } catch (const rust::Error& error) {
+      message = error.what();
+    }
+    std::fprintf(stderr, "untriangulated face, %s: %s\n", file, message.c_str());
+    CHECK(contains(message, "Body1: a face could not be triangulated: F1:side0 (cylinder)"));
+  }
+  mitcad::io::use_face_algorithms_for_tests(occ::handle<IMeshTools_MeshAlgoFactory>());
+}
+
 // Sketch geometry to DXF.
 void test_sketch_export(const fs::path& dir) {
   auto document = block();
@@ -1037,6 +1386,8 @@ int main(int argc, char** argv) {
     test_sketch_export(dir);
     test_3mf_export(dir);
     test_usdz_export(dir);
+    test_mesh_on_bed(dir);
+    test_untriangulated_face_named(dir);
     test_ipt_import(dir);
     test_rvt_import(dir);
   } catch (const std::exception& e) {

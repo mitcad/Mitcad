@@ -5,6 +5,7 @@
 # check-all sources: app/commands/PatternCommands.cpp app/commands/PointPatternCommands.cpp
 # check-all sources: app/commands/GearCommands.cpp app/commands/PulleyCommands.cpp app/commands/BearingCommands.cpp
 # check-all sources: app/framework/ToolbarPins.cpp app/framework/ToolbarPins.hpp app/framework/ShortcutDialog.cpp
+# check-all sources: app/MainWindowNavigationBar.cpp app/view/NavigationBar.cpp
 # The sketch CREATE group in submenus (mitcad#222), through the real UI, in
 # the Docked and the Floating layout:
 #   - the CREATE menu: Lines, Point (an entry of its own, mitcad#1545),
@@ -369,8 +370,8 @@ pin_toolbar() {
   ui_mark
   ui_step "open the SOLID CREATE menu"     ui_click_logged "Ribbon SOLID/CREATE"
   row_menu "SOLID/CREATE" solid.sweep "Pin to Toolbar"
-  ui_expect_new "Toolbar menu SOLID/CREATE solid.sweep: Pin to Toolbar | Change Keyboard Shortcut…" \
-    "$layout: Sweep's row menu: Pin to Toolbar, Change Keyboard Shortcut…"
+  ui_expect_new "Toolbar menu SOLID/CREATE solid.sweep: Pin to Toolbar | Pin to Navigation Bar | Change Keyboard Shortcut…" \
+    "$layout: Sweep's row menu: Pin to Toolbar, Pin to Navigation Bar, Change Keyboard Shortcut…"
   ui_expect_new "Pinned to toolbar: Sweep (Solid)" "$layout: Sweep pinned"
   ui_expect_new "Ribbon group SOLID/CREATE pinned: solid.sweep" "$layout: Sweep in the CREATE group"
   ui_sync
@@ -428,7 +429,7 @@ pin_toolbar() {
   ui_sync
   ui_mark
   ui_step "right-click the pinned Sweep"   ui_click_logged "Ribbon pinned SOLID/CREATE/solid.sweep" 3
-  ui_expect_new "Toolbar menu SOLID/CREATE solid.sweep: Unpin from Toolbar | Change Keyboard Shortcut…" \
+  ui_expect_new "Toolbar menu SOLID/CREATE solid.sweep: Unpin from Toolbar | Pin to Navigation Bar | Change Keyboard Shortcut…" \
     "$layout: the pinned button's menu"
   ui_expect_new "Toolbar menu entry Unpin from Toolbar at" "its Unpin from Toolbar"
   ui_step "Unpin from Toolbar"             ui_click_logged "Toolbar menu entry Unpin from Toolbar"

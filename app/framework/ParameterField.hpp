@@ -78,6 +78,12 @@ struct ParameterFieldOptions {
   // value field too (a feature's value, mitcad#1536); the list's words name
   // a dimension where `sketch` is set, else the field.
   bool keepOwn = false;
+  // Remove Name (mitcad#1577): while the field's text starts with a
+  // `name =`, the browser and the right-click menu offer to take it off,
+  // leaving the value; the field's owner then gives the parameter its
+  // automatic name back as it takes the text (a sketch dimension whose
+  // parameter has a name given to it).
+  bool removeName = false;
   // The list offers Create User Parameter... (not where a dialog would end
   // the editing, as in a table's cell).
   bool create = true;
@@ -149,6 +155,10 @@ public:
   // field's tools run without the list).
   void refreshParameters();
   void startNaming();
+  // Remove Name (ParameterFieldOptions::removeName, mitcad#1577): the
+  // leading `name =` taken off the text, which goes in as typed; false
+  // when the text has none.
+  bool removeName();
   void close(const QString& why = QString());
 
   // Stepping a value (mitcad#1254, ValueStep.hpp), the rules every field

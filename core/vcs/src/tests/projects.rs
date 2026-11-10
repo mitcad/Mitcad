@@ -18,6 +18,8 @@ use crate::projects::{
     clone_project, create_project, fingerprint, host_keys, init_bare, inspect_folder,
     parse_keyscan, ssh_public_key, trust_host_key, trust_shown_host_keys,
 };
+// Remove Project (mitcad#1562).
+use crate::projects::{REMOVE_MESSAGE, RepositoryFate, remove_project};
 use crate::remote::{Control, ErrorClass, GitCli};
 
 /// GitHub's published Ed25519 host key (its documentation's known_hosts
@@ -1647,4 +1649,169 @@ fn the_web_viewer_is_turned_on_with_its_files() {
     if system_git().is_some() {
         clean(repo.root());
     }
+}
+
+/// Remove Project (mitcad#1562): New Project made the repository, so `.git`
+/// goes with the history; the designs stay byte for byte, and one that
+/// refers to the project's B-rep store is written as a single file with its
+/// data inside first.
+#[test]
+fn a_project_is_removed_and_its_designs_stay() {
+    let scratch = Scratch::new("remove");
+    let dir = scratch.join("Workshop");
+    fs::create_dir_all(dir.join("parts")).unwrap();
+    let single = design().to_json();
+    fs::write(dir.join("a.mitcad"), &single).unwrap();
+    fs::write(dir.join("parts/b.mitcad"), &single).unwrap();
+    fs::write(dir.join("notes.txt"), "notes").unwrap();
+    let options = CreateOptions {
+        design: None,
+        ..options(None)
+    };
+    let mut log = Vec::new();
+    create_project(&dir, &options, &Context::default(), None, &mut log).unwrap();
+    // Saved in the project: its base features' data is in the store.
+    let stored = dir.join("parts/stored.mitcad");
+    design().save_file(&stored, FileFormat::Auto).unwrap();
+    let stored_text = fs::read_to_string(&stored).unwrap();
+    assert!(
+        !mitcad_model::file::brep_references(&stored_text)
+            .unwrap()
+            .is_empty()
+    );
+    let config = fs::read_to_string(dir.join(".git/config")).unwrap();
+    assert!(config.contains("repository = created"), "{config}");
+
+    // What would happen: nothing changes yet.
+    let plan = remove_project(&dir, true, None).unwrap();
+    assert!(plan.dry_run);
+    assert_eq!(plan.repository, RepositoryFate::Removed);
+    assert_eq!(plan.versions, Some(1));
+    assert_eq!(
+        plan.removed,
+        [".git", ".mitcad", ".gitattributes", ".gitignore"]
+    );
+    assert!(plan.edited.is_empty());
+    assert_eq!(plan.rewritten, ["parts/stored.mitcad"]);
+    assert_eq!(plan.designs, 3);
+    assert_eq!(plan.remote, None);
+    assert!(dir.join(".git").is_dir() && dir.join(PROJECT_MARKER).is_file());
+    assert_eq!(fs::read_to_string(&stored).unwrap(), stored_text);
+    // The same through the command, as the application asks.
+    let answer = projects_run(
+        json!({"cmd": "remove_project", "dir": dir, "dry_run": true}),
+        &Context::default(),
+    );
+    assert_eq!(answer["error"], Value::Null, "{answer}");
+    assert_eq!(answer["repository"], "removed");
+    assert!(projects::describe("remove_project", &answer).contains("3 designs stay"));
+
+    let removed = remove_project(&dir, false, None).unwrap();
+    assert!(!removed.dry_run);
+    assert_eq!(removed.removed, plan.removed);
+    assert_eq!(removed.commit, None);
+    for name in [".git", ".mitcad", ".gitattributes", ".gitignore"] {
+        assert!(!dir.join(name).exists(), "{name} is still there");
+    }
+    assert_eq!(fs::read(dir.join("a.mitcad")).unwrap(), single.as_bytes());
+    assert_eq!(
+        fs::read(dir.join("parts/b.mitcad")).unwrap(),
+        single.as_bytes()
+    );
+    assert_eq!(fs::read_to_string(dir.join("notes.txt")).unwrap(), "notes");
+    // The rewritten design keeps its data without a project.
+    let text = fs::read_to_string(&stored).unwrap();
+    assert!(
+        mitcad_model::file::brep_references(&text)
+            .unwrap()
+            .is_empty()
+    );
+    let loaded = Document::load_design(&stored, MockKernel::default()).unwrap();
+    assert!(
+        loaded
+            .load_warnings()
+            .iter()
+            .all(|warning| !warning.contains("B-rep")),
+        "{:?}",
+        loaded.load_warnings()
+    );
+    assert_eq!(inspect_folder(&dir).unwrap().kind, FolderKind::Designs);
+    // A folder that is no project any more.
+    let again = remove_project(&dir, false, None);
+    assert_eq!(class_of(again), ErrorClass::NotAProject);
+    // A subfolder can be a project now.
+    create_project(
+        &dir.join("parts"),
+        &options,
+        &Context::default(),
+        None,
+        &mut log,
+    )
+    .unwrap();
+}
+
+/// Remove Project in a folder that was a git repository before the
+/// project: `.git` and its history stay, and a version takes the project's
+/// files and MitCad's lines out. A project made before the repository's
+/// mark is told by its history.
+#[test]
+fn a_removed_project_leaves_the_users_repository() {
+    if !has_git() {
+        return;
+    }
+    let scratch = Scratch::new("remove-kept");
+    let own = scratch.join("own");
+    fs::create_dir_all(&own).unwrap();
+    git(&own, &["init", "-q"]).unwrap();
+    fs::write(own.join("readme.txt"), "mine").unwrap();
+    fs::write(own.join(".gitignore"), "build/\n").unwrap();
+    git(&own, &["add", "-A"]).unwrap();
+    git(&own, &["commit", "-q", "-m", "My files"]).unwrap();
+    let single = design().to_json();
+    fs::write(own.join("c.mitcad"), &single).unwrap();
+    let options = CreateOptions {
+        design: None,
+        ..options(None)
+    };
+    let mut log = Vec::new();
+    create_project(&own, &options, &Context::default(), None, &mut log).unwrap();
+
+    let plan = remove_project(&own, true, None).unwrap();
+    assert_eq!(plan.repository, RepositoryFate::Kept);
+    assert_eq!(plan.versions, None);
+    assert_eq!(plan.removed, [".mitcad", ".gitattributes"]);
+    assert_eq!(plan.edited, [".gitignore"]);
+    let removed = remove_project(&own, false, Some(&author())).unwrap();
+    assert!(removed.commit.is_some(), "{removed:?}");
+    assert!(own.join(".git").is_dir());
+    assert!(!own.join(".mitcad").exists() && !own.join(".gitattributes").exists());
+    assert_eq!(
+        fs::read_to_string(own.join(".gitignore")).unwrap(),
+        "build/\n"
+    );
+    assert_eq!(fs::read(own.join("c.mitcad")).unwrap(), single.as_bytes());
+    assert_eq!(fs::read_to_string(own.join("readme.txt")).unwrap(), "mine");
+    assert_eq!(
+        log_of(&own),
+        [REMOVE_MESSAGE, "Create project own", "My files"]
+    );
+    clean(&own);
+
+    // A project made before the mark: its history began as a project.
+    let older = scratch.join("older");
+    create_project(&older, &options, &Context::default(), None, &mut log).unwrap();
+    git(&older, &["config", "--unset", "mitcad.repository"]).unwrap();
+    let plan = remove_project(&older, true, None).unwrap();
+    assert_eq!(plan.repository, RepositoryFate::Removed);
+    // ... and one in a repository with a history of its own.
+    let mine = scratch.join("mine");
+    fs::create_dir_all(&mine).unwrap();
+    git(&mine, &["init", "-q"]).unwrap();
+    fs::write(mine.join("readme.txt"), "mine").unwrap();
+    git(&mine, &["add", "-A"]).unwrap();
+    git(&mine, &["commit", "-q", "-m", "My files"]).unwrap();
+    create_project(&mine, &options, &Context::default(), None, &mut log).unwrap();
+    git(&mine, &["config", "--unset", "mitcad.repository"]).unwrap();
+    let plan = remove_project(&mine, true, None).unwrap();
+    assert_eq!(plan.repository, RepositoryFate::Kept);
 }

@@ -25,10 +25,32 @@ pub(crate) const SKILL: &str = include_str!("../guide/mitcad-modeling/SKILL.md")
 /// The topics by id, each `references/<id>.md`. A new topic needs a line
 /// here and one in the index of `SKILL.md`; a test checks both against
 /// the folder.
-pub(crate) const TOPICS: &[(&str, &str)] = &[(
-    "principles",
-    include_str!("../guide/mitcad-modeling/references/principles.md"),
-)];
+pub(crate) const TOPICS: &[(&str, &str)] = &[
+    (
+        "principles",
+        include_str!("../guide/mitcad-modeling/references/principles.md"),
+    ),
+    (
+        "choosing-features",
+        include_str!("../guide/mitcad-modeling/references/choosing-features.md"),
+    ),
+    (
+        "sketches",
+        include_str!("../guide/mitcad-modeling/references/sketches.md"),
+    ),
+    (
+        "references",
+        include_str!("../guide/mitcad-modeling/references/references.md"),
+    ),
+    (
+        "verification",
+        include_str!("../guide/mitcad-modeling/references/verification.md"),
+    ),
+    (
+        "3d-printing",
+        include_str!("../guide/mitcad-modeling/references/3d-printing.md"),
+    ),
+];
 
 /// A line of the index.
 pub(crate) struct Entry {

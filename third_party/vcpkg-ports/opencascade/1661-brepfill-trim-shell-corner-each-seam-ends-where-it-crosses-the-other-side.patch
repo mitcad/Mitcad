@@ -1,0 +1,268 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Pipe shells' mitred and rounded corners between pieces of a path that
+are not lines or circles (mitcad#1559).
+
+BRepFill_TrimShellCorner trims the two sides of a corner (each swept
+along its piece and extended past the corner) against each other. It
+ended each side's seam lines (the U-edges) at the vertex where the
+corresponding seams of the two sides cross. Swept along lines or circles
+(cylinders, tori) they cross exactly; swept along other curves (the
+B-spline sides of an intersection curve's pieces, a sketch spline's) they
+pass each other by 1e-4 to 0.2 mm, no vertex is found, the corner is left
+untrimmed and the shell is invalid. A seam now ends where it crosses the
+other side's faces (the new vertex the intersection put on it nearest to
+the bisector plane) when the two seams have no common vertex; each side's
+loop round the section then starts at its own seam's vertex, on the
+section edges the two sides share.
+
+Walking the section edges, CheckAndOrientEdges found which end of an
+edge's curve on the face lies at the seam by comparing points on the face
+within the resolution of the vertex's tolerance there. The curves of
+approximated section edges on swept faces end up to 1.2e-6 off in the
+face's parameters (4.7e-6 mm on a circle of 4 mm), beyond the resolution
+of their vertices' 1e-5 mm. The ends are now compared in 3D within twice
+the vertex's or the edge's tolerance, whichever is wider, and on the face
+only for which of the two points they are nearer (the two curves of a
+closed face's seam are one line in 3D).
+
+An 8 mm pipe along the intersection curve of a sine wave drawn as four
+lines on XZ and an arc on XY (elliptic arcs meeting at about 60 degrees
+where the lines turn) was built by the caller with the section carried
+unturned through the corners, leaning up to 58.8 degrees from square and
+holding 23.9 % less than the circle's area times the path's length; it is
+now mitred, square to the path within 0.00001 degrees, its volume within
+0.00001 %. Two B-spline pieces meeting at 1 degree likewise. Where the
+intersection of the two sides comes in pieces (sides of one radius touch
+at two points of the corner, and meet at a shallow angle along small
+corners), the loop still does not close.
+
+diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
+--- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
++++ b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
+@@ -85,9 +85,16 @@
+   const occ::handle<NCollection_HArray2<TopoDS_Shape>>& theUEdges,
+   const BOPDS_PDS&                                      theDS,
+   const gp_Vec&                                         theCrossDirection,
++  const gp_Ax2&                                         theAxeOfBisPlane,
+   NCollection_DataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>&
+     theHistMap);
+ 
++static bool FindHitNearBisector(const BOPDS_PDS& theDS,
++                                const int        theEIndex,
++                                const gp_Ax2&    theAxeOfBisPlane,
++                                TopoDS_Vertex&   theVertex,
++                                double&          theParam);
++
+ static void StoreVedgeInHistMap(
+   const occ::handle<NCollection_HArray1<TopoDS_Shape>>& theVEdges,
+   const int                                             theIndex,
+@@ -335,7 +342,7 @@
+   NCollection_DynamicArray<BOPDS_InterfFF>& aFFs   = theDS->InterfFF();
+   int                                       aNbFFs = aFFs.Length();
+ 
+-  if (!SplitUEdges(myUEdges, theDS, myIntPointCrossDir, myHistMap))
++  if (!SplitUEdges(myUEdges, theDS, myIntPointCrossDir, myAxeOfBisPlane, myHistMap))
+   {
+     return;
+   }
+@@ -1290,6 +1297,7 @@
+   const occ::handle<NCollection_HArray2<TopoDS_Shape>>& theUEdges,
+   const BOPDS_PDS&                                      theDS,
+   const gp_Vec&                                         theCrossDirection,
++  const gp_Ax2&                                         theAxeOfBisPlane,
+   NCollection_DataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>&
+     theHistMap)
+ {
+@@ -1352,6 +1360,17 @@
+       }
+     }
+ 
++    // The vertex where each U-edge ends: the common one, or (the sides swept
++    // along pieces of a path curved near the corner, whose U-edges do not
++    // cross each other) each U-edge's own crossing with the other side's
++    // faces nearest to the bisector plane.
++    TopoDS_Vertex aHit1 = aCommonVertex, aHit2 = aCommonVertex;
++    if (!bvertexfound)
++    {
++      bvertexfound = FindHitNearBisector(theDS, anEIndex1, theAxeOfBisPlane, aHit1, apar1)
++                     && FindHitNearBisector(theDS, anEIndex2, theAxeOfBisPlane, aHit2, apar2);
++    }
++
+     if (bvertexfound)
+     {
+       TopoDS_Vertex aV1, aV2;
+@@ -1362,8 +1381,8 @@
+       aNewE1.Orientation(TopAbs_FORWARD);
+       aV1.Orientation(TopAbs_FORWARD);
+       aBB.Add(aNewE1, aV1);
+-      aCommonVertex.Orientation(TopAbs_REVERSED);
+-      aBB.Add(aNewE1, aCommonVertex);
++      aHit1.Orientation(TopAbs_REVERSED);
++      aBB.Add(aNewE1, aHit1);
+       BRep_Tool::Range(TopoDS::Edge(aE1), f, l);
+       aBB.Range(aNewE1, f, apar1);
+ 
+@@ -1371,8 +1390,8 @@
+       TopoDS_Edge aNewE2 = TopoDS::Edge(aE2.EmptyCopied());
+       TopExp::Vertices(TopoDS::Edge(aE2), aV1, aV2);
+       aNewE2.Orientation(TopAbs_FORWARD);
+-      aCommonVertex.Orientation(TopAbs_FORWARD);
+-      aBB.Add(aNewE2, aCommonVertex);
++      aHit2.Orientation(TopAbs_FORWARD);
++      aBB.Add(aNewE2, aHit2);
+       aBB.Add(aNewE2, aV2);
+       BRep_Tool::Range(TopoDS::Edge(aE2), f, l);
+       aBB.Range(aNewE2, apar2, l);
+@@ -1388,6 +1407,49 @@
+   return true;
+ }
+ 
++//=======================================================================
++// function : FindHitNearBisector
++// purpose  : The vertex the intersection put on the edge (where it
++//            crosses the other side's faces) nearest to the bisector
++//            plane, and its parameter on the edge.
++//=======================================================================
++bool FindHitNearBisector(const BOPDS_PDS& theDS,
++                         const int        theEIndex,
++                         const gp_Ax2&    theAxeOfBisPlane,
++                         TopoDS_Vertex&   theVertex,
++                         double&          theParam)
++{
++  if (theEIndex < 0 || !theDS->HasPaveBlocks(theEIndex))
++  {
++    return false;
++  }
++  const gp_Pln aBisPlane(theAxeOfBisPlane.Location(), theAxeOfBisPlane.Direction());
++  double       aBest  = RealLast();
++  bool         bFound = false;
++  NCollection_List<occ::handle<BOPDS_PaveBlock>>::Iterator aItPB(theDS->PaveBlocks(theEIndex));
++  for (; aItPB.More(); aItPB.Next())
++  {
++    for (int i = 0; i < 2; ++i)
++    {
++      const BOPDS_Pave aPave = (i == 0) ? aItPB.Value()->Pave1() : aItPB.Value()->Pave2();
++      if (!theDS->IsNewShape(aPave.Index()))
++      {
++        continue;
++      }
++      const TopoDS_Vertex& aV = TopoDS::Vertex(theDS->Shape(aPave.Index()));
++      const double         aD = aBisPlane.Distance(BRep_Tool::Pnt(aV));
++      if (aD < aBest)
++      {
++        aBest     = aD;
++        theVertex = aV;
++        theParam  = aPave.Parameter();
++        bFound    = true;
++      }
++    }
++  }
++  return bFound;
++}
++
+ //=================================================================================================
+ 
+ void StoreVedgeInHistMap(
+@@ -1724,20 +1786,29 @@
+   TopExp::Vertices(aEPrev, Vf, Vl);
+   BRepAdaptor_Surface aBAS(theFace, false);
+ 
++  // An end of an edge's curve on the face is at the point theP (rather
++  // than at theQ) where it lies within the tolerance of theP in 3D and
++  // nearer to theP than to theQ on the face (the two curves of a closed
++  // face's seam are one line in 3D). The tolerance is that of the edge's
++  // vertex and of the edge itself: the curve of an approximated section
++  // edge on a swept face can end further from its vertex than the
++  // vertex's own tolerance, and further on the face than the tolerance's
++  // resolution there.
++  const auto isAt =
++    [&aBAS](const gp_Pnt2d& theEnd, const gp_Pnt2d& theP, const gp_Pnt2d& theQ, const double theTol) {
++      return aBAS.Value(theEnd.X(), theEnd.Y()).Distance(aBAS.Value(theP.X(), theP.Y())) <= theTol
++             && theEnd.Distance(theP) <= theEnd.Distance(theQ);
++    };
+   double aTolerance1 = (Vf.IsNull()) ? Precision::Confusion() : BRep_Tool::Tolerance(Vf);
+   double aTolerance2 = (Vl.IsNull()) ? Precision::Confusion() : BRep_Tool::Tolerance(Vl);
+-  double utol        = aBAS.UResolution(aTolerance1);
+-  double vtol        = aBAS.VResolution(aTolerance1);
+-  aTolerance1        = (utol > vtol) ? utol : vtol;
+-  utol               = aBAS.UResolution(aTolerance2);
+-  vtol               = aBAS.VResolution(aTolerance2);
+-  aTolerance2        = (utol > vtol) ? utol : vtol;
++  aTolerance1        = 2. * std::max(aTolerance1, BRep_Tool::Tolerance(aEPrev));
++  aTolerance2        = 2. * std::max(aTolerance2, BRep_Tool::Tolerance(aEPrev));
+ 
+   gp_Pnt2d ap          = aCurve->Value(f);
+   bool     bFirstFound = false;
+   bool     bLastFound  = false;
+ 
+-  if (ap.Distance(theFirstPoint) < aTolerance1)
++  if (isAt(ap, theFirstPoint, theLastPoint, aTolerance1))
+   {
+     if (theOrientedList.IsEmpty())
+     {
+@@ -1745,7 +1816,7 @@
+     }
+     bFirstFound = true;
+   }
+-  else if (ap.Distance(theLastPoint) < aTolerance1)
++  else if (isAt(ap, theLastPoint, theFirstPoint, aTolerance1))
+   {
+     if (theOrientedList.IsEmpty())
+     {
+@@ -1755,7 +1826,7 @@
+   }
+   ap = aCurve->Value(l);
+ 
+-  if (ap.Distance(theLastPoint) < aTolerance2)
++  if (isAt(ap, theLastPoint, theFirstPoint, aTolerance2))
+   {
+     if (theOrientedList.IsEmpty())
+     {
+@@ -1763,7 +1834,7 @@
+     }
+     bLastFound = true;
+   }
+-  else if (ap.Distance(theFirstPoint) < aTolerance2)
++  else if (isAt(ap, theFirstPoint, theLastPoint, aTolerance2))
+   {
+     if (theOrientedList.IsEmpty())
+     {
+@@ -1792,30 +1863,26 @@
+ 
+     aTolerance1 = (aV21.IsNull()) ? Precision::Confusion() : BRep_Tool::Tolerance(aV21);
+     aTolerance2 = (aV22.IsNull()) ? Precision::Confusion() : BRep_Tool::Tolerance(aV22);
+-    utol        = aBAS.UResolution(aTolerance1);
+-    vtol        = aBAS.VResolution(aTolerance1);
+-    aTolerance1 = (utol > vtol) ? utol : vtol;
+-    utol        = aBAS.UResolution(aTolerance2);
+-    vtol        = aBAS.VResolution(aTolerance2);
+-    aTolerance2 = (utol > vtol) ? utol : vtol;
++    aTolerance1 = 2. * std::max(aTolerance1, BRep_Tool::Tolerance(aE));
++    aTolerance2 = 2. * std::max(aTolerance2, BRep_Tool::Tolerance(aE));
+     aCurve      = BRep_Tool::CurveOnSurface(aE, theFace, f, l);
+     ap          = aCurve->Value(f);
+ 
+-    if (ap.Distance(theFirstPoint) < aTolerance1)
++    if (isAt(ap, theFirstPoint, theLastPoint, aTolerance1))
+     {
+       bFirstFound = true;
+     }
+-    else if (ap.Distance(theLastPoint) < aTolerance1)
++    else if (isAt(ap, theLastPoint, theFirstPoint, aTolerance1))
+     {
+       bLastFound = true;
+     }
+     ap = aCurve->Value(l);
+ 
+-    if (ap.Distance(theFirstPoint) < aTolerance2)
++    if (isAt(ap, theFirstPoint, theLastPoint, aTolerance2))
+     {
+       bFirstFound = true;
+     }
+-    else if (ap.Distance(theLastPoint) < aTolerance2)
++    else if (isAt(ap, theLastPoint, theFirstPoint, aTolerance2))
+     {
+       bLastFound = true;
+     }

@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: MIT
+# A constraint symbol keeps clear of the curves (mitcad#1594), on
+# sketch-glyph-clear.json's Sketch1: the construction centre line c3 and
+# the line c6 2 mm above it (mid (17.68, 2)), Parallel k12 between them.
+# Its second symbol, beside c3's middle, covered c6's middle after a fit
+# and took its clicks; the glyph log named only the first symbol.
+#   1. Both of k12's symbols are logged, each with its place and its line.
+#   2. A click on c6's middle selects the line, not the Parallel.
+#   3. A click on the symbol beside c3 selects the Parallel.
+# The clicks stay within the free part of the view after the fit, also in
+# session 0's 1024x768 window on Windows. Run by
+# tools/ui-sketch-glyph-clear-test.sh (Linux) and
+# tools/ui-windows-sketch-glyph-clear-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+expect-ever '^Timeline Sketch1 at '
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)' 30
+key F6
+wait-idle
+
+# 1. Both symbols logged.
+wait-log '^Constraint k12 glyph at [0-9]+,[0-9]+ \(parallel by c6\)$' 10
+wait-log '^Constraint k12 glyph at [0-9]+,[0-9]+ \(parallel by c3\)$' 10
+screenshot '${MITCAD_TEST_WORK}/sketch-glyph-clear.png'
+
+# 2. The upper line's middle selects the line.
+mark
+sketch-click 17.68 2
+expect-selection 1 0
+wait-log '^Selected: 1 [a-z ]+ \[[a-z ]+ c6 of F1\]$' 10
+expect-no-log '^Selected: .*k12 of F1'
+
+# 3. The symbol beside the centre line selects the Parallel.
+mark
+click-logged '^Constraint k12 glyph at [0-9]+,[0-9]+ \(parallel by c3\)$'
+expect-selection 1 0
+wait-log '^Selected: 1 [a-z ]+ \[[a-z ]+ k12 of F1\]$' 10
+wait-idle

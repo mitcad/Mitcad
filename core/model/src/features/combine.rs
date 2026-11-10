@@ -286,16 +286,50 @@ impl<K: Kernel> Evaluate<K> for CombineDef {
         let target_material = has_solids(kernel, std::iter::once(&target));
         let material = target_material || has_solids(kernel, tools.iter());
         let count = tools.len() + 1;
+        let mut sheets = BTreeMap::new();
         match self.operation {
             CombineOperation::Join => {
                 let mut all = vec![&target];
                 all.extend(tools.iter());
                 // (Within the document's join tolerance, mitcad#397.)
-                let joined = ctx.unite(&all).map_err(error)?;
+                let mut joined = ctx.unite(&all).map_err(error)?;
                 if material {
                     require_solid(kernel, &joined, || {
                         format!("the join of {count} bodies gave an empty result")
                     })?;
+                }
+                // Sheet metal bodies of this component joined as one sheet
+                // where they meet as a sheet and its mirror image or copy
+                // (mitcad#1558); otherwise the sheet-domain adapter takes
+                // the join, as before.
+                if !self.has_links() {
+                    let sheet_tools: Vec<(BodyUid, &K::Shape)> = self
+                        .tools
+                        .iter()
+                        .map(|t| t.body)
+                        .zip(tools.iter())
+                        .collect();
+                    match crate::sheet::body_copy::combined(
+                        ctx,
+                        (self.target, &target),
+                        &sheet_tools,
+                        &joined,
+                    ) {
+                        Some(Ok((state, rebuilt))) => {
+                            sheets.insert(self.target, crate::sheet::SheetChange::Set(state));
+                            joined = rebuilt;
+                        }
+                        Some(Err(why)) => {
+                            let change = crate::sheet::body_copy::not_combined(
+                                ctx,
+                                self.target,
+                                &joined,
+                                &why,
+                            );
+                            sheets.insert(self.target, change);
+                        }
+                        None => {}
+                    }
                 }
                 changes.push(BodyChange::Set(self.target, joined));
             }
@@ -382,6 +416,7 @@ impl<K: Kernel> Evaluate<K> for CombineDef {
         }
         Ok(FeatureOutput {
             changes,
+            sheets,
             ..FeatureOutput::default()
         })
     }

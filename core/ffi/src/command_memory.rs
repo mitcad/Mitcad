@@ -86,8 +86,18 @@ impl Document {
     /// application's), else with one of the command's own. A command the
     /// guard stopped fails with the guard's reason and changes nothing.
     pub(crate) fn guarded_command(&mut self, json: &str) -> Result<String, ApiError> {
+        self.guarded_model_action(|doc| doc.command(json))
+    }
+
+    /// Runs a caller-controlled model action under the same command guard.
+    pub(crate) fn guarded_model_action<T>(
+        &mut self,
+        action: impl FnOnce(
+            &mut mitcad_model::Document<crate::kernel::OcctKernel>,
+        ) -> Result<T, ApiError>,
+    ) -> Result<T, ApiError> {
         if !GUARDED.load(Ordering::Relaxed) {
-            return self.0.command(json);
+            return action(&mut self.0);
         }
         let attached = self.0.monitor().cloned();
         let monitor = match &attached {
@@ -99,7 +109,7 @@ impl Document {
             }
         };
         let limit = LIMIT.load(Ordering::Relaxed);
-        let result = memory_guard::guarded(&monitor, measurer(limit), || self.0.command(json));
+        let result = memory_guard::guarded(&monitor, measurer(limit), || action(&mut self.0));
         if attached.is_none() {
             self.0.set_monitor(None);
         }

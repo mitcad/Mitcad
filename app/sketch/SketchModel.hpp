@@ -315,6 +315,19 @@ std::optional<double> axisScreenDistance(const QPointF& screen, const QPointF& o
 // text's sketch curve pick, as a click on its outline gives it; any other
 // item stays as it is.
 SelectionItem textSelectionItem(const SketchModel& model, const SelectionItem& item);
+// A place picked with the sketch's snaps where no point of the sketch is
+// (InputDef::sketchSnaps, mitcad#1563: a line's middle, a quadrant, a
+// crossing, the grid): its pick id, "@x,y" in sketch millimetres, and the
+// place back from such an id (none for any other).
+QString placePick(const V2& at);
+std::optional<V2> pickedPlace(const QString& id);
+// Where a pick of `model` is: a point's place, or a placePick's; none for
+// anything else.
+std::optional<V2> pickPlace(const SketchModel& model, const QString& id);
+// The middle of points and curves of `model` (mitcad#1563): the center of
+// the box round their points, a circle's whole round included, as the
+// model's Rotate turns about without a pivot; none without any.
+std::optional<V2> middleOf(const SketchModel& model, const QStringList& entities);
 
 // The sketch point of a 3D frame point and back.
 V2 toSketch(const geometry::Frame& frame, const gp_Pnt& point);

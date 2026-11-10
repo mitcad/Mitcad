@@ -1,0 +1,6 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The design tools/ui-scripts/move-handles.mitcad-ui saved after MoveTurned's edit was left with OK and nothing changed (mitcad#1583): the feature keeps its own matrix, not one made of the rounded values the panel shows (0.0001 mm, 0.000001 deg)."},
+  {"expect":{"query":{"query":"feature","uid":"F9"},"result":{"name":"MoveTurned","def":{"transform":{"type":"free",
+    "matrix":[[0.8660254037844387,-0.5,0,100],[0.5,0.8660254037844387,0,8650],[0,0,1,0]]}}},"tolerance":1e-12}}
+]

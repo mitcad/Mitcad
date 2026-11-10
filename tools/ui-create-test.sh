@@ -3,6 +3,7 @@
 # check-all sources: app/commands app/sketch app/framework/HybridAssembly.cpp
 # check-all sources: app/framework/CommandPanel.cpp
 # check-all sources: core/model/src/features/thread.rs
+# check-all sources: core/model/src/features/hole.rs geometry/src/hole.cpp
 # The CREATE group (U4) through the real UI, with the volumes the model
 # reports (analytic, or tools/cli/tests/f1_*.json):
 #   - Extrude: a thin extrusion (walls centred on the profile), edited to
@@ -18,7 +19,11 @@
 #     back, and when the hole opens again; a typed Countersink Diameter is
 #     marked and its Reset to size makes it follow the size, mitcad#980),
 #     then to
-#     a tapered counterdrill; a counterdrilled, tapered hole at a sketch's
+#     a tapered counterdrill, then to a hex press fit for a 5 mm pin at
+#     the printed fit press_fit_interference (mitcad#1517: the flats 4.9 mm
+#     apart, the parameter created with the hole, Hole Type, Drill Point
+#     and Taper hidden, and it opens again as a hex press fit); a
+#     counterdrilled, tapered hole at a sketch's
 #     circle
 #     (as the FreeCAD import makes them) opens for editing with its values
 #     and keeps its counterdrill when its taper changes.
@@ -411,6 +416,39 @@ ui_expect_new "Edited F3" "Hole1 edited to counterdrills"
 ui_expect_new "Body Body1 (F2.b0): volume" "the block measured"
 ui_expect_volume "Body Body1 (F2.b0): volume [0-9.]* -> \([0-9.]*\) mm3" \
   "$(awk -v one="$(hole_volume 2 90)" 'BEGIN { printf "%.6f", 48000 - one }')" "a tapered counterdrill"
+
+echo "--- Edited to a hex press fit for a 5 mm pin (mitcad#1517)"
+ui_mark
+ui_step "double-click Hole1"               ui_double_click_logged "Timeline Hole1"
+ui_expect_new "Editing F3 with Hole" "editing Hole1 again"
+ui_step "Press Fit"                        ui_choose_text "Panel Hole input tap" "Press"
+ui_expect_new "Hole: Hole Tap Type = Press Fit" "Press Fit chosen"
+for input in press_shape interference press_angle; do
+  grep "Panel Hole input $input at" "$UI_LOG" | tail -1 | grep -q "(hidden)" && ui_fail "$input hidden"
+done
+for input in type drill taper cd_diameter; do
+  grep "Panel Hole input $input at" "$UI_LOG" | tail -1 | grep -q "(hidden)" || ui_fail "$input still shown"
+done
+# Press Fit offers the printed fit in Interference (typed, the name would
+# open the field's suggestions, whose Enter creates a parameter).
+ui_expect_new "Hole interference: the printed fit press_fit_interference" "the printed fit offered"
+ui_expect_new "Hole Interference: press_fit_interference = 0.1 mm" "the interference is the printed-fit parameter"
+ui_step "diameter 5"                       ui_type_in "Panel Hole input diameter" "5"
+ui_expect_new "Preview Hole: ok" "previewed"
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Edited F3" "Hole1 edited to a hex press fit"
+ui_expect_new "Created user parameter press_fit_interference = 0.1 mm" "press_fit_interference created with the hole" 30
+# The block less a hex whose flats are 4.9 mm apart, through its 20 mm
+# (press_fit_holes.json).
+ui_expect_volume "Body Body1 (F2.b0): volume [0-9.]* -> \([0-9.]*\) mm3" \
+  "$(awk 'BEGIN { printf "%.6f", 48000 - sqrt(3) / 2 * 4.9 * 4.9 * 20 }')" "a hex press fit"
+ui_mark
+ui_step "double-click Hole1"               ui_double_click_logged "Timeline Hole1"
+ui_expect_new "Editing F3 with Hole" "the press fit opens for editing"
+ui_expect_new "tap=press_fit" "as a press fit"
+ui_expect_new "press_shape=hex" "a hex"
+ui_step "Cancel (Escape)"                  ui_key Escape
+ui_expect_new "Command Hole cancelled" "closed unchanged"
 ui_stop_app
 
 echo "=== An imported counterdrilled, tapered hole"

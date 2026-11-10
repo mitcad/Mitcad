@@ -87,10 +87,10 @@ ui_expect_new "Materials properties: Shop steel: Young's modulus 30000000 psi | 
 echo "--- 2. Browse Material Dataset...: Aluminum 6061, T6 into This design"
 ui_mark
 ui_step "New"                              ui_click_logged "Materials new"
-ui_expect_new "Materials new menu: Metal | General Plastic | FDM Plastic | Resin | Other | Browse Material Dataset" \
+ui_expect_new "Materials new menu: Metal | General Plastic | FDM Plastic | Resin | Wood | Other | Browse Material Dataset" \
   "New ends with Browse Material Dataset..."
-ui_step "Browse Material Dataset..."       ui_key Down Down Down Down Down Down Return
-ui_expect_new "Material dataset opened: 119 materials" "the dataset opened, offline"
+ui_step "Browse Material Dataset..."       ui_key Down Down Down Down Down Down Down Return
+ui_expect_new "Material dataset opened: 136 materials" "the dataset opened, offline"
 ui_focus_dialog '^Material Dataset$'
 ui_mark
 xdotool type --delay 40 "6061 t6"

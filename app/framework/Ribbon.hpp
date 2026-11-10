@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -110,6 +111,12 @@ public:
   void pin(const QString& tab, const QString& id);
   void unpin(const QString& tab, const QString& id);
   void movePin(const QString& tab, const QString& id, int index);
+  // The navigation bar's pins (mitcad#1589): with it set, a command row's
+  // menu (and a pinned button's) has Pin to Navigation Bar after Pin to
+  // Toolbar, Unpin from Navigation Bar when `pinned` says the command is
+  // pinned there; choosing it emits navigationBarPinRequested. Unset (no
+  // navigation bar), the menu has no such entry.
+  void setNavigationBarPins(std::function<bool(const QString& id)> pinned);
 
   Presentation presentation() const { return m_presentation; }
   // The workspace tabs. In the Mac presentation the bar is not part of the
@@ -147,6 +154,9 @@ signals:
   void shortcutRequested(const QString& id);
   // A tab's pinned commands changed (pinned, unpinned or reordered).
   void pinsChanged(const QString& tab);
+  // Pin to Navigation Bar (`pin`) or Unpin from Navigation Bar of a
+  // command row's menu (mitcad#1589), once the menus have closed.
+  void navigationBarPinRequested(const QString& id, bool pin);
   // Another tab is shown: its internal name ("MAKE", mitcad#1049).
   void tabChanged(const QString& tab);
 
@@ -268,6 +278,7 @@ private:
   QHash<QWidget*, QWidget*> m_classicPages;
   bool m_groupCards = false; // setGroupCards
   ToolbarPins m_pins;         // mitcad#1001
+  std::function<bool(const QString&)> m_navigationBarPinned; // mitcad#1589
   QHash<QString, QWidget*> m_pageOfTab;        // the row of groups, by tab
   QPointer<QToolButton> m_pinDrag;             // the pinned button pressed
   QPoint m_pinDragStart;                       // where (global)

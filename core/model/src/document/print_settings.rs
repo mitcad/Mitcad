@@ -28,7 +28,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::library_items::profile_title;
-use super::{DocState, Document, ModelError, invalid};
+use super::{DocState, Document, InstanceView, ModelError, invalid};
 use crate::ids::{BodyUid, ComponentUid, OccurrenceUid};
 use crate::kernel::Kernel;
 use crate::material::{DEFAULT_MATERIAL, Material, VariantMatch};
@@ -1167,7 +1167,41 @@ impl<K: Kernel> Document<K> {
     /// (their box beyond the bed's outline or its height, below the bed, or
     /// over an excluded area).
     pub fn build_volume_json(&self) -> Value {
-        let effective = self.effective_print(&PrintTarget::Component(ComponentUid::ROOT));
+        self.build_volume_in_json(
+            &PrintTarget::Component(ComponentUid::ROOT),
+            self.instances()
+                .into_iter()
+                .filter(|instance| instance.visible)
+                .collect(),
+        )
+    }
+
+    /// The same build-volume check for one body's placement and effective
+    /// printer. A review's print queries use the first shown occurrence,
+    /// whose printer and plate may differ from the root's.
+    pub fn body_build_volume_json(&self, body: BodyUid, path: &[OccurrenceUid]) -> Value {
+        let instance = self
+            .instances()
+            .into_iter()
+            .find(|instance| instance.body == body && instance.path.as_slice() == path)
+            .unwrap_or_else(|| InstanceView {
+                path: path.to_vec(),
+                path_name: self.assembly().path_name(path),
+                component: self.body_component(body).unwrap_or(ComponentUid::ROOT),
+                body,
+                name: self.body_name(body),
+                transform: self.path_transform(path),
+                visible: true,
+                transparent: false,
+            });
+        self.build_volume_in_json(
+            &PrintTarget::Body(body, Some(path.to_vec())),
+            vec![instance],
+        )
+    }
+
+    fn build_volume_in_json(&self, target: &PrintTarget, instances: Vec<InstanceView>) -> Value {
+        let effective = self.effective_print(target);
         let printer = effective
             .printer
             .as_ref()
@@ -1195,7 +1229,7 @@ impl<K: Kernel> Document<K> {
         };
         let tolerance = 1e-6;
         let mut outside = Vec::new();
-        for instance in self.instances().iter().filter(|i| i.visible) {
+        for instance in &instances {
             let Some(shape) = self.body_shape(instance.body) else {
                 continue;
             };

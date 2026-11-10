@@ -20,8 +20,10 @@
 
 use mitcad_freecad::sketch::{self as fc, Curve, PointPos};
 use mitcad_freecad::{LinkRef, Object, SubName};
+use mitcad_model::datum::SurfaceGeometry;
 use mitcad_model::{
-    BodyUid, ComponentUid, Curve3, EdgeName, ElementKind, Kernel, SketchFrame, TopoName, Transform,
+    BodyUid, ComponentUid, Curve3, EdgeName, ElementKind, FaceName, Kernel, SketchFrame, TopoName,
+    Transform,
 };
 use serde_json::{Value, json};
 
@@ -270,6 +272,70 @@ impl<K: Kernel> Importer<'_, '_, K> {
             return Err(format!("{object}.{element} is {} pieces here", names.len()));
         }
         Ok((body, names.remove(0)))
+    }
+
+    /// A face of the bodies holding an object's result (all its solids)
+    /// that lies on the surface of FreeCAD's face (by its index in the
+    /// object's stored shape): the same plane, cylinder, cone, sphere or
+    /// torus. For what only the surface decides (a joint's frame,
+    /// mitcad#1560), where [`Self::element_name`] does not find the face
+    /// because its boundary differs (a face a hole or pocket cut, whose
+    /// cut edges MitCad's body has otherwise). The first such face.
+    pub(super) fn face_on_same_surface(
+        &mut self,
+        object: &str,
+        index: usize,
+    ) -> Result<(BodyUid, String), String> {
+        let element = format!("{object}.Face{}", index + 1);
+        let place = self
+            .place_of(object, true)
+            .ok_or_else(|| format!("{element}: its object is not placed"))?;
+        let stored = self
+            .stored_in(object, &place.transform)
+            .ok_or_else(|| format!("{element}: no stored shape"))?;
+        let mut bodies = self.bodies_of_object(object);
+        for p in self
+            .planned
+            .iter()
+            .filter(|p| p.key.doc == 0 && p.owner.as_deref() == Some(object))
+        {
+            for b in p.body.iter().chain(&p.more) {
+                if !bodies.contains(b) {
+                    bodies.push(*b);
+                }
+            }
+        }
+        let kernel = self.doc.kernel();
+        let face = kernel
+            .indexed_element(&stored, ElementKind::Face, index)
+            .ok()
+            .flatten()
+            .and_then(|e| e.name)
+            .and_then(|n| n.parse::<FaceName>().ok())
+            .ok_or_else(|| format!("{element}: not in its stored shape"))?;
+        let wanted = kernel
+            .face_geometry(&stored, &face)
+            .map_err(|e| format!("{element}: {e}"))?;
+        if matches!(wanted, SurfaceGeometry::Other { .. }) {
+            return Err(format!(
+                "{element} is no plane, cylinder, cone, sphere or torus"
+            ));
+        }
+        for body in bodies {
+            let Some(now) = self.doc.body_shape(body) else {
+                continue;
+            };
+            if let Some(name) = surfaces_of(kernel, now)
+                .into_iter()
+                .find(|(_, s)| same_surface(s, &wanted))
+                .map(|(name, _)| name)
+            {
+                return Ok((body, name));
+            }
+        }
+        Err(format!(
+            "no face of its body lies on the surface of {element}"
+        ))
     }
 
     /// An object's placement in a component's coordinates (None when it
@@ -796,6 +862,127 @@ fn same_whole_conic(x: &Curve3, y: &Curve3) -> Option<bool> {
             && parallel(n1, n2)
             && ((a1 - b1).abs() <= tol || parallel(x1, x2)),
     )
+}
+
+/// Each face of a shape (its first name) with its surface: in one pass
+/// where the kernel lists them, else face by face.
+fn surfaces_of<K: Kernel>(kernel: &K, shape: &K::Shape) -> Vec<(String, SurfaceGeometry)> {
+    if let Ok(all) = kernel.face_geometries(shape) {
+        return all
+            .into_iter()
+            .filter_map(|(names, s)| Some((names.into_iter().next()?, s)))
+            .collect();
+    }
+    kernel
+        .faces(shape)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|f| {
+            let name = f.names.into_iter().next()?;
+            let face = name.parse::<FaceName>().ok()?;
+            let surface = kernel.face_geometry(shape, &face).ok()?;
+            Some((name, surface))
+        })
+        .collect()
+}
+
+/// Whether two faces' surfaces are the same plane, cylinder, cone, sphere
+/// or torus (axes and normals either way along), to [`SAME_GEOMETRY`]
+/// relative to their size.
+pub(super) fn same_surface(a: &SurfaceGeometry, b: &SurfaceGeometry) -> bool {
+    use SurfaceGeometry as S;
+    let close = |x: f64, y: f64| (x - y).abs() <= SAME_GEOMETRY * (1.0 + x.abs().max(y.abs()));
+    let near =
+        |p: [f64; 3], q: [f64; 3]| norm(sub(p, q)) <= SAME_GEOMETRY * (1.0 + norm(p).max(norm(q)));
+    let parallel = |u: [f64; 3], v: [f64; 3]| match (unit(u), unit(v)) {
+        (Some(u), Some(v)) => norm(cross(u, v)) <= SAME_GEOMETRY,
+        _ => false,
+    };
+    // `q` on the line through `p` along `axis`.
+    let on_line = |p: [f64; 3], axis: [f64; 3], q: [f64; 3]| {
+        unit(axis).is_some_and(|a| {
+            norm(cross(sub(q, p), a)) <= SAME_GEOMETRY * (1.0 + norm(p).max(norm(q)))
+        })
+    };
+    match (a, b) {
+        (
+            S::Plane {
+                origin: o1,
+                normal: n1,
+            },
+            S::Plane {
+                origin: o2,
+                normal: n2,
+            },
+        ) => {
+            parallel(*n1, *n2)
+                && unit(*n1).is_some_and(|n| {
+                    dot(sub(*o2, *o1), n).abs() <= SAME_GEOMETRY * (1.0 + norm(*o1).max(norm(*o2)))
+                })
+        }
+        (
+            S::Cylinder {
+                origin: o1,
+                axis: a1,
+                radius: r1,
+            },
+            S::Cylinder {
+                origin: o2,
+                axis: a2,
+                radius: r2,
+            },
+        ) => parallel(*a1, *a2) && close(*r1, *r2) && on_line(*o1, *a1, *o2),
+        (
+            S::Cone {
+                origin: o1,
+                axis: a1,
+                radius: r1,
+                half_angle: h1,
+            },
+            S::Cone {
+                origin: o2,
+                axis: a2,
+                radius: r2,
+                half_angle: h2,
+            },
+        ) => {
+            // The same axis, opening the same way, the same radius where
+            // the second's is given.
+            let (Some(u1), Some(u2)) = (unit(*a1), unit(*a2)) else {
+                return false;
+            };
+            dot(u1, u2) > 0.0
+                && parallel(u1, u2)
+                && close(*h1, *h2)
+                && on_line(*o1, u1, *o2)
+                && close(r1 + h1.tan() * dot(sub(*o2, *o1), u1), *r2)
+        }
+        (
+            S::Sphere {
+                center: c1,
+                radius: r1,
+            },
+            S::Sphere {
+                center: c2,
+                radius: r2,
+            },
+        ) => near(*c1, *c2) && close(*r1, *r2),
+        (
+            S::Torus {
+                center: c1,
+                axis: a1,
+                major_radius: r1,
+                minor_radius: m1,
+            },
+            S::Torus {
+                center: c2,
+                axis: a2,
+                major_radius: r2,
+                minor_radius: m2,
+            },
+        ) => near(*c1, *c2) && parallel(*a1, *a2) && close(*r1, *r2) && close(*m1, *m2),
+        _ => false,
+    }
 }
 
 /// Whether two lists of curves are the same geometry (in any order, either

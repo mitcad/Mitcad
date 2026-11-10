@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/agent app/mcp/ChatGate.hpp app/mcp/LiveServer.cpp app/mcp/AgentIndicator.cpp app/mcp/AssistantSetup.cpp
 # check-all sources: app/framework/FloatingLayout.cpp app/framework/TitleBar.cpp app/tests/chat_test_agent.cpp
-# check-all sources: core/mcp/src/chat core/ffi/src/chat.rs tools/cli/mcp.cpp tools/cli/mcp-connect.cpp
+# check-all sources: core/mcp/src/chat core/mcp/src/guide.rs core/mcp/guide core/ffi/src/chat.rs tools/cli/mcp.cpp tools/cli/mcp-connect.cpp
 # check-all sources: app/MainWindow.cpp app/framework/TestDriverAssistant.cpp
 """The chat panel (mitcad#947) through the real UI, the real live MCP server
 and bridge, with a scripted agent instead of Claude Code (no AI).
@@ -360,6 +360,11 @@ def lines(path):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def modeling_guide_index():
+    source = Path(__file__).resolve().parent.parent / "core/mcp/guide/mitcad-modeling/SKILL.md"
+    return source.read_text(encoding="utf-8").split("---", 2)[2].lstrip()
+
+
 def main():
     app, stub, output = sys.argv[1:4]
     if len(sys.argv) > 4:
@@ -462,6 +467,17 @@ def main():
         starts = lines(work / "chat-starts.jsonl")
         first = starts[0]["argv"]
         session = first[first.index("--session-id") + 1]
+        # Compare against the same source compiled into the server, with no
+        # copied topic list. The prompt contains the index body, not frontmatter.
+        guide_index = modeling_guide_index()
+        claude_guidance = starts[0]["guidance"]
+        prompt_file = Path(first[first.index("--append-system-prompt-file") + 1])
+        if not prompt_file.is_file() or prompt_file.read_text(encoding="utf-8") != claude_guidance:
+            raise RuntimeError("Claude Code's modeling instructions file was not written before starting it")
+        if not claude_guidance.endswith(guide_index) or not claude_guidance.startswith("Control the documents open"):
+            raise RuntimeError("Claude Code was not given the server's live core and complete guide index")
+        if "name: mitcad-modeling" in claude_guidance or "Skill" in first:
+            raise RuntimeError("the guide's frontmatter or an extra Skill tool was passed to Claude Code")
         messages = lines(work / "chat-messages.jsonl")
         with_view = [m for m in messages if m["text"] == "hello with the view"]
         if not with_view or with_view[0]["pictures"] != ["image/png"]:
@@ -635,6 +651,8 @@ def main():
                                + str([start["method"] for start in threads]))
         if "model" in threads[0]["params"] or threads[1]["params"].get("model") != "test-codex-large":
             raise RuntimeError("the chosen model did not go to Codex's thread")
+        if any(start["params"]["config"].get("developer_instructions") != claude_guidance for start in threads):
+            raise RuntimeError("Codex's new or resumed thread did not get the same core and guide index as Claude Code")
         servers = threads[0]["params"]["config"]["mcp_servers"]
         if list(servers) != ["mitcad"] or "--chat-session" not in servers["mitcad"]["args"]:
             raise RuntimeError("Codex was not given MitCad's bridge alone")
@@ -1083,6 +1101,8 @@ def api_runs(app, out):
                 raise RuntimeError("the Anthropic API was not asked with its default model")
             if not any(entry["thinking_echoed"] for entry in anthropic):
                 raise RuntimeError("the thinking blocks did not go back with their signatures")
+            if not anthropic[0]["system"].endswith(modeling_guide_index()):
+                raise RuntimeError("the API agent did not receive the server's complete guide index")
             if "model_command" not in anthropic[0]["tools"] or "MitCad" not in anthropic[0]["system"]:
                 raise RuntimeError("the model was not given MitCad's live tool catalog and instructions")
             if not any(entry.get("stopped") for entry in sent):

@@ -35,6 +35,8 @@ mod hostkeys;
 mod inspect;
 mod onto;
 mod settings;
+// Remove Project (mitcad#1562).
+mod remove;
 // A project's folders and designs (mitcad#144).
 mod links;
 mod listing;
@@ -69,6 +71,7 @@ pub use hostkeys::{
 };
 pub(crate) use inspect::remotes_of;
 pub use inspect::{Design, FolderInfo, FolderKind, ProjectRemote, inspect_folder};
+pub use remove::{REMOVE_MESSAGE, Removal, RepositoryFate, remove_project};
 
 /// Names at the root of a remote's latest version that a check lists.
 const MAX_FILES: usize = 100;
@@ -398,6 +401,30 @@ pub fn run(
                 |_| json!({"dir": dir, "created": false}),
             )?
         }
+        "remove_project" => {
+            let dir = text(&command, "dir")?;
+            let dry_run = command
+                .get("dry_run")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let author = optional(&command, "author")
+                .map(Identity::parse)
+                .transpose()?;
+            // Every failure is the answer's: the application shows it.
+            let removed = remove_project(Path::new(dir), dry_run, author.as_ref()).map_err(
+                |error| match error {
+                    VcsError::Remote(error) => VcsError::Remote(error),
+                    other => {
+                        RemoteError::new(crate::remote::ErrorClass::Other, other.to_string()).into()
+                    }
+                },
+            );
+            answer(removed, |_| {
+                json!({"root": dir, "dry_run": dry_run, "repository": null, "versions": null,
+                       "removed": [], "edited": [], "rewritten": [], "designs": 0,
+                       "remote": null, "commit": null, "warnings": []})
+            })?
+        }
         "host_keys" => {
             let host = text(&command, "host")?;
             let port = port_of(&command)?;
@@ -584,6 +611,66 @@ pub(crate) fn describe_summary(out: &mut String, answer: &Value) {
     }
 }
 
+/// `remove_project`'s answer as text (mitcad#1562).
+fn describe_removal(out: &mut String, answer: &Value) {
+    let list = |key: &str| -> Vec<&str> {
+        answer[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect()
+    };
+    let dry_run = answer["dry_run"].as_bool() == Some(true);
+    let root = answer["root"].as_str().unwrap_or("");
+    let _ = if dry_run {
+        writeln!(
+            out,
+            "Would remove the project {root} (nothing changed: add --yes)"
+        )
+    } else {
+        writeln!(out, "Removed the project {root}")
+    };
+    let designs = answer["designs"].as_u64().unwrap_or(0);
+    let _ = writeln!(
+        out,
+        "{designs} design{} stay{} in the folder",
+        if designs == 1 { "" } else { "s" },
+        if designs == 1 { "s" } else { "" }
+    );
+    let _ = match answer["repository"].as_str() {
+        Some("removed") => writeln!(
+            out,
+            "Version history: deleted with .git ({})",
+            versions(answer["versions"].as_u64().unwrap_or(0))
+        ),
+        Some("kept") => writeln!(
+            out,
+            "Version history: kept (the repository was there before the project)"
+        ),
+        _ => writeln!(out, "Version history: none of its own"),
+    };
+    for (key, label) in [
+        ("removed", "Removed"),
+        ("edited", "MitCad's lines taken out of"),
+        ("rewritten", "Written as single files"),
+    ] {
+        let items = list(key);
+        if !items.is_empty() {
+            let _ = writeln!(out, "{label}: {}", items.join(", "));
+        }
+    }
+    if let Some(url) = answer["remote"]["url"].as_str() {
+        let _ = writeln!(out, "The remote {url} is not changed");
+    }
+    if let Some(commit) = answer["commit"].as_str() {
+        let _ = writeln!(out, "Recorded version {}", &commit[..7.min(commit.len())]);
+    }
+    for warning in list("warnings") {
+        let _ = writeln!(out, "warning: {warning}");
+    }
+}
+
 /// The answer of command `name` of [`run`] as text for people.
 pub fn describe(name: &str, answer: &Value) -> String {
     let mut out = String::new();
@@ -664,6 +751,7 @@ pub fn describe(name: &str, answer: &Value) -> String {
                 writeln!(out, "{} is a shared repository already", field("dir"))
             };
         }
+        "remove_project" => describe_removal(&mut out, answer),
         "host_keys" => hostkeys::describe(&mut out, answer),
         "trust_host_key" => {
             let _ = if answer["written"].as_bool() == Some(true) {

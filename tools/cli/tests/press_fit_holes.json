@@ -1,0 +1,35 @@
+[
+  {"comment": "Press-fit holes for printed parts (mitcad#1517) in a 60 x 40 x 20 block (F1, F2), one at (30, 20) on its top face (Hole1 F3): the flats of a hex or square hole, or the tips of crush ribs, lie the interference under the hole's diameter, the pin's."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+
+  {"comment": "A 5 mm pin in a hex hole through all at the printed fit press_fit_interference (0.1 mm, created with the hole): flats 4.9 mm apart, the block less sqrt(3)/2 x 4.9^2 x 20."},
+  {"cmd": "add_feature", "def": {"type": "hole",
+    "placement": {"type": "face", "body": "F2.b0", "face": "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})",
+                  "points": [[30, 20, 20]]},
+    "diameter": 5, "extent": {"type": "through_all"},
+    "press_fit": {"shape": "hex", "interference": "press_fit_interference"}}},
+  {"expect": {"feature": "Hole1", "status": "ok", "bodies": 1, "body": "F2.b0", "volume": 47584.13460110271,
+    "has_face": "F3:hole0.flat5"}},
+  {"expect": {"parameter": "press_fit_interference", "value": 0.1}},
+
+  {"comment": "A square turned 45 degrees, 10 deep with a flat bottom, 0.2 mm under the pin: the block less 4.8^2 x 10."},
+  {"cmd": "edit_feature", "uid": "F3", "def": {"type": "hole",
+    "placement": {"type": "face", "body": "F2.b0", "face": "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})",
+                  "points": [[30, 20, 20]]},
+    "diameter": 5, "extent": {"type": "distance", "depth": 10},
+    "press_fit": {"shape": "square", "interference": 0.2, "angle": "45 deg"}}},
+  {"expect": {"feature": "F3", "status": "ok", "body": "F2.b0", "volume": 47769.6, "has_face": "F3:hole0.tip"}},
+
+  {"comment": "An 8 mm pin in three crush ribs 0.3 mm high (the defaults), 0.2 mm under it: tips at 7.8 mm, the bore 8.4 mm; the block less (pi R^2 - 3 (R^2 a - 3.9 R sin a)) x 20, R = 4.2, sin a = 0.3 / R."},
+  {"cmd": "edit_feature", "uid": "F3", "def": {"type": "hole",
+    "placement": {"type": "face", "body": "F2.b0", "face": "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})",
+                  "points": [[30, 20, 20]]},
+    "diameter": 8, "extent": {"type": "through_all"},
+    "press_fit": {"shape": "crush_ribs", "interference": 0.2}}},
+  {"expect": {"feature": "F3", "status": "ok", "body": "F2.b0", "volume": 46897.11054557235,
+    "has_face": "F3:hole0.rib2.side1", "has_edge": "E{F3:hole0.rib0.side0|F3:hole0.rib0.side1}"}}
+]

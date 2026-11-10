@@ -18,6 +18,7 @@
 #include <QRegularExpression>
 #include <QSet>
 
+#include "GlyphRows.hpp"
 #include "PointMarkers.hpp"
 #include "SketchController.hpp"
 #include "SketchTool.hpp"
@@ -63,6 +64,10 @@ const QColor kInk = sketchRole(ColorRole::ViewInk);
 const QColor kStatusFree = sketchRole(ColorRole::SketchPreview);
 const QColor kStatusFixed = sketchRole(ColorRole::Text);
 const QColor kStatusConflict = themeColor(ColorRole::ErrorText, false);
+// The constraints and dimensions that block a refused edit, and the curves
+// and points they are on (mitcad#1566): the error's lines and fill.
+const QColor kConflictColor = themeColor(ColorRole::ErrorBorder, false);
+const QColor kConflictFill = themeColor(ColorRole::ErrorFill, false);
 
 // A label's light box, `alpha` opaque.
 QColor labelBox(int alpha) {
@@ -123,28 +128,6 @@ DimensionShape onDevicePixels(const DimensionShape& shape, const QPainter& paint
     arrow.first = point(arrow.first);
   }
   return out;
-}
-
-// Whether `rect`, with a 2 px margin, holds a point of `outline` (a single
-// point, or a polyline) or crosses one of its segments.
-bool rectTouches(const QRectF& rect, const std::vector<QPointF>& outline) {
-  const QRectF area = rect.adjusted(-2, -2, 2, 2);
-  for (const QPointF& p : outline) {
-    if (area.contains(p)) {
-      return true;
-    }
-  }
-  const QLineF sides[] = {QLineF(area.topLeft(), area.topRight()), QLineF(area.topRight(), area.bottomRight()),
-                          QLineF(area.bottomRight(), area.bottomLeft()), QLineF(area.bottomLeft(), area.topLeft())};
-  for (std::size_t i = 1; i < outline.size(); ++i) {
-    const QLineF segment(outline[i - 1], outline[i]);
-    for (const QLineF& side : sides) {
-      if (segment.intersects(side, nullptr) == QLineF::BoundedIntersection) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 // The part of the line through `at` along `direction` (not zero) inside
@@ -758,14 +741,14 @@ QString SketchOverlay::inactiveTooltip(bool active, const QString& reason) {
                           : tr("Not applied: %1").arg(reason);
 }
 
-std::map<QString, QRectF> SketchOverlay::constraintGlyphRects() const {
-  std::map<QString, QRectF> rects;
+std::vector<std::pair<QString, SketchOverlay::GlyphPlace>> SketchOverlay::constraintGlyphPlaces() const {
+  std::vector<std::pair<QString, GlyphPlace>> places;
   for (const Glyph& g : glyphs()) {
     if (!g.constraint.isEmpty()) {
-      rects.emplace(g.constraint, g.rect);
+      places.emplace_back(g.constraint, GlyphPlace{g.rect, g.type, g.entity});
     }
   }
-  return rects;
+  return places;
 }
 
 std::vector<QRectF> SketchOverlay::constraintGlyphBounds() const {
@@ -837,48 +820,61 @@ std::vector<SketchOverlay::DimensionLayout> SketchOverlay::dimensions() const {
 std::vector<SketchOverlay::Glyph> SketchOverlay::glyphs() const {
   const SketchModel& model = m_c.model();
   // Glyphs per entity, in order, then laid out in a row beside it.
-  // One glyph per entity and type: a polygon's side equal to both its
-  // neighbours shows one "=", which picks the first of them.
+  // Every constraint keeps at least one glyph of its own, so that each can
+  // be seen, selected and deleted in the view (mitcad#1578): two
+  // coincidences at one point show two glyphs side by side, as do two
+  // tangencies at one point or two midpoints. Only a constraint drawn at
+  // several entities leaves out a glyph where another constraint of its
+  // type already shows one, while it keeps one elsewhere: a polygon's side
+  // equal to both its neighbours shows one "=", which picks the first of
+  // them, and each equality still has its glyph at its other side.
   // An inactive constraint (mitcad#721) has a glyph of its own beside an
   // active one of its type.
   std::vector<Glyph> all;
-  const auto add = [&all](const QString& constraint, const QString& entity, const QString& type,
+  const auto add = [&all](const QString& constraint, const QStringList& entities, const QString& type,
                           bool inactive) {
-    const bool shown = std::any_of(all.begin(), all.end(), [&](const Glyph& g) {
-      return g.entity == entity && g.type == type && g.inactive == inactive;
-    });
-    if (!shown) {
-      all.push_back({constraint, entity, type, QRectF(), inactive});
+    bool kept = false;
+    for (const QString& entity : entities) {
+      const bool shown = std::any_of(all.begin(), all.end(), [&](const Glyph& g) {
+        return g.entity == entity && g.type == type && g.inactive == inactive;
+      });
+      if (!shown) {
+        all.push_back({constraint, entity, type, QRectF(), inactive});
+        kept = true;
+      }
+    }
+    if (!kept && !entities.isEmpty()) {
+      all.push_back({constraint, entities.first(), type, QRectF(), inactive});
     }
   };
   for (const ConstraintData& k : model.constraints) {
     const QString& t = k.type;
     const bool off = !k.active;
     if (t == QStringLiteral("coincident") || t == QStringLiteral("midpoint")) {
-      add(k.id, k.json.value(QStringLiteral("point")).toString(), t, off);
+      add(k.id, QStringList{k.json.value(QStringLiteral("point")).toString()}, t, off);
     } else if (t == QStringLiteral("symmetric")) {
-      add(k.id, k.json.value(QStringLiteral("a")).toString(), t, off);
-      add(k.id, k.json.value(QStringLiteral("b")).toString(), t, off);
+      add(k.id,
+          QStringList{k.json.value(QStringLiteral("a")).toString(), k.json.value(QStringLiteral("b")).toString()},
+          t, off);
     } else if ((t == QStringLiteral("tangent") || t == QStringLiteral("smooth")) &&
                !k.json.value(QStringLiteral("at")).toString().isEmpty()) {
       // Beside the point it applies at (mitcad#783): a curve tangent at
       // both ends shows both.
-      add(k.id, k.json.value(QStringLiteral("at")).toString(), t, off);
+      add(k.id, QStringList{k.json.value(QStringLiteral("at")).toString()}, t, off);
     } else {
-      for (const QString& entity : k.refs) {
-        add(k.id, entity, t, off);
-      }
+      add(k.id, k.refs, t, off);
     }
   }
+  // A fixed entity's "fix" (no constraint of its own): one per entity.
   const QString origin = model.originPoint();
   for (const PointData& p : model.points) {
     if (p.fixed && !p.reference && p.id != origin && p.axis.isEmpty()) {
-      add(QString(), p.id, QStringLiteral("fix"), false);
+      add(QString(), QStringList{p.id}, QStringLiteral("fix"), false);
     }
   }
   for (const CurveData& c : model.curves) {
     if (c.fixed && !c.reference && c.axis.isEmpty()) {
-      add(QString(), c.id, QStringLiteral("fix"), false);
+      add(QString(), QStringList{c.id}, QStringLiteral("fix"), false);
     }
   }
 
@@ -888,37 +884,53 @@ std::vector<SketchOverlay::Glyph> SketchOverlay::glyphs() const {
       dimensionRects.push_back(d.textRect.adjusted(-3, -3, 3, 3));
     }
   }
-  const auto distanceToClear = [&dimensionRects](const QRectF& row, const QPointF& direction) {
-    double distance = 0;
-    // Along a fixed direction, each move leaves at least one text box
-    // behind. At most one move per box is needed, even in a dense sketch.
-    for (std::size_t pass = 0; pass <= dimensionRects.size(); ++pass) {
-      const QRectF at = row.translated(direction * distance);
-      double move = 0;
-      for (const QRectF& text : dimensionRects) {
-        if (!at.intersects(text)) continue;
-        double exit = std::numeric_limits<double>::infinity();
-        if (direction.x() > 1e-9) exit = std::min(exit, (text.right() - at.left()) / direction.x());
-        if (direction.x() < -1e-9) exit = std::min(exit, (text.left() - at.right()) / direction.x());
-        if (direction.y() > 1e-9) exit = std::min(exit, (text.bottom() - at.top()) / direction.y());
-        if (direction.y() < -1e-9) exit = std::min(exit, (text.top() - at.bottom()) / direction.y());
-        move = std::max(move, exit + 1.0);
-      }
-      if (move == 0) break;
-      distance += move;
+  // Every curve as the rows keep clear of it (mitcad#1594), its own
+  // included; an axis's line runs across the view and is left out.
+  std::vector<GlyphCurve> curves;
+  for (const CurveData& c : model.curves) {
+    if (c.axis.isEmpty()) {
+      curves.push_back(glyphCurve(entityOutline(c.id)));
     }
-    return distance;
-  };
+  }
+  // The rows placed so far, which a later row keeps clear of.
+  std::vector<QRectF> placedRows;
+  // The row each glyph goes into: its entity's, but points at one place
+  // (two curve ends a point-to-point coincidence holds together) share one
+  // row, so that their glyphs lie side by side rather than over each other
+  // (mitcad#1578).
+  std::map<QString, QString> rowOf;
+  std::vector<std::pair<QPointF, QString>> pointRows;
+  for (const Glyph& g : all) {
+    if (rowOf.count(g.entity) != 0) {
+      continue;
+    }
+    QString row = g.entity;
+    if (const auto p = model.pointAt(g.entity)) {
+      const QPointF screen = m_c.toScreen(*p);
+      const auto same = std::find_if(pointRows.begin(), pointRows.end(),
+                                     [&screen](const std::pair<QPointF, QString>& known) {
+                                       return std::abs(known.first.x() - screen.x()) < 0.5 &&
+                                              std::abs(known.first.y() - screen.y()) < 0.5;
+                                     });
+      if (same != pointRows.end()) {
+        row = same->second;
+      } else {
+        pointRows.emplace_back(screen, g.entity);
+      }
+    }
+    rowOf.emplace(g.entity, row);
+  }
   std::map<QString, QPointF> rowOffsets;
   std::map<QString, int> counts;
   for (const Glyph& g : all) {
-    ++counts[g.entity];
+    ++counts[rowOf[g.entity]];
   }
   std::map<QString, int> placed;
   std::vector<Glyph> result;
   for (Glyph g : all) {
-    const int index = placed[g.entity]++;
-    const int count = counts[g.entity];
+    const QString& rowKey = rowOf[g.entity];
+    const int index = placed[rowKey]++;
+    const int count = counts[rowKey];
     QPointF center;
     QPointF along(1.0, 0.0);
     QPointF normal(0.0, -1.0);
@@ -946,12 +958,13 @@ std::vector<SketchOverlay::Glyph> SketchOverlay::glyphs() const {
     } else {
       continue;
     }
-    // Keep an entity's glyph row together. Only a collision moves it,
-    // to the nearer side of its original normal; dimension positions and
-    // model constraints stay intact. Painting and picking use this layout.
-    // A move never puts the row over its own point or curve: a symbol
-    // there would hide it and take the clicks meant for it.
-    auto [offset, inserted] = rowOffsets.try_emplace(g.entity);
+    // Keep an entity's glyph row together. Only a collision moves it, to
+    // the nearer side of its original normal clear of the dimensions'
+    // texts, the rows before it and every curve (sketch/GlyphRows.hpp,
+    // mitcad#1594): a symbol over a curve would hide it and take the clicks
+    // meant for it. Dimension positions and model constraints stay intact.
+    // Painting and picking use this layout.
+    auto [offset, inserted] = rowOffsets.try_emplace(rowKey);
     if (inserted) {
       const QPointF first = center - along * (index * kGlyphStep);
       const QPointF last = first + along * ((count - 1) * kGlyphStep);
@@ -959,17 +972,8 @@ std::vector<SketchOverlay::Glyph> SketchOverlay::glyphs() const {
         return QRectF(at.x() - kGlyphSize / 2, at.y() - kGlyphSize / 2, kGlyphSize, kGlyphSize);
       };
       const QRectF row = box(first).united(box(last));
-      if (normal.isNull()) normal = QPointF(0.0, -1.0);
-      const double forward = distanceToClear(row, normal);
-      const double backward = distanceToClear(row, -normal);
-      if (forward > 0 || backward > 0) {
-        const std::vector<QPointF> own = entityOutline(g.entity);
-        const bool forwardOver = rectTouches(row.translated(normal * forward), own);
-        const bool backwardOver = rectTouches(row.translated(-normal * backward), own);
-        // The nearer side clear of it; when neither is, the original side.
-        const bool useForward = forwardOver == backwardOver ? forwardOver || forward <= backward : !forwardOver;
-        offset->second = normal * (useForward ? forward : -backward);
-      }
+      offset->second = glyphRowOffset(row, normal, dimensionRects, placedRows, curves, entityOutline(g.entity));
+      placedRows.push_back(row.translated(offset->second));
     }
     center += offset->second;
     g.rect = QRectF(center.x() - kGlyphSize / 2, center.y() - kGlyphSize / 2, kGlyphSize, kGlyphSize);
@@ -1085,16 +1089,23 @@ bool SketchOverlay::isSelected(const QString& kind, const QString& id) const {
 }
 
 void SketchOverlay::paintGlyph(QPainter& painter, const Glyph& glyph, bool selected,
-                               bool hovered) const {
+                               bool hovered, bool conflicted) const {
   const QRectF r = glyph.rect;
-  // An inactive constraint's (mitcad#721): pink, its frame dashed.
-  painter.setPen(glyph.inactive ? QPen(kInactiveColor, 1.0, Qt::DashLine) : QPen(kGuideColor, 1.0));
+  // An inactive constraint's (mitcad#721): pink, its frame dashed. One
+  // that blocks a refused edit (mitcad#1566): the error's frame and fill.
+  painter.setPen(conflicted       ? QPen(kConflictColor, 2.0)
+                 : glyph.inactive ? QPen(kInactiveColor, 1.0, Qt::DashLine)
+                                  : QPen(kGuideColor, 1.0));
   painter.setBrush(selected           ? kSelectedColor
                    : hovered          ? kHoverColor.lighter(150)
+                   : conflicted       ? kConflictFill
                    : glyph.inactive   ? kInactiveFill
                                       : labelBox(225));
   painter.drawRoundedRect(r, 2.5, 2.5);
-  const QColor ink = selected ? QColor(Qt::white) : glyph.inactive ? kInactiveColor : kInk;
+  const QColor ink = selected         ? QColor(Qt::white)
+                     : conflicted     ? kConflictColor
+                     : glyph.inactive ? kInactiveColor
+                                      : kInk;
   painter.setPen(QPen(ink, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
   painter.setBrush(Qt::NoBrush);
   const QPointF c = r.center();
@@ -1218,6 +1229,13 @@ std::vector<std::pair<QString, QColor>> SketchOverlay::idleHighlights() const {
   // the view's highlight cannot show.
   for (const QString& axis : m_c.host().sketchAxisPicks()) {
     highlighted.emplace_back(axis, kSelectedColor);
+  }
+  // What a refused edit's blocking constraints and dimensions are on
+  // (mitcad#1566), in the hover's colour while the pointer is over its
+  // message.
+  const QColor conflict = m_c.conflictHovered() ? kHoverColor : kConflictColor;
+  for (const QString& entity : m_c.conflictEntities()) {
+    highlighted.emplace_back(entity, conflict);
   }
   // What a picking tool points at and has picked.
   for (const QString& entity : m_c.picked()) {
@@ -1534,6 +1552,55 @@ void SketchOverlay::paintSnap(QPainter& painter) const {
   }
 }
 
+void SketchOverlay::paintCommandPicks(QPainter& painter) const {
+  std::vector<QPointF> places;
+  for (const QString& pick : m_c.host().sketchSnapPicks()) {
+    if (const auto at = pickPlace(m_c.model(), pick)) {
+      places.push_back(m_c.toScreen(*at));
+    }
+  }
+  painter.save();
+  if (places.size() >= 2) {
+    painter.setPen(QPen(kPickColor, 1.5, Qt::DashLine));
+    painter.drawLine(places[0], places[1]);
+  }
+  painter.setPen(QPen(kPickColor, 1.5));
+  painter.setBrush(kPickColor);
+  for (const QPointF& place : places) {
+    painter.drawEllipse(place, 3.5, 3.5);
+  }
+  if (const auto shape = m_c.handleShape()) {
+    // Each arrow from the square's center, with its head at the tip; the
+    // part dragged in the selection's color.
+    const auto arrow = [&painter, &shape](const QPointF& tip, bool dragged) {
+      const QColor color = dragged ? kSelectedColor : kSnapColor;
+      painter.setPen(QPen(color, 2.0, Qt::SolidLine, Qt::RoundCap));
+      painter.drawLine(shape->center, tip);
+      const QPointF back = shape->center - tip;
+      const double length = std::hypot(back.x(), back.y());
+      if (length <= 0.0) {
+        return;
+      }
+      const QPointF unit = back / length;
+      const QPointF across(-unit.y(), unit.x());
+      constexpr double head = 9.0;
+      painter.setBrush(color);
+      painter.drawPolygon(QPolygonF{tip, tip + unit * head + across * (head * 0.45),
+                                    tip + unit * head - across * (head * 0.45)});
+    };
+    arrow(shape->xTip, shape->dragged == 'x' || shape->dragged == 'b');
+    arrow(shape->yTip, shape->dragged == 'y' || shape->dragged == 'b');
+    const QColor square = shape->dragged == 'b' ? kSelectedColor : kSnapColor;
+    painter.setPen(QPen(square, 1.5));
+    painter.setBrush(shape->dragged == 'b' ? QBrush(square) : QBrush(labelBox(220)));
+    painter.drawRect(QRectF(shape->center.x() - 5.0, shape->center.y() - 5.0, 10.0, 10.0));
+  }
+  painter.restore();
+  if (m_c.commandSnapping()) {
+    paintSnap(painter);
+  }
+}
+
 void SketchOverlay::paintEvent(QPaintEvent* event) {
   Q_UNUSED(event);
   if (!m_c.isActive()) {
@@ -1580,6 +1647,9 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
   logHighlightSummary(summary);
 
   const QString hover = m_c.hoverAnnotation();
+  // A refused edit's blocking constraints and dimensions (mitcad#1566).
+  const QStringList conflicts = m_c.conflicts();
+  const bool conflictHovered = m_c.conflictHovered();
   if (m_c.showDimensions()) {
     const bool dark = m_c.viewer().backgroundDark();
     const std::vector<DimensionLayout> layouts = dimensions();
@@ -1595,9 +1665,12 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
       const bool selected = isSelected(QStringLiteral("dimension"), layout.id);
       const bool driven = d != nullptr && d->driven;
       const bool inactive = d != nullptr && !d->active;
-      const bool marked = selected || hover == layout.id;
+      const bool conflicted = conflicts.contains(layout.id);
+      const bool hovered = hover == layout.id || (conflicted && conflictHovered);
+      const bool marked = selected || hovered || conflicted;
       const QColor color = selected ? kSelectedColor
-                           : hover == layout.id ? kHoverColor
+                           : hovered ? kHoverColor
+                           : conflicted ? kConflictColor
                            : inactive ? kInactiveColor
                            : driven ? kDrivenColor
                                     : kDimensionColor;
@@ -1613,8 +1686,10 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
     for (const Glyph& g : glyphs()) {
       const bool selected = g.constraint.isEmpty() ? isSelected(QStringLiteral("fix"), g.entity)
                                                    : isSelected(QStringLiteral("constraint"), g.constraint);
-      const bool hovered = g.constraint.isEmpty() ? hover == g.entity : hover == g.constraint;
-      paintGlyph(painter, g, selected, hovered);
+      const bool conflicted = !g.constraint.isEmpty() && conflicts.contains(g.constraint);
+      const bool hovered = (g.constraint.isEmpty() ? hover == g.entity : hover == g.constraint) ||
+                           (conflicted && conflictHovered);
+      paintGlyph(painter, g, selected, hovered, conflicted);
     }
   }
   // Equal spacings' chains (mitcad#221), numbered in the order the model
@@ -1677,6 +1752,9 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
     }
     paintPreview(painter, removal);
   }
+  // A command's points picked with the sketch's snaps and its handle
+  // (mitcad#1563).
+  paintCommandPicks(painter);
 
   // Degrees of freedom, as the sketch palette shows them.
   QString status = model.fullyConstrained()

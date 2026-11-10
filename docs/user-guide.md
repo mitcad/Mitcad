@@ -345,7 +345,15 @@ sign-in, invalid API key or a credit/rate limit), the error stays in the
 state line. **How to fix** opens help in the panel; after fixing the
 account, **Check again** checks sign-in and one short request without your
 design or conversation. **New conversation** (+) starts a fresh agent
-process with the latest sign-in.
+process with the latest sign-in. For Claude Code and Codex, **Sign in
+Again…** beside **Check again** opens a terminal window that signs the
+agent out and in again with its own commands (`claude auth logout`, then
+`claude auth login`; `codex logout`, then `codex login`). It first says
+what will happen: signing Claude Code out also signs Claude Desktop out,
+as they share one sign-in, and signing in again with an account whose
+organization has disabled access does not fix that. When you are done in
+the terminal, MitCad runs **Check again** by itself. Without a terminal
+program, **How to fix** shows the commands with **Copy**.
 
 See [the chat panel](ai-chat.md) for the setup, the approvals, privacy
 and the history.
@@ -461,6 +469,7 @@ A silent install uses these switches:
 | `/S` | Installs just for the current user |
 | `/S /AllUsers` | Installs for all users |
 | `/CurrentUser` | Says the default (just for the current user) explicitly |
+| `/EndPrograms` | Ends the programs that run from the installation's `bin` folder in your session, except MitCad itself, instead of stopping with exit code 3. The updater passes it after you chose End Them and Install |
 | `/D=<dir>` | Sets the folder in both scopes. Put it last, without quotes |
 
 A silent install whose `/D` folder is the folder of the installation
@@ -481,6 +490,7 @@ The installer has these exit codes:
 | 0 | Done |
 | 1 | Canceled |
 | 2 | Aborted (also when the installer could not uninstall the earlier version) |
+| 3 | Programs from the installation are running (silent install). Nothing was changed. With `/EndPrograms`: programs it could not end, such as MitCad |
 | 740 | Elevated, but still without administrator rights |
 | 1223 | Elevation refused |
 
@@ -573,7 +583,9 @@ display scaling set in your system.
 
 To make only the texts or only the icons smaller or larger, move the
 **Text size** and **Icon size** sliders under it: 80% to 200% in steps of
-5%, on top of the Interface size. **Font** chooses the interface's font:
+5%, on top of the Interface size. Icon size covers the toolbar, the
+Browser and the panels, and also the icons in menus, drop-down lists and
+text fields (on macOS the menu bar's menus keep the system's size). **Font** chooses the interface's font:
 **System** (the default) or any font installed on the computer, at the
 Text size. These too take effect when MitCad starts again.
 
@@ -952,8 +964,29 @@ commands you use all the time:
   is checked.
 - **Layout Grid** shows or hides the grid.
 - **Snap to Grid** turns grid snap in sketches on or off.
+- **Edit Parameters**, after a line at the end of the bar, opens the
+  parameter table in every workspace (Solid, Build, Make and the others)
+  and in a sketch, so that you do not have to go to Solid › Modify for
+  it. Refer to [Parameters and expressions](#parameters-and-expressions).
+  While a drawing is open, the same button is in the drawing's bar,
+  after **Add Revision…**. It is the first of the commands pinned to the
+  bar, and you can unpin it like the others.
 
-These are the View menu's own commands: a change in the bar shows in the
+**Your commands on the bar.** You can pin any command to the end of the
+navigation bar, so that it is one click away in every workspace and in
+sketches: for example **Measure** from Solid › Inspect while you work in
+Build. Open the command's row menu in a group's menu (the ⋮ button at
+the right of its row, a right-click on the row, or the Menu key) or
+right-click a command you pinned to the toolbar, and choose **Pin to
+Navigation Bar**. The command shows after the line at the end of the bar,
+with its icon, its tooltip and its shortcut, and it is unavailable when
+the command is. Drag a pinned command along the others to put it
+elsewhere. Right-click it for **Unpin from Navigation Bar** and **Change
+Keyboard Shortcut…**; the row menu has **Unpin from Navigation Bar**
+too. MitCad keeps the pinned commands across sessions. Refer to
+**Pinned commands** in [Commands and shortcuts](#commands-and-shortcuts) for the toolbar.
+
+The view buttons are the View menu's own commands: a change in the bar shows in the
 View menu, and a change in the View menu, by a shortcut or in the Sketch
 Palette shows in the bar. Layout Grid and Snap to Grid show checked while
 they are on. Hold the pointer over a button to see its command and its
@@ -1202,9 +1235,10 @@ toolbar, so that you need not look for it in a group's menu. In a group's
 menu (Create, Modify, …, also in their submenus) each command's row shows
 a ⋮ button at its right while the pointer is on the row; click it, or
 right-click the row, or choose the row with the arrow keys and press the
-Menu key (Shift+F10). Its menu has **Pin to Toolbar** and **Change
-Keyboard Shortcut…**, which opens Tools › Keyboard Shortcuts at that
-command (press Enter and the new key). A command you pin shows as a
+Menu key (Shift+F10). Its menu has **Pin to Toolbar**, **Pin to
+Navigation Bar** (the navigation bar in [View and navigation](#view-and-navigation)) and
+**Change Keyboard Shortcut…**, which opens Tools › Keyboard Shortcuts at
+that command (press Enter and the new key). A command you pin shows as a
 button in its own group, after the group's own buttons: Draft pinned from
 the Modify menu is a button in the Modify group, Sweep a button in the
 Create group. The group's menu still lists the command. The pinned
@@ -1862,7 +1896,8 @@ puts it (see [Placing a feature](#placing-a-feature)): click a face, and set
 its distances from two edges of the face; or select a point, or a shaft
 or a hole to drill along its axis. **From Sketch**, the holes are at
 sketch points. A hole is one of these types: simple, counterbore,
-countersink, counterdrill, taper or thread.
+countersink, counterdrill, taper or thread; for printed parts it can
+also be a press fit (below).
 
 **Flip**, next to the placement, turns the hole round.
 
@@ -1931,6 +1966,33 @@ clearance hole, it opens with its screw size and fit, and the values you
 typed stay as they are. The hole keeps its values as numbers, so a
 change to the tables in a later version does not change it. Holes made
 in earlier versions open as they were.
+
+**Press fits for printed parts.** A printed round hole cannot hold a pin
+or a bearing firmly: a printed surface is only good to about ±0.1 mm.
+With *Hole Tap Type* **Press Fit** the hole grips the part that goes in.
+*Diameter* is the diameter of that pin or bearing, and *Press Fit Shape*
+is one of these:
+
+| Shape | What grips | Use it for |
+|---|---|---|
+| Hex | the six flats of a hexagon | pins; the corners leave room for the plastic the pin pushes aside |
+| Square | the four flats of a square | small pins |
+| Crush Ribs | small ribs round a slightly larger bore | pins and bearings in parts you assemble once; the ribs deform as the part goes in |
+
+*Interference* is how much smaller than *Diameter* the flats or the
+ribs' tips are, on the diameter. A new hole suggests the printed fit
+`press_fit_interference` (0.1 mm, see [Tuning printed
+fits](#tuning-printed-fits)), so that you tune it once for your printer.
+Crush ribs also have *Ribs* (3 by default) and *Rib Height* (0.3 mm): the
+bore is the ribs' tips plus twice the height, so the pin touches only
+the ribs. A rib must stand out more than half the interference.
+*Rotation* turns the shape about the hole's axis; at 0° the first flat
+or rib faces the x axis.
+
+A press-fit hole is a simple hole with a flat bottom, so the panel hides
+*Hole Type*, *Drill Point* and *Taper Angle*. It can go to a depth,
+through all or up to an object. It has no hole callout in drawings,
+because it is not round: dimension its flats or its ribs instead.
 
 ### Thread
 
@@ -3258,9 +3320,27 @@ objects before you click Mirror, Mirror Line is active at once.
 Otherwise, click Mirror Line in the panel after you select the objects.
 
 **Move/Copy** (Modify, **M**) moves or copies the selected curves and
-points by X and Y Distance (Translate) or turns them about a Pivot
-Point by an Angle (Rotate). X and Y Distance start at 0, so nothing
-moves when the panel opens; the selection moves as you type a distance.
+points. Move Type has three choices:
+
+- **Translate** moves them by X and Y Distance. X and Y Distance start
+  at 0, so nothing moves when the panel opens; the selection moves as
+  you type a distance. You can also drag the handle at the middle of the
+  selection: drag an arrow to move along that axis, or the square
+  between the arrows to move freely. The handle snaps as the drawing
+  tools do: on a point or a curve, the middle of the selection goes
+  there; on the grid, the distances go in grid steps. Hold Shift or Alt
+  to drag without snaps.
+- **Rotate** turns them about a Pivot Point by an Angle (default
+  90°). If you do not pick a Pivot Point, they turn about their own
+  middle. Horizontal and vertical constraints of the turned geometry
+  turn with it: a quarter turn makes a horizontal line vertical. At
+  other angles, the lines are held parallel or perpendicular to each
+  other instead, and the panel says so.
+- **Point to Point** moves them from the Origin Point to the Target
+  Point. Pick each in the view: the pointer snaps to points, line ends,
+  midpoints, centers, quadrants, intersections and the grid, as when you
+  draw. To use a point of another sketch, project it first.
+
 A move keeps the constraints; Create Copy leaves the originals where
 they are.
 
@@ -3588,6 +3668,20 @@ with a message. The sketch refuses a constraint that is already implied
 or that conflicts. MitCad also refuses a constraint that would
 over-constrain the sketch, with a message. When you click geometry that
 a constraint tool does not take, the status line tells why.
+
+**Conflicting constraints.** When a change cannot hold with the
+constraints and dimensions the sketch has, MitCad refuses it and says
+what blocks it, for example *the Equal between two lines can't hold with
+the fillet*. The message names constraints by their type and the
+geometry they are on, and dimensions by their value. Projected and fixed
+geometry is called *projected geometry* or *fixed geometry*. While the
+message shows, the blocking constraints' symbols, the dimensions and the
+curves they are on are drawn in red in the sketch. When you point at the
+message in a command panel, they are drawn in the highlight color.
+Delete or change the blocking constraint, or choose a value that fits.
+If the sketch itself no longer solves, the Sketch Palette shows
+*Conflicting constraints* as a link: click it to select the constraints
+and dimensions that conflict.
 
 Symmetry of two circles or arcs makes their radii equal. If dimensions
 or an Equal constraint already fix both radii, Symmetry mirrors only
@@ -4516,8 +4610,10 @@ gear, for example its **Module**, **Teeth**, **Pressure Angle** and
 **Face Width**, are also parameters. You can type expressions into
 them, and you can change them later in the parameters.
 
-**Edit Parameters.** Open **Edit Parameters** from the Modify group
-or from the Edit menu. It lists the user parameters and the model
+**Edit Parameters.** Open **Edit Parameters** from the Modify group,
+from the Edit menu, or with its button at the end of the navigation bar
+at the bottom of the view, which is there in every workspace and in
+sketches (in a drawing, in the drawing's bar). It lists the user parameters and the model
 parameters with their expressions and comments. To change a value,
 double-click it and type a number such as `50` or an expression such
 as `d2 * 2`. MitCad computes the design again. A fillet stays on the
@@ -4744,6 +4840,15 @@ its name into the field where you typed it. The new parameter is in
 Edit Parameters and in the lists at once. In a sketch, Undo takes it
 back. In a feature panel it stays when you cancel the panel. The
 right-click menu of a value field has the same actions.
+
+**Remove a name.** A sketch dimension whose parameter you named shows
+the name in its value editor, for example `width = 20 mm`. Delete the
+`width = ` part and press Enter, or choose **Remove Name** in the fx
+list or the field's right-click menu, and the parameter gets its
+automatic name back, such as `d1`. The right-click menu of the dimension
+in the sketch offers **Remove Name width** too. Other dimensions and
+parameters that use `width` change to the new name, in one step that
+Undo takes back.
 
 #### Tables
 
@@ -5508,7 +5613,7 @@ appearances of the class of the body's material (for a PLA, the FDM
 Plastic ones, then the General Plastic ones), then the rest of the
 design's own appearances under *This Design*, then the rest of the
 library under the headings of their classes, in the order *Metal*,
-*General Plastic*, *FDM Plastic*, *Resin*, *Other*. Pick the **Bodies** and the **Faces** in
+*General Plastic*, *FDM Plastic*, *Resin*, *Wood*, *Other*. Pick the **Bodies** and the **Faces** in
 the view or the Browser; what you selected before goes into them. **OK**
 gives them the appearance in one Undo step. A face's appearance
 overrides its body's; **Default** for a face takes its own away. With
@@ -5526,8 +5631,8 @@ other entries (Down, or type *Edit*, then Enter).
 
 The Appearances window lists the design's own appearances first, under
 *This Design*, then the library grouped by class under the headings
-*Metal*, *General Plastic*, *FDM Plastic*, *Resin* and *Other*, each
-with the number of its appearances. Click a heading (or press Space on
+*Metal*, *General Plastic*, *FDM Plastic*, *Resin*, *Wood* and *Other*,
+each with the number of its appearances. Click a heading (or press Space on
 it) to collapse or expand its group; MitCad remembers which groups you
 collapsed. Typing in the search narrows every group and hides the groups
 with no match.
@@ -5568,10 +5673,10 @@ values:
 - Opacity
 
 and a **Class**: what it is a look of (Metal, General Plastic, FDM
-Plastic, Resin or Other). The pickers offer the appearances of a
+Plastic, Resin, Wood or Other). The pickers offer the appearances of a
 material's class first. The library's appearances have theirs (the
 metals Metal, the plastics General Plastic, the filament colors FDM
-Plastic, the resins Resin); an
+Plastic, the resins Resin, the woods, plywoods and panels Wood); an
 appearance you make is Other until you choose its class, and a
 filament's color is FDM Plastic. A design whose appearances have a class
 does not open in MitCad versions from before the classes.
@@ -5647,19 +5752,20 @@ project), **My library** and **Built-in**, each with its count (refer to
 [Where print items live](#where-print-items-live)). In each group the
 materials are listed by their class: *Metals*, *General Plastics*
 (molded, cast, machined or sheet plastic), *FDM Plastics* (the
-filaments), *Resins* (for resin printers) and *Other*. Type in the
+filaments), *Resins* (for resin printers), *Wood* (solid wood and
+wood-based panels) and *Other*. Type in the
 search above the list to find materials by name in all the groups. The
 list is as
 wide as the longest name needs; drag the divider to make it narrower,
 and a long name then ends in "…" (point at it to see it in full).
 Select a material to see it on the right. The **General** tab has its
-**Name**, its **Class** (Metal, General Plastic, FDM Plastic, Resin or
-Other: the group it is listed in; a material with print settings is an
+**Name**, its **Class** (Metal, General Plastic, FDM Plastic, Resin,
+Wood or Other: the group it is listed in; a material with print settings is an
 FDM plastic, and its Class shows so and cannot change), **Density** (g/cm³) and **Appearances** (see
 [A filament's color is its appearance](#a-filaments-color-is-its-appearance)).
 An FDM plastic also has its print
 settings in the tabs beside General (*Filament*, *Cooling*, …); a
-metal, a general plastic, a resin or another material has none. Type in **Search settings** to find
+metal, a general plastic, a resin, a wood or another material has none. Type in **Search settings** to find
 a setting or a field of General, or turn on **Advanced** to see all of
 the print settings. A setting that is
 not set is an empty field that reads *Slicer default* in gray: type a
@@ -5691,10 +5797,11 @@ OK button. Undo takes back the change, also in your library.
 
 **New**, **Duplicate** and **Delete** are under the list. New asks the
 class first and starts a metal at steel's density, a plastic at PLA's
-and a resin at that of the built-in *Resin - Standard*; for another
-material it asks for the density. A design with a material of the class
-FDM Plastic without print settings, or of the class Resin, does not open
-in MitCad versions from before these classes. Duplicate makes
+and a resin at that of the built-in *Resin - Standard*; for a wood or
+another material it asks for the density. A new wood looks like oak
+until you choose its appearance. A design with a material of the class
+FDM Plastic without print settings, or of the class Resin or Wood, does
+not open in MitCad versions from before these classes. Duplicate makes
 your own copy of a material, with its class, named after it (for
 example "PLA Plastic (copy)", then "PLA Plastic (copy 2)"); New names
 it "Material 1". New and Duplicate ask where to make the material: This
@@ -5787,7 +5894,10 @@ Temperature unit**, whatever the design's units.
 material from MitCad's bundled material dataset: typical values of
 common steels, stainless steels, cast irons, aluminum, copper and nickel
 alloys, titanium and printing materials (PLA, ABS, PETG, ASA, nylon,
-polycarbonate, HIPS). It works offline. Type in its search to find a
+polycarbonate, HIPS), and in the class *Wood* ten solid woods (birch,
+cedar, cherry, Douglas fir, eucalyptus, maple, oak, pine, teak, walnut)
+and seven panels (chipboard, MDF, OSB/3, birch, eucalyptus, pine and
+spruce plywood), each with a look of its own. It works offline. Type in its search to find a
 material and grade, for example *6061 T6*, select it to see its values
 in the design's units, and click **Create**; then choose where to make
 it. The new material is your own: its values are filled in and you can
@@ -5795,7 +5905,11 @@ change them. It remembers the dataset's material and grade as its
 source, and a newer MitCad with an updated dataset never changes it.
 The dataset's values come from the material-properties dataset, under
 the Apache License 2.0 (refer to the About box and the third-party
-notices).
+notices); those of the woods and panels are MitCad's own, each from the
+public source it names as its source (a wood database, OEKOBAUDAT and the
+manufacturers' data sheets; refer to [Materials as JSON and CSV
+files](material-files.md#the-woods-and-panels)). A wood has its density
+and Young's modulus, a panel its density only.
 
 **Import…** and **Export…** under the list read and write materials as
 JSON or CSV files (refer to [Materials as JSON and CSV
@@ -5872,7 +5986,7 @@ filament, the design's and MitCad's together); for an FDM plastic or a
 resin then the *General Plastic* ones; then the design's other
 appearances, under *This Design*, and MitCad's, under the headings of
 their classes (*Metal*, *General Plastic*, *FDM Plastic*, *Resin*,
-*Other*); a search hides the headings with no match; **Edit
+*Wood*, *Other*); a search hides the headings with no match; **Edit
 Appearances…** at the end opens the Appearances window. Select a row and
 click **Make Default** to make it the default, or **Remove** to take it
 out of the list (or right-click the row for the same two). When you
@@ -8362,6 +8476,13 @@ the Middle** from the middle of the edge. This width can pass the ends of
 the edge. **Own Overhang Root** sets how far the wall past the ends is cut
 back; 0 starts it at the end of the bend.
 
+When a Position other than *Edge* sets the bend back into the face and a
+side of the face meets the edge at another angle than 90 degrees, an end
+without an offset follows that side: the side runs on to the bend at its
+own angle, and the bend and the wall reach from side to side there. A
+flange so comes out wider than the edge where a side leans outwards and
+narrower where it leans inwards.
+
 **Corner** is for a flange that closes against another wall of the
 sheet, such as the last side of a box section that is welded. Type the
 inside dimension as the Length; the corner sets where the wall ends.
@@ -8425,10 +8546,15 @@ has a Flat Pattern like any other sheet. The details are in
 a new body takes the sheet tools: Fold, Flange, Cut and the Flat Pattern
 work on it as on the original. With **Join**, the copy and the original
 become one sheet: where their flat panels meet in one plane, they are
-one panel, and the bends on either side stay bends. The Flat Pattern
+one panel, and where a bend crosses the mirror plane, the bend and its
+mirror image are one bend. The other bends stay bends. The Flat Pattern
 unfolds the whole part. MitCad refuses the join when the two halves
-overlap, do not touch, or meet only at a bend or a wall that crosses the
-mirror plane. The message says which.
+overlap, do not touch, or meet only at a wall that crosses the mirror
+plane at a slant. The message says which. **Combine** with Join does the
+same when you join a sheet with its mirrored or patterned copy made as a
+new body: the result is one sheet. Where the two sheets cannot be one
+sheet, Combine still joins them, and the sheet state says why the result
+is no longer a sheet.
 
 This also holds for a sheet with an ordinary fillet or chamfer on it, for
 a pattern of a pattern of the sheet body, and for **Join any**, where a
@@ -8600,6 +8726,12 @@ dialog has these fields:
   the project's designs, in its first version. Other files stay in the
   folder, and MitCad does not version them. A folder inside another git
   repository gets a repository of its own, and a warning says so.
+- If the folder already holds files or folders, a warning says that the
+  folder and everything below it, its subfolders too, become the
+  project. It also says how many designs go into the first version. To
+  keep the folder as it is, use **Create in a New Subfolder** instead of
+  Create. It makes the project in a new folder inside the chosen one,
+  named in the **New subfolder** field (New Project by default).
 - **Storage:** Local, or Cloud with the Cloud section (refer to [Sharing
   a project](#sharing-a-project)).
 - **Author:** the name and the email address that every version records.
@@ -8777,6 +8909,30 @@ or cloned on this computer, newest first. It also lists the projects in
 the projects folder (Documents/Mitcad). **Add Existing Project Folder…**
 adds a project from another place. **Remove from List** takes a project
 out of the panel and deletes nothing.
+
+**Remove Project.** **Remove Project…** makes a project's folder an
+ordinary folder again. It is on the project's context menu, in the
+panel's Projects menu and in Project Settings. Your designs and other
+files stay in the folder, but the project's version history goes. First
+a question tells you what happens:
+
+- The folder and its designs stay.
+- If MitCad made the project's git repository, the repository and its
+  versions are deleted. Older versions and deleted designs cannot be
+  brought back.
+- If the folder was a git repository before the project, it keeps its
+  history. A new version takes the project's files out.
+- For a Cloud project, only this computer's copy stops being a project.
+  The repository on the server does not change.
+- A design that keeps data in the project is saved as a single file
+  first, so it opens without the project.
+- Open designs of the project close. MitCad asks you to save changes
+  first.
+
+MitCad removes only its own files: the `.mitcad` folder, its lines in
+`.gitattributes` and `.gitignore` (the files too when nothing else is in
+them), and the `.git` folder when MitCad made it. After that, you can
+make a project in a subfolder, or in the same folder again.
 
 **Rows.** Each project is a row of its own. Only its folders and designs
 are below it, sorted by name. A project shows the display name that you
@@ -10544,7 +10700,8 @@ viewers, a drawing on a sheet, and web pages for people without MitCad.
 #### Tuning printed fits
 
 New Thread, Gear, Pulley and Bearing panels suggest parameter names in
-their clearance fields. The ordinary user parameters are created when
+their clearance fields, and a new Hole suggests one in its press fit's
+*Interference*. The ordinary user parameters are created when
 you accept a feature that uses them. Cancel leaves the parameter list
 unchanged, and one Undo removes both a new feature and its new parameters.
 
@@ -10555,7 +10712,9 @@ Open **Edit Parameters** to tune fits for your printer. Use
 and `gear_backlash` (0.2 mm) for the space between mating gear teeth.
 Printable bearings use `bearing_radial_clearance` (0.4 mm),
 `bearing_axial_clearance` (0.4 mm), `bearing_element_gap` (0.6 mm) and
-`bearing_fit_clearance` (0.5 mm). Their comments explain which printer
+`bearing_fit_clearance` (0.5 mm). Press-fit holes use
+`press_fit_interference` (0.1 mm): how much smaller than the pin a hex's
+or square's flats or the crush ribs' tips are. Their comments explain which printer
 quality affects each fit; bearing gaps are especially sensitive to circle
 accuracy and ringing.
 
@@ -10935,8 +11094,9 @@ another project), it opens with ISO.
 takes the whole workspace: the sheet fills the area of the 3D view from
 edge to edge, and the toolbar shows the **Drawing** tab with the
 drawing's tools instead of Solid and Build. Above the sheet, one row
-shows the drawing's name, its sheets as tabs, **+**, **Sheet…** and
-**Add Revision…**. The browser stays, so you can open another drawing
+shows the drawing's name, its sheets as tabs, **+**, **Sheet…**,
+**Add Revision…** and **Edit Parameters…**, which opens the design's
+parameter table over the drawing; the drawing follows each change. The browser stays, so you can open another drawing
 from it; in the Floating layout the other cards (the timeline, the
 Projects card, the Command card) are hidden while the drawing is open.
 **Close Drawing**, the first button of the Drawing tab, shows the 3D
@@ -11813,6 +11973,19 @@ the release page instead. If a download's signature does not match,
 MitCad deletes the download. MitCad never runs it. On Windows, the
 download goes to a private folder, and the updater checks the installer
 again right before it runs it.
+
+On Windows the update replaces no file while a program from the
+installation runs, for example another MitCad window or the MCP bridge
+of an AI assistant session (`mitcad-cli.exe`). The updater then names
+these programs and asks: **End Them and Install** or **Cancel**. End
+Them and Install first asks MitCad to close as when you quit it, so it
+asks to save your changes. If MitCad still runs after half a minute,
+the updater asks again: **End Anyway** ends it and loses the changes it
+has not saved, **Wait** waits again, **Cancel** stops. Then the updater
+ends the other programs and installs. Cancel installs nothing. MitCad
+then starts again and says the update was not installed; close the
+programs it names and choose **Try Again**. The installer with its
+pages asks the same with **End Them**, **Retry** and **Cancel**.
 
 The update information of a release has a last day. When it has
 expired, the check at start-up offers nothing. **Help › Check for

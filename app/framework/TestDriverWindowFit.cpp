@@ -4,13 +4,15 @@
 // native-card-width, expect-native-card-width, expect-native-name-fits,
 // native-screen-limit and expect-native-window-fits (TestDriver.hpp); the
 // left column's native-column-split and expect-native-card-height
-// (mitcad#1020).
+// (mitcad#1020); expect-widget-whole for a Qt widget shown whole
+// (mitcad#1590).
 #include "TestDriver.hpp"
 
 #include <algorithm>
 
 #include <QAbstractButton>
 #include <QDialogButtonBox>
+#include <QFontMetrics>
 #include <QPoint>
 #include <QRect>
 #include <QRegularExpression>
@@ -93,6 +95,81 @@ bool dialogFits(QWidget* window, const QSize& most, QString& detail) {
   return true;
 }
 
+// The one visible widget named `name` in `window` shown whole (mitcad#1590):
+// as high as its text needs at its width (heightForWidth; without wrapped
+// text, its minimum height) and cut by none of its parents up to the
+// window, scroll areas' views included. In its own scroll area (it is the
+// area's widget) it counts as whole when that area's view is whole, at least
+// a line of the widget's text high, and scrolls to the widget's end.
+bool widgetWhole(QWidget* window, const QString& name, QString& detail) {
+  if (window == nullptr) {
+    detail = QStringLiteral("no window");
+    return false;
+  }
+  QWidget* widget = nullptr;
+  for (QWidget* candidate : window->findChildren<QWidget*>(name)) {
+    if (!candidate->isVisible()) {
+      continue;
+    }
+    if (widget != nullptr) {
+      detail = QStringLiteral("several visible widgets '%1'").arg(name);
+      return false;
+    }
+    widget = candidate;
+  }
+  if (widget == nullptr) {
+    detail = QStringLiteral("no visible widget '%1'").arg(name);
+    return false;
+  }
+  detail = QStringLiteral("'%1' %2x%3").arg(name).arg(widget->width()).arg(widget->height());
+  if (widget->hasHeightForWidth()) {
+    const int needed = widget->heightForWidth(widget->width());
+    detail += QStringLiteral(", its text %1 high").arg(needed);
+    if (needed > widget->height()) {
+      detail += QStringLiteral(": cut");
+      return false;
+    }
+  } else if (widget->height() < widget->minimumSizeHint().height()) {
+    // A squeezed button cuts its text.
+    detail += QStringLiteral(", below its minimum height %1").arg(widget->minimumSizeHint().height());
+    return false;
+  }
+  const int line = widget->fontMetrics().lineSpacing();
+  int scrolled = 0;
+  QWidget* current = widget;
+  QRect rect = widget->rect();
+  while (current != window && !current->isWindow()) {
+    QWidget* parent = current->parentWidget();
+    if (parent == nullptr) {
+      break;
+    }
+    rect.translate(current->pos());
+    auto* area = qobject_cast<QScrollArea*>(parent->parentWidget());
+    if (area != nullptr && area->viewport() == parent && area->widget() == widget) {
+      // The widget's own scroll area (a long text's): clipped by the view,
+      // but reachable by scrolling. In any other scroll area it must be in
+      // view.
+      const int hidden = area->widget()->height() - parent->height();
+      if (parent->height() < line || (hidden > 1 && area->verticalScrollBar()->maximum() < hidden - 1)) {
+        detail += QStringLiteral(", its scroll area '%1' %2 high, %3 of it out of reach")
+                      .arg(area->objectName()).arg(parent->height()).arg(std::max(0, hidden));
+        return false;
+      }
+      ++scrolled;
+      rect = parent->rect();
+    } else if (!parent->rect().contains(rect)) {
+      detail += QStringLiteral(", cut by '%1' (%2)")
+                    .arg(parent->objectName(), QString::fromLatin1(parent->metaObject()->className()));
+      return false;
+    }
+    current = parent;
+  }
+  if (scrolled > 0) {
+    detail += QStringLiteral(", in %1 scroll area(s)").arg(scrolled);
+  }
+  return true;
+}
+
 } // namespace
 
 bool TestDriver::runWindowFitStep(const QString& name, const QStringList& a, int line) {
@@ -107,23 +184,37 @@ bool TestDriver::runWindowFitStep(const QString& name, const QStringList& a, int
   if (name == QLatin1String("fit-main-frame") || name == QLatin1String("expect-main-frame")) {
     int width = 0;
     int height = 0;
+    // `least`: the height raised to the window's own minimum where its
+    // layout cannot be that short (mitcad#1590: a dock's minimum on top of
+    // the platform's bars).
+    const bool least = a.size() > 2 && a.at(2) == QLatin1String("least");
     if (mac::test::active() || !m_main || !toInt(a.at(0), width) || !toInt(a.at(1), height) ||
-        width < 300 || height < 200 || width > 10000 || height > 10000) {
-      fail(line, QStringLiteral("%1 requires a Qt main window and a frame of at least 300x200").arg(name));
+        width < 300 || height < 200 || width > 10000 || height > 10000 || (a.size() > 2 && !least)) {
+      fail(line, QStringLiteral("%1 <w> <h> [least] requires a Qt main window and a frame of at least 300x200")
+                     .arg(name));
       return true;
     }
-    const QSize available(width, height);
+    // The frame asked for, with the window's frame margins and minimum.
+    const auto wanted = [width, height, least](const QWidget* top) {
+      if (!least) {
+        return QSize(width, height);
+      }
+      const int margins = top->frameGeometry().height() - top->height();
+      const int lowest = top->minimumSizeHint().expandedTo(top->minimumSize()).height() + margins;
+      return QSize(width, std::max(height, lowest));
+    };
     if (name == QLatin1String("fit-main-frame")) {
       // A process-local available-frame scenario: use this window's real
       // titlebar/border size, without changing the display or user settings.
       QWidget* top = topWindow();
       const QSize frame = top->frameGeometry().size() - top->size();
-      top->resize(available - frame);
+      top->resize(wanted(top) - frame);
       m_notBefore = std::max(m_notBefore, m_clock.elapsed() + 300);
     } else {
-      whenReady([this, available] {
+      whenReady([this, wanted] {
         const QWidget* top = topWindow();
         if (top == nullptr) return false;
+        const QSize available = wanted(top);
         const QSize frame = top->frameGeometry().size();
         m_waitDetail = QStringLiteral("actual frame %1x%2, client %3x%4, minimum %5x%6, available %7x%8")
             .arg(frame.width()).arg(frame.height()).arg(top->width()).arg(top->height())
@@ -155,6 +246,19 @@ bool TestDriver::runWindowFitStep(const QString& name, const QStringList& a, int
       }
       return fits;
     }, 6, QStringLiteral("the dialog is not within the screen with its buttons visible"));
+    return true;
+  }
+  if (name == QLatin1String("expect-widget-whole")) {
+    const QString widgetName = a.at(0);
+    whenReady([this, widgetName] {
+      QString detail;
+      const bool whole = widgetWhole(targetWindow(), widgetName, detail);
+      m_waitDetail = detail;
+      if (whole) {
+        qInfo().noquote() << QStringLiteral("TestDriver: widget whole: %1").arg(detail);
+      }
+      return whole;
+    }, 6, QStringLiteral("the widget is not shown whole"));
     return true;
   }
   if (name == QLatin1String("native-card-width") || name == QLatin1String("expect-native-card-width") ||

@@ -32,7 +32,7 @@
   {"cmd":"add_feature","def":{"type":"sheet_face","rules":"F1","profiles":[{"sketch":"F12","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}]}},
   {"cmd":"add_feature","def":{"type":"mirror","objects":{"type":"bodies","bodies":["F13.b0"]},"plane":"yz","combine":true}},
   {"expect":{"feature":"F14","status":"error","error_contains":"does not touch it"}},
-  {"comment":"A folded panel mirrored about the outer surface of its wall (x=32): the halves meet wall to wall, where no coplanar panels share a seam, and the join is refused."},
+  {"comment":"A folded panel mirrored about the outer surface of its wall (x=32): the halves meet wall to wall, where no coplanar panels or coaxial bends share a seam, and the join is refused."},
   {"cmd":"sketch.create"},
   {"cmd":"sketch.add_rectangle","sketch":"F15","corner":[0,100],"width":40,"height":20},
   {"cmd":"add_feature","def":{"type":"sheet_face","rules":"F1","profiles":[{"sketch":"F15","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}]}},
@@ -41,7 +41,7 @@
   {"cmd":"add_feature","def":{"type":"sheet_fold","body":"F16.b0","panel":{"feature":"F16","slot":0},"line":{"sketch":"F17","curve":"c1"},"stationary_side":"left","angle":1.5707963267948966,"position":"edge"}},
   {"cmd":"add_feature","def":{"type":"construction_plane","definition":{"type":"offset","plane":"yz","distance":32}}},
   {"cmd":"add_feature","def":{"type":"mirror","objects":{"type":"bodies","bodies":["F16.b0"]},"plane":"F19","combine":true}},
-  {"expect":{"feature":"F20","status":"error","error_contains":"no coplanar panels share a seam"}},
+  {"expect":{"feature":"F20","status":"error","error_contains":"no coplanar panels or coaxial bends share a seam"}},
   {"comment":"The sheet joined first is unchanged by the refusals."},
   {"expect":{"query":{"query":"sheet_state","body":"F3.b0"},"result":{"status":"valid"}}}
 ]

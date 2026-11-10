@@ -1433,12 +1433,25 @@ QMenu* Ribbon::showRowMenu(QWidget* over, const QString& tab, const QString& pla
   connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
   // The command is pinned in its own group, on its own tab (mitcad#1084).
   const CommandDef* def = m_registry.find(id);
-  const QString own = def != nullptr ? def->tab : tab;
+  // A command without a tab of its own (Measure, on SOLID and SKETCH) is
+  // the shown tab's, as pin() takes it.
+  const QString own = def != nullptr && !def->tab.isEmpty() ? def->tab : tab;
   const bool pinned = m_pins.isPinned(own, id);
   QAction* pinAction = menu->addAction(pinned ? tr("Unpin from Toolbar") : tr("Pin to Toolbar"));
   // A command that is already a button of its group has nothing to pin.
   if (!pinned && hasOwnButton(own, id)) {
     pinAction->setEnabled(false);
+  }
+  // The navigation bar's pin (mitcad#1589): the command one click away in
+  // every workspace; also for a command that is a button of its group.
+  QAction* navigationAction = nullptr;
+  if (m_navigationBarPinned) {
+    const bool onBar = m_navigationBarPinned(id);
+    navigationAction = menu->addAction(onBar ? tr("Unpin from Navigation Bar") : tr("Pin to Navigation Bar"));
+    connect(navigationAction, &QAction::triggered, this, [this, id, onBar] {
+      closePopups();
+      TestSync::singleShot(0, this, [this, id, onBar] { emit navigationBarPinRequested(id, !onBar); });
+    });
   }
   QAction* shortcutAction = menu->addAction(tr("Change Keyboard Shortcut…"));
   // The menus closed first; then the change, which may remake the group
@@ -1460,7 +1473,9 @@ QMenu* Ribbon::showRowMenu(QWidget* over, const QString& tab, const QString& pla
   qDebug().noquote() << QStringLiteral("Toolbar menu %1 %2: %3").arg(place, id, menuEntries(menu));
   menu->popup(global);
   if (keyboard) {
-    menu->setActiveAction(pinAction->isEnabled() ? pinAction : shortcutAction);
+    menu->setActiveAction(pinAction->isEnabled()      ? pinAction
+                          : navigationAction != nullptr ? navigationAction
+                                                        : shortcutAction);
   }
   // Its entries' places, for UI tests: "Toolbar menu entry Pin to Toolbar
   // at x,y" in the main window's coordinates.
@@ -1471,6 +1486,10 @@ QMenu* Ribbon::showRowMenu(QWidget* over, const QString& tab, const QString& pla
     }
   });
   return menu;
+}
+
+void Ribbon::setNavigationBarPins(std::function<bool(const QString& id)> pinned) {
+  m_navigationBarPinned = std::move(pinned);
 }
 
 bool Ribbon::hasOwnButton(const QString& tab, const QString& id) const {

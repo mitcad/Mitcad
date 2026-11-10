@@ -160,7 +160,7 @@
 //! `filament`, `based_on`, `class` (mitcad#655: `metal`, `plastic`,
 //! `other`; `fdm_plastic` and `resin` since mitcad#1102, written only
 //! when chosen for a material without print settings, which older versions
-//! refuse), `version`, `origin`, `properties` and `reference`, mitcad#1213)
+//! refuse, as they refuse `wood`, since mitcad#1552), `version`, `origin`, `properties` and `reference`, mitcad#1213)
 //! and the components' default materials
 //! `component_materials` (`[{"component", "material", "appearance"?}]`), see
 //! [`crate::material`]; a body's `material` names a built-in material or
@@ -936,6 +936,39 @@ pub fn brep_references(json: &str) -> Result<BTreeSet<Sha256>, FileError> {
         out.insert(sha256);
     }
     Ok(out)
+}
+
+/// The text of a project's design file (version 3) as a single file, the
+/// B-rep data it refers to read from `store` and put inside, its
+/// statistics kept: what Remove Project writes before the project's store
+/// goes (mitcad#1562). None when the file refers to no data (it stays as
+/// it is). An error, so that nothing is lost, when data it refers to
+/// cannot be read or the file has fields a newer MitCad wrote.
+pub fn single_file_text(json: &str, store: &dyn BlobStore) -> Result<Option<String>, FileError> {
+    if brep_references(json)?.is_empty() {
+        return Ok(None);
+    }
+    let Loaded {
+        mut state,
+        mut warnings,
+        statistics,
+        unknown_fields,
+    } = load_parts(json)?;
+    if !unknown_fields.is_empty() {
+        return Err(FileError::Invalid(format!(
+            "it has fields a newer MitCad wrote ({}): open and save it in that MitCad first",
+            unknown_fields.join(", ")
+        )));
+    }
+    warnings.clear();
+    resolve(&mut state, store, &mut warnings);
+    if has_references(&state) {
+        return Err(FileError::Invalid(format!(
+            "the B-rep data it refers to cannot be read: {}",
+            warnings.join("; ")
+        )));
+    }
+    Ok(Some(v2::save_with(&state, &statistics.unwrap_or_default())))
 }
 
 /// Whether a base feature refers to B-rep data elsewhere.

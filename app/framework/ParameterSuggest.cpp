@@ -268,6 +268,23 @@ int expressionStart(const QString& text) {
   return start;
 }
 
+QString namedPrefix(const QString& text) {
+  const QRegularExpressionMatch match = namedMatch(text);
+  return match.hasMatch() ? match.captured(1) : QString();
+}
+
+bool isAutomaticName(const QString& name) {
+  if (name.size() < 2 || name.at(0) != QLatin1Char('d') || name.at(1) == QLatin1Char('0')) {
+    return false;
+  }
+  for (int i = 1; i < name.size(); ++i) {
+    if (name.at(i) < QLatin1Char('0') || name.at(i) > QLatin1Char('9')) {
+      return false;
+    }
+  }
+  return true;
+}
+
 QString kindProblem(ParameterKind field, ParameterKind parameter) {
   // A number's field takes a unitless parameter; a text and a number
   // never stand for each other (mitcad#664).

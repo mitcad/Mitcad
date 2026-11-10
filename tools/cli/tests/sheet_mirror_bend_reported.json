@@ -1,0 +1,12 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT. The reported design of GitHub #209 (mitcad#1558; opened with --open, never committed): its folded face mirrored with Join about its wall along the sketch line c2 (x = 0), which the second fold's bend crosses: one valid sheet, the bend and its image one bend. Then the mirror as a new body, joined to the sheet with Combine: one valid sheet as well. Before the fix the join failed (an empty material solid) and the Combine left an invalid sheet (material added)."},
+  {"cmd":"add_feature","def":{"type":"mirror","objects":{"type":"bodies","bodies":["F3.b0"]},"plane":{"body":"F3.b0","face":"F3:sheet_side0(F1:sheet_curve(c2[c44,c30]))"},"combine":true}},
+  {"expect":{"feature":"F22","status":"ok","bodies":1}},
+  {"expect":{"query":{"query":"sheet_state","body":"F3.b0"},"result":{"status":"valid"}}},
+  {"cmd":"edit_feature","uid":"F22","def":{"type":"mirror","objects":{"type":"bodies","bodies":["F3.b0"]},"plane":{"body":"F3.b0","face":"F3:sheet_side0(F1:sheet_curve(c2[c44,c30]))"},"combine":false}},
+  {"expect":{"feature":"F22","status":"ok","bodies":2}},
+  {"expect":{"query":{"query":"sheet_state","body":"F22.b0"},"result":{"status":"valid"}}},
+  {"cmd":"add_feature","def":{"type":"combine","target":"F3.b0","tools":["F22.b0"],"operation":"join"}},
+  {"expect":{"feature":"F23","status":"ok","bodies":1}},
+  {"expect":{"query":{"query":"sheet_state","body":"F3.b0"},"result":{"status":"valid"}}}
+]

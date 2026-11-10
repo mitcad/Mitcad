@@ -53,6 +53,8 @@ public:
   QList<Model> models() const override { return m_models; }
   // The fix in a terminal beside Sign in (mitcad#1289).
   QString signedOutText() const override;
+  // `codex logout`, then `codex login` (mitcad#1585).
+  QList<QStringList> signInAgainCommands() const override;
 
   void check() override;
   bool installedNow() const override;

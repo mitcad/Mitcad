@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: MIT
 #include "ChatPanel.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <utility>
 
 #include <QAbstractButton>
+#include <QClipboard>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDir>
 #include <QEvent>
+#include <QFontDatabase>
 #include <QFrame>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHash>
 #include <QJsonArray>
@@ -20,11 +25,13 @@
 #include <QMenu>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSet>
 #include <QShowEvent>
 #include <QSignalBlocker>
+#include <QSize>
 #include <QStyleOptionViewItem>
 #include <QStyledItemDelegate>
 #include <QTimer>
@@ -42,12 +49,73 @@
 #include "AccountCheck.hpp"
 #include "ChatController.hpp"
 #include "ChatLogic.hpp"
+#include "SignInCommands.hpp"
+#include "SignInTerminal.hpp"
 
 namespace mitcad::agent {
 namespace {
 
 constexpr int kPollMs = 3000;
 constexpr int kRenderMs = 60;
+
+// A wrapped text in a scroll area of its own (mitcad#1590): as high as the
+// text needs at the area's width while the panel has the room, at least
+// `leastLines` lines when it has not, and the rest of the text scrolls. A
+// short panel then shrinks the text's view instead of cutting the text.
+class TextScroll : public QScrollArea {
+public:
+  TextScroll(QLabel* text, int leastLines) : m_text(text), m_leastLines(leastLines) {
+    setWidgetResizable(true);
+    setFrameShape(QFrame::NoFrame);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setWidget(text);
+  }
+
+  QSize sizeHint() const override { return {QScrollArea::sizeHint().width(), textHeight()}; }
+
+  QSize minimumSizeHint() const override {
+    const int least = m_text->fontMetrics().lineSpacing() * m_leastLines + 2 * frameWidth();
+    return {QScrollArea::minimumSizeHint().width(), std::min(textHeight(), least)};
+  }
+
+protected:
+  bool event(QEvent* event) override {
+    // The text changed (or its font): the layout asks for its height again.
+    if (event->type() == QEvent::LayoutRequest) {
+      updateGeometry();
+    }
+    return QScrollArea::event(event);
+  }
+
+  void resizeEvent(QResizeEvent* event) override {
+    QScrollArea::resizeEvent(event);
+    if (event->size().width() != event->oldSize().width()) {
+      updateGeometry(); // another width wraps the text into another height
+    }
+  }
+
+private:
+  // The text's height at the area's whole width (no scroll bar needed then).
+  int textHeight() const {
+    const int frame = 2 * frameWidth();
+    return m_text->heightForWidth(std::max(1, width() - frame)) + frame;
+  }
+
+  QLabel* m_text;
+  int m_leastLines;
+};
+
+// Where the panel scrolls as a whole (the Floating card of a short window,
+// MainWindowChat.cpp, mitcad#1590), `widget` laid out and scrolled into view.
+void revealInScrollingPanel(QWidget* panel, QWidget* widget) {
+  QWidget* view = panel->parentWidget();
+  auto* area = qobject_cast<QScrollArea*>(view != nullptr ? view->parentWidget() : nullptr);
+  if (area == nullptr || area->viewport() != view) {
+    return;
+  }
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+  area->ensureWidgetVisible(widget, 0, 0);
+}
 
 // The agent's state beside its name in the switcher's list (mitcad#1289):
 // "Claude Code · signed in as someone@example.com". The item's text stays
@@ -310,17 +378,104 @@ ChatPanel::ChatPanel(ChatController& chat, QWidget* parent) : QWidget(parent), m
   m_checkAccount->setObjectName(QStringLiteral("chatCheckAccount"));
   m_checkAccount->hide();
   setupLine->addWidget(m_checkAccount);
+  // The agent's own sign-out and sign-in in a terminal (mitcad#1585).
+  m_signInAgain = new QPushButton(tr("Sign in Again…"));
+  m_signInAgain->setObjectName(QStringLiteral("chatSignInAgain"));
+  m_signInAgain->hide();
+  setupLine->addWidget(m_signInAgain);
   setupLine->addStretch(1);
   column->addWidget(m_setupRow);
+  // Sign in Again's confirmation: what will happen, before it starts.
+  m_signInConfirm = new QFrame;
+  m_signInConfirm->setObjectName(QStringLiteral("chatSignInAgainConfirm"));
+  m_signInConfirm->setFrameShape(QFrame::StyledPanel);
+  auto* confirmColumn = new QVBoxLayout(m_signInConfirm);
+  m_signInConfirmText = wrapped(QStringLiteral("chatSignInAgainText"));
+  m_signInConfirmText->setTextFormat(Qt::PlainText);
+  // A short panel scrolls the text above the buttons instead of cutting it
+  // (mitcad#1590).
+  m_signInConfirmScroll = new TextScroll(m_signInConfirmText, 5);
+  m_signInConfirmScroll->setObjectName(QStringLiteral("chatSignInAgainTextScroll"));
+  confirmColumn->addWidget(m_signInConfirmScroll, 1);
+  auto* confirmButtons = new QHBoxLayout;
+  confirmButtons->addStretch(1);
+  auto* confirmCancel = new QPushButton(tr("Cancel"));
+  confirmCancel->setObjectName(QStringLiteral("chatSignInAgainCancel"));
+  auto* confirmStart = new QPushButton(tr("Sign in Again"));
+  confirmStart->setObjectName(QStringLiteral("chatSignInAgainStart"));
+  confirmStart->setDefault(true);
+  confirmButtons->addWidget(confirmCancel);
+  confirmButtons->addWidget(confirmStart);
+  confirmColumn->addLayout(confirmButtons);
+  m_signInConfirm->hide();
+  column->addWidget(m_signInConfirm);
   m_accountHelp = new QFrame;
   m_accountHelp->setObjectName(QStringLiteral("chatAccountHelp"));
   m_accountHelp->setFrameShape(QFrame::StyledPanel);
   auto* helpColumn = new QVBoxLayout(m_accountHelp);
   m_accountHelpText = wrapped(QStringLiteral("chatAccountHelpText"));
   helpColumn->addWidget(m_accountHelpText);
+  // The commands Sign in Again runs, to run by hand (no terminal found, or
+  // one of the user's own), with Copy.
+  m_signInCommandsRow = new QWidget;
+  m_signInCommandsRow->setObjectName(QStringLiteral("chatSignInCommandsRow"));
+  auto* commandsColumn = new QVBoxLayout(m_signInCommandsRow);
+  commandsColumn->setContentsMargins(0, 0, 0, 0);
+  commandsColumn->setSpacing(4);
+  m_signInCaption = wrapped(QStringLiteral("chatSignInCaption"));
+  m_signInCaption->setTextFormat(Qt::PlainText);
+  commandsColumn->addWidget(m_signInCaption);
+  m_signInCommands = wrapped(QStringLiteral("chatSignInCommands"));
+  m_signInCommands->setTextFormat(Qt::PlainText);
+  m_signInCommands->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+  commandsColumn->addWidget(m_signInCommands);
+  auto* copyLine = new QHBoxLayout;
+  copyLine->setContentsMargins(0, 0, 0, 0);
+  m_copyCommands = new QPushButton(tr("Copy"));
+  m_copyCommands->setObjectName(QStringLiteral("chatSignInCommandsCopy"));
+  copyLine->addWidget(m_copyCommands);
+  copyLine->addStretch(1);
+  commandsColumn->addLayout(copyLine);
+  m_signInCommandsRow->hide();
+  helpColumn->addWidget(m_signInCommandsRow);
   m_accountHelp->hide();
   column->addWidget(m_accountHelp);
   connect(m_checkAccount, &QPushButton::clicked, this, [this] { m_chat.checkAccount(); });
+  connect(m_signInAgain, &QPushButton::clicked, this, [this] {
+    const QString text = signInAgainText();
+    m_signInConfirmText->setText(text);
+    m_signInConfirmScroll->updateGeometry(); // the new text's height
+    m_signInConfirmScroll->verticalScrollBar()->setValue(0);
+    m_signInConfirm->show();
+    revealInScrollingPanel(this, m_signInConfirm);
+    qInfo().noquote() << QStringLiteral("Chat: Sign in Again asked: %1")
+                             .arg(QString(text).replace(QLatin1Char('\n'), QStringLiteral(" | ")));
+    updateState();
+  });
+  connect(confirmCancel, &QPushButton::clicked, this, [this] {
+    qInfo().noquote() << QStringLiteral("Chat: Sign in Again cancelled");
+    m_signInConfirm->hide();
+    updateState();
+  });
+  connect(confirmStart, &QPushButton::clicked, this, [this] {
+    m_signInConfirm->hide();
+    ChatAgent* agent = m_chat.agent();
+    const QString heading = tr("MitCad: signing out of %1 and signing in again.").arg(agent->name());
+    const QString closing = SignInTerminal::shell() == ScriptShell::WindowsCmd
+                                ? tr("Done. Close this window and go back to MitCad: it checks the account again.")
+                                : tr("Done. Press Enter, then go back to MitCad: it checks the account again.");
+    QString error;
+    if (!m_chat.signInAgain(heading, closing, &error)) {
+      // How to fix shows the commands to run by hand.
+      m_accountHelp->show();
+    }
+    updateState();
+  });
+  connect(m_copyCommands, &QPushButton::clicked, this, [this] {
+    QGuiApplication::clipboard()->setText(m_signInCommands->text());
+    qInfo().noquote() << QStringLiteral("Chat: sign-in commands copied: %1")
+                             .arg(QString(m_signInCommands->text()).replace(QLatin1Char('\n'), QStringLiteral(" | ")));
+  });
   connect(m_setup, &QPushButton::clicked, this, [this] {
     qInfo().noquote() << QStringLiteral("Chat: %1").arg(m_setup->text());
     if (m_setupAction == QStringLiteral("install")) {
@@ -953,6 +1108,25 @@ void ChatPanel::applyModel() {
   m_chat.setModel(model);
 }
 
+QString ChatPanel::signInAgainText() const {
+  const ChatAgent* agent = m_chat.agent();
+  const QString commands = commandLines(agent->signInAgainCommands(), SignInTerminal::shell());
+  if (agent->id().startsWith(QStringLiteral("claude"))) {
+    return tr("Sign in Again opens a terminal window that runs:\n%1\n"
+              "Signing out also signs out Claude Desktop and every other Claude Code on this computer: they share one "
+              "sign-in. Signing in again helps only with an account that is allowed to use Claude Code: if your "
+              "organization has disabled access, signing in again with the same account does not fix it. When you are "
+              "done in the terminal, MitCad checks the account again.")
+        .arg(commands);
+  }
+  return tr("Sign in Again opens a terminal window that runs:\n%1\n"
+            "Signing out also signs out the other Codex programs on this computer that use this sign-in. Signing in "
+            "again helps only with an account that is allowed to use Codex: if your organization has disabled access, "
+            "signing in again with the same account does not fix it. When you are done in the terminal, MitCad checks "
+            "the account again.")
+      .arg(commands);
+}
+
 void ChatPanel::updateState() {
   ChatAgent* agent = m_chat.agent();
   const QString name = agent->name();
@@ -979,6 +1153,13 @@ void ChatPanel::updateState() {
   } else if (m_chat.checkingAccount()) {
     key = QStringLiteral("checking-account");
     text = tr("Checking %1's sign-in and account access…").arg(name);
+  } else if (accountProblem && !unusable && m_chat.signingInAgain()) {
+    // Sign in Again's terminal runs (mitcad#1585): Check again follows it.
+    key = QStringLiteral("signing-in-again");
+    text = tr("Signing in again to %1 in a terminal: MitCad checks the account when you are done there.")
+               .arg(agent->accountName());
+    action = QStringLiteral("account-help");
+    actionText = tr("How to fix");
   } else if (accountProblem && !unusable) {
     key = QStringLiteral("account-error");
     text = tr("%1 cannot use this account: %2").arg(name, m_chat.accountError().value(QStringLiteral("reason")).toString());
@@ -1051,6 +1232,38 @@ void ChatPanel::updateState() {
   setErrorStyleSheet(m_state, key == QStringLiteral("account-error") ? QStringLiteral("color: %1;") : QString());
   m_checkAccount->setVisible(accountCheckOffered(accountProblem, readiness, m_chat.checkingAccount()));
   m_checkAccount->setEnabled(activity == ChatController::Activity::Idle);
+  // Sign in Again (mitcad#1585): beside Check again for an agent whose own
+  // sign-out and sign-in MitCad knows; disabled while its terminal is open,
+  // and when no terminal is found (How to fix shows the commands then).
+  const QList<QStringList> commands =
+      accountProblem && !unusable ? agent->signInAgainCommands() : QList<QStringList>();
+  const bool offerSignIn = signInAgainOffered(accountProblem, readiness, m_chat.checkingAccount(), !commands.isEmpty());
+  const QString terminal = offerSignIn ? m_chat.signInTerminal() : QString();
+  const bool canSignIn = offerSignIn && activity == ChatController::Activity::Idle && !terminal.isEmpty() &&
+                         !m_chat.signInAgainOpen();
+  m_signInAgain->setVisible(offerSignIn);
+  m_signInAgain->setEnabled(canSignIn);
+  m_signInAgain->setToolTip(offerSignIn && terminal.isEmpty()
+                                ? tr("No terminal program was found: How to fix shows the commands to run in one.")
+                                : QString());
+  m_signInAgain->setProperty("terminal", terminal);
+  if (!canSignIn) {
+    m_signInConfirm->hide();
+  }
+  const QString loggedTerminal = offerSignIn ? agent->id() + QLatin1Char('\n') + terminal : QString();
+  if (loggedTerminal != m_loggedTerminal) {
+    m_loggedTerminal = loggedTerminal;
+    if (offerSignIn) {
+      qInfo().noquote() << (terminal.isEmpty() ? QStringLiteral("Chat panel: Sign in Again offered, no terminal found")
+                                               : QStringLiteral("Chat panel: Sign in Again offered (terminal %1)")
+                                                     .arg(terminal));
+    }
+  }
+  m_signInCommandsRow->setVisible(!commands.isEmpty());
+  m_signInCommands->setText(commandLines(commands, SignInTerminal::shell()));
+  m_signInCaption->setText(terminal.isEmpty() && offerSignIn
+                               ? tr("No terminal program was found. To sign in again, run these commands in a terminal:")
+                               : tr("Sign in Again… runs these commands in a terminal. To run them yourself:"));
   if (!accountProblem || unusable) {
     m_accountHelp->hide();
   }
@@ -1058,7 +1271,8 @@ void ChatPanel::updateState() {
   // requests are typed there; this chat needs the agent's own setup.
   QString desktop;
   if (m_chat.claudeDesktopConnected()) {
-    if (key == QStringLiteral("account-error") || key == QStringLiteral("signed-out")) {
+    if (key == QStringLiteral("account-error") || key == QStringLiteral("signing-in-again") ||
+        key == QStringLiteral("signed-out")) {
       desktop = agent->asksForKey()
                     ? tr("Claude Desktop is connected: type your request in Claude Desktop. This chat needs %1's API key.")
                           .arg(name)
@@ -1116,6 +1330,7 @@ void ChatPanel::updateState() {
   // This one cannot be used now and another found is ready: offered by
   // name (mitcad#1289).
   const bool unusableNow = key == QStringLiteral("signed-out") || key == QStringLiteral("account-error") ||
+                           key == QStringLiteral("signing-in-again") ||
                            key == QStringLiteral("missing") || key == QStringLiteral("outdated");
   ChatAgent* other = unusableNow ? m_chat.readyAlternative() : nullptr;
   m_otherAgent->setVisible(other != nullptr);

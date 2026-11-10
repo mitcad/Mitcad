@@ -168,10 +168,22 @@ pub(crate) fn pictures(request: &Value) -> Result<Vec<(&str, &str)>, String> {
     Ok(found)
 }
 
+/// The chat's live instructions and modeling-guide index, from the same
+/// compiled sources as the MCP server. Every built-in agent gets this text
+/// before its first user message, without another tool or resource read.
+pub(crate) fn guidance() -> String {
+    format!(
+        "{}\n\n{}",
+        crate::instructions(crate::Profile::Live),
+        crate::guide::index()
+    )
+}
+
 /// One operation of the chat's logic: `{"op": ..., ...}` in, its answer out.
 ///
 /// - `claude_arguments`: `session`, `resume`, `bridge`, `instance`, `chat`,
-///   `model` (optional) → `arguments` (the command line after the program)
+///   `guidance_file`, `model` (optional) → `arguments` (the command line after
+///   the program), `guidance` (the text to write to `guidance_file`)
 /// - `claude_message`: `text`, `context` (optional), `images` (`media_type`,
 ///   `data`) → `line` (one stdin line with its newline)
 /// - `claude_version`: `output` (of `claude --version`) → `version`, `ok`,

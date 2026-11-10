@@ -1471,7 +1471,9 @@ pub(crate) fn path_curve(r: &mut impl Resolver, path: &PathRef) -> Result<PathCu
             center,
             radius,
             start,
-        } => Ok(arc(center, radius, start, start + std::f64::consts::TAU)),
+            // A whole turn from where the circle starts: `arc` takes the
+            // sweep, not the end angle.
+        } => Ok(arc(center, radius, start, std::f64::consts::TAU)),
         SegmentGeometry::Arc {
             center,
             radius,

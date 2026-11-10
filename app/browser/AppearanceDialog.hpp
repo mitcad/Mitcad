@@ -44,7 +44,7 @@ class TextureBrowser;
 // to faces and to clear a face's own.
 //
 // The list is grouped by class (mitcad#1133): the design's own first, then
-// the library's under Metal, General Plastic, FDM Plastic, Resin and Other
+// the library's under Metal, General Plastic, FDM Plastic, Resin, Wood and Other
 // (appearanceSections, shared with the pickers), each heading with its
 // count; a click on a heading (or Space, Return, Left, Right on it)
 // collapses or expands its group, remembered per user (the setting

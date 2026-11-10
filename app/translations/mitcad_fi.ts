@@ -838,6 +838,18 @@
         <translation>Porausupotus</translation>
     </message>
     <message>
+        <source>Press Fit</source>
+        <translation>Puristussovite</translation>
+    </message>
+    <message>
+        <source>Hex</source>
+        <translation>Kuusikulmio</translation>
+    </message>
+    <message>
+        <source>Crush Ribs</source>
+        <translation>Puristusrivat</translation>
+    </message>
+    <message>
         <source>Countersink</source>
         <translation>Kartioupotus</translation>
     </message>
@@ -2833,13 +2845,31 @@
         <source>%1 is a git repository: the project goes into it.</source>
         <translation>%1 on git-repositorio: projekti tulee siihen.</translation>
     </message>
-    <message>
-        <source>The designs in %1 become the project&apos;s, in its first version.</source>
-        <translation>Kansion %1 malleista tulee projektin malleja sen ensimmäisessä versiossa.</translation>
+    <message numerus="yes">
+        <source>%1 and everything below it, its subfolders too, become the project: more than %n design(s) go into its first version.</source>
+        <translation>
+            <numerusform>Kansiosta %1 ja kaikesta sen alla olevasta, myös alikansioista, tulee projekti: sen ensimmäiseen versioon tulee yli %n malli.</numerusform>
+            <numerusform>Kansiosta %1 ja kaikesta sen alla olevasta, myös alikansioista, tulee projekti: sen ensimmäiseen versioon tulee yli %n mallia.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%1 and everything below it, its subfolders too, become the project: %n design(s) go into its first version.</source>
+        <translation>
+            <numerusform>Kansiosta %1 ja kaikesta sen alla olevasta, myös alikansioista, tulee projekti: sen ensimmäiseen versioon tulee %n malli.</numerusform>
+            <numerusform>Kansiosta %1 ja kaikesta sen alla olevasta, myös alikansioista, tulee projekti: sen ensimmäiseen versioon tulee %n mallia.</numerusform>
+        </translation>
     </message>
     <message>
-        <source>The files in %1 stay where they are, and are not versioned.</source>
-        <translation>Kansion %1 tiedostot pysyvät paikallaan, eikä niistä pidetä versioita.</translation>
+        <source>%1 and everything below it, its subfolders too, become the project.</source>
+        <translation>Kansiosta %1 ja kaikesta sen alla olevasta, myös alikansioista, tulee projekti.</translation>
+    </message>
+    <message>
+        <source>Other files stay where they are, not versioned.</source>
+        <translation>Muut tiedostot pysyvät paikallaan, eikä niistä pidetä versioita.</translation>
+    </message>
+    <message>
+        <source>Create in a New Subfolder makes the project in a new folder inside it instead.</source>
+        <translation>Luo uuteen alikansioon tekee projektin sen sijaan uuteen kansioon sen sisälle.</translation>
     </message>
     <message>
         <source>It is inside the git repository %1: the project gets a repository of its own, which the other one does not record.</source>
@@ -2964,6 +2994,30 @@
     <message>
         <source>&amp;Change</source>
         <translation>&amp;Vaihda</translation>
+    </message>
+    <message>
+        <source>New subfolder:</source>
+        <translation>Uusi alikansio:</translation>
+    </message>
+    <message>
+        <source>The name of the folder Create in a New Subfolder makes for the project</source>
+        <translation>Kansion nimi, jonka Luo uuteen alikansioon tekee projektille</translation>
+    </message>
+    <message>
+        <source>Create in a New Subfolder</source>
+        <translation>Luo uuteen alikansioon</translation>
+    </message>
+    <message>
+        <source>The new subfolder needs a name.</source>
+        <translation>Uusi alikansio tarvitsee nimen.</translation>
+    </message>
+    <message>
+        <source>%1 is no folder name: leave out / \ : * ? &quot; &lt; &gt; | and a dot at the start.</source>
+        <translation>%1 ei kelpaa kansion nimeksi: jätä pois / \ : * ? &quot; &lt; &gt; | ja piste alusta.</translation>
+    </message>
+    <message>
+        <source>%1 is in the folder already: choose another name.</source>
+        <translation>%1 on jo kansiossa: valitse toinen nimi.</translation>
     </message>
 </context>
 <context>
@@ -3351,6 +3405,14 @@
         <source>The name shown on this computer only. Empty uses the repository address or folder name.</source>
         <translation>Nimi näkyy vain tällä tietokoneella. Tyhjänä käytetään repositorion osoitetta tai kansion nimeä.</translation>
     </message>
+    <message>
+        <source>Remove Project…</source>
+        <translation>Poista projekti…</translation>
+    </message>
+    <message>
+        <source>The folder stops being a project and keeps its designs; you confirm what goes first</source>
+        <translation>Kansio lakkaa olemasta projekti ja sen mallit säilyvät; vahvistat ensin, mitä poistetaan</translation>
+    </message>
 </context>
 <context>
     <name>ProjectsPanel</name>
@@ -3447,6 +3509,10 @@
     <message>
         <source>Built with:</source>
         <translation>Tehty käyttäen:</translation>
+    </message>
+    <message>
+        <source>Looking for printers…</source>
+        <translation>Etsitään tulostimia…</translation>
     </message>
     <message>
         <source>Open CASCADE Technology %1 (LGPL-2.1 with the Open CASCADE exception)</source>
@@ -7340,8 +7406,8 @@
         <translation>Reiän kierretyyppi</translation>
     </message>
     <message>
-        <source>Simple, Tapped (threaded), or Clearance: sized for a screw, with its recesses</source>
-        <translation>Tavallinen, kierteitetty tai välysreikä: mitoitettu ruuville upotuksineen</translation>
+        <source>Simple, Tapped (threaded), Clearance (sized for a screw) or Press Fit: a hole that grips a pin</source>
+        <translation>Tavallinen, kierteitetty, välysreikä (mitoitettu ruuville) tai puristussovite: reikä, joka pitää tapin</translation>
     </message>
     <message>
         <source>Drill Point</source>
@@ -7364,8 +7430,8 @@
         <translation>ISO 273:n välys: hieno, normaali (keskisarja) tai karkea</translation>
     </message>
     <message>
-        <source>The hole&apos;s diameter; a tapered pipe thread&apos;s tap drill; a clearance hole&apos;s from its screw</source>
-        <translation>Reiän halkaisija; kartiomaisen putkikierteen pohjareikä; välysreiän koko ruuvin mukaan</translation>
+        <source>Hole diameter; a tapered pipe thread&apos;s tap drill; the screw&apos;s (Clearance) or pin&apos;s (Press Fit)</source>
+        <translation>Reiän halkaisija; kartiomaisen putkikierteen pohjareikä; ruuvin (välysreikä) tai tapin (puristussovite)</translation>
     </message>
     <message>
         <source>The wall&apos;s angle to the axis; positive narrows the hole as it goes deeper</source>
@@ -7430,6 +7496,38 @@
     <message>
         <source>%1 hole, %2</source>
         <translation>%1-reikä, %2</translation>
+    </message>
+    <message>
+        <source>Press Fit Shape</source>
+        <translation>Puristussovitteen muoto</translation>
+    </message>
+    <message>
+        <source>Hex or Square: flats grip the pin; Crush Ribs: ribs the pin crushes, for parts assembled once</source>
+        <translation>Kuusikulmio tai neliö: tasopinnat pitävät tapin; puristusrivat: rivat, jotka tappi painaa kasaan, kerran koottaville osille</translation>
+    </message>
+    <message>
+        <source>How much smaller than the Diameter, on the diameter, the flats or the ribs&apos; tips are</source>
+        <translation>Kuinka paljon halkaisijaa pienempiä tasopinnat tai ripojen kärjet ovat, halkaisijana mitattuna</translation>
+    </message>
+    <message>
+        <source>The number of crush ribs, evenly spaced round the bore</source>
+        <translation>Puristusripojen määrä, tasavälein reiän ympärillä</translation>
+    </message>
+    <message>
+        <source>Rib Height</source>
+        <translation>Rivan korkeus</translation>
+    </message>
+    <message>
+        <source>How far each rib stands out of the bore; the bore is the tips&apos; diameter plus twice this</source>
+        <translation>Kuinka paljon kukin ripa nousee reiän seinämästä; reikä on kärkien halkaisija lisättynä kahdella tällä</translation>
+    </message>
+    <message>
+        <source>The shape turned about the hole&apos;s axis</source>
+        <translation>Muoto kierrettynä reiän akselin ympäri</translation>
+    </message>
+    <message>
+        <source>%1 press-fit</source>
+        <translation>%1-puristussovite</translation>
     </message>
     <message>
         <source>Threads on cylindrical faces: cosmetic, or modeled into the geometry</source>
@@ -10344,8 +10442,24 @@
         <translation>Siirrä</translation>
     </message>
     <message>
+        <source>Where the objects move from: a point, an end, a middle or a center the pointer snaps to</source>
+        <translation>Mistä kohteet siirtyvät: piste, pää, keskikohta tai keskipiste, johon osoitin kohdistuu</translation>
+    </message>
+    <message>
+        <source>Where the Origin Point moves to: a point, an end, a middle or a center</source>
+        <translation>Mihin lähtöpiste siirtyy: piste, pää, keskikohta tai keskipiste</translation>
+    </message>
+    <message>
         <source>Pivot Point</source>
         <translation>Kiertopiste</translation>
+    </message>
+    <message>
+        <source>The point to turn about; none: the middle of the objects</source>
+        <translation>Piste, jonka ympäri käännetään; ei mitään: kohteiden keskikohta</translation>
+    </message>
+    <message>
+        <source>Pick the Origin Point and the Target Point.</source>
+        <translation>Poimi lähtöpiste ja kohdepiste.</translation>
     </message>
     <message>
         <source>Edit Pattern</source>
@@ -13705,6 +13819,10 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Hartsi</translation>
     </message>
     <message>
+        <source>Wood</source>
+        <translation>Puu</translation>
+    </message>
+    <message>
         <source>This project</source>
         <translation>Tämä projekti</translation>
     </message>
@@ -15374,6 +15492,20 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
 </context>
 <context>
+    <name>QPlatformTheme</name>
+    <message>
+        <source>Cancel</source>
+        <translation>Peruuta</translation>
+    </message>
+</context>
+<context>
+    <name>QProgressDialog</name>
+    <message>
+        <source>Cancel</source>
+        <translation>Peruuta</translation>
+    </message>
+</context>
+<context>
     <name>QThread</name>
     <message>
         <source>The %1 thread could not start, including with an 8 MiB stack; no computation was queued.</source>
@@ -15382,6 +15514,13 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <message>
         <source>worker</source>
         <translation>työsäie</translation>
+    </message>
+</context>
+<context>
+    <name>QWizard</name>
+    <message>
+        <source>Cancel</source>
+        <translation>Peruuta</translation>
     </message>
 </context>
 <context>
@@ -24595,6 +24734,63 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
         <translation>Verkkokatseluohjelma on kirjoitettu, mutta sitä ei voitu kirjata versioksi:
 %1</translation>
     </message>
+    <message>
+        <source>Remove Project</source>
+        <translation>Poista projekti</translation>
+    </message>
+    <message>
+        <source>Remove the project %1?</source>
+        <translation>Poistetaanko projekti %1?</translation>
+    </message>
+    <message numerus="yes">
+        <source>The folder %1 stays with its %n design(s) and other files: it is no longer a project.</source>
+        <translation>
+            <numerusform>Kansio %1 säilyy, samoin sen %n malli ja muut tiedostot: se ei ole enää projekti.</numerusform>
+            <numerusform>Kansio %1 säilyy, samoin sen %n mallia ja muut tiedostot: se ei ole enää projekti.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Its version history (%n version(s)) is deleted: older versions and deleted designs cannot be brought back.</source>
+        <translation>
+            <numerusform>Sen versiohistoria (%n versio) poistetaan: vanhempia versioita ja poistettuja malleja ei voi palauttaa.</numerusform>
+            <numerusform>Sen versiohistoria (%n versiota) poistetaan: vanhempia versioita ja poistettuja malleja ei voi palauttaa.</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>The folder was a git repository before the project: it keeps its history, and a new version takes the project&apos;s files out.</source>
+        <translation>Kansio oli git-repositorio jo ennen projektia: sen historia säilyy, ja uusi versio poistaa projektin tiedostot.</translation>
+    </message>
+    <message>
+        <source>Only this computer&apos;s copy stops being a project: the repository at %1 is not changed.</source>
+        <translation>Vain tämän tietokoneen kopio lakkaa olemasta projekti: repositoriota %1 ei muuteta.</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n design(s) keeping data in the project are first saved as single files: %1.</source>
+        <translation>
+            <numerusform>%n malli, joka pitää tietoja projektissa, tallennetaan ensin yksittäisenä tiedostona: %1.</numerusform>
+            <numerusform>%n mallia, jotka pitävät tietoja projektissa, tallennetaan ensin yksittäisinä tiedostoina: %1.</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>MitCad&apos;s files are removed: %1.</source>
+        <translation>MitCadin tiedostot poistetaan: %1.</translation>
+    </message>
+    <message>
+        <source>Open designs of the project close: %1.</source>
+        <translation>Projektin avoimet mallit suljetaan: %1.</translation>
+    </message>
+    <message>
+        <source>&amp;Remove Project</source>
+        <translation>&amp;Poista projekti</translation>
+    </message>
+    <message>
+        <source>%1 is no longer a project; its designs stay in the folder.</source>
+        <translation>%1 ei ole enää projekti; sen mallit säilyvät kansiossa.</translation>
+    </message>
+    <message>
+        <source>Remove Name %1</source>
+        <translation>Poista nimi %1</translation>
+    </message>
 </context>
 <context>
     <name>mitcad::MakeBodyCard</name>
@@ -24753,8 +24949,16 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
         <translation>Tee näillä arvoilla oma materiaali</translation>
     </message>
     <message>
-        <source>Values from the %1 (%2), converted into the design&apos;s units. Values are typical: check them against the supplier&apos;s data.</source>
-        <translation>Arvot lähteestä %1 (%2), muunnettuina mallin yksiköihin. Arvot ovat tyypillisiä: tarkista ne toimittajan tiedoista.</translation>
+        <source>the %1 (%2)</source>
+        <translation>%1 (%2)</translation>
+    </message>
+    <message>
+        <source>%1 and %2</source>
+        <translation>%1 ja %2</translation>
+    </message>
+    <message>
+        <source>Values from %1, converted into the design&apos;s units. Values are typical: check them against the supplier&apos;s data.</source>
+        <translation>Arvot lähteistä %1, muunnettuina mallin yksiköihin. Arvot ovat tyypillisiä: tarkista ne toimittajan tiedoista.</translation>
     </message>
     <message>
         <source>Pick a material and grade to see its values.</source>
@@ -25495,6 +25699,14 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
         <source>Visual Style: %1</source>
         <translation>Visuaalinen tyyli: %1</translation>
     </message>
+    <message>
+        <source>Unpin from Navigation Bar</source>
+        <translation>Irrota navigointipalkista</translation>
+    </message>
+    <message>
+        <source>Change Keyboard Shortcut…</source>
+        <translation>Muuta pikanäppäintä…</translation>
+    </message>
 </context>
 <context>
     <name>mitcad::NavigationPreferences</name>
@@ -26229,6 +26441,14 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     <message>
         <source>Parameter Limits</source>
         <translation>Parametrin rajat</translation>
+    </message>
+    <message>
+        <source>Remove Name</source>
+        <translation>Poista nimi</translation>
+    </message>
+    <message>
+        <source>gives this parameter its automatic name back</source>
+        <translation>palauttaa parametrille sen automaattisen nimen</translation>
     </message>
 </context>
 <context>
@@ -27273,12 +27493,16 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
         <translation>Poista luettelosta</translation>
     </message>
     <message>
+        <source>Remove Project…</source>
+        <translation>Poista projekti…</translation>
+    </message>
+    <message>
         <source>Projects</source>
         <translation>Projektit</translation>
     </message>
     <message>
-        <source>New Project, Open from Cloud, Add Existing Project Folder, Show in Folder, Remove from List</source>
-        <translation>Uusi projekti, Avaa pilvestä, Lisää olemassa oleva projektikansio, Näytä kansiossa, Poista luettelosta</translation>
+        <source>New, open or add a project; Show in Folder, Remove from List, Remove Project</source>
+        <translation>Uusi, avaa tai lisää projekti; Näytä kansiossa, Poista luettelosta, Poista projekti</translation>
     </message>
     <message>
         <source>Cloud project: its versions are also in a remote repository</source>
@@ -29098,6 +29322,14 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     <message>
         <source>Pin to Toolbar</source>
         <translation>Kiinnitä työkaluriville</translation>
+    </message>
+    <message>
+        <source>Unpin from Navigation Bar</source>
+        <translation>Irrota navigointipalkista</translation>
+    </message>
+    <message>
+        <source>Pin to Navigation Bar</source>
+        <translation>Kiinnitä navigointipalkkiin</translation>
     </message>
     <message>
         <source>Change Keyboard Shortcut…</source>
@@ -32198,6 +32430,10 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
         <source>exit status %1</source>
         <translation>paluuarvo %1</translation>
     </message>
+    <message>
+        <source>Sign in Again: %1 Run the commands under How to fix in a terminal.</source>
+        <translation>Kirjaudu uudelleen: %1 Suorita Korjausohjeen komennot päätteessä.</translation>
+    </message>
 </context>
 <context>
     <name>mitcad::agent::ChatPanel</name>
@@ -32488,6 +32724,62 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
         <source>Stop</source>
         <translation>Pysäytä</translation>
     </message>
+    <message>
+        <source>Sign in Again…</source>
+        <translation>Kirjaudu uudelleen…</translation>
+    </message>
+    <message>
+        <source>Sign in Again</source>
+        <translation>Kirjaudu uudelleen</translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation>Kopioi</translation>
+    </message>
+    <message>
+        <source>MitCad: signing out of %1 and signing in again.</source>
+        <translation>MitCad: kirjaudutaan ulos ohjelmasta %1 ja kirjaudutaan uudelleen sisään.</translation>
+    </message>
+    <message>
+        <source>Done. Close this window and go back to MitCad: it checks the account again.</source>
+        <translation>Valmis. Sulje tämä ikkuna ja palaa MitCadiin: se tarkistaa tilin uudelleen.</translation>
+    </message>
+    <message>
+        <source>Done. Press Enter, then go back to MitCad: it checks the account again.</source>
+        <translation>Valmis. Paina Enter ja palaa sitten MitCadiin: se tarkistaa tilin uudelleen.</translation>
+    </message>
+    <message>
+        <source>Sign in Again opens a terminal window that runs:
+%1
+Signing out also signs out Claude Desktop and every other Claude Code on this computer: they share one sign-in. Signing in again helps only with an account that is allowed to use Claude Code: if your organization has disabled access, signing in again with the same account does not fix it. When you are done in the terminal, MitCad checks the account again.</source>
+        <translation>Kirjaudu uudelleen avaa pääteikkunan, joka suorittaa:
+%1
+Uloskirjautuminen kirjaa ulos myös Claude Desktopin ja kaikki muut tämän tietokoneen Claude Codet: niillä on yhteinen kirjautuminen. Uudelleen kirjautuminen auttaa vain tilillä, jolla on oikeus käyttää Claude Codea: jos organisaatiosi on poistanut käyttöoikeuden, uudelleen kirjautuminen samalla tilillä ei korjaa sitä. Kun olet valmis päätteessä, MitCad tarkistaa tilin uudelleen.</translation>
+    </message>
+    <message>
+        <source>Sign in Again opens a terminal window that runs:
+%1
+Signing out also signs out the other Codex programs on this computer that use this sign-in. Signing in again helps only with an account that is allowed to use Codex: if your organization has disabled access, signing in again with the same account does not fix it. When you are done in the terminal, MitCad checks the account again.</source>
+        <translation>Kirjaudu uudelleen avaa pääteikkunan, joka suorittaa:
+%1
+Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jotka käyttävät tätä kirjautumista. Uudelleen kirjautuminen auttaa vain tilillä, jolla on oikeus käyttää Codexia: jos organisaatiosi on poistanut käyttöoikeuden, uudelleen kirjautuminen samalla tilillä ei korjaa sitä. Kun olet valmis päätteessä, MitCad tarkistaa tilin uudelleen.</translation>
+    </message>
+    <message>
+        <source>Signing in again to %1 in a terminal: MitCad checks the account when you are done there.</source>
+        <translation>Kirjaudutaan uudelleen palveluun %1 päätteessä: MitCad tarkistaa tilin, kun olet valmis siellä.</translation>
+    </message>
+    <message>
+        <source>No terminal program was found: How to fix shows the commands to run in one.</source>
+        <translation>Pääteohjelmaa ei löytynyt: Korjausohje näyttää komennot, jotka voit suorittaa päätteessä.</translation>
+    </message>
+    <message>
+        <source>No terminal program was found. To sign in again, run these commands in a terminal:</source>
+        <translation>Pääteohjelmaa ei löytynyt. Kirjaudu uudelleen suorittamalla nämä komennot päätteessä:</translation>
+    </message>
+    <message>
+        <source>Sign in Again… runs these commands in a terminal. To run them yourself:</source>
+        <translation>Kirjaudu uudelleen… suorittaa nämä komennot päätteessä. Jos haluat suorittaa ne itse:</translation>
+    </message>
 </context>
 <context>
     <name>mitcad::agent::ChatPreferencesBox</name>
@@ -32623,6 +32915,10 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
 <context>
     <name>mitcad::agent::ClaudeCodeAgent</name>
     <message>
+        <source>The chat&apos;s instructions could not be written.</source>
+        <translation>Keskustelun ohjeita ei voitu kirjoittaa.</translation>
+    </message>
+    <message>
         <source>Only an npm launcher of Claude Code (%1) was found; the chat needs Claude Code&apos;s native installation.</source>
         <translation>Claude Codesta löytyi vain npm-käynnistin (%1); keskustelu tarvitsee Claude Coden natiivin asennuksen.</translation>
     </message>
@@ -32684,6 +32980,25 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     <message>
         <source>Codex</source>
         <translation>Codex</translation>
+    </message>
+</context>
+<context>
+    <name>mitcad::agent::SignInTerminal</name>
+    <message>
+        <source>No terminal program was found.</source>
+        <translation>Pääteohjelmaa ei löytynyt.</translation>
+    </message>
+    <message>
+        <source>The script %1 could not be written.</source>
+        <translation>Komentosarjaa %1 ei voitu kirjoittaa.</translation>
+    </message>
+    <message>
+        <source>The terminal (%1) ended at once.</source>
+        <translation>Pääte (%1) päättyi heti.</translation>
+    </message>
+    <message>
+        <source>The terminal (%1) did not start: %2</source>
+        <translation>Pääte (%1) ei käynnistynyt: %2</translation>
     </message>
 </context>
 <context>
@@ -34570,6 +34885,10 @@ Hyväksy säilyttää kohteen %1 ilman niitä; Peruuta kumoaa sen.</translation>
         <translation>Veto: valinta liikkuu yhdessä niin pitkälle kuin sen rajoitteet sallivat.</translation>
     </message>
     <message>
+        <source>Drag: the objects follow, snapping to points and curves (Shift or Alt: no snap).</source>
+        <translation>Veto: kohteet seuraavat ja kohdistuvat pisteisiin ja käyriin (Shift tai Alt: ei kohdistusta).</translation>
+    </message>
+    <message>
         <source>Fully constrained or fixed geometry does not move.</source>
         <translation>Täysin rajoitettu tai kiinnitetty geometria ei liiku.</translation>
     </message>
@@ -34584,6 +34903,10 @@ Hyväksy säilyttää kohteen %1 ilman niitä; Peruuta kumoaa sen.</translation>
     <message>
         <source>Enter a value.</source>
         <translation>Anna arvo.</translation>
+    </message>
+    <message>
+        <source>Remove Name %1</source>
+        <translation>Poista nimi %1</translation>
     </message>
 </context>
 <context>
@@ -34753,6 +35076,10 @@ Hyväksy säilyttää kohteen %1 ilman niitä; Peruuta kumoaa sen.</translation>
     <message>
         <source>&lt;b&gt;Sketch Palette&lt;/b&gt; &lt;span style=&apos;color:%2&apos;&gt;%1&lt;/span&gt;</source>
         <translation>&lt;b&gt;Luonnospaletti&lt;/b&gt; &lt;span style=&apos;color:%2&apos;&gt;%1&lt;/span&gt;</translation>
+    </message>
+    <message>
+        <source>Click to select the constraints and dimensions that conflict</source>
+        <translation>Valitse ristiriitaiset rajoitteet ja mitat napsauttamalla</translation>
     </message>
     <message>
         <source>Conflicting constraints</source>

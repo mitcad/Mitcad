@@ -48,7 +48,9 @@
 #      its counterdrill; edited to a Clearance hole for M6 (mitcad#903) the
 #      size fills its diameter and counterdrill, and a typed depth stays
 #      when the size changes; a typed Countersink Diameter is marked and
-#      its Reset to size makes it follow the size again (mitcad#980).
+#      its Reset to size makes it follow the size again (mitcad#980); then
+#      edited to a hex press fit for a 5 mm pin at the printed fit
+#      press_fit_interference (mitcad#1517).
 #  13. Joints (mitcad#55) on a design mitcad-cli makes: a pin on a revolute
 #      joint dragged in the view turns about its joint (one undo step); Joint
 #      (J) puts a cap's top face onto a plate's, flipped, the preview showing
@@ -620,6 +622,25 @@ Ui-ExpectNew 'Edited F5' 'the hole edited to a clearance hole' 30
 # 6.6 mm wall (2.2 high), the wall to the bottom.
 $hole = [Math]::PI * (5.5 * 5.5 * 8 + 2.2 / 3 * (5.5 * 5.5 + 5.5 * 3.3 + 3.3 * 3.3) + 3.3 * 3.3 * (20 - 8 - 2.2))
 Ui-ExpectVolume 'Body \S+ \(F2\.b0\): volume [0-9.]+ -> ([0-9.]+) mm3' (48000 - $hole) 'an M6 clearance hole, counterdrilled 8 deep'
+# A hex press fit for a 5 mm pin (mitcad#1517): Hole Tap Type Press Fit
+# (after Clearance), its interference the printed fit
+# press_fit_interference (0.1 mm), created with the hole; the block less a
+# hex whose flats are 4.9 mm apart, through its 20 mm
+# (tools/cli/tests/press_fit_holes.json).
+Ui-Mark
+Ui-Step 'edit Hole1 a third time (double-click)' { Ui-DoubleClickLogged 'Timeline Hole1' }
+Ui-ExpectNew 'Editing F5 with Hole' 'the hole opens a third time' 30
+Ui-Step 'Press Fit (wheel)'              { Ui-WheelLogged 'Panel Hole input tap' -1 }
+Ui-ExpectNew 'Hole: Hole Tap Type = Press Fit' 'Hole Tap Type Press Fit'
+# Press Fit offers the printed fit in Interference (typed, the name would
+# open the field's suggestions, whose Enter creates a parameter).
+Ui-ExpectNew 'Hole interference: the printed fit press_fit_interference' 'the printed fit offered'
+Ui-ExpectNew 'Hole Interference: press_fit_interference = 0.1 mm' 'the interference is the printed-fit parameter'
+Ui-Step 'diameter 5'                     { Ui-TypeIn 'Panel Hole input diameter' '5' }
+Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
+Ui-ExpectNew 'Edited F5' 'the hole edited to a hex press fit' 30
+Ui-ExpectNew 'Created user parameter press_fit_interference = 0.1 mm' 'press_fit_interference created with the hole' 30
+Ui-ExpectVolume 'Body \S+ \(F2\.b0\): volume [0-9.]+ -> ([0-9.]+) mm3' (48000 - [Math]::Sqrt(3) / 2 * 4.9 * 4.9 * 20) 'a hex press fit'
 
 Write-Host '--- Joints (mitcad#55): a drag in the view, a joint from its panel'
 # The design: Plate:1 (a 40 x 40 x 10 block, grounded), Pin:1 (10 x 10 x 20)

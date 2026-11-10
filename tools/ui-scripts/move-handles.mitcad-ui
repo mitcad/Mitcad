@@ -1,0 +1,194 @@
+# SPDX-License-Identifier: MIT
+# Move/Copy's Free Move handles (mitcad#1580, mitcad#1581, mitcad#1583;
+# GitHub mitcad/Mitcad#220, #221, #223), the shared input script of
+# tools/ui-move-handles-test.sh (Linux) and
+# tools/ui-windows-move-handles-test.ps1 (Windows), on the design
+# tools/ui-scripts/move-handles.json makes: Body1 (its middle (-50, 10,
+# 10)), Component1:1 (O1, (75, 10, 5)), Body2 ((-90, 5, 5)) and a linked
+# component (O2, (5, -95, 5)), each moved by a Free Move feature:
+# MoveBody, MoveComponent and MoveLinked 8650 mm along Y, MoveTurned 30
+# deg about Z and (100, 8650, 0). The handles' places in the design are
+# read from the "Handle world" lines (ManipulatorOverlay::logPlaces).
+#   1. An edit's rings sit at the middle of what it moves, where the
+#      feature moves it (within 0.000001 mm), for a body, a component and
+#      a linked component; not 8650 mm beyond it, the move counted twice
+#      (#1583).
+#   2. MoveTurned's edit splits the matrix about Body2's middle; its rings
+#      are where the matrix takes that middle (within the 0.0001 mm the
+#      distances show), and OK without changes keeps the feature's matrix
+#      (the wrappers check the saved design with move-handles-check.json).
+#   3. A new Move/Copy of Body1 with X Distance 40 mm: the Y and Z arrows
+#      start at the moved middle, where the rings are, not at the start
+#      (#1580); the Z arrow dragged goes along Z from there, and the other
+#      arrows and the rings go with it.
+#   4. Free Move's arrows and rings in the axis colors, Translate's arrows
+#      in the handles' color (#1581).
+wait-idle
+key F6
+wait-idle
+
+# --- 1. MoveBody: Body1's middle (-50, 10, 10), 8650 mm along Y.
+mark
+dblclick-logged '^Timeline MoveBody at '
+wait-log '^Editing F[0-9]+ with Move/Copy$'
+expect-log '^Free move pivot where the feature finds what moves: -50\.000000,10\.000000,10\.000000$'
+expect-input-text ty '^8650 mm$'
+wait-log '^Handle world Move/Copy rx: center '
+wait-idle
+capture x '^Handle world Move/Copy rx: center ([-0-9.]+),'
+capture y '^Handle world Move/Copy rx: center [-0-9.]+,([-0-9.]+),'
+capture z '^Handle world Move/Copy rx: center [-0-9.]+,[-0-9.]+,([-0-9.]+),'
+expect-near ${x} -50 0 0.000001
+expect-near ${y} 8660 0 0.000001
+expect-near ${z} 10 0 0.000001
+# The Y arrow from the middle as the feature finds it, its knob at the
+# moved middle with the rings.
+capture y '^Handle world Move/Copy ty: origin [-0-9.]+,([-0-9.]+),'
+expect-near ${y} 10 0 0.000001
+capture y '^Handle world Move/Copy ty: origin .*, knob [-0-9.]+,([-0-9.]+),'
+expect-near ${y} 8660 0 0.000001
+mark
+key Escape
+wait-log '^Command Move/Copy cancelled$'
+wait-idle
+
+# --- 1. MoveComponent: Component1:1's middle (75, 10, 5).
+mark
+dblclick-logged '^Timeline MoveComponent at '
+wait-log '^Editing F[0-9]+ with Move/Copy$'
+expect-log '^Free move pivot where the feature finds what moves: 75\.000000,10\.000000,5\.000000$'
+expect-input-text ty '^8650 mm$'
+wait-log '^Handle world Move/Copy rx: center '
+wait-idle
+capture x '^Handle world Move/Copy rx: center ([-0-9.]+),'
+capture y '^Handle world Move/Copy rx: center [-0-9.]+,([-0-9.]+),'
+capture z '^Handle world Move/Copy rx: center [-0-9.]+,[-0-9.]+,([-0-9.]+),'
+expect-near ${x} 75 0 0.000001
+expect-near ${y} 8660 0 0.000001
+expect-near ${z} 5 0 0.000001
+mark
+key Escape
+wait-log '^Command Move/Copy cancelled$'
+wait-idle
+
+# --- 1. MoveLinked: the linked component's middle (5, -95, 5).
+mark
+dblclick-logged '^Timeline MoveLinked at '
+wait-log '^Editing F[0-9]+ with Move/Copy$'
+expect-log '^Free move pivot where the feature finds what moves: 5\.000000,-95\.000000,5\.000000$'
+expect-input-text ty '^8650 mm$'
+wait-log '^Handle world Move/Copy rx: center '
+wait-idle
+capture x '^Handle world Move/Copy rx: center ([-0-9.]+),'
+capture y '^Handle world Move/Copy rx: center [-0-9.]+,([-0-9.]+),'
+capture z '^Handle world Move/Copy rx: center [-0-9.]+,[-0-9.]+,([-0-9.]+),'
+expect-near ${x} 5 0 0.000001
+expect-near ${y} 8555 0 0.000001
+expect-near ${z} 5 0 0.000001
+mark
+key Escape
+wait-log '^Command Move/Copy cancelled$'
+wait-idle
+
+# --- 2. MoveTurned: Body2's middle (-90, 5, 5) turned 30 deg about Z and
+# moved (100, 8650, 0) lands at (19.5577137, 8609.3301270, 5); the
+# distances about that middle are (109.5577137, 8604.3301270, 0), shown
+# to 0.0001 mm.
+mark
+dblclick-logged '^Timeline MoveTurned at '
+wait-log '^Editing F9 with Move/Copy$'
+expect-log '^Free move pivot where the feature finds what moves: -90\.000000,5\.000000,5\.000000$'
+expect-input-text rz '^30 deg$'
+expect-input-text tx '^109\.5577 mm$'
+expect-input-text ty '^8604\.3301 mm$'
+wait-log '^Handle world Move/Copy rx: center '
+wait-idle
+capture x '^Handle world Move/Copy rx: center ([-0-9.]+),'
+capture y '^Handle world Move/Copy rx: center [-0-9.]+,([-0-9.]+),'
+capture z '^Handle world Move/Copy rx: center [-0-9.]+,[-0-9.]+,([-0-9.]+),'
+expect-near ${x} 19.557713659400522 0 0.0001
+expect-near ${y} 8609.330127018922 0 0.0001
+expect-near ${z} 5 0 0.000001
+# OK without changes: the feature keeps its own matrix (checked in the
+# saved design).
+mark
+key Return
+wait-log '^Edited F9$'
+wait-idle
+
+# --- 3. and 4. A new Move/Copy of Body1, now at (-50, 8660, 10).
+mark
+context-menu-logged '^Browser Root/Bodies/Body1 at ' 'Move/Copy'
+wait-log '^Command Move/Copy started$'
+wait-log '^Move/Copy Objects: 1 body'
+wait-log '^Preview Move/Copy: ok'
+wait-idle
+expect-log '^Handle world Move/Copy tx: origin .*, color AxisX$'
+expect-log '^Handle world Move/Copy ty: origin .*, color AxisY$'
+expect-log '^Handle world Move/Copy tz: origin .*, color AxisZ$'
+expect-log '^Handle world Move/Copy rx: center .*, color AxisX$'
+expect-log '^Handle world Move/Copy ry: center .*, color AxisY$'
+expect-log '^Handle world Move/Copy rz: center .*, color AxisZ$'
+mark
+type-in '^Panel Move/Copy input tx at ' '40'
+wait-log '^Preview Move/Copy: ok'
+wait-idle
+expect-input-text tx '^40( mm)?$'
+# The Y and Z arrows start at the moved middle (-10, 8660, 10), with the
+# rings; the X arrow from the start (-50, 8660, 10), its knob there too.
+capture x '^Handle world Move/Copy ty: origin ([-0-9.]+),'
+capture y '^Handle world Move/Copy ty: origin [-0-9.]+,([-0-9.]+),'
+capture z '^Handle world Move/Copy ty: origin [-0-9.]+,[-0-9.]+,([-0-9.]+),'
+expect-near ${x} -10 0 0.000001
+expect-near ${y} 8660 0 0.000001
+expect-near ${z} 10 0 0.000001
+capture x '^Handle world Move/Copy tz: origin ([-0-9.]+),'
+capture y '^Handle world Move/Copy tz: origin [-0-9.]+,([-0-9.]+),'
+expect-near ${x} -10 0 0.000001
+expect-near ${y} 8660 0 0.000001
+capture x '^Handle world Move/Copy rx: center ([-0-9.]+),'
+expect-near ${x} -10 0 0.000001
+capture x '^Handle world Move/Copy tx: origin ([-0-9.]+),'
+expect-near ${x} -50 0 0.000001
+capture x '^Handle world Move/Copy tx: origin .*, knob ([-0-9.]+),'
+expect-near ${x} -10 0 0.000001
+screenshot-view '${MITCAD_TEST_WORK}/move-handles.png'
+
+# The Z arrow dragged up: it stays where it starts, its knob goes along
+# Z, and the X and Y arrows and the rings go with it.
+mark
+drag-from '^Manipulator Move/Copy tz at ' 0 -40
+wait-log '^Manipulator Move/Copy tz dragged to '
+expect-no-log '^Manipulator Move/Copy tz dragged to 0$'
+wait-idle
+capture x '^Handle world Move/Copy tz: origin ([-0-9.]+),'
+capture y '^Handle world Move/Copy tz: origin [-0-9.]+,([-0-9.]+),'
+capture z '^Handle world Move/Copy tz: origin [-0-9.]+,[-0-9.]+,([-0-9.]+),'
+expect-near ${x} -10 0 0.000001
+expect-near ${y} 8660 0 0.000001
+expect-near ${z} 10 0 0.000001
+capture x '^Handle world Move/Copy tz: origin .*, knob ([-0-9.]+),'
+capture y '^Handle world Move/Copy tz: origin .*, knob [-0-9.]+,([-0-9.]+),'
+capture knob '^Handle world Move/Copy tz: origin .*, knob [-0-9.]+,[-0-9.]+,([-0-9.]+),'
+expect-near ${x} -10 0 0.000001
+expect-near ${y} 8660 0 0.000001
+capture z '^Handle world Move/Copy tx: origin .*, knob [-0-9.]+,[-0-9.]+,([-0-9.]+),'
+expect-near ${z} ${knob} 0 0.000001
+capture z '^Handle world Move/Copy ty: origin [-0-9.]+,[-0-9.]+,([-0-9.]+),'
+expect-near ${z} ${knob} 0 0.000001
+capture z '^Handle world Move/Copy rz: center [-0-9.]+,[-0-9.]+,([-0-9.]+),'
+expect-near ${z} ${knob} 0 0.000001
+expect-input-text tx '^40( mm)?$'
+
+# --- 4. Translate's arrows keep the handles' color.
+mark
+qt-choice input_type 'Translate'
+wait-log '^Handle world Move/Copy x: origin .*, color Handle$'
+mark
+key Escape
+wait-log '^Command Move/Copy cancelled$'
+wait-idle
+
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|TestDriver: FAIL'

@@ -15,13 +15,71 @@ use super::prelude::*;
 use mitcad_model::ids::ComponentUid;
 use mitcad_model::internal::document::writable_library;
 use mitcad_model::kernel::Kernel;
+use mitcad_model::print_files::Imported;
 use mitcad_model::print_files::filaments::PrinterChoice;
 use mitcad_model::print_files::installed::{self, PresetEnv, SlicerFolder};
 use mitcad_model::print_keys::Dialect;
 use mitcad_model::print_library::{ItemKind, LibraryKind};
 use mitcad_model::print_profile::{ProfileChange, ProfileKind};
 use mitcad_model::properties::PropertyOwner;
-use mitcad_model::{Document, PresetChoice, PrintTarget, SameName};
+use mitcad_model::{Document, ModelError, PresetChoice, PrintTarget, SameName};
+
+/// Supplies all files consumed by a print import, including inherited presets.
+/// External clients can provide a confined reader instead of installed discovery.
+pub trait PrintImportReader {
+    fn read_print_file(&self, path: &str, dialect: Option<Dialect>)
+    -> Result<Imported, ModelError>;
+    fn resolve_preset(
+        &self,
+        folder: &Path,
+        path: &Path,
+    ) -> Result<installed::ResolvedPreset, ModelError>;
+}
+
+/// Validates the confined import subset without changing a document.
+pub fn validate_print_import_command(value: &Value) -> Result<(), ApiError> {
+    let command: PrintProfileCommand = super::parse(value.clone(), "command")?;
+    let (into, project) = match &command {
+        PrintProfileCommand::ImportPrintProfile { into, project, .. }
+        | PrintProfileCommand::ImportSlicerPresets { into, project, .. } => (into, project),
+        _ => return Err(ApiError("not a print import command".to_owned())),
+    };
+    if !matches!(into.as_deref(), None | Some("design")) || project.is_some() {
+        return Err(ApiError("MCP print imports target the design only; library targets and project paths are refused".to_owned()));
+    }
+    Ok(())
+}
+
+/// The ordinary print-import commands with a caller-controlled source reader.
+pub trait PrintImportApi {
+    fn command_with_print_reader(
+        &mut self,
+        json: &str,
+        reader: &dyn PrintImportReader,
+    ) -> Result<String, ApiError>;
+}
+
+impl<K: Kernel> PrintImportApi for Document<K> {
+    fn command_with_print_reader(
+        &mut self,
+        text: &str,
+        reader: &dyn PrintImportReader,
+    ) -> Result<String, ApiError> {
+        use super::DocumentLocal;
+        let value = super::read_json(text)?;
+        validate_print_import_command(&value)?;
+        let result = self.with_policy_checks(|doc| {
+            doc.run_checked_action(value, |doc, value| {
+                doc.run_print_profile_command_with_reader(
+                    super::parse(value, "command")?,
+                    Some(reader),
+                )
+            })
+        })?;
+        self.settle_comments_now();
+        Ok(result.to_string())
+    }
+}
 
 named_enum! {
     #[derive(Debug, Deserialize)]
@@ -260,6 +318,12 @@ pub(crate) trait PrintProfilesCrateOps<K: Kernel> {
         command: PrintProfileCommand,
     ) -> Result<Value, ApiError>;
 
+    fn run_print_profile_command_with_reader(
+        &mut self,
+        command: PrintProfileCommand,
+        reader: Option<&dyn PrintImportReader>,
+    ) -> Result<Value, ApiError>;
+
     /// What a `print_settings` query asks for.
     fn print_target(&self, query: &PrintSettingsQuery) -> Result<PrintTarget, ApiError>;
 }
@@ -268,6 +332,14 @@ impl<K: Kernel> PrintProfilesCrateOps<K> for Document<K> {
     fn run_print_profile_command(
         &mut self,
         command: PrintProfileCommand,
+    ) -> Result<Value, ApiError> {
+        self.run_print_profile_command_with_reader(command, None)
+    }
+
+    fn run_print_profile_command_with_reader(
+        &mut self,
+        command: PrintProfileCommand,
+        reader: Option<&dyn PrintImportReader>,
     ) -> Result<Value, ApiError> {
         Ok(match command {
             PrintProfileCommand::CreatePrintProfile(change) => match change.library.as_deref() {
@@ -390,13 +462,22 @@ impl<K: Kernel> PrintProfilesCrateOps<K> for Document<K> {
                     None | Some("design") => None,
                     Some(text) => Some(library_kind(text)?),
                 };
-                self.import_print_settings(
-                    &path,
-                    dialect,
-                    into,
-                    project.as_deref().map(Path::new),
-                    choose.unwrap_or(true),
-                )?
+                match reader {
+                    Some(reader) => self.import_print_settings_read(
+                        &path,
+                        reader.read_print_file(&path, dialect)?,
+                        None,
+                        None,
+                        choose.unwrap_or(true),
+                    )?,
+                    None => self.import_print_settings(
+                        &path,
+                        dialect,
+                        into,
+                        project.as_deref().map(Path::new),
+                        choose.unwrap_or(true),
+                    )?,
+                }
             }
             PrintProfileCommand::ImportSlicerPresets {
                 dialect,
@@ -436,15 +517,26 @@ impl<K: Kernel> PrintProfilesCrateOps<K> for Document<K> {
                         })
                     })
                     .collect::<Result<Vec<_>, ApiError>>()?;
-                self.import_slicer_presets(
-                    dialect,
-                    Path::new(&folder),
-                    &choices,
-                    into,
-                    project.as_deref().map(Path::new),
-                    printers.as_deref(),
-                    merge_separate.unwrap_or(false),
-                )?
+                match reader {
+                    Some(reader) => self.import_slicer_presets_with_reader(
+                        dialect,
+                        &choices,
+                        None,
+                        None,
+                        printers.as_deref(),
+                        merge_separate.unwrap_or(false),
+                        |path| reader.resolve_preset(Path::new(&folder), path),
+                    )?,
+                    None => self.import_slicer_presets(
+                        dialect,
+                        Path::new(&folder),
+                        &choices,
+                        into,
+                        project.as_deref().map(Path::new),
+                        printers.as_deref(),
+                        merge_separate.unwrap_or(false),
+                    )?,
+                }
             }
         })
     }

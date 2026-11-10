@@ -1,0 +1,9 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The part tools/ui-scripts/move-handles.json links (mitcad#1583): a 10 x 10 x 10 block from the origin, its middle (5, 5, 5)."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[0,0],"width":10,"height":10},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent":{"type":"distance","distance":10},"operation":"new_body"}},
+  {"expect":{"body":"Body1","volume":1000,"tolerance":1e-9}}
+]

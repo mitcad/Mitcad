@@ -767,6 +767,16 @@ const fn resin(entry: Entry) -> Entry {
     }
 }
 
+/// A wood's or a wood-based panel's look (mitcad#1552): dielectric, a
+/// little specular, no coat.
+const fn wood(entry: Entry) -> Entry {
+    Entry {
+        specular: 0.5,
+        class: MaterialClass::Wood,
+        ..entry
+    }
+}
+
 /// A filament's look (mitcad#1133): a printed thermoplastic, dielectric,
 /// the layered surface of a print rough, a little specular, no coat.
 const fn filament(id: &'static str, name: &'static str, rgb: u32) -> Entry {
@@ -808,10 +818,7 @@ const ENTRIES: &[Entry] = &[
         ..dielectric("rubber", "Rubber", 0x222224, 0.85)
     },
     clear("glass", "Glass", 0xa8d0e0, 0.0),
-    Entry {
-        specular: 0.5,
-        ..dielectric("wood_oak", "Wood - Oak", 0xb08450, 0.6)
-    },
+    wood(dielectric("wood_oak", "Wood - Oak", 0xb08450, 0.6)),
     metal("chrome", "Chrome", 0xc4c7ca, 0.05),
     metal("gold_polished", "Gold - Polished", 0xf5d27a, 0.12),
     metal("steel_polished", "Steel - Polished", 0xb8bcc2, 0.12),
@@ -826,14 +833,8 @@ const ENTRIES: &[Entry] = &[
     plastic(clear("plastic_clear", "Plastic - Clear", 0xf4f6f8, 0.1)),
     clear("glass_clear", "Glass - Clear", 0xf6fafa, 0.0),
     clear("glass_frosted", "Glass - Frosted", 0xf0f4f4, 0.45),
-    Entry {
-        specular: 0.5,
-        ..dielectric("wood_walnut", "Wood - Walnut", 0x6b4a30, 0.55)
-    },
-    Entry {
-        specular: 0.5,
-        ..dielectric("wood_maple", "Wood - Maple", 0xd8b888, 0.55)
-    },
+    wood(dielectric("wood_walnut", "Wood - Walnut", 0x6b4a30, 0.55)),
+    wood(dielectric("wood_maple", "Wood - Maple", 0xd8b888, 0.55)),
     Entry {
         emission: 5.0,
         ..dielectric("emissive_white", "Emissive - White", 0xffffff, 0.5)
@@ -863,6 +864,66 @@ const ENTRIES: &[Entry] = &[
         roughness: 0.45,
         ..filament("filament_translucent", "Filament - Translucent", 0xeef0ec)
     },
+    // The looks of the bundled dataset's woods and panels (mitcad#1552),
+    // colours only. Their ids are stable: never renamed.
+    wood(dielectric("wood_birch", "Wood - Birch", 0xe0c49a, 0.55)),
+    wood(dielectric("wood_cedar", "Wood - Cedar", 0xa8643c, 0.55)),
+    wood(dielectric("wood_cherry", "Wood - Cherry", 0x9a4f2c, 0.5)),
+    wood(dielectric(
+        "wood_douglas_fir",
+        "Wood - Douglas Fir",
+        0xc89060,
+        0.55,
+    )),
+    wood(dielectric(
+        "wood_eucalyptus",
+        "Wood - Eucalyptus",
+        0xbf9a6a,
+        0.55,
+    )),
+    wood(dielectric("wood_pine", "Wood - Pine", 0xe2c58e, 0.55)),
+    wood(dielectric("wood_teak", "Wood - Teak", 0xa8743c, 0.5)),
+    wood(dielectric("panel_chipboard", "Chipboard", 0xc8ab7c, 0.8)),
+    wood(dielectric("panel_mdf", "MDF", 0xb38a5e, 0.75)),
+    wood(dielectric("panel_osb", "OSB", 0xc89a5a, 0.75)),
+    wood(dielectric(
+        "plywood_birch",
+        "Plywood - Birch",
+        0xe6cfa4,
+        0.6,
+    )),
+    wood(dielectric(
+        "plywood_eucalyptus",
+        "Plywood - Eucalyptus",
+        0xc49a70,
+        0.6,
+    )),
+    wood(dielectric("plywood_pine", "Plywood - Pine", 0xdcc08c, 0.6)),
+    wood(dielectric(
+        "plywood_spruce",
+        "Plywood - Spruce",
+        0xe8d2a6,
+        0.6,
+    )),
+];
+
+/// The looks the library took with the woods and panels (mitcad#1552),
+/// after designs could have used their ids for appearances of their own.
+const WOOD_LOOKS_TAKEN_LATER: [&str; 14] = [
+    "wood_birch",
+    "wood_cedar",
+    "wood_cherry",
+    "wood_douglas_fir",
+    "wood_eucalyptus",
+    "wood_pine",
+    "wood_teak",
+    "panel_chipboard",
+    "panel_mdf",
+    "panel_osb",
+    "plywood_birch",
+    "plywood_eucalyptus",
+    "plywood_pine",
+    "plywood_spruce",
 ];
 
 fn srgb(rgb: u32) -> Color {
@@ -897,17 +958,20 @@ pub fn library_appearance(id: &str) -> Option<&'static Appearance> {
 }
 
 /// Whether the library took `id` after designs could have used it for an
-/// appearance of their own (mitcad#1133): the `filament_*` colours. A
-/// design file reader gives such an appearance of a design a free id; one
-/// with another library id is refused, as no design could save it.
+/// appearance of their own (mitcad#1133): the `filament_*` colours, and
+/// the woods' and panels' looks of mitcad#1552. A design file reader gives
+/// such an appearance of a design a free id; one with another library id
+/// is refused, as no design could save it.
 pub fn library_id_taken_later(id: &str) -> bool {
-    id.starts_with("filament_") && library_appearance(id).is_some()
+    (id.starts_with("filament_") || WOOD_LOOKS_TAKEN_LATER.contains(&id))
+        && library_appearance(id).is_some()
 }
 
 /// A library appearance's class by its id (mitcad#1102): Steel, Aluminum,
 /// Brass, Copper, Iron, Chrome and Gold are Metal, the Plastic ones General
 /// Plastic, the Filament ones FDM Plastic (mitcad#1133), the Resin ones
-/// Resin, the others Other. Never stored.
+/// Resin, the Wood, Plywood and panel ones Wood (mitcad#1552), the others
+/// Other. Never stored.
 pub fn library_class(id: &str) -> Option<MaterialClass> {
     ENTRIES.iter().find(|e| e.id == id).map(|e| e.class)
 }
@@ -969,8 +1033,15 @@ mod tests {
         ] {
             assert_eq!(class(id), MaterialClass::Plastic, "{id}");
         }
-        for id in ["paint_red", "rubber", "glass", "wood_oak", "emissive_white"] {
+        for id in ["paint_red", "rubber", "glass", "emissive_white"] {
             assert_eq!(class(id), MaterialClass::Other, "{id}");
+        }
+        // The woods are Wood (mitcad#1552), those from before too.
+        for id in ["wood_oak", "wood_walnut", "wood_maple"]
+            .into_iter()
+            .chain(WOOD_LOOKS_TAKEN_LATER)
+        {
+            assert_eq!(class(id), MaterialClass::Wood, "{id}");
         }
         for id in ["resin_grey", "resin_white", "resin_clear"] {
             assert_eq!(class(id), MaterialClass::Resin, "{id}");
@@ -1001,8 +1072,9 @@ mod tests {
         change.apply_to(&mut own);
         assert_eq!(own.class, None);
         assert!(serde_json::to_value(&own).unwrap().get("class").is_none());
-        let wood = serde_json::from_value::<AppearanceChange>(serde_json::json!({"class": "wood"}));
-        assert!(wood.is_err());
+        let stone =
+            serde_json::from_value::<AppearanceChange>(serde_json::json!({"class": "stone"}));
+        assert!(stone.is_err());
     }
 
     /// mitcad#1133: the basic filament colours are FDM Plastic, each with

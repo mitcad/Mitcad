@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
+#include <utility>
 
 #include <QAction>
 #include <QCoreApplication>
@@ -32,6 +34,7 @@
 #include "../framework/ParameterField.hpp"
 #include "../framework/Theme.hpp"
 #include "../framework/TestSync.hpp"
+#include "SketchConflict.hpp"
 #include "SketchOverlay.hpp"
 #include "SketchPreferences.hpp"
 #include "SketchTool.hpp"
@@ -191,7 +194,10 @@ QRectF clearPlace(const QRectF& row, const QPointF& away, const QRectF& bounds, 
 // ---------------------------------------------------------------------------
 // SketchOp
 
-SketchOp::SketchOp(SketchController& controller) : m_c(controller), m_depth(controller.undoDepth()) {}
+SketchOp::SketchOp(SketchController& controller) : m_c(controller), m_depth(controller.undoDepth()) {
+  // The last action's refusal is no longer shown (mitcad#1566).
+  m_c.setConflict(QStringLiteral("action"), {});
+}
 
 SketchOp::~SketchOp() {
   if (!m_finished) {
@@ -220,9 +226,19 @@ bool SketchOp::run(const QJsonObject& command, QJsonObject* result) {
     }
     return true;
   } catch (const std::exception& e) {
-    m_error = errorText(e);
+    // The log keeps the model's whole text; a refusal for conflicting
+    // constraints is shown without its ids line, and what blocks it is
+    // painted (mitcad#1566).
+    const QString raw = errorText(e);
     qDebug().noquote() << QStringLiteral("Sketch command %1 refused: %2")
-                              .arg(command.value(QStringLiteral("cmd")).toString(), m_error);
+                              .arg(command.value(QStringLiteral("cmd")).toString(),
+                                   QString(raw).replace(QLatin1Char('\n'), QLatin1Char(' ')));
+    const ConflictText conflict = splitConflict(raw);
+    m_error = conflict.message;
+    m_conflicted = conflict.conflict;
+    if (conflict.conflict) {
+      m_c.setConflict(QStringLiteral("action"), conflict.items);
+    }
     return false;
   }
 }
@@ -402,7 +418,12 @@ bool SketchOp::addAuto(const QJsonObject& constraint, const QString& why) {
   cmd.insert(QStringLiteral("constraint"), constraint);
   cmd.insert(QStringLiteral("auto"), true);
   const QString kept = m_error;
+  const bool keptConflicted = m_conflicted;
+  // Skipped without a hint: nothing of it painted either (mitcad#1566).
+  const QStringList shownConflict = m_c.conflictItems(QStringLiteral("action"));
   const bool done = run(cmd);
+  m_conflicted = keptConflicted;
+  m_c.setConflict(QStringLiteral("action"), shownConflict);
   const QString source = why.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(why);
   if (done) {
     // For UI tests.
@@ -691,6 +712,10 @@ void SketchController::leave() {
   m_hover.clear();
   m_picked.clear();
   m_hoverAnnotation.clear();
+  // No refusal's items painted in the next sketch (mitcad#1566).
+  m_conflicts.clear();
+  m_conflictHovered.clear();
+  conflictChanged();
   emit changed();
 }
 
@@ -740,6 +765,11 @@ void SketchController::reload() {
   // Where their symbols are now: a change of the geometry moves them
   // without a change of the view (mitcad#723).
   logGlyphs();
+  // Where a command's handle is after its preview moved the geometry
+  // (mitcad#1563).
+  logHandle();
+  // A sketch that does not solve paints its conflicts (mitcad#1566).
+  conflictChanged();
   updateConvertAction();
   m_overlay->update();
   emit changed();
@@ -886,19 +916,30 @@ void SketchController::logGlyphs() {
   // Where each inactive constraint's symbol is (mitcad#721), to right-click
   // it: when the view or the sketch changes it (mitcad#723). With
   // MITCAD_LOG_PICKS (the UI tests) every constraint's, to click an active
-  // one too (mitcad#773).
+  // one too (mitcad#773). Each names its type and the entity it is drawn
+  // at, "Constraint k4 glyph at 512,300 (coincident by p3)", so that two
+  // coincidences at one point show as two symbols there (mitcad#1578).
+  // A constraint drawn at two entities logs both of its symbols
+  // (mitcad#1594: "Constraint k12 glyph at 540,310 (parallel by c3)" and
+  // "... (parallel by c6)"), its first one last, so that the last line of
+  // a constraint, which a test clicks, stays the symbol it always was.
   static const bool everyGlyph = qEnvironmentVariableIsSet("MITCAD_LOG_PICKS");
   const QPoint window = m_viewer.mapTo(m_viewer.window(), QPoint(0, 0));
-  QStringList lines;
-  for (const auto& [id, rect] : m_overlay->constraintGlyphRects()) {
+  std::map<QString, QStringList> byConstraint;
+  for (const auto& [id, place] : m_overlay->constraintGlyphPlaces()) {
     const ConstraintData* k = m_model.constraint(id);
     if (k == nullptr || (k->active && !everyGlyph)) {
       continue;
     }
-    lines << QStringLiteral("Constraint %1 glyph at %2,%3")
-                 .arg(id)
-                 .arg(qRound(rect.center().x() + window.x()))
-                 .arg(qRound(rect.center().y() + window.y()));
+    byConstraint[id].prepend(QStringLiteral("Constraint %1 glyph at %2,%3 (%4 by %5)")
+                                 .arg(id)
+                                 .arg(qRound(place.rect.center().x() + window.x()))
+                                 .arg(qRound(place.rect.center().y() + window.y()))
+                                 .arg(place.type, place.entity));
+  }
+  QStringList lines;
+  for (const auto& entry : byConstraint) {
+    lines << entry.second;
   }
   const QString logged = lines.join(QLatin1Char('\n'));
   if (logged == m_loggedGlyphs) {
@@ -1269,6 +1310,18 @@ void SketchController::toggleFixed() {
                                  QJsonDocument(entities).toJson(QJsonDocument::Compact));
 }
 
+// "Dimension k5: name width removed, now d1 (rewritten: d2, gap)", for UI
+// tests (mitcad#1577), from `remove_parameter_name`'s result.
+static void logNameRemoved(const QString& id, const QString& name, const QJsonObject& removed) {
+  QStringList rewritten;
+  for (const QJsonValue& value : removed.value(QStringLiteral("rewritten")).toArray()) {
+    rewritten << value.toString();
+  }
+  qDebug().noquote() << QStringLiteral("Dimension %1: name %2 removed, now %3 (rewritten: %4)")
+                            .arg(id, name, removed.value(QStringLiteral("name")).toString(),
+                                 rewritten.isEmpty() ? QStringLiteral("none") : rewritten.join(QStringLiteral(", ")));
+}
+
 void SketchController::editDimension(const QString& id) {
   const DimensionData* d = m_model.dimension(id);
   if (d == nullptr) {
@@ -1283,9 +1336,18 @@ void SketchController::editDimension(const QString& id) {
                                           : QString::number(d->measured / m_unitScale, 'g', 10);
   }
   qDebug().noquote() << QStringLiteral("Editing dimension %1 (%2)").arg(id, text);
+  // A name given to the parameter is part of the text, to be deleted
+  // (mitcad#1577); an automatic one stays a label before it.
+  const QString named = namedParameter(id);
+  if (!named.isEmpty()) {
+    text = QStringLiteral("%1 = %2").arg(named, text);
+  }
   openValueEditor(
       rect.center(), text, kind,
-      [this, id](const QString& expression) {
+      [this, id, named](const QString& expression) {
+        // The `name = ` deleted: the parameter gets its automatic name back
+        // in the same undo step (mitcad#1577).
+        const bool unname = !named.isEmpty() && namedPrefix(expression).isEmpty();
         SketchOp op(*this);
         QJsonObject cmd = op.command(QStringLiteral("sketch.set_dimension"));
         cmd.insert(QStringLiteral("dimension"), id);
@@ -1297,6 +1359,22 @@ void SketchController::editDimension(const QString& id) {
           error(reason);
           return;
         }
+        // A value that used the own name gave the dimension a new parameter
+        // already (mitcad#1535): nothing is left to rename then.
+        const DimensionData* now = unname ? op.model().dimension(id) : nullptr;
+        if (now != nullptr && now->parameter == named) {
+          QJsonObject removed;
+          if (!op.run({{QStringLiteral("cmd"), QStringLiteral("remove_parameter_name")},
+                       {QStringLiteral("name"), named}},
+                      &removed)) {
+            const QString reason = op.error();
+            op.rollback();
+            error(reason);
+            return;
+          }
+          op.setLabel(tr("Remove Name %1").arg(named));
+          logNameRemoved(id, named, removed);
+        }
         op.commit();
         const DimensionData* changed = m_model.dimension(id);
         qDebug().noquote() << QStringLiteral("Dimension %1 = %2 (%3)")
@@ -1305,7 +1383,7 @@ void SketchController::editDimension(const QString& id) {
       },
       d->driven ? QString() : d->parameter,
       // Up and Down stop where the dimension's kind does (mitcad#1254).
-      sketchDimensionStepLimit(d->type, d->signedOffset));
+      sketchDimensionStepLimit(d->type, d->signedOffset), !named.isEmpty());
   m_editorDimension = id;
   // Its own parameter is offered as kept as a user parameter, which a value
   // that uses it does (mitcad#1535).
@@ -1393,6 +1471,48 @@ void SketchController::keepAsUserParameter(const QString& id) {
   noteKeptParameters(result);
 }
 
+QString SketchController::namedParameter(const QString& id) const {
+  const DimensionData* d = m_model.dimension(id);
+  if (d == nullptr || d->driven || d->parameter.isEmpty() || isAutomaticName(d->parameter)) {
+    return QString();
+  }
+  // Only the sketch's own: a user parameter the dimension uses keeps its
+  // name, which is what the dimension refers to.
+  try {
+    for (const QJsonValue& value : m_host.queryArray(QStringLiteral("parameters"))) {
+      const QJsonObject p = value.toObject();
+      if (p.value(QStringLiteral("name")).toString() == d->parameter) {
+        const bool own = p.value(QStringLiteral("kind")).toString() == QStringLiteral("model") &&
+                         p.value(QStringLiteral("owner")).toString() == m_uid;
+        return own ? d->parameter : QString();
+      }
+    }
+  } catch (const std::exception& e) {
+    // A job computes the model: the name stays a label for now.
+    qDebug().noquote() << QStringLiteral("Named parameter of %1 not read: %2").arg(id, errorText(e));
+  }
+  return QString();
+}
+
+void SketchController::removeDimensionName(const QString& id) {
+  const QString name = namedParameter(id);
+  if (name.isEmpty()) {
+    return;
+  }
+  SketchOp op(*this);
+  QJsonObject removed;
+  if (!op.run({{QStringLiteral("cmd"), QStringLiteral("remove_parameter_name")}, {QStringLiteral("name"), name}},
+              &removed)) {
+    const QString reason = op.error();
+    op.rollback();
+    error(reason);
+    return;
+  }
+  op.setLabel(tr("Remove Name %1").arg(name));
+  op.commit();
+  logNameRemoved(id, name, removed);
+}
+
 void SketchController::setDimensionSigned(const QString& id, bool on) {
   const DimensionData* d = m_model.dimension(id);
   if (d == nullptr || !d->isAxisDistance() || d->signedOffset == on) {
@@ -1466,9 +1586,12 @@ void SketchController::setItemsActive(const QStringList& ids, bool on) {
   if (!op.run(cmd)) {
     const QString reason = op.error();
     op.rollback();
-    // "Sketch items not activated: k5 cannot be activated: …", for UI tests.
+    // "Sketch items not activated: k5 cannot be activated: …", for UI tests:
+    // the ids in front of a conflict's words, which name none (mitcad#1566).
+    const QString listed = ids.join(QStringLiteral(", "));
     qDebug().noquote() << QStringLiteral("Sketch items not %1: %2")
-                              .arg(on ? QStringLiteral("activated") : QStringLiteral("deactivated"), reason);
+                              .arg(on ? QStringLiteral("activated") : QStringLiteral("deactivated"),
+                                   reason.startsWith(listed) ? reason : listed + QLatin1Char(' ') + reason);
     error(reason);
     return;
   }
@@ -2130,9 +2253,117 @@ void SketchController::setHover(const QString& entity) {
   }
 }
 
+void SketchController::setConflict(const QString& source, const QStringList& items) {
+  if (m_conflicts.value(source) == items) {
+    return;
+  }
+  if (items.isEmpty()) {
+    m_conflicts.remove(source);
+    m_conflictHovered.remove(source);
+  } else {
+    m_conflicts.insert(source, items);
+  }
+  conflictChanged();
+}
+
+void SketchController::setConflictHovered(const QString& source, bool hovered) {
+  const bool on = hovered && m_conflicts.contains(source);
+  if (on == m_conflictHovered.contains(source)) {
+    return;
+  }
+  if (on) {
+    m_conflictHovered.insert(source);
+  } else {
+    m_conflictHovered.remove(source);
+  }
+  conflictChanged();
+}
+
+QStringList SketchController::conflicts() const {
+  QStringList items;
+  const auto add = [&items](const QString& id) {
+    if (!items.contains(id)) {
+      items << id;
+    }
+  };
+  // In a fixed order of the sources, so the log line does not depend on
+  // the hash's.
+  for (const QString& source : {QStringLiteral("panel"), QStringLiteral("action")}) {
+    for (const QString& id : m_conflicts.value(source)) {
+      add(id);
+    }
+  }
+  // A sketch that does not solve: its own conflicts' constraints and
+  // dimensions (not the fixed entities they name).
+  for (const QStringList& set : m_model.conflicts) {
+    for (const QString& id : set) {
+      if (m_model.constraint(id) != nullptr || m_model.dimension(id) != nullptr) {
+        add(id);
+      }
+    }
+  }
+  return items;
+}
+
+QStringList SketchController::conflictEntities() const {
+  QStringList entities;
+  for (const QString& id : conflicts()) {
+    QStringList refs;
+    if (const ConstraintData* k = m_model.constraint(id)) {
+      refs = k->refs;
+    } else if (const DimensionData* d = m_model.dimension(id)) {
+      refs = d->refs;
+    }
+    for (const QString& ref : std::as_const(refs)) {
+      if (!entities.contains(ref) && (m_model.point(ref) != nullptr || m_model.curve(ref) != nullptr)) {
+        entities << ref;
+      }
+    }
+  }
+  return entities;
+}
+
+int SketchController::selectConflicts() {
+  Selection items;
+  for (const QString& id : conflicts()) {
+    SelectionItem item;
+    item.owner = m_uid;
+    item.name = id;
+    if (m_model.constraint(id) != nullptr) {
+      item.kind = SelectKind::SketchConstraint;
+    } else if (m_model.dimension(id) != nullptr) {
+      item.kind = SelectKind::SketchDimension;
+    } else {
+      continue;
+    }
+    items.append(item);
+  }
+  m_host.setSelection(items);
+  m_overlay->update();
+  return static_cast<int>(items.size());
+}
+
+void SketchController::conflictChanged() {
+  const QStringList items = conflicts();
+  const QString logged =
+      items.isEmpty() ? QStringLiteral("none")
+                      : QStringLiteral("%1 on %2%3")
+                            .arg(items.join(QStringLiteral(", ")),
+                                 conflictEntities().join(QStringLiteral(", ")),
+                                 conflictHovered() ? QStringLiteral(" (hovered)") : QString());
+  if (logged != m_loggedConflict) {
+    m_loggedConflict = logged;
+    // "Sketch conflict painted: k5 on c3, c6", for UI tests.
+    qDebug().noquote() << QStringLiteral("Sketch conflict painted: %1").arg(logged);
+  }
+  m_overlay->update();
+}
+
 void SketchController::setPaused(bool paused) {
   m_paused = paused;
   m_axisPress.clear();
+  // A command's snaps and handle (mitcad#1563) are not the next one's.
+  endCommandPicks();
   // An axis hovered for a command's input (mitcad#876) is not the next
   // one's, nor sketch mode's; nor is one a click would select (mitcad#899)
   // a command's.
@@ -2403,6 +2634,11 @@ bool SketchController::viewerEvent(QEvent* event) {
     } else if (event->type() == QEvent::Leave) {
       setPointerText(QString());
     }
+  }
+  // A command's handle in the sketch and an input that picks points with
+  // the sketch's snaps take their mouse events here (mitcad#1563).
+  if (isActive() && m_paused && !m_forwarding && (handleEvent(event) || snapPickEvent(event))) {
+    return true;
   }
   // A command's input that takes the sketch's axes picks them here
   // (mitcad#876): the view does not show them.
@@ -3420,14 +3656,17 @@ void SketchController::setLive(const QString& id, double value) {
 
 void SketchController::openValueEditor(const QPointF& at, const QString& text, FieldSpec::Kind kind,
                                        std::function<void(const QString&)> accept, const QString& name,
-                                       const ValueStepLimit& stepLimit) {
+                                       const ValueStepLimit& stepLimit, bool nameInText) {
   closeEditor();
   auto* edit = new QLineEdit(&m_viewer);
   edit->setObjectName(QStringLiteral("sketchValueEditor"));
   edit->setStyleSheet(kFieldStyle);
   edit->setText(text);
   int width = 110;
-  if (!name.isEmpty()) {
+  if (nameInText) {
+    // The name is in the text (mitcad#1577): room for it.
+    width += edit->fontMetrics().horizontalAdvance(namedPrefix(text) + QStringLiteral(" = "));
+  } else if (!name.isEmpty()) {
     // The parameter's name before the text, not part of it (mitcad#231).
     auto* label = new QLabel(QStringLiteral("%1 =").arg(name), edit);
     label->setObjectName(QStringLiteral("sketchValueEditorName"));
@@ -3452,6 +3691,8 @@ void SketchController::openValueEditor(const QPointF& at, const QString& text, F
     suggest.sketch = m_uid;
     suggest.label = name.isEmpty() ? QStringLiteral("sketch dimension") : QStringLiteral("dimension %1").arg(name);
     suggest.naming = true;
+    // The name in the text can be taken off (mitcad#1577).
+    suggest.removeName = nameInText;
     // Up, Down and the wheel step a plain value (mitcad#1254); Enter
     // takes it, as a typed one.
     suggest.steps = true;
@@ -3472,26 +3713,36 @@ void SketchController::openValueEditor(const QPointF& at, const QString& text, F
   } else {
     focusNativeInlineEditor(edit);
   }
-  edit->selectAll();
+  if (nameInText) {
+    // The value selected, to type over it: the name stays unless it is
+    // deleted on purpose (mitcad#1577).
+    const int start = expressionStart(text);
+    edit->setSelection(start, static_cast<int>(text.size()) - start);
+  } else {
+    edit->selectAll();
+  }
   m_editor = edit;
   m_editorKind = kind;
   m_editorText = text;
+  m_editorName = nameInText ? name : QString();
   m_editorAccept = std::move(accept);
   m_editorToolSession = m_tool ? std::optional<int>(m_toolSession) : std::nullopt;
   const QPoint corner = m_viewer.mapTo(m_viewer.window(), edit->geometry().center());
   qDebug().noquote() << QStringLiteral("Sketch value editor at %1,%2 with %3%4")
                             .arg(corner.x())
                             .arg(corner.y())
-                            .arg(name.isEmpty() ? QString() : QStringLiteral("%1 = ").arg(name), text);
+                            .arg(name.isEmpty() || nameInText ? QString() : QStringLiteral("%1 = ").arg(name), text);
 }
 
 void SketchController::insertIntoEditor(const QString& name) {
   if (!m_editor || name.isEmpty()) {
     return;
   }
-  // Into a value not edited yet, the name replaces it, as typing would.
+  // Into a value not edited yet, the name replaces it, as typing would; a
+  // name before it stays (mitcad#1577).
   if (m_editor->text() == m_editorText) {
-    m_editor->selectAll();
+    const int start = m_editorName.isEmpty() ? 0 : expressionStart(m_editorText);
+    m_editor->setSelection(start, static_cast<int>(m_editorText.size()) - start);
   }
   m_editor->insert(name);
   if (!focusNativeInlineEditor(m_editor)) {
@@ -3521,6 +3772,14 @@ void SketchController::acceptEditor() {
     if (match.hasMatch()) {
       rename = match.captured(1);
       text = match.captured(2).trimmed();
+      // `name = value` typed over the selected value of an editor that
+      // shows the name (`w = h = 30`, mitcad#1577) names it as it did over
+      // a label: the name typed wins.
+      const QRegularExpressionMatch typedName = named.match(text);
+      if (rename == m_editorName && typedName.hasMatch()) {
+        rename = typedName.captured(1);
+        text = typedName.captured(2).trimmed();
+      }
     }
   }
   QString expression;
@@ -3540,6 +3799,9 @@ void SketchController::acceptEditor() {
   const QPointer<QLineEdit> editor = m_editor;
   const QString typed = editor->text();
   const QString dimension = m_editorDimension;
+  // The name the text opened with, deleted: refused when the dimension
+  // keeps it (mitcad#1577).
+  const QString removed = rename.isEmpty() ? m_editorName : QString();
   hideNativeInlineEditor(editor);
   editor->hide();
   if (accept) {
@@ -3547,9 +3809,10 @@ void SketchController::acceptEditor() {
   }
   // Only an existing dimension's editor knows its dimension: the Dimension
   // tool adds one and leaves no id here (mitcad#352).
-  if (!rename.isEmpty() && !dimension.isEmpty() && editor && editor == m_editor) {
+  if ((!rename.isEmpty() || !removed.isEmpty()) && !dimension.isEmpty() && editor && editor == m_editor) {
     const DimensionData* d = m_model.dimension(dimension);
-    if (d == nullptr || d->parameter != rename) {
+    if (d == nullptr || (!rename.isEmpty() && d->parameter != rename) ||
+        (!removed.isEmpty() && d->parameter == removed)) {
       m_editorAccept = std::move(accept);
       editor->setText(typed);
       editor->setStyleSheet(kInvalidFieldStyle);
@@ -3581,6 +3844,7 @@ void SketchController::closeEditor() {
   m_editorAccept = nullptr;
   m_editorToolSession.reset();
   m_editorDimension.clear();
+  m_editorName.clear();
   m_editorLabel = nullptr;
 }
 

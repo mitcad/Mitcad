@@ -163,6 +163,7 @@ fn thread_config(bridge: &str, instance: &str, chat: &str) -> Value {
             "startup_timeout_sec": STARTUP_TIMEOUT_SECONDS,
             "tool_timeout_sec": TOOL_TIMEOUT_SECONDS,
         }},
+        "developer_instructions": super::guidance(),
         "approval_policy": "never",
         "sandbox_mode": "read-only",
         "features.shell_tool": false,

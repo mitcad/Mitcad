@@ -681,22 +681,21 @@ fn the_solver_reports_freedom_conflicts_and_driven_values() {
     let solved = solve(&entities, std::slice::from_ref(&horizontal), &driven).unwrap();
     assert_eq!(solved.status.dof, 1);
     assert!((solved.status.driven[&ConstraintUid(2)] - 9.0).abs() < 1e-9);
-    // Vertical as well: a conflict naming both constraints.
+    // Vertical as well: a conflict told in words, the ids in the status
+    // (mitcad#1566).
     let vertical = Constraint::new(ConstraintUid(3), ConstraintKind::Vertical { line: c(3) });
     let error = solve(&entities, &[horizontal, vertical], &driving).unwrap_err();
     assert!(
-        error.message.contains("k1") && error.message.contains("k3"),
+        error.message.contains("Horizontal")
+            && error.message.contains("Vertical")
+            && !error.message.contains("k1")
+            && !error.message.contains("k3"),
         "{}",
         error.message
     );
-    assert!(
-        error
-            .status
-            .conflicts
-            .iter()
-            .flatten()
-            .any(|i| *i == SolverItem::Constraint(ConstraintUid(3)))
-    );
+    let conflicting: Vec<SolverItem> = error.status.conflicts.iter().flatten().copied().collect();
+    assert!(conflicting.contains(&SolverItem::Constraint(ConstraintUid(1))));
+    assert!(conflicting.contains(&SolverItem::Constraint(ConstraintUid(3))));
 }
 
 #[test]

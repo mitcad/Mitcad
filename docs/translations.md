@@ -281,7 +281,7 @@ Finnish CAD and engineering usage.
 | cut list | leikkuuluettelo | cut sheet: leikkuuarkki |
 | stock (cut list) | aihio | stock length: aihion pituus; offcut: hukkapala; kerf: sahausrako; running meters: juoksumetrit; grade (timber): lujuusluokka; finish: pintakäsittely; part number: osanumero |
 | opening (Build) | aukko | sill: alareuna; partition: väliseinä; rough opening: karkea aukko; top plate, bottom plate: yläjuoksu, alajuoksu |
-| material | materiaali | |
+| material | materiaali | classes: Metal: metalli; Resin: hartsi; Wood: puu |
 | material properties | materiaaliominaisuudet | material dataset: materiaaliaineisto; Young's modulus: kimmokerroin; Poisson's ratio: Poissonin luku; yield strength: myötöraja; a material's variant: muunnelma |
 | appearance | ulkoasu | |
 | texture | tekstuuri | base color: perusväri; roughness: karheus; opacity: peittävyys; emission: hehku |
@@ -329,6 +329,7 @@ Finnish CAD and engineering usage.
 | Start, Solid, Build, Make | Aloitus, Solidi, Rakenna, Valmistus | the tabs |
 | Create, Modify, Inspect, Insert, Select | Luo, Muokkaa, Tarkastele, Lisää, Valitse | the groups |
 | Auto | Auto | an input's automatic value: Auto (%1) |
+| Cancel | Peruuta | every Cancel button, Qt's own dialogs too (Qt's catalogue says Peru) |
 | member (Build) | rakenneosa | timber: puutavara; stud: tolppa; plate: juoksu; joist: palkki; rafter: kattokannattaja; header: ylityspalkki; trimmer: pielitolppa |
 | connector | liitin | junction: liitoskohta |
 | fastener | kiinnike | wood screw: puuruuvi; nail: naula; set screw: pidätysruuvi |
@@ -353,3 +354,4 @@ Finnish CAD and engineering usage.
 | boss, rib (plastic) | torni, ripa | |
 | Anaglyph 3D | Anaglyfi-3D | stereo depth: stereosyvyys; convergence: konvergenssi |
 | key names | Shift, Ctrl, Alt, Enter | as on the keyboard, never translated (not Vaihto) |
+| navigation bar, toolbar | navigointipalkki, työkalurivi | Pin to Navigation Bar: Kiinnitä navigointipalkkiin; Unpin from Navigation Bar: Irrota navigointipalkista; Pin to Toolbar: Kiinnitä työkaluriville |

@@ -97,6 +97,12 @@ QString expressionPart(const QString& text);
 // spaces that follow it, where the match found them, not where the
 // expression's text first occurs ("t2 = 2" starts at 5, mitcad#755).
 int expressionStart(const QString& text);
+// The name of a leading `name =` (a single `=`) in a field's text; empty
+// when there is none (mitcad#1577).
+QString namedPrefix(const QString& text);
+// `d12` and the like: the names the model gives new dimension parameters,
+// `d` and a number without a leading zero (mitcad#1577).
+bool isAutomaticName(const QString& name);
 
 // A choice in the list: the parameter and why the field cannot take it
 // (empty when it can).

@@ -16,7 +16,9 @@
 //!   are `<feature>:import(j)` in the shapes' face order, j counted over
 //!   the feature's bodies. A Body with a placement of its own gets a
 //!   component of its own with the Body's origin as the component's (its
-//!   features' origin references stay the component's).
+//!   features' origin references stay the component's). Expressions on a
+//!   Body's or part's position move its occurrence by a `move_occurrence`
+//!   ([`placements`], mitcad#1560).
 //! - App::Link → occurrences of the linked object's component (the linked
 //!   object gets one when it is not a part), an array → one per element;
 //!   links to other files read those files; a scaled link → a copy of the
@@ -63,6 +65,9 @@ mod binders;
 // Base features and clones of Bodies, assembly joints (mitcad#1557).
 mod bases;
 mod joints;
+// Placement expressions of Bodies and parts as occurrence moves
+// (mitcad#1560).
+mod placements;
 #[cfg(test)]
 mod tests;
 
@@ -157,6 +162,7 @@ pub fn import_fcstd_file<K: Kernel>(
         appearances: HashMap::new(),
         looks: HashMap::new(),
         placements: 0,
+        driven: HashMap::new(),
     };
     let result = importer.run();
     let Importer {
@@ -539,6 +545,9 @@ struct Importer<'a, 'l, K: Kernel> {
     looks: HashMap<BodyUid, (Option<String>, usize)>,
     /// The objects placed so far (see [`MAX_PLACED`]).
     placements: usize,
+    /// The occurrences a `move_occurrence` places by their objects'
+    /// position expressions, with those expressions (mitcad#1560).
+    driven: HashMap<OccurrenceUid, placements::Driven>,
 }
 
 /// How deep links of links and nested parts are followed.
@@ -582,6 +591,9 @@ impl<K: Kernel> Importer<'_, '_, K> {
         self.make_bodies()?;
         if !self.bodies_only {
             self.import_parameters();
+            // Positions of Bodies and parts that expressions drive, as
+            // moves of their occurrences (mitcad#1560).
+            self.import_placements();
             self.import_history();
             // Assembly joints between the occurrences (mitcad#1557).
             self.import_joints();
@@ -757,9 +769,13 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let role = self.source(doc).role(o);
         let visible = self.source(doc).file.visible(o);
         let placement = o.placement().unwrap_or_default();
+        // A Body whose position an expression drives too, so that its
+        // occurrence can move by it (mitcad#1560).
         let own = role == Role::Body
             && (self.link_targets.contains(&key)
-                || o.type_name == "PartDesign::Body" && !placement.is_identity(1e-12));
+                || o.type_name == "PartDesign::Body"
+                    && (!placement.is_identity(1e-12)
+                        || doc == 0 && !self.bodies_only && placements::position_driven(o)));
         match role {
             Role::Component => {
                 self.note(&key, ObjectOutcome::Component, None);
