@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "ImportDeviations.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <QAbstractItemView>
 #include <QDialog>
@@ -100,7 +101,7 @@ std::vector<DeviationRow> deviationRows(const QJsonObject& result) {
     row.bodyVolume = deviation.value(QStringLiteral("body_volume")).toDouble();
     row.storedBodyVolume = deviation.value(QStringLiteral("stored_body_volume")).toDouble();
     row.tolerance = deviation.value(QStringLiteral("tolerance")).toDouble(0.01);
-    row.reason = deviation.value(QStringLiteral("reason")).toString();
+    row.reason = mitcad::modelMessage(deviation.value(QStringLiteral("reason")).toString());
     row.faces = deviation.value(QStringLiteral("faces")).toArray();
     for (const QJsonValue& edge : deviation.value(QStringLiteral("missing_edges")).toArray()) {
       row.missingEdges << edge.toString();

@@ -188,6 +188,12 @@ pub enum Value {
     Vec2fArray(Vec<[f32; 2]>),
     Vec3fArray(Vec<[f32; 3]>),
     TokenArray(Vec<String>),
+    /// A list of doubles (`std::vector<double>`): the times of time
+    /// samples (mitcad#1597).
+    DoubleVector(Vec<f64>),
+    /// An attribute's values at time codes, the times increasing
+    /// (`timeSamples`, mitcad#1597).
+    TimeSamples(Vec<(f64, Value)>),
 }
 
 /// A spec: its path, what it is and its fields in order.

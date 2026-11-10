@@ -26,6 +26,18 @@
 //!   IOR, clear coat, emission), and for a texture a `UsdUVTexture` reading
 //!   the image from the package (sRGB, repeated) at the mesh's `st`.
 //!
+//! A scene with an [`Animation`] (mitcad#1597) moves rigid parts along
+//! time: the layer declares the time codes of the first and last samples
+//! (`startTimeCode`, `endTimeCode`) and the rate (`timeCodesPerSecond`
+//! and `framesPerSecond`, one time code per frame), and each node or mesh
+//! with `samples` has its `xformOp:transform` sampled at each time code
+//! (`timeSamples`; the static placement stays its `default`, for readers
+//! without time). A moved mesh gets its own `xformOp:transform` in its
+//! node's coordinates. The meshes and materials are written once: only
+//! the placements change. Readers interpolate between samples linearly,
+//! matrix element by matrix element (USD's linear interpolation), which is
+//! exact at the samples.
+//!
 //! [`read::read_package`] reads a package back and checks what the formats
 //! require of it (tests use it on what [`write`] wrote).
 
@@ -77,6 +89,23 @@ impl Placement {
                 + self.translation[r]
         })
     }
+
+    /// Every number finite.
+    pub fn is_finite(&self) -> bool {
+        self.linear.iter().flatten().all(|v| v.is_finite())
+            && self.translation.iter().all(|v| v.is_finite())
+    }
+}
+
+/// The time of an animated scene (mitcad#1597): the rate and the time
+/// codes of the samples.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Animation {
+    /// Time codes (frames) per second; positive.
+    pub fps: f64,
+    /// The time codes of the samples, increasing: the first is the layer's
+    /// start, the last its end.
+    pub times: Vec<f64>,
 }
 
 /// Texture coordinates of a mesh.
@@ -113,6 +142,10 @@ pub struct Mesh {
     /// Index into [`Scene::materials`].
     pub material: usize,
     pub subsets: Vec<Subset>,
+    /// With the scene's [`Animation`] (mitcad#1597): the mesh's placement
+    /// in its node at each time code; none when it does not move in its
+    /// node.
+    pub samples: Vec<Placement>,
 }
 
 /// A physically based material (`UsdPreviewSurface`); colours linear.
@@ -164,6 +197,9 @@ pub struct Node {
     pub placement: Placement,
     pub meshes: Vec<Mesh>,
     pub children: Vec<Node>,
+    /// With the scene's [`Animation`] (mitcad#1597): the placement at each
+    /// time code; none when the node stays at `placement`.
+    pub samples: Vec<Placement>,
 }
 
 impl Node {
@@ -173,6 +209,7 @@ impl Node {
             placement: Placement::IDENTITY,
             meshes: Vec::new(),
             children: Vec::new(),
+            samples: Vec::new(),
         }
     }
 }
@@ -186,6 +223,8 @@ pub struct Scene {
     pub images: Vec<Image>,
     /// The layer's `doc`: the writing application.
     pub documentation: String,
+    /// Time-sampled placements (mitcad#1597); none for a still scene.
+    pub animation: Option<Animation>,
 }
 
 /// A USDZ file could not be written or read, or breaks the format.

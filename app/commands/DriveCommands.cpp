@@ -10,6 +10,7 @@
 // occurrence as a seat with its link (mitcad#754); the second gear meshes
 // with the first, so it goes on geometry of the active component.
 #include <algorithm>
+#include "framework/ModelMessages.hpp"
 #include <cmath>
 #include <exception>
 #include <limits>
@@ -278,10 +279,10 @@ void findCandidates(CommandState& state, const CommandContext& context, const QS
     // The model's warnings (the parts not lined up along their axes).
     QStringList warnings;
     if (answer.value(QStringLiteral("warning")).isString()) {
-      warnings << answer.value(QStringLiteral("warning")).toString();
+      warnings << mitcad::modelMessage(answer.value(QStringLiteral("warning")).toString());
     }
     for (const QJsonValue& warning : answer.value(QStringLiteral("warnings")).toArray()) {
-      warnings << warning.toString();
+      warnings << mitcad::modelMessage(warning.toString());
     }
     kept = {{QStringLiteral("rows"), answer.value(QStringLiteral("candidates"))},
             {QStringLiteral("center_distance"), answer.value(QStringLiteral("center_distance"))},
@@ -294,7 +295,7 @@ void findCandidates(CommandState& state, const CommandContext& context, const QS
                               .arg(answer.value(QStringLiteral("candidates")).toArray().size())
                               .arg(lengthText(answer.value(QStringLiteral("center_distance")).toDouble(), context));
   } catch (const std::exception& e) {
-    kept = {{QStringLiteral("error"), QString::fromUtf8(e.what())}};
+    kept = {{QStringLiteral("error"), mitcad::modelMessage(e.what())}};
     qDebug().noquote() << QStringLiteral("%1 candidates: none: %2").arg(command, QString::fromUtf8(e.what()));
   }
   state.setObject(kCandidates, kept);

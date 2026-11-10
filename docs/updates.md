@@ -368,6 +368,76 @@ folders stay the system's.
 - Keys, signatures and digests are lowercase hex. `format` is 1. MitCad
   refuses a manifest of another format.
 
+### The web browser component
+
+Insert › Component from Web's browser (mitcad#1579, the module
+`mitcad-webbrowser` with the Chromium Embedded Framework's runtime) is
+not in the installers. It is a package of its own per platform,
+`mitcad-browser-<version>-<platform>.zip`, which MitCad downloads on the
+first Component from Web… and updates on its own cadence, whatever
+MitCad's version. The manifest lists the packages in `browser` (left out
+when there are none; earlier versions of MitCad ignore it):
+
+```json
+"browser": [
+  {
+    "platform": "windows-x64",
+    "abi": 2,
+    "version": "2026.1110.900",
+    "cef": "156.0.27+ga10dae3+chromium-156.0.8078.88",
+    "fingerprint": "<64 hex digits>",
+    "url": "https://github.com/mitcad/Mitcad/releases/download/v0.60.0/mitcad-browser-2026.1110.900-windows-x64.zip",
+    "size": 123456789,
+    "sha256": "<64 hex digits>",
+    "signature": "<128 hex digits>"
+  }
+]
+```
+
+- `abi` is the module's interface version (`kComponentBrowserAbi`,
+  `app/webbrowser/ComponentBrowserHost.hpp`). A MitCad takes only a
+  package of its own interface, the highest `version` among them, and
+  says that MitCad needs an update when the manifest has packages only
+  for other interfaces. A manifest may list several interfaces, so that
+  the latest release serves older versions of MitCad too.
+- `version` is the package's own semantic version (the build's date and
+  time, `YYYY.MDD.HMM`); `cef` the CEF version inside; `fingerprint` the
+  SHA-256 of what the package is built from (the CEF version, the
+  interface, the module's sources), which the release compares to decide
+  whether to build a new package.
+- `signature` is the Ed25519 signature, with the release key, of the
+  package's statement:
+
+  ```text
+  mitcad-browser-package
+  platform windows-x64
+  abi 2
+  version 2026.1110.900
+  cef 156.0.27+ga10dae3+chromium-156.0.8078.88
+  fingerprint <64 hex digits>
+  size 123456789
+  sha256 <64 hex digits>
+  ```
+
+  MitCad checks the manifest's signature, then the package's statement,
+  size and SHA-256 (`core/update`: `browser_check`,
+  `verify_browser_download`) before it unpacks anything.
+
+**In a release** (the orchestrator's release tooling):
+
+1. On each platform, after the build: `tools/browser-package.sh <build>
+   <the latest release's update-manifest.json> <release public key>`
+   (`tools/browser-package.ps1 -Build <build> -Latest … -Key …` on
+   Windows) writes `<build>/browser-package.txt`: `unchanged`, or the
+   new package's `PLATFORM ABI VERSION CEF FINGERPRINT FILE`.
+2. A new package is uploaded to the release beside the installers.
+3. The manifest is signed with `mitcad-release manifest … --keep-browser
+   <the latest release's update-manifest.json>` (its packages carried
+   over) and one `--browser PLATFORM ABI VERSION CEF FINGERPRINT FILE URL`
+   per new package (which replaces a kept one of the same platform and
+   interface). `mitcad-release renew` keeps the packages;
+   `mitcad-release verify --browser PLATFORM ABI VERSION FILE` checks one.
+
 ### Manifest expiry
 
 Design choice (mitcad#938): without an expiry, a still validly signed

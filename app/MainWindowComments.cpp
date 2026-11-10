@@ -11,6 +11,7 @@
 // Retarget run the model's comment commands, each one undo step outside a
 // panel's undo range as an annotation's (runVisibilityCommands).
 #include "MainWindow.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <array>
 #include <exception>
@@ -232,7 +233,7 @@ void MainWindow::followComments() {
     answer = queryObject({{QStringLiteral("query"), QStringLiteral("comments")}});
   } catch (const std::exception& error) {
     // A model without comments (or one that refuses the query) has none.
-    const QString why = QStringLiteral("Comments not read: %1").arg(QString::fromUtf8(error.what()));
+    const QString why = QStringLiteral("Comments not read: %1").arg(mitcad::modelMessage(error.what()));
     if (why != m_loggedCommentsError) {
       m_loggedCommentsError = why;
       qDebug().noquote() << why;

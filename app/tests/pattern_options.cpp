@@ -108,6 +108,13 @@ void optionsTextTests() {
                              {QStringLiteral("angle"), QStringLiteral("90 deg")},
                              {QStringLiteral("symmetric"), true}};
   CHECK(patternOptionsText(circular) == QStringLiteral("symmetric, quantity 3, angle 90 deg"));
+  // About two axes (mitcad#1588): the second axis after the first.
+  QJsonObject twoAxes = circular;
+  twoAxes.insert(QStringLiteral("axis2"), QJsonObject{{QStringLiteral("axis"), QStringLiteral("z")},
+                                                      {QStringLiteral("quantity"), 4},
+                                                      {QStringLiteral("angle"), QStringLiteral("360 deg")}});
+  CHECK(patternOptionsText(twoAxes) ==
+        QStringLiteral("symmetric, quantity 3, angle 90 deg; axis 2 one direction, quantity 4, angle 360 deg"));
 
   const QJsonObject path{{QStringLiteral("type"), QStringLiteral("path_pattern")},
                          {QStringLiteral("quantity"), 4},

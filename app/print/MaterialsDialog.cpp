@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "MaterialsDialog.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -805,7 +806,7 @@ void MaterialsPanel::refresh() {
       m_keys = PrintKeyTable(m_host->model().queryObject({{QStringLiteral("query"), QStringLiteral("print_keys")}}));
     }
   } catch (const std::exception& e) {
-    error = QString::fromUtf8(e.what());
+    error = mitcad::modelMessage(e.what());
   }
   // The design's units of materials' values, temperatures as preferred
   // (mitcad#1213).
@@ -1220,7 +1221,7 @@ bool MaterialsPanel::run(const QJsonObject& command, QJsonObject* result) {
                true); // plain words (mitcad#655)
   }
   qDebug().noquote() << QStringLiteral("%1: %2 refused: %3").arg(m_log)
-                            .arg(command.value(QStringLiteral("cmd")).toString(), m_host->lastError());
+                            .arg(command.value(QStringLiteral("cmd")).toString(), mitcad::modelMessage(m_host->lastError()));
   return false;
 }
 
@@ -1264,7 +1265,7 @@ void MaterialsPanel::edit(const QJsonObject& change, const QString& what, const 
     if (!done && !field.isEmpty() && !m_host->lastCancelled()) {
       // A refusal of a print setting under its field (mitcad#655).
       setMessage(QString());
-      m_form->setError(field, m_keys.plainText(m_host->lastError()));
+      m_form->setError(field, m_keys.plainText(mitcad::modelMessage(m_host->lastError())));
     }
   });
 }
@@ -1765,7 +1766,7 @@ void MaterialsPanel::exportMaterials() {
   try {
     answer = m_host->model().queryObject(query);
   } catch (const std::exception& e) {
-    setMessage(QString::fromUtf8(e.what()), true);
+    setMessage(mitcad::modelMessage(e.what()), true);
     return;
   }
   QSaveFile out(path);

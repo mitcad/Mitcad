@@ -1,0 +1,16 @@
+{
+  "comment": "two_boxes.usdz of tools/cli/tests/usdz_animation.json (ctest cli.export_usdz_animation, mitcad#1597): Body2's mesh where it is, 10 mm up, then turned a quarter about Z through (70, 10) and 20 mm up, at 24 frames per second. Poses in MitCad's layout (rows of the rotation, translation last).",
+  "fps": 24,
+  "start": 0,
+  "end": 2,
+  "prims": {
+    "/two_boxes/Body2": {
+      "times": [0, 1, 2],
+      "poses": [
+        [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]],
+        [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 10]],
+        [[0, -1, 0, 80], [1, 0, 0, -60], [0, 0, 1, 20]]
+      ]
+    }
+  }
+}

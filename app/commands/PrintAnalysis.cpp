@@ -138,6 +138,51 @@ void describe(const QJsonObject& overhang, const QJsonObject& thickness, bool ov
   }
 }
 
+// A pair's closest points, 6 numbers, or none.
+std::optional<std::array<double, 6>> gapPoints(const QJsonObject& pair) {
+  const QJsonArray a = pair.value(QStringLiteral("on_a")).toArray();
+  const QJsonArray b = pair.value(QStringLiteral("on_b")).toArray();
+  if (a.size() != 3 || b.size() != 3) {
+    return std::nullopt;
+  }
+  return std::array<double, 6>{a.at(0).toDouble(), a.at(1).toDouble(), a.at(2).toDouble(),
+                               b.at(0).toDouble(), b.at(1).toDouble(), b.at(2).toDouble()};
+}
+
+// The two bodies of a narrow gap by their names: "Body1 and Body2" or
+// "Body1-Body2" (the log's).
+QString gapBodies(const QJsonObject& pair, const BodyNames& name, const QString& between) {
+  const QJsonArray names = pair.value(QStringLiteral("names")).toArray();
+  const auto nameOf = [&pair, &names, &name](int i, const char* key) {
+    const QString given = names.at(i).toString();
+    return given.isEmpty() ? name(pair.value(QLatin1String(key)).toString()) : given;
+  };
+  return nameOf(0, "a") + between + nameOf(1, "b");
+}
+
+// The narrow gaps in the panel's words: each pair's distance as a link to
+// the middle of its closest points.
+void describeGaps(const QJsonObject& answer, const BodyNames& name, QStringList& lines) {
+  const QString gap = plain(answer.value(QStringLiteral("gap")).toDouble());
+  const QJsonArray pairs = answer.value(QStringLiteral("pairs")).toArray();
+  lines << QObject::tr("<b>Narrow gaps</b> (under %1 mm)").arg(gap);
+  if (pairs.isEmpty()) {
+    lines << QObject::tr("None: the bodies are apart by the gap or touch.");
+    return;
+  }
+  for (const QJsonValue& value : pairs) {
+    const QJsonObject pair = value.toObject();
+    QString distance = QStringLiteral("%1 mm").arg(fixed(pair.value(QStringLiteral("distance")).toDouble(), 2));
+    if (const auto points = gapPoints(pair)) {
+      const std::array<double, 6>& p = *points;
+      distance = QStringLiteral("<a href='point:%1,%2,%3'>%4</a>")
+                     .arg(QString::number((p[0] + p[3]) / 2.0, 'g', 12), QString::number((p[1] + p[4]) / 2.0, 'g', 12),
+                          QString::number((p[2] + p[5]) / 2.0, 'g', 12), distance);
+    }
+    lines << QObject::tr("%1: %2").arg(gapBodies(pair, name, QObject::tr(" and ")).toHtmlEscaped(), distance);
+  }
+}
+
 } // namespace
 
 PrintAnalysisSettings PrintAnalysisSettings::load(QSettings& settings) {
@@ -174,6 +219,12 @@ PrintAnalysisSettings PrintAnalysisSettings::load(QSettings& settings) {
   if (ok && std::isfinite(price) && price >= 0.0) {
     s.pricePerKg = price;
   }
+  s.minGap = settings.value(QStringLiteral("min_gap"), s.minGap).toBool();
+  bool gapOk = false;
+  const double gap = settings.value(QStringLiteral("gap")).toString().toDouble(&gapOk);
+  if (gapOk && inRange(gap, 1e-3, kMaxLength)) {
+    s.gap = gap;
+  }
   settings.endGroup();
   return s;
 }
@@ -193,6 +244,8 @@ void PrintAnalysisSettings::save(QSettings& settings) const {
   settings.setValue(QStringLiteral("infill"), infill);
   settings.setValue(QStringLiteral("filament_diameter"), filamentDiameter);
   settings.setValue(QStringLiteral("price_per_kg"), pricePerKg ? QString::number(*pricePerKg, 'g', 12) : QString());
+  settings.setValue(QStringLiteral("min_gap"), minGap);
+  settings.setValue(QStringLiteral("gap"), gap ? QString::number(*gap, 'g', 12) : QString());
   settings.endGroup();
 }
 
@@ -217,6 +270,12 @@ PrintAnalysisSettings PrintAnalysisSettings::fromDef(const QJsonObject& def) {
   if (price.isDouble() && std::isfinite(price.toDouble()) && price.toDouble() >= 0.0) {
     s.pricePerKg = price.toDouble();
   }
+  const QJsonObject gaps = part(def, "min_gap");
+  s.minGap = flag(gaps, "enabled", s.minGap);
+  const QJsonValue gap = gaps.value(QStringLiteral("gap"));
+  if (gap.isDouble() && inRange(gap.toDouble(), 1e-3, kMaxLength)) {
+    s.gap = gap.toDouble();
+  }
   return s;
 }
 
@@ -238,7 +297,9 @@ QJsonObject PrintAnalysisSettings::def(const QJsonArray& bodies, const QJsonValu
                        {QStringLiteral("top_bottom_layers"), topBottomLayers},
                        {QStringLiteral("infill"), infill},
                        {QStringLiteral("filament_diameter"), filamentDiameter},
-                       {QStringLiteral("price_per_kg"), pricePerKg ? QJsonValue(*pricePerKg) : none}}}};
+                       {QStringLiteral("price_per_kg"), pricePerKg ? QJsonValue(*pricePerKg) : none}}},
+          {QStringLiteral("min_gap"), QJsonObject{{QStringLiteral("enabled"), minGap},
+                                                  {QStringLiteral("gap"), gap ? QJsonValue(*gap) : none}}}};
 }
 
 QJsonObject printOverhangsQuery(const QJsonObject& def) {
@@ -280,6 +341,19 @@ QJsonObject printEstimateQuery(const QJsonObject& def) {
   return request;
 }
 
+QJsonObject printMinGapQuery(const QJsonObject& def) {
+  const PrintAnalysisSettings s = PrintAnalysisSettings::fromDef(def);
+  const QJsonArray bodies = def.value(QStringLiteral("bodies")).toArray();
+  if (!s.minGap || bodies.size() < 2) {
+    return QJsonObject();
+  }
+  QJsonObject request{{QStringLiteral("query"), QStringLiteral("print_min_gap")}, {QStringLiteral("bodies"), bodies}};
+  if (s.gap) {
+    request.insert(QStringLiteral("gap"), *s.gap);
+  }
+  return request;
+}
+
 QString runPrintAnalysis(const QJsonObject& def, const PrintQuery& query, PrintAnswers& answers) {
   answers = PrintAnswers();
   const auto ask = [&query](const QJsonObject& request, bool slow, QJsonObject& answer) {
@@ -297,6 +371,9 @@ QString runPrintAnalysis(const QJsonObject& def, const PrintQuery& query, PrintA
   }
   if (error.isEmpty()) {
     error = ask(printEstimateQuery(def), false, answers.estimate);
+  }
+  if (error.isEmpty()) {
+    error = ask(printMinGapQuery(def), true, answers.minGap);
   }
   return error;
 }
@@ -326,6 +403,11 @@ QString printAnalysisText(const PrintAnswers& answers, const BodyNames& name) {
     describe(answers.overhangs, answers.thickness, overhangs, walls, lines);
     parts << lines.join(QStringLiteral("<br>"));
   }
+  if (!answers.minGap.isEmpty()) {
+    QStringList lines;
+    describeGaps(answers.minGap, name, lines);
+    parts << lines.join(QStringLiteral("<br>"));
+  }
   if (!answers.estimate.isEmpty()) {
     const QJsonObject& e = answers.estimate;
     QStringList lines{QObject::tr("<b>Estimate:</b> %1").arg(printEstimateLine(e))};
@@ -340,7 +422,7 @@ QString printAnalysisText(const PrintAnswers& answers, const BodyNames& name) {
     parts << lines.join(QStringLiteral("<br>"));
   }
   if (parts.isEmpty()) {
-    return QObject::tr("Nothing to check: turn on Overhangs, Thin Walls or Estimate.");
+    return QObject::tr("Nothing to check: turn on Overhangs, Thin Walls, Narrow Gaps or Estimate.");
   }
   return parts.join(QStringLiteral("<br><br>"));
 }
@@ -379,6 +461,19 @@ QString printAnalysisLog(const PrintAnswers& answers, const BodyNames& name) {
     line = line.isEmpty() ? estimate
                           : line + (uids.size() > 1 ? QStringLiteral("; ") : QStringLiteral(", ")) + estimate;
   }
+  if (!answers.minGap.isEmpty()) {
+    QStringList pairs;
+    for (const QJsonValue& value : answers.minGap.value(QStringLiteral("pairs")).toArray()) {
+      const QJsonObject pair = value.toObject();
+      pairs << QStringLiteral("%1 %2 mm")
+                   .arg(gapBodies(pair, name, QStringLiteral("-")),
+                        fixed(pair.value(QStringLiteral("distance")).toDouble(), 2));
+    }
+    const QString gaps = QStringLiteral("narrow gaps under %1 mm: %2")
+                             .arg(plain(answers.minGap.value(QStringLiteral("gap")).toDouble()),
+                                  pairs.isEmpty() ? QStringLiteral("none") : pairs.join(QStringLiteral(", ")));
+    line = line.isEmpty() ? gaps : line + QStringLiteral("; ") + gaps;
+  }
   return line.isEmpty() ? QStringLiteral("nothing checked") : line;
 }
 
@@ -404,16 +499,34 @@ QJsonObject printOverlayJson(const QJsonObject& def, const PrintAnswers& answers
                             {QStringLiteral("thinnest"), answers.thickness.value(QStringLiteral("thinnest"))},
                             {QStringLiteral("at"), answers.thickness.value(QStringLiteral("at"))}});
   }
+  if (s.minGap && !answers.minGap.isEmpty()) {
+    QJsonArray pairs;
+    for (const QJsonValue& value : answers.minGap.value(QStringLiteral("pairs")).toArray()) {
+      if (const auto points = gapPoints(value.toObject())) {
+        QJsonArray flat;
+        for (const double coordinate : *points) {
+          flat.append(coordinate);
+        }
+        pairs.append(flat);
+      }
+    }
+    json.insert(QStringLiteral("min_gap"),
+                QJsonObject{{QStringLiteral("gap"), answers.minGap.value(QStringLiteral("gap"))},
+                            {QStringLiteral("pairs"), pairs},
+                            {QStringLiteral("closest"), answers.minGap.value(QStringLiteral("closest"))}});
+  }
   if (!json.isEmpty()) {
     json.insert(QStringLiteral("title"), title);
   }
   return json;
 }
 
-PrintOverlay printOverlayOf(const QJsonObject& json, const QColor& overhangColor, const QColor& thinColor) {
+PrintOverlay printOverlayOf(const QJsonObject& json, const QColor& overhangColor, const QColor& thinColor,
+                            const QColor& gapColor) {
   PrintOverlay overlay;
   overlay.overhangColor = overhangColor;
   overlay.thinColor = thinColor;
+  overlay.gapColor = gapColor;
   overlay.title = json.value(QStringLiteral("title")).toString();
   const auto flatten = [](const QJsonValue& parts, std::vector<float>& out) {
     for (const QJsonValue& body : parts.toArray()) {
@@ -446,6 +559,30 @@ PrintOverlay printOverlayOf(const QJsonObject& json, const QColor& overhangColor
           QObject::tr("Thinnest %1 mm").arg(fixed(thin.value(QStringLiteral("thinnest")).toDouble(), 2));
     }
   }
+  const QJsonObject gaps = json.value(QStringLiteral("min_gap")).toObject();
+  if (!gaps.isEmpty()) {
+    for (const QJsonValue& value : gaps.value(QStringLiteral("pairs")).toArray()) {
+      const QJsonArray pair = value.toArray();
+      if (pair.size() != 6) {
+        continue;
+      }
+      for (const QJsonValue& coordinate : pair) {
+        overlay.gaps.push_back(static_cast<float>(coordinate.toDouble()));
+      }
+    }
+    overlay.legend.emplace_back(gapColor, QObject::tr("Narrow gap, under %1 mm")
+                                              .arg(plain(gaps.value(QStringLiteral("gap")).toDouble())));
+    // The answer's pairs come the closest first.
+    const QJsonArray all = gaps.value(QStringLiteral("pairs")).toArray();
+    const QJsonArray first = all.isEmpty() ? QJsonArray() : all.at(0).toArray();
+    if (gaps.value(QStringLiteral("closest")).isDouble() && first.size() == 6) {
+      overlay.narrowest = std::array<double, 3>{(first.at(0).toDouble() + first.at(3).toDouble()) / 2.0,
+                                                (first.at(1).toDouble() + first.at(4).toDouble()) / 2.0,
+                                                (first.at(2).toDouble() + first.at(5).toDouble()) / 2.0};
+      overlay.narrowestLabel =
+          QObject::tr("Gap %1 mm").arg(fixed(gaps.value(QStringLiteral("closest")).toDouble(), 2));
+    }
+  }
   return overlay;
 }
 
@@ -458,6 +595,16 @@ QString printOverlayLog(const PrintOverlay& overlay) {
     const std::array<double, 3>& p = *overlay.thinnest;
     marker = QStringLiteral("marker %1 at (%2, %3, %4)")
                  .arg(overlay.thinnestLabel, plain(p[0]), plain(p[1]), plain(p[2]));
+  }
+  if (!overlay.gaps.empty()) {
+    marker += QStringLiteral(", %1 narrow gap(s) %2")
+                  .arg(static_cast<qulonglong>(overlay.gaps.size() / 6))
+                  .arg(overlay.gapColor.name());
+    if (overlay.narrowest) {
+      const std::array<double, 3>& g = *overlay.narrowest;
+      marker += QStringLiteral(", marker %1 at (%2, %3, %4)")
+                    .arg(overlay.narrowestLabel, plain(g[0]), plain(g[1]), plain(g[2]));
+    }
   }
   QStringList legend;
   for (const auto& [color, words] : overlay.legend) {

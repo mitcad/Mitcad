@@ -61,13 +61,15 @@ use mitcad_model_drawing::annotate::{
     ViewAnnotation, ViewPick, Want,
 };
 use mitcad_model_drawing::clip::ViewMap;
-use mitcad_model_drawing::compose::{Bounds, PlacedView, SketchDimension, ViewRole, view_bounds};
+use mitcad_model_drawing::compose::{
+    Bounds, EdgeSeen, PlacedView, SketchDimension, ViewRole, view_bounds,
+};
 use mitcad_model_drawing::def::{
     Drawing, DrawingDefaults, DrawingSheet, DrawingUid, Subject, ViewKind,
 };
 use mitcad_model_drawing::internal::BodyInView;
 use mitcad_model_drawing::internal::sketch_dimension;
-use mitcad_model_drawing::sheet::{Group, Item};
+use mitcad_model_drawing::sheet::{Group, Item, Pen};
 use mitcad_model_drawing::tables::{
     HOLE_COLUMNS, Levels, PARTS_COLUMNS, TableSettings, header, lay_out_table,
 };
@@ -506,6 +508,23 @@ fn curve_distance(curve: &ViewCurve, p: P2) -> f64 {
             }
         }
     }
+}
+
+/// The pen of the lines a pick's mark lies along (mitcad#1618), so that the
+/// application draws the mark as wide as them: of the view's projected
+/// lines on `along` (view mm), the widest one's pen (an edge partly hidden
+/// is marked as wide as its visible part); None when the view draws no line
+/// there.
+fn marked_pen(placed: &PlacedView, along: Seen) -> Option<Pen> {
+    let tolerance = (VISIBLE_NEAR / placed.map.scale).max(placed.pens.tolerance);
+    let on = EdgeSeen::Seen(along);
+    placed
+        .projection
+        .edges
+        .iter()
+        .filter(|e| on.holds(&e.curve, tolerance))
+        .map(|e| placed.pens.pen(e))
+        .max_by(|a, b| a.width().total_cmp(&b.width()))
 }
 
 /// How far a model point lies on the normal's side of a section's plane
@@ -2205,9 +2224,20 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         let map = &view.placed.map;
         let scale = map.scale;
         let seen = found.found.seen;
+        // A line's, a circle's or an arc's mark with the pen of the lines
+        // it lies on (mitcad#1618): the application draws it as wide.
+        let marked = |mut item: Value, along: Seen| {
+            if let Some(pen) = marked_pen(view.placed, along) {
+                item["pen"] = json!(pen.name());
+            }
+            item
+        };
         let (what, items) = match seen {
             Seen::Point(p) => ("point", vec![json!({"point": map.at(p)})]),
-            Seen::Line(a, b) => ("line", vec![json!({"line": [map.at(a), map.at(b)]})]),
+            Seen::Line(a, b) => (
+                "line",
+                vec![marked(json!({"line": [map.at(a), map.at(b)]}), seen)],
+            ),
             Seen::Circle {
                 center,
                 radius,
@@ -2217,13 +2247,15 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             } => (
                 "circle",
                 vec![
-                    match arc {
-                        Some((start, end)) => json!({"arc": {"center": map.at(center),
-                            "radius": radius * scale, "start": start, "end": end}}),
-                        None => {
-                            json!({"circle": {"center": map.at(center), "radius": radius * scale}})
-                        }
-                    },
+                    marked(
+                        match arc {
+                            Some((start, end)) => json!({"arc": {"center": map.at(center),
+                                "radius": radius * scale, "start": start, "end": end}}),
+                            None => json!({"circle": {"center": map.at(center),
+                                "radius": radius * scale}}),
+                        },
+                        seen,
+                    ),
                     // Its centre, which a click there picks (mitcad#1272).
                     json!({"point": map.at(center)}),
                 ],
@@ -2238,15 +2270,25 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                 let (low, high) = arc.unwrap_or((-radius, radius));
                 let a = [center[0] + across[0] * low, center[1] + across[1] * low];
                 let b = [center[0] + across[0] * high, center[1] + across[1] * high];
-                ("circle", vec![json!({"line": [map.at(a), map.at(b)]})])
+                (
+                    "circle",
+                    vec![marked(
+                        json!({"line": [map.at(a), map.at(b)]}),
+                        Seen::Line(a, b),
+                    )],
+                )
             }
             Seen::Axis { a, b, radius } => {
                 let d = [b[0] - a[0], b[1] - a[1]];
                 let length = (d[0] * d[0] + d[1] * d[1]).sqrt().max(1e-12);
                 let n = [-d[1] / length * radius, d[0] / length * radius];
                 let edge = |s: f64| {
-                    json!({"line": [map.at([a[0] + s * n[0], a[1] + s * n[1]]),
-                                    map.at([b[0] + s * n[0], b[1] + s * n[1]])]})
+                    let from = [a[0] + s * n[0], a[1] + s * n[1]];
+                    let to = [b[0] + s * n[0], b[1] + s * n[1]];
+                    marked(
+                        json!({"line": [map.at(from), map.at(to)]}),
+                        Seen::Line(from, to),
+                    )
                 };
                 ("axis", vec![edge(1.0), edge(-1.0)])
             }
@@ -2280,7 +2322,13 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         if let Some([a, b]) = found.line {
             answer["center_line"] = json!(true);
             if let Some(items) = answer["items"].as_array_mut() {
-                items.insert(0, json!({"line": [map.at(a), map.at(b)]}));
+                // A centre mark's lines are narrow (chain or thin, one
+                // width), a round face's axis too where it is drawn.
+                let pen = marked_pen(view.placed, Seen::Line(a, b)).unwrap_or(Pen::Chain);
+                items.insert(
+                    0,
+                    json!({"line": [map.at(a), map.at(b)], "pen": pen.name()}),
+                );
             }
         }
         Ok(answer)

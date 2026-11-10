@@ -244,6 +244,15 @@ fi
 for file in bin/lrelease bin/lupdate translations/qtbase_fi.qm; do
   [ -e "$HOME/Qt/$QT_VERSION/macos/$file" ] || { echo "Qt $QT_VERSION has no $file" >&2; exit 1; }
 done
+# The Chromium Embedded Framework of the web browser component (Insert >
+# Component from Web, mitcad#1579): the pinned distribution, named in the
+# login profile as MITCAD_CEF_ROOT, which the build reads.
+echo "== CEF $CEF_VERSION"
+CEF_ROOT=$("$SCRIPT_DIR/fetch-cef.sh")
+touch "$HOME/.zprofile"
+grep -v '^export MITCAD_CEF_ROOT=' "$HOME/.zprofile" > "$HOME/.zprofile.mitcad" || true
+mv "$HOME/.zprofile.mitcad" "$HOME/.zprofile"
+echo "export MITCAD_CEF_ROOT=\"$CEF_ROOT\"" >> "$HOME/.zprofile"
 
 echo "== mosquitto (a test tool)"
 # The MQTT broker of the live updates' tests (mitcad#89); they start their

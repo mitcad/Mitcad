@@ -346,6 +346,19 @@ impl<K: Kernel> Document<K> {
         verb: &str,
         attributes: BodyAttributes,
     ) -> Result<(), ModelError> {
+        self.set_attributes_with(uid, verb, attributes, false)
+    }
+
+    /// Like [`Document::set_attributes`]; with `recompute` the features
+    /// that read the attributes are evaluated again (print-shaped holes read
+    /// the print bed face, mitcad#1515).
+    pub(super) fn set_attributes_with(
+        &mut self,
+        uid: BodyUid,
+        verb: &str,
+        attributes: BodyAttributes,
+        recompute: bool,
+    ) -> Result<(), ModelError> {
         if attributes == self.body_attributes(uid) {
             return Ok(());
         }
@@ -356,7 +369,7 @@ impl<K: Kernel> Document<K> {
             } else {
                 state.body_attributes.insert(uid, attributes);
             }
-            Ok((label, (), false))
+            Ok((label, (), recompute))
         })
     }
 

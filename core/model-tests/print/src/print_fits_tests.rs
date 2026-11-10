@@ -80,6 +80,8 @@ fn owner_table_and_virtual_evaluation_do_not_change_a_design() {
         ("bearing_element_gap", 0.6),
         ("bearing_fit_clearance", 0.5),
         ("press_fit_interference", 0.1),
+        ("print_in_place_gap", 0.3),
+        ("hole_roof_sag", 0.4),
     ];
     assert_eq!(fits.as_array().unwrap().len(), expected.len());
     for (fit, (name, value)) in fits.as_array().unwrap().iter().zip(expected) {

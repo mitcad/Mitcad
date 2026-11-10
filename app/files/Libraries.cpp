@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "Libraries.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <exception>
 
@@ -70,7 +71,7 @@ void logLibraryFetch(const QString& url, const QJsonObject& answer) {
                                   labels.join(QStringLiteral(", ")), pickerVersion);
   } else {
     qWarning().noquote() << QStringLiteral("Library fetch failed: %1: %2")
-                                .arg(url, error.value(QStringLiteral("message")).toString());
+                                .arg(url, mitcad::modelMessage(error.value(QStringLiteral("message")).toString()));
   }
 }
 
@@ -126,7 +127,7 @@ QString licenseNote(const QString& license) {
   for (const QJsonValue& value : licenses) {
     const QJsonObject entry = value.toObject();
     if (entry.value(QStringLiteral("id")).toString().compare(license.trimmed(), Qt::CaseInsensitive) == 0) {
-      return entry.value(QStringLiteral("note")).toString();
+      return mitcad::modelMessage(entry.value(QStringLiteral("note")).toString());
     }
   }
   return {};

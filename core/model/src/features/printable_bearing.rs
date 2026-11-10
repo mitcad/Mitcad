@@ -150,6 +150,17 @@ impl Element {
             Self::Airsoft => "airsoft",
         }
     }
+
+    /// The elements in the plural, a word of its own in the messages
+    /// (mitcad#1284: no plural ending put on a value).
+    pub fn plural(self) -> &'static str {
+        match self {
+            Self::Dumbbell => "dumbbells",
+            Self::Roller => "rollers",
+            Self::Ball => "balls",
+            Self::Airsoft => "airsofts",
+        }
+    }
 }
 
 fn none<P>() -> Option<P> {
@@ -1151,16 +1162,16 @@ impl Layout {
         }
         if self.element_wall + 1.0e-9 < self.min_wall {
             return Err(format!(
-                "the {}s are {} mm across at their thinnest, below the smallest wall of {} mm",
-                self.element.name(),
+                "the {} are {} mm across at their thinnest, below the smallest wall of {} mm",
+                self.element.plural(),
                 mm(self.element_wall.max(0.0)),
                 mm(self.min_wall)
             ));
         }
         if self.hold + 1.0e-9 < MIN_HOLD {
             return Err(format!(
-                "the {}s are not held: they reach {} mm past the raceway's {}, {MIN_HOLD} mm at least (a smaller axial clearance or a larger element)",
-                self.element.name(),
+                "the {} are not held: they reach {} mm past the raceway's {}, {MIN_HOLD} mm at least (a smaller axial clearance or a larger element)",
+                self.element.plural(),
                 mm(self.hold),
                 match self.element {
                     Element::Dumbbell => "ridge",

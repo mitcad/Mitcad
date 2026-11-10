@@ -315,3 +315,38 @@ fn bom_material_columns_follow_placement_materials_without_changing_other_proper
             .all(|row| row.signature.is_none())
     );
 }
+
+// A component's own `Part number` property is its parts list's part number
+// when it is no library or BUILD part (mitcad#1579: Insert › Component from
+// Web sets it from the downloaded file's name).
+#[test]
+fn a_components_own_part_number_is_its_parts_list_part_number() {
+    let mut doc = Document::new(MockKernel::default());
+    let made = command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "6494K13_NO THREADS_Bearing"}),
+    );
+    let component = made["component"].as_str().unwrap().to_owned();
+    block(&mut doc, 10.0);
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "C0"}),
+    );
+    let row = |doc: &Document<MockKernel>| {
+        query(doc, json!({"query": "parts_list"}))["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["component"] == component.as_str())
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(row(&doc)["part_number"], "");
+    command(
+        &mut doc,
+        json!({"cmd": "set_property", "owner": component, "set": "Identity",
+               "key": "Part number", "value": "6494K13"}),
+    );
+    assert_eq!(row(&doc)["part_number"], "6494K13");
+    assert_eq!(row(&doc)["name"], "6494K13_NO THREADS_Bearing");
+}

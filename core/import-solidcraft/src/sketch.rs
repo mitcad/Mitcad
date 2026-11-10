@@ -497,11 +497,15 @@ impl<K: Kernel> Importer<'_, '_, K> {
             }
         }
         if !s.equations.is_empty() {
-            t.dropped.push(format!(
-                "the formulas of {} equation curve{} (each stays the spline it placed)",
-                s.equations.len(),
-                if s.equations.len() > 1 { "s" } else { "" }
-            ));
+            // One and several as whole messages (mitcad#1284).
+            t.dropped.push(if s.equations.len() == 1 {
+                "the formula of an equation curve (it stays the spline it placed)".to_owned()
+            } else {
+                format!(
+                    "the formulas of {} equation curves (each stays the spline it placed)",
+                    s.equations.len()
+                )
+            });
         }
         for l in &s.links {
             let kind = l.get("type").and_then(Value::as_str).unwrap_or("link");

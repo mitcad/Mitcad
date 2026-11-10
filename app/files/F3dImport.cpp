@@ -269,10 +269,13 @@ bool isRvtFile(const QString& path) {
          suffix == QLatin1String("rft");
 }
 
-// A SolidCraft design (mitcad#450), by import_solidcraft.
+// A SolidCraft design (mitcad#450), by import_solidcraft: .sc too
+// (mitcad#1622), which the import refuses unless its format key is
+// SolidCraft's.
 bool isSolidcraftFile(const QString& path) {
   const QString suffix = QFileInfo(path).suffix().toLower();
-  return suffix == QLatin1String("solidcraft") || suffix == QLatin1String("solvecraft");
+  return suffix == QLatin1String("sc") || suffix == QLatin1String("solidcraft") ||
+         suffix == QLatin1String("solvecraft");
 }
 
 // A drawing's 3D content (mitcad#453), by import_dwg.
@@ -332,7 +335,7 @@ int runImportWorker(int argc, char* argv[]) {
   QCommandLineParser parser;
   const QCommandLineOption worker(QStringLiteral("import-worker"),
                                   QStringLiteral(".f3d, .f3z, .FCStd, .ipt, .iam, .ifc, .ifczip, .rvt, .rfa, "
-                                                 ".solidcraft or .dwg file"),
+                                                 ".sc, .solidcraft or .dwg file"),
                                   QStringLiteral("file"));
   const QCommandLineOption output(QStringLiteral("output"), QStringLiteral("Design file to write"),
                                   QStringLiteral("file"));

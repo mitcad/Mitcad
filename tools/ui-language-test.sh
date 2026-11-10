@@ -4,6 +4,9 @@
 # check-all sources: app/framework/Ribbon.cpp app/main.cpp app/view/ViewController.cpp app/translations cmake/Translations.cmake
 # check-all sources: tools/translations app/framework/TestDriver.cpp tools/ui-scripts/language-fi.mitcad-ui
 # check-all sources: tools/ui-scripts/language-en.mitcad-ui tools/ui-scripts/language-pseudo.mitcad-ui
+# check-all sources: app/framework/ModelMessages.cpp app/framework/ModelMessages.hpp app/framework/ModelMessageTemplates.cpp
+# Each start also shows a model message (mitcad#1284), the model's refusal of
+# a feature that does not exist: English, Finnish, the pseudo-language.
 # The interface language (mitcad#1460) through the real UI. Four starts:
 #   1. default: as every UI test starts MitCad (the test library sets
 #      MITCAD_LANGUAGE=en): English (tools/ui-scripts/language-en.mitcad-ui).

@@ -138,6 +138,23 @@ QString pointBallKey(const QColor& color, double ratio) {
   return QStringLiteral("ball %1 %2").arg(color.name(QColor::HexArgb)).arg(ratio, 0, 'f', 3);
 }
 
+Qt::PenStyle sketchCurvePenStyle(bool construction, bool centerline) {
+  return construction ? Qt::DashLine : centerline ? Qt::DashDotLine : Qt::SolidLine;
+}
+
+QString penStyleName(Qt::PenStyle style) {
+  switch (style) {
+  case Qt::DashLine:
+    return QStringLiteral("dashed");
+  case Qt::DashDotLine:
+    return QStringLiteral("dash-dot");
+  case Qt::DotLine:
+    return QStringLiteral("dotted");
+  default:
+    return QStringLiteral("solid");
+  }
+}
+
 std::vector<HighlightPass> highlightPassOrder() {
   return {HighlightPass::Strokes, HighlightPass::Markers, HighlightPass::Balls};
 }
@@ -153,7 +170,10 @@ std::vector<HighlightPass> paintHighlightLayers(QPainter& painter, const Highlig
         if (stroke.dashed) {
           painter.setPen(QPen(stroke.color, 1.5, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin));
         } else {
-          painter.setPen(QPen(stroke.color, 4.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+          // A patterned line with flat ends to its dashes: round ones
+          // would close the gaps of a 4 px line (mitcad#1619).
+          painter.setPen(QPen(stroke.color, 4.0, stroke.style,
+                              stroke.style == Qt::SolidLine ? Qt::RoundCap : Qt::FlatCap, Qt::RoundJoin));
         }
         if (stroke.path.size() == 1) {
           painter.drawEllipse(stroke.path.front(), 3.0, 3.0);

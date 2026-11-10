@@ -34,15 +34,19 @@ edges, so finishing the edge does not create a poorly supported underside.
 Select stable edges after the main shape is complete. Inspect the
 result in the chosen print orientation.
 
-For a horizontal bore, consider a teardrop or flat roof. MitCad's `hole`
-has no special print-hole shape: sketch the section with `sketch.arc`
-and `sketch.add_line`, constrain its size and joins, then `extrude` with
-a cut operation. A teardrop retains the lower circular bearing surface
-and replaces the upper arc with slopes; a flat roof leaves a short
-bridge above the required circular envelope. Check the usable diameter,
-not just the outline's overall height. Vertical holes can print smaller
-than drawn; expose any compensation as a parameter rather than changing
-an unrelated nominal screw size.
+For a horizontal bore, give `hole` a `print_shape`: `teardrop` (45°
+sides meeting at a point) or `flat_roof` (the sides cut short by a short
+bridge `roof_sag` above the circle, by default the printed fit
+`hole_roof_sag`, 0.4 mm). The roof points away from the body's print bed
+face, or up the design's Z without one, so set the bed face first; holes
+whose axis is not parallel to the bed stay round. The lower arc keeps the
+diameter, and the hole keeps its nominal size for drawings and callouts.
+It does not combine with `press_fit`, `taper` or a modelled thread; for
+those, or a bore that is not a hole, sketch the section and cut it with
+`extrude`. Check the usable diameter, not just the outline's overall
+height. Vertical holes can print smaller than drawn; expose any
+compensation as a parameter rather than changing an unrelated nominal
+screw size.
 
 ## Fits and fastening
 
@@ -106,10 +110,11 @@ Distinguish modeled ears from a slicer's brim when estimating plate space.
   `plastic_rule` keeps common design values but does not establish FDM
   strength or validate fatigue; check which feature fields actually use it.
 - For print-in-place motion, begin with around 0.3 mm between moving
-  surfaces and keep them as separate bodies. Check critical separations
-  with `measure` and check unintended overlaps with `interference`.
-  MitCad has no general minimum-gap print query; collision-free bodies
-  alone do not prove the gap will print open.
+  surfaces and keep them as separate bodies. `print_min_gap` lists the
+  pairs that are apart but closer than the gap (the design's
+  `print_in_place_gap`, else 0.3 mm); check unintended overlaps with
+  `interference`. A gap above the threshold still needs the slicer
+  preview to prove it prints open.
 - Use `printable_bearing` for its supported bearing geometry and explicit
   radial, axial and element clearances. Preserve the feature's own
   defaults unless the task supplies a tested alternative.
@@ -136,6 +141,8 @@ Distinguish modeled ears from a slicer's brim when estimating plate space.
 3. Run `print_thickness` with the required minimum wall; its default
    0.8 mm is an analysis threshold, not a strength certificate. The
    MCP summary suffices until a flagged region needs closer inspection.
+   For bodies printed in place, run `print_min_gap` (by `plate` or
+   `bodies`) and widen every narrow gap it reports.
 4. Check `build_volume` against the selected printer and `print_plates`
    for the intended grouping. An item is on one plate at most:
    `place_on_plate` moves one from another plate, and its result's

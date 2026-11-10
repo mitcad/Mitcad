@@ -249,7 +249,7 @@ mod scoped_cut_replay_tests;
 // Print Analysis: overhangs, thin walls and a print estimate on the
 // bodies' triangle meshes (mitcad#620).
 pub mod print_analysis;
-pub use document::{EstimateCheck, OverhangCheck, PrintAnalysis, ThinWallCheck};
+pub use document::{EstimateCheck, MinGapCheck, OverhangCheck, PrintAnalysis, ThinWallCheck};
 #[cfg(test)]
 mod print_analysis_tests;
 // Materials as objects and components' default materials (mitcad#640).
@@ -363,3 +363,6 @@ pub use document::{LinkState, LinksUpdated};
 // Preview images of the design without a GPU or a display, the MCP tool
 // model_render (mitcad#1486).
 pub mod preview;
+// Filament changes and pauses at print heights, written into slicers' 3MF
+// projects and shown as print colours (mitcad#1596).
+pub mod print_changes;

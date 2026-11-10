@@ -154,6 +154,8 @@ mod sketch_loop;
 mod drawing_lines;
 // Read-only modeling guidance and per-command hints (mitcad#1513).
 mod design_review;
+// Filament changes and pauses at print heights (mitcad#1596).
+mod filament_changes;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -289,7 +291,16 @@ impl std::error::Error for ApiError {}
 
 impl From<ModelError> for ApiError {
     fn from(error: ModelError) -> Self {
-        Self(error.to_string())
+        match error {
+            // In plain words for a person, its own message (a template the
+            // application translates), the id for agents (mitcad#1612).
+            ModelError::NoSuchFeature(_) => Self(
+                mitcad_model::notice::FeatureError::new("a feature does not exist")
+                    .with_detail(error.to_string())
+                    .text(),
+            ),
+            error => Self(error.to_string()),
+        }
     }
 }
 
@@ -1093,6 +1104,11 @@ named_enum! {
         // The closed loop of a sketch curve (mitcad#1541, `sketch_loop.rs`).
         "sketch_loop" => SketchLoop(sketch_loop::SketchLoopQuery),
         "design_review" => DesignReview(design_review::ReviewQuery),
+        // Narrow gaps between bodies printed in place (mitcad#1519, `print.rs`).
+        "print_min_gap" => PrintMinGap(print::MinGapQuery),
+        // Filament changes at print heights (mitcad#1596,
+        // `filament_changes.rs`).
+        "filament_changes" => FilamentChanges(filament_changes::FilamentChangesQuery),
     }
 }
 
@@ -1695,6 +1711,9 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             // The closed loop of a sketch curve (mitcad#1541).
             Query::SketchLoop(query) => sketch_loop::sketch_loop_json(self, &query)?,
             Query::DesignReview(query) => design_review::review(self, &query)?,
+            Query::PrintMinGap(query) => self.print_min_gap_json(&query)?,
+            // Filament changes at print heights (mitcad#1596).
+            Query::FilamentChanges(query) => filament_changes::query(self, &query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);

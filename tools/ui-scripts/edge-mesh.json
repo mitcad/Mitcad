@@ -1,0 +1,14 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The view's lines (mitcad#1633; tools/ui-edge-mesh-test.sh, tools/ui-edge-mesh-look.sh and their Windows twins): a block 60 x 40 x 200 (F1.b0) from the origin, its upright edge at x 60, y 0 rounded with 4 mm (F2); Plane1 (F3) 200 mm above XY, on the block's top face, hidden; on it Sketch1 (F4): a line from (20, 24) to (40, 16) and an arc of centre (30, 10) from (40, 10) to (20, 10), both through (30, 20), the middle of the top face, and an arc on the rounding's top edge (centre (56, 4), from (56, 0) to (60, 4))."},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[0,0],"length":60,"width":40,"height":200,"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"fillet","body":"F1.b0","edges":["E{F1:side0|F1:side1}"],"radius":4}},
+  {"expect":{"feature":"F2","status":"ok"}},
+  {"cmd":"add_feature","def":{"type":"construction_plane","definition":{"type":"offset","plane":"xy","distance":200}}},
+  {"cmd":"sketch.create","plane":"F3"},
+  {"cmd":"sketch.add_line","sketch":"F4","start":[20,24],"end":[40,16]},
+  {"cmd":"sketch.arc","sketch":"F4","mode":"center","center":[30,10],"start":[40,10],"end":[20,10]},
+  {"cmd":"sketch.arc","sketch":"F4","mode":"center","center":[56,4],"start":[56,0],"end":[60,4]},
+  {"expect":{"feature":"F4","status":"ok"}},
+  {"cmd":"set_feature_visible","uid":"F3","visible":false}
+]

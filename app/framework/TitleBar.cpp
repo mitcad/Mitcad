@@ -176,6 +176,38 @@ void TitleBar::setQuickAccess(QuickAccessGroup* group) {
   update();
 }
 
+void TitleBar::setMenuButton(QWidget* button) {
+  auto* row = qobject_cast<QHBoxLayout*>(layout());
+  if (row == nullptr || button == nullptr || m_menu != nullptr) {
+    return;
+  }
+  // A capsule as the Undo and Redo pair's, as high.
+  m_menu = new CapsuleFrame(-1, this);
+  m_menu->setObjectName(QStringLiteral("titleMenu"));
+  auto* box = new QHBoxLayout(m_menu);
+  box->setContentsMargins(4, 2, 4, 3);
+  box->setSpacing(0);
+  box->addWidget(button);
+  m_menu->setFixedHeight(m_history->maximumHeight());
+  m_menu->setCardMaterial(m_floatingRow);
+  m_menu->hide();
+  row->insertWidget(row->indexOf(m_history), m_menu);
+  if (m_floatingRow) {
+    m_menu->installEventFilter(this);
+    updateRowMask();
+  }
+}
+
+void TitleBar::setMenuButtonVisible(bool visible) {
+  if (m_menu == nullptr || m_menu->isHidden() != visible) {
+    return;
+  }
+  m_menu->setVisible(visible);
+  updateRowMask();
+  scheduleQuickFold();
+  update();
+}
+
 void TitleBar::setIndicator(QWidget* indicator) {
   auto* row = qobject_cast<QHBoxLayout*>(layout());
   if (row == nullptr || indicator == nullptr) {
@@ -242,9 +274,13 @@ void TitleBar::setFloatingRow(bool floating) {
   if (m_quickAccess != nullptr) {
     m_quickAccess->setCardMaterial(floating);
   }
+  if (m_menu != nullptr) {
+    m_menu->setCardMaterial(floating);
+  }
   for (QWidget* part :
-       std::initializer_list<QWidget*>{m_history, m_tabs, m_search, m_indicator.data(), m_agentIndicator.data(),
-                                       m_chatButton.data(), static_cast<QWidget*>(m_quickAccess.data())}) {
+       std::initializer_list<QWidget*>{static_cast<QWidget*>(m_menu), m_history, m_tabs, m_search,
+                                       m_indicator.data(), m_agentIndicator.data(), m_chatButton.data(),
+                                       static_cast<QWidget*>(m_quickAccess.data())}) {
     if (part == nullptr) {
       continue;
     }
@@ -272,6 +308,7 @@ std::vector<std::pair<QString, QRect>> TitleBar::rowParts() const {
       }
     }
   };
+  add("titleMenu", m_menu);
   add("titleHistory", m_history);
   add("titleTabs", m_tabs);
   add("titleQuickAccess", m_quickAccess.data());
@@ -513,7 +550,8 @@ void TitleBar::paintEvent(QPaintEvent*) {
     painter.setPen(QPen(cardBorderColor(pal), hairline));
     painter.setBrush(cardFillColor(pal));
     for (const auto& [name, rect] : rowParts()) {
-      if (name == QLatin1String("titleHistory") || name == QLatin1String("titleQuickAccess")) {
+      if (name == QLatin1String("titleMenu") || name == QLatin1String("titleHistory") ||
+          name == QLatin1String("titleQuickAccess")) {
         continue; // capsules of their own
       }
       const QRectF box = QRectF(rect).adjusted(hairline / 2, hairline / 2, -hairline / 2, -hairline / 2);

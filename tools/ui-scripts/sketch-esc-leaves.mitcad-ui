@@ -1,0 +1,112 @@
+# SPDX-License-Identifier: MIT
+# Esc leaves a sketch nothing was changed in while the preference "Esc
+# leaves an unchanged sketch" is on (mitcad#1623, off by default), on
+# sketch-esc-leaves.json (Sketch1 with a rectangle, Extrude1 after it):
+#   0. The preference off: Create Sketch on Extrude1's top face, Esc three times: still in
+#      the sketch, nothing changed (the sketch's creation the only undo
+#      step); Finish Sketch takes the empty sketch back as before.
+#   The preference turned on (sketch/escLeavesUnchangedSketch), then:
+#   1. Create Sketch on the top face, Esc: back in the model; the new, empty sketch
+#      is taken back with no undo step left.
+#   2. Edit Sketch1 (a double-click on the timeline), Esc: back in the
+#      model, Sketch1 as it was and no undo step left (the timeline marker
+#      rolled forward again).
+#   3. Edit Sketch1, draw a line, Esc ends the chain, Esc the tool; Esc
+#      then keeps the changed sketch open and says once how to leave it
+#      (Finish Sketch, or Ctrl+Z to undo); another Esc says nothing more.
+#   4. Ctrl+Z takes the line back: the sketch is as it was entered, and
+#      Esc leaves it.
+# Run by tools/ui-sketch-esc-leaves-test.sh (Linux) and
+# tools/ui-windows-sketch-esc-leaves-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+capture-undo-depth baseline
+
+# 0. The preference off (the default): Esc does not leave.
+mark
+command sketch.create
+expect-log '^Pick face F2\.b0/F2:end'
+click-logged '^Pick face F2\.b0/F2:end'
+expect-log 'Sketch started on '
+wait-idle
+mark
+key Escape
+key Escape
+key Escape
+wait-idle
+expect-no-log '^Esc: '
+expect-no-log '^Sketch finished$'
+expect-undo-depth ${baseline} 1
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-idle
+expect-undo-depth ${baseline} 0
+
+set-setting sketch/escLeavesUnchangedSketch true
+
+# 1. Create Sketch, Esc.
+mark
+command sketch.create
+expect-log '^Pick face F2\.b0/F2:end'
+click-logged '^Pick face F2\.b0/F2:end'
+expect-log 'Sketch started on '
+wait-idle
+mark
+key Escape
+wait-log '^Esc: leaving Sketch[0-9]+, nothing changed in it$'
+wait-log '^Sketch finished$'
+wait-log '^Esc: Sketch[0-9]+ taken back, it was new and empty$'
+wait-idle
+expect-undo-depth ${baseline} 0
+
+# 2. Edit Sketch1, Esc.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+wait-idle
+mark
+key Escape
+wait-log '^Esc: leaving Sketch1, nothing changed in it$'
+wait-log '^Sketch finished$'
+wait-idle
+expect-no-log '^Esc: Sketch1 taken back'
+expect-undo-depth ${baseline} 0
+
+# 3. Edit Sketch1, draw a line, Esc twice and more: still in the sketch.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+command sketch.line
+sketch-click 64 70
+sketch-click 76 70
+wait-log '^Added line c[0-9]+ from '
+key Escape
+key Escape
+wait-log '^Sketch tool ended: Line'
+wait-idle
+expect-no-log '^Esc: '
+mark
+key Escape
+wait-log '^Esc: Sketch1 changed, it stays open; hint: Finish Sketch \(or .+ to undo\) to leave the sketch\.$'
+mark
+key Escape
+wait-log '^Esc: Sketch1 changed, it stays open$'
+wait-idle
+expect-no-log '^Esc: Sketch1 changed, it stays open; hint: '
+expect-no-log '^Sketch finished$'
+
+# 4. Ctrl+Z takes the line back; Esc leaves.
+mark
+key ctrl+z
+wait-idle
+expect-no-log '^Sketch finished$'
+mark
+key Escape
+wait-log '^Esc: leaving Sketch1, nothing changed in it$'
+wait-log '^Sketch finished$'
+wait-idle
+expect-undo-depth ${baseline} 0
+expect-never 'Recompute failed|TestDriver: FAIL'

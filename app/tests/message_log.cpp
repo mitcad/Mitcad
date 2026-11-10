@@ -160,6 +160,65 @@ void withdrawTests() {
   CHECK(log.full()->text == QStringLiteral("Nothing to pick there"));
 }
 
+// An error of a source (mitcad#1621): it goes to the stub when its source,
+// or a source it is within, closes; another source, a source within it, or
+// a message no longer shown in full changes nothing; the history keeps it.
+void sourceTests() {
+  CHECK(MessageLog::sourceCovers(QStringLiteral("sketch"), QStringLiteral("sketch")));
+  CHECK(MessageLog::sourceCovers(QStringLiteral("sketch"), QStringLiteral("sketch/tool")));
+  CHECK(MessageLog::sourceCovers(QStringLiteral("sketch"), QStringLiteral("sketch/editor")));
+  CHECK(!MessageLog::sourceCovers(QStringLiteral("sketch/tool"), QStringLiteral("sketch")));
+  CHECK(!MessageLog::sourceCovers(QStringLiteral("sketch/tool"), QStringLiteral("sketch/editor")));
+  CHECK(!MessageLog::sourceCovers(QStringLiteral("sketch"), QStringLiteral("sketches")));
+  CHECK(!MessageLog::sourceCovers(QString(), QString()));
+  CHECK(!MessageLog::sourceCovers(QStringLiteral("command"), QString()));
+
+  MessageLog log;
+  const QString empty = QStringLiteral("Enter a value.");
+  CHECK(!log.sourceClosed(QStringLiteral("sketch/editor"))); // nothing shown
+  CHECK(log.add(empty, NoticeLevel::Error, QString(), at(0), QString(), QStringLiteral("sketch/editor")));
+  CHECK(log.full()->source == QStringLiteral("sketch/editor"));
+  CHECK(!log.sourceClosed(QStringLiteral("sketch/tool")));
+  CHECK(!log.sourceClosed(QStringLiteral("command")));
+  CHECK(!log.sourceClosed(QString()));
+  CHECK(log.shown() == MessageLog::Shown::Full);
+  CHECK(log.sourceClosed(QStringLiteral("sketch/editor")));
+  CHECK(log.shown() == MessageLog::Shown::Stub);
+  CHECK(log.stub()->text == empty);
+  CHECK(!log.sourceClosed(QStringLiteral("sketch/editor"))); // already the stub
+  CHECK(log.size() == 1);
+
+  // The sketch finishing takes its tool's error.
+  const QString refused = QStringLiteral("Line not added: the sketch cannot be solved");
+  CHECK(log.add(refused, NoticeLevel::Error, QString(), at(1), QString(), QStringLiteral("sketch/tool")));
+  CHECK(log.sourceClosed(QStringLiteral("sketch")));
+  CHECK(log.stub()->text == refused);
+
+  // An error of no source (a failed feature) stays until it is closed or
+  // the next command starts.
+  const QString failed = QStringLiteral("Fillet2: the radius is too large");
+  CHECK(log.add(failed, NoticeLevel::Error, QStringLiteral("F4"), at(2)));
+  CHECK(!log.sourceClosed(QStringLiteral("sketch")));
+  CHECK(!log.sourceClosed(QStringLiteral("command")));
+  CHECK(log.full()->text == failed);
+  CHECK(log.commandStarted());
+
+  // The same text again from another source: the newest source counts.
+  CHECK(log.add(empty, NoticeLevel::Error, QString(), at(3), QString(), QStringLiteral("command")));
+  CHECK(log.add(empty, NoticeLevel::Error, QString(), at(4), QString(), QStringLiteral("sketch/editor")));
+  CHECK(log.entries().front().count == 2);
+  CHECK(!log.sourceClosed(QStringLiteral("command")));
+  CHECK(log.sourceClosed(QStringLiteral("sketch/editor")));
+
+  // A hint after the error goes to the history only; the error going
+  // leaves the stub of that hint, the latest.
+  CHECK(log.add(empty, NoticeLevel::Error, QString(), at(5), QString(), QStringLiteral("sketch/editor")));
+  CHECK(!log.add(QStringLiteral("Pick the first point"), NoticeLevel::Hint, QString(), at(6)));
+  CHECK(log.sourceClosed(QStringLiteral("sketch/editor")));
+  CHECK(log.stub()->text == QStringLiteral("Pick the first point"));
+  CHECK(log.entries().at(1).text == empty);
+}
+
 void historyTests() {
   MessageLog log;
   log.add(QStringLiteral("Fillet2: too large"), NoticeLevel::Error, QStringLiteral("F5"), at(0));
@@ -217,6 +276,7 @@ int messageLogTests() {
   bandTests();
   clearTests();
   withdrawTests();
+  sourceTests();
   historyTests();
   actionTests();
   return failures;

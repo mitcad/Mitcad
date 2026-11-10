@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "BuildCatalog.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -442,7 +443,7 @@ void Catalog::refresh(const QString& role, const CommandContext& context) {
     answer = libraryCommand(request);
   }
   if (answer.contains(QStringLiteral("error"))) {
-    problem = answer.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString();
+    problem = mitcad::modelMessage(answer.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString());
   }
   // Which clones the picker reads: one per repository, removed sources'
   // left out (mitcad#1436).
@@ -589,7 +590,7 @@ QVector<Part> Catalog::forJunction(const QJsonObject& junction, QStringList* ref
   QStringList nearly;
   QHash<QString, QStringList> rows;
   if (answer.contains(QStringLiteral("error"))) {
-    nearly << answer.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString();
+    nearly << mitcad::modelMessage(answer.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString());
   }
   // A junction of two timber members (mitcad#478): member a's section.
   const QJsonArray section = junction.value(QStringLiteral("wood"))

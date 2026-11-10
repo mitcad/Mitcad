@@ -40,6 +40,7 @@ fn cube(name: &str, material: usize) -> Mesh {
         double_sided: false,
         material,
         subsets: Vec::new(),
+        samples: Vec::new(),
     }
 }
 
@@ -127,6 +128,177 @@ fn scene() -> Scene {
             data: png(),
         }],
         documentation: "Mitcad test".to_owned(),
+        animation: None,
+    }
+}
+
+/// A turn of `degrees` about Z and a move.
+fn turned(degrees: f64, translation: [f64; 3]) -> Placement {
+    let (s, c) = degrees.to_radians().sin_cos();
+    Placement {
+        linear: [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]],
+        translation,
+    }
+}
+
+/// The test scene animated (mitcad#1597) at 24 frames per second over the
+/// time codes 0, 1, 2: the arm turns 0, 45 and 90 degrees about Z at its
+/// place, the pin slides 0, 5 and 10 mm up in the arm, and the root's
+/// painted body moves 0, 10 and 20 mm along X in its node.
+fn animated_scene() -> Scene {
+    let mut scene = scene();
+    scene.animation = Some(Animation {
+        fps: 24.0,
+        times: vec![0.0, 1.0, 2.0],
+    });
+    let arm = &mut scene.root.children[0];
+    let at = arm.placement.translation;
+    arm.samples = [0.0, 45.0, 90.0].iter().map(|d| turned(*d, at)).collect();
+    let pin = &mut arm.children[0];
+    pin.samples = [0.0, 5.0, 10.0]
+        .iter()
+        .map(|z| turned(0.0, [0.0, 0.0, 5.0 + z]))
+        .collect();
+    scene.root.meshes[0].samples = [0.0, 10.0, 20.0]
+        .iter()
+        .map(|x| turned(0.0, [*x, 0.0, 0.0]))
+        .collect();
+    scene
+}
+
+#[test]
+fn writes_time_samples_that_read_back() {
+    let animated = animated_scene();
+    let data = write(&animated).unwrap();
+    let layer = read_package(&data).unwrap().layer;
+    // The time: from 0 to 2 at 24 frames per second.
+    let root = layer.spec("/").unwrap();
+    assert_eq!(root.field("startTimeCode"), Some(&Value::Double(0.0)));
+    assert_eq!(root.field("endTimeCode"), Some(&Value::Double(2.0)));
+    assert_eq!(root.field("timeCodesPerSecond"), Some(&Value::Double(24.0)));
+    assert_eq!(root.field("framesPerSecond"), Some(&Value::Double(24.0)));
+    let samples = |path: &str| match layer.field(path, "timeSamples") {
+        Some(Value::TimeSamples(samples)) => samples.clone(),
+        other => panic!("{path}: {other:?}"),
+    };
+    let matrix = |value: &Value| match value {
+        Value::Matrix4d(m) => *m,
+        other => panic!("{other:?}"),
+    };
+    // The arm: first, middle and last frames, USD's row-vector matrices.
+    let arm = samples("/bracket_assembly/Arm_1.xformOp:transform");
+    assert_eq!(
+        arm.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+        [0.0, 1.0, 2.0]
+    );
+    for ((_, value), degrees) in arm.iter().zip([0.0_f64, 45.0, 90.0]) {
+        let m = matrix(value);
+        let (s, c) = degrees.to_radians().sin_cos();
+        assert!((m[0][0] - c).abs() < 1e-12 && (m[0][1] - s).abs() < 1e-12);
+        assert!((m[1][0] + s).abs() < 1e-12 && (m[1][1] - c).abs() < 1e-12);
+        assert_eq!(m[3], [10.0, 20.0, 30.5, 1.0]);
+    }
+    // The static placement stays the default.
+    assert_eq!(
+        layer.field("/bracket_assembly/Arm_1.xformOp:transform", "default"),
+        Some(&Value::Matrix4d(
+            animated.root.children[0].placement.to_usd()
+        ))
+    );
+    let pin = samples("/bracket_assembly/Arm_1/Pin_1.xformOp:transform");
+    let z: Vec<f64> = pin.iter().map(|(_, v)| matrix(v)[3][2]).collect();
+    assert_eq!(z, [5.0, 10.0, 15.0]);
+    // The moved mesh: its own transform, identity by default, then its
+    // samples; its points stay as they are.
+    let body = "/bracket_assembly/Body1";
+    assert_eq!(
+        layer.field(&format!("{body}.xformOpOrder"), "default"),
+        Some(&Value::TokenArray(vec!["xformOp:transform".to_owned()]))
+    );
+    assert_eq!(
+        layer.field(&format!("{body}.xformOp:transform"), "default"),
+        Some(&Value::Matrix4d(Placement::IDENTITY.to_usd()))
+    );
+    let x: Vec<f64> = samples(&format!("{body}.xformOp:transform"))
+        .iter()
+        .map(|(_, v)| matrix(v)[3][0])
+        .collect();
+    assert_eq!(x, [0.0, 10.0, 20.0]);
+    let Some(Value::Vec3fArray(points)) = layer.field(&format!("{body}.points"), "default") else {
+        panic!("no points");
+    };
+    assert_eq!(points.len(), 24);
+    // A mesh and a node that do not move have no samples.
+    assert!(
+        layer
+            .field("/bracket_assembly/Arm_1/Body1.xformOp:transform", "default")
+            .is_none()
+    );
+    assert!(
+        layer
+            .field(
+                "/bracket_assembly/Arm_1/Pin_1/Pin_2.xformOpOrder",
+                "default"
+            )
+            .is_none()
+    );
+    // Each mesh is written once: as many meshes as in the still scene.
+    let still = read_package(&write(&scene()).unwrap()).unwrap().layer;
+    let meshes = |layer: &Layer| {
+        layer
+            .specs
+            .iter()
+            .filter(|s| s.field("typeName") == Some(&Value::Token("Mesh".to_owned())))
+            .count()
+    };
+    assert_eq!(meshes(&layer), meshes(&still));
+    // A still scene declares no time.
+    assert!(still.spec("/").unwrap().field("startTimeCode").is_none());
+    assert!(
+        still
+            .field("/bracket_assembly/Arm_1.xformOp:transform", "timeSamples")
+            .is_none()
+    );
+}
+
+#[test]
+fn checks_the_animation() {
+    let error = |scene: Scene| write(&scene).unwrap_err().0;
+    let mut bad = animated_scene();
+    bad.animation.as_mut().unwrap().fps = 0.0;
+    assert!(error(bad).contains("positive number of frames per second"));
+    let mut bad = animated_scene();
+    bad.animation.as_mut().unwrap().fps = f64::NAN;
+    assert!(error(bad).contains("positive number of frames per second"));
+    let mut bad = animated_scene();
+    bad.animation.as_mut().unwrap().times = vec![0.0, 2.0, 1.0];
+    assert!(error(bad).contains("must increase"));
+    let mut bad = animated_scene();
+    bad.animation.as_mut().unwrap().times = vec![0.0, f64::INFINITY, 3.0];
+    assert!(error(bad).contains("finite"));
+    let mut bad = animated_scene();
+    bad.root.children[0].samples.pop();
+    assert!(error(bad).contains("Arm:1 has 2 samples for 3 time codes"));
+    let mut bad = animated_scene();
+    bad.root.children[0].samples[1].translation[0] = f64::NAN;
+    assert!(error(bad).contains("Arm:1: the placement at time code 1 is not finite"));
+    let mut bad = scene();
+    bad.root.children[0].samples = vec![Placement::IDENTITY];
+    assert!(error(bad).contains("the scene has no animation"));
+    let mut bad = animated_scene();
+    bad.root.samples = vec![Placement::IDENTITY; 3];
+    assert!(error(bad).contains("the root does not move"));
+}
+
+/// `MITCAD_USDZ_ANIMATED_SAMPLE=<file>` writes the animated test scene
+/// there, for OpenUSD's own reading of the time samples
+/// (`tools/usdz-check/check-animation.py` with
+/// `tools/usdz-check/animated-sample.json`; `docs/development.md`, *USDZ
+/// files*).
+#[test]
+fn animated_sample_for_validators() {
+    if let Ok(path) = std::env::var("MITCAD_USDZ_ANIMATED_SAMPLE") {
+        std::fs::write(path, write(&animated_scene()).unwrap()).unwrap();
     }
 }
 

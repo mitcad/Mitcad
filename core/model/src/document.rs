@@ -213,7 +213,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 pub use analyses::{Analysis, AnalysisDef, SectionAnalysis, SectionPlane};
-pub use analyses::{EstimateCheck, OverhangCheck, PrintAnalysis, ThinWallCheck};
+pub use analyses::{EstimateCheck, MinGapCheck, OverhangCheck, PrintAnalysis, ThinWallCheck};
 pub use analyses::{check_minimum_wall, check_overhang_angle, print_material};
 pub use appearances::DeletedAppearance;
 pub use bodies::{BodyAttributes, FaceAppearance};
@@ -381,6 +381,9 @@ pub struct DocState {
     /// The print plates (mitcad#1050), in their order: the first takes
     /// what no plate names.
     pub(crate) print_plates: Vec<crate::print_plates::PrintPlate>,
+    /// Filament changes at print heights (mitcad#1596): the design's own
+    /// schedule and print plates' own, at most one per plate.
+    pub(crate) filament_changes: Vec<crate::print_changes::ChangeSchedule>,
 }
 
 impl Default for DocState {
@@ -426,6 +429,7 @@ impl Default for DocState {
             comments: Vec::new(),
             next_comment: 1,
             print_plates: Vec::new(),
+            filament_changes: Vec::new(),
         }
     }
 }
@@ -4783,3 +4787,7 @@ pub use link_updates::{LinkState, LinksUpdated};
 // The curve of an Intersection Curve projected into a later sketch
 // (mitcad#1405).
 mod intersection_curves;
+// Filament changes at print heights: the schedules, their query, the 3MF
+// events and the print colours of a placement (mitcad#1596).
+mod filament_changes;
+pub(crate) use filament_changes::PrintColors;

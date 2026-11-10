@@ -11,8 +11,11 @@ replay as the stored bodies. These imports are described here:
   tests.
 - **.ipt** and **.iam**: read by `core/ipt` and replayed on the same dump
   IR as the `.f3d` import.
-- **.solidcraft**: built again from the file's definitions; the file
-  keeps no bodies to check against. A crate of its own,
+- **.sc** and **.solidcraft**: built again from the file's definitions;
+  the file keeps no bodies to check against. A `.sc` file (SolidCraft's
+  extension now, mitcad#1622, which other programs use too) is read only
+  when its format key is SolidCraft's, else refused with "Not a
+  SolidCraft design: …". A crate of its own,
   [mitcad-import-solidcraft](../import-solidcraft/README.md) (mitcad#785),
   re-exported as `mitcad_import::solidcraft`.
 

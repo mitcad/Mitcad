@@ -1531,6 +1531,40 @@ class McpTest(unittest.TestCase):
             client.tool("document_close", {"document": document, "discard": True})
             client.finish()
 
+    def test_export_usdz_animation(self):
+        """mitcad#1597: model_export passes a USDZ's animation on to export."""
+        poses = [[[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, z]] for z in (0, 5, 10)]
+        animation = {"fps": 24, "tracks": [{"body": "F1.b0", "transforms": poses}]}
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            client.tool("model_command", {"document": document, "command": CYLINDER})
+            before = client.tool("model_query", {"document": document,
+                                                 "query": {"query": "bodies"}})
+            exported = client.tool("model_export", {"document": document, "path": "moving.usdz",
+                                                    "format": "usdz", "animation": animation})
+            # The export command's result, with its frames.
+            self.assertEqual(exported["result"]["animation"]["frames"], 3)
+            self.assertEqual(exported["result"]["animation"]["end"], 2)
+            with zipfile.ZipFile(self.workspace / "moving.usdz") as package:
+                self.assertEqual(package.namelist()[0], "moving.usdc")
+            # The document did not move.
+            after = client.tool("model_query", {"document": document,
+                                                "query": {"query": "bodies"}})
+            self.assertEqual(before, after)
+            # USDZ only; export checks the values and writes nothing then.
+            refused = client.tool("model_export", {"document": document, "path": "moving.stl",
+                                                   "format": "stl", "animation": animation},
+                                  error=True)
+            self.assertIn("animation", refused["error"])
+            self.assertFalse((self.workspace / "moving.stl").exists())
+            client.tool("model_export", {"document": document, "path": "still.usdz",
+                                         "format": "usdz", "animation": dict(animation, fps=0)},
+                        error=True)
+            self.assertFalse((self.workspace / "still.usdz").exists())
+            client.tool("document_close", {"document": document, "discard": True})
+            client.finish()
+
     def test_export_refinement_and_overwrite(self):
         """mitcad#1569: the mesh's tolerances, and replacing existing files."""
         def triangles(name):

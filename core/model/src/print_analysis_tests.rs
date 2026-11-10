@@ -780,3 +780,48 @@ fn a_uniformly_thin_plate_is_shown_whole() {
     assert!(close(shown, 3200.0, TOL), "{shown}");
     assert_eq!(found.regions, 1);
 }
+
+#[test]
+fn gaps_are_touching_narrow_or_clear() {
+    // mitcad#1519: 0.2 mm under a 0.3 mm gap is narrow, 0.5 mm clear;
+    // touching or overlapping bodies are interference's.
+    use print_analysis::GapKind;
+    assert_eq!(print_analysis::gap_kind(0.2, false, 0.3), GapKind::Narrow);
+    assert_eq!(print_analysis::gap_kind(0.5, false, 0.3), GapKind::Clear);
+    assert_eq!(print_analysis::gap_kind(0.0, false, 0.3), GapKind::Touching);
+    assert_eq!(
+        print_analysis::gap_kind(1e-7, false, 0.3),
+        GapKind::Touching
+    );
+    assert_eq!(print_analysis::gap_kind(0.0, true, 0.3), GapKind::Touching);
+    // At the gap, within the baseline tolerance: not narrow.
+    assert_eq!(
+        print_analysis::gap_kind(0.3 - 1e-7, false, 0.3),
+        GapKind::Clear
+    );
+    assert!(print_analysis::check_min_gap(0.3).is_ok());
+    for bad in [0.0, -0.1, f64::NAN, f64::INFINITY] {
+        assert!(print_analysis::check_min_gap(bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn only_bodies_whose_boxes_lie_within_the_gap_are_measured() {
+    use crate::kernel::BoundingBox;
+    let cube = |x: f64| {
+        Some(BoundingBox {
+            min: [x, 0.0, 0.0],
+            max: [x + 20.0, 20.0, 20.0],
+        })
+    };
+    // 0.2 mm, then 0.5 mm apart along X; an empty body; one far away.
+    let boxes = [cube(0.0), cube(20.2), cube(40.7), None, cube(100.0)];
+    assert_eq!(print_analysis::gap_candidates(&boxes, 0.3), [(0, 1)]);
+    assert_eq!(
+        print_analysis::gap_candidates(&boxes, 0.6),
+        [(0, 1), (1, 2)]
+    );
+    // Boxes that overlap are candidates whatever the gap.
+    let overlapping = [cube(0.0), cube(10.0)];
+    assert_eq!(print_analysis::gap_candidates(&overlapping, 0.01), [(0, 1)]);
+}

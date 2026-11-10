@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "BrowserPanel.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -723,7 +724,7 @@ QString jointTooltip(const DocumentSnapshot& snapshot, const DocumentSnapshot::F
                  .arg(it.key(), QString::number(std::round(value * 1e4) / 1e4, 'g', 10),
                       turn ? QStringLiteral("deg") : QStringLiteral("mm"));
   }
-  const QString message = joint.value(QStringLiteral("message")).toString();
+  const QString message = mitcad::modelMessage(joint.value(QStringLiteral("message")).toString());
   if (!message.isEmpty()) {
     parts << message;
   }
@@ -2266,7 +2267,7 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
       row.name = row.uid;
       row.visible = image.value(QStringLiteral("visible")).toBool(true);
       row.hasEye = true;
-      const QString error = image.value(QStringLiteral("error")).toString();
+      const QString error = mitcad::modelMessage(image.value(QStringLiteral("error")).toString());
       const QJsonArray size = image.value(QStringLiteral("size")).toArray();
       const QString file = image.value(QStringLiteral("file_name")).toString();
       const QString about = tr("%1 × %2 mm")
@@ -2424,7 +2425,7 @@ void BrowserPanel::applyAnalysisNotes() {
 void BrowserPanel::styleAnalysisRow(QTreeWidgetItem* item, const QJsonObject& analysis) {
   const QString name = analysis.value(QStringLiteral("name")).toString();
   const bool print = analysis.value(QStringLiteral("type")).toString() == QStringLiteral("print");
-  const QString error = analysis.value(QStringLiteral("error")).toString();
+  const QString error = mitcad::modelMessage(analysis.value(QStringLiteral("error")).toString());
   const QString kind = print ? tr("Print Analysis") : tr("Section Analysis");
   const QIcon icon = themeIcon(print ? QStringLiteral("print-analysis") : QStringLiteral("section-analysis"));
   // A plane that cannot be found stays the error it is (mitcad#1230).

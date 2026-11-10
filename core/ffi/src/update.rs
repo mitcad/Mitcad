@@ -41,7 +41,52 @@ mod ffi {
         /// Whether `version` is newer than `than`; false when either is no
         /// version.
         fn update_is_newer(version: &str, than: &str) -> bool;
+        /// The web browser component (mitcad#1579): reads and verifies a
+        /// manifest and tells what it offers for `platform` and the module
+        /// interface `abi`, `installed` the installed package's version (or
+        /// ""): JSON {"status": "available" | "current" | "abi" | "none",
+        /// "expired", "package": {"platform", "abi", "version", "cef",
+        /// "fingerprint", "url", "size", "sha256", "signature"} or null,
+        /// "abis"}.
+        fn update_browser_check(
+            manifest: &[u8],
+            keys: &str,
+            platform: &str,
+            abi: u32,
+            installed: &str,
+        ) -> Result<String>;
+        /// Verifies the manifest again, then a downloaded browser package
+        /// at `path`: its signature, size and SHA-256.
+        fn update_verify_browser_download(
+            manifest: &[u8],
+            keys: &str,
+            platform: &str,
+            abi: u32,
+            version: &str,
+            path: &str,
+        ) -> Result<()>;
     }
+}
+
+fn update_browser_check(
+    manifest: &[u8],
+    keys: &str,
+    platform: &str,
+    abi: u32,
+    installed: &str,
+) -> Result<String, UpdateError> {
+    mitcad_update::browser_check(manifest, keys, platform, abi, installed)
+}
+
+fn update_verify_browser_download(
+    manifest: &[u8],
+    keys: &str,
+    platform: &str,
+    abi: u32,
+    version: &str,
+    path: &str,
+) -> Result<(), UpdateError> {
+    mitcad_update::verify_browser_download(manifest, keys, platform, abi, version, Path::new(path))
 }
 
 fn update_check(

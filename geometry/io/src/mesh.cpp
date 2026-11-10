@@ -1182,10 +1182,38 @@ occ::handle<IMeshTools_MeshAlgoFactory> default_algorithms() {
   return new BRepMesh_MeshAlgoFactory();
 }
 
+// The tori's algorithms (mitcad#1624): Delabella's base triangulation of the
+// boundary's and the inside's nodes together (OCCT's
+// BRepMesh_DelabellaMeshAlgoFactory, its signs exact since OCCT port patch
+// 1070), whatever CSF_MeshAlgo says for the other faces;
+// use_face_algorithms_for_tests' instead when it gives some. BRepMesh's
+// torus range splitter puts the inside's nodes on a grid of the edges'
+// parameters: round a rounding of 0.25 mm on a circle of 10 mm, columns
+// 1.3 mm apart and rows 0.13 mm apart (its seam's 30 degree steps, a small
+// circle's, mitcad#879) in the face's scaled parameters, every cell's four
+// corners on one circle. The default's
+// Watson insertion (BRepMesh_Delaun) left many of those nodes out, inserted
+// after the boundary's triangulation or with it, and spanned triangles over
+// the whole rounding from one of its edges to the other: a funnel's rim
+// rounding was 0.12 mm off at its body's 0.04 mm, its triangles' normals
+// up to 64 degrees off the surface's, and its outline in the view showed
+// saw teeth. Delabella's triangulation of the same nodes keeps every one
+// (0.025 mm off; 565 triangles for the 503 of the default).
+occ::handle<IMeshTools_MeshAlgoFactory> torus_algorithms() {
+  {
+    const std::lock_guard<std::mutex> lock(g_fastPlanesMutex);
+    if (!g_facesForTests.IsNull()) {
+      return g_facesForTests;
+    }
+  }
+  return new BRepMesh_DelabellaMeshAlgoFactory();
+}
+
 // The faces' algorithms: BRepMesh_Context's default (CSF_MeshAlgo), with
 // planes through Delabella's base triangulation when `fast_planes`
 // (MeshOptions::fast_planes), checked and made again by the default when
 // `check_planes` too (CheckedPlaneAlgo, counted in the shared `redone`),
+// tori through Delabella's base triangulation always (torus_algorithms),
 // the other faces held within `held` triangles when that is not 0
 // (HeldFaceAlgo, MeshOptions::hold_face_triangles), each on a private copy
 // of its face (PrivateFaceAlgo), cones, tori and spheres with their angles
@@ -1194,15 +1222,15 @@ occ::handle<IMeshTools_MeshAlgoFactory> default_algorithms() {
 class FaceAlgoFactory : public IMeshTools_MeshAlgoFactory {
 public:
   FaceAlgoFactory(bool fast_planes, bool check_planes, std::size_t held, int small_circles, MeshSharedPtr shared)
-      : m_default(default_algorithms()), m_check(fast_planes && check_planes), m_held(held),
-        m_smallCircles(small_circles), m_shared(std::move(shared)) {
+      : m_default(default_algorithms()), m_tori(torus_algorithms()), m_check(fast_planes && check_planes),
+        m_held(held), m_smallCircles(small_circles), m_shared(std::move(shared)) {
     m_planes = fast_planes ? fast_plane_algorithms() : m_default;
   }
 
   occ::handle<IMeshTools_MeshAlgo> GetAlgo(const GeomAbs_SurfaceType type,
                                            const IMeshTools_Parameters& parameters) const override {
-    occ::handle<IMeshTools_MeshAlgo> algorithm =
-        (type == GeomAbs_Plane ? m_planes : m_default)->GetAlgo(type, parameters);
+    const occ::handle<IMeshTools_MeshAlgoFactory>& own = type == GeomAbs_Torus ? m_tori : m_default;
+    occ::handle<IMeshTools_MeshAlgo> algorithm = (type == GeomAbs_Plane ? m_planes : own)->GetAlgo(type, parameters);
     if (algorithm.IsNull()) {
       return algorithm;
     }
@@ -1210,7 +1238,7 @@ public:
       algorithm = new CheckedPlaneAlgo(algorithm, m_default, m_shared);
     }
     if (m_held > 0 && type != GeomAbs_Plane) {
-      algorithm = new HeldFaceAlgo(algorithm, m_default, m_held);
+      algorithm = new HeldFaceAlgo(algorithm, own, m_held);
     }
     algorithm = new PrivateFaceAlgo(algorithm, m_shared);
     if (m_smallCircles > 0 && (type == GeomAbs_Cone || type == GeomAbs_Torus || type == GeomAbs_Sphere)) {
@@ -1224,6 +1252,7 @@ public:
 
 private:
   occ::handle<IMeshTools_MeshAlgoFactory> m_default;
+  occ::handle<IMeshTools_MeshAlgoFactory> m_tori;
   occ::handle<IMeshTools_MeshAlgoFactory> m_planes;
   bool m_check;
   std::size_t m_held;

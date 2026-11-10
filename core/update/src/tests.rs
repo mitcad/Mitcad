@@ -52,6 +52,7 @@ fn manifest(version: &str, file: &TempFile, signer: &SigningKey) -> Manifest {
         expires: None,
         notes: format!("https://example.invalid/releases/tag/v{version}"),
         assets: BTreeMap::from([("windows-x64".to_string(), asset)]),
+        browser: Vec::new(),
     }
 }
 
@@ -636,4 +637,211 @@ fn versions_and_keys_parse() {
     assert_eq!(from_hex::<2>("0aFf"), Some([0x0a, 0xff]));
     assert_eq!(from_hex::<2>("0aF"), None);
     assert_eq!(from_hex::<2>("0aFg"), None);
+}
+
+// ---------------------------------------------------------------------------
+// The web browser component's packages (mitcad#1579)
+
+const BROWSER_ZIP: &[u8] = b"the browser component package, for the tests";
+const CEF: &str = "156.0.27+ga10dae3+chromium-156.0.8078.88";
+
+fn fingerprint(label: &str) -> String {
+    to_hex(&Sha256::digest(label.as_bytes()))
+}
+
+fn browser_package(
+    abi: u32,
+    version: &str,
+    file: &TempFile,
+    signer: &SigningKey,
+) -> BrowserPackage {
+    sign_browser_package(
+        "windows-x64",
+        abi,
+        version,
+        CEF,
+        &fingerprint("module and CEF"),
+        &file.0,
+        &format!("https://example.invalid/mitcad-browser-{version}-windows-x64.zip"),
+        signer,
+    )
+    .unwrap()
+}
+
+fn browser_check_json(
+    signed: &str,
+    signer: &SigningKey,
+    abi: u32,
+    installed: &str,
+) -> serde_json::Value {
+    serde_json::from_str(
+        &browser_check(
+            signed.as_bytes(),
+            &public_key(signer),
+            "windows-x64",
+            abi,
+            installed,
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_browser_package_is_offered_for_its_interface_and_verifies() {
+    let release = key("release");
+    let installer = TempFile::new("browser-installer.exe", INSTALLER);
+    let zip = TempFile::new("browser.zip", BROWSER_ZIP);
+    let mut release_manifest = manifest("0.60.0", &installer, &release);
+    release_manifest.browser = vec![
+        browser_package(2, "2026.1110.900", &zip, &release),
+        browser_package(2, "2026.1112.1530", &zip, &release),
+        browser_package(1, "2026.1101.800", &zip, &release),
+    ];
+    let signed = release_manifest.signed(&release);
+    let read = Manifest::read(signed.as_bytes(), &keys(&release)).unwrap();
+    // The highest version of the interface asked for.
+    assert_eq!(
+        read.browser_for("windows-x64", 2).unwrap().version,
+        "2026.1112.1530"
+    );
+    assert_eq!(
+        read.browser_for("windows-x64", 1).unwrap().version,
+        "2026.1101.800"
+    );
+    assert!(read.browser_for("linux-x64", 2).is_none());
+    verify_browser_download(
+        signed.as_bytes(),
+        &public_key(&release),
+        "windows-x64",
+        2,
+        "2026.1112.1530",
+        &zip.0,
+    )
+    .unwrap();
+
+    // None installed, an older one, the same one.
+    let offer = browser_check_json(&signed, &release, 2, "");
+    assert_eq!(offer["status"], "available");
+    assert_eq!(offer["package"]["version"], "2026.1112.1530");
+    assert_eq!(offer["package"]["cef"], CEF);
+    assert_eq!(offer["package"]["size"], BROWSER_ZIP.len() as u64);
+    assert_eq!(offer["abis"], serde_json::json!([1, 2]));
+    assert_eq!(
+        browser_check_json(&signed, &release, 2, "2026.1110.900")["status"],
+        "available"
+    );
+    assert_eq!(
+        browser_check_json(&signed, &release, 2, "2026.1112.1530")["status"],
+        "current"
+    );
+    // A MitCad whose interface no package has: it needs an update itself.
+    let other = browser_check_json(&signed, &release, 3, "");
+    assert_eq!(other["status"], "abi");
+    assert!(other["package"].is_null());
+    // A manifest without packages for the platform, or none at all.
+    let plain = manifest("0.60.0", &installer, &release).signed(&release);
+    assert!(!plain.contains("\"browser\""));
+    assert_eq!(
+        browser_check_json(&plain, &release, 2, "")["status"],
+        "none"
+    );
+}
+
+#[test]
+fn a_tampered_or_mismatching_browser_package_is_refused() {
+    let release = key("release");
+    let installer = TempFile::new("browser-installer2.exe", INSTALLER);
+    let zip = TempFile::new("browser2.zip", BROWSER_ZIP);
+    let mut release_manifest = manifest("0.60.0", &installer, &release);
+    release_manifest.browser = vec![browser_package(2, "2026.1110.900", &zip, &release)];
+    let signed = release_manifest.signed(&release);
+    let public = public_key(&release);
+    let verify = |abi: u32, version: &str, path: &PathBuf| {
+        verify_browser_download(
+            signed.as_bytes(),
+            &public,
+            "windows-x64",
+            abi,
+            version,
+            path,
+        )
+    };
+    // Another file, another interface, another version.
+    let other = TempFile::new(
+        "browser-other.zip",
+        b"another package of the same size!!!!!!!!!!!!",
+    );
+    assert!(matches!(
+        verify(2, "2026.1110.900", &other.0),
+        Err(UpdateError::File(_))
+    ));
+    assert!(matches!(
+        verify(3, "2026.1110.900", &zip.0),
+        Err(UpdateError::File(_))
+    ));
+    assert!(matches!(
+        verify(2, "2026.1110.901", &zip.0),
+        Err(UpdateError::File(_))
+    ));
+    // Signed with another key than the release's.
+    let mut forged = release_manifest.clone();
+    forged.browser = vec![browser_package(
+        2,
+        "2026.1110.900",
+        &zip,
+        &key("someone else"),
+    )];
+    let forged = forged.signed(&release);
+    assert!(matches!(
+        verify_browser_download(
+            forged.as_bytes(),
+            &public,
+            "windows-x64",
+            2,
+            "2026.1110.900",
+            &zip.0
+        ),
+        Err(UpdateError::File(_))
+    ));
+    // The package's entry changed after signing the manifest.
+    let changed = signed.replace("2026.1110.900", "2026.1110.999");
+    assert!(matches!(
+        Manifest::read(changed.as_bytes(), &keys(&release)),
+        Err(UpdateError::ManifestSignature)
+    ));
+    // Signed, but invalid: no HTTPS, no fingerprint.
+    let mut insecure = release_manifest.clone();
+    insecure.browser[0].url = "http://example.invalid/b.zip".into();
+    assert!(matches!(
+        Manifest::read(insecure.signed(&release).as_bytes(), &keys(&release)),
+        Err(UpdateError::Manifest(_))
+    ));
+    let mut unfingerprinted = release_manifest.clone();
+    unfingerprinted.browser[0].fingerprint = String::new();
+    assert!(matches!(
+        Manifest::read(unfingerprinted.signed(&release).as_bytes(), &keys(&release)),
+        Err(UpdateError::Manifest(_))
+    ));
+}
+
+#[test]
+fn a_manifest_with_browser_packages_reads_where_they_are_unknown() {
+    // What a MitCad before mitcad#1579 reads of a manifest with packages:
+    // the release as before (the field is ignored, the signature covers it).
+    #[derive(Deserialize)]
+    struct Before {
+        version: String,
+        assets: BTreeMap<String, Asset>,
+    }
+    let release = key("release");
+    let installer = TempFile::new("browser-installer3.exe", INSTALLER);
+    let zip = TempFile::new("browser3.zip", BROWSER_ZIP);
+    let mut release_manifest = manifest("0.60.0", &installer, &release);
+    release_manifest.browser = vec![browser_package(2, "2026.1110.900", &zip, &release)];
+    let signed = release_manifest.signed(&release);
+    let envelope: serde_json::Value = serde_json::from_str(&signed).unwrap();
+    let before: Before = serde_json::from_value(envelope["manifest"].clone()).unwrap();
+    assert_eq!(before.version, "0.60.0");
+    assert_eq!(before.assets.len(), 1);
 }

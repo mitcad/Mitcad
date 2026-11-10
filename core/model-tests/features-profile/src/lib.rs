@@ -24,3 +24,5 @@ mod pipe_corners_tests;
 mod pipe_tight_bends_tests;
 // Press-fit holes for printed parts: hex, square, crush ribs (mitcad#1517).
 mod press_fit_hole_tests;
+// Print shapes of holes printed lying: teardrop, flat roof (mitcad#1515).
+mod print_shape_hole_tests;

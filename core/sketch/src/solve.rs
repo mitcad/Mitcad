@@ -89,19 +89,17 @@ impl SketchStatus {
         }
         // Counted, not named (mitcad#1612): `degenerate` and the query's
         // `warning_entities` name them, and the palette selects them.
-        let curves = match self.degenerate.len() {
-            1 => "a curve".to_owned(),
-            n => format!("{n} curves"),
-        };
-        Some(format!(
-            "{curves} collapsed (a line of no length or a circle or arc of no radius) and \
-             {} no region",
-            if self.degenerate.len() == 1 {
-                "makes"
-            } else {
-                "make"
-            }
-        ))
+        // Whole messages for one and for several (mitcad#1284: no word
+        // ending put on a value).
+        Some(match self.degenerate.len() {
+            1 => "a curve collapsed (a line of no length or a circle or arc of no radius) and \
+                  makes no region"
+                .to_owned(),
+            n => format!(
+                "{n} curves collapsed (a line of no length or a circle or arc of no radius) and \
+                 make no region"
+            ),
+        })
     }
 }
 

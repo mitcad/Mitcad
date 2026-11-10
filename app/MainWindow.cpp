@@ -99,6 +99,7 @@
 #include "projects/ProjectsPanel.hpp"
 #include "files/VersionDialogs.hpp"
 #include "framework/AppSettings.hpp"
+#include "framework/ModelMessages.hpp"
 #include "framework/Appearances.hpp"
 #include "framework/AutoselectPanel.hpp"
 #include "framework/Dialogs.hpp"
@@ -122,6 +123,8 @@
 #include "framework/ResultCache.hpp"
 #include "framework/Restart.hpp"
 #include "framework/QuickAccessGroup.hpp"
+#include "framework/EnterRepeat.hpp"
+#include "framework/MenuBarReveal.hpp"
 #include "framework/Ribbon.hpp"
 #include "framework/SectionPreview.hpp"
 #include "framework/SectionWorker.hpp"
@@ -708,11 +711,18 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
 
   // Enter confirms the active command (or what a sketch tool has typed)
   // wherever the focus is; Esc cancels it, or steps back in a
-  // sketch tool, or clears the selection.
+  // sketch tool, or clears the selection. With nothing to confirm, Enter
+  // repeats the last command (mitcad#1620) unless the focus takes Enter
+  // itself: then the action is disabled, and the focus gets the key.
   m_confirmAction = new QAction(tr("OK"), this);
   m_confirmAction->setShortcuts({QKeySequence(Qt::Key_Return), QKeySequence(Qt::Key_Enter)});
   connect(m_confirmAction, &QAction::triggered, this, &MainWindow::confirm);
   addAction(m_confirmAction);
+  m_focusRepeat = connect(qApp, &QApplication::focusChanged, this, [this] {
+    if (m_mode == Mode::Idle) {
+      updateConfirmEnabled();
+    }
+  });
   m_cancelAction = new QAction(tr("Cancel"), this);
   m_cancelAction->setShortcut(Qt::Key_Escape);
   connect(m_cancelAction, &QAction::triggered, this, &MainWindow::cancel);
@@ -736,7 +746,7 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
                                 return true;
                               }
                               if (error != nullptr) {
-                                *error = lastCancelled() ? tr("The computation was canceled.") : lastError();
+                                *error = lastCancelled() ? tr("The computation was canceled.") : mitcad::modelMessage(lastError());
                               }
                               return false;
                             },
@@ -909,6 +919,12 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
 }
 
 MainWindow::~MainWindow() {
+  // Insert › Component from Web's window (mitcad#1579) is a window of its
+  // own whose imports go into this one: it ends first, its downloads' files
+  // with it.
+  delete m_componentBrowser.data();
+  // No more Enter's state on focus changes while the children go.
+  disconnect(m_focusRepeat);
   // The section worker's rounds end first (mitcad#438): their ends call
   // back into the window.
   m_documentSession->setBeforeJob({});
@@ -1487,6 +1503,12 @@ void MainWindow::createMenus() {
   for (QAction* top : menuBar()->actions()) {
     mac::hideMenuImages(top->menu());
   }
+  // Hidden while Preferences › Display › Show the menu bar is cleared
+  // (mitcad#1620, Windows and Linux): its menus stay reachable by Alt and
+  // the ☰ button (createRibbon).
+  if (!m_nativeUi) {
+    MenuBarReveal::instance().watch(menuBar());
+  }
 }
 
 #ifdef MITCAD_MAC_UI
@@ -1639,6 +1661,12 @@ void MainWindow::createRibbon() {
                                   m_registry->action(QStringLiteral("edit.redo")),
                                   m_registry->action(QStringLiteral("tools.search")));
     titleBar->setQuickAccess(quickAccess);
+    // The ☰ of the hidden menu bar (mitcad#1620), before Undo and Redo,
+    // while Preferences › Display › Show the menu bar is cleared.
+    titleBar->setMenuButton(new MenuBarButton(menuBar(), uiIconSize(18)));
+    titleBar->setMenuButtonVisible(MenuBarButton::wanted());
+    connect(&MenuBarNotifier::instance(), &MenuBarNotifier::shownChanged, titleBar,
+            [titleBar](bool) { titleBar->setMenuButtonVisible(MenuBarButton::wanted()); });
     if (floatingTopCards()) {
       // Windows and Linux (mitcad#425): only the menu bar is a bar; the title
       // row floats over the view without a card, its controls and the
@@ -1669,6 +1697,12 @@ void MainWindow::createRibbon() {
   // design, and the hidden ribbon came back with the design whenever it
   // was in front again (mitcad#1451).
   bar->toggleViewAction()->setVisible(false);
+  // The ☰ of the hidden menu bar (mitcad#1620) first, before Undo and Redo,
+  // while Preferences › Display › Show the menu bar is cleared.
+  QAction* menuButton = bar->addWidget(new MenuBarButton(menuBar(), bar->iconSize().height()));
+  menuButton->setVisible(MenuBarButton::wanted());
+  connect(&MenuBarNotifier::instance(), &MenuBarNotifier::shownChanged, menuButton,
+          [menuButton](bool) { menuButton->setVisible(MenuBarButton::wanted()); });
   // Undo and Redo at hand in the application bar; named for the tests of
   // the bar's colours (mitcad#1245).
   for (const char* id : {"edit.undo", "edit.redo"}) {
@@ -2106,7 +2140,7 @@ void MainWindow::updateActions() {
   logPrintTarget();
   // The card's Create row offers enabled commands only (mitcad#619).
   updateSelectionCreate();
-  m_confirmAction->setEnabled(m_mode == Mode::Command || m_mode == Mode::Sketch);
+  updateConfirmEnabled();
   updateWindowTitle();
 #ifdef MITCAD_MACOS_NATIVE_UI
   if (m_nativeWindow) {
@@ -2501,6 +2535,9 @@ void MainWindow::onCommandFinished(bool committed) {
 #endif
   CommandSession* session = m_session;
   m_session = nullptr;
+  // OK or Cancel: the panel's errors go with it (mitcad#1621), before its
+  // "Done." or "Command canceled." takes the band.
+  closeMessageSource(QStringLiteral("command"));
   // An Annotate panel's preview goes with it (mitcad#1097).
   if (!m_annotationPreview.isEmpty()) {
     previewAnnotation(QJsonObject());
@@ -2537,9 +2574,42 @@ void MainWindow::confirm() {
     m_session->commit();
     return;
   }
-  if (m_mode == Mode::Sketch) {
-    m_sketch->confirm();
+  if (m_mode == Mode::Sketch && m_sketch->confirm()) {
+    return;
   }
+  // Outside commands and sketches nothing waits for Enter: it repeats the
+  // last command (mitcad#1620), as the view's context menu's Repeat does,
+  // unless the focus takes Enter itself (a field, a rename, a list) or the
+  // command is not available now.
+  if (repeatableCommand() && !focusTakesEnter(QApplication::focusWidget())) {
+    const QString id = m_lastCommand;
+    const CommandDef* last = m_registry->find(id);
+    qDebug().noquote() << QStringLiteral("Repeat %1 (Enter)").arg(last != nullptr ? last->name : id);
+    if (m_reports != nullptr) {
+      m_reports->noteAction(QStringLiteral("repeat ") + id);
+    }
+    trigger(id);
+  }
+}
+
+bool MainWindow::repeatableCommand() const {
+  // Not in a sketch: there Enter ends a tool's step and, pressed once more,
+  // must not start a command (a model command such as Extrude would even
+  // finish the sketch first).
+  if (m_mode != Mode::Idle || m_lastCommand.isEmpty()) {
+    return false;
+  }
+  // Its action is enabled as the command is available (updateActions).
+  const QAction* action = m_registry->action(m_lastCommand);
+  return action != nullptr && action->isEnabled();
+}
+
+void MainWindow::updateConfirmEnabled() {
+  // Enter confirms the open command or the sketch's tool; outside them it
+  // repeats the last command, only while the focus does not take Enter
+  // itself, which then gets it (mitcad#1620).
+  const bool repeat = repeatableCommand() && !focusTakesEnter(QApplication::focusWidget());
+  m_confirmAction->setEnabled(m_mode == Mode::Command || m_mode == Mode::Sketch || repeat);
 }
 
 void MainWindow::cancel() {
@@ -2571,9 +2641,16 @@ void MainWindow::cancel() {
     return;
   }
   if (m_mode == Mode::Sketch) {
-    if (!m_sketch->cancel()) {
-      setSelection({});
+    // An editor, a drag, the tool and the selection first; then, with the
+    // preference on (mitcad#1623, off by default), the sketch itself.
+    if (m_sketch->cancel()) {
+      return;
     }
+    if (!m_selection.isEmpty() || !sketch::escLeavesUnchangedSketch()) {
+      setSelection({});
+      return;
+    }
+    escapeSketch();
     return;
   }
   if (escapeDrawing()) {
@@ -4570,12 +4647,26 @@ void MainWindow::showStatus(const QString& message, NoticeLevel level) {
   showFeatureStatus(message, level, QString());
 }
 
-void MainWindow::showFeatureStatus(const QString& message, NoticeLevel level, const QString& feature) {
+void MainWindow::showFeatureStatus(const QString& given, NoticeLevel level, const QString& feature) {
+  // What raised it, when it lasts only while that is open (mitcad#1621):
+  // showSourceError's, or the open command panel's for an error of no
+  // feature (a refused OK); it goes when that closes (closeMessageSource).
+  QString source = std::exchange(m_nextStatusSource, QString());
+  if (source.isEmpty() && level == NoticeLevel::Error && feature.isEmpty() && m_session != nullptr) {
+    source = QStringLiteral("command");
+  }
+  if (given.isEmpty() || level != NoticeLevel::Error) {
+    source.clear();
+  }
   // An edit refused on a linked component says where to change it, with
   // Open Linked Design (mitcad#1416, files/MainWindowLinks.cpp).
-  if (level == NoticeLevel::Error && m_statusActionLabel.isEmpty() && showLinkedRefusal(message)) {
+  if (level == NoticeLevel::Error && m_statusActionLabel.isEmpty() && showLinkedRefusal(given)) {
     return;
   }
+  // The model's messages in the interface language (mitcad#1284): the
+  // status line, the message band, its history and the log line of the UI
+  // tests show the same text.
+  const QString message = modelMessage(given);
   // A message whose button waits for an answer (mitcad#1416) stays in the
   // Docked status line, as in the band: a hint or a cleared status goes to
   // the history only.
@@ -4592,6 +4683,7 @@ void MainWindow::showFeatureStatus(const QString& message, NoticeLevel level, co
   // mitcad#1042, mitcad#1098) and its history.
   m_statusIsHint = level == NoticeLevel::Hint || level == NoticeLevel::Progress;
   m_statusLevel = level;
+  m_statusSource = source;   // mitcad#1621
   m_statusFeature = feature; // its notice places on hover (mitcad#1327)
   updateStatusNoticeHover(); // shown under the pointer: its own (mitcad#1609)
   if (level == NoticeLevel::Error) {
@@ -4633,8 +4725,15 @@ void MainWindow::showFeatureStatus(const QString& message, NoticeLevel level, co
     if (!actionLabel.isEmpty()) {
       m_messages->postAction(message, level, actionLabel, std::move(actionRun));
     } else {
-      m_messages->post(message, level, feature);
+      m_messages->post(message, level, feature, source);
     }
+  }
+  if (!source.isEmpty()) {
+    // Raised now: its source closing in the same turn (a tool that ends on
+    // its own failure) leaves it, as it says why (closeMessageSource).
+    m_freshSourceError = source;
+    QTimer::singleShot(0, this, [this] { m_freshSourceError.clear(); });
+    qDebug().noquote() << QStringLiteral("Status error source: %1").arg(source);
   }
   if (!message.isEmpty() && !m_statusIsHint) {
     // The level as the UI tests read it (mitcad#1040); hints are many.
@@ -4657,6 +4756,7 @@ void MainWindow::clearDesignMessages() {
   // it.
   m_statusIsHint = true;
   m_statusLevel = NoticeLevel::Hint;
+  m_statusSource.clear(); // mitcad#1621
   // Its feature's places with it (mitcad#1609).
   m_statusFeature.clear();
   updateStatusNoticeHover();
@@ -4899,6 +4999,41 @@ void MainWindow::showWarning(const QString& message) {
 }
 
 void MainWindow::showError(const QString& message) { showStatus(message, NoticeLevel::Error); }
+
+void MainWindow::showSourceError(const QString& message, const QString& source) {
+  m_nextStatusSource = source; // showFeatureStatus takes it
+  showStatus(message, NoticeLevel::Error);
+}
+
+void MainWindow::closeMessageSource(const QString& source) {
+  // An error of a tool, a value editor, a sketch or a command panel goes
+  // when that closes (mitcad#1621): from the Docked status line and from
+  // the message band (its stub, `cleared`); the history keeps it. Not one
+  // raised in this same turn: the source closed on its own failure, and the
+  // error says why.
+  if (MessageLog::sourceCovers(source, m_freshSourceError)) {
+    qDebug().noquote() << QStringLiteral("Message source closed: %1 (its error raised just now stays)").arg(source);
+    return;
+  }
+  if (m_statusLabel != nullptr && !m_statusLabel->text().isEmpty() &&
+      MessageLog::sourceCovers(source, m_statusSource)) {
+    m_statusSource.clear();
+    m_statusIsHint = true;
+    m_statusLevel = NoticeLevel::Hint;
+    m_statusFeature.clear();
+    updateStatusNoticeHover();
+    setErrorStyleSheet(m_statusLabel, QString());
+    m_statusLabel->clear();
+    if (m_statusIcon != nullptr) {
+      m_statusIcon->clear();
+      m_statusIcon->hide();
+    }
+    qDebug().noquote() << QStringLiteral("Status line cleared (%1 closed)").arg(source);
+  }
+  if (m_messages != nullptr) {
+    m_messages->closeSource(source);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Selection outside commands
@@ -5941,6 +6076,8 @@ void MainWindow::enterSketch(const QString& uid, bool existing, const QString& p
   m_sketchScope.reset();
   selectionScopeChanged(QStringLiteral("defaults"));
   m_sketchEnterDepth = undoDepth();
+  m_sketchEnterRevision = documentRevision();
+  m_sketchEscHinted = false;
   m_viewer->setGridPlane(toAx3(m_sketch->model().frame)); // the grid on the sketch plane
   m_ribbon->setSketchMode(true);
   // The palette's Create section chosen again as it opens (mitcad#1027):
@@ -6170,6 +6307,44 @@ bool MainWindow::finishSketch() {
     }
   }
   return true;
+}
+
+qint64 MainWindow::documentRevision() const {
+  return query({{QStringLiteral("query"), QStringLiteral("document")}})
+      .toObject()
+      .value(QStringLiteral("revision"))
+      .toInteger(-1);
+}
+
+void MainWindow::escapeSketch() {
+  if (m_mode != Mode::Sketch) {
+    return;
+  }
+  const QString uid = m_sketch->uid();
+  const QString name = m_sketch->model().name;
+  // Undo back to where the sketch was entered gives that revision back, so
+  // a change taken back counts as none.
+  if (m_sketchEnterRevision >= 0 && documentRevision() == m_sketchEnterRevision) {
+    const bool created = !m_sketchExisting;
+    qDebug().noquote() << QStringLiteral("Esc: leaving %1, nothing changed in it").arg(name);
+    // As Finish Sketch: a new sketch still empty is taken back with it
+    // (its creation undone, no undo step left).
+    if (finishSketch() && created && !sketchExists(uid)) {
+      qDebug().noquote() << QStringLiteral("Esc: %1 taken back, it was new and empty").arg(name);
+    }
+    return;
+  }
+  if (m_sketchEscHinted) {
+    qDebug().noquote() << QStringLiteral("Esc: %1 changed, it stays open").arg(name);
+    return;
+  }
+  m_sketchEscHinted = true;
+  const QList<QKeySequence> undoKeys = m_registry->effectiveShortcuts(QStringLiteral("edit.undo"));
+  const QString undoKey =
+      undoKeys.isEmpty() ? tr("Undo") : undoKeys.front().toString(QKeySequence::NativeText);
+  const QString hint = tr("Finish Sketch (or %1 to undo) to leave the sketch.").arg(undoKey);
+  showHint(hint);
+  qDebug().noquote() << QStringLiteral("Esc: %1 changed, it stays open; hint: %2").arg(name, hint);
 }
 
 // ---------------------------------------------------------------------------
@@ -6595,7 +6770,7 @@ bool MainWindow::writeFile(const QString& path, const QString& description, Vers
   try {
     json = idleDocument().save_design_stamped(rustStr(path.toUtf8()), "auto");
   } catch (const std::exception& e) {
-    error = QString::fromUtf8(e.what());
+    error = mitcad::modelMessage(e.what());
   }
   if (!json) {
     const QString failure = tr("Could not save %1:\n%2").arg(QDir::toNativeSeparators(path), error);

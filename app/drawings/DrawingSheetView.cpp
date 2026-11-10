@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "DrawingSheetView.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -44,6 +45,9 @@ constexpr double kPi = 3.14159265358979323846;
 // drag, not a click: the 3D view's and the sketch's rule (OcctViewer,
 // SketchController; mitcad#1085, mitcad#1404).
 constexpr double kRightClickPixels = 4.0;
+// How opaque the hover's and the picks' marks are (of 255): the line they
+// mark shows under them (mitcad#1618).
+constexpr int kMarkAlpha = 160;
 
 QPointF pointOf(const QJsonValue& value) {
   const QJsonArray a = value.toArray();
@@ -195,7 +199,7 @@ void DrawingSheetView::setSheet(const QJsonObject& sheet) {
     entry.type = v.value(QStringLiteral("type")).toString();
     entry.parent = v.value(QStringLiteral("parent")).toInt();
     entry.label = v.value(QStringLiteral("label")).toString();
-    entry.error = v.value(QStringLiteral("error")).toString();
+    entry.error = mitcad::modelMessage(v.value(QStringLiteral("error")).toString());
     const QJsonArray box = v.value(QStringLiteral("box")).toArray();
     if (box.size() == 2) {
       entry.box = QRectF(pointOf(box.at(0)), pointOf(box.at(1))).normalized();
@@ -212,7 +216,7 @@ void DrawingSheetView::setSheet(const QJsonObject& sheet) {
     entry.type = a.value(QStringLiteral("type")).toString();
     entry.label = a.value(QStringLiteral("label")).toString();
     entry.broken = a.value(QStringLiteral("broken")).toBool();
-    entry.error = a.value(QStringLiteral("error")).toString();
+    entry.error = mitcad::modelMessage(a.value(QStringLiteral("error")).toString());
     const QJsonArray box = a.value(QStringLiteral("box")).toArray();
     if (box.size() == 2) {
       entry.box = QRectF(pointOf(box.at(0)), pointOf(box.at(1))).normalized();
@@ -515,6 +519,17 @@ int DrawingSheetView::annotationAt(const QPointF& sheet) const {
     }
   }
   return best;
+}
+
+double DrawingSheetView::markWidth(const QJsonObject& item, bool picked) const {
+  const double least = picked ? kPickMarkWidth : kHoverMarkWidth;
+  const QString pen = item.value(QStringLiteral("pen")).toString();
+  if (pen.isEmpty()) {
+    return least;
+  }
+  // As paintItems draws the line: at least a pixel wide.
+  const double drawn = std::max(penOf(m_pens, pen).widthF() * m_zoom, 1.0);
+  return std::max(least, drawn + 2.0 * kMarkMargin);
 }
 
 void DrawingSheetView::setPickMarks(const QJsonArray& items) {
@@ -1151,12 +1166,15 @@ void DrawingSheetView::paintAnnotations(QPainter& painter) const {
   }
   // What a click would pick under the pointer, light (mitcad#725), and
   // what an annotation tool picked so far, in the handles' orange
-  // (mitcad#1041: what is under the pointer in the hover's blue).
+  // (mitcad#1041: what is under the pointer in the hover's blue). Each
+  // line, circle or arc as wide as the line it marks and a little more,
+  // see-through so that the line shows under it (mitcad#1618).
   QColor hoverMark = themeColor(ColorRole::Hover, false);
-  hoverMark.setAlpha(160);
-  QPen mark(hoverMark, 2.0);
+  hoverMark.setAlpha(kMarkAlpha);
+  QColor pickMark = themeColor(ColorRole::Handle, false);
+  pickMark.setAlpha(kMarkAlpha);
+  QPen mark(hoverMark, kHoverMarkWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
   mark.setCosmetic(true);
-  painter.setPen(mark);
   painter.setBrush(Qt::NoBrush);
   QJsonArray marks = m_hoverMarks;
   const qsizetype hovered = marks.size();
@@ -1164,13 +1182,11 @@ void DrawingSheetView::paintAnnotations(QPainter& painter) const {
     marks.append(value);
   }
   for (qsizetype i = 0; i < marks.size(); ++i) {
-    if (i == hovered) {
-      mark.setColor(themeColor(ColorRole::Handle, false));
-      mark.setWidthF(2.5);
-      painter.setPen(mark);
-    }
-    const QJsonValue value = marks.at(i);
-    const QJsonObject item = value.toObject();
+    const bool picked = i >= hovered;
+    const QJsonObject item = marks.at(i).toObject();
+    mark.setColor(picked ? pickMark : hoverMark);
+    mark.setWidthF(markWidth(item, picked));
+    painter.setPen(mark);
     if (item.contains(QStringLiteral("line"))) {
       const QJsonArray line = item.value(QStringLiteral("line")).toArray();
       painter.drawLine(toWidget(pointOf(line.at(0))), toWidget(pointOf(line.at(1))));

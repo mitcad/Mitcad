@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "FileDialogs.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1102,7 +1103,7 @@ QString freeCadParameters(const QJsonObject& report, QStringList* kept) {
       if (kept && !formula.isEmpty() && p.contains(QStringLiteral("cell"))) {
         *kept << QObject::tr("%1 = %2: %3")
                      .arg(p.value(QStringLiteral("source")).toString(), formula,
-                          p.value(QStringLiteral("note")).toString());
+                          mitcad::modelMessage(p.value(QStringLiteral("note")).toString()));
       }
     } else {
       ++leftOut;
@@ -1125,7 +1126,7 @@ QString freeCadParameters(const QJsonObject& report, QStringList* kept) {
         *kept << QObject::tr("%1.%2 = %3: %4")
                      .arg(e.value(QStringLiteral("object")).toString(), path,
                           e.value(QStringLiteral("expression")).toString(),
-                          e.value(QStringLiteral("note")).toString());
+                          mitcad::modelMessage(e.value(QStringLiteral("note")).toString()));
       }
     }
   }
@@ -1441,8 +1442,8 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
     auto* row = new QTreeWidgetItem(
         items, {QString::number(item.value(QStringLiteral("index")).toInt()), item.value(QStringLiteral("name")).toString(),
                 item.value(QStringLiteral("type")).toString(), item.value(QStringLiteral("outcome")).toString(),
-                item.value(QStringLiteral("note")).toString()});
-    row->setToolTip(4, item.value(QStringLiteral("note")).toString());
+                mitcad::modelMessage(item.value(QStringLiteral("note")).toString())});
+    row->setToolTip(4, mitcad::modelMessage(item.value(QStringLiteral("note")).toString()));
   }
   // A SolidCraft design's features and joints: how each came in, or why
   // it did not (mitcad#450).
@@ -1453,7 +1454,7 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
         const QJsonObject f = value.toObject();
         QStringList notes;
         for (const QJsonValue& note : f.value(QStringLiteral("notes")).toArray()) {
-          notes << note.toString();
+          notes << mitcad::modelMessage(note.toString());
         }
         const QString note = notes.join(QStringLiteral("; "));
         auto* row = new QTreeWidgetItem(items, {QString::number(++index), f.value(QStringLiteral("name")).toString(),
@@ -1469,7 +1470,7 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
       const QJsonObject p = value.toObject();
       QStringList notes;
       for (const QJsonValue& note : p.value(QStringLiteral("notes")).toArray()) {
-        notes << note.toString();
+        notes << mitcad::modelMessage(note.toString());
       }
       const QString note = notes.join(QStringLiteral("; "));
       auto* row = new QTreeWidgetItem(
@@ -1501,7 +1502,7 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
     const QString title = (name.isEmpty() ? r.value(QStringLiteral("document")).toString() : name) +
                           (version > 0 ? QObject::tr(" (version %1)").arg(version) : QString());
     const QString source = r.value(QStringLiteral("file")).toString();
-    const QString note = r.value(QStringLiteral("note")).toString();
+    const QString note = mitcad::modelMessage(r.value(QStringLiteral("note")).toString());
     const QString from =
         source.isEmpty() ? QString() : QObject::tr(", from %1").arg(QFileInfo(source).fileName().toHtmlEscaped());
     references << QObject::tr("%1: %2%3%4")
@@ -1516,10 +1517,10 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
   }
   QStringList warnings;
   for (const QJsonValue& warning : design.value(QStringLiteral("warnings")).toArray()) {
-    warnings << warning.toString().toHtmlEscaped();
+    warnings << mitcad::modelMessage(warning.toString()).toHtmlEscaped();
   }
   for (const QJsonValue& warning : replay.value(QStringLiteral("warnings")).toArray()) {
-    warnings << warning.toString().toHtmlEscaped();
+    warnings << mitcad::modelMessage(warning.toString()).toHtmlEscaped();
   }
   if (!warnings.isEmpty()) {
     auto* text = new QLabel(QObject::tr("<b>Warnings</b><br>%1").arg(warnings.join(QStringLiteral("<br>"))));

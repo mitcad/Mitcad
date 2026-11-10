@@ -8,6 +8,7 @@
 // the file (or the folder) with the name of what is saved proposed, and
 // the model's `export` writes it. The design does not change.
 #include "../MainWindow.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <memory>
@@ -328,7 +329,7 @@ void MainWindow::saveAsMesh(const Selection& items) {
                                       printBedLog(result.value(QStringLiteral("bed")).toObject()));
       }
       for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
-        warnings << warning.toString();
+        warnings << mitcad::modelMessage(warning.toString());
       }
     }
   }

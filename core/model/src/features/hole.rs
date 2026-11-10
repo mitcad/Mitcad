@@ -21,6 +21,8 @@
 //! against the face or sketch normal, into the material, and `flip` turns
 //! them round.
 
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
 use super::extrude::{Operation, apply_operation, check_participants, participant_bodies};
@@ -40,7 +42,8 @@ use super::{
 };
 use crate::ids::{BodyUid, EntityUid, FeatureUid};
 use crate::kernel::{
-    Axis, Bound, Cylinder, HoleEnd, HoleShape, HoleSpec, Kernel, ThreadSpec, ThreadTaper,
+    Axis, Bound, Cylinder, HoleEnd, HolePrintShape, HoleShape, HoleSpec, Kernel, ThreadSpec,
+    ThreadTaper,
 };
 use crate::parameters::ParamId;
 use crate::sketch::geometry::Curve2;
@@ -283,6 +286,40 @@ pub struct HolePressFit<P = ParamId> {
     pub angle: Option<P>,
 }
 
+/// How a hole is printed when its axis lies parallel to the print bed
+/// (mitcad#1515): a round hole's roof sags and comes out out-of-round and
+/// undersized, so its upper arc gives way to a teardrop's point or a flat
+/// roof that bridges ([`crate::kernel::HolePrintShape`]). The bed is the
+/// participant body's print bed face (`set_print_bed_face`), the design's
+/// −Z without one; holes whose axis does not lie parallel to it stay round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrintShape {
+    #[default]
+    Round,
+    /// Two sides at 45 degrees to the bed's normal, tangent to the circle,
+    /// meeting at a point above it.
+    Teardrop,
+    /// The teardrop's sides cut short by a flat roof the sag allowance
+    /// (`roof_sag`) above the circle.
+    FlatRoof,
+}
+
+impl PrintShape {
+    pub fn is_round(&self) -> bool {
+        *self == Self::Round
+    }
+}
+
+/// A flat roof's sag allowance when a hole leaves it out (mitcad#1515):
+/// how far above the circle the bridge is printed, so that it sags onto it.
+pub const DEFAULT_ROOF_SAG: f64 = 0.4;
+
+/// How far from right angles to the print bed's normal a hole's axis may
+/// lie and still be printed lying (mitcad#1515): the cosine of the angle
+/// between them.
+const ALONG_BED: f64 = 1e-6;
+
 /// Crush ribs' number and height when a press fit leaves them out.
 pub const DEFAULT_CRUSH_RIBS: u32 = 3;
 pub const DEFAULT_RIB_HEIGHT: f64 = 0.3;
@@ -451,6 +488,16 @@ pub struct HoleDef<P = ParamId> {
     /// bottom, no thread, taper or clearance.
     #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
     pub press_fit: Option<HolePressFit<P>>,
+    /// How the holes whose axis lies parallel to the print bed are printed
+    /// (mitcad#1515): round, a teardrop or a flat roof; only the solid is
+    /// shaped, the hole keeps its diameter (drawings, callouts). Not with a
+    /// press fit, a taper or a modelled thread.
+    #[serde(default, skip_serializing_if = "PrintShape::is_round")]
+    pub print_shape: PrintShape,
+    /// A flat roof's sag allowance above the circle, [`DEFAULT_ROOF_SAG`]
+    /// when left out; only with `print_shape` `flat_roof`.
+    #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+    pub roof_sag: Option<P>,
 }
 
 type Mapper<'a, P, Q, E> = dyn FnMut(&str, &P) -> Result<Q, E> + 'a;
@@ -613,6 +660,8 @@ impl<P> HoleDef<P> {
             taper,
             clearance: self.clearance.clone(),
             press_fit,
+            print_shape: self.print_shape,
+            roof_sag: map_option("roof_sag", &self.roof_sag, f)?,
         })
     }
 
@@ -625,6 +674,17 @@ impl<P> HoleDef<P> {
             HolePlacement::Plane { points, .. } => points.len(),
             HolePlacement::At { .. } | HolePlacement::CylinderOffset { .. } => 1,
         }
+    }
+}
+
+/// A flat roof's sag allowance (mitcad#1515): a finite length above zero.
+fn roof_sag_value(sag: f64) -> Result<f64, String> {
+    if sag.is_finite() && sag > 0.0 {
+        Ok(sag)
+    } else {
+        Err(format!(
+            "the flat roof's sag allowance must be greater than zero, got {sag}"
+        ))
     }
 }
 
@@ -823,6 +883,32 @@ impl FeatureInfo for HoleDef {
                 return Err("only crush ribs have `ribs` and `rib_height`".to_owned());
             }
         }
+        // A print shape's roof over a round bore (mitcad#1515).
+        if !self.print_shape.is_round() {
+            if self.press_fit.is_some() {
+                return Err(
+                    "a press-fit hole has its own section: leave out `print_shape` or `press_fit`"
+                        .to_owned(),
+                );
+            }
+            if self.taper.is_some() {
+                return Err("a tapered hole has no print shape: leave out `print_shape`".to_owned());
+            }
+            if self
+                .thread
+                .as_ref()
+                .is_some_and(|t| t.modeled || t.tapers())
+            {
+                return Err(
+                    "a modeled or tapering thread is cut round: leave out `print_shape` or make \
+                     the thread cosmetic"
+                        .to_owned(),
+                );
+            }
+        }
+        if self.roof_sag.is_some() && self.print_shape != PrintShape::FlatRoof {
+            return Err("only a flat roof has `roof_sag`".to_owned());
+        }
         check_participants(ctx, Operation::Cut, &self.participants)
     }
 
@@ -939,6 +1025,9 @@ impl FeatureInfo for HoleDef {
                 fit.rib_height.map(value),
                 fit.angle.map(value),
             )?;
+        }
+        if let Some(sag) = self.roof_sag {
+            roof_sag_value(value(sag))?;
         }
         Ok(())
     }
@@ -1173,6 +1262,85 @@ impl HoleDef {
     }
 }
 
+impl HoleDef {
+    /// The roofs of a print-shaped hole (mitcad#1515): for each hole whose
+    /// axis lies parallel to the print bed, the direction away from it at
+    /// right angles to the axis; None for round holes, or when no hole lies
+    /// so (an information then) or the bed is not found here (a warning).
+    fn print_roofs<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        participants: &[(BodyUid, K::Shape)],
+        positions: &[Axis],
+    ) -> Result<Option<HolePrintShape>, String> {
+        let flat_roof = match self.print_shape {
+            PrintShape::Round => return Ok(None),
+            PrintShape::Teardrop => None,
+            PrintShape::FlatRoof => Some(match self.roof_sag {
+                Some(id) => roof_sag_value(ctx.param(id)?)?,
+                None => DEFAULT_ROOF_SAG,
+            }),
+        };
+        let Some(up) = away_from_bed(ctx, participants) else {
+            return Ok(None);
+        };
+        let roofs: Vec<Option<[f64; 3]>> = positions
+            .iter()
+            .map(|position| {
+                let along = normalized(position.direction)?;
+                let across = dot(up, along);
+                if across.abs() > ALONG_BED {
+                    return None;
+                }
+                // (`+ 0.0`: no negative zeros.)
+                normalized(std::array::from_fn(|i| up[i] - across * along[i]))
+                    .map(|roof| roof.map(|v| v + 0.0))
+            })
+            .collect();
+        if roofs.iter().all(Option::is_none) {
+            ctx.inform("no hole lies parallel to the print bed: the holes are round");
+            return Ok(None);
+        }
+        Ok(Some(HolePrintShape { roofs, flat_roof }))
+    }
+}
+
+/// The direction away from the print bed for a print-shaped hole
+/// (mitcad#1515): against the outward normal of the print bed face of the
+/// first participant that has one, found in its shape before the hole; up
+/// the design's Z when none has one (its −Z is down, as the 3D print export
+/// and Print Analysis take it). None, with a warning, when the bed faces the
+/// participants have are not found here.
+fn away_from_bed<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    participants: &[(BodyUid, K::Shape)],
+) -> Option<[f64; 3]> {
+    let mut missing = Vec::new();
+    for (body, _) in participants {
+        let Some(face) = ctx.print_bed_face(*body) else {
+            continue;
+        };
+        // Its plane as the bed's is found (`document/print_bed.rs`), in
+        // the body as it is before the hole.
+        let plane = FaceName::from_str(&face)
+            .map_err(|e| e.to_string())
+            .and_then(|face| ctx.plane(&GeomRef::Face { body: *body, face }));
+        match plane {
+            // (`+ 0.0`: no negative zeros.)
+            Ok(plane) => return Some(plane.frame().normal().map(|v| -v + 0.0)),
+            Err(e) => missing.push(format!("body {body} ({e})")),
+        }
+    }
+    if missing.is_empty() {
+        return Some([0.0, 0.0, 1.0]);
+    }
+    ctx.warn(format!(
+        "the print bed face of {} is not found before the hole: the holes are round",
+        missing.join(", ")
+    ));
+    None
+}
+
 /// The point of a plane at given distances from the lines of two edges, on
 /// the side of each line where the plane's origin (the face's middle) is.
 fn offset_point(
@@ -1258,6 +1426,9 @@ impl<K: Kernel> Evaluate<K> for HoleDef {
             }
             None => 0.0,
         };
+        // A print shape's roofs over the holes printed lying (mitcad#1515);
+        // the hole keeps its diameter.
+        let print_shape = self.print_roofs(ctx, &participants, &positions)?;
         // A press fit's section (mitcad#1517), from the nominal diameter.
         let press_fit = match &self.press_fit {
             Some(fit) => {
@@ -1308,7 +1479,8 @@ impl<K: Kernel> Evaluate<K> for HoleDef {
             _ if thread.is_some()
                 || !matches!(shape, HoleShape::Simple)
                 || taper != 0.0
-                || press_fit.is_some() =>
+                || press_fit.is_some()
+                || print_shape.is_some() =>
             {
                 None
             }
@@ -1330,6 +1502,7 @@ impl<K: Kernel> Evaluate<K> for HoleDef {
             bodies: participants.iter().map(|(_, s)| s.clone()).collect(),
             taper,
             press_fit,
+            print_shape,
         };
         let tool = ctx.kernel.hole_tool(&spec).map_err(|e| e.to_string())?;
         if let (Some(depth), Some(body)) = (sheet_depth, sheet_body)
@@ -1564,6 +1737,44 @@ mod tests {
         let mut wrong = before;
         wrong["clearance"] = serde_json::json!({"size": "M6", "fit": "loose"});
         assert!(serde_json::from_value::<HoleDef<String>>(wrong).is_err());
+    }
+
+    #[test]
+    fn print_shapes_keep_their_values() {
+        // mitcad#1515: a round hole (and one saved before) writes no print
+        // shape; a teardrop or a flat roof writes it, with its sag.
+        let before = serde_json::json!({
+            "placement": {"type": "sketch_points", "sketch": "F3", "points": ["c5"]},
+            "diameter": "d4", "extent": {"type": "through_all"}});
+        let def: HoleDef<String> = serde_json::from_value(before.clone()).unwrap();
+        assert_eq!(def.print_shape, PrintShape::Round);
+        assert_eq!(def.roof_sag, None);
+        assert_eq!(serde_json::to_value(&def).unwrap(), before);
+        let mut round = before.clone();
+        round["print_shape"] = serde_json::json!("round");
+        let def: HoleDef<String> = serde_json::from_value(round).unwrap();
+        assert_eq!(serde_json::to_value(&def).unwrap(), before);
+        let mut flat = before;
+        flat["print_shape"] = serde_json::json!("flat_roof");
+        flat["roof_sag"] = serde_json::json!("hole_roof_sag");
+        let def: HoleDef<String> = serde_json::from_value(flat.clone()).unwrap();
+        assert_eq!(def.print_shape, PrintShape::FlatRoof);
+        assert_eq!(serde_json::to_value(&def).unwrap(), flat);
+        let mut slots = Vec::new();
+        let mapped = def
+            .map_params::<String, ()>(&mut |slot, p| {
+                slots.push(slot.to_owned());
+                Ok(p.clone())
+            })
+            .unwrap();
+        assert_eq!(mapped.print_shape, PrintShape::FlatRoof);
+        assert_eq!(mapped.roof_sag, def.roof_sag);
+        assert!(slots.contains(&"roof_sag".to_owned()));
+        let mut wrong = flat;
+        wrong["print_shape"] = serde_json::json!("oval");
+        assert!(serde_json::from_value::<HoleDef<String>>(wrong).is_err());
+        assert!(roof_sag_value(0.0).is_err() && roof_sag_value(f64::NAN).is_err());
+        assert_eq!(roof_sag_value(0.4), Ok(0.4));
     }
 
     #[test]

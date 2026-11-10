@@ -3,6 +3,7 @@
 // Core, so that the unit tests (app/tests/library_settings.cpp) use it
 // without the bridge.
 #include "Libraries.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <mutex>
 
@@ -249,7 +250,7 @@ QString libraryClonesText(const QJsonObject& answer) {
   QStringList leftOut;
   for (const QJsonValue& value : clones.value(QStringLiteral("left_out")).toArray()) {
     const QJsonObject clone = value.toObject();
-    leftOut << QStringLiteral("%1: %2").arg(entry(clone), clone.value(QStringLiteral("reason")).toString());
+    leftOut << QStringLiteral("%1: %2").arg(entry(clone), mitcad::modelMessage(clone.value(QStringLiteral("reason")).toString()));
   }
   QString text = read.isEmpty() ? QStringLiteral("none") : read.join(QStringLiteral(", "));
   if (!leftOut.isEmpty()) {

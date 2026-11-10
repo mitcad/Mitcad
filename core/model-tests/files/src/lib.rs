@@ -18,3 +18,5 @@ mod tables_tests;
 mod design_properties_tests;
 // Top-level fields a newer MitCad wrote (mitcad#1132).
 mod unknown_fields_tests;
+// Animated USDZ export (mitcad#1597).
+mod usdz_animation_tests;

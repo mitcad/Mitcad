@@ -1458,7 +1458,7 @@ impl Splicing<'_> {
                 && let Ok(joints) = splice_joints(run, self.longest, self.least, &seats, &[], gap)
             {
                 warnings.push(format!(
-                    "{}: the joints of its {what}s are less than a stud spacing apart",
+                    "{}: the joints along its {what} are less than a stud spacing apart",
                     self.w.name
                 ));
                 return Ok(joints);

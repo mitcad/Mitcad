@@ -23,8 +23,17 @@ namespace mitcad {
 // hover in the accent.
 occ::handle<AIS_ViewCube> makeViewCube();
 
-// The axes' thickness and letters for the cube's size, after
-// AIS_ViewCube::SetSize (which resets the facets, padding and font).
+// The cube as large as AIS_ViewCube::SetSize(size) makes AIS_ViewCube's
+// own cube, a tenth larger across, with wider bevels (mitcad#1620): its
+// face 0.86 of the size and the bevels of its edges and corners 0.29 of it
+// (AIS_ViewCube's 0.15), so that the edges and corners are about twice as
+// easy to hit; the axes and their letters for the size (scaleViewCube).
+// AIS_ViewCube::Size() is then the face's side; viewCubeSize gives `size`
+// back. The caller sets the font height after it, and redisplays the cube.
+void sizeViewCube(AIS_ViewCube& cube, double size);
+// The size sizeViewCube gave the cube last (its Size() for another cube).
+double viewCubeSize(const AIS_ViewCube& cube);
+// The axes' thickness and letters for the cube's size (sizeViewCube).
 void scaleViewCube(AIS_ViewCube& cube);
 
 // Whether the view's background is dark: the cube's glass follows it. The

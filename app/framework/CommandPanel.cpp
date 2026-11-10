@@ -198,6 +198,9 @@ QString choiceLabel(const QString& label) {
     // Press-fit holes (mitcad#1517).
     QT_TRANSLATE_NOOP("Choice", "Press Fit"), QT_TRANSLATE_NOOP("Choice", "Hex"),
     QT_TRANSLATE_NOOP("Choice", "Crush Ribs"),
+    // Print shapes of holes printed lying (mitcad#1515; Round and Teardrop
+    // are listed above).
+    QT_TRANSLATE_NOOP("Choice", "Flat Roof"),
     // The thread types of the model's thread table (ThreadStandard::title).
     QT_TRANSLATE_NOOP("Choice", "British Standard Whitworth"), QT_TRANSLATE_NOOP("Choice", "ANSI Taper Pipe Threads (NPT)"),
     QT_TRANSLATE_NOOP("Choice", "ISO Tyre Valve Threads"), QT_TRANSLATE_NOOP("Choice", "Metric Forming Screw Threads"),

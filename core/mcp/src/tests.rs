@@ -794,6 +794,60 @@ fn assert_plate_fields(export: &Value) {
     assert_export_mesh_and_overwrite(export);
 }
 
+/// `model_export` takes a USDZ's `animation` (mitcad#1597), in both
+/// servers: poses per occurrence or body, or a motion study.
+#[test]
+fn model_export_takes_a_usdz_animation() {
+    let pose = json!([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 5]]);
+    for tools in [catalog::tools(), catalog::live_tools()] {
+        let export = tools
+            .iter()
+            .find(|tool| tool["name"] == "model_export")
+            .unwrap();
+        let schema = &export["inputSchema"];
+        assert_eq!(schema["properties"]["animation"]["type"], "object");
+        let check = |animation: Value| {
+            let arguments = json!({"document": "doc1", "path": "a.usdz", "format": "usdz",
+                                   "animation": animation});
+            catalog::validate(&arguments, schema, "arguments")
+        };
+        for animation in [
+            json!({"fps": 24, "tracks": [{"occurrence": "Arm:1", "transforms": [pose, pose]}]}),
+            json!({"fps": 24, "start": 10, "space": "design",
+                   "tracks": [{"body": "F2.b0", "transforms": [[1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0]]}]}),
+            json!({"fps": 30, "study": "Study1", "from": 0, "to": 40, "frames": 41}),
+            json!({"fps": 30, "times": [0, 2, 4], "study": "Study1", "frames": 3}),
+        ] {
+            if let Err(error) = check(animation.clone()) {
+                panic!("{animation}: {error}");
+            }
+        }
+        for (animation, error) in [
+            (json!({"tracks": []}), "arguments.animation.fps is required"),
+            (json!({"fps": "24"}), "arguments.animation.fps"),
+            (
+                json!({"fps": 24, "space": "world"}),
+                "arguments.animation.space",
+            ),
+            (
+                json!({"fps": 24, "tracks": [{"occurrence": "Arm:1", "poses": [pose]}]}),
+                "arguments.animation.tracks[0].transforms is required",
+            ),
+            (
+                json!({"fps": 24, "frames": 0, "study": "Study1"}),
+                "arguments.animation.frames",
+            ),
+            (
+                json!({"fps": 24, "loop": true}),
+                "Unknown argument arguments.animation.loop",
+            ),
+        ] {
+            let refused = check(animation.clone()).unwrap_err();
+            assert!(refused.contains(error), "{animation}: {refused}");
+        }
+    }
+}
+
 /// `model_export` takes the `export` command's `refinement` and replaces
 /// existing files with `overwrite`, as `document_save` (mitcad#1569).
 fn assert_export_mesh_and_overwrite(export: &Value) {
@@ -2652,7 +2706,14 @@ fn model_render_answers_an_image_block() {
     let tools = catalog::tools();
     let render = tools.iter().find(|t| t["name"] == "model_render").unwrap();
     assert_eq!(render["annotations"]["readOnlyHint"], true);
-    for option in ["colors", "highlight", "section", "explode", "views"] {
+    for option in [
+        "colors",
+        "highlight",
+        "section",
+        "explode",
+        "print_colors",
+        "views",
+    ] {
         assert!(
             render["inputSchema"]["properties"].get(option).is_some(),
             "{option}"

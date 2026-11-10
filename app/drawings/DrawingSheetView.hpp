@@ -155,6 +155,17 @@ public:
   // That marker's radius, logical pixels (which follow the display's
   // scale): larger than the largest corner dot, so that it shows over them.
   static constexpr double kCornerMarkerRadius = 6.0;
+  // The width of a line's, a circle's or an arc's mark, hovered or picked,
+  // logical pixels (mitcad#1618): as wide as the line it marks is drawn at
+  // the zoom (the item's `pen`, at least a pixel) and kMarkMargin more on
+  // each side, never narrower than kHoverMarkWidth (the hover) or
+  // kPickMarkWidth (a pick); those alone for an item without a pen.
+  double markWidth(const QJsonObject& item, bool picked) const;
+  static constexpr double kHoverMarkWidth = 2.0;
+  static constexpr double kPickMarkWidth = 2.5;
+  static constexpr double kMarkMargin = 2.0;
+  // Logical pixels per sheet millimetre.
+  double zoom() const { return m_zoom; }
   // The corners the views show (sheet mm), each drawn as a filled dot of
   // `radius` logical pixels while Always show corners is on (mitcad#1338);
   // empty: none. On the screen only.

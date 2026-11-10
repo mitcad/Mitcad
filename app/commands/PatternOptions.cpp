@@ -69,9 +69,17 @@ QString patternOptionsText(const QJsonObject& def) {
     return directions.join(QStringLiteral("; "));
   }
   if (type == QStringLiteral("circular_pattern")) {
-    return QStringLiteral("%1, quantity %2, angle %3")
-        .arg(directionWords(def), valueText(def.value(QStringLiteral("quantity"))),
-             valueText(def.value(QStringLiteral("angle"))));
+    const QString first = QStringLiteral("%1, quantity %2, angle %3")
+                              .arg(directionWords(def), valueText(def.value(QStringLiteral("quantity"))),
+                                   valueText(def.value(QStringLiteral("angle"))));
+    // The second axis (mitcad#1588) as the first: "; axis 2 …".
+    const QJsonObject axis2 = def.value(QStringLiteral("axis2")).toObject();
+    if (axis2.isEmpty()) {
+      return first;
+    }
+    return QStringLiteral("%1; axis 2 %2, quantity %3, angle %4")
+        .arg(first, directionWords(axis2), valueText(axis2.value(QStringLiteral("quantity"))),
+             valueText(axis2.value(QStringLiteral("angle"))));
   }
   if (type == QStringLiteral("path_pattern")) {
     return QStringLiteral("%1, quantity %2, %3 %4%5")

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "ConfigurationBar.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -371,7 +372,7 @@ void ConfigurationBar::run(const QJsonObject& command, const QString& what) {
           }
         }
       } else if (!m_host.lastCancelled()) {
-        showNotice(m_host.lastError(), true);
+        showNotice(mitcad::modelMessage(m_host.lastError()), true);
         qDebug().noquote() << QStringLiteral("Configuration refused: %1").arg(m_host.lastError());
       }
       refresh();

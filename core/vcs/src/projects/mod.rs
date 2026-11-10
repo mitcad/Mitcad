@@ -632,12 +632,12 @@ fn describe_removal(out: &mut String, answer: &Value) {
         writeln!(out, "Removed the project {root}")
     };
     let designs = answer["designs"].as_u64().unwrap_or(0);
-    let _ = writeln!(
-        out,
-        "{designs} design{} stay{} in the folder",
-        if designs == 1 { "" } else { "s" },
-        if designs == 1 { "s" } else { "" }
-    );
+    // One and several as whole messages (mitcad#1284).
+    let _ = if designs == 1 {
+        writeln!(out, "1 design stays in the folder")
+    } else {
+        writeln!(out, "{designs} designs stay in the folder")
+    };
     let _ = match answer["repository"].as_str() {
         Some("removed") => writeln!(
             out,

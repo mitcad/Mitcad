@@ -61,6 +61,10 @@ pub struct Inspect {
     pub section: Option<Section>,
     /// 0: no explode.
     pub explode: f64,
+    /// Each body in the colours of the filaments it prints with by height,
+    /// as the design's filament changes say (mitcad#1596), in place of its
+    /// appearances.
+    pub print_colors: bool,
 }
 
 impl Inspect {
@@ -103,6 +107,11 @@ impl Inspect {
                 .ok_or_else(|| format!("explode must be a factor from 0 to {MAX_EXPLODE}"))?;
             inspect.explode = factor;
         }
+        if let Some(print_colors) = object.get("print_colors") {
+            inspect.print_colors = print_colors
+                .as_bool()
+                .ok_or("print_colors must be true or false")?;
+        }
         Ok(inspect)
     }
 
@@ -121,6 +130,9 @@ impl Inspect {
         }
         if self.explode != 0.0 {
             given.push("explode");
+        }
+        if self.print_colors {
+            given.push("print_colors");
         }
         given
     }

@@ -786,7 +786,7 @@ pub(super) fn offset(
                     };
                     dist(mid(pe), mid(ce))
                 }
-                other => return Err(format!("offsets of {other}s are not supported")),
+                other => return Err(format!("offsets of the kind {other} are not supported")),
             };
             if best.is_none_or(|(d, _)| near < d) {
                 best = Some((near, parent));

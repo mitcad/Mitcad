@@ -9,7 +9,8 @@
 //! - `"bodies": n`: the number of bodies at the timeline marker;
 //! - `"body": "Body1"` (a name or uid) with any of `"volume"`, `"area"`
 //!   (relative `"tolerance"`, default 1e-6), `"faces"`, `"edges"` (counts),
-//!   `"has_face"`, `"has_edge"` and `"no_edge"` (topological names),
+//!   `"has_face"`, `"no_face"` (mitcad#1588), `"has_edge"` and `"no_edge"`
+//!   (topological names),
 //!   `"min"`, `"max"` (bounding box corners, the same tolerance) and
 //!   `"max_triangles"` (the most triangles its mesh at 0.1 mm may have);
 //! - `"feature": "Fillet1"` (a name or uid) with `"status"` (`ok`,
@@ -55,6 +56,8 @@ struct Expectation {
     faces: Option<usize>,
     edges: Option<usize>,
     has_face: Option<FaceName>,
+    // Copies a pattern left out (mitcad#1588).
+    no_face: Option<FaceName>,
     has_edge: Option<EdgeName>,
     no_edge: Option<EdgeName>,
     min: Option<[f64; 3]>,
@@ -318,6 +321,11 @@ impl<K: Kernel> ScriptLocal<K> for Document<K> {
                 && kernel.count_faces(body.shape, face).map_err(error)? == 0
             {
                 return fail(format!("{wanted} to have a face {face}"));
+            }
+            if let Some(face) = &expect.no_face
+                && kernel.count_faces(body.shape, face).map_err(error)? > 0
+            {
+                return fail(format!("{wanted} to have no face {face}"));
             }
             if let Some(least) = expect.min_face_area {
                 let faces = kernel.faces(body.shape).map_err(error)?;

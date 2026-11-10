@@ -216,6 +216,77 @@
     </message>
 </context>
 <context>
+    <name>BrowserComponent</name>
+    <message>
+        <source>The downloaded web browser component is version %1, not %2.</source>
+        <translation>Ladattu verkkoselainkomponentti on versio %1 eikä %2.</translation>
+    </message>
+    <message>
+        <source>The downloaded web browser component has no %1.</source>
+        <translation>Ladatussa verkkoselainkomponentissa ei ole tiedostoa %1.</translation>
+    </message>
+    <message>
+        <source>The installed web browser component is for another version of MitCad (interface %1; this MitCad needs %2). MitCad downloads the matching one.</source>
+        <translation>Asennettu verkkoselainkomponentti on MitCadin toiselle versiolle (rajapinta %1; tämä MitCad tarvitsee rajapinnan %2). MitCad lataa sopivan komponentin.</translation>
+    </message>
+    <message>
+        <source>No web browser component for this version of MitCad is published (it needs interface %1, the published ones are for %2). Update MitCad to use Component from Web.</source>
+        <translation>Tälle MitCadin versiolle ei ole julkaistu verkkoselainkomponenttia (se tarvitsee rajapinnan %1, julkaistut ovat rajapinnoille %2). Päivitä MitCad, jotta voit käyttää toimintoa Komponentti verkosta.</translation>
+    </message>
+    <message>
+        <source>The web browser component&apos;s package is empty.</source>
+        <translation>Verkkoselainkomponentin paketti on tyhjä.</translation>
+    </message>
+    <message>
+        <source>The web browser component&apos;s package could not be unpacked: %1</source>
+        <translation>Verkkoselainkomponentin pakettia ei voitu purkaa: %1</translation>
+    </message>
+    <message>
+        <source>The downloaded web browser component is not MitCad&apos;s: %1</source>
+        <translation>Ladattu verkkoselainkomponentti ei ole MitCadin: %1</translation>
+    </message>
+    <message>
+        <source>MitCad could not make the folder %1.</source>
+        <translation>MitCad ei voinut luoda kansiota %1.</translation>
+    </message>
+    <message>
+        <source>The downloaded web browser component is incomplete: %1</source>
+        <translation>Ladattu verkkoselainkomponentti on puutteellinen: %1</translation>
+    </message>
+    <message>
+        <source>MitCad could not replace %1.</source>
+        <translation>MitCad ei voinut korvata kohdetta %1.</translation>
+    </message>
+    <message>
+        <source>MitCad could not install the web browser component in %1.</source>
+        <translation>MitCad ei voinut asentaa verkkoselainkomponenttia kansioon %1.</translation>
+    </message>
+    <message>
+        <source>The address %1 is not HTTPS.</source>
+        <translation>Osoite %1 ei ole HTTPS-osoite.</translation>
+    </message>
+    <message>
+        <source>The update manifest could not be read: %1</source>
+        <translation>Päivitysluetteloa ei voitu lukea: %1</translation>
+    </message>
+    <message>
+        <source>The update manifest is too large.</source>
+        <translation>Päivitysluettelo on liian suuri.</translation>
+    </message>
+    <message>
+        <source>MitCad could not write %1: %2</source>
+        <translation>MitCad ei voinut kirjoittaa tiedostoa %1: %2</translation>
+    </message>
+    <message>
+        <source>%1 bytes instead of %2</source>
+        <translation>%1 tavua odotetun %2 sijaan</translation>
+    </message>
+    <message>
+        <source>The web browser component could not be downloaded: %1</source>
+        <translation>Verkkoselainkomponenttia ei voitu ladata: %1</translation>
+    </message>
+</context>
+<context>
     <name>Choice</name>
     <message>
         <source>New Body</source>
@@ -563,7 +634,7 @@
     </message>
     <message>
         <source>Load-bearing: trimmer studs and a header on edge</source>
-        <translation>Kantava: pielitolpat ja syrjällään oleva ylityspalkki</translation>
+        <translation>Kantava: pielipylväät ja syrjällään oleva ylityspalkki</translation>
     </message>
     <message>
         <source>Middle</source>
@@ -579,7 +650,7 @@
     </message>
     <message>
         <source>Non-load-bearing: a flat header, no trimmers</source>
-        <translation>Kantamaton: lappeellaan oleva ylityspalkki, ei pielitolppia</translation>
+        <translation>Kantamaton: lappeellaan oleva ylityspalkki, ei pielipylväitä</translation>
     </message>
     <message>
         <source>None</source>
@@ -848,6 +919,10 @@
     <message>
         <source>Crush Ribs</source>
         <translation>Puristusrivat</translation>
+    </message>
+    <message>
+        <source>Flat Roof</source>
+        <translation>Tasakatto</translation>
     </message>
     <message>
         <source>Countersink</source>
@@ -1526,6 +1601,49 @@
     <message>
         <source>This computer knows another key of the server: it changed its keys, or someone is between you and it. Ask its administrator before you trust it.</source>
         <translation>Tämä tietokone tuntee palvelimelle toisen avaimen: palvelin vaihtoi avaimensa, tai joku on sinun ja sen välissä. Kysy sen ylläpitäjältä ennen kuin luotat siihen.</translation>
+    </message>
+</context>
+<context>
+    <name>ComponentWebFiles</name>
+    <message>
+        <source>MitCad brings DXF and SVG drawings into sketches, not in as components (.%1).</source>
+        <translation>MitCad tuo DXF- ja SVG-piirustukset luonnoksiin, ei komponentteina (.%1).</translation>
+    </message>
+    <message>
+        <source>MitCad cannot import files without an extension.</source>
+        <translation>MitCad ei voi tuoda tiedostoja, joilla ei ole tiedostopäätettä.</translation>
+    </message>
+    <message>
+        <source>MitCad cannot import PDF documents (.pdf).</source>
+        <translation>MitCad ei voi tuoda PDF-asiakirjoja (.pdf).</translation>
+    </message>
+    <message>
+        <source>MitCad cannot import 3MF files as components (.3mf).</source>
+        <translation>MitCad ei voi tuoda 3MF-tiedostoja komponentteina (.3mf).</translation>
+    </message>
+    <message>
+        <source>MitCad cannot import .%1 files.</source>
+        <translation>MitCad ei voi tuoda .%1-tiedostoja.</translation>
+    </message>
+    <message>
+        <source>%1 is empty.</source>
+        <translation>%1 on tyhjä.</translation>
+    </message>
+    <message>
+        <source>%1 is a web page, not a model file: the site may want you to sign in first.</source>
+        <translation>%1 on verkkosivu eikä mallitiedosto: sivusto saattaa vaatia ensin kirjautumisen.</translation>
+    </message>
+    <message>
+        <source>%1 is a PDF document, not a model file.</source>
+        <translation>%1 on PDF-asiakirja eikä mallitiedosto.</translation>
+    </message>
+    <message>
+        <source>%1 is not a zip file.</source>
+        <translation>%1 ei ole zip-tiedosto.</translation>
+    </message>
+    <message>
+        <source>%1 is not a STEP file: it has no ISO-10303-21 header.</source>
+        <translation>%1 ei ole STEP-tiedosto: siitä puuttuu ISO-10303-21-otsake.</translation>
     </message>
 </context>
 <context>
@@ -3939,11 +4057,11 @@
     </message>
     <message>
         <source>with its studs it does not fit between the wall&apos;s end studs</source>
-        <translation>tolppineen se ei mahdu seinän päätytolppien väliin</translation>
+        <translation>pylväineen se ei mahdu seinän päätypylväiden väliin</translation>
     </message>
     <message>
         <source>overlaps opening %1 with its studs</source>
-        <translation>menee tolppineen päällekkäin aukon %1 kanssa</translation>
+        <translation>menee pylväineen päällekkäin aukon %1 kanssa</translation>
     </message>
     <message>
         <source>its header reaches %1 mm, above the top plate at %2 mm</source>
@@ -4583,7 +4701,7 @@
     </message>
     <message>
         <source>A partition&apos;s openings get a flat header, a load-bearing wall&apos;s trimmers</source>
-        <translation>Väliseinän aukot saavat lappeellaan olevan ylityspalkin, kantavan seinän aukot pielitolpat</translation>
+        <translation>Väliseinän aukot saavat lappeellaan olevan ylityspalkin, kantavan seinän aukot pielipylväät</translation>
     </message>
     <message>
         <source>Opening Marked</source>
@@ -4599,11 +4717,11 @@
     </message>
     <message>
         <source>%1, load-bearing: a header on edge and trimmer studs each</source>
-        <translation>%1, kantava: kullakin syrjällään oleva ylityspalkki ja pielitolpat</translation>
+        <translation>%1, kantava: kullakin syrjällään oleva ylityspalkki ja pielipylväät</translation>
     </message>
     <message>
         <source>%1, non-load-bearing: 1 flat header each, no trimmers</source>
-        <translation>%1, kantamaton: kullakin 1 lappeellaan oleva ylityspalkki, ei pielitolppia</translation>
+        <translation>%1, kantamaton: kullakin 1 lappeellaan oleva ylityspalkki, ei pielipylväitä</translation>
     </message>
     <message>
         <source>Auto: from the members</source>
@@ -4751,7 +4869,7 @@
     </message>
     <message>
         <source>Spliced over studs, pieces up to %1 mm: %2</source>
-        <translation>Jatkettu tolppien kohdalla, kappaleet enintään %1 mm: %2</translation>
+        <translation>Jatkettu pylväiden kohdalla, kappaleet enintään %1 mm: %2</translation>
     </message>
     <message>
         <source>Choose timber for the frame&apos;s members.</source>
@@ -4843,7 +4961,7 @@
     </message>
     <message>
         <source>Places a timber wall frame: plates, studs and the framing of its openings</source>
-        <translation>Sijoittaa puisen seinärungon: juoksut, tolpat ja aukkojen kehystys</translation>
+        <translation>Sijoittaa puisen seinärungon: juoksut, pylväät ja aukkojen kehystys</translation>
     </message>
     <message>
         <source>Where the wall&apos;s center line starts: a plane, a face or another wall&apos;s member</source>
@@ -4887,7 +5005,7 @@
     </message>
     <message>
         <source>The studs&apos; center distance, from the start</source>
-        <translation>Tolppien keskiöetäisyys alusta lukien</translation>
+        <translation>Pylväiden keskiöetäisyys alusta lukien</translation>
     </message>
     <message>
         <source>Top Plates</source>
@@ -5047,7 +5165,7 @@
     </message>
     <message>
         <source>A center distance (studs, joists, rafters), or a gap between boards (a deck, a fence, cladding)</source>
-        <translation>Keskiöetäisyys (tolpat, palkit, kattokannattajat) tai lautojen väli (terassi, aita, verhous)</translation>
+        <translation>Keskiöetäisyys (pylväät, palkit, kattokannattajat) tai lautojen väli (terassi, aita, verhous)</translation>
     </message>
     <message>
         <source>Distance</source>
@@ -5139,7 +5257,7 @@
     </message>
     <message>
         <source>The members&apos; size (studs, joists, rafters)</source>
-        <translation>Rakenneosien koko (tolpat, palkit, kattokannattajat)</translation>
+        <translation>Rakenneosien koko (pylväät, palkit, kattokannattajat)</translation>
     </message>
     <message>
         <source>Pick a member of a timber frame.</source>
@@ -7530,6 +7648,22 @@
         <translation>%1-puristussovite</translation>
     </message>
     <message>
+        <source>Print Shape</source>
+        <translation>Tulostusmuoto</translation>
+    </message>
+    <message>
+        <source>For a hole lying on its side: a roof that prints unsupported, pointing away from the print bed</source>
+        <translation>Kyljellään olevalle reiälle: ilman tukea tulostuva katto, joka osoittaa poispäin tulostusalustasta</translation>
+    </message>
+    <message>
+        <source>Roof Sag</source>
+        <translation>Katon painuma</translation>
+    </message>
+    <message>
+        <source>How far above the hole&apos;s circle the flat roof is printed, so that its bridge sags onto it</source>
+        <translation>Kuinka paljon reiän ympyrän yläpuolelle tasakatto tulostetaan, jotta sen silta painuu ympyrän tasolle</translation>
+    </message>
+    <message>
         <source>Threads on cylindrical faces: cosmetic, or modeled into the geometry</source>
         <translation>Kierteet sylinteritahkoilla: kosmeettisina tai geometriaan mallinnettuina</translation>
     </message>
@@ -7898,8 +8032,8 @@
         <translation>Tulostusanalyysi</translation>
     </message>
     <message>
-        <source>Overhangs, thin walls and an estimate of weight, filament and cost</source>
-        <translation>Ulokkeet, ohuet seinämät sekä arvio painosta, filamentista ja hinnasta</translation>
+        <source>Overhangs, thin walls, narrow gaps and an estimate of weight, filament and cost</source>
+        <translation>Ulokkeet, ohuet seinämät, kapeat raot sekä arvio painosta, filamentista ja hinnasta</translation>
     </message>
     <message>
         <source>The bodies to check: a click on a body adds or removes it</source>
@@ -9294,6 +9428,26 @@
         <translation>Kopioi alkuperäisen molemmin puolin, kulma keskitettynä siihen</translation>
     </message>
     <message>
+        <source>Axis 2</source>
+        <translation>Akseli 2</translation>
+    </message>
+    <message>
+        <source>A second axis the copies turn about again; none: one axis</source>
+        <translation>Toinen akseli, jonka ympäri kopiot käännetään vielä; ei mitään: yksi akseli</translation>
+    </message>
+    <message>
+        <source>Total Angle 2</source>
+        <translation>Kokonaiskulma 2</translation>
+    </message>
+    <message>
+        <source>Symmetric 2</source>
+        <translation>Symmetrinen 2</translation>
+    </message>
+    <message>
+        <source>Copies on both sides about the second axis, the angle centered on them</source>
+        <translation>Kopioi molemmin puolin toisen akselin ympäri, kulma keskitettynä niihin</translation>
+    </message>
+    <message>
         <source>Pattern on Path</source>
         <translation>Kuvio polulla</translation>
     </message>
@@ -9706,8 +9860,8 @@
         <translation>&lt;i&gt;Arvio: viipaloijan asetukset ratkaisevat.&lt;/i&gt;</translation>
     </message>
     <message>
-        <source>Nothing to check: turn on Overhangs, Thin Walls or Estimate.</source>
-        <translation>Ei tarkistettavaa: ota käyttöön Ulokkeet, Ohuet seinämät tai Arvio.</translation>
+        <source>Nothing to check: turn on Overhangs, Thin Walls, Narrow Gaps or Estimate.</source>
+        <translation>Ei tarkistettavaa: ota käyttöön Ulokkeet, Ohuet seinämät, Kapeat raot tai Arvio.</translation>
     </message>
     <message>
         <source>Overhang, angle %1°</source>
@@ -9720,6 +9874,50 @@
     <message>
         <source>Thinnest %1 mm</source>
         <translation>Ohuin %1 mm</translation>
+    </message>
+    <message>
+        <source>&lt;b&gt;Narrow gaps&lt;/b&gt; (under %1 mm)</source>
+        <translation>&lt;b&gt;Kapeat raot&lt;/b&gt; (alle %1 mm)</translation>
+    </message>
+    <message>
+        <source>None: the bodies are apart by the gap or touch.</source>
+        <translation>Ei yhtään: kappaleet ovat vähintään raon päässä toisistaan tai koskettavat.</translation>
+    </message>
+    <message>
+        <source> and </source>
+        <translation> ja </translation>
+    </message>
+    <message>
+        <source>Narrow gap, under %1 mm</source>
+        <translation>Kapea rako, alle %1 mm</translation>
+    </message>
+    <message>
+        <source>Gap %1 mm</source>
+        <translation>Rako %1 mm</translation>
+    </message>
+    <message>
+        <source>Minimum gap: more than 0 mm.</source>
+        <translation>Pienin rako: yli 0 mm.</translation>
+    </message>
+    <message>
+        <source>Measuring the gaps</source>
+        <translation>Mitataan rakoja</translation>
+    </message>
+    <message>
+        <source>Narrow Gaps</source>
+        <translation>Kapeat raot</translation>
+    </message>
+    <message>
+        <source>Bodies printed in place closer than the gap may fuse</source>
+        <translation>Paikalleen tulostetut kappaleet, joiden väli on rakoa pienempi, voivat sulautua yhteen</translation>
+    </message>
+    <message>
+        <source>Minimum gap</source>
+        <translation>Pienin rako</translation>
+    </message>
+    <message>
+        <source>The narrowest gap the printer keeps open between bodies, or print_in_place_gap</source>
+        <translation>Kapein rako, jonka tulostin pitää avoinna kappaleiden välissä, tai print_in_place_gap</translation>
     </message>
     <message>
         <source>Profiles holds a face, which is extruded alone: click the face to remove it first, or clear Profiles.</source>
@@ -14591,6 +14789,14 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Luonnosmitta: näitä ei voi mitoittaa yhdessä.</translation>
     </message>
     <message>
+        <source>Driven</source>
+        <translation>Ohjattu</translation>
+    </message>
+    <message>
+        <source>Driving</source>
+        <translation>Ohjaava</translation>
+    </message>
+    <message>
         <source>Sketch Dimension: pick a line, circle, arc or point, of the sketch or a body edge or vertex (projected onto the sketch plane), or a sketch axis or the origin.</source>
         <translation>Luonnosmitta: poimi luonnoksen viiva, ympyrä, kaari tai piste, kappaleen särmä tai kärkipiste (projisoituna luonnostasolle) tai luonnoksen akseli tai origo.</translation>
     </message>
@@ -18839,6 +19045,177 @@ Napsautus: %2</translation>
     <message>
         <source>Reply %1 to Comment %2, %3: %4</source>
         <translation>Vastaus %1 kommenttiin %2, %3: %4</translation>
+    </message>
+</context>
+<context>
+    <name>mitcad::ComponentBrowser</name>
+    <message>
+        <source>Component from Web</source>
+        <translation>Komponentti verkosta</translation>
+    </message>
+    <message>
+        <source>Back</source>
+        <translation>Takaisin</translation>
+    </message>
+    <message>
+        <source>Forward</source>
+        <translation>Eteenpäin</translation>
+    </message>
+    <message>
+        <source>Reload</source>
+        <translation>Lataa uudelleen</translation>
+    </message>
+    <message>
+        <source>Address</source>
+        <translation>Osoite</translation>
+    </message>
+    <message>
+        <source>The page&apos;s address</source>
+        <translation>Sivun osoite</translation>
+    </message>
+    <message>
+        <source>Sites</source>
+        <translation>Sivustot</translation>
+    </message>
+    <message>
+        <source>Your sites, and adding or editing them</source>
+        <translation>Omat sivustosi sekä niiden lisääminen ja muokkaaminen</translation>
+    </message>
+    <message>
+        <source>Components from the web</source>
+        <translation>Komponentit verkosta</translation>
+    </message>
+    <message>
+        <source>Add the sites you take parts and models from: a supplier, a model library, your own server. Type a site&apos;s address above, then choose Sites › Add This Page….</source>
+        <translation>Lisää sivustot, joilta haet osia ja malleja: toimittaja, mallikirjasto tai oma palvelin. Kirjoita sivuston osoite yllä olevaan kenttään ja valitse sitten Sivustot › Lisää tämä sivu….</translation>
+    </message>
+    <message>
+        <source>Your sites</source>
+        <translation>Omat sivustot</translation>
+    </message>
+    <message>
+        <source>When you download a STEP, IGES, BRep, STL, OBJ or MitCad file, or a zip of them, MitCad brings it into the open design as a component and starts Move so that you can place it. The component is named after the file, and the name&apos;s first part is its part number.</source>
+        <translation>Kun lataat STEP-, IGES-, BRep-, STL-, OBJ- tai MitCad-tiedoston tai niitä sisältävän zip-tiedoston, MitCad tuo sen avoimeen malliin komponenttina ja aloittaa siirron, jotta voit sijoittaa sen. Komponentti nimetään tiedoston mukaan, ja nimen ensimmäinen osa on sen osanumero.</translation>
+    </message>
+    <message>
+        <source>Other files are refused. Sign-ins and cookies stay in MitCad&apos;s own browsing data, which Sites › Clear Browsing Data… removes.</source>
+        <translation>Muita tiedostoja ei hyväksytä. Kirjautumiset ja evästeet säilyvät MitCadin omissa selaustiedoissa, jotka Sivustot › Tyhjennä selaustiedot… poistaa.</translation>
+    </message>
+    <message>
+        <source>%1 is not a web address.</source>
+        <translation>%1 ei ole verkko-osoite.</translation>
+    </message>
+    <message>
+        <source>No sites yet</source>
+        <translation>Ei vielä sivustoja</translation>
+    </message>
+    <message>
+        <source>Add This Page…</source>
+        <translation>Lisää tämä sivu…</translation>
+    </message>
+    <message>
+        <source>Edit Sites…</source>
+        <translation>Muokkaa sivustoja…</translation>
+    </message>
+    <message>
+        <source>Clear Browsing Data…</source>
+        <translation>Tyhjennä selaustiedot…</translation>
+    </message>
+    <message>
+        <source>The sites the Sites menu opens. Double-click a name or an address to change it.</source>
+        <translation>Sivustot, jotka Sivustot-valikko avaa. Muuta nimeä tai osoitetta kaksoisnapsauttamalla sitä.</translation>
+    </message>
+    <message>
+        <source>Name</source>
+        <translation>Nimi</translation>
+    </message>
+    <message>
+        <source>&amp;Add</source>
+        <translation>&amp;Lisää</translation>
+    </message>
+    <message>
+        <source>&amp;Remove</source>
+        <translation>&amp;Poista</translation>
+    </message>
+    <message>
+        <source>New site</source>
+        <translation>Uusi sivusto</translation>
+    </message>
+    <message>
+        <source>Clear Browsing Data</source>
+        <translation>Tyhjennä selaustiedot</translation>
+    </message>
+    <message>
+        <source>Remove the cookies, site sign-ins, cache and history of MitCad&apos;s browser? Your sites stay.</source>
+        <translation>Poistetaanko MitCadin selaimen evästeet, sivustojen kirjautumiset, välimuisti ja historia? Sivustosi säilyvät.</translation>
+    </message>
+    <message>
+        <source>Browsing data cleared.</source>
+        <translation>Selaustiedot tyhjennetty.</translation>
+    </message>
+    <message>
+        <source>MitCad could not make a temporary folder for %1.</source>
+        <translation>MitCad ei voinut luoda väliaikaista kansiota tiedostolle %1.</translation>
+    </message>
+    <message>
+        <source>Downloading %1…</source>
+        <translation>Ladataan %1…</translation>
+    </message>
+    <message>
+        <source>Downloading %1: %2 of %3</source>
+        <translation>Ladataan %1: %2 / %3</translation>
+    </message>
+    <message>
+        <source>The download of %1 was canceled.</source>
+        <translation>Tiedoston %1 lataus peruttiin.</translation>
+    </message>
+    <message>
+        <source>The download of %1 failed: %2</source>
+        <translation>Tiedoston %1 lataus epäonnistui: %2</translation>
+    </message>
+    <message>
+        <source>%1 is a zip inside a zip: unpack it first.</source>
+        <translation>%1 on zip-tiedosto toisen zip-tiedoston sisällä: pura se ensin.</translation>
+    </message>
+    <message>
+        <source>Could not import %1: %2</source>
+        <translation>Tiedostoa %1 ei voitu tuoda: %2</translation>
+    </message>
+    <message>
+        <source>Imported %1.</source>
+        <translation>%1 tuotu.</translation>
+    </message>
+    <message>
+        <source>Could not read %1: %2</source>
+        <translation>Tiedostoa %1 ei voitu lukea: %2</translation>
+    </message>
+    <message>
+        <source>%1 holds no file MitCad imports.</source>
+        <translation>%1 ei sisällä tiedostoja, joita MitCad tuo.</translation>
+    </message>
+    <message>
+        <source>Could not unpack the files of %1.</source>
+        <translation>Tiedoston %1 tiedostoja ei voitu purkaa.</translation>
+    </message>
+    <message>
+        <source>Files in %1</source>
+        <translation>Tiedostot: %1</translation>
+    </message>
+    <message>
+        <source>Choose the files to bring in as components:</source>
+        <translation>Valitse komponentteina tuotavat tiedostot:</translation>
+    </message>
+    <message>
+        <source>File</source>
+        <translation>Tiedosto</translation>
+    </message>
+    <message>
+        <source>Size</source>
+        <translation>Koko</translation>
+    </message>
+    <message>
+        <source>&amp;Import</source>
+        <translation>&amp;Tuo</translation>
     </message>
 </context>
 <context>
@@ -23751,6 +24128,10 @@ Lisää tallennetun mallin.</translation>
         <translation>Tee etäisyydestä etumerkitön</translation>
     </message>
     <message>
+        <source>Move %1 to User Parameters</source>
+        <translation>Siirrä %1 käyttäjäparametreihin</translation>
+    </message>
+    <message>
         <source>Insert Point</source>
         <translation>Lisää piste</translation>
     </message>
@@ -23777,6 +24158,10 @@ Lisää tallennetun mallin.</translation>
     <message>
         <source>Extrude (E) a profile, or create another sketch.</source>
         <translation>Pursota (E) profiili tai luo toinen luonnos.</translation>
+    </message>
+    <message>
+        <source>Finish Sketch (or %1 to undo) to leave the sketch.</source>
+        <translation>Poistu luonnoksesta valitsemalla Lopeta luonnos (tai kumoa painamalla %1).</translation>
     </message>
     <message>
         <source>Open</source>
@@ -24788,6 +25173,56 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
         <translation>%1 ei ole enää projekti; sen mallit säilyvät kansiossa.</translation>
     </message>
     <message>
+        <source>Component from Web…</source>
+        <translation>Komponentti verkosta…</translation>
+    </message>
+    <message>
+        <source>Opens a browser whose downloads come into the design as components</source>
+        <translation>Avaa selaimen, jonka lataukset tulevat malliin komponentteina</translation>
+    </message>
+    <message>
+        <source>Component from Web</source>
+        <translation>Komponentti verkosta</translation>
+    </message>
+    <message>
+        <source>The web browser could not be loaded:
+%1</source>
+        <translation>Verkkoselainta ei voitu ladata:
+%1</translation>
+    </message>
+    <message>
+        <source>The web browser could not be started.</source>
+        <translation>Verkkoselainta ei voitu käynnistää.</translation>
+    </message>
+    <message>
+        <source>No web browser component is published for this kind of computer.</source>
+        <translation>Tämänlaiselle tietokoneelle ei ole julkaistu verkkoselainkomponenttia.</translation>
+    </message>
+    <message>
+        <source>The web browser component could not be checked: %1</source>
+        <translation>Verkkoselainkomponenttia ei voitu tarkistaa: %1</translation>
+    </message>
+    <message>
+        <source>the update manifest is not valid</source>
+        <translation>päivitysluettelo ei kelpaa</translation>
+    </message>
+    <message>
+        <source>Component from Web needs MitCad&apos;s web browser component (the Chromium Embedded Framework %1), a download of %2. Download it now?</source>
+        <translation>Komponentti verkosta tarvitsee MitCadin verkkoselainkomponentin (Chromium Embedded Framework %1), ladattavaa %2. Ladataanko se nyt?</translation>
+    </message>
+    <message>
+        <source>Downloading the web browser component…</source>
+        <translation>Ladataan verkkoselainkomponenttia…</translation>
+    </message>
+    <message>
+        <source>The web browser component was updated; MitCad uses it from its next start.</source>
+        <translation>Verkkoselainkomponentti päivitettiin; MitCad käyttää sitä seuraavasta käynnistyksestä alkaen.</translation>
+    </message>
+    <message>
+        <source>Finish or cancel the open command first.</source>
+        <translation>Lopeta tai peru ensin avoin komento.</translation>
+    </message>
+    <message>
         <source>Remove Name %1</source>
         <translation>Poista nimi %1</translation>
     </message>
@@ -25362,6 +25797,17 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
     <message>
         <source>Copy</source>
         <translation>Kopioi</translation>
+    </message>
+</context>
+<context>
+    <name>mitcad::MenuBarButton</name>
+    <message>
+        <source>The menus: File, Edit, View, Tools, Window and Help</source>
+        <translation>Valikot: Tiedosto, Muokkaa, Näytä, Työkalut, Ikkuna ja Ohje</translation>
+    </message>
+    <message>
+        <source>Menus</source>
+        <translation>Valikot</translation>
     </message>
 </context>
 <context>
@@ -26001,7 +26447,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>Partition: a flat header and no trimmers; load-bearing: trimmer studs and a header on edge</source>
-        <translation>Väliseinä: lappeellaan oleva ylityspalkki eikä pielitolppia; kantava: pielitolpat ja syrjällään oleva ylityspalkki</translation>
+        <translation>Väliseinä: lappeellaan oleva ylityspalkki eikä pielipylväitä; kantava: pielipylväät ja syrjällään oleva ylityspalkki</translation>
     </message>
     <message>
         <source>Add &amp;Window</source>
@@ -26333,6 +26779,30 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     <message>
         <source>driven: %1</source>
         <translation>ohjattu: %1</translation>
+    </message>
+    <message>
+        <source>This Dimension&apos;s Parameter</source>
+        <translation>Tämän mitan parametri</translation>
+    </message>
+    <message>
+        <source>This Field&apos;s Parameter</source>
+        <translation>Tämän kentän parametri</translation>
+    </message>
+    <message>
+        <source>this dimension&apos;s value, kept as a user parameter</source>
+        <translation>tämän mitan arvo, säilytetään käyttäjäparametrina</translation>
+    </message>
+    <message>
+        <source>this field&apos;s value, kept as a user parameter</source>
+        <translation>tämän kentän arvo, säilytetään käyttäjäparametrina</translation>
+    </message>
+    <message>
+        <source>%1 (%2) stays as a user parameter; the dimension gets a new one</source>
+        <translation>%1 (%2) jää käyttäjäparametriksi; mitta saa uuden</translation>
+    </message>
+    <message>
+        <source>%1 (%2) stays as a user parameter; the field gets a new one</source>
+        <translation>%1 (%2) jää käyttäjäparametriksi; kenttä saa uuden</translation>
     </message>
     <message>
         <source>Tables</source>
@@ -29548,6 +30018,13 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
 </context>
 <context>
+    <name>mitcad::SettingsWindow</name>
+    <message>
+        <source>Changes are saved automatically</source>
+        <translation>Muutokset tallennetaan automaattisesti</translation>
+    </message>
+</context>
+<context>
     <name>mitcad::ShortcutDialog</name>
     <message>
         <source>All</source>
@@ -31613,6 +32090,14 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
         <translation>Napsautus lisää valintaan tai poistaa siitä; Esc tai napsautus tyhjään kohtaan tyhjentää sen</translation>
     </message>
     <message>
+        <source>Esc &amp;leaves an unchanged sketch</source>
+        <translation>Esc &amp;poistuu muuttamattomasta luonnoksesta</translation>
+    </message>
+    <message>
+        <source>Esc with nothing else to cancel leaves a sketch you did not change; a new empty one is removed</source>
+        <translation>Kun peruttavaa ei muuta ole, Esc poistuu luonnoksesta, jota et muuttanut; uusi tyhjä luonnos poistetaan</translation>
+    </message>
+    <message>
         <source>Navigation</source>
         <translation>Navigointi</translation>
     </message>
@@ -31827,6 +32312,14 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     <message>
         <source>File, Edit, View, Tools, Window and Help under the title bar too</source>
         <translation>Tiedosto, Muokkaa, Näytä, Työkalut, Ikkuna ja Ohje myös otsikkorivin alla</translation>
+    </message>
+    <message>
+        <source>Show the m&amp;enu bar</source>
+        <translation>Näytä valikko&amp;rivi</translation>
+    </message>
+    <message>
+        <source>Off: the menus are under the ☰ button before Undo, and Alt shows them</source>
+        <translation>Pois: valikot ovat Kumoa-painikkeen edellä olevan ☰-painikkeen alla, ja Alt näyttää ne</translation>
     </message>
     <message>
         <source>Card</source>
@@ -32568,6 +33061,10 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     <message>
         <source>%1 wants to save a picture of the view as %2.</source>
         <translation>%1 haluaa tallentaa kuvan näkymästä nimellä %2.</translation>
+    </message>
+    <message>
+        <source>%1 wants to save a picture of the design as %2.</source>
+        <translation>%1 haluaa tallentaa kuvan mallista nimellä %2.</translation>
     </message>
     <message>
         <source>%1 wants to run a File command.</source>
@@ -34853,6 +35350,10 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
         <translation>Muunna luonnosgeometriaksi: %1</translation>
     </message>
     <message>
+        <source>Move %1 to User Parameters</source>
+        <translation>Siirrä %1 käyttäjäparametreihin</translation>
+    </message>
+    <message>
         <source>Insert Point: %1</source>
         <translation>Lisää piste: %1</translation>
     </message>
@@ -34881,6 +35382,10 @@ Hyväksy säilyttää kohteen %1 ilman niitä; Peruuta kumoaa sen.</translation>
         <translation>Hyväksy</translation>
     </message>
     <message>
+        <source>Drag: the point snaps to points and curves and is held where it is dropped (Shift or Alt: no snap).</source>
+        <translation>Veto: piste kohdistuu pisteisiin ja käyriin ja pysyy siinä, mihin se pudotetaan (Shift tai Alt: ei kohdistusta).</translation>
+    </message>
+    <message>
         <source>Drag: the geometry follows as far as its constraints let it.</source>
         <translation>Veto: geometria seuraa niin pitkälle kuin sen rajoitteet sallivat.</translation>
     </message>
@@ -34907,6 +35412,10 @@ Hyväksy säilyttää kohteen %1 ilman niitä; Peruuta kumoaa sen.</translation>
     <message>
         <source>Enter a value.</source>
         <translation>Anna arvo.</translation>
+    </message>
+    <message>
+        <source>Enter some text.</source>
+        <translation>Kirjoita tekstiä.</translation>
     </message>
     <message>
         <source>Remove Name %1</source>

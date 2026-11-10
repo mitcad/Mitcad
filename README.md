@@ -192,7 +192,7 @@ corpus setup: [docs/development.md](docs/development.md#the-check-script).
 | `core/f3d`, `core/f3d-design`, `core/f3d-decode`, `core/f3d-file`, `core/f3d-names`, `core/asm`, `core/dump`, `core/freecad`, `core/import`, `core/zip` | `.f3d` and FreeCAD readers (the ASM B-rep reader in `core/asm`, the dump IR in `core/dump`) and the history import |
 | `core/expr`, `core/print-keys` | Parameter expressions with units; the print settings' key map (both re-exported by the model) |
 | `core/ipt` | `.ipt` reader: compound file, property sets, segments, the bodies |
-| `core/solidcraft` | `.solidcraft` reader: the JSON design or its container, upgraded to one format |
+| `core/solidcraft` | `.sc` and `.solidcraft` reader: the JSON design or its container, upgraded to one format; a `.sc` file only by its format key |
 | `core/dxf`, `core/3mf`, `core/usdz` | DXF, 3MF and USDZ |
 | `core/vcs`, `core/update` | Version history in git; automatic updates |
 | `core/ffi`, `core/cpp` | CXX bridges between Rust and C++ |

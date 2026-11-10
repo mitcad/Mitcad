@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "ParametersDialog.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -201,7 +202,7 @@ private:
       accept();
       return;
     } else {
-      problem = m_host.lastError();
+      problem = mitcad::modelMessage(m_host.lastError());
     }
     m_error->setText(problem);
     qDebug().noquote() << QStringLiteral("Add parameter %1 refused: %2").arg(name, problem);
@@ -282,14 +283,14 @@ public:
       const bool fromValue = row.value(QStringLiteral("from_value")).toBool();
       const QString expression = row.value(QStringLiteral("expression")).toString();
       const QString text = row.value(QStringLiteral("text")).toString();
-      const QString reason = row.value(QStringLiteral("reason")).toString();
+      const QString reason = mitcad::modelMessage(row.value(QStringLiteral("reason")).toString());
       QStringList changes;
       for (const QJsonValue& change : row.value(QStringLiteral("changes")).toArray()) {
         changes << change.toString();
       }
       QStringList notes;
       for (const QJsonValue& note : row.value(QStringLiteral("notes")).toArray()) {
-        notes << note.toString();
+        notes << mitcad::modelMessage(note.toString());
       }
       QString shownAction;
       if (action == QStringLiteral("add")) {
@@ -777,7 +778,7 @@ void ParametersDialog::refresh() {
                           feature.value(QStringLiteral("name")).toString());
     }
   } catch (const std::exception& e) {
-    m_message->setText(QString::fromUtf8(e.what()));
+    m_message->setText(mitcad::modelMessage(e.what()));
   }
   // Favourites first (P9); they stay in their own
   // groups too.
@@ -1042,7 +1043,7 @@ void ParametersDialog::submit(const QString& name, int column, const QString& te
       qDebug().noquote() << QStringLiteral("Parameter %1 %2: %3 cancelled").arg(name, what, text);
     } else {
       // The model's reason stays with the cell; the document is unchanged.
-      const QString problem = m_host.lastError();
+      const QString problem = mitcad::modelMessage(m_host.lastError());
       m_refused.insert(refusedKey(name, column), {text, problem});
       m_message->setText(QStringLiteral("%1: %2").arg(name, problem));
       qDebug().noquote() << QStringLiteral("Parameter %1 %2: %3 refused: %4").arg(name, what, text, problem);
@@ -1070,7 +1071,7 @@ void ParametersDialog::deleteParameter() {
     m_message->clear();
     qDebug().noquote() << QStringLiteral("Deleted parameter %1").arg(name);
   } else {
-    m_message->setText(QStringLiteral("%1: %2").arg(name, m_host.lastError()));
+    m_message->setText(QStringLiteral("%1: %2").arg(name, mitcad::modelMessage(m_host.lastError())));
     qDebug().noquote() << QStringLiteral("Delete parameter %1 refused: %2").arg(name, m_host.lastError());
   }
   refresh();
@@ -1081,7 +1082,7 @@ void ParametersDialog::exportParameters() {
   try {
     table = m_host.model().queryObject({{QStringLiteral("query"), QStringLiteral("parameters_csv")}});
   } catch (const std::exception& e) {
-    m_message->setText(QString::fromUtf8(e.what()));
+    m_message->setText(mitcad::modelMessage(e.what()));
     return;
   }
   const QString folder = dialogStartFolder(DialogGroup::Export, m_host.documentFolder());
@@ -1138,7 +1139,7 @@ void ParametersDialog::importParameters() {
     preview = m_host.model().queryObject({{QStringLiteral("query"), QStringLiteral("parameters_csv_preview")},
                                           {QStringLiteral("csv"), csv}});
   } catch (const std::exception& e) {
-    const QString problem = QString::fromUtf8(e.what());
+    const QString problem = mitcad::modelMessage(e.what());
     m_message->setText(QStringLiteral("%1: %2").arg(file, problem));
     qDebug().noquote() << QStringLiteral("Import of parameters from %1 refused: %2").arg(file, problem);
     return;
@@ -1161,7 +1162,7 @@ void ParametersDialog::importParameters() {
     m_message->setText(tr("%1: the import was canceled.").arg(file));
     qDebug().noquote() << QStringLiteral("Import of parameters from %1 cancelled while computing").arg(file);
   } else {
-    m_message->setText(QStringLiteral("%1: %2").arg(file, m_host.lastError()));
+    m_message->setText(QStringLiteral("%1: %2").arg(file, mitcad::modelMessage(m_host.lastError())));
     qDebug().noquote() << QStringLiteral("Import of parameters from %1 refused: %2").arg(file, m_host.lastError());
   }
   refresh();
@@ -1442,7 +1443,7 @@ void ParametersDialog::previewExpression(const QString& name, const QString& tex
     } catch (const std::exception& e) {
       // A strict parameter refuses it; other problems (a half-typed
       // expression) are told when the edit ends.
-      const QString problem = QString::fromUtf8(e.what());
+      const QString problem = mitcad::modelMessage(e.what());
       if (problem.contains(QStringLiteral("minimum")) || problem.contains(QStringLiteral("maximum")) ||
           problem.contains(QStringLiteral("not on a step"))) {
         message = tr("%1: will be refused: %2").arg(name, problem);

@@ -160,6 +160,9 @@ struct FileOut<'a> {
     // The print plates (mitcad#1050), when there are any.
     #[serde(skip_serializing_if = "<[crate::print_plates::PrintPlate]>::is_empty")]
     print_plates: &'a [crate::print_plates::PrintPlate],
+    // Filament changes at print heights (mitcad#1596), when there are any.
+    #[serde(skip_serializing_if = "<[crate::print_changes::ChangeSchedule]>::is_empty")]
+    filament_changes: &'a [crate::print_changes::ChangeSchedule],
     // The design's statistics (mitcad#1088), when anything of them is
     // known. Read apart from the definition (`file/mod.rs`, `load_parts`,
     // which takes it out before the unknown fields), so not in
@@ -534,6 +537,7 @@ pub(super) fn save_with(state: &DocState, statistics: &super::DesignStatistics) 
         comments: &state.comments,
         next_comment: next_comment_out(state),
         print_plates: &state.print_plates,
+        filament_changes: &state.filament_changes,
         statistics,
     };
     let mut json =
@@ -843,7 +847,7 @@ struct FeatureIn {
     shapes: Option<Value>,
 }
 
-const TOP_FIELDS: [&str; 43] = [
+const TOP_FIELDS: [&str; 44] = [
     "format",
     "version",
     "units",
@@ -908,6 +912,8 @@ const TOP_FIELDS: [&str; 43] = [
     // The numbers the next feature and occurrence take (mitcad#1320).
     "next_feature",
     "next_occurrence",
+    // Filament changes at print heights (mitcad#1596).
+    "filament_changes",
 ];
 
 fn schema(message: impl Into<String>) -> FileError {
@@ -1477,6 +1483,39 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             )));
         }
     }
+    // Filament changes at print heights (mitcad#1596): each schedule
+    // valid, one per plate, of a plate the design has. A material the
+    // design no longer has is kept (the export says so).
+    let filament_changes = array(&mut top, "filament_changes", false)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let schedule = serde_json::from_value::<crate::print_changes::ChangeSchedule>(s)
+                .map_err(|e| schema(format!("filament_changes[{i}]: {e}")))?;
+            schedule
+                .check()
+                .map_err(|e| invalid(format!("filament_changes[{i}]: {e}")))?;
+            Ok(schedule)
+        })
+        .collect::<Result<Vec<_>, FileError>>()?;
+    for (i, schedule) in filament_changes.iter().enumerate() {
+        if filament_changes[..i]
+            .iter()
+            .any(|s| s.plate == schedule.plate)
+        {
+            return Err(invalid(format!(
+                "filament_changes[{i}]: the schedule of {} is listed more than once",
+                schedule.plate.as_deref().unwrap_or("the design")
+            )));
+        }
+        if let Some(plate) = schedule.plate.as_deref()
+            && !print_plates.iter().any(|p| p.id == plate)
+        {
+            return Err(invalid(format!(
+                "filament_changes[{i}]: there is no print plate {plate}"
+            )));
+        }
+    }
     // Drawings (mitcad#707): definitions only; their views are projected
     // when they are asked for, so one whose subject is gone loads and says
     // why.
@@ -1946,6 +1985,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     state.next_comment = next_comment;
     state.purge_volumes = purge_volumes;
     state.print_plates = print_plates;
+    state.filament_changes = filament_changes;
     for (i, drawing) in drawings.iter().enumerate() {
         if !state.assembly.exists(drawing.component) {
             return Err(invalid(format!(

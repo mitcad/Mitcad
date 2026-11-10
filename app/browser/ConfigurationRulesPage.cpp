@@ -7,6 +7,7 @@
 // configurations' JSON adapter (ConfigurationsData.hpp), so that what the
 // page does not edit (the options, the rows) goes back as it was.
 #include <exception>
+#include "framework/ModelMessages.hpp"
 #include <utility>
 
 #include <QJsonArray>
@@ -27,7 +28,7 @@ QJsonObject queryOrError(DocumentHost& host, const QJsonObject& query) {
   try {
     return host.model().queryObject(query);
   } catch (const std::exception& e) {
-    return {{QStringLiteral("error"), QString::fromUtf8(e.what())}};
+    return {{QStringLiteral("error"), mitcad::modelMessage(e.what())}};
   } catch (...) {
     return {{QStringLiteral("error"), QStringLiteral("the design cannot answer now")}};
   }
@@ -49,7 +50,7 @@ rules::RulesSource sourceFor(DocumentHost& host, QWidget* page) {
       answer = host.model().queryObject(configurations::configurationsQuery());
     } catch (const std::exception& e) {
       if (error != nullptr) {
-        *error = QString::fromUtf8(e.what());
+        *error = mitcad::modelMessage(e.what());
       }
       return false;
     }
@@ -59,7 +60,7 @@ rules::RulesSource sourceFor(DocumentHost& host, QWidget* page) {
       return true;
     }
     if (error != nullptr) {
-      *error = host.lastCancelled() ? QStringLiteral("The computation was canceled.") : host.lastError();
+      *error = host.lastCancelled() ? QStringLiteral("The computation was canceled.") : mitcad::modelMessage(host.lastError());
     }
     return false;
   };

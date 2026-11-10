@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "HybridAssembly.hpp"
+#include "ModelMessages.hpp"
 
 #include <exception>
 
@@ -59,7 +60,7 @@ bool moveToNewComponents(QWidget* parent, const HybridModel& model, const QJsonO
   try {
     plan = model.query(query);
   } catch (const std::exception& e) {
-    const QString error = QString::fromUtf8(e.what());
+    const QString error = mitcad::modelMessage(e.what());
     qDebug().noquote() << QStringLiteral("Move to Component refused: %1").arg(error);
     sheetWarning(parent, what, error);
     return false;

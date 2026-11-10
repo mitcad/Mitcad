@@ -1,0 +1,32 @@
+{
+  "comment": "The animated test scene of core/usdz/src/tests.rs (animated_scene, mitcad#1597): the arm turns 0, 45 and 90 degrees about Z at (10, 20, 30.5), the pin slides up 5 mm per frame in the arm, the root's painted body moves 10 mm along X per frame. Poses in MitCad's layout (rows of the rotation, translation last).",
+  "fps": 24,
+  "start": 0,
+  "end": 2,
+  "prims": {
+    "/bracket_assembly/Arm_1": {
+      "times": [0, 1, 2],
+      "poses": [
+        [[1, 0, 0, 10], [0, 1, 0, 20], [0, 0, 1, 30.5]],
+        [[0.7071067811865476, -0.7071067811865475, 0, 10], [0.7071067811865475, 0.7071067811865476, 0, 20], [0, 0, 1, 30.5]],
+        [[0, -1, 0, 10], [1, 0, 0, 20], [0, 0, 1, 30.5]]
+      ]
+    },
+    "/bracket_assembly/Arm_1/Pin_1": {
+      "times": [0, 1, 2],
+      "poses": [
+        [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 5]],
+        [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 10]],
+        [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 15]]
+      ]
+    },
+    "/bracket_assembly/Body1": {
+      "times": [0, 1, 2],
+      "poses": [
+        [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]],
+        [[1, 0, 0, 10], [0, 1, 0, 0], [0, 0, 1, 0]],
+        [[1, 0, 0, 20], [0, 1, 0, 0], [0, 0, 1, 0]]
+      ]
+    }
+  }
+}

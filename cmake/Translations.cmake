@@ -40,16 +40,19 @@ set(mitcad_ts_work "${CMAKE_BINARY_DIR}/translations-work")
 file(MAKE_DIRECTORY "${mitcad_qm_dir}" "${mitcad_ts_work}")
 set(mitcad_qt_translations "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_TRANSLATIONS}")
 
-# mitcad_compile_catalogue(<ts> <code>): <ts> prepared and compiled into
-# mitcad_<code>.qm; its path appended to mitcad_catalogues.
-function(mitcad_compile_catalogue ts code)
+# mitcad_compile_catalogue(<ts> <model ts> <code>): <ts> prepared and
+# compiled into mitcad_<code>.qm with <model ts>, the model's messages
+# (mitcad#1284: model_<code>.ts, the context ModelMessage; empty when the
+# language has none), which needs no context-free copy; the path appended to
+# mitcad_catalogues.
+function(mitcad_compile_catalogue ts model code)
   set(prepared "${mitcad_ts_work}/mitcad_${code}.ts")
   set(qm "${mitcad_qm_dir}/mitcad_${code}.qm")
   add_custom_command(
     OUTPUT "${qm}"
     COMMAND mitcad-translations prepare "${ts}" "${prepared}"
-    COMMAND Qt6::lrelease -silent -nounfinished "${prepared}" -qm "${qm}"
-    DEPENDS "${ts}" mitcad-translations
+    COMMAND Qt6::lrelease -silent -nounfinished "${prepared}" ${model} -qm "${qm}"
+    DEPENDS "${ts}" ${model} mitcad-translations
     COMMENT "Compiling the interface language ${code}"
     VERBATIM)
   set(mitcad_catalogues ${mitcad_catalogues} "${qm}" PARENT_SCOPE)
@@ -58,7 +61,11 @@ endfunction()
 set(mitcad_catalogues "")
 set(mitcad_shipped "")
 foreach(code IN LISTS MITCAD_UI_LANGUAGES)
-  mitcad_compile_catalogue("${mitcad_ts_dir}/mitcad_${code}.ts" ${code})
+  set(model_ts "")
+  if(EXISTS "${mitcad_ts_dir}/model_${code}.ts")
+    set(model_ts "${mitcad_ts_dir}/model_${code}.ts")
+  endif()
+  mitcad_compile_catalogue("${mitcad_ts_dir}/mitcad_${code}.ts" "${model_ts}" ${code})
   list(APPEND mitcad_shipped "${mitcad_qm_dir}/mitcad_${code}.qm")
   # Qt's own catalogue of the language, as Qt ships it (BSD-3-Clause, Qt's
   # translations module), where there is one.
@@ -87,7 +94,20 @@ if(BUILD_TESTING AND MITCAD_UI_LANGUAGES)
     DEPENDS "${mitcad_ts_dir}/mitcad_${mitcad_first_language}.ts" mitcad-translations
     COMMENT "Making the tests' pseudo-language"
     VERBATIM)
-  mitcad_compile_catalogue("${mitcad_pseudo_ts}" xx)
+  # The model's messages too (mitcad#1284), so that a test sees any left
+  # English.
+  set(mitcad_pseudo_model_ts "")
+  if(EXISTS "${mitcad_ts_dir}/model_${mitcad_first_language}.ts")
+    set(mitcad_pseudo_model_ts "${mitcad_ts_work}/model_xx.source.ts")
+    add_custom_command(
+      OUTPUT "${mitcad_pseudo_model_ts}"
+      COMMAND mitcad-translations pseudo "${mitcad_ts_dir}/model_${mitcad_first_language}.ts"
+              "${mitcad_pseudo_model_ts}"
+      DEPENDS "${mitcad_ts_dir}/model_${mitcad_first_language}.ts" mitcad-translations
+      COMMENT "Making the tests' pseudo-language of the model's messages"
+      VERBATIM)
+  endif()
+  mitcad_compile_catalogue("${mitcad_pseudo_ts}" "${mitcad_pseudo_model_ts}" xx)
 endif()
 
 add_custom_target(mitcad_translations ALL DEPENDS ${mitcad_catalogues})
@@ -119,6 +139,9 @@ endif()
 # Refreshes the .ts files from the sources (lupdate) and writes the counts of
 # unfinished entries into languages.txt: cmake --build <build> --target
 # update_translations.
+# First the model's message templates are written again from core/
+# (app/framework/ModelMessageTemplates.cpp, mitcad#1284), whose texts
+# lupdate takes into the model_<code>.ts files.
 add_custom_target(update_translations
   COMMAND "${CMAKE_COMMAND}" -DLUPDATE=$<TARGET_FILE:Qt6::lupdate> -DTOOL=$<TARGET_FILE:mitcad-translations>
           -DWORK=${mitcad_ts_work} -P "${PROJECT_SOURCE_DIR}/tools/translations-update.cmake"

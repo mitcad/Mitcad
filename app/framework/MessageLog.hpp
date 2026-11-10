@@ -15,7 +15,9 @@ namespace mitcad {
 // level, its text and the feature it is about (its uid; empty when it is
 // about none). A message repeated at once is one entry, counted. `action`:
 // the label of the button the band shows with it (mitcad#1416: Update, Open
-// Linked Design); empty for none.
+// Linked Design); empty for none. `source`: what raised it and lasts only
+// while it is open (mitcad#1621: `sketch/editor`, `sketch/tool`, `sketch`,
+// `command`); empty for a message of the window's own.
 struct MessageEntry {
   QDateTime time;
   NoticeLevel level = NoticeLevel::Hint;
@@ -23,6 +25,7 @@ struct MessageEntry {
   QString feature;
   int count = 1;
   QString action;
+  QString source;
 };
 
 // What the message band shows and the session's message history
@@ -38,6 +41,9 @@ struct MessageEntry {
 //   or starts the next command (commandStarted).
 // - Faded or closed, the band shows the latest message as a one-line stub,
 //   which opens the history.
+// - An error of a source (a sketch's value editor or tool, the sketch, a
+//   command panel; mitcad#1621) also goes when its source closes
+//   (sourceClosed), as when it is closed.
 // - Another design in the window (New, Open, recovery; mitcad#1174) clears
 //   the band: neither the message shown in full nor the stub stays, until
 //   the next message (clear). The history keeps them.
@@ -60,9 +66,10 @@ public:
   // of a higher level is shown (see above). Returns whether it is shown in
   // full now. An empty text records nothing and turns a message shown in
   // full that is not a problem into the stub (a cleared status line).
-  // `action`: the label of the message's button (mitcad#1416), or empty.
+  // `action`: the label of the message's button (mitcad#1416), or empty;
+  // `source`: what raised it (MessageEntry::source), or empty.
   bool add(const QString& text, NoticeLevel level, const QString& feature, const QDateTime& time,
-           const QString& action = QString());
+           const QString& action = QString(), const QString& source = QString());
 
   // The message shown in full timed out: the stub. Not for an error.
   // Returns whether the band changed.
@@ -82,6 +89,16 @@ public:
   // stub, a problem too; the history keeps it. Returns whether the band
   // changed.
   bool withdraw(const QString& text);
+  // A source closed (mitcad#1621: the value editor closed or took its
+  // value, the tool ended, the sketch finished, the panel's OK or Cancel):
+  // when the message shown in full was raised by it, or by a source within
+  // it (sourceCovers), it becomes the stub, an error too; the history
+  // keeps it. Returns whether the band changed.
+  bool sourceClosed(const QString& source);
+  // Whether closing `closing` closes `raised`: the same source, or one
+  // within it (`sketch` covers `sketch/tool` and `sketch/editor`). Never
+  // for an empty source.
+  static bool sourceCovers(const QString& closing, const QString& raised);
 
   Shown shown() const;
   // The message shown in full; null unless shown() is Full.

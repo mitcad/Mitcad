@@ -16,6 +16,10 @@ pub(crate) struct Fit {
 /// allows (`features::thread::fitted_clearance`, mitcad#691).
 pub(crate) const THREAD_FLANK_CLEARANCE: &str = "thread_flank_clearance";
 
+/// The gap under which bodies printed in place fuse: Print Analysis'
+/// default narrow gap (mitcad#1519, `Document::print_min_gap_default`).
+pub(crate) const PRINT_IN_PLACE_GAP: &str = "print_in_place_gap";
+
 pub(crate) const FITS: &[Fit] = &[
     Fit {
         name: "thread_radial_clearance",
@@ -81,6 +85,25 @@ pub(crate) const FITS: &[Fit] = &[
         millimetres: 0.1,
         comment: "Printed press fit on the diameter, flats or crush rib tips under the pin; \
                   depends on dimensional accuracy",
+    },
+    // The narrow gap of Print Analysis between bodies printed in place
+    // (mitcad#1519): no panel field offers it; the analysis reads it.
+    Fit {
+        name: PRINT_IN_PLACE_GAP,
+        field: "min_gap",
+        features: &[],
+        millimetres: 0.3,
+        comment: "Printed-in-place gap between bodies that must not fuse; \
+                  depends on extrusion width and cooling",
+    },
+    // A flat-roofed hole's bridge above its circle (mitcad#1515).
+    Fit {
+        name: "hole_roof_sag",
+        field: "roof_sag",
+        features: &["hole"],
+        millimetres: 0.4,
+        comment: "Printed flat roof of a hole lying on the bed, height above the circle for the \
+                  bridge's sag; depends on bridging",
     },
 ];
 

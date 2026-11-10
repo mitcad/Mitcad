@@ -19,6 +19,7 @@
 // library_show): the commands are ordinary panels (apply with inspect as
 // their preview, CommandDef), so live MCP fills them as any other.
 #include "Commands.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1377,7 +1378,7 @@ QString problemsOf(const QJsonObject& answer) {
 QStringList warningsOf(const QJsonObject& answer) {
   QStringList texts;
   for (const QJsonValue& warning : answer.value(QStringLiteral("warnings")).toArray()) {
-    texts << warning.toString();
+    texts << mitcad::modelMessage(warning.toString());
   }
   return texts;
 }
@@ -4047,8 +4048,8 @@ Inspection inspectFrame(const SharedPtr& shared, const CommandState& state, cons
                                                       : QObject::tr("No fasteners"));
   QStringList warnings;
   for (const QJsonValue& warning : preview.answer.value(QStringLiteral("warnings")).toArray()) {
-    warnings << warning.toString();
-    lines << QStringLiteral("<i>%1</i>").arg(warning.toString().toHtmlEscaped());
+    warnings << mitcad::modelMessage(warning.toString());
+    lines << QStringLiteral("<i>%1</i>").arg(mitcad::modelMessage(warning.toString()).toHtmlEscaped());
   }
   result.text = lines.join(QStringLiteral("<br>"));
   result.error = preview.error;
@@ -5334,7 +5335,7 @@ CommandDef frameCommand(const SharedPtr& shared, DocumentHost& host, const Comma
     }
     shared->setOpeningsSizes(sizes);
     for (const QJsonValue& warning : preview.answer.value(QStringLiteral("warnings")).toArray()) {
-      lines << QStringLiteral("<i>%1</i>").arg(warning.toString().toHtmlEscaped());
+      lines << QStringLiteral("<i>%1</i>").arg(mitcad::modelMessage(warning.toString()).toHtmlEscaped());
     }
     result.text = lines.join(QStringLiteral("<br>"));
     result.error = preview.error;

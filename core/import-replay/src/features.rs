@@ -2719,14 +2719,18 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                     Reference::Profile(p) => p.sketch.flatten(),
                     _ => None,
                 });
-            return Err(format!(
-                "its profile is {} sketch text{} the file no longer has{}",
-                texts.len(),
-                if texts.len() == 1 { "" } else { "s" },
-                sketch
-                    .map(|s| format!(" (deleted from {s})"))
-                    .unwrap_or_default()
-            ));
+            let deleted = sketch
+                .map(|s| format!(" (deleted from {s})"))
+                .unwrap_or_default();
+            // One and several as whole messages (mitcad#1284).
+            return Err(if texts.len() == 1 {
+                format!("its profile is a sketch text the file no longer has{deleted}")
+            } else {
+                format!(
+                    "its profile is {} sketch texts the file no longer has{deleted}",
+                    texts.len()
+                )
+            });
         }
         // The faces of bodies the profile selects (mitcad#169), and the
         // profiles of its sketch.

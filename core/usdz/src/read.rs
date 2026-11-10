@@ -505,8 +505,74 @@ impl Values<'_> {
                     })
                 }))
             }
+            DOUBLE_VECTOR => {
+                let count = b.usize(at)?;
+                let d = b.get(
+                    at + 8,
+                    count
+                        .checked_mul(8)
+                        .ok_or_else(|| fail("a list too large"))?,
+                )?;
+                Value::DoubleVector(
+                    d.as_chunks::<8>()
+                        .0
+                        .iter()
+                        .map(|c| f64::from_le_bytes(*c))
+                        .collect(),
+                )
+            }
+            TIME_SAMPLES => self.time_samples(at)?,
             other => return Err(fail(format!("value type {other} is not read"))),
         })
+    }
+
+    /// Time samples at `at` (mitcad#1597, `usdc`'s module documentation): a
+    /// jump to the times' reference, a jump to the count and the values'
+    /// references; one value per time, the times increasing.
+    fn time_samples(&self, at: usize) -> Result<Value, Error> {
+        let b = self.bytes;
+        // A jump is relative to where it is written.
+        let jump = |from: usize| -> Result<usize, Error> {
+            let offset =
+                isize::try_from(b.u64(from)? as i64).map_err(|_| fail("a jump beyond memory"))?;
+            from.checked_add_signed(offset)
+                .filter(|&to| to > from)
+                .ok_or_else(|| fail("a time samples jump that does not go forward"))
+        };
+        let kind = |rep: u64| ((rep >> 48) & 0xff) as u8;
+        let times_at = jump(at)?;
+        let times_rep = b.u64(times_at)?;
+        if kind(times_rep) != types::DOUBLE_VECTOR || times_rep & ARRAY_BIT != 0 {
+            return Err(fail(format!(
+                "the times of time samples are of type {}, not a list of doubles",
+                kind(times_rep)
+            )));
+        }
+        let Value::DoubleVector(times) = self.value(times_rep)? else {
+            unreachable!("a list of doubles")
+        };
+        if times.iter().any(|t| !t.is_finite()) || times.windows(2).any(|w| w[1] <= w[0]) {
+            return Err(fail(format!(
+                "the times of time samples {times:?} do not increase"
+            )));
+        }
+        let values_at = jump(times_at + 8)?;
+        let count = b.usize(values_at)?;
+        if count != times.len() {
+            return Err(fail(format!(
+                "{count} time sample values for {} times",
+                times.len()
+            )));
+        }
+        let mut samples = Vec::with_capacity(count);
+        for (i, time) in times.into_iter().enumerate() {
+            let rep = b.u64(values_at + 8 + 8 * i)?;
+            if kind(rep) == types::TIME_SAMPLES {
+                return Err(fail("time samples inside time samples"));
+            }
+            samples.push((time, self.value(rep)?));
+        }
+        Ok(Value::TimeSamples(samples))
     }
 
     fn list_op<T>(

@@ -100,6 +100,15 @@ if (-not (Test-Path $qtDir)) {
 foreach ($file in 'bin\lrelease.exe', 'bin\lupdate.exe', 'translations\qtbase_fi.qm') {
   if (-not (Test-Path (Join-Path $qtDir $file))) { throw "Qt $QtVersion has no $file" }
 }
+# The Chromium Embedded Framework of the web browser component (Insert >
+# Component from Web, mitcad#1579): the distribution pinned in versions.sh
+# (fetch-cef.ps1 reads it), named for the build as the user's
+# MITCAD_CEF_ROOT.
+Write-Host '== CEF (fetch-cef.ps1)'
+$cefRoot = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'fetch-cef.ps1') -Root (Join-Path $Root 'cef') | Select-Object -Last 1
+if ($LASTEXITCODE -ne 0 -or -not $cefRoot) { throw 'fetch-cef.ps1 failed' }
+[Environment]::SetEnvironmentVariable('MITCAD_CEF_ROOT', $cefRoot, 'User')
+$env:MITCAD_CEF_ROOT = $cefRoot
 
 # Every build has the render worker (docs/rendering.md "Building"): Cycles
 # and Open Image Denoise, built once outside the build folders, in the

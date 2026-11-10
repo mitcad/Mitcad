@@ -74,7 +74,17 @@ struct HighlightStroke {
   // Body geometry out of the sketch plane where it is (mitcad#866): thin
   // and dashed; a single point as a small ring.
   bool dashed = false;
+  // The 4 px line in the sketch curve's own line type (mitcad#1619):
+  // dashed for construction geometry, dash-dot for a centre line.
+  Qt::PenStyle style = Qt::SolidLine;
 };
+
+// A sketch curve's line type, as the view draws the curve and its
+// highlights (mitcad#1619): dashed construction geometry, a dash-dot
+// centre line, else solid.
+Qt::PenStyle sketchCurvePenStyle(bool construction, bool centerline);
+// Its name in the logs: "solid", "dashed" or "dash-dot".
+QString penStyleName(Qt::PenStyle style);
 struct HighlightMarker {
   QPointF at;
   PointMarkerLook look;

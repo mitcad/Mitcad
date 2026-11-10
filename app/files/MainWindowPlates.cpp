@@ -23,6 +23,7 @@
 // on|off", "Plate view: <name>: <n> pieces: <body> x<count>, ..." (or
 // "Plate view: none").
 #include "../MainWindow.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <exception>
 #include <memory>
@@ -275,7 +276,7 @@ CommandDef MainWindow::platesCommand() {
       return false;
     }
     if (!runModelCommand(command)) {
-      showError(lastError());
+      showError(mitcad::modelMessage(lastError()));
       return false;
     }
     return true;
@@ -288,7 +289,7 @@ CommandDef MainWindow::platesCommand() {
       return QString();
     }
     if (!runModelCommand({{QStringLiteral("cmd"), QStringLiteral("add_print_plate")}}, &result)) {
-      showError(lastError());
+      showError(mitcad::modelMessage(lastError()));
       return QString();
     }
     panel->choose = text(result, "id");

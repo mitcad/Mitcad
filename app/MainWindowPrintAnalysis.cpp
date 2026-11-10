@@ -50,12 +50,14 @@ void MainWindow::showPrintAnalysis(const QJsonObject& overlay) {
 }
 
 void MainWindow::showPrintOverlay(const QJsonObject& overlay) {
-  // Overhangs and walls too thin to print are categories with a legend,
-  // not warnings or errors: violet and magenta for the view's background,
+  // Overhangs, walls too thin to print and narrow gaps (mitcad#1519) are
+  // categories with a legend, not warnings or errors: violet, magenta and
+  // teal for the view's background,
   // not the widgets' palette (mitcad#1041).
   const bool dark = m_viewer->backgroundDark();
   m_viewer->setPrintOverlay(printOverlayOf(overlay, viewColor(ColorRole::PrintOverhang, dark),
-                                           viewColor(ColorRole::PrintThin, dark)));
+                                           viewColor(ColorRole::PrintThin, dark),
+                                           viewColor(ColorRole::PrintGap, dark)));
 }
 
 void MainWindow::followPrintAnalysis() {

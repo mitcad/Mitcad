@@ -2879,13 +2879,17 @@ int linkedFilesTests();
 int previewHoldTests();
 int handleStepTests();
 int languageTests();
+int modelMessageTests();
 int interfaceSizeTests();
 int uiSizesTests();
 int sketchPlacesTests();
 int iconSizeStyleTests();
 int sketchConflictTests();
+int componentWebFilesTests();
+int browserComponentTests();
 int navigationBarPinsTests();
 int sketchGlyphRowsTests();
+int menuBarTests();
 
 int main(int argc, char* argv[]) {
   // The application's own class: its notify() is tested (busy_input.cpp).
@@ -3040,13 +3044,17 @@ int main(int argc, char* argv[]) {
     failures += previewHoldTests();
     failures += handleStepTests();
     failures += languageTests();
+    failures += modelMessageTests();
     failures += interfaceSizeTests();
     failures += uiSizesTests();
     failures += sketchPlacesTests();
     failures += iconSizeStyleTests();
     failures += sketchConflictTests();
+    failures += componentWebFilesTests();
+    failures += browserComponentTests();
     failures += navigationBarPinsTests();
     failures += sketchGlyphRowsTests();
+    failures += menuBarTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

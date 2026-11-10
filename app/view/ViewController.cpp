@@ -68,6 +68,7 @@
 #include "../print/MaterialProperties.hpp"
 #include "../framework/CachePreferences.hpp"
 #include "../framework/InterfaceSize.hpp"
+#include "../framework/MenuBarReveal.hpp"
 #include "../framework/UiSizes.hpp"
 #include "../framework/ChromeStyle.hpp"
 #include "../framework/CommandRegistry.hpp"
@@ -249,7 +250,8 @@ const PreferencePage kPreferencePages[] = {
     {"navigation", QT_TRANSLATE_NOOP("View", "Navigation"), "mouse orbit pan zoom scheme"},
     {"display", QT_TRANSLATE_NOOP("View", "Display"),
      "camera perspective orthographic orientation view cube projection follow background environment render device gpu cuda worker optix ghost inactive components pick priority layout docked floating browser background rows card "
-     "quick_access_toolbar quick-access toolbar theme dark light mode colour color scheme"},
+     "quick_access_toolbar quick-access toolbar theme dark light mode colour color scheme "
+     "menu_bar menus hamburger"},
     {"cache", QT_TRANSLATE_NOOP("View", "Cache"), "results memory disk diagnostics"},
     {"cloud", QT_TRANSLATE_NOOP("View", "Cloud"),
      "git remote sync push fetch version control author email name mqtt live broker"},
@@ -266,8 +268,10 @@ const PreferencePage kPreferencePages[] = {
     {"fonts", QT_TRANSLATE_NOOP("View", "Fonts"), "font folders text ttf otf woff typeface"},
     // The first dimension scales the sketch (mitcad#860).
     // Click adds to the selection in sketches (mitcad#1403).
+    // Esc leaves an unchanged sketch (mitcad#1623).
     {"sketch", QT_TRANSLATE_NOOP("View", "Sketch"),
-     "sketch dimension first scale proportion drawn size click select selection add ctrl multiple"},
+     "sketch dimension first scale proportion drawn size click select selection add ctrl multiple "
+     "esc escape leave exit finish unchanged"},
     // The suppliers' shops: the region of the product links and the shops
     // the Supplier filters start with (mitcad#950).
     {"suppliers", QT_TRANSLATE_NOOP("View", "Suppliers"),
@@ -1647,6 +1651,27 @@ void ViewController::showPreferences(const QString& page) {
   } else {
     connect(dialog.get(), &QDialog::accepted, clickAdds, applyClickAdds);
   }
+  // Esc leaves an unchanged sketch (mitcad#1623), off by default: Esc with
+  // nothing else to cancel leaves a sketch nothing was changed in.
+  auto* escLeaves = new QCheckBox(tr("Esc &leaves an unchanged sketch"));
+  escLeaves->setObjectName(QStringLiteral("escLeavesUnchangedSketch"));
+  escLeaves->setChecked(sketch::escLeavesUnchangedSketch());
+  escLeaves->setToolTip(
+      tr("Esc with nothing else to cancel leaves a sketch you did not change; a new empty one is removed"));
+  control(sketchForm, escLeaves);
+  const auto applyEscLeaves = [escLeaves] {
+    const bool on = escLeaves->isChecked();
+    if (on == sketch::escLeavesUnchangedSketch()) {
+      return;
+    }
+    sketch::saveEscLeavesUnchangedSketch(on);
+    qDebug().noquote() << QStringLiteral("Preferences: Esc leaves an unchanged sketch %1").arg(onOff(on));
+  };
+  if (window != nullptr) {
+    connect(escLeaves, &QCheckBox::toggled, host, saving(applyEscLeaves));
+  } else {
+    connect(dialog.get(), &QDialog::accepted, escLeaves, applyEscLeaves);
+  }
   groups.insert(QStringLiteral("sketch"), sketchBox);
   // Suppliers (mitcad#950): the region of the product links and the shops
   // the Supplier filters start with. Saved when the dialog is accepted, at
@@ -2132,6 +2157,27 @@ void ViewController::showPreferences(const QString& page) {
               const QSignalBlocker blocker(quickAccess);
               quickAccess->setChecked(visible);
             });
+  }
+  // The menu bar (mitcad#1620, Windows and Linux): shown by default;
+  // cleared, it is hidden in either layout, a ☰ button before Undo and Redo
+  // opens its menus, and Alt shows it until its menu closes (MenuBarReveal).
+  if (MenuBarSettings::offered()) {
+    auto* menuBarShown = new QCheckBox(tr("Show the m&enu bar"));
+    menuBarShown->setObjectName(QStringLiteral("menuBarVisible"));
+    menuBarShown->setChecked(MenuBarSettings::loadShown());
+    menuBarShown->setToolTip(tr("Off: the menus are under the ☰ button before Undo, and Alt shows them"));
+    control(display, menuBarShown);
+    const auto applyMenuBar = [menuBarShown] {
+      if (MenuBarSettings::saveShown(menuBarShown->isChecked())) {
+        qDebug().noquote() << QStringLiteral("Preferences: menu bar %1")
+                                  .arg(menuBarShown->isChecked() ? QStringLiteral("shown") : QStringLiteral("hidden"));
+      }
+    };
+    if (window != nullptr) {
+      connect(menuBarShown, &QCheckBox::toggled, host, saving(applyMenuBar));
+    } else {
+      connect(dialog.get(), &QDialog::accepted, menuBarShown, applyMenuBar);
+    }
   }
 #if defined(Q_OS_MACOS) && !defined(MITCAD_MAC_UI)
   // The window's own File, Edit, ... menu bar (experiment/macos-shared-qt-ui):

@@ -323,7 +323,7 @@ const PROJECT_ONLY: [&str; 2] = ["spiral_vase", "complete_objects"];
 pub(super) fn export(shared: &Shared<'_>, on_plates: bool) -> ExportOutput {
     let mut out = ExportOutput::default();
     let mut warnings = Vec::new();
-    let slots = shared.slot_parts.len().max(1);
+    let slots = shared.slot_settings.len().max(1);
     let mut lines: BTreeMap<String, String> = BTreeMap::new();
     for set in [PrintSet::Printer, PrintSet::Process] {
         for (def, value) in defs_in(set, &shared.values) {
@@ -374,12 +374,9 @@ pub(super) fn export(shared: &Shared<'_>, on_plates: bool) -> ExportOutput {
                 *entry = match def.key {
                     "filament_colour" => Some("#FFFFFF".to_owned()),
                     "filament_type" => Some("PLA".to_owned()),
-                    "filament_settings_id" => Some(
-                        shared.parts[shared.slot_parts[slot]]
-                            .settings
-                            .material_name
-                            .clone(),
-                    ),
+                    "filament_settings_id" => {
+                        Some(shared.slot_settings[slot].material_name.clone())
+                    }
                     _ => None,
                 };
             }
@@ -423,7 +420,7 @@ pub(super) fn export(shared: &Shared<'_>, on_plates: bool) -> ExportOutput {
     // materials' as a list of the slots'.
     let mut per_slot: BTreeMap<String, Vec<Option<String>>> = BTreeMap::new();
     for slot in 0..slots {
-        let settings = shared.parts[shared.slot_parts[slot]].settings;
+        let settings = shared.slot_settings[slot];
         let Some(keys) = settings.slicer.get(DIALECT.id()) else {
             continue;
         };

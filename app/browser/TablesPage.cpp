@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "TablesPage.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -440,7 +441,7 @@ private:
                                            {QStringLiteral("name"), m_previewed},
                                            {QStringLiteral("csv"), m_csv}});
     } catch (const std::exception& e) {
-      problem = QString::fromUtf8(e.what());
+      problem = mitcad::modelMessage(e.what());
     }
     m_rows->clear();
     m_rows->setRowCount(0);
@@ -511,7 +512,7 @@ private:
       const int line = cell.value(QStringLiteral("line")).toInt();
       const QJsonValue column = cell.value(QStringLiteral("column"));
       const QString columnName = column.isString() ? column.toString() : QString::number(column.toInt());
-      const QString reason = cell.value(QStringLiteral("reason")).toString();
+      const QString reason = mitcad::modelMessage(cell.value(QStringLiteral("reason")).toString());
       lines << tr("Line %1, %2: %3").arg(line).arg(columnName, reason);
       qDebug().noquote() << QStringLiteral("Table import refused line %1 %2: %3").arg(line).arg(columnName, reason);
       const int r = line - 2; // the header is line 1
@@ -751,7 +752,7 @@ void TablesPage::refresh() {
   try {
     answer = m_host.model().query({{QStringLiteral("query"), QStringLiteral("tables")}});
   } catch (const std::exception& e) {
-    m_message->setText(QString::fromUtf8(e.what()));
+    m_message->setText(mitcad::modelMessage(e.what()));
   }
   // The answer's `tables` (a bare list taken as well).
   m_tables = answer.isArray() ? answer.toArray() : answer.toObject().value(QStringLiteral("tables")).toArray();
@@ -979,7 +980,7 @@ bool TablesPage::run(const QJsonObject& command, QJsonObject* result, QString* p
   const bool done =
       m_host.parameterScope().isEmpty() ? m_host.runModelCommand(command, result) : m_host.runParameterCommand(command);
   if (!done) {
-    *problem = m_host.lastCancelled() ? tr("the change was canceled") : m_host.lastError();
+    *problem = m_host.lastCancelled() ? tr("the change was canceled") : mitcad::modelMessage(m_host.lastError());
   }
   return done;
 }
@@ -1492,7 +1493,7 @@ void TablesPage::exportCsv() {
     answer = m_host.model().queryObject(
         {{QStringLiteral("query"), QStringLiteral("table_csv")}, {QStringLiteral("name"), name}});
   } catch (const std::exception& e) {
-    m_message->setText(QString::fromUtf8(e.what()));
+    m_message->setText(mitcad::modelMessage(e.what()));
     return;
   }
   const QString folder = dialogStartFolder(DialogGroup::Export, m_host.documentFolder());

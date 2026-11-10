@@ -19,3 +19,5 @@ serde_json.workspace = true
 mitcad-3mf = { path = "../../3mf" }
 # Slicers' preset bundles (zips) the print settings tests write (mitcad#640).
 mitcad-zip = { path = "../../zip" }
+# The print colours of a USDZ export read back (mitcad#1596).
+mitcad-usdz = { path = "../../usdz" }

@@ -12,6 +12,7 @@
 // the size whose bore fits the shaft (whose outside diameter fits the
 // hole) within the Fit Clearance; another size may be chosen after.
 #include <cmath>
+#include "framework/ModelMessages.hpp"
 #include <functional>
 #include <memory>
 
@@ -320,8 +321,8 @@ CommandDef bearingCommand(const CommandContext& context) {
     } catch (...) {
       return QString();
     }
-    // In plain words (mitcad#1612).
-    const QString error = userText(values.value(QStringLiteral("error")).toString());
+    // In plain words (mitcad#1612), in the interface language (mitcad#1284).
+    const QString error = mitcad::modelMessage(userText(values.value(QStringLiteral("error")).toString()));
     if (!error.isEmpty()) {
       QString text = error;
       text[0] = text[0].toUpper();

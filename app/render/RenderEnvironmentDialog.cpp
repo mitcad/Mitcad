@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "render/RenderEnvironmentDialog.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -278,7 +279,7 @@ void RenderEnvironmentDialog::refresh() {
   try {
     m_settings = m_host.model().queryObject({{QStringLiteral("query"), QStringLiteral("render_settings")}});
   } catch (const std::exception& e) {
-    m_message->setText(QString::fromUtf8(e.what()));
+    m_message->setText(mitcad::modelMessage(e.what()));
     return;
   }
   m_building = true;
@@ -386,7 +387,7 @@ void RenderEnvironmentDialog::change(const QString& key, const QJsonValue& value
     m_message->clear();
     qDebug().noquote() << QStringLiteral("Render setting %1 = %2").arg(key, text);
   } else {
-    m_message->setText(m_host.lastError());
+    m_message->setText(mitcad::modelMessage(m_host.lastError()));
     qDebug().noquote() << QStringLiteral("Render setting %1 = %2 refused: %3").arg(key, text, m_host.lastError());
   }
   refresh();
@@ -419,7 +420,7 @@ void RenderEnvironmentDialog::reset() {
     m_message->clear();
     qDebug().noquote() << "Render settings reset";
   } else {
-    m_message->setText(m_host.lastError());
+    m_message->setText(mitcad::modelMessage(m_host.lastError()));
   }
   refresh();
 }
@@ -827,7 +828,7 @@ void RenderEnvironmentDialog::addLight() {
     m_lightId = result.value(QStringLiteral("id")).toString();
     qDebug().noquote() << QStringLiteral("Render light %1 added (%2)").arg(m_lightId, type);
   } else {
-    m_message->setText(m_host.lastError());
+    m_message->setText(mitcad::modelMessage(m_host.lastError()));
   }
   refresh();
 }
@@ -847,7 +848,7 @@ void RenderEnvironmentDialog::deleteLight() {
     m_message->clear();
     qDebug().noquote() << QStringLiteral("Render light %1 deleted").arg(id);
   } else {
-    m_message->setText(m_host.lastError());
+    m_message->setText(mitcad::modelMessage(m_host.lastError()));
   }
   refresh();
 }
@@ -868,7 +869,7 @@ void RenderEnvironmentDialog::changeLight(const QJsonObject& fields, const QStri
     m_message->clear();
     qDebug().noquote() << QStringLiteral("Render light %1 %2").arg(m_lightId, what);
   } else {
-    m_message->setText(m_host.lastError());
+    m_message->setText(mitcad::modelMessage(m_host.lastError()));
     qDebug().noquote() << QStringLiteral("Render light %1 %2 refused: %3").arg(m_lightId, what, m_host.lastError());
   }
   refresh();

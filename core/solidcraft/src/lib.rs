@@ -59,12 +59,19 @@ pub struct SolidcraftFile {
 pub const MAX_BYTES: usize = 256 << 20;
 
 impl SolidcraftFile {
+    /// Reads the design at `path`. A file with an extension other programs
+    /// use too (`.sc`, [`has_shared_extension`]) is read only when its
+    /// format key says it is a SolidCraft design ([`check_design`]), else
+    /// refused with "Not a SolidCraft design: …" (mitcad#1622).
     pub fn open(path: &Path) -> Result<Self, String> {
         let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
         if meta.len() as usize > MAX_BYTES {
             return Err(format!("the file is larger than {} MiB", MAX_BYTES >> 20));
         }
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        if has_shared_extension(path) {
+            check_design(&bytes).map_err(|reason| format!("Not a SolidCraft design: {reason}"))?;
+        }
         Self::from_bytes(&bytes)
     }
 
@@ -140,6 +147,165 @@ pub fn version_of(s: &str) -> Option<u32> {
         .or_else(|| s.strip_prefix("solvecraft/"))?
         .parse()
         .ok()
+}
+
+/// The extensions of SolidCraft designs, lower case: `.sc`, which
+/// SolidCraft saves designs as now (mitcad#1622), `.solidcraft`, and the
+/// legacy `.solvecraft`.
+pub const EXTENSIONS: [&str; 3] = ["sc", "solidcraft", "solvecraft"];
+
+/// The extensions of [`EXTENSIONS`] that other programs use too: a file
+/// with one is a design only when [`check_design`] passes.
+pub const SHARED_EXTENSIONS: [&str; 1] = ["sc"];
+
+fn extension_in(path: &Path, list: &[&str]) -> bool {
+    path.extension()
+        .and_then(|x| x.to_str())
+        .is_some_and(|x| list.iter().any(|e| x.eq_ignore_ascii_case(e)))
+}
+
+/// Whether the path has a SolidCraft design's extension (any case).
+pub fn has_design_extension(path: &Path) -> bool {
+    extension_in(path, &EXTENSIONS)
+}
+
+/// Whether the path's extension is a SolidCraft one that other programs
+/// use too (`.sc`, any case).
+pub fn has_shared_extension(path: &Path) -> bool {
+    extension_in(path, &SHARED_EXTENSIONS)
+}
+
+/// How many of a file's first bytes [`check_design`] reads for its format
+/// key.
+pub const HEAD_BYTES: usize = 64 << 10;
+
+/// Whether a file's content is a SolidCraft design by its format key: a
+/// design container (`container.json`'s `solidcraft-container/1`, which
+/// needs the whole file), or a JSON object whose top-level `format`, within
+/// its first [`HEAD_BYTES`], starts with `solidcraft/` (or the legacy
+/// `solvecraft/`). The error says why not, for "Not a SolidCraft design: …"
+/// (mitcad#1622).
+pub fn check_design(bytes: &[u8]) -> Result<(), String> {
+    if bytes.starts_with(b"PK\x03\x04") {
+        return if container::is_container(bytes) {
+            Ok(())
+        } else {
+            Err("the file is a zip archive but not a SolidCraft design container".to_owned())
+        };
+    }
+    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(HEAD_BYTES)]);
+    let format = head_format(&head)?;
+    if format.starts_with("solidcraft-drawing/") {
+        Err("the file is a SolidCraft drawing; open the designs it draws instead".to_owned())
+    } else if format.starts_with("solidcraft/") || format.starts_with("solvecraft/") {
+        Ok(())
+    } else {
+        Err(format!(
+            "the file's format is `{format}`, not a SolidCraft design's"
+        ))
+    }
+}
+
+/// [`check_design`] on the file at `path` for a path with a shared
+/// extension ([`has_shared_extension`]); any other path passes unread. A
+/// file that cannot be read passes too: the import says why. The error is
+/// the whole message, "Not a SolidCraft design: …".
+pub fn check_file(path: &Path) -> Result<(), String> {
+    use std::io::Read;
+    if !has_shared_extension(path) {
+        return Ok(());
+    }
+    let Ok(file) = std::fs::File::open(path) else {
+        return Ok(());
+    };
+    let mut head = Vec::new();
+    if file.take(HEAD_BYTES as u64).read_to_end(&mut head).is_err() {
+        return Ok(());
+    }
+    let bytes = if head.starts_with(b"PK\x03\x04") {
+        // A container's directory is at its end: the whole file, within
+        // the size the import reads.
+        match std::fs::metadata(path) {
+            Ok(meta) if meta.len() as usize <= MAX_BYTES => match std::fs::read(path) {
+                Ok(all) => all,
+                Err(_) => return Ok(()),
+            },
+            _ => return Ok(()),
+        }
+    } else {
+        head
+    };
+    check_design(&bytes).map_err(|reason| format!("Not a SolidCraft design: {reason}"))
+}
+
+/// The top-level `format` string of the JSON object that `head` (a file's
+/// first bytes) starts, read without parsing the rest: keys of nested
+/// objects and strings in values are skipped. The error says why there is
+/// none.
+fn head_format(head: &str) -> Result<String, String> {
+    let mut chars = head.chars().peekable();
+    let skip_space = |chars: &mut std::iter::Peekable<std::str::Chars>| {
+        while chars.peek().is_some_and(|c| c.is_whitespace()) {
+            chars.next();
+        }
+    };
+    // A string's text after its opening quote, escapes kept as written;
+    // None when the head ends inside it.
+    let string = |chars: &mut std::iter::Peekable<std::str::Chars>| -> Option<String> {
+        let mut text = String::new();
+        loop {
+            match chars.next()? {
+                '"' => return Some(text),
+                '\\' => {
+                    text.push('\\');
+                    text.push(chars.next()?);
+                }
+                c => text.push(c),
+            }
+        }
+    };
+    let not_object = || "the file is not a JSON object".to_owned();
+    let no_key = || "the file has no `format` key at its start".to_owned();
+    skip_space(&mut chars);
+    if chars.next() != Some('{') {
+        return Err(not_object());
+    }
+    let mut depth = 1usize;
+    let mut expect_key = true;
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                let text = string(&mut chars).ok_or_else(no_key)?;
+                if depth == 1 && expect_key {
+                    expect_key = false;
+                    skip_space(&mut chars);
+                    match chars.next() {
+                        Some(':') => {}
+                        Some(_) => return Err(not_object()),
+                        None => return Err(no_key()),
+                    }
+                    if text == "format" {
+                        skip_space(&mut chars);
+                        return match chars.next() {
+                            Some('"') => string(&mut chars).ok_or_else(no_key),
+                            Some(_) => Err("the file's `format` is not a string".to_owned()),
+                            None => Err(no_key()),
+                        };
+                    }
+                }
+            }
+            '{' | '[' => depth += 1,
+            '}' | ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Err(no_key());
+                }
+            }
+            ',' if depth == 1 => expect_key = true,
+            _ => {}
+        }
+    }
+    Err(no_key())
 }
 
 /// Whether bytes look like a SolidCraft design: a container, or JSON with

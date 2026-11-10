@@ -3262,11 +3262,18 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
             ));
         }
         if !cleaned.unlinked.is_empty() {
-            warnings.push(format!(
-                "unlinked, their curves kept as fixed references: the projection{} of {}",
-                if cleaned.unlinked.len() == 1 { "" } else { "s" },
-                cleaned.unlinked.join(", ")
-            ));
+            // One and several as whole messages (mitcad#1284).
+            warnings.push(if cleaned.unlinked.len() == 1 {
+                format!(
+                    "unlinked, its curves kept as fixed references: the projection of {}",
+                    cleaned.unlinked.join(", ")
+                )
+            } else {
+                format!(
+                    "unlinked, their curves kept as fixed references: the projections of {}",
+                    cleaned.unlinked.join(", ")
+                )
+            });
         }
         for why in [Keep::Region, Keep::UserCurve, Keep::Constrained, Keep::Used] {
             let ids: Vec<EntityUid> = cleaned

@@ -378,9 +378,9 @@ fn filament_sources(
                 .collect()
         });
     let count = names.as_ref().map(Vec::len).filter(|n| *n > 0);
-    let sources = (0..shared.slot_parts.len())
+    let sources = (0..shared.slot_settings.len())
         .map(|slot| {
-            let settings = shared.parts[shared.slot_parts[slot]].settings;
+            let settings = shared.slot_settings[slot];
             let own = settings
                 .slicer
                 .get(dialect.id())
@@ -494,6 +494,248 @@ fn write_purge(config: &mut Map<String, Value>, purge: &crate::print_purge::Matr
     config.insert(MULTIPLIER.to_owned(), text(m));
 }
 
+/// The family's prime (wipe) tower switch, a process setting of the whole
+/// project.
+const PRIME_TOWER: &str = "enable_prime_tower";
+
+/// Whether the filaments beyond the first are only the manual filament
+/// changes' (mitcad#1596): every plate's parts (the build's objects
+/// `listed` on each of `plates`; without plates, every part) print with
+/// one filament. A change on such a plate is the one-extruder printer's
+/// swap of its spool, not a print of several filaments at once.
+fn manual_changes_only(
+    shared: &Shared<'_>,
+    listed: &[(&str, &[usize])],
+    plates: &[super::ExportPlate<'_>],
+) -> bool {
+    if plates.is_empty() {
+        return one_filament(shared, 0..shared.parts.len());
+    }
+    plates.iter().all(|plate| {
+        let parts = plate
+            .objects
+            .iter()
+            .filter_map(|&o| listed.get(o))
+            .flat_map(|(_, own)| own.iter().copied());
+        one_filament(shared, parts)
+    })
+}
+
+/// Whether parts (indices) print with one filament slot at most.
+fn one_filament(shared: &Shared<'_>, parts: impl Iterator<Item = usize>) -> bool {
+    parts
+        .map(|i| shared.slots[i])
+        .collect::<BTreeSet<usize>>()
+        .len()
+        <= 1
+}
+
+/// Turns the prime tower off for manual filament changes (mitcad#1596).
+/// The family's slicers build a prime tower whenever a plate prints with
+/// more than one filament, the slot a change adds included, at the
+/// project's `wipe_tower_x` / `wipe_tower_y` (per plate; the slicers'
+/// defaults are a corner of their own printers' beds, which a printer of
+/// another size does not have: a tower outside its printable area stops
+/// the slicing). A manual change needs no tower: the printer purges the
+/// old filament in its own filament-change G-code (the swap of the
+/// spool), the tower's other layers would only print waste, and its place
+/// would have to follow the bed and every object on it. A design that
+/// turned the tower on is told.
+fn prime_tower_off(config: &mut Map<String, Value>, warnings: &mut Vec<String>) {
+    let on = config
+        .get(PRIME_TOWER)
+        .and_then(source::json_text)
+        .is_some_and(|t| matches!(t.trim(), "1" | "true"));
+    if on {
+        warnings.push(
+            "the prime tower is written off: the filament changes at print heights are manual \
+             changes of one extruder, which need none"
+                .to_owned(),
+        );
+    }
+    config.insert(PRIME_TOWER.to_owned(), json!("0"));
+    differs_from_preset(config, 0, PRIME_TOWER);
+}
+
+/// The filament diameters, one per filament.
+const DIAMETER: &str = "filament_diameter";
+
+/// The diameter the family's slicers take for a filament that gives none,
+/// mm (their default, and every generic filament's of MitCad's).
+const DEFAULT_DIAMETER: &str = "1.75";
+
+/// Writes `filament_diameter` with an entry per filament slot (mitcad#1596)
+/// when no slot set it: OrcaSlicer (and the family) count a project's
+/// filaments by that list (`ToolOrdering`: `num_filaments =
+/// filament_diameter.size()`; `emit_custom_gcode_per_print_z`: a print
+/// of one filament when it has one entry), and a project of one entry
+/// takes a filament change at a height as a colour change, whose G-code
+/// the family's export leaves out ("inserting color gcode is removed"):
+/// the change went missing. A list of another length is fitted (its
+/// first entry for the slots it lacks).
+fn filament_count_written(config: &mut Map<String, Value>, slots: usize) {
+    if slots < 2 {
+        return;
+    }
+    let fitted: Vec<Value> = match config.get(DIAMETER) {
+        Some(Value::Array(items)) if items.len() == slots => return,
+        Some(Value::Array(items)) if !items.is_empty() => (0..slots)
+            .map(|i| items.get(i).unwrap_or(&items[0]).clone())
+            .collect(),
+        Some(other) => match source::json_text(other) {
+            Some(text) => vec![json!(text); slots],
+            None => vec![json!(DEFAULT_DIAMETER); slots],
+        },
+        None => vec![json!(DEFAULT_DIAMETER); slots],
+    };
+    config.insert(DIAMETER.to_owned(), Value::Array(fitted));
+}
+
+/// The printer's G-code at a change of filament.
+const CHANGE_GCODE: &str = "change_filament_gcode";
+
+/// The filament change G-code the export writes for a printer without one
+/// (mitcad#1596): M600, the filament change of Marlin and of PrusaSlicer's
+/// default colour change, but not at the first filament of the print (the
+/// family's slicers run this G-code there too, with `previous_extruder`
+/// -1 in their `GCode::set_extruder`).
+const MANUAL_CHANGE_GCODE: &str =
+    "{if previous_extruder > -1}{if previous_extruder != next_extruder}M600{endif}{endif}";
+
+/// The printer's filament change G-code for manual changes (mitcad#1596):
+/// with two filaments in the project the family's slicers emit a change at
+/// a height as a tool change, the printer's `change_filament_gcode` and
+/// `T<n>`; a printer of one extruder that has no such G-code (a printer
+/// of the design's, not the slicer's) would not stop for the new spool,
+/// so the export writes [`MANUAL_CHANGE_GCODE`] and says so. A printer's
+/// own G-code stays.
+fn manual_change_gcode(config: &mut Map<String, Value>, warnings: &mut Vec<String>) {
+    let own = config
+        .get(CHANGE_GCODE)
+        .and_then(source::json_text)
+        .is_some_and(|t| !t.trim().is_empty());
+    if own {
+        return;
+    }
+    config.insert(CHANGE_GCODE.to_owned(), json!(MANUAL_CHANGE_GCODE));
+    differs_from_preset(config, usize::MAX, CHANGE_GCODE);
+    warnings.push(
+        "the printer has no filament change G-code: the filament changes at print heights are \
+         written with M600 as its change_filament_gcode (the slicer also writes the tool \
+         change T<n>, which a printer of one extruder may report as unknown)"
+            .to_owned(),
+    );
+}
+
+/// The family's relative extrusion switch and its G-code at each layer
+/// change (before the move to the new layer, then after it).
+const RELATIVE_E: &str = "use_relative_e_distances";
+const BEFORE_LAYER_GCODE: &str = "before_layer_change_gcode";
+const LAYER_GCODE: &str = "layer_change_gcode";
+
+/// The line that resets the extruder's position.
+const RESET_E: &str = "G92 E0";
+
+/// Whether a G-code text has a line that resets the extruder's position,
+/// as OrcaSlicer's and PrusaSlicer's check of a printer's layer G-code
+/// reads one (`Print::validate`, the expression
+/// `^[ \t]*[gG]92[ \t]*[eE](0(\.0*)?|\.0+)[ \t]*(;.*)?$` on each line):
+/// `G92 E0`, `g92 e0.0`, `G92 E.0 ; reset`.
+fn resets_e(gcode: &str) -> bool {
+    let blank = |c: char| c == ' ' || c == '\t';
+    let zeros = |text: &str| text.chars().all(|c| c == '0');
+    gcode.lines().any(|line| {
+        let code = line.split(';').next().unwrap_or("");
+        let Some(rest) = code
+            .trim_start_matches(blank)
+            .strip_prefix(['G', 'g'])
+            .and_then(|r| r.strip_prefix("92"))
+        else {
+            return false;
+        };
+        // A comment must follow blanks or the zero directly; `split`
+        // removed it, so the zero ends the line but for blanks.
+        let Some(zero) = rest
+            .trim_start_matches(blank)
+            .strip_prefix(['E', 'e'])
+            .map(|z| z.trim_end_matches(blank))
+        else {
+            return false;
+        };
+        match zero.split_once('.') {
+            None => zero == "0",
+            Some(("0", fraction)) => zeros(fraction),
+            Some(("", fraction)) => !fraction.is_empty() && zeros(fraction),
+            Some(_) => false,
+        }
+    })
+}
+
+/// Makes relative extrusion valid (mitcad#1596): with
+/// `use_relative_e_distances` on (the family's default when the printer
+/// does not say), the slicers ask the printer's layer G-code to reset the
+/// extruder's position at each layer, so that the position does not lose
+/// floating point accuracy, and OrcaSlicer refuses a project without
+/// (`Print::validate`: "Add G92 E0 to layer_gcode"). When neither the
+/// before nor the after layer change G-code resets it, the export writes
+/// `G92 E0` as the last line of `before_layer_change_gcode`, where the
+/// family's own printer profiles keep it, and says relative extrusion is
+/// on. Relative extrusion stays: the prime tower works only with it.
+fn reset_e_each_layer(config: &mut Map<String, Value>) {
+    let relative = match config.get(RELATIVE_E) {
+        None => true,
+        Some(value) => source::json_text(value).is_some_and(|t| matches!(t.trim(), "1" | "true")),
+    };
+    if !relative {
+        return;
+    }
+    let text_of = |settings: &Map<String, Value>, key: &str| {
+        settings
+            .get(key)
+            .and_then(source::json_text)
+            .unwrap_or_default()
+    };
+    if resets_e(&text_of(config, BEFORE_LAYER_GCODE)) || resets_e(&text_of(config, LAYER_GCODE)) {
+        return;
+    }
+    if !matches!(
+        config.get(BEFORE_LAYER_GCODE),
+        None | Some(Value::String(_))
+    ) {
+        return; // not a text the export knows how to extend
+    }
+    let mut before = text_of(config, BEFORE_LAYER_GCODE);
+    if !before.is_empty() && !before.ends_with('\n') {
+        before.push('\n');
+    }
+    before.push_str(RESET_E);
+    config.insert(BEFORE_LAYER_GCODE.to_owned(), json!(before));
+    differs_from_preset(config, usize::MAX, BEFORE_LAYER_GCODE);
+    if !config.contains_key(RELATIVE_E) {
+        config.insert(RELATIVE_E.to_owned(), json!("1"));
+        differs_from_preset(config, usize::MAX, RELATIVE_E);
+    }
+}
+
+/// Adds `key` to an entry of `different_settings_to_system` (`entry`: 0
+/// the process's, `usize::MAX` the printer's, the last).
+fn differs_from_preset(config: &mut Map<String, Value>, entry: usize, key: &str) {
+    let Some(Value::Array(items)) = config.get_mut("different_settings_to_system") else {
+        return;
+    };
+    let last = items.len().saturating_sub(1);
+    let Some(Value::String(keys)) = items.get_mut(entry.min(last)) else {
+        return;
+    };
+    if keys.split(';').any(|k| k == key) {
+        return;
+    }
+    if !keys.is_empty() {
+        keys.push(';');
+    }
+    keys.push_str(key);
+}
+
 /// The project's settings and the parts' filaments and overrides, by the
 /// build's objects (`objects`, mitcad#856; none: one object named
 /// `model_name` of every part).
@@ -551,7 +793,7 @@ pub(super) fn export(
     // is left to the slicer's presets, one that some slots have is filled
     // for the others (mitcad#1052, `slot_values`), and the colour, the
     // type and the preset's name are always written.
-    let slots = shared.slot_parts.len().max(1);
+    let slots = shared.slot_settings.len().max(1);
     let mut filament_keys: Vec<Vec<String>> = vec![Vec::new(); slots];
     // The keys written with an entry per slot.
     let mut per_slot_keys: BTreeSet<String> = BTreeSet::new();
@@ -592,12 +834,9 @@ pub(super) fn export(
                 *entry = match def.key {
                     "filament_colour" => Some("#FFFFFF".to_owned()),
                     "filament_type" => Some("PLA".to_owned()),
-                    "filament_settings_id" => Some(
-                        shared.parts[shared.slot_parts[slot]]
-                            .settings
-                            .material_name
-                            .clone(),
-                    ),
+                    "filament_settings_id" => {
+                        Some(shared.slot_settings[slot].material_name.clone())
+                    }
                     _ => None,
                 };
             }
@@ -691,7 +930,7 @@ pub(super) fn export(
     // materials' per slot.
     let mut per_slot: BTreeMap<String, Vec<Option<String>>> = BTreeMap::new();
     for slot in 0..slots {
-        let settings = shared.parts[shared.slot_parts[slot]].settings;
+        let settings = shared.slot_settings[slot];
         let Some(keys) = settings.slicer.get(dialect.id()) else {
             continue;
         };
@@ -730,13 +969,11 @@ pub(super) fn export(
     // written filament.
     let (sources, count) = filament_sources(shared, raw);
     fit_to_filaments(&mut config, &per_slot_keys, dialect, &sources, count);
+    // The slicers count the filaments by their diameters (mitcad#1596).
+    filament_count_written(&mut config, slots);
     // The design's purge volumes (mitcad#705).
     write_purge(&mut config, &shared.purge);
-    let mut project =
-        serde_json::to_string_pretty(&Value::Object(config)).expect("settings serialize");
-    project.push('\n');
-    // Each object's parts: each part's filament and the values it does not
-    // share.
+    // The build's objects, each with its parts.
     let every: Vec<usize> = (0..shared.parts.len()).collect();
     let listed: Vec<(&str, &[usize])> = if objects.is_empty() {
         vec![(model_name, every.as_slice())]
@@ -746,6 +983,19 @@ pub(super) fn export(
             .map(|o| (o.name, o.parts.as_slice()))
             .collect()
     };
+    // Manual filament changes on plates of one filament (mitcad#1596): no
+    // prime tower.
+    if shared.layer_changes && manual_changes_only(shared, &listed, plates) {
+        prime_tower_off(&mut config, &mut warnings);
+        manual_change_gcode(&mut config, &mut warnings);
+    }
+    // Relative extrusion resets E at each layer (mitcad#1596).
+    reset_e_each_layer(&mut config);
+    let mut project =
+        serde_json::to_string_pretty(&Value::Object(config)).expect("settings serialize");
+    project.push('\n');
+    // Each object's parts: each part's filament and the values it does not
+    // share.
     let mut model = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<config>\n");
     for (index, (name, parts)) in listed.iter().enumerate() {
         let _ = writeln!(

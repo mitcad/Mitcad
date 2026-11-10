@@ -44,7 +44,7 @@ pub(crate) fn tools() -> Vec<Value> {
         ),
         tool(
             "document_open",
-            "Open a MitCad project within the configured workspace and return its document handle. The source file is not changed. A SolidCraft design (.solidcraft) is imported with its history into a new, unsaved document (save it with document_save and a path).",
+            "Open a MitCad project within the configured workspace and return its document handle. The source file is not changed. A SolidCraft design (.sc, .solidcraft) is imported with its history into a new, unsaved document (save it with document_save and a path); a .sc file whose format key is not SolidCraft's is refused.",
             json!({"path": path}),
             &["path"],
             false,
@@ -107,7 +107,7 @@ pub(crate) fn tools() -> Vec<Value> {
         ),
         tool(
             "model_export",
-            "Export geometry to a new file inside the workspace. An existing file is replaced only with overwrite: true (each file the export writes, checked before any is written). Optionally select bodies; refinement sets the mesh of STL, OBJ, 3MF and USDZ (low, medium by default, high, or {\"deviation\": mm, \"angle\": radians}; model_reference {\"section\": \"Mesh refinement\"}); DXF requires a sketch handle, or a sheet-metal body whose Flat Pattern is written, instead of bodies, unless drawing or cut_sheet is given; cut_sheet writes a cut sheet kept in the design (DXF or SVG at 1:1, model_reference {\"section\": \"Cut sheets\"}). PDF and SVG (and DXF with drawing) write a drawing of the bodies: views with hidden lines removed, overall dimensions, hole diameters, a hole table and a title block; drawing holds the export_drawing options (sheet, orientation, scale, projection, views, section, hidden_lines, ...; model_reference {\"section\": \"Drawings\"}). 3MF for a slicer: plates writes the design's print plates (one_file: every plate in one file, for Bambu Studio, OrcaSlicer, QIDI Studio and PrusaSlicer 2.9+; file_per_plate: a file per plate beside path, for Cura and older PrusaSlicer, each checked before any is written; model_reference {\"section\": \"Print plates\"}), plate one of them, dialect the slicer whose settings go with the bodies (bambu_studio, orcaslicer, qidi_studio, prusaslicer, cura); on_bed, center, drop, auto_orient, bed_face and spacing lay the pieces on the print bed (also STL and OBJ; model_reference {\"section\": \"Print bed faces\"}), occurrences and whole pick placements. The result is the export command's (plates with each plate's path, origin, bed and warnings, and files). Defaults are metric.",
+            "Export geometry to a new file inside the workspace. An existing file is replaced only with overwrite: true (each file the export writes, checked before any is written). Optionally select bodies; refinement sets the mesh of STL, OBJ, 3MF and USDZ (low, medium by default, high, or {\"deviation\": mm, \"angle\": radians}; model_reference {\"section\": \"Mesh refinement\"}); DXF requires a sketch handle, or a sheet-metal body whose Flat Pattern is written, instead of bodies, unless drawing or cut_sheet is given; cut_sheet writes a cut sheet kept in the design (DXF or SVG at 1:1, model_reference {\"section\": \"Cut sheets\"}). PDF and SVG (and DXF with drawing) write a drawing of the bodies: views with hidden lines removed, overall dimensions, hole diameters, a hole table and a title block; drawing holds the export_drawing options (sheet, orientation, scale, projection, views, section, hidden_lines, ...; model_reference {\"section\": \"Drawings\"}). 3MF for a slicer: plates writes the design's print plates (one_file: every plate in one file, for Bambu Studio, OrcaSlicer, QIDI Studio and PrusaSlicer 2.9+; file_per_plate: a file per plate beside path, for Cura and older PrusaSlicer, each checked before any is written; model_reference {\"section\": \"Print plates\"}), plate one of them, dialect the slicer whose settings go with the bodies (bambu_studio, orcaslicer, qidi_studio, prusaslicer, cura); on_bed, center, drop, auto_orient, bed_face and spacing lay the pieces on the print bed (also STL and OBJ; model_reference {\"section\": \"Print bed faces\"}), occurrences and whole pick placements. USDZ: animation writes a mechanism's motion as time-sampled placements (poses per occurrence or body, or a motion study; model_reference {\"section\": \"Animated USDZ\"}). The result is the export command's (plates with each plate's path, origin, bed and warnings, and files). Defaults are metric.",
             json!({
                 "document": document,
                 "path": path,
@@ -123,7 +123,7 @@ pub(crate) fn tools() -> Vec<Value> {
                 "plate": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "3MF: one print plate (its id like plate2, or its name) alone, in path, on the print bed"},
                 "dialect": {"type": "string", "enum": ["bambu_studio", "orcaslicer", "qidi_studio", "prusaslicer", "cura"], "description": "3MF: the slicer whose print settings go with the bodies (model_reference {\"section\": \"Print profiles\"})"},
                 "on_bed": {"type": "boolean", "default": false, "description": "3MF, STL, OBJ: the bodies on the print bed by their print bed faces, centred on the plate (implied by plates and plate)"},
-                "center": {"type": "boolean", "default": true, "description": "On the print bed: each piece's middle over the plate's centre"},
+                "center": {"type": "boolean", "default": true, "description": "On the print bed: each piece's middle over the plate's centre; a 3MF with a dialect without on_bed: the whole build's middle over it (false keeps the design's X and Y)"},
                 "drop": {"type": "boolean", "default": true, "description": "On the print bed: each piece's lowest point on the bed"},
                 "auto_orient": {"type": "boolean", "default": true, "description": "On the print bed: a piece without a usable print bed face turned onto the face the automatic orientation finds"},
                 "spacing": {"type": "number", "minimum": 0, "maximum": 1000, "default": 5, "description": "On the print bed: mm between neighbouring pieces beyond their brims (model_reference {\"section\": \"Spacing beyond the brims\"})"},
@@ -131,8 +131,12 @@ pub(crate) fn tools() -> Vec<Value> {
                 "occurrence": {"type": "string", "maxLength": NAME_CHARS, "description": "Only the placements by this occurrence (\"O1/O4\" or \"Arm:1/Pin:2\")"},
                 "occurrences": {"type": "object", "description": "3MF: per body (uid or name), the occurrences whose placements are written, e.g. {\"F2.b0\": [\"Nuts:1\"]} (\"\" the design itself; [] all of them)"},
                 "whole": {"type": "array", "items": {"type": "string", "maxLength": NAME_CHARS}, "description": "3MF on the print bed: occurrences sent whole, each one object as assembled"},
+                // Print colours by height (mitcad#1596).
+                "print_colors": {"type": "boolean", "default": false, "description": "USDZ: each placement in the colours of the filaments it prints with by height (the filament changes, set_filament_changes), as model_render's print_colors draws it, in place of the appearances; a 3MF for a slicer gets the changes themselves with dialect"},
                 // The mesh's tolerances and replacing a file (mitcad#1569).
                 "refinement": refinement_schema(),
+                // A USDZ's time-sampled placements (mitcad#1597).
+                "animation": animation_schema(),
                 "overwrite": {"type": "boolean", "default": false, "description": "Explicitly allow replacement of existing files: path, and the other files the export writes (an OBJ's .mtl, a drawing's further sheets, file_per_plate's plate files)"}
             }),
             &["document", "path", "format"],
@@ -244,6 +248,8 @@ fn render_tool() -> Value {
             "highlight": {"type": "array", "minItems": 1, "maxItems": 1000, "items": {"type": ["string", "object"]}, "description": "References drawn in the selection blue: body, feature, component or occurrence ids or body names (the whole body), face names (F2:side(c1[c4,c2])), edge names (E{...|...}, a line over everything), body/face text (Body1/F2:end(...)), {\"body\", \"face\" or \"edge\", \"occurrence\"} or an entity as ui_state lists it {\"kind\", \"owner\", \"name\"}. One naming nothing drawn is a warning"},
             "section": {"type": "object", "description": "A clip plane {\"origin\": [x,y,z], \"normal\": [x,y,z]} in mm: the side the normal points to is cut away, solid bodies capped (their color, hatched), to look inside fits and cavities"},
             "explode": {"type": "number", "minimum": 0, "maximum": 10, "default": 0, "description": "Moves top-level components (in a design of one, its bodies) apart from the drawn bodies' centre: each by this factor times its centre's distance from it; 0 draws them where they are"},
+            // Print colours by height (mitcad#1596).
+            "print_colors": {"type": "boolean", "default": false, "description": "Each body in the colours of the filaments it prints with by height, as the filament changes of the plate it prints on say (set_filament_changes; model_reference {\"section\": \"Filament changes at print heights\"}), in place of its appearances: its triangles cut at the layer boundaries, measured up from its lowest point away from its print bed face; the design is not changed"},
             "views": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": ["string", "object"]}, "description": "Several pictures in one call: each a view (as view takes it) or {\"view\", \"projection\", \"fit\", \"size\", \"section\"} over this call's arguments; structuredContent.views holds each one's camera and size in order, and an image block follows the text for each. Each picture gets max_bytes / count bytes. Not with path"}
         }),
         &["document"],
@@ -300,6 +306,50 @@ fn refinement_schema() -> Value {
             "face_triangles": {"type": "integer", "minimum": 0, "description": "A face's most triangles (about); 0, the default: no bound"},
             "max_edge": {"type": "number", "description": "STL, OBJ, 3MF: a triangle's longest edge in mm; 0, the default: none"}
         },
+        "additionalProperties": false
+    })
+}
+
+/// `model_export`'s `animation` (mitcad#1597): the `export` command's,
+/// which checks its values (commands.md, "Animated USDZ").
+fn animation_schema() -> Value {
+    let pose = json!({
+        "type": "array",
+        "minItems": 3,
+        "maxItems": 16,
+        "items": {"type": ["array", "number"]},
+        "description": "Rows of the rotation with the translation last, [[r00, r01, r02, tx], [r10, r11, r12, ty], [r20, r21, r22, tz]] (a fourth row [0, 0, 0, 1] optional; p' = M p), or the same 12 or 16 numbers row by row; a rotation and a translation only"
+    });
+    json!({
+        "type": "object",
+        "description": "USDZ: a mechanism's motion as time-sampled placements of the occurrences and bodies; the meshes and materials are written once and the design does not change. Either tracks (poses given, one per frame) or study (a saved motion study's placements). model_reference {\"section\": \"Animated USDZ\"}",
+        "properties": {
+            "fps": {"type": "number", "minimum": 0, "description": "Frames per second (> 0): the file's timeCodesPerSecond"},
+            "start": {"type": "number", "description": "The first frame's time code (default 0); the others follow one apart"},
+            "times": {"type": "array", "minItems": 1, "maxItems": 100000, "items": {"type": "number"}, "description": "Each frame's time code, increasing (instead of start)"},
+            "space": {"type": "string", "enum": ["parent", "design"], "default": "parent", "description": "tracks: parent (an occurrence's placement in its parent occurrence, a body's motion in its component) or design (where it is in the design)"},
+            "tracks": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 10000,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "occurrence": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "An occurrence path (\"O1/O4\" or \"Arm:1/Pin:2\"): each placement of a repeated or nested component moves on its own"},
+                        "body": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "A body (uid or name) written by one placement; one written by several is refused: name the occurrence"},
+                        "transforms": {"type": "array", "minItems": 1, "maxItems": 100000, "items": pose, "description": "One pose per frame; every track has as many"}
+                    },
+                    "required": ["transforms"],
+                    "additionalProperties": false
+                },
+                "description": "Poses given: each an occurrence or a body and its transforms"
+            },
+            "study": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "A saved motion study's name: its keyed joints solved at each frame's step, as play_study solves them"},
+            "from": {"type": "number", "description": "study: the first frame's step (default 0)"},
+            "to": {"type": "number", "description": "study: the last frame's step (default the study's steps)"},
+            "frames": {"type": "integer", "minimum": 1, "maximum": 100000, "description": "study: the number of frames from from to to (default one per step)"}
+        },
+        "required": ["fps"],
         "additionalProperties": false
     })
 }

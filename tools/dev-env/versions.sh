@@ -90,3 +90,18 @@ CUDA_CCCL_WINDOWS_SHA256=17aaa7c6b8f94a417d8f3261780b7e34b9cbdfab7513bce86768623
 # version with the highest minor not above its own) and PTX for compute
 # 7.5, which the driver compiles for newer GPUs (sm_80, sm_90, ...).
 CUDA_ARCHITECTURES="sm_50;sm_52;sm_60;sm_61;sm_70;sm_75;sm_86;sm_89;sm_120;compute_75"
+
+# The Chromium Embedded Framework of Insert > Component from Web's web
+# browser component (mitcad#1579): CEF's official binary distribution
+# (https://cef-builds.spotifycdn.com/, the "minimal" one: the runtime, its
+# headers, libcef_dll_wrapper's sources and its CMake files), fetched and
+# unpacked by fetch-cef.sh / fetch-cef.ps1 into ~/cef (C:\dev\cef), which
+# MITCAD_CEF_ROOT then names. The SHA-1 pins are the digests cef-builds
+# publishes beside each archive (<archive>.sha1); while a pin is empty the
+# fetch checks the archive against that published file and prints the
+# digest to pin. The web browser component's package (tools/browser-package.sh,
+# tools/browser-package.ps1) is rebuilt when CEF_VERSION changes.
+CEF_VERSION=156.0.27+ga10dae3+chromium-156.0.8078.88
+CEF_LINUX64_SHA1=1ccade9535dba5362f0c6adb05f9ae019e860af1
+CEF_MACOSARM64_SHA1=fe8d1915b99c5ad6ba00c4cc13f53af1ae289ff3
+CEF_WINDOWS64_SHA1=f3bac43e0e5a8ead78532bbc8f1de5c19f97d569

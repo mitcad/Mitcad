@@ -142,7 +142,7 @@
 //! Analyses (mitcad#41), when there are any: `analyses` (`name`,
 //! `"visible": false`, `type`: `section` with `plane`, `offset`, `flip`;
 //! `print` with `bodies`, `bed_face`, `overhang`, `thin_wall`, `estimate`,
-//! mitcad#620).
+//! mitcad#620, and `min_gap`, mitcad#1519).
 //!
 //! Motion studies and contact sets (mitcad#454), when there are any:
 //! `motion_studies` (`name`, `steps`, `keys`: `joint`, `motion`, `points`
@@ -210,6 +210,14 @@
 //! when not 1`]`, `values`: process values by key), see
 //! [`crate::print_plates`]; an item whose body or occurrence is not in the
 //! design is kept. Builds without plates treat the field as unknown.
+//!
+//! Filament changes at print heights (mitcad#1596), when there are any:
+//! `filament_changes` (`[{"plate", "changes": [{"height", "kind",
+//! "material", "appearance", "message"}]}]`: `plate` a print plate's id,
+//! left out for the design's own schedule; heights in mm above the print
+//! bed, upwards; `kind` left out for a change, `"pause"` for a pause), see
+//! [`crate::print_changes`]. Builds without them treat the field as
+//! unknown.
 //!
 //! Drawings of the root and the components (mitcad#707), when there are
 //! any: `drawings` (`uid` `D<n>`, `name`, `component` unless the root's,

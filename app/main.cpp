@@ -65,6 +65,8 @@
 #include "update/InstallationCheck.hpp"
 #include "update/OpenSslConfiguration.hpp"
 #include "view/SmallCirclesPreference.hpp"
+#include "webbrowser/BrowserComponent.hpp"
+#include "webbrowser/ComponentWebFiles.hpp"
 
 namespace {
 
@@ -293,6 +295,17 @@ int runApplication(int argc, char* argv[]) {
   // The desktop file whose icon the desktop shows (packaging/linux).
   QGuiApplication::setDesktopFileName(QStringLiteral("mitcad"));
   mitcad::integrateDesktop();
+  // The component browser's downloads that an earlier run left behind (a
+  // crash, a run killed): no running MitCad holds them (mitcad#1579).
+  if (const int removed = mitcad::WebDownloadFolders::removeLeftovers(); removed > 0) {
+    qInfo().noquote() << QStringLiteral("Component browser: removed %1 earlier run(s)' downloads").arg(removed);
+  }
+  // The web browser components other than the one in use: an update's
+  // predecessor, which the run that installed the update still had loaded.
+  if (const int removed = mitcad::removeOldBrowserComponents(mitcad::browserComponentsRoot(), QString());
+      removed > 0) {
+    qInfo().noquote() << QStringLiteral("Component from Web: removed %1 earlier web browser component(s)").arg(removed);
+  }
   // Where crash reports go, also the workers' (mitcad#62).
   mitcad::ReportCenter::prepareCrashReports();
   // The preferred temperature unit, which every temperature of materials
@@ -340,7 +353,7 @@ int runApplication(int argc, char* argv[]) {
       QStringLiteral("open"),
       QStringLiteral("Open <file> at start-up: a MitCad design (.mitcad), an .f3d or .f3z design, "
                      "a FreeCAD document (.FCStd), an .ipt part, an .iam assembly, an IFC file (.ifc, .ifczip), an "
-                     ".rvt project or .rfa family, a SolidCraft design (.solidcraft), a .dwg drawing's 3D content, "
+                     ".rvt project or .rfa family, a SolidCraft design (.sc, .solidcraft), a .dwg drawing's 3D content, "
                      "STEP, IGES, BRep, STL, OBJ or DXF as a new document."),
       QStringLiteral("file"));
   const QCommandLineOption qtDialogsOption(

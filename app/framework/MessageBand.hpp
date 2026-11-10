@@ -31,7 +31,8 @@ namespace mitcad {
 // Logged for the UI tests: `Message band: <level> <text>` for each message,
 // `Message band full: <level> <text>` when the band shows it in full and
 // `Message band stub: <level> <text> (faded|closed|next command|cleared|withdrawn)`
-// when the band turns into the stub of the latest message, `Message band
+// when the band turns into the stub of the latest message (cleared: a
+// cleared status line, or the source of the error closed, mitcad#1621), `Message band
 // cleared (another design)` when another design empties it (mitcad#1174).
 class MessageCenter : public QObject {
   Q_OBJECT
@@ -42,9 +43,11 @@ public:
   const MessageLog& log() const { return m_log; }
 
   // A message of the status line; `feature`: the uid of the feature it is
-  // about (its history row selects it), or empty. An empty text clears a
+  // about (its history row selects it), or empty; `source`: what raised it
+  // (MessageEntry::source, mitcad#1621), or empty. An empty text clears a
   // message shown in full that is no problem.
-  void post(const QString& text, NoticeLevel level, const QString& feature = QString());
+  void post(const QString& text, NoticeLevel level, const QString& feature = QString(),
+            const QString& source = QString());
   // A message with a button (mitcad#1416: "<file> changed" with Update, a
   // linked component with Open Linked Design): `action` its label, `run`
   // what it does. Shown in full, it stays until it is closed, its button is
@@ -68,6 +71,11 @@ public:
   // in full, it becomes the stub at once, a warning too (logged `Message
   // band stub: <level> <text> (withdrawn)`); otherwise nothing changes.
   void withdraw(const QString& text);
+  // A source closed (mitcad#1621, MessageLog::sourceClosed): its message
+  // shown in full, an error too, becomes the stub (logged `Message band
+  // source closed: <level> <text> (<source>)`, then `Message band stub:
+  // <level> <latest text> (cleared)`); otherwise nothing changes.
+  void closeSource(const QString& source);
 
 signals:
   // What the band shows changed (another message, or the stub).

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "PurgeVolumesDialog.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <exception>
 #include <utility>
@@ -199,7 +200,7 @@ void PurgeVolumesDialog::refresh() {
     try {
       m_table = m_host.model().queryObject({{QStringLiteral("query"), QStringLiteral("purge_volumes")}});
     } catch (const std::exception&) {
-      setMessage(QString::fromUtf8(e.what()), true);
+      setMessage(mitcad::modelMessage(e.what()), true);
       return;
     }
   }
@@ -366,7 +367,7 @@ bool PurgeVolumesDialog::run(const QJsonArray& volumes) {
     return true;
   }
   if (!m_host.lastCancelled()) {
-    setMessage(m_host.lastError(), true);
+    setMessage(mitcad::modelMessage(m_host.lastError()), true);
     qDebug().noquote() << QStringLiteral("Purge volumes refused: %1").arg(m_host.lastError());
   }
   return false;

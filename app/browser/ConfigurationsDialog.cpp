@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "ConfigurationsDialog.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -315,7 +316,7 @@ private:
       qDebug().noquote() << QStringLiteral("Configurations added option %1").arg(name);
       accept();
     } else if (!m_host.lastCancelled()) {
-      m_message->setText(m_host.lastError());
+      m_message->setText(mitcad::modelMessage(m_host.lastError()));
       qDebug().noquote() << QStringLiteral("Configurations add option %1 refused: %2").arg(name, m_host.lastError());
     }
   }
@@ -444,7 +445,7 @@ private:
       qDebug().noquote() << QStringLiteral("Configurations: column %1 added").arg(name);
       accept();
     } else if (!m_host.lastCancelled()) {
-      m_message->setText(m_host.lastError());
+      m_message->setText(mitcad::modelMessage(m_host.lastError()));
       qDebug().noquote() << QStringLiteral("Configurations add column %1 refused: %2").arg(name, m_host.lastError());
     }
   }
@@ -659,7 +660,7 @@ private:
       qDebug().noquote() << QStringLiteral("Option %1 domain: %2").arg(m_name, described);
       accept();
     } else if (!m_host.lastCancelled()) {
-      m_message->setText(m_host.lastError());
+      m_message->setText(mitcad::modelMessage(m_host.lastError()));
       qDebug().noquote() << QStringLiteral("Option %1 domain refused: %2").arg(m_name, m_host.lastError());
     }
   }
@@ -899,9 +900,9 @@ private:
       m_done = true;
       accept();
     } else if (!m_host.lastCancelled()) {
-      m_message->setText(m_host.lastError());
+      m_message->setText(mitcad::modelMessage(m_host.lastError()));
       qDebug().noquote() << QStringLiteral("Configurations generate rows from %1 for %2 refused: %3")
-                                .arg(cfg::columnReference(table, column), option, m_host.lastError());
+                                .arg(cfg::columnReference(table, column), option, mitcad::modelMessage(m_host.lastError()));
     }
   }
 
@@ -1028,7 +1029,7 @@ private:
     try {
       answer = host.model().queryObject(cfg::rowsCsvPreviewQuery(csv));
     } catch (const std::exception& e) {
-      problem = QString::fromUtf8(e.what());
+      problem = mitcad::modelMessage(e.what());
     }
     if (!problem.isEmpty()) {
       m_summary->setText(tr("%1: %2").arg(m_file, problem));
@@ -1081,7 +1082,7 @@ private:
       const QJsonObject cell = value.toObject();
       const int line = cell.value(QStringLiteral("line")).toInt();
       const QString columnName = cell.value(QStringLiteral("column")).toString();
-      const QString reason = cell.value(QStringLiteral("reason")).toString();
+      const QString reason = mitcad::modelMessage(cell.value(QStringLiteral("reason")).toString());
       refusing << tr("Line %1, %2: %3").arg(line).arg(columnName, reason);
       qDebug().noquote() << QStringLiteral("Rows import refused line %1 %2: %3").arg(line).arg(columnName, reason);
       const int r = line - 2; // the header is line 1
@@ -1096,7 +1097,7 @@ private:
         markLevel(item, NoticeLevel::Error, refusedText(reason), m_cells->palette());
       }
     }
-    const QString tableProblem = answer.value(QStringLiteral("problem")).toString();
+    const QString tableProblem = mitcad::modelMessage(answer.value(QStringLiteral("problem")).toString());
     if (!tableProblem.isEmpty()) {
       refusing << tableProblem;
       qDebug().noquote() << QStringLiteral("Rows import problem: %1").arg(tableProblem);
@@ -1433,7 +1434,7 @@ void ConfigurationsDialog::refresh() {
     const QJsonObject answer = model.queryObject(cfg::configurationsQuery());
     m_table = cfg::readTable(answer);
     for (const QJsonValue& problem : answer.value(QStringLiteral("problems")).toArray()) {
-      problems << problem.toString();
+      problems << mitcad::modelMessage(problem.toString());
     }
     m_parameters.clear();
     m_userParameters.clear();
@@ -1450,7 +1451,7 @@ void ConfigurationsDialog::refresh() {
                                    .value(QStringLiteral("tables"))
                                    .toArray());
   } catch (const std::exception& e) {
-    problems << QString::fromUtf8(e.what());
+    problems << mitcad::modelMessage(e.what());
   }
   // The options' reports; none from a model without options (an empty
   // table) or one that cannot answer.
@@ -1459,7 +1460,7 @@ void ConfigurationsDialog::refresh() {
     try {
       m_report = cfg::readReport(model.queryObject(cfg::configureQuery()));
     } catch (const std::exception& e) {
-      problems << QString::fromUtf8(e.what());
+      problems << mitcad::modelMessage(e.what());
     }
   }
   checkRows();
@@ -1520,7 +1521,7 @@ void ConfigurationsDialog::checkRows() {
         m_rowIssues.insert(row.name, *refused);
       }
     } catch (const std::exception& e) {
-      m_rowIssues.insert(row.name, cfg::Refusal{QString(), QString(), QString::fromUtf8(e.what())});
+      m_rowIssues.insert(row.name, cfg::Refusal{QString(), QString(), mitcad::modelMessage(e.what())});
     }
   }
   QStringList issues;
@@ -1796,7 +1797,7 @@ bool ConfigurationsDialog::run(const QJsonObject& command, QJsonObject* result) 
     showMessage(tr("The change was canceled."), false);
     return false;
   } else {
-    m_reason = m_host.lastError();
+    m_reason = mitcad::modelMessage(m_host.lastError());
   }
   showMessage(m_reason, true);
   return false;
@@ -2007,7 +2008,7 @@ void ConfigurationsDialog::rowEdited(QTableWidgetItem* item) {
             return;
           }
         } catch (const std::exception& e) {
-          refuse(key, what, typed, QString::fromUtf8(e.what()));
+          refuse(key, what, typed, mitcad::modelMessage(e.what()));
           refresh();
           return;
         }
@@ -2372,7 +2373,7 @@ void ConfigurationsDialog::exportRows() {
   try {
     answer = m_host.model().queryObject(cfg::rowsCsvQuery());
   } catch (const std::exception& e) {
-    showMessage(QString::fromUtf8(e.what()), true);
+    showMessage(mitcad::modelMessage(e.what()), true);
     return;
   }
   const QString folder = dialogStartFolder(DialogGroup::Export, m_host.documentFolder());

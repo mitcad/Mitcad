@@ -7,11 +7,17 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <limits>
+#include <utility>
 #include <vector>
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepPrimAPI_MakeCone.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
@@ -20,6 +26,7 @@
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
+#include <BRepPrimAPI_MakeTorus.hxx>
 #include <BRep_Tool.hxx>
 #include <Geom_BSplineSurface.hxx>
 #include <IMeshTools_Parameters.hxx>
@@ -30,7 +37,12 @@
 #include <Poly_PolygonOnTriangulation.hxx>
 #include <Poly_Triangulation.hxx>
 #include <StdPrs_DeflectionCurve.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <StdPrs_ToolTriangulatedShape.hxx>
+#include <TopExp.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
+#include <NCollection_IndexedDataMap.hxx>
+#include <NCollection_List.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <gp_Ax2.hxx>
@@ -387,6 +399,193 @@ void checkSmallCircles() {
   CHECK(circlePoints(drawnFull) == smallFull);
   CHECK(tankAdaptive == tankFull);
 }
+
+// The rim's two edges (those of its flat ring at the top) rounded 0.25 mm.
+TopoDS_Shape roundedRim(const TopoDS_Shape& shell) {
+  BRepFilletAPI_MakeFillet rounding(shell);
+  for (TopExp_Explorer face(shell, TopAbs_FACE); face.More(); face.Next()) {
+    const BRepAdaptor_Surface surface(TopoDS::Face(face.Current()));
+    if (surface.GetType() != GeomAbs_Plane) continue;
+    if (surface.Value(surface.FirstUParameter(), surface.FirstVParameter()).Z() < 1.0) continue; // the outlet's end
+    for (TopExp_Explorer edge(face.Current(), TopAbs_EDGE); edge.More(); edge.Next()) {
+      rounding.Add(0.25, TopoDS::Edge(edge.Current()));
+    }
+  }
+  return rounding.Shape();
+}
+
+// A small funnel (mitcad#1624): a tube of 10 mm and a cone of 30 degrees
+// above it, shelled 1 mm inside with both ends open (`rounded`: its rim's
+// two edges rounded 0.25 mm, as the reporter's design). Its rounded rim
+// is about 21 mm across, so the view meshes it at 0.04 mm and the shell
+// before the rounding at 0.028 mm (io::shape_deviation).
+TopoDS_Shape funnel(bool rounded) {
+  const double top = 5.0 + 10.0 * std::tan(30.0 * std::atan(1.0) / 45.0);
+  const TopoDS_Shape tube = BRepPrimAPI_MakeCylinder(5.0, 15.0).Shape();
+  const TopoDS_Shape cone = BRepPrimAPI_MakeCone(gp_Ax2(gp_Pnt(0, 0, 15), gp::DZ()), 5.0, top, 10.0).Shape();
+  ShapeUpgrade_UnifySameDomain unified(BRepAlgoAPI_Fuse(tube, cone).Shape());
+  unified.Build();
+  const TopoDS_Shape outer = unified.Shape();
+  NCollection_List<TopoDS_Shape> open;
+  for (TopExp_Explorer it(outer, TopAbs_FACE); it.More(); it.Next()) {
+    if (BRepAdaptor_Surface(TopoDS::Face(it.Current())).GetType() == GeomAbs_Plane) open.Append(it.Current());
+  }
+  // Joined by intersection, as the model's shell: the tube's and the cone's
+  // insides meet in an edge, not a rounding.
+  BRepOffsetAPI_MakeThickSolid shelled;
+  shelled.MakeThickSolidByJoin(outer, open, -1.0, 1e-3, BRepOffset_Skin, false, false, GeomAbs_Intersection);
+  if (!rounded) return shelled.Shape();
+  return roundedRim(shelled.Shape());
+}
+
+// The largest distance of a face's triangles' centroids from its surface,
+// and the most a triangle's normal turns from the surface's at its
+// centroid, in degrees.
+struct FaceFit {
+  double off = 0.0;
+  double turn = 0.0;
+};
+FaceFit faceFit(const TopoDS_Face& face) {
+  FaceFit fit;
+  TopLoc_Location location;
+  const auto mesh = BRep_Tool::Triangulation(face, location);
+  if (mesh.IsNull() || !mesh->HasUVNodes()) return fit;
+  const BRepAdaptor_Surface surface(face, false);
+  for (int t = 1; t <= mesh->NbTriangles(); ++t) {
+    int n1 = 0, n2 = 0, n3 = 0;
+    mesh->Triangle(t).Get(n1, n2, n3);
+    const gp_Pnt a = mesh->Node(n1).Transformed(location.Transformation());
+    const gp_Pnt b = mesh->Node(n2).Transformed(location.Transformation());
+    const gp_Pnt c = mesh->Node(n3).Transformed(location.Transformation());
+    const gp_XY uv = (mesh->UVNode(n1).XY() + mesh->UVNode(n2).XY() + mesh->UVNode(n3).XY()) / 3.0;
+    gp_Pnt on;
+    gp_Vec du, dv;
+    surface.D1(uv.X(), uv.Y(), on, du, dv);
+    fit.off = std::max(fit.off, on.Distance(gp_Pnt((a.XYZ() + b.XYZ() + c.XYZ()) / 3.0)));
+    const gp_Vec facet = gp_Vec(a, b).Crossed(gp_Vec(a, c));
+    const gp_Vec normal = du.Crossed(dv);
+    if (facet.Magnitude() > 1e-12 && normal.Magnitude() > 1e-12) {
+      const double angle = facet.Angle(normal) * 45.0 / std::atan(1.0);
+      fit.turn = std::max(fit.turn, std::min(angle, 180.0 - angle));
+    }
+  }
+  return fit;
+}
+
+// The most an edge's polygon on one of its faces' triangulations lies off
+// its polygon on the other's (mm): 0 when the faces meet at the same nodes,
+// more where a gap opens between them.
+double edgeGap(const TopoDS_Shape& shape, int& edges) {
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, faces);
+  double gap = 0.0;
+  edges = 0;
+  for (int e = 1; e <= faces.Extent(); ++e) {
+    const TopoDS_Edge& edge = TopoDS::Edge(faces.FindKey(e));
+    std::vector<std::vector<gp_Pnt>> sides;
+    for (const TopoDS_Shape& face : faces.FindFromIndex(e)) {
+      TopLoc_Location location;
+      const auto mesh = BRep_Tool::Triangulation(TopoDS::Face(face), location);
+      if (mesh.IsNull()) continue;
+      const auto polygon = BRep_Tool::PolygonOnTriangulation(edge, mesh, location);
+      if (polygon.IsNull()) continue;
+      std::vector<gp_Pnt> points;
+      for (int n = 1; n <= polygon->NbNodes(); ++n) {
+        points.push_back(mesh->Node(polygon->Node(n)).Transformed(location.Transformation()));
+      }
+      sides.push_back(points);
+    }
+    if (sides.size() < 2) continue;
+    ++edges;
+    for (std::size_t s = 1; s < sides.size(); ++s) {
+      for (const auto& [one, other] : {std::pair{&sides[0], &sides[s]}, std::pair{&sides[s], &sides[0]}}) {
+        for (const gp_Pnt& p : *one) {
+          double nearest = std::numeric_limits<double>::max();
+          for (std::size_t k = 1; k < other->size(); ++k) {
+            const gp_Pnt& q0 = (*other)[k - 1];
+            const gp_Pnt& q1 = (*other)[k];
+            const gp_Vec along(q0, q1);
+            const double length = along.SquareMagnitude();
+            const double t = length > 0.0 ? std::clamp(gp_Vec(q0, p).Dot(along) / length, 0.0, 1.0) : 0.0;
+            nearest = std::min(nearest, p.Distance(q0.Translated(along * t)));
+          }
+          gap = std::max(gap, nearest);
+        }
+      }
+    }
+  }
+  return gap;
+}
+
+// A small funnel's rounded rim and its outlet in the view (mitcad#1624).
+// The rim's roundings are tori of 0.25 mm about circles of 10 mm. BRepMesh
+// puts a torus's inside nodes on a grid of its edges' parameters (rows
+// 30 degrees apart round the rounding: its seam is a small circle,
+// mitcad#879), and the default's insertion left many of them out, its
+// triangles spanning the whole 120 degrees of the outer rounding (0.12 mm
+// off it at the body's 0.04 mm, normals 64 degrees off): the rim's outline
+// showed saw teeth. Tori are triangulated through Delabella's base
+// triangulation now (io's torus_algorithms). The faces meet at the same
+// nodes on every edge, the body meshed as opened and meshed after the
+// shell before it (at 0.028 mm) with the faces the rounding left as they
+// were kept: the reporter's dark sliver at the outlet is the background
+// seen through the open tube, not a gap between faces.
+void checkFunnel() {
+  const double deviation = mitcad::viewShapeDeviation(funnel(true));
+  std::printf("Small funnel: deviation %g mm\n", deviation);
+  CHECK(std::abs(deviation - 0.04) < 1e-9);
+  const auto checkFaces = [deviation](const TopoDS_Shape& body, const char* how) {
+    int tori = 0;
+    for (TopExp_Explorer it(body, TopAbs_FACE); it.More(); it.Next()) {
+      const TopoDS_Face& face = TopoDS::Face(it.Current());
+      const GeomAbs_SurfaceType type = BRepAdaptor_Surface(face).GetType();
+      if (type == GeomAbs_Plane) continue;
+      const FaceFit fit = faceFit(face);
+      TopLoc_Location location;
+      const auto mesh = BRep_Tool::Triangulation(face, location);
+      std::printf("  %s: %s face, %d triangles, off by %.3g mm, normals turned by %.3g degrees\n", how,
+                  type == GeomAbs_Torus ? "torus" : type == GeomAbs_Cone ? "cone" : "cylinder",
+                  mesh.IsNull() ? -1 : mesh->NbTriangles(), fit.off, fit.turn);
+      CHECK(fit.off <= deviation * 1.05);
+      if (type == GeomAbs_Torus) {
+        ++tori;
+        // No triangle across the rounding: its normal within 20 degrees of the surface's.
+        CHECK(fit.turn <= 20.0);
+      }
+    }
+    CHECK(tori == 2);
+    int edges = 0;
+    const double gap = edgeGap(body, edges);
+    std::printf("  %s: %d edges between two faces, the faces' polygons apart by %.3g mm\n", how, edges, gap);
+    CHECK(edges > 0);
+    CHECK(gap < 1e-6);
+  };
+  const TopoDS_Shape opened = funnel(true);
+  CHECK(mitcad::io::mesh_all_in_place({opened}, mitcad::viewMeshOptions()) == 1);
+  checkFaces(opened, "opened");
+
+  // Rounded in the view: the shell shown first, then its rounding, which
+  // keeps the faces the rounding leaves as they were (as DisplayMeshes
+  // meshes a command's result).
+  const TopoDS_Shape shell = funnel(false);
+  CHECK(mitcad::io::mesh_all_in_place({shell}, mitcad::viewMeshOptions()) == 1);
+  const TopoDS_Shape rounded = roundedRim(shell);
+  mitcad::io::reuse_triangulations(rounded, {shell});
+  CHECK(mitcad::io::mesh_all_in_place({rounded}, mitcad::viewMeshOptions()) == 1);
+  checkFaces(rounded, "rounded after the shell");
+
+  // A whole torus of the same rounding (two seams).
+  const TopoDS_Shape ring = BRepPrimAPI_MakeTorus(10.0, 0.25).Shape();
+  const double ringDeviation = mitcad::viewShapeDeviation(ring);
+  CHECK(mitcad::io::mesh_all_in_place({ring}, mitcad::viewMeshOptions()) == 1);
+  for (TopExp_Explorer it(ring, TopAbs_FACE); it.More(); it.Next()) {
+    const FaceFit fit = faceFit(TopoDS::Face(it.Current()));
+    std::printf("  ring of 0.25 mm on 10 mm: off by %.3g mm at %.3g mm, normals turned by %.3g degrees\n", fit.off,
+                ringDeviation, fit.turn);
+    CHECK(fit.off > 0.0 && fit.off <= ringDeviation * 1.05);
+    CHECK(fit.turn <= 20.0);
+  }
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -416,6 +615,7 @@ int main(int argc, char** argv) {
     checkHeldFace(drawer);
     checkUnmeshable();
     checkJobMeshesKept(drawer);
+    checkFunnel();
   } catch (const Standard_Failure& error) {
     std::fprintf(stderr, "OCCT: %s\n", error.what());
     return 1;

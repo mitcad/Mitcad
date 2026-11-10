@@ -9,6 +9,7 @@
 // pick shows where its origin snaps; the preview shows the occurrences
 // where the joint puts them (the preview's `placements`).
 #include "Commands.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1015,7 +1016,7 @@ CommandDef jointOriginCommand(const CommandContext& context) {
     try {
       datum = context.queryObject({{QStringLiteral("query"), QStringLiteral("datum")}, {QStringLiteral("uid"), str(made, "uid")}});
     } catch (const std::exception& e) {
-      return QStringLiteral("Added joint origin %1: %2").arg(str(made, "name"), QString::fromUtf8(e.what()));
+      return QStringLiteral("Added joint origin %1: %2").arg(str(made, "name"), mitcad::modelMessage(e.what()));
     }
     const auto xyz = [&datum](const char* key) {
       QStringList parts;
@@ -2017,7 +2018,7 @@ CommandDef motionLinkCommand(const CommandContext& context) {
           link.insert(QStringLiteral("offset"), valueText(bMotion, offset, context));
         }
       } catch (const std::exception& e) {
-        return Built::failure(QString::fromUtf8(e.what()), QStringLiteral("b"));
+        return Built::failure(mitcad::modelMessage(e.what()), QStringLiteral("b"));
       }
     } else {
       const QString input = isTurn(bMotion) ? QStringLiteral("offset_angle") : QStringLiteral("offset");

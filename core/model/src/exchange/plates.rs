@@ -670,7 +670,9 @@ impl<K: Kernel> Document<K> {
                     settings,
                     exported,
                 };
-                let mut out = self.write_3mf(path, built, dialect, &export_plates)?;
+                // Each plate's filament changes (mitcad#1596).
+                let ids: Vec<Option<&str>> = plates.iter().map(|p| Some(p.id.as_str())).collect();
+                let mut out = self.write_3mf(path, built, dialect, &export_plates, &ids)?;
                 out.plates = plates_written;
                 Ok(out)
             }
@@ -723,7 +725,13 @@ impl<K: Kernel> Document<K> {
                         objects: (0..objects.max(1)).collect(),
                         values: &plate.values,
                     }];
-                    let out = self.write_3mf(&file, built, dialect, &one)?;
+                    // The plate's filament changes (mitcad#1596), counted
+                    // by the plate's place among the design's.
+                    let mut out =
+                        self.write_3mf(&file, built, dialect, &one, &[Some(plate.id.as_str())])?;
+                    for event in &mut out.layer_events {
+                        event.plate = i;
+                    }
                     written.path = Some(file);
                     written.bodies = out.bodies.clone();
                     written.pieces = content.pieces.len();
@@ -864,4 +872,5 @@ fn merge(into: &mut Exported, from: Exported) {
     into.slots.extend(from.slots);
     into.printed.extend(from.printed);
     into.parts.extend(from.parts);
+    into.layer_events.extend(from.layer_events);
 }

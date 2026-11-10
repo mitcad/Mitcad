@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "LibraryDialogs.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -55,7 +56,7 @@ namespace mitcad {
 namespace {
 
 QString errorOf(const QJsonObject& answer) {
-  return answer.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString();
+  return mitcad::modelMessage(answer.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString());
 }
 
 QString shortRev(const QString& rev) { return rev.left(7); }
@@ -1880,7 +1881,7 @@ void PublishLibraryDialog::add() {
     say(tr("Error: %1").arg(error.toString()));
   }
   for (const QJsonValue& warning : added.value(QStringLiteral("warnings")).toArray()) {
-    say(tr("Warning: %1").arg(warning.toString()));
+    say(tr("Warning: %1").arg(mitcad::modelMessage(warning.toString())));
   }
   // Recorded as a version of the library's project.
   QJsonArray files;

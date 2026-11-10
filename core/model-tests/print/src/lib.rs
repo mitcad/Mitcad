@@ -32,5 +32,10 @@ mod process_printers_tests;
 mod library_own_colour_tests;
 // model_render's overlay from Print Analysis' functions (mitcad#1488).
 mod render_overlay_tests;
+// Narrow gaps between bodies printed in place (mitcad#1519).
+mod print_min_gap_tests;
+// Filament changes at print heights: the schedule, the slicers' 3MF
+// events and the print colours (mitcad#1596).
+mod filament_change_tests;
 // The plate an item left when place_on_plate moves it (mitcad#1595).
 mod plate_moves_tests;

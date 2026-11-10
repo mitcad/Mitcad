@@ -380,6 +380,8 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("keep_drawing_model_items", Model),
     // Line styles in drawing views (mitcad#1546, `drawing_lines.rs`).
     ("edit_drawing_line", Model),
+    // Filament changes at print heights (mitcad#1596).
+    ("set_filament_changes", Model),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -594,6 +596,10 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("sketch_loop", Model),
     // Read-only guidance from existing modeling results (mitcad#1513).
     ("design_review", Model),
+    // Narrow gaps between bodies printed in place (mitcad#1519).
+    ("print_min_gap", Model),
+    // Filament changes at print heights (mitcad#1596).
+    ("filament_changes", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

@@ -122,8 +122,8 @@ pub use {
     mirror::MirrorDef,
     moves::{MoveDef, MoveSpec},
     pattern::{
-        CircularPatternDef, ComputeOption, PathPatternDef, PatternDirection, PatternObjects,
-        RectangularPatternDef, SpacingType,
+        CircularAxis, CircularPatternDef, ComputeOption, PathPatternDef, PatternDirection,
+        PatternObjects, RectangularPatternDef, SpacingType,
     },
     primitive::{BoxDef, CylinderDef, SphereDef, TorusDef, TorusPosition},
     scale::{ScaleDef, ScaleSpec},
@@ -844,6 +844,10 @@ pub(crate) struct Env<'a, S> {
     pub split_pieces: &'a SplitPieces,
     pub changed_pieces: &'a BTreeMap<BodyUid, String>,
     pub gone_pieces: &'a BTreeMap<BodyUid, FeatureUid>,
+    /// The bodies' attributes (`DocState::body_attributes`): print-shaped
+    /// holes read their bodies' print bed faces (mitcad#1515), through
+    /// [`EvalContext::print_bed_face`].
+    pub body_attributes: &'a BTreeMap<BodyUid, crate::document::BodyAttributes>,
 }
 
 // (References only: an evaluation and its preview's extra see the same,
@@ -1029,6 +1033,18 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             }
         }
         self.warn(message);
+    }
+
+    /// A body's print bed face as it was assigned (mitcad#731), None
+    /// without one; a read, so that a result that used it is evaluated
+    /// again when it changes (print-shaped holes, mitcad#1515).
+    pub(crate) fn print_bed_face(&mut self, body: BodyUid) -> Option<String> {
+        let face = crate::recompute::print_bed_of(self.env.body_attributes, body).cloned();
+        let read = Read::PrintBed(body, face.clone());
+        if !self.reads.contains(&read) {
+            self.reads.push(read);
+        }
+        face
     }
 
     /// Information about the feature that needs no action (mitcad#1106).

@@ -43,4 +43,15 @@ bool clickAddsToSelection() { return QSettings().value(QLatin1String(kClickAddsS
 
 void saveClickAddsToSelection(bool on) { QSettings().setValue(QLatin1String(kClickAddsSetting), on); }
 
+// Esc leaves an unchanged sketch (mitcad#1623).
+namespace {
+
+const char* const kEscLeavesSetting = "sketch/escLeavesUnchangedSketch";
+
+} // namespace
+
+bool escLeavesUnchangedSketch() { return QSettings().value(QLatin1String(kEscLeavesSetting), false).toBool(); }
+
+void saveEscLeavesUnchangedSketch(bool on) { QSettings().setValue(QLatin1String(kEscLeavesSetting), on); }
+
 } // namespace mitcad::sketch

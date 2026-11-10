@@ -25,9 +25,18 @@
 //       translated as its source with accented letters, a third longer and in
 //       brackets, placeholders, accelerators, markup and a trailing ellipsis
 //       or colon kept, to show untranslated and cut texts
+//   mitcad-translations messages SOURCE-ROOT [--write]
+//       the ctest repo.model-messages (mitcad#1284): the model's message
+//       templates of core/'s Rust sources against the generated list
+//       app/framework/ModelMessageTemplates.cpp, or (--write) the list
+//       written again (tools/translations-update.cmake, before lupdate reads
+//       it into the model_<code>.ts files)
 //   mitcad-translations --self-test
-//       checks the parser, the checks and the pseudo-language on planted
-//       catalogues
+//       checks the parser, the checks, the pseudo-language and the scan of
+//       the model's messages on planted catalogues and sources
+//
+// A language's model_<code>.ts (the model's messages, mitcad#1284) is
+// checked with its mitcad_<code>.ts and counted in its baseline.
 //
 // The .ts files are lupdate's XML; this reads them with a small scanner of
 // its own (the elements context, name, message, source, comment,
@@ -36,9 +45,11 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <set>
 #include <sstream>
@@ -462,8 +473,7 @@ int checkLanguages(const fs::path& list, bool write) {
       ++problems;
       continue;
     }
-    const Counts found = examine(catalogue);
-    counts[entry.code] = found.unfinished;
+    Counts found = examine(catalogue);
     for (const std::string& problem : found.problems) {
       std::cerr << file.string() << ": " << problem << "\n";
     }
@@ -473,6 +483,30 @@ int checkLanguages(const fs::path& list, bool write) {
                 << " obsolete or vanished entries (refresh it with tools/translations-update.cmake, which drops them)\n";
       ++problems;
     }
+    // The model's messages of the language (mitcad#1284), counted with it.
+    const fs::path model = folder / ("model_" + entry.code + ".ts");
+    if (fs::exists(model)) {
+      const std::string modelText = readFile(model, read);
+      Catalogue modelCatalogue;
+      if (!read || !parse(modelText, modelCatalogue, error)) {
+        std::cerr << model.string() << ": " << (read ? error : std::string("cannot read")) << "\n";
+        ++problems;
+      } else {
+        const Counts modelFound = examine(modelCatalogue);
+        for (const std::string& problem : modelFound.problems) {
+          std::cerr << model.string() << ": " << problem << "\n";
+        }
+        problems += static_cast<int>(modelFound.problems.size());
+        if (modelFound.obsolete > 0) {
+          std::cerr << model.string() << ": " << modelFound.obsolete
+                    << " obsolete or vanished entries (refresh it with tools/translations-update.cmake)\n";
+          ++problems;
+        }
+        found.unfinished += modelFound.unfinished;
+        found.finished += modelFound.finished;
+      }
+    }
+    counts[entry.code] = found.unfinished;
     std::cout << entry.code << ": " << found.finished << " translated, " << found.unfinished << " unfinished (baseline "
               << entry.baseline << ")\n";
     if (!write && found.unfinished > entry.baseline) {
@@ -488,8 +522,10 @@ int checkLanguages(const fs::path& list, bool write) {
   std::error_code walkError;
   for (const fs::directory_entry& entry : fs::directory_iterator(folder, walkError)) {
     const std::string name = entry.path().filename().string();
-    if (name.rfind("mitcad_", 0) == 0 && entry.path().extension() == ".ts") {
-      const std::string code = name.substr(7, name.size() - 7 - 3);
+    const bool model = name.rfind("model_", 0) == 0;
+    if ((name.rfind("mitcad_", 0) == 0 || model) && entry.path().extension() == ".ts") {
+      const std::size_t prefix = model ? 6 : 7;
+      const std::string code = name.substr(prefix, name.size() - prefix - 3);
       if (codes.count(code) == 0) {
         std::cerr << entry.path().string() << ": not in " << list.string() << " (add the line \"" << code
                   << " <unfinished entries>\")\n";
@@ -676,6 +712,486 @@ int transform(const fs::path& in, const fs::path& out, bool pseudoLanguage) {
   return 0;
 }
 
+// The model's messages (mitcad#1284, docs/translations.md "The model's
+// messages"): the message texts of core/'s Rust sources as templates, their
+// values as %1, %2, ... The application matches a message to its template
+// and translates it (app/framework/ModelMessages.cpp); the templates are
+// app/framework/ModelMessageTemplates.cpp, which lupdate reads into the
+// model_<code>.ts files.
+
+bool asciiLetter(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+bool asciiDigit(char c) { return c >= '0' && c <= '9'; }
+bool identChar(char c) { return asciiLetter(c) || asciiDigit(c) || c == '_'; }
+
+// A format argument of Rust's: {}, {name}, {0}, {:.2}, {name:>8}.
+bool placeholderSpec(const std::string& inner) {
+  std::size_t j = 0;
+  while (j < inner.size() && identChar(inner[j])) ++j;
+  if (j == inner.size()) return true;
+  if (inner[j] != ':') return false;
+  return inner.find_first_of("{}", j) == std::string::npos;
+}
+
+// The template of a literal's text, or "" when it is no message: a text
+// with two words of letters side by side, not markup, not a value list.
+std::string messageTemplate(const std::string& text) {
+  std::string out;
+  std::string fixed; // the text with a space for each placeholder
+  int count = 0;
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    const char c = text[i];
+    if (c == '{') {
+      if (i + 1 < text.size() && text[i + 1] == '{') {
+        out += '{';
+        fixed += '{';
+        ++i;
+        continue;
+      }
+      const std::size_t close = text.find('}', i + 1);
+      if (close != std::string::npos && placeholderSpec(text.substr(i + 1, close - i - 1))) {
+        ++count;
+        out += "%" + std::to_string(count);
+        fixed += ' ';
+        i = close;
+        // "%1" followed by a digit would read as %10.
+        if (i + 1 < text.size() && asciiDigit(text[i + 1])) return std::string();
+        continue;
+      }
+      out += c;
+      fixed += c;
+      continue;
+    }
+    if (c == '}' && i + 1 < text.size() && text[i + 1] == '}') {
+      out += '}';
+      fixed += '}';
+      ++i;
+      continue;
+    }
+    out += c;
+    fixed += c;
+  }
+  if (count > 99) return std::string();
+  for (const char c : out) {
+    const auto byte = static_cast<unsigned char>(c);
+    if (byte >= 1 && byte <= 31 && c != '\n') return std::string();
+  }
+  for (std::size_t i = 0; i + 1 < fixed.size(); ++i) {
+    if (fixed[i] == '%' && asciiDigit(fixed[i + 1])) return std::string();
+  }
+  bool words = false;
+  for (std::size_t p = 2; p + 2 < fixed.size() && !words; ++p) {
+    words = fixed[p] == ' ' && asciiLetter(fixed[p - 1]) && asciiLetter(fixed[p - 2]) && asciiLetter(fixed[p + 1]) &&
+            asciiLetter(fixed[p + 2]);
+  }
+  if (!words) return std::string();
+  const std::size_t first = fixed.find_first_not_of(" \t");
+  if (first != std::string::npos && fixed[first] == '<') return std::string();
+  if (fixed.find("=\"") != std::string::npos) return std::string();
+  return out;
+}
+
+// A line without its leading blanks and its trailing blanks and carriage
+// return.
+std::string trimmedLine(const std::string& line) {
+  std::size_t begin = 0;
+  while (begin < line.size() && (line[begin] == ' ' || line[begin] == '\t')) ++begin;
+  std::size_t end = line.size();
+  if (end > begin && line[end - 1] == '\r') --end;
+  while (end > begin && (line[end - 1] == ' ' || line[end - 1] == '\t')) --end;
+  return line.substr(begin, end - begin);
+}
+
+// Whether `rest` starts with a module's head, `mod tests {` (pub, pub(crate)).
+bool moduleStart(const std::string& rest) {
+  std::size_t i = 0;
+  const auto blanks = [&rest](std::size_t at) {
+    while (at < rest.size() && (rest[at] == ' ' || rest[at] == '\t')) ++at;
+    return at;
+  };
+  i = blanks(i);
+  const auto tryMod = [&rest, &blanks](std::size_t at) {
+    if (rest.compare(at, 3, "mod") != 0) return false;
+    std::size_t j = at + 3;
+    const std::size_t afterMod = blanks(j);
+    if (afterMod == j) return false;
+    j = afterMod;
+    const std::size_t name = j;
+    while (j < rest.size() && identChar(rest[j])) ++j;
+    if (j == name) return false;
+    j = blanks(j);
+    return j < rest.size() && rest[j] == '{';
+  };
+  if (rest.compare(i, 3, "pub") == 0) {
+    std::size_t j = i + 3;
+    if (j < rest.size() && rest[j] == '(') {
+      std::size_t k = j + 1;
+      while (k < rest.size() && rest[k] >= 'a' && rest[k] <= 'z') ++k;
+      if (k > j + 1 && k < rest.size() && rest[k] == ')') j = k + 1;
+    }
+    const std::size_t after = blanks(j);
+    if (after > j && tryMod(after)) return true;
+  }
+  return tryMod(i);
+}
+
+unsigned long hexValue(const std::string& digits) {
+  unsigned long value = 0;
+  for (const char c : digits) {
+    int digit = 0;
+    if (c >= '0' && c <= '9') digit = c - '0';
+    else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10;
+    else if (c >= 'A' && c <= 'F') digit = c - 'A' + 10;
+    value = value * 16 + static_cast<unsigned long>(digit);
+  }
+  return value;
+}
+
+// The message templates of one Rust source: its string literals outside
+// comments, test modules and the arguments of panics, assertions,
+// expectations and logs, as messageTemplate takes them.
+void scanRust(const std::string& s, std::set<std::string>& found) {
+  static const std::set<std::string> excluded = {
+      "panic!", "unreachable!", "unimplemented!", "todo!", "assert!", "assert_eq!", "assert_ne!",
+      "debug_assert!", "debug_assert_eq!", "debug_assert_ne!", "expect", "expect_err", "debug!", "trace!",
+      "info!", "warn!", "error!", "eprintln!", "println!", "eprint!", "print!", "log!", "dbg!"};
+  const std::size_t n = s.size();
+  const auto at = [&s, n](std::size_t i) { return i < n ? s[i] : '\0'; };
+  const auto before = [&s](std::size_t i, std::size_t back) { return i >= back ? s[i - back] : '\0'; };
+  std::vector<std::string> stack;
+  bool skipping = false;
+  long braces = 0;
+  long skipDepth = 0;
+  int pendingTest = 0;
+  std::size_t lineStart = 0;
+  const auto emit = [&](const std::string& text) {
+    if (skipping) return;
+    for (const std::string& name : stack) {
+      if (excluded.count(name) != 0) return;
+    }
+    const std::string t = messageTemplate(text);
+    if (!t.empty()) found.insert(t);
+  };
+  std::size_t i = 0;
+  while (i < n) {
+    char c = s[i];
+    if (c == '\n') {
+      const std::string line = trimmedLine(s.substr(lineStart, i - lineStart));
+      if (line == "#[cfg(test)]") {
+        pendingTest = 2;
+      } else if (pendingTest == 2 &&
+                 (line.empty() || (line.size() >= 3 && line.compare(0, 2, "#[") == 0 && line.back() == ']'))) {
+        pendingTest = 2;
+      } else if (pendingTest == 2) {
+        pendingTest = 0;
+      }
+      ++i;
+      lineStart = i;
+      if (pendingTest == 2 && moduleStart(s.substr(i, 200)) && !skipping) {
+        skipping = true;
+        skipDepth = braces;
+        pendingTest = 0;
+      }
+      continue;
+    }
+    if (c == '/' && at(i + 1) == '/') {
+      while (i < n && s[i] != '\n') ++i;
+      continue;
+    }
+    if (c == '/' && at(i + 1) == '*') {
+      int nest = 1;
+      i += 2;
+      while (i < n && nest > 0) {
+        if (s.compare(i, 2, "/*") == 0) {
+          ++nest;
+          i += 2;
+        } else if (s.compare(i, 2, "*/") == 0) {
+          --nest;
+          i += 2;
+        } else {
+          ++i;
+        }
+      }
+      continue;
+    }
+    if (c == '\'') {
+      // A character literal ('"', '\'', '°') or a lifetime ('a).
+      const char next = at(i + 1);
+      if (next == '\\') {
+        std::size_t j = i + 3;
+        while (j < n && s[j] != '\'') ++j;
+        i = j + 1;
+        continue;
+      }
+      const auto lead = static_cast<unsigned char>(next);
+      const std::size_t length = lead < 128 ? 1 : (lead < 224 ? 2 : (lead < 240 ? 3 : 4));
+      if (at(i + 1 + length) == '\'') {
+        i += 2 + length;
+        continue;
+      }
+      ++i;
+      continue;
+    }
+    const bool bytePrefix = before(i, 1) == 'b' && !identChar(before(i, 2));
+    if (c == 'r' && (!identChar(before(i, 1)) || bytePrefix) && (at(i + 1) == '"' || at(i + 1) == '#')) {
+      std::size_t j = i + 1;
+      std::size_t hashes = 0;
+      while (at(j) == '#') {
+        ++hashes;
+        ++j;
+      }
+      if (at(j) == '"') {
+        const std::string close = "\"" + std::string(hashes, '#');
+        const std::size_t end = s.find(close, j + 1);
+        if (end == std::string::npos) break;
+        if (!bytePrefix) emit(s.substr(j + 1, end - j - 1));
+        i = end + close.size();
+        continue;
+      }
+    }
+    if (c == '"') {
+      const bool bytes = bytePrefix;
+      std::string text;
+      ++i;
+      while (i < n) {
+        c = s[i];
+        if (c == '"') {
+          ++i;
+          break;
+        }
+        if (c == '\\') {
+          const char e = at(i + 1);
+          if (e == 'n') {
+            text += '\n';
+            i += 2;
+          } else if (e == 't') {
+            text += '\t';
+            i += 2;
+          } else if (e == 'r') {
+            text += '\r';
+            i += 2;
+          } else if (e == '0') {
+            text += '\x01'; // a NUL: no message
+            i += 2;
+          } else if (e == '\\' || e == '"' || e == '\'') {
+            text += e;
+            i += 2;
+          } else if (e == 'x') {
+            text += static_cast<char>(hexValue(i + 2 <= n ? s.substr(i + 2, 2) : std::string()));
+            i += 4;
+          } else if (e == 'u') {
+            const std::size_t close = s.find('}', i);
+            if (close == std::string::npos) {
+              i = n;
+              break;
+            }
+            appendUtf8(text, hexValue(s.substr(i + 3, close - i - 3)));
+            i = close + 1;
+          } else if (e == '\n' || e == '\r') {
+            // A line continued: its break and the next line's indent go.
+            ++i;
+            while (i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) ++i;
+          } else {
+            text += c;
+            ++i;
+          }
+          continue;
+        }
+        text += c;
+        ++i;
+      }
+      if (!bytes) emit(text);
+      continue;
+    }
+    if (c == '(') {
+      std::string name;
+      std::size_t j = i;
+      if (before(j, 1) == '!') {
+        name = "!";
+        --j;
+      }
+      while (j > 0 && identChar(s[j - 1])) {
+        name.insert(name.begin(), s[j - 1]);
+        --j;
+      }
+      if (name == "!") name.clear();
+      stack.push_back(name);
+      ++i;
+      continue;
+    }
+    if (c == ')') {
+      if (!stack.empty()) stack.pop_back();
+      ++i;
+      continue;
+    }
+    if (c == '{') {
+      ++braces;
+      ++i;
+      continue;
+    }
+    if (c == '}') {
+      --braces;
+      ++i;
+      if (skipping && braces == skipDepth) skipping = false;
+      continue;
+    }
+    ++i;
+  }
+}
+
+// Whether a Rust source below the root (`core/...`, with /) is scanned: not
+// tests, fuzzing, benchmarks, tools, nor the texts agents and the command
+// line read (mcp, chat, cli).
+bool scannedSource(const std::string& relative) {
+  static const std::set<std::string> folders = {"model-tests", "model-testkit", "fuzz", "mcp", "tests",
+                                                "benches", "examples", "bin", "ffi-staticlib", "target"};
+  if (relative.size() < 3 || relative.compare(relative.size() - 3, 3, ".rs") != 0) return false;
+  std::size_t from = 0;
+  while (true) {
+    const std::size_t slash = relative.find('/', from);
+    if (slash == std::string::npos) break;
+    if (folders.count(relative.substr(from, slash - from)) != 0) return false;
+    from = slash + 1;
+  }
+  const std::string name = relative.substr(from);
+  if (name.compare(0, 4, "test") == 0 || name == "mcp.rs" || name == "chat.rs" || name == "cli.rs") return false;
+  for (const char* suffix : {"_tests.rs", "_test.rs", "_corpus.rs"}) {
+    const std::size_t length = std::strlen(suffix);
+    if (name.size() >= length && name.compare(name.size() - length, length, suffix) == 0) return false;
+  }
+  return true;
+}
+
+std::set<std::string> scanCore(const fs::path& root, int& files) {
+  std::set<std::string> found;
+  files = 0;
+  std::vector<std::string> sources;
+  std::error_code error;
+  for (fs::recursive_directory_iterator it(root / "core", error), end; !error && it != end; it.increment(error)) {
+    if (!it->is_regular_file(error)) continue;
+    const std::string relative = it->path().lexically_relative(root).generic_string();
+    if (scannedSource(relative)) sources.push_back(relative);
+  }
+  std::sort(sources.begin(), sources.end());
+  for (const std::string& relative : sources) {
+    bool ok = false;
+    const std::string text = readFile(root / relative, ok);
+    if (!ok) continue;
+    ++files;
+    scanRust(text, found);
+  }
+  return found;
+}
+
+// A template as one line: its backslashes doubled, its line breaks \n (the
+// order of the generated list).
+std::string lineForm(const std::string& text) {
+  std::string out;
+  for (const char c : text) {
+    if (c == '\\') out += "\\\\";
+    else if (c == '\n') out += "\\n";
+    else out += c;
+  }
+  return out;
+}
+
+const char* const kTemplatesFile = "app/framework/ModelMessageTemplates.cpp";
+const char* const kTemplateLine = "    QT_TRANSLATE_NOOP(\"ModelMessage\", \"";
+
+std::string templatesSource(const std::set<std::string>& templates) {
+  std::map<std::string, std::string> ordered;
+  for (const std::string& text : templates) ordered.emplace(lineForm(text), text);
+  std::string out =
+      "// SPDX-License-Identifier: MIT\n"
+      "// The templates of the model's user-facing messages (mitcad#1284,\n"
+      "// docs/translations.md \"The model's messages\"): every message text of the\n"
+      "// Rust sources of core/, found by `mitcad-translations messages`, with its\n"
+      "// values as %1, %2, ... Generated, do not edit: the target\n"
+      "// update_translations writes it again (tools/translations-update.cmake),\n"
+      "// and the ctest repo.model-messages fails while it differs from the sources.\n"
+      "#include \"ModelMessages.hpp\"\n\n#include <QCoreApplication>\n\nnamespace mitcad {\n\n"
+      "const char* const kModelMessageTemplates[] = {\n";
+  for (const auto& entry : ordered) {
+    std::string literal;
+    for (const char c : entry.second) {
+      if (c == '\\') literal += "\\\\";
+      else if (c == '"') literal += "\\\"";
+      else if (c == '\n') literal += "\\n";
+      else literal += c;
+    }
+    out += kTemplateLine + literal + "\"),\n";
+  }
+  out += "};\n\nconst int kModelMessageTemplateCount =\n"
+         "    static_cast<int>(sizeof(kModelMessageTemplates) / sizeof(kModelMessageTemplates[0]));\n\n"
+         "} // namespace mitcad\n";
+  return out;
+}
+
+// The templates a generated list holds.
+std::set<std::string> templatesOf(const std::string& source) {
+  std::set<std::string> found;
+  std::istringstream lines(source);
+  std::string line;
+  const std::string head = kTemplateLine;
+  while (std::getline(lines, line)) {
+    if (line.compare(0, head.size(), head) != 0 || line.size() < head.size() + 3 ||
+        line.compare(line.size() - 3, 3, "\"),") != 0) {
+      continue;
+    }
+    const std::string literal = line.substr(head.size(), line.size() - head.size() - 3);
+    std::string text;
+    for (std::size_t i = 0; i < literal.size(); ++i) {
+      if (literal[i] == '\\' && i + 1 < literal.size()) {
+        const char e = literal[++i];
+        text += e == 'n' ? '\n' : e;
+      } else {
+        text += literal[i];
+      }
+    }
+    found.insert(text);
+  }
+  return found;
+}
+
+// messages ROOT [--write]: the templates of core/ against the generated
+// list (the ctest repo.model-messages), or the list written again.
+int messages(const fs::path& root, bool write) {
+  int files = 0;
+  const std::set<std::string> scanned = scanCore(root, files);
+  const fs::path list = root / kTemplatesFile;
+  if (files == 0) {
+    std::cerr << (root / "core").string() << ": no Rust sources\n";
+    return 1;
+  }
+  if (write) {
+    if (!writeFile(list, templatesSource(scanned))) {
+      std::cerr << list.string() << ": cannot write\n";
+      return 1;
+    }
+    std::cout << scanned.size() << " model message templates of " << files << " sources written to " << list.string()
+              << "\n";
+    return 0;
+  }
+  bool ok = false;
+  const std::set<std::string> listed = templatesOf(readFile(list, ok));
+  if (!ok) {
+    std::cerr << list.string() << ": cannot read\n";
+    return 1;
+  }
+  std::vector<std::string> added;
+  std::vector<std::string> gone;
+  std::set_difference(scanned.begin(), scanned.end(), listed.begin(), listed.end(), std::back_inserter(added));
+  std::set_difference(listed.begin(), listed.end(), scanned.begin(), scanned.end(), std::back_inserter(gone));
+  std::cout << scanned.size() << " model message templates in " << files << " sources, " << listed.size()
+            << " listed\n";
+  if (added.empty() && gone.empty()) return 0;
+  for (std::size_t i = 0; i < added.size() && i < 20; ++i) std::cerr << "new: " << lineForm(added[i]) << "\n";
+  for (std::size_t i = 0; i < gone.size() && i < 20; ++i) std::cerr << "gone: " << lineForm(gone[i]) << "\n";
+  std::cerr << list.string() << ": " << added.size() << " templates new in core/, " << gone.size()
+            << " no longer there: refresh it and the model_<code>.ts files with the target update_translations "
+               "(docs/translations.md), then translate the new ones\n";
+  return 1;
+}
+
 int selfTest() {
   int failures = 0;
   const auto expect = [&failures](bool condition, const std::string& what) {
@@ -761,6 +1277,53 @@ int selfTest() {
                                                  {{"fi", 7}, {"de", 118}});
   expect(rewritten == "# comment\nfi 7 # note\nde 118  # two spaces\nxx 0\n\n",
          "baselines rewritten with their comments kept: " + rewritten);
+  // The model's messages (mitcad#1284).
+  expect(messageTemplate("feature {uid} does not exist") == "feature %1 does not exist", "a named argument");
+  expect(messageTemplate("{slot}: the value must be {:.2} or more") == "%1: the value must be %2 or more",
+         "a format spec");
+  expect(messageTemplate("{}").empty() && messageTemplate("Fillet").empty() && messageTemplate("{} {}").empty(),
+         "no words, no message");
+  expect(messageTemplate("<svg width=\"1\" height=\"2\">").empty(), "markup is no message");
+  expect(messageTemplate("use {{\"cmd\": x}} here please") == "use {\"cmd\": x} here please", "doubled braces");
+  expect(messageTemplate("{a}0 mm left over").empty(), "a digit after a placeholder");
+  expect(messageTemplate("at 5%2 of the length").empty(), "a percent and a digit");
+  expect(messageTemplate("a tab\there in it").empty(), "a control character");
+  {
+    const std::string rust =
+        "fn f() {\n"
+        "    let a = invalid(format!(\"the radius {r} must be positive\"));\n"
+        "    panic!(\"never shown to anybody\");\n"
+        "    log::warn!(\"a log line only\");\n"
+        "    x.expect(&format!(\"an expectation text {}\", 1));\n"
+        "    let b = \"a long message \\\n"
+        "             on two lines\";\n"
+        "    let c = r#\"raw text with \"quotes\" inside\"#;\n"
+        "    let d = b\"byte string text here\";\n"
+        "    let e = '\"'; let f = \"after the quote char\";\n"
+        "    // \"a comment text here\"\n"
+        "    /* \"a block comment here\" */ let g = \"after the block comment\";\n"
+        "}\n"
+        "#[cfg(test)]\n"
+        "mod tests {\n"
+        "    fn g() { let x = \"inside a test module\"; }\n"
+        "}\n"
+        "fn h<'a>(s: &'a str) { let y = \"after the test module\"; }\n";
+    std::set<std::string> found;
+    scanRust(rust, found);
+    const std::set<std::string> wanted = {"the radius %1 must be positive", "a long message on two lines",
+                                          "raw text with \"quotes\" inside", "after the quote char",
+                                          "after the block comment", "after the test module"};
+    expect(found == wanted, "the scan of a planted Rust source: " + std::to_string(found.size()) + " templates");
+  }
+  expect(scannedSource("core/model/src/document.rs") && !scannedSource("core/model/src/tests.rs") &&
+             !scannedSource("core/mcp/src/lib.rs") && !scannedSource("core/ffi/src/chat.rs") &&
+             !scannedSource("core/model/src/x_tests.rs") && !scannedSource("core/model-tests/a/src/lib.rs") &&
+             !scannedSource("core/update/src/bin/tool.rs") && !scannedSource("core/model/src/lib.txt"),
+         "the sources scanned");
+  {
+    const std::set<std::string> some = {"a \"quoted\" text here", "a back\\slash text", "two lines\nof text"};
+    expect(templatesOf(templatesSource(some)) == some, "the generated list read back");
+  }
   if (failures == 0) std::cout << "translations self-test passed\n";
   return failures == 0 ? 0 : 1;
 }
@@ -768,6 +1331,7 @@ int selfTest() {
 void usage() {
   std::cerr << "usage: mitcad-translations check|baseline LANGUAGES.TXT\n"
                "       mitcad-translations prepare|pseudo IN.ts OUT.ts\n"
+               "       mitcad-translations messages SOURCE-ROOT [--write]\n"
                "       mitcad-translations --self-test\n";
 }
 
@@ -783,6 +1347,9 @@ int main(int argc, char* argv[]) {
   }
   if (args.size() == 3 && (args[0] == "prepare" || args[0] == "pseudo")) {
     return transform(args[1], args[2], args[0] == "pseudo");
+  }
+  if ((args.size() == 2 || (args.size() == 3 && args[2] == "--write")) && args[0] == "messages") {
+    return messages(args[1], args.size() == 3);
   }
   usage();
   return 2;

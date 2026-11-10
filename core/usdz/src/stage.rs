@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use crate::sdf::{ListOp, Path, Spec, SpecType, Specifier, Value, Variability};
-use crate::{Error, Material, Mesh, Node, Scene, TexCoords};
+use crate::{Animation, Error, Material, Mesh, Node, Placement, Scene, TexCoords};
 
 /// A valid prim name: ASCII letters, digits and `_`, not starting with a
 /// digit; a run of other characters becomes one `_`, none at the end
@@ -190,6 +190,20 @@ pub fn specs(scene: &Scene) -> Result<Vec<Spec>, Error> {
             ),
         ],
     }];
+    // The time of an animation (mitcad#1597): one time code per frame.
+    if let Some(animation) = &scene.animation {
+        let first = *animation.times.first().expect("checked");
+        let last = *animation.times.last().expect("checked");
+        out[0].fields.extend([
+            ("startTimeCode".to_owned(), Value::Double(first)),
+            ("endTimeCode".to_owned(), Value::Double(last)),
+            (
+                "timeCodesPerSecond".to_owned(),
+                Value::Double(animation.fps),
+            ),
+            ("framesPerSecond".to_owned(), Value::Double(animation.fps)),
+        ]);
+    }
     let root_at = reserve(&mut out);
     let mut root = Prim::new(Path::root().child(&root_name), "Xform");
     root.metadata("kind", Value::Token("component".to_owned()));
@@ -212,9 +226,93 @@ pub fn specs(scene: &Scene) -> Result<Vec<Spec>, Error> {
         material_specs(scene, material, path, &mut out);
     }
     scope.finish(&mut out, scope_at);
-    node_specs(&scene.root, &mut root, &materials, &mut out);
+    let times = scene.animation.as_ref().map_or(&[][..], |a| &a.times[..]);
+    node_specs(&scene.root, &mut root, &materials, times, &mut out);
     root.finish(&mut out, root_at);
     Ok(out)
+}
+
+/// An `xformOp:transform` of a placement and, when it moves, its samples
+/// at the times; then the `xformOpOrder` naming it.
+fn transform_op(prim: &mut Prim, placement: &Placement, samples: &[Placement], times: &[f64]) {
+    let op = prim.attribute(
+        "xformOp:transform",
+        "matrix4d",
+        false,
+        Some(Value::Matrix4d(placement.to_usd())),
+    );
+    if !samples.is_empty() {
+        op.fields.push((
+            "timeSamples".to_owned(),
+            Value::TimeSamples(
+                times
+                    .iter()
+                    .zip(samples)
+                    .map(|(t, p)| (*t, Value::Matrix4d(p.to_usd())))
+                    .collect(),
+            ),
+        ));
+    }
+    prim.attribute(
+        "xformOpOrder",
+        "token[]",
+        true,
+        Some(Value::TokenArray(vec!["xformOp:transform".to_owned()])),
+    );
+}
+
+/// Why an animation cannot be written, if it cannot (mitcad#1597).
+fn check_animation(animation: &Animation) -> Result<(), Error> {
+    if !(animation.fps.is_finite() && animation.fps > 0.0) {
+        return Err(Error(format!(
+            "the frame rate must be a positive number of frames per second, not {}",
+            animation.fps
+        )));
+    }
+    if animation.times.is_empty() {
+        return Err(Error(
+            "an animation needs at least one time code".to_owned(),
+        ));
+    }
+    if animation.times.iter().any(|t| !t.is_finite()) {
+        return Err(Error("the time codes must be finite numbers".to_owned()));
+    }
+    if animation.times.windows(2).any(|w| w[1] <= w[0]) {
+        return Err(Error(
+            "the time codes must increase from each sample to the next".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Why a node's or a mesh's samples cannot be written, if they cannot.
+fn check_samples(
+    name: &str,
+    samples: &[Placement],
+    animation: Option<&Animation>,
+) -> Result<(), Error> {
+    if samples.is_empty() {
+        return Ok(());
+    }
+    let Some(animation) = animation else {
+        return Err(Error(format!(
+            "{name} has samples, but the scene has no animation"
+        )));
+    };
+    if samples.len() != animation.times.len() {
+        return Err(Error(format!(
+            "{name} has {} samples for {} time codes",
+            samples.len(),
+            animation.times.len()
+        )));
+    }
+    if let Some(i) = samples.iter().position(|p| !p.is_finite()) {
+        return Err(Error(format!(
+            "{name}: the placement at time code {} is not finite",
+            animation.times[i]
+        )));
+    }
+    Ok(())
 }
 
 fn check(scene: &Scene) -> Result<(), Error> {
@@ -226,7 +324,23 @@ fn check(scene: &Scene) -> Result<(), Error> {
                 .chain(node.children.iter().flat_map(meshes)),
         )
     }
+    fn nodes(node: &Node) -> Box<dyn Iterator<Item = &Node> + '_> {
+        Box::new(std::iter::once(node).chain(node.children.iter().flat_map(nodes)))
+    }
+    if let Some(animation) = &scene.animation {
+        check_animation(animation)?;
+    }
+    for node in nodes(&scene.root) {
+        check_samples(&node.name, &node.samples, scene.animation.as_ref())?;
+    }
+    if !scene.root.samples.is_empty() {
+        return fail(format!(
+            "{}: the root does not move; move its meshes or child nodes",
+            scene.root.name
+        ));
+    }
     for mesh in meshes(&scene.root) {
+        check_samples(&mesh.name, &mesh.samples, scene.animation.as_ref())?;
         let n = mesh.points.len();
         if mesh.triangles.is_empty() {
             return fail(format!("{} has no triangles", mesh.name));
@@ -300,40 +414,41 @@ fn check(scene: &Scene) -> Result<(), Error> {
     Ok(())
 }
 
-/// A node's meshes and child nodes as prims under `prim`.
-fn node_specs(node: &Node, prim: &mut Prim, materials: &[Path], out: &mut Vec<Spec>) {
+/// A node's meshes and child nodes as prims under `prim`; `times` are the
+/// animation's time codes (none for a still scene).
+fn node_specs(
+    node: &Node,
+    prim: &mut Prim,
+    materials: &[Path],
+    times: &[f64],
+    out: &mut Vec<Spec>,
+) {
     for mesh in &node.meshes {
         let path = prim.child(&mesh.name);
-        mesh_specs(mesh, path, materials, out);
+        mesh_specs(mesh, path, materials, times, out);
     }
     for child in &node.children {
         let path = prim.child(&child.name);
         let at = reserve(out);
         let mut xform = Prim::new(path, "Xform");
-        xform.attribute(
-            "xformOp:transform",
-            "matrix4d",
-            false,
-            Some(Value::Matrix4d(child.placement.to_usd())),
-        );
-        xform.attribute(
-            "xformOpOrder",
-            "token[]",
-            true,
-            Some(Value::TokenArray(vec!["xformOp:transform".to_owned()])),
-        );
-        node_specs(child, &mut xform, materials, out);
+        transform_op(&mut xform, &child.placement, &child.samples, times);
+        node_specs(child, &mut xform, materials, times, out);
         xform.finish(out, at);
     }
 }
 
-fn mesh_specs(mesh: &Mesh, path: Path, materials: &[Path], out: &mut Vec<Spec>) {
+fn mesh_specs(mesh: &Mesh, path: Path, materials: &[Path], times: &[f64], out: &mut Vec<Spec>) {
     let at = reserve(out);
     let mut prim = Prim::new(path, "Mesh");
     prim.metadata(
         "apiSchemas",
         Value::TokenListOp(ListOp::prepended(vec!["MaterialBindingAPI".to_owned()])),
     );
+    // A mesh moved in its node (mitcad#1597): where it is by default, its
+    // samples along time.
+    if !mesh.samples.is_empty() {
+        transform_op(&mut prim, &Placement::IDENTITY, &mesh.samples, times);
+    }
     let points: Vec<[f32; 3]> = mesh.points.iter().map(|p| f32s(*p)).collect();
     let mut low = [f32::INFINITY; 3];
     let mut high = [f32::NEG_INFINITY; 3];

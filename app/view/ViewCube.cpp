@@ -62,6 +62,15 @@ namespace {
 const QColor kAccent = viewColor(ColorRole::Hover, false); // the hover's, as in the view
 // The cube's size the proportions below are for (AIS_ViewCube's default).
 constexpr double kBaseSize = 70.0;
+// The cube's parts for its nominal size (sizeViewCube, mitcad#1620): the
+// face's side and the width of the bevels of its edges and corners beside
+// it. AIS_ViewCube's own are the whole size and 0.15 of it, which left
+// small edge and corner zones; the bevels here are about twice as wide (so
+// the edges and corners about twice as easy to hit), the faces a little
+// smaller and the cube a tenth larger across (1.44 against 1.3 times the
+// size), still inside the arrows and below the Home button.
+constexpr double kFaceShare = 0.86;
+constexpr double kBevelShare = 0.29;
 // The faces' textures: about four texels to a pixel of a face at 2x.
 constexpr int kTexture = 512;
 // The cube's own perspective (mitcad#774): the tangent of half its field of
@@ -210,12 +219,14 @@ QImage faceImage(const QString& label, const Glass& glass) {
   font.setStyleHint(QFont::SansSerif);
   font.setWeight(QFont::Bold);
   font.setLetterSpacing(QFont::PercentageSpacing, 106);
-  constexpr double kLetters = 0.17; // of the face
+  // Of the face: as large on the screen as on AIS_ViewCube's larger face
+  // (0.17 of it; kFaceShare), and the widest names a little wider on it.
+  constexpr double kLetters = 0.20;
   font.setPixelSize(qRound(n * kLetters));
   QPainterPath path;
   path.addText(0, 0, font, label);
   QRectF bounds = path.boundingRect();
-  const double room = n * 0.80;
+  const double room = n * 0.86;
   if (bounds.width() > room) {
     font.setPixelSize(qRound(n * kLetters * room / bounds.width()));
     path = QPainterPath();
@@ -554,6 +565,11 @@ private:
     group->AddPrimitiveArray(triangles);
   }
 
+public:
+  // The size sizeViewCube last gave (AIS_ViewCube's default until then).
+  double m_nominal = kBaseSize;
+
+private:
   bool m_dark = false; // OcctViewer starts with a light background
   bool m_perspective = false; // in a perspective of its own (mitcad#774)
   gp_Dir m_toEye = gp::DZ();  // from the cube towards the eye
@@ -586,12 +602,38 @@ occ::handle<AIS_ViewCube> makeViewCube() {
   hover->ShadingAspect()->SetColor(occtColor(kAccent));
   hover->ShadingAspect()->SetTransparency(0.7);
   hover->ShadingAspect()->Aspect()->SetAlphaMode(Graphic3d_AlphaMode_Blend);
-  scaleViewCube(*cube);
+  sizeViewCube(*cube, kBaseSize);
+  // AIS_ViewCube's font height for the size (SetSize gave the face's).
+  cube->SetFontHeight(kBaseSize * 0.16);
   return cube;
 }
 
+void sizeViewCube(AIS_ViewCube& cube, double size) {
+  // SetSize also sets the bevels, the axes' padding and the font for the
+  // face's size: the bevels and the padding are set again here.
+  cube.SetSize(size * kFaceShare);
+  const double bevel = size * kBevelShare;
+  cube.SetBoxFacetExtension(bevel);
+  // No gap between an edge's bevel and the faces beside it, and the edges'
+  // and corners' zones never thinner than the bevel (OCCT's minimums, which
+  // only a thin bevel would reach).
+  cube.SetBoxEdgeGap(0.0);
+  cube.SetBoxEdgeMinSize(bevel);
+  cube.SetBoxCornerMinSize(bevel);
+  cube.SetAxesPadding(size * 0.1);
+  if (auto* glass = dynamic_cast<GlassViewCube*>(&cube)) {
+    glass->m_nominal = size;
+  }
+  scaleViewCube(cube);
+}
+
+double viewCubeSize(const AIS_ViewCube& cube) {
+  const auto* glass = dynamic_cast<const GlassViewCube*>(&cube);
+  return glass != nullptr ? glass->m_nominal : cube.Size();
+}
+
 void scaleViewCube(AIS_ViewCube& cube) {
-  const double scale = cube.Size() / kBaseSize;
+  const double scale = viewCubeSize(cube) / kBaseSize;
   cube.SetAxesRadius(0.9 * scale);
   cube.SetAxesConeRadius(2.4 * scale);
   cube.SetAxesSphereRadius(2.2 * scale);

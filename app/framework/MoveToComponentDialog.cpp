@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "HybridAssembly.hpp"
+#include "ModelMessages.hpp"
 
 #include <exception>
 
@@ -90,7 +91,7 @@ public:
     try {
       initial = m_model.query(query());
     } catch (const std::exception& e) {
-      m_initialError = QString::fromUtf8(e.what());
+      m_initialError = mitcad::modelMessage(e.what());
     }
     // Resolve parents in a second pass: the model need not sort its rows.
     QHash<QString, QTreeWidgetItem*> paths;
@@ -152,7 +153,7 @@ private:
       }
       plan = m_model.query(query);
     } catch (const std::exception& e) {
-      problems << QString::fromUtf8(e.what());
+      problems << mitcad::modelMessage(e.what());
     }
     for (const QJsonValue& value : plan.value(QStringLiteral("destinations")).toArray()) {
       const QJsonObject row = value.toObject();
@@ -278,7 +279,7 @@ private:
     try {
       m_plan = m_model.query(query());
     } catch (const std::exception& e) {
-      problems << QString::fromUtf8(e.what());
+      problems << mitcad::modelMessage(e.what());
     }
     for (const QJsonValue& problem : m_plan.value(QStringLiteral("problems")).toArray()) {
       problems << problem.toString();

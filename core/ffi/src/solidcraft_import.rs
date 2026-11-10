@@ -106,3 +106,12 @@ impl Document {
         Ok(report.command_result())
     }
 }
+
+/// The bridge's `solidcraft_file_check` (mitcad#1622): "Not a SolidCraft
+/// design: …" for a `.sc` file whose format key is not SolidCraft's (other
+/// programs use `.sc` too), empty for any other file.
+pub(crate) fn solidcraft_file_check(path: &str) -> String {
+    mitcad_import::solidcraft::check_file(std::path::Path::new(path))
+        .err()
+        .unwrap_or_default()
+}

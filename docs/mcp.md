@@ -1064,19 +1064,23 @@ required.
 | Tool | Arguments | Result |
 |---|---|---|
 | `document_create` | `{}` | `document`, null `path`, `state`, `timeline`, `bodies`, `applied`, empty `failed_features` |
-| `document_open` | `path` | New `document`, canonical `path`, recomputed `state`, `timeline`, `bodies`, `applied`, `failed_features`. For a `.solidcraft` design, refer to the text below the table. |
+| `document_open` | `path` | New `document`, canonical `path`, recomputed `state`, `timeline`, `bodies`, `applied`, `failed_features`. For a SolidCraft design (`.sc`, `.solidcraft`), refer to the text below the table. |
 | `document_list` | `{}` | `documents`: objects with `document`, `path`, `state` |
 | `document_close` | `document`, `discard` (default false) | `document`, `closed`. The tool refuses unsaved changes unless `discard` is true. |
 | `model_command` | `document`, `command` (a native JSON object or an array of them), `timeline` (`changed` default, `full`, `none`) | `document`, `applied`, native `result`, `failed_features`, `state`, `changes` (with `full` `timeline` and `bodies` instead); for an array also `ran`, `results`, `stopped_at`. Refer to the command arrays and results under "Live tools" and [failed features](#transport-errors-and-limits). |
 | `model_query` | `document`, `query` (a native JSON object) | `document`, native JSON in `result` |
 | `document_save` | `document`, `path`, `overwrite` (default false) | `document`, canonical `path`, saved `state` |
-| `model_export` | `document`, `path`, `format`. Optional `overwrite` (default false: an existing file is refused). Optional `bodies` (an array of names or UIDs). Optional `sketch`. For DXF, `flat_pattern`. For a drawing, `drawing`. For STL, OBJ, 3MF and USDZ, `refinement`. For 3MF, `plates`, `plate`, `dialect`, `occurrences`, `whole`; on the print bed of 3MF, STL or OBJ, `on_bed`, `center`, `drop`, `auto_orient`, `bed_face`, `spacing`; for the bodies' formats, `occurrence`. Refer to the text below the table. | `document`, canonical `path`, native export `result` |
+| `model_export` | `document`, `path`, `format`. Optional `overwrite` (default false: an existing file is refused). Optional `bodies` (an array of names or UIDs). Optional `sketch`. For DXF, `flat_pattern`. For a drawing, `drawing`. For STL, OBJ, 3MF and USDZ, `refinement`. For 3MF, `plates`, `plate`, `dialect`, `occurrences`, `whole`; on the print bed of 3MF, STL or OBJ, `on_bed`, `center`, `drop`, `auto_orient`, `bed_face`, `spacing`; for USDZ, `print_colors` (mitcad#1596); for the bodies' formats, `occurrence`. Refer to the text below the table. | `document`, canonical `path`, native export `result` |
 | `model_reference` | None, or one of `section`, `query`, `command`, `feature`, `search`. Optional `offset` and `extended` (the whole section instead of the brief one). Refer to [Look up the reference](#look-up-the-reference). | The contents and the permitted names, or one part of the reference, at most 64 kB of text |
-| `model_render` | `document`. Optional `view`, `projection`, `fit`, `bodies`, `hidden`, `size`, `edges`, `background`, `path`, `overwrite`, `max_bytes`, `colors`, `highlight`, `section`, `explode`, `views`, `quality` (`"raytrace"` with `samples`, `time_limit_s`, `denoise`: [Ray-traced pictures](#ray-traced-pictures)). Refer to [Preview images](#preview-images-model_render). | An MCP image block (PNG) after the text: `camera`, `width`, `height`, `bytes`, `bodies`, `timing_ms`, `warnings`, ...; with `views` an image block per view and `views` |
+| `model_render` | `document`. Optional `view`, `projection`, `fit`, `bodies`, `hidden`, `size`, `edges`, `background`, `path`, `overwrite`, `max_bytes`, `colors`, `highlight`, `section`, `explode`, `print_colors`, `views`, `quality` (`"raytrace"` with `samples`, `time_limit_s`, `denoise`: [Ray-traced pictures](#ray-traced-pictures)). Refer to [Preview images](#preview-images-model_render). | An MCP image block (PNG) after the text: `camera`, `width`, `height`, `bytes`, `bodies`, `timing_ms`, `warnings`, ...; with `views` an image block per view and `views` |
 
-`document_open` imports a `.solidcraft` design with its history into a
-new document without a `path`. Save that document with `document_save`
-and a path.
+`document_open` imports a SolidCraft design (`.sc`, `.solidcraft` or
+`.solvecraft`) with its history into a new document without a `path`.
+Save that document with `document_save` and a path. Other programs use
+`.sc` too, so a `.sc` file is imported only when its JSON's top-level
+`format` starts with `solidcraft/` (or it is SolidCraft's design
+container); any other is refused with "Not a SolidCraft design: …"
+(mitcad#1622).
 
 Headless `model_command` also permits `import_print_profile` and
 `import_slicer_presets` with `into` omitted or `"design"`. They change only
@@ -1368,6 +1372,7 @@ the view's default light gradient.
 | `highlight` | none | References drawn in the selection blue: bodies, faces and edges |
 | `section` | none | A clip plane `{"origin", "normal"}` in mm: the side the normal points to is cut away, solids capped |
 | `explode` | `0` | Moves components (or bodies) apart from the centre by this factor, 0 to 10 |
+| `print_colors` | `false` | Each body in the colours of the filaments it prints with by height, as the filament changes of its plate say, cut at their layer boundaries, in place of its appearances (mitcad#1596; the commands reference's "Filament changes at print heights") |
 | `views` | none | Up to 8 views answered as several pictures in one call |
 | `overlay` | none | What an analysis finds, drawn over the bodies ([Overlays](#overlays)): `"overhang"`, `"thickness"`, `"draft"`, `"failed"`, or an object with `type` and its settings |
 

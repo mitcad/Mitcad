@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/framework/Language.cpp app/framework/Language.hpp app/framework/CommandSearch.cpp app/framework/Ribbon.cpp app/main.cpp app/view/ViewController.cpp app/translations cmake/Translations.cmake tools/translations
+# check-all sources: app/framework/ModelMessages.cpp app/framework/ModelMessages.hpp app/framework/ModelMessageTemplates.cpp
+# Each start also shows a model message (mitcad#1284), the model's refusal of
+# a feature that does not exist: English, Finnish, the pseudo-language.
 # The interface language (mitcad#1460) in the build VM, as
 # tools/ui-language-test.sh on Linux: the shared steps
 # tools/ui-scripts/language-*.mitcad-ui. Four starts:

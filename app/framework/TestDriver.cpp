@@ -82,6 +82,7 @@
 #include "../MainWindow.hpp"
 #include "../WindowManager.hpp"
 #include "../view/SpaceMouseController.hpp"
+#include "../view/ViewEdges.hpp"
 #include "../sketch/SketchController.hpp"
 #include "../sketch/SketchOverlay.hpp"
 #include "../sketch/SketchTool.hpp"
@@ -324,12 +325,17 @@ const StepSpec kSpecs[] = {
     {"expect-model-bodies", 2, 2, kIdle},
     {"expect-model-parameter", 2, 3, kIdle},
     {"model-command", 1, 1, kIdle},
+    // A command the model refuses: its refusal shown as the user sees it
+    // (mitcad#1284: the model's message in the interface language).
+    {"model-command-refused", 1, 1, kIdle},
     {"expect-input-text", 2, 2, kIdle},
     {"expect-shown-body", 3, 9, kIdle},
     {"capture-shown-body", 3, 3, kIdle},
     {"expect-shown-body-meshes", 3, 3, kIdle},
     {"expect-body-edges-unmeshed", 1, 1, kIdle},
     {"expect-view-own-shapes", 0, 0, kIdle},
+    {"expect-view-edges", 2, 3, kIdle},
+    {"expect-sketch-highlights-on-curves", 1, 1, kIdle},
     {"expect-native-dialog-gone", 1, 2, kPlain},
     {"focus-dialog", 1, 2, kPlain},
     {"focus-main", 0, 0, kPlain},
@@ -466,6 +472,10 @@ const StepSpec kSpecs[] = {
     // Preferences' Text size, Icon size and Font as the run applied them
     // (mitcad#1556).
     {"expect-text-icon-size", 3, 3, kIdle},
+    // A named widget's invokable method, with one text or none: what a
+    // window offers its tests where input cannot reach, such as a link on
+    // the component browser's page (mitcad#1579).
+    {"invoke-widget", 2, 3, kInputOfTarget},
 };
 
 // The colour that covers most of a visible widget's area as its window
@@ -2095,21 +2105,29 @@ void TestDriver::run(const Step& step) {
       return;
     }
     session->m_testFailCommand = a.at(0);
-  } else if (name == QLatin1String("model-command")) {
+  } else if (name == QLatin1String("model-command") || name == QLatin1String("model-command-refused")) {
+    const bool refusal = name == QLatin1String("model-command-refused");
     auto* window = qobject_cast<MainWindow*>(mainWindow);
     QJsonParseError error;
     const QJsonDocument document = QJsonDocument::fromJson(a.at(0).toUtf8(), &error);
     if (!window || error.error != QJsonParseError::NoError || !document.isObject() ||
         !document.object().value(QStringLiteral("cmd")).isString()) {
-      fail(line, QStringLiteral("model-command requires a document and one JSON command object"));
+      fail(line, QStringLiteral("%1 requires a document and one JSON command object").arg(name));
       return;
     }
-    if (!window->runVisibilityCommands(QJsonArray{document.object()}, QStringLiteral("UI test model command"))) {
+    const bool done =
+        window->runVisibilityCommands(QJsonArray{document.object()}, QStringLiteral("UI test model command"));
+    if (!done && !refusal) {
       fail(line, QStringLiteral("model-command was refused: %1").arg(a.at(0)));
       return;
     }
-    qInfo().noquote() << QStringLiteral("TestDriver model command: %1")
-                            .arg(document.object().value(QStringLiteral("cmd")).toString());
+    if (done && refusal) {
+      fail(line, QStringLiteral("model-command-refused was not refused: %1").arg(a.at(0)));
+      return;
+    }
+    const QString logged = refusal ? QStringLiteral("TestDriver model command refused: %1")
+                                   : QStringLiteral("TestDriver model command: %1");
+    qInfo().noquote() << logged.arg(document.object().value(QStringLiteral("cmd")).toString());
   } else if (name == QLatin1String("capture-undo-depth")) {
     auto* window = qobject_cast<MainWindow*>(mainWindow);
     if (!window || window->modelBusy()) { fail(line, QStringLiteral("capture-undo-depth requires an idle document")); return; }
@@ -2403,6 +2421,73 @@ void TestDriver::run(const Step& step) {
       qInfo().noquote() << QStringLiteral("TestDriver: view's own shapes: %1").arg(counts);
       return true;
     }, 6, QStringLiteral("the view shows no profile, sketch entity or datum plane, or shares a body's shape"));
+  } else if (name == QLatin1String("expect-view-edges")) {
+    // expect-view-edges <body> <segments a quarter turn> [highlighted
+    // edges]: the body's lines are drawn from detached copies of its edges
+    // (mitcad#1633), its circles and arcs cut in at least that many
+    // segments a quarter turn, none sagging more than twice the view's
+    // line deviation; and the highlights shown that have its edges (at
+    // least the number given) draw them with its own copies, on the same
+    // polylines as the body.
+    const QString uid = a.at(0);
+    double perQuarter = 0;
+    double highlighted = 0;
+    if (!toNumber(a.at(1), perQuarter) || (a.size() > 2 && !toNumber(a.at(2), highlighted))) {
+      fail(line, QStringLiteral("expect-view-edges <body> <segments a quarter turn> [highlighted edges]"));
+      return;
+    }
+    whenReady([this, uid, perQuarter, highlighted] {
+      auto* window = qobject_cast<MainWindow*>(m_main.data());
+      if (!window || window->modelBusy()) return false;
+      const OcctViewer::EdgeDrawing drawing = window->viewer().edgeDrawing(uid.toStdString());
+      if (!drawing.shown) {
+        m_waitDetail = QStringLiteral("body %1 is not drawn from copies of its edges").arg(uid);
+        return false;
+      }
+      const QString counts =
+          QStringLiteral("body %1: %2 edges drawn from copies, %3 circles at least %4 segments a quarter turn, "
+                         "sag at most %5 mm; %6 highlighted edges, %7 on the body's polylines")
+              .arg(uid)
+              .arg(drawing.edges)
+              .arg(drawing.circles)
+              .arg(drawing.fewestPerQuarter, 0, 'f', 1)
+              .arg(drawing.largestSag, 0, 'g', 3)
+              .arg(drawing.highlightEdges)
+              .arg(drawing.highlightShared);
+      m_waitDetail = counts;
+      if (drawing.edges == 0 || (drawing.circles > 0 && drawing.fewestPerQuarter + 1e-9 < perQuarter) ||
+          drawing.largestSag > 2.0 * kViewEdgeDeviation + 1e-6 || drawing.highlightEdges < qRound(highlighted) ||
+          drawing.highlightShared != drawing.highlightEdges) {
+        return false;
+      }
+      qInfo().noquote() << QStringLiteral("TestDriver: %1").arg(counts);
+      return true;
+    }, 6, QStringLiteral("the lines of %1 are not drawn finely from its copies").arg(uid));
+  } else if (name == QLatin1String("expect-sketch-highlights-on-curves")) {
+    // expect-sketch-highlights-on-curves <curves>: at least that many
+    // highlighted sketch curves, each highlight's polyline on the shown
+    // curve's within a pixel of the view as it is now and twice the view's
+    // line deviation (mitcad#1633).
+    double curves = 0;
+    if (!toNumber(a.at(0), curves)) {
+      fail(line, QStringLiteral("expect-sketch-highlights-on-curves <curves>"));
+      return;
+    }
+    whenReady([this, curves] {
+      auto* window = qobject_cast<MainWindow*>(m_main.data());
+      if (!window || window->modelBusy()) return false;
+      const OcctViewer::SketchHighlightFit fit = window->viewer().sketchHighlightFit();
+      const QString counts = QStringLiteral("%1 sketch curve highlights, at most %2 mm and %3 px off their curves")
+                                 .arg(fit.curves)
+                                 .arg(fit.millimetres, 0, 'g', 3)
+                                 .arg(fit.pixels, 0, 'f', 2);
+      m_waitDetail = counts;
+      if (fit.curves < qRound(curves) || fit.pixels > 1.0 || fit.millimetres > 2.0 * kViewEdgeDeviation + 1e-6) {
+        return false;
+      }
+      qInfo().noquote() << QStringLiteral("TestDriver: %1").arg(counts);
+      return true;
+    }, 6, QStringLiteral("a sketch curve's highlight lies off the curve"));
   } else if (name == QLatin1String("expect-native-history-wheel")) {
     QString error;
     if (!mac::test::historyWheel(error)) { fail(line, error); }
@@ -5433,6 +5518,26 @@ void TestDriver::run(const Step& step) {
       fail(line, QStringLiteral("expect-text-icon-size <text%> <icon%> <family|system>")); return;
     }
     testTextIconSize(textPercent, iconPercent, a.at(2));
+  } else if (name == QLatin1String("invoke-widget")) {
+    const QPointer<QWidget> window = targetWindow();
+    const QString widgetName = a.at(0);
+    const QByteArray method = a.at(1).toUtf8();
+    const QString text = a.size() > 2 ? a.at(2) : QString();
+    const bool withText = a.size() > 2;
+    whenReady([this, window, widgetName] {
+      if (window.isNull()) {
+        return false;
+      }
+      // The window itself, or a widget in it.
+      m_found = window->objectName() == widgetName ? window.data() : namedWidget(window.data(), widgetName);
+      return !m_found.isNull();
+    }, 6, QStringLiteral("no widget named %1").arg(widgetName), [this, line, method, text, withText] {
+      const bool invoked = withText ? QMetaObject::invokeMethod(m_found.data(), method.constData(), Q_ARG(QString, text))
+                                    : QMetaObject::invokeMethod(m_found.data(), method.constData());
+      if (!invoked) {
+        fail(line, QStringLiteral("%1 has no invokable %2").arg(m_found->objectName(), QString::fromUtf8(method)));
+      }
+    });
   } else if (name == QLatin1String("test-dialog-controls")) {
     testDialogControls(a.at(0));
   } else if (name == QLatin1String("expect-dialog-appearance")) {

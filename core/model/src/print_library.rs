@@ -385,7 +385,7 @@ pub fn parse_item(path: &str, data: &[u8]) -> Result<ItemData, String> {
         && kind != item.kind()
     {
         return Err(format!(
-            "{path}: a {} in the folder of {}s",
+            "{path}: a {} item in the folder of the {} items",
             item.kind().id(),
             kind.id()
         ));
@@ -619,7 +619,7 @@ mod tests {
         assert_eq!(parse_item(&path, item.text().as_bytes()).unwrap(), item);
         // In the wrong folder, under another name, of another format.
         let error = parse_item("print/printers/pla.json", item.text().as_bytes()).unwrap_err();
-        assert!(error.contains("folder of printers"), "{error}");
+        assert!(error.contains("folder of the printer items"), "{error}");
         let error = parse_item("materials/abs.json", item.text().as_bytes()).unwrap_err();
         assert!(error.contains("belongs in materials/pla.json"), "{error}");
         let error =

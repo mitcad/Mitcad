@@ -1257,8 +1257,10 @@ HighlightLayers SketchOverlay::highlightLayers(const std::vector<std::pair<QStri
   QStringList balled;     // the entities drawn as balls, once each
   QStringList curves;     // the sketch curves among them, whose points get markers
   QSet<QString> points;   // the sketch points highlighted: their balls, no plain marker
-  const auto strokeOf = [&layers, &stroked](const QString& id, const QPolygonF& path, const QColor& tone) {
-    layers.strokes.push_back({path, tone, false});
+  QStringList curveLines; // the sketch curves' line types, once per curve (mitcad#1619)
+  const auto strokeOf = [&layers, &stroked](const QString& id, const QPolygonF& path, const QColor& tone,
+                                            Qt::PenStyle pattern) {
+    layers.strokes.push_back({path, tone, false, pattern});
     if (!stroked.contains(id)) {
       stroked << id;
     }
@@ -1285,7 +1287,7 @@ HighlightLayers SketchOverlay::highlightLayers(const std::vector<std::pair<QStri
         if (const std::optional<QLineF> line = lineAcross(origin, along, rect())) {
           QPolygonF across;
           across << line->p1() << line->p2();
-          strokeOf(entity, across, color);
+          strokeOf(entity, across, color, Qt::SolidLine);
         }
       }
       continue;
@@ -1293,7 +1295,7 @@ HighlightLayers SketchOverlay::highlightLayers(const std::vector<std::pair<QStri
     // A body edge or vertex out of the plane (mitcad#866): where it is, thin
     // and dashed, and below what it projects to, as for one in the plane.
     if (const BodyItem* item = onBody ? body.item(entity) : nullptr; item != nullptr && !item->inPlane) {
-      layers.strokes.push_back({m_c.bodyPath(*item), color, true});
+      layers.strokes.push_back({m_c.bodyPath(*item), color, true, Qt::SolidLine});
     }
     if (const auto p = onBody ? body.pointAt(entity) : model.pointAt(entity)) {
       ballOf(entity, m_c.toScreen(*p), color);
@@ -1308,9 +1310,14 @@ HighlightLayers SketchOverlay::highlightLayers(const std::vector<std::pair<QStri
       for (const V2& at : curve->sample(2.0 * m_c.pixel())) {
         polyline << m_c.toScreen(at);
       }
-      strokeOf(entity, polyline, color);
+      // A sketch curve's highlight in the curve's own line type
+      // (mitcad#1619): a selected or hovered construction line stays
+      // dashed, a centre line dash-dot; a body's edge solid.
+      const Qt::PenStyle lineStyle = c != nullptr ? sketchCurvePenStyle(c->construction, c->centerline) : Qt::SolidLine;
+      strokeOf(entity, polyline, color, lineStyle);
       if (c != nullptr && !curves.contains(entity)) {
         curves << entity;
+        curveLines << penStyleName(lineStyle);
       }
     }
   }
@@ -1343,6 +1350,7 @@ HighlightLayers SketchOverlay::highlightLayers(const std::vector<std::pair<QStri
     summary->curves = static_cast<int>(stroked.size());
     summary->points = static_cast<int>(balled.size());
     summary->markers = static_cast<int>(layers.markers.size());
+    summary->curveLines = curveLines;
     // The order paintHighlightLayers paints in.
     summary->markersOver = markersOverHighlights(highlightPassOrder());
   }
@@ -1376,6 +1384,21 @@ void SketchOverlay::logHighlightSummary(const HighlightSummary& summary) {
   if (line != m_loggedHighlights) {
     m_loggedHighlights = line;
     qDebug().noquote() << QStringLiteral("Sketch overlay: %1").arg(line);
+  }
+  // "Sketch overlay lines: 1 dashed" (mitcad#1619): how many highlighted
+  // sketch curves are drawn in each line type.
+  QStringList counts;
+  for (const Qt::PenStyle pattern : {Qt::SolidLine, Qt::DashLine, Qt::DashDotLine}) {
+    const QString name = penStyleName(pattern);
+    const int count = static_cast<int>(summary.curveLines.count(name));
+    if (count > 0) {
+      counts << QStringLiteral("%1 %2").arg(count).arg(name);
+    }
+  }
+  const QString lines = counts.isEmpty() ? QStringLiteral("none") : counts.join(QStringLiteral(", "));
+  if (lines != m_loggedHighlightLines) {
+    m_loggedHighlightLines = lines;
+    qDebug().noquote() << QStringLiteral("Sketch overlay lines: %1").arg(lines);
   }
 }
 

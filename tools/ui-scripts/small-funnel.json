@@ -1,0 +1,14 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A small funnel (mitcad#1624, tools/ui-small-funnel-look.sh): a circle of 10 mm extruded 15, its end extruded 10 more with a 30 degree taper, shelled 1 mm inside with both ends open, and the rim's two edges rounded 0.25 mm (F2.b0)."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_circle","sketch":"F1","center":[0,0],"diameter":10},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1}"}],
+    "extent":{"type":"distance","distance":15},"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"extrude","extent":{"type":"distance","distance":10,"taper":"30 deg"},
+    "operation":"join","participants":["F2.b0"],"profile_face":{"body":"F2.b0","face":"F2:end(r{c1})"}}},
+  {"cmd":"add_feature","def":{"type":"shell","body":"F2.b0","faces":["F3:end(F2:end(r{c1}))","F2:start(r{c1})"],"inside":1}},
+  {"cmd":"add_feature","def":{"type":"fillet","body":"F2.b0","edges":[
+    "E{F4:offset(F3:side(E{F2:end(r{c1})|F2:side(c1)}))|F4:offset_cap(F3:end(F2:end(r{c1})))}",
+    "E{F3:side(E{F2:end(r{c1})|F2:side(c1)})|F4:offset_cap(F3:end(F2:end(r{c1})))}"],"radius":0.25}}
+]

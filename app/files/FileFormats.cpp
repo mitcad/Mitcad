@@ -41,7 +41,11 @@ FileKind fileKind(const QString& path) {
           suffix)) {
     return FileKind::Rvt;
   }
-  if (suffix == QStringLiteral("solidcraft") || suffix == QStringLiteral("solvecraft")) {
+  // .sc too, as SolidCraft saves designs now (mitcad#1622); other programs
+  // use .sc as well, so opening one checks its format key first
+  // (solidcraft_file_check).
+  if (suffix == QStringLiteral("sc") || suffix == QStringLiteral("solidcraft") ||
+      suffix == QStringLiteral("solvecraft")) {
     return FileKind::Solidcraft;
   }
   if (suffix == QStringLiteral("dwg")) {
@@ -55,11 +59,11 @@ namespace {
 // The CAD formats, one filter: designs with a history (FreeCAD, .f3d),
 // part and assembly files (.ipt, .iam), IFC building models (.ifc,
 // .ifczip), building projects and families (.rvt, .rfa, .rte, .rft), SolidCraft
-// designs (.solidcraft), drawings' 3D content (.dwg), then STEP, IGES and
-// BRep. Both spellings of .FCStd, .ipt, .iam, .ifc, .rvt, .rfa and .dwg:
-// name filters match case-sensitively on Linux.
+// designs (.sc, .solidcraft), drawings' 3D content (.dwg), then STEP, IGES
+// and BRep. Both spellings of .FCStd, .ipt, .iam, .ifc, .rvt, .rfa, .sc and
+// .dwg: name filters match case-sensitively on Linux.
 const char* const kCad = "*.FCStd *.fcstd *.f3d *.f3z *.ipt *.IPT *.iam *.IAM *.ifc *.IFC *.ifczip *.rvt *.RVT *.rfa *.RFA "
-                         "*.rte *.rft *.solidcraft *.dwg *.DWG *.step *.stp *.iges *.igs *.brep *.brp";
+                         "*.rte *.rft *.sc *.SC *.solidcraft *.dwg *.DWG *.step *.stp *.iges *.igs *.brep *.brp";
 const char* const kMesh = "*.stl *.obj";
 const char* const kDrawing = "*.dxf *.svg";
 

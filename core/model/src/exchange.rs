@@ -47,6 +47,12 @@ mod edges;
 mod assembly_import;
 pub use assembly_import::{ImportStructure, ImportedComponent, ImportedFile, file_has_assembly};
 
+// Animated USDZ export: time-sampled placements (mitcad#1597).
+pub mod usdz_animation;
+pub use usdz_animation::{
+    AnimationPoses, AnimationReport, AnimationSpace, AnimationTarget, AnimationTrack, UsdzAnimation,
+};
+
 // The data the kernel reads and writes, below the model (mitcad#777).
 pub use mitcad_model_base::exchange::{
     BodyKind, BodyPlacement, ExportBody, ExportFormat, ExportOptions, FaceMeshes, FileRead,
@@ -110,6 +116,13 @@ pub struct ExportPlacement {
     /// On the print bed (mitcad#1491): the clearance between two
     /// neighbouring pieces beyond their brims, mm; 5 mm when `None`.
     pub spacing: Option<f64>,
+    /// USDZ (mitcad#1597): time-sampled placements, in the design's
+    /// coordinates (`usdz_animation`); a still file when `None`.
+    pub animation: Option<UsdzAnimation>,
+    /// USDZ (mitcad#1596): each placement in the colours of the filaments
+    /// it prints with by height, as `model_render`'s `print_colors` draws
+    /// it, in place of the appearances.
+    pub print_colors: bool,
 }
 
 /// A 3MF model before its slicer's settings (mitcad#1050,
@@ -166,6 +179,11 @@ pub struct Exported {
     /// 3MF of the print plates (mitcad#1050): each plate as written, in
     /// the design's order.
     pub plates: Vec<ExportedPlate>,
+    /// USDZ with an animation (mitcad#1597): its frames and what moves.
+    pub animation: Option<AnimationReport>,
+    /// 3MF with a slicer's settings (mitcad#1596): the filament changes
+    /// and pauses at print heights written into the project.
+    pub layer_events: Vec<crate::print_files::WrittenEvent>,
 }
 
 /// A body's mesh in a 3MF file: its triangles and the volume they enclose
@@ -519,6 +537,27 @@ impl<K: Kernel> Document<K> {
         placement: &ExportPlacement,
     ) -> Result<Exported, ModelError> {
         let format = options.format;
+        // Print colours by height (mitcad#1596): a USDZ file's.
+        if placement.print_colors && format != ExportFormat::Usdz {
+            return Err(invalid(
+                "print colours by height are written into USDZ files (and drawn by model_render)",
+            ));
+        }
+        // An animation (mitcad#1597): USDZ only, where the design places
+        // the bodies.
+        if placement.animation.is_some() {
+            if format != ExportFormat::Usdz {
+                return Err(invalid(
+                    "an animation is written only to USDZ files (format usdz)",
+                ));
+            }
+            if placement.coordinates == Some(Coordinates::Component) {
+                return Err(invalid(
+                    "an animation moves the bodies where the design places them: leave out \
+                     coordinates component",
+                ));
+            }
+        }
         // The design's print plates (mitcad#1050, `plates.rs`).
         if let Some(files) = placement.plates {
             return self.export_plates(path, bodies, options, colors, placement, files);
@@ -786,6 +825,7 @@ impl<K: Kernel> Document<K> {
                     )
                 }),
                 pieces.as_mut(),
+                placement.settle.center,
             )?;
             if let Some(pieces) = pieces {
                 on_bed = Some(self.merged_bed(pieces, placement.settle));
@@ -837,6 +877,8 @@ impl<K: Kernel> Document<K> {
                 design.then_some(inside.as_slice()),
                 within.map_or(0, <[OccurrenceUid]>::len),
                 options.design_folder.as_deref(),
+                placement.animation.as_ref(),
+                placement.print_colors,
             );
         }
         // The kernel's formats (mitcad#19): each body with its placements in
@@ -1066,7 +1108,9 @@ impl<K: Kernel> Document<K> {
     /// along X (mitcad#856); each piece is an object of the build when
     /// there are several. The meshes stay as the kernel made them. The
     /// model is in `unit`, its meshes and placements scaled to it
-    /// (mitcad#734).
+    /// (mitcad#734). A slicer's project not put on the bed (no `pieces`)
+    /// is moved as a whole in X and Y over the printer's plate when
+    /// `centre` (mitcad#1596, [`Document::centre_on_plate`]).
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::type_complexity)]
     fn export_3mf(
@@ -1083,6 +1127,7 @@ impl<K: Kernel> Document<K> {
             &dyn Fn(BodyUid) -> Vec<Option<Vec<OccurrenceUid>>>,
         )>,
         pieces: Option<&mut Vec<bed::Piece>>,
+        centre: bool,
     ) -> Result<Exported, ModelError> {
         let model_name = Path::new(path)
             .file_stem()
@@ -1090,7 +1135,8 @@ impl<K: Kernel> Document<K> {
             .unwrap_or("Mitcad")
             .to_owned();
         let dialect = print.as_ref().map(|(d, _)| *d);
-        let built = self.build_3mf(
+        let on_bed = pieces.is_some();
+        let mut built = self.build_3mf(
             model_name,
             chosen,
             all,
@@ -1102,7 +1148,50 @@ impl<K: Kernel> Document<K> {
             pieces,
             ThreeMfPlate::default(),
         )?;
-        self.write_3mf(path, built, dialect, &[])
+        // A slicer's project lies on the printer's plate (mitcad#1596).
+        if dialect.is_some() && !on_bed && centre {
+            self.centre_on_plate(&mut built.model, unit);
+        }
+        // The design's filament changes at print heights (mitcad#1596).
+        self.write_3mf(path, built, dialect, &[], &[None])
+    }
+
+    /// Moves every placement of a slicer's 3MF model alike in X and Y so
+    /// that the box of the placed meshes is centred over the printer's
+    /// plate ([`Document::plate_centre`]; `unit` the model's), as the
+    /// slicer would arrange it (mitcad#1596). A slicer's project keeps its
+    /// objects where the file puts them, in the bed's coordinates: the
+    /// design's origin is no place on the bed, and a body at it (a box from
+    /// the origin) lies at the bed's corner, its skirt or brim outside the
+    /// printable area, which the Bambu family's slicers refuse. The
+    /// bodies' arrangement and heights stay as designed.
+    fn centre_on_plate(&self, model: &mut mitcad_3mf::Model, unit: LengthUnit) {
+        let scale = 1.0 / unit.millimeters();
+        let plate = self.plate_centre().map(|c| c * scale);
+        let mut min = [f64::INFINITY; 2];
+        let mut max = [f64::NEG_INFINITY; 2];
+        for part in &model.parts {
+            for placement in &part.placements {
+                for vertex in &part.mesh.vertices {
+                    let [x, y, _] = placement.apply(*vertex);
+                    min = [min[0].min(x), min[1].min(y)];
+                    max = [max[0].max(x), max[1].max(y)];
+                }
+            }
+        }
+        if !min.iter().chain(&max).all(|v| v.is_finite()) {
+            return;
+        }
+        let shift = [
+            plate[0] - (min[0] + max[0]) / 2.0,
+            plate[1] - (min[1] + max[1]) / 2.0,
+        ];
+        for part in &mut model.parts {
+            for placement in &mut part.placements {
+                placement.translation[0] += shift[0];
+                placement.translation[1] += shift[1];
+            }
+        }
     }
 
     /// The model of a 3MF file of the bodies as [`Document::export_3mf`]
@@ -1488,19 +1577,36 @@ impl<K: Kernel> Document<K> {
     /// `dialect`, each part's effective settings in its dialect
     /// (mitcad#640, mitcad#1061: of its group of placements), on the print
     /// `plates` the file holds (mitcad#1050; none: one plate of every
-    /// object).
+    /// object), with the filament changes at print heights of each plate
+    /// (mitcad#1596): `plate_ids` gives each plate's id in `plates` order
+    /// (one entry, none, for a file without plates: the design's own
+    /// schedule).
     pub(crate) fn write_3mf(
         &self,
         path: &str,
         built: Built3mf,
         dialect: Option<crate::print_keys::Dialect>,
         plates: &[crate::print_files::ExportPlate<'_>],
+        plate_ids: &[Option<&str>],
     ) -> Result<Exported, ModelError> {
         let Built3mf {
             mut model,
             settings,
             mut exported,
         } = built;
+        // Filament changes without a slicer's settings (mitcad#1596): the
+        // events are a slicer's project's.
+        if dialect.is_none()
+            && plate_ids
+                .iter()
+                .any(|id| !self.plate_schedule(*id).is_empty())
+        {
+            exported.warnings.push(
+                "the filament changes at print heights go into a slicer's project: give the \
+                 slicer (dialect) to write them"
+                    .to_owned(),
+            );
+        }
         // The slicer's settings (mitcad#640): each part's effective ones
         // (mitcad#1061: of its group of placements).
         if let Some(dialect) = dialect {
@@ -1529,16 +1635,21 @@ impl<K: Kernel> Document<K> {
                     }
                 })
                 .collect();
+            // The plates' filament changes at print heights, placed on
+            // their layers (mitcad#1596).
+            let changes = self.layer_events(&model, &settings, plates, plate_ids, &mut exported);
             // With the purge volumes set by hand (mitcad#705), on the
             // plates (mitcad#1050).
-            let written = crate::print_files::export_plates(
+            let written = crate::print_files::export_print(
                 dialect,
                 &model.name,
                 &parts,
                 &objects,
                 &self.state().purge_volumes,
                 plates,
+                &changes,
             );
+            exported.layer_events = written.layer_events;
             if let Some(application) = written.application {
                 model.application = application;
             }

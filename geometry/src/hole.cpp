@@ -4,11 +4,13 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
@@ -20,11 +22,17 @@
 #include <GeomAPI_IntCS.hxx>
 #include <Geom_Line.hxx>
 #include <IntCurvesFace_ShapeIntersector.hxx>
+#include <NCollection_List.hxx>
 #include <Precision.hxx>
+#include <TopAbs_ShapeEnum.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopoDS_Compound.hxx>
+#include <TopoDS_Shape.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Lin.hxx>
+#include <gp_Vec.hxx>
 
 #include "face_select.hpp"
 #include "history.hpp"
@@ -224,9 +232,14 @@ std::vector<Corner> section(const HoleSpec& spec, double depth, bool drill_point
   return corners;
 }
 
-ShapePtr one_hole(const HoleSpec& spec, int index, const gp_Ax1& at, double depth, bool drill_point) {
+// `seam` (a direction at right angles to the axis) is where the revolution
+// starts, its round faces' seam; a direction across the axis by default.
+ShapePtr one_hole(const HoleSpec& spec, int index, const gp_Ax1& at, double depth, bool drill_point,
+                  const std::optional<gp_Dir>& seam = std::nullopt) {
   const gp_Dir along = at.Direction();
-  const gp_Dir across = std::abs(along.X()) < 0.9 ? along.Crossed(gp_Dir(1, 0, 0)) : along.Crossed(gp_Dir(0, 1, 0));
+  const gp_Dir across = seam                          ? *seam
+                        : std::abs(along.X()) < 0.9 ? along.Crossed(gp_Dir(1, 0, 0))
+                                                    : along.Crossed(gp_Dir(0, 1, 0));
   const auto point = [&](const Corner& c) {
     return at.Location().Translated(gp_Vec(across) * c.r + gp_Vec(along) * c.z);
   };
@@ -355,6 +368,138 @@ ShapePtr press_fit_hole(const HoleSpec& spec, int index, const gp_Ax1& at, doubl
   return namer.shape();
 }
 
+// A print shape's section (mitcad#1515) of the radius `radius` about the
+// hole's axis, in its start plane: the circle's lower arc (`<stem>wall`)
+// and above it two sides at 45 degrees to `up`, tangent to the circle
+// (`<stem>roof0` and `<stem>roof1`, counterclockwise about the hole's
+// direction after the arc), meeting at a point the radius times the square
+// root of 2 above the axis, or cut short by a flat roof `sag` above the
+// circle (`<stem>roof`; 0: none). Swept `length` along the hole: `top` at
+// the start, `<stem>roof_end` at the end.
+ShapePtr roof_prism(const HoleSpec& spec, int index, const gp_Ax1& at, const gp_Dir& up, const std::string& stem,
+                    double radius, double sag, double length) {
+  detail::require_positive("hole radius", radius);
+  detail::require_positive("hole length", length);
+  const gp_Dir along = at.Direction();
+  const gp_Dir side = along.Crossed(up);
+  const gp_Pnt centre = at.Location();
+  // A point `height` along `up` and `aside` along `side` from the axis.
+  const auto point = [&](double height, double aside) {
+    return centre.Translated(gp_Vec(up) * height + gp_Vec(side) * aside);
+  };
+  const std::string prefix = "hole" + std::to_string(index) + ".";
+  BRepBuilderAPI_MakeWire wire;
+  std::vector<std::pair<TopoDS_Edge, std::string>> named;
+  const auto add = [&](const TopoDS_Edge& edge, const std::string& part) {
+    wire.Add(edge);
+    if (!wire.IsDone()) {
+      throw std::runtime_error("the hole's print shape could not be built");
+    }
+    named.emplace_back(wire.Edge(), face_name(spec.feature, prefix + stem + part));
+  };
+  const auto line = [](const gp_Pnt& from_point, const gp_Pnt& to_point) {
+    BRepBuilderAPI_MakeEdge edge(from_point, to_point);
+    if (!edge.IsDone()) {
+      throw std::runtime_error("the hole's print shape could not be built");
+    }
+    return edge.Edge();
+  };
+  // The sides touch the circle 45 degrees either side of `up`.
+  const double foot = radius / std::sqrt(2.0);
+  const double peak = radius * std::sqrt(2.0);
+  const gp_Pnt first = point(foot, foot);
+  const gp_Pnt last = point(foot, -foot);
+  // The circle's positive sense turns from `up` to `side`: from the first
+  // foot round under the axis to the last.
+  const gp_Circ circle(gp_Ax2(centre, along, up), radius);
+  BRepBuilderAPI_MakeEdge arc(circle, first, last);
+  if (!arc.IsDone()) {
+    throw std::runtime_error("the hole's print shape could not be built");
+  }
+  add(arc.Edge(), "wall");
+  const double roof = radius + sag;
+  if (sag > 0.0 && roof < peak - Precision::Confusion()) {
+    // The flat roof meets each side where it is `roof` above the axis.
+    const double half = peak - roof;
+    add(line(last, point(roof, -half)), "roof0");
+    add(line(point(roof, -half), point(roof, half)), "roof");
+    add(line(point(roof, half), first), "roof1");
+  } else {
+    // A teardrop's point (a flat roof above it leaves the point).
+    add(line(last, point(peak, 0.0)), "roof0");
+    add(line(point(peak, 0.0), first), "roof1");
+  }
+  BRepBuilderAPI_MakeFace face(wire.Wire(), true);
+  if (!face.IsDone()) {
+    throw std::runtime_error("the hole's print shape could not be built");
+  }
+  BRepPrimAPI_MakePrism prism(face.Face(), gp_Vec(along) * length);
+  prism.Build();
+  if (!prism.IsDone()) {
+    throw std::runtime_error("the hole's print shape could not be built");
+  }
+  detail::FaceNamer namer(prism.Shape());
+  for (const auto& [edge, name] : named) {
+    namer.generated(prism, edge, name);
+  }
+  namer.add(prism.FirstShape(), face_name(spec.feature, prefix + "top"));
+  namer.add(prism.LastShape(), face_name(spec.feature, prefix + stem + "roof_end"));
+  namer.finish();
+  return namer.shape();
+}
+
+// A hole printed lying (mitcad#1515): the round hole with its seam at the
+// top, fused with the roof's prism over its cylindrical part (from the
+// start to `depth`) and, for a counterbore or counterdrill, over the wider
+// one, each face named as it was in them (the faces they share merged).
+ShapePtr print_shaped(const HoleSpec& spec, int index, const gp_Ax1& at, double depth, bool drill_point,
+                      const gp_Dir& up) {
+  if (std::abs(up.Dot(at.Direction())) > 1.0e-6) {
+    throw std::invalid_argument("a print shape's roof must point at right angles to the hole's axis");
+  }
+  if (!(spec.roof_sag >= 0.0) || !std::isfinite(spec.roof_sag)) {
+    throw std::invalid_argument("a print shape's flat roof must lie above the hole");
+  }
+  const ShapePtr plain = one_hole(spec, index, at, depth, drill_point, up);
+  std::vector<ShapePtr> roofs{roof_prism(spec, index, at, up, "", spec.diameter / 2.0, spec.roof_sag, depth)};
+  if (spec.type == HoleType::Counterbore || spec.type == HoleType::Counterdrill) {
+    roofs.push_back(roof_prism(spec, index, at, up, "cbore_", spec.counterbore_diameter / 2.0, spec.roof_sag,
+                               spec.counterbore_depth));
+  }
+  NCollection_List<TopoDS_Shape> arguments;
+  arguments.Append(plain->occt());
+  NCollection_List<TopoDS_Shape> tools;
+  for (const ShapePtr& roof : roofs) {
+    tools.Append(roof->occt());
+  }
+  BRepAlgoAPI_Fuse fuse;
+  fuse.SetArguments(arguments);
+  fuse.SetTools(tools);
+  detail::build(fuse);
+  if (!fuse.IsDone() || fuse.HasErrors()) {
+    throw std::runtime_error("the hole's print shape could not be built");
+  }
+  // The faces the round hole and the roofs share (the wall's lower arc,
+  // the start, a flat bottom) merged into one each; the history includes it.
+  fuse.SimplifyResult();
+  TopoDS_Shape solid;
+  int solids = 0;
+  for (TopExp_Explorer it(fuse.Shape(), TopAbs_SOLID); it.More(); it.Next()) {
+    solid = it.Current();
+    ++solids;
+  }
+  if (solids != 1) {
+    throw std::runtime_error("the hole's print shape came apart");
+  }
+  detail::FaceNamer namer(solid);
+  namer.carry(fuse, *plain);
+  for (const ShapePtr& roof : roofs) {
+    namer.carry(fuse, *roof);
+  }
+  namer.finish();
+  return namer.shape();
+}
+
 } // namespace
 
 ShapePtr hole_tool(const HoleSpec& spec) {
@@ -367,6 +512,15 @@ ShapePtr hole_tool(const HoleSpec& spec) {
   }
   if (spec.extent == HoleExtent::Target && !spec.target) {
     throw std::invalid_argument("the hole has no target");
+  }
+  // A print shape (mitcad#1515): a roof per position, round or not.
+  if (!spec.roofs.empty()) {
+    if (spec.roofs.size() != spec.positions.size()) {
+      throw std::invalid_argument("the print shape has no roof direction for every hole");
+    }
+    if (spec.press_fit != PressFit::None || spec.taper != 0.0) {
+      throw std::invalid_argument("a press-fit or tapered hole has no print shape");
+    }
   }
   return detail::run("hole", [&] {
     BRep_Builder builder;
@@ -383,9 +537,11 @@ ShapePtr hole_tool(const HoleSpec& spec) {
       } else if (spec.extent == HoleExtent::Target) {
         depth = depth_to(*spec.target, at);
       }
-      const ShapePtr hole = spec.press_fit != PressFit::None
-                                ? press_fit_hole(spec, static_cast<int>(i), at, depth)
-                                : one_hole(spec, static_cast<int>(i), at, depth, drill_point);
+      const int index = static_cast<int>(i);
+      const bool roofed = !spec.roofs.empty() && spec.roofs[i].has_value();
+      const ShapePtr hole = spec.press_fit != PressFit::None ? press_fit_hole(spec, index, at, depth)
+                            : roofed ? print_shaped(spec, index, at, depth, drill_point, *spec.roofs[i])
+                                     : one_hole(spec, index, at, depth, drill_point);
       builder.Add(compound, hole->occt());
       for (int f = 0; f < hole->face_count(); ++f) {
         names.push_back({hole->face(f), hole->face_names(f)});

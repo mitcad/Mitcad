@@ -14,6 +14,7 @@
 // the other pulley its Check Belt, and is saved as it was until either
 // changes.
 #include <algorithm>
+#include "framework/ModelMessages.hpp"
 #include <cmath>
 #include <exception>
 #include <functional>
@@ -197,7 +198,7 @@ BeltCheck beltRows(const CommandState& state, const CommandContext& model, const
         }
       }
     } catch (const std::exception& e) {
-      error = QString::fromUtf8(e.what());
+      error = mitcad::modelMessage(e.what());
     }
   }
   if (belt.isEmpty() && !editing.isEmpty() && editing != mate) {
@@ -213,7 +214,7 @@ BeltCheck beltRows(const CommandState& state, const CommandContext& model, const
       nearest = belt.value(QStringLiteral("belts")).toArray().at(0).toObject();
       error.clear();
     } catch (const std::exception& e) {
-      error = QString::fromUtf8(e.what());
+      error = mitcad::modelMessage(e.what());
     }
   }
   if (belt.isEmpty()) {
@@ -243,7 +244,7 @@ BeltCheck beltRows(const CommandState& state, const CommandContext& model, const
   } else {
     check.lines << QObject::tr("No catalog belt fits");
   }
-  const QString warning = answer.value(QStringLiteral("warning")).toString();
+  const QString warning = mitcad::modelMessage(answer.value(QStringLiteral("warning")).toString());
   if (!warning.isEmpty()) {
     check.lines << warning;
   }
@@ -507,8 +508,8 @@ CommandDef pulleyCommand(const CommandContext& context) {
     if (!shaft.isEmpty()) {
       parts << shaft;
     }
-    // In plain words (mitcad#1612).
-    const QString error = userText(values.value(QStringLiteral("error")).toString());
+    // In plain words (mitcad#1612), in the interface language (mitcad#1284).
+    const QString error = mitcad::modelMessage(userText(values.value(QStringLiteral("error")).toString()));
     if (!error.isEmpty()) {
       parts << error;
     }

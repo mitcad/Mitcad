@@ -4,7 +4,9 @@
 //! body's lines; the edge's choice winning over its body's; an occurrence's
 //! choice ranked below a body's; the long dash double dotted pen; a reset;
 //! refusals; the choices in the file, the undo, the SVG, PDF and DXF
-//! exports (the DXF file's line types and line weights).
+//! exports (the DXF file's line types and line weights); the pen of the
+//! lines a pick's mark lies on, for the application to draw it as wide
+//! (mitcad#1618).
 
 use serde_json::{Value, json};
 
@@ -530,4 +532,47 @@ fn the_exports_draw_the_chosen_lines_with_their_line_types_and_weights() {
         .count();
     assert!(on_phantom >= pens_at(&doc, 20.0, 0.0, 40.0).len());
     assert!(on_phantom > 0);
+}
+
+#[test]
+fn a_picks_mark_carries_the_pen_of_the_lines_it_lies_on() {
+    let (mut doc, names) = drawn();
+    let place = view(&doc, 1)["place"].clone();
+    let (px, py) = (place[0].as_f64().unwrap(), place[1].as_f64().unwrap());
+    // What the Dimension tool's click on the front's bottom edge picks, and
+    // the pen its mark is drawn as wide as (mitcad#1618).
+    let pick = |doc: &Document<MockKernel>, at: [f64; 2]| {
+        query(
+            doc,
+            json!({"query": "drawing_pick", "drawing": "D1", "view": 1, "at": at}),
+        )
+    };
+    let bottom = [px + 20.0, py + 0.3];
+    let plain = pick(&doc, bottom);
+    assert_eq!(plain["pick"]["edge"], names[1].as_str(), "{plain}");
+    let items = plain["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{plain}");
+    assert!(items[0].get("line").is_some(), "{plain}");
+    assert_eq!(items[0]["pen"], "thick", "{plain}");
+    // The edge's lines chosen extra wide: its mark says so; the top edge's
+    // stays wide.
+    set_line(
+        &mut doc,
+        json!({"body": "F2.b0", "edge": names[1], "width": "extra_thick"}),
+    );
+    let wide = pick(&doc, bottom);
+    assert_eq!(wide["items"][0]["pen"], "extra_thick", "{wide}");
+    let top = pick(&doc, [px + 20.0, py + 19.7]);
+    assert_eq!(top["pick"]["edge"], names[0].as_str(), "{top}");
+    assert_eq!(top["items"][0]["pen"], "thick", "{top}");
+    // A corner's mark is a point of its own size: no pen.
+    let corner = pick(&doc, [px + 40.2, py + 0.2]);
+    assert_eq!(corner["seen"], "point", "{corner}");
+    let items = corner["items"].as_array().unwrap();
+    assert!(
+        items
+            .iter()
+            .all(|i| i.get("point").is_some() && i.get("pen").is_none()),
+        "{corner}"
+    );
 }

@@ -25,6 +25,11 @@
 //!   kept (mitcad#767, [`Bvh::wall`]).
 //! - **Estimate** ([`estimate`]): shell, infill and filament from the
 //!   body's volume and area.
+//! - **Narrow gaps** (mitcad#1519, [`gap_candidates`], [`gap_kind`]):
+//!   bodies printed in place closer than the gap a printer keeps open
+//!   fuse. The pairs whose boxes lie within the gap are measured by the
+//!   kernel's exact distance (`Kernel::measure_between`); a pair that
+//!   touches or overlaps is `interference`'s, not a narrow gap.
 //!
 //! The functions take a [`TriangleMesh`] and the settings, so they are
 //! tested without a kernel (`print_analysis_tests.rs`); the queries that
@@ -1107,6 +1112,85 @@ pub fn estimate(volume: f64, area: f64, density: f64, settings: &EstimateSetting
         length,
         cost: settings.price_per_kg.map(|price| price * mass / 1000.0),
     }
+}
+
+/// The gap between bodies printed in place under which they fuse, mm
+/// (mitcad#1519): about 0.3 mm on a common FDM printer. A design's user
+/// parameter `print_in_place_gap` (a printed fit parameter) replaces it.
+pub const DEFAULT_MIN_GAP: f64 = 0.3;
+/// Bodies closer than this (mm) touch: the baseline tolerance. A gap at
+/// the threshold is not narrow either.
+pub const GAP_TOLERANCE: f64 = 1e-6;
+
+/// What the smallest distance of two bodies makes of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GapKind {
+    /// They touch, overlap or one lies inside the other: `interference`'s.
+    Touching,
+    /// Apart, but closer than the gap: they may fuse when printed.
+    Narrow,
+    /// At least the gap apart.
+    Clear,
+}
+
+/// The kind of a pair `distance` mm apart (`inside`: one lies, partly,
+/// inside the other's material) for the gap `gap` (mm).
+pub fn gap_kind(distance: f64, inside: bool, gap: f64) -> GapKind {
+    if inside || distance <= GAP_TOLERANCE {
+        GapKind::Touching
+    } else if distance < gap - GAP_TOLERANCE {
+        GapKind::Narrow
+    } else {
+        GapKind::Clear
+    }
+}
+
+/// The pairs `(i, j)`, `i < j`, of bodies whose boxes lie within `gap` of
+/// each other: only they can be closer than the gap, so only they are
+/// measured. A body without a box (an empty one) pairs with none.
+pub fn gap_candidates(
+    boxes: &[Option<crate::kernel::BoundingBox>],
+    gap: f64,
+) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::new();
+    for (i, a) in boxes.iter().enumerate() {
+        let Some(a) = a else { continue };
+        for (j, b) in boxes.iter().enumerate().skip(i + 1) {
+            if let Some(b) = b
+                && a.overlaps(b, gap)
+            {
+                pairs.push((i, j));
+            }
+        }
+    }
+    pairs
+}
+
+/// Why a gap threshold (mm) is not one.
+pub fn check_min_gap(gap: f64) -> Result<(), String> {
+    if gap > 0.0 && gap.is_finite() {
+        Ok(())
+    } else {
+        Err(format!("the gap must be greater than zero, got {gap}"))
+    }
+}
+
+/// The [`PrintCache`] key of the distance of two placed bodies: each
+/// body, its shape's version and its placement, in the order asked.
+pub fn gap_key(a: (BodyUid, u128, &Transform), b: (BodyUid, u128, &Transform)) -> u128 {
+    let mut fp = Fingerprint::new("print-gap-v1");
+    for (body, version, placement) in [a, b] {
+        fp.str(&body.to_string()).u128(version);
+        for row in placement.linear {
+            for value in row {
+                fp.f64(value);
+            }
+        }
+        for value in placement.translation {
+            fp.f64(value);
+        }
+    }
+    fp.finish()
 }
 
 /// The mesh tolerance's part of a cache key.

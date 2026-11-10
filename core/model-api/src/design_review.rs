@@ -14,7 +14,7 @@ use mitcad_model::expr::{Dims, ParamKind};
 use mitcad_model::features::construction::PlaneDefinition;
 use mitcad_model::features::geom_ref::GeomRef;
 use mitcad_model::features::{FeatureDef, SketchPlane};
-use mitcad_model::ids::FeatureUid;
+use mitcad_model::ids::{BodyUid, FeatureUid};
 use mitcad_model::kernel::Kernel;
 use mitcad_model::notice::NoticeLevel;
 use mitcad_model::parameters::ParamId;
@@ -35,6 +35,7 @@ pub(super) const RULES: &[&str] = &[
     "overhang",
     "thin-wall",
     "outside-build-volume",
+    "min-gap",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -391,7 +392,7 @@ pub(super) fn review<K: Kernel>(doc: &Document<K>, query: &ReviewQuery) -> Resul
     let mut errors = Vec::new();
     let mut contexts = Vec::new();
     let mut print_bodies = 0;
-    let print_requested = ["overhang", "thin-wall", "outside-build-volume"]
+    let print_requested = ["overhang", "thin-wall", "outside-build-volume", "min-gap"]
         .iter()
         .any(|rule| enabled(rule));
     if forced != Some(false) && print_requested {
@@ -484,6 +485,9 @@ fn printing<K: Kernel>(
     contexts: &mut Vec<Value>,
 ) -> Result<usize, ApiError> {
     let mut checked = 0;
+    // The checked bodies by the plate they print on (mitcad#1519): only
+    // bodies printed together can fuse.
+    let mut by_plate: BTreeMap<Option<usize>, Vec<BodyUid>> = BTreeMap::new();
     let instances = doc.instances();
     // The marker's final bodies may have been modified after their creator.
     // Scope includes the body's creator or any selected feature producing
@@ -541,6 +545,10 @@ fn printing<K: Kernel>(
             continue;
         }
         checked += 1;
+        by_plate
+            .entry(doc.plate_of_body(body, Some(path)))
+            .or_default()
+            .push(body);
         let number = |key: &str, default| {
             settings
                 .value(key)
@@ -632,5 +640,45 @@ fn printing<K: Kernel>(
             }
         }
     }
+    if enabled("min-gap") {
+        min_gaps(doc, &by_plate, findings, errors)?;
+    }
     Ok(checked)
+}
+
+/// `min-gap` (mitcad#1519): the checked bodies of each plate that are
+/// apart but closer than the design's printed-in-place gap.
+fn min_gaps<K: Kernel>(
+    doc: &Document<K>,
+    by_plate: &BTreeMap<Option<usize>, Vec<BodyUid>>,
+    findings: &mut Vec<Value>,
+    errors: &mut Vec<Value>,
+) -> Result<(), ApiError> {
+    for bodies in by_plate.values().filter(|bodies| bodies.len() > 1) {
+        let request = json!({"query": "print_min_gap", "bodies": bodies});
+        let answer: Value = serde_json::from_str(&doc.query(&request.to_string())?)
+            .map_err(|e| ApiError(e.to_string()))?;
+        if let Some(error) = answer.get("error") {
+            errors.push(json!({"rule": "min-gap", "target": bodies[0], "message": error}));
+            continue;
+        }
+        for pair in answer["pairs"].as_array().into_iter().flatten() {
+            findings.push(finding(
+                "min-gap",
+                NoticeLevel::Warning,
+                pair["a"].as_str().unwrap_or_default(),
+                format!(
+                    "{} and {} are {:.2} mm apart, closer than the {} mm gap that bodies printed in place need",
+                    pair["names"][0].as_str().unwrap_or_default(),
+                    pair["names"][1].as_str().unwrap_or_default(),
+                    pair["distance"].as_f64().unwrap_or_default(),
+                    answer["gap"],
+                ),
+                "Widen the gap between the bodies, or print them apart; check the slicer preview for a closed gap.",
+                "3d-printing",
+                "checks",
+            ));
+        }
+    }
+    Ok(())
 }

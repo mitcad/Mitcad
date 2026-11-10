@@ -157,6 +157,7 @@ search: type the start of a command's name and press Enter.
 - [Import and export](#import-and-export)
   - [File formats](#file-formats)
   - [Import](#import)
+  - [Components from the web](#components-from-the-web)
   - [Image references](#image-references)
   - [Export](#export)
   - [Base features](#base-features)
@@ -677,6 +678,16 @@ The menus are in the menu bar at the top of the screen; **Show the menu
 bar in the window** on the Display page of Settings shows them under
 the title bar too (off by default).
 
+**Hide the menu bar (Windows and Linux).** Clear **Show the menu bar** on
+the Display page of Preferences to give the view the menu bar's height,
+in either layout. The menus are then under the ☰ button at the left, before
+Undo and Redo (in the title bar row of the Floating layout, at the start
+of the toolbar in the Docked layout). Press and release Alt to show the
+menu bar and go to its File menu, or press Alt with a menu's underlined
+letter (Alt+F for File). The menu bar goes away again when its menu
+closes or when you press Esc. The menus' shortcuts work while the bar is hidden. Select **Show
+the menu bar** to show it again.
+
 In the Floating layout only the menu bar is a bar at the top (on macOS
 the system's menu bar), and the 3D view starts directly below it. The
 title bar row floats over the top of the view without a card. Its
@@ -854,8 +865,10 @@ Home, Camera (Orthographic, Perspective: the camera's projection, as in
 View › Camera), Set Current View as Home, Reset Home, Fit.
 
 The cube is dark glass over a dark background and frosted light glass
-over a light background. Its face names are printed on it. The faces,
-edges and corners light up in the accent color under the pointer. The
+over a light background. Its face names are printed on it. The edges and
+corners are wide bevels between the faces, so that the edge and corner
+views are easy to hit. The faces, edges and corners light up in the
+accent color under the pointer. The
 house is the small capsule above the upper left corner of the cube.
 
 The **arrow keys** turn the view while the view has the keyboard: click
@@ -1271,9 +1284,10 @@ still in the group's menu.
 | Undo, Redo | Ctrl+Z, Ctrl+Y | Undo or redo. This includes a dimension change and a drag of the timeline marker |
 | Fit | F6 | Fit the design to the view. If something is selected, Fit shows the selection. If some bodies are isolated, Fit shows only the isolated bodies |
 | OK, Cancel | Enter, Esc | Accept or cancel a command. Esc also clears the selection |
+| Repeat | Enter | With no command running and outside sketches, start the last command again, as Repeat in the context menu does. Not while you type in a field, rename a row or work in a list: there Enter keeps its own meaning |
 | Hide the preview | Hold Ctrl (Cmd) | While a feature command's panel is open: hide its preview while you pick its inputs, and show it again on release ([Command panels](#command-panels)) |
 | Create Sketch | Alt+S (Option+S) | Select a plane or a planar face, or select it before the command. Available outside a sketch |
-| Finish Sketch | Ctrl+Enter | Go back to the 3D view |
+| Finish Sketch | Ctrl+Enter | Go back to the 3D view. Esc never leaves a sketch unless you turn on Esc leaves an unchanged sketch in Preferences › Sketch: then Esc does the same as Finish Sketch when it has nothing else to cancel and you changed nothing in the sketch, and a new sketch that is still empty is removed |
 | Line | L | Draw lines one after another. Drag from the last point, or from the end of a line or an arc, for an arc: tangent when you drag along the curve, normal when you drag across it. Also Midpoint Line ([Sketch curve tools](#sketch-curve-tools)) |
 | 2-Point Rectangle | R | Also 3-Point Rectangle, Center Rectangle and the rounded rectangles |
 | Center Diameter Circle | C | Also 2-Point, 3-Point, 2-Tangent and 3-Tangent circles |
@@ -1993,6 +2007,27 @@ A press-fit hole is a simple hole with a flat bottom, so the panel hides
 *Hole Type*, *Drill Point* and *Taper Angle*. It can go to a depth,
 through all or up to an object. It has no hole callout in drawings,
 because it is not round: dimension its flats or its ribs instead.
+
+A round hole printed lying on its side has a roof with nothing under
+it: the roof sags, and the hole comes out out of round and too small.
+When a body of the design has a print bed face (**Set as Print Bed
+Face**), the Hole panel offers *Print Shape* for such holes:
+
+| Print Shape | The hole's top |
+|---|---|
+| Round | round, as drawn |
+| Teardrop | two sides at 45° that meet at a point, which print without support |
+| Flat Roof | the teardrop's sides cut short by a flat roof that bridges the hole, *Roof Sag* above the circle |
+
+The roof points away from the print bed face; without one, the design's
+−Z is down. Holes whose axis is not parallel to the bed stay round. The
+lower part of the hole keeps its circle, and the hole keeps its
+diameter in drawings and callouts: only the solid gets the roof. A new
+flat roof's *Roof Sag* suggests the printed fit `hole_roof_sag` (0.4 mm,
+see [Tuning printed fits](#tuning-printed-fits)), which you tune to how
+far your printer's bridges sag. A counterbore lying on its side gets a
+roof of its own. Print shapes do not go with a press fit, a taper or a
+modeled thread. Changing the print bed face turns the roofs with it.
 
 ### Thread
 
@@ -9824,7 +9859,7 @@ file's history.
 | `.iam` (assemblies) | Open, Import. Parts become components with their history or with their bodies. Sub-assemblies become components | None | The parts' features, or their bodies |
 | IFC (`.ifc`, `.ifczip`) | Open, Import. Storeys become components, elements become features, bodies and meshes | None | Swept solids and their cuts as features |
 | `.rvt` (projects) | Open. Levels become components, elements become bodies and meshes | None | Walls, floors, roofs, ceilings, columns, beams and stair runs as features |
-| SolidCraft (`.solidcraft`) | Open, Import (every file format version) | None | Features, sketches, parameters, components and joints. Sheet metal |
+| SolidCraft (`.sc`, `.solidcraft`) | Open, Import (every file format version) | None | Features, sketches, parameters, components and joints. Sheet metal |
 | DWG (`.dwg`, R13 to R2018) | Open, Import. 3D solids become bodies, 3D faces and meshes become mesh bodies, blocks become components with their occurrences | A drawing (R2000) | None. A drawing keeps no history |
 | STEP (`.step`, `.stp`) | Bodies. An assembly: its parts become components, each placed by an occurrence per instance | Bodies (AP214 or AP242). Components as an assembly | None |
 | IGES (`.iges`, `.igs`) | Bodies | Bodies | None |
@@ -9962,6 +9997,93 @@ placed in the design.
 
 The whole import is one undo step. The components go into the active
 component.
+
+### Components from the web
+
+**Insert › Component from Web…** opens a web browser in a window of its
+own. Use it to get parts from the sites that you use: a supplier's
+catalog, a model library or your own server. When you download a model
+there, MitCad brings it into the open design as a component. The first
+use downloads the browser ([The web browser
+component](#the-web-browser-component)).
+
+The window has these controls:
+
+- **Back**, **Forward** and **Reload**.
+- The address field. Type an address and press Enter. If you type no
+  `http://` or `https://`, MitCad adds `https://`.
+- **Sites**: the sites that you added. Click one to open it.
+
+MitCad does not add sites for you. To add a site:
+
+1. Type its address and press Enter.
+2. Choose **Sites › Add This Page…**.
+3. Change the name if necessary, then click OK.
+
+**Sites › Edit Sites…** lists your sites. Double-click a name or an
+address to change it. **Add** and **Remove** add and remove sites. When
+no page is open, the window shows your sites as links.
+
+When you download a file, MitCad does these steps:
+
+1. It checks the type of the file. It accepts STEP, IGES, BRep, STL,
+   OBJ and MitCad designs, and zip files that hold them. It refuses
+   other files, and a note at the bottom of the window tells you the
+   type. A PDF data sheet that the site shows in the window is not a
+   download: you can read it in the window.
+2. It downloads the file to a temporary folder of its own. You do not
+   select a folder. A bar at the bottom of the window shows the
+   progress.
+3. It checks the contents of the file. If a site sends a web page (for
+   example a sign-in page) in place of the model, MitCad refuses it.
+4. It brings the model into the active component as a new component.
+   The component's name is the file's name without its extension.
+5. It sets the component's **Part number** property from the first part
+   of the name, up to the first underscore or space, if that part has
+   only letters and digits and at least one digit. For example,
+   `6494K13_NO THREADS_Bearing.step` becomes the component
+   `6494K13_NO THREADS_Bearing` with the part number `6494K13`. The
+   Bill of Materials shows the part number.
+6. It starts **Move/Copy** with the new component selected. Drag the
+   component to its place, then click OK.
+
+The import is one undo step. You can rename the component and change its
+part number later ([Properties](#properties)). A STEP assembly comes in
+as one component with its parts as components in it. A design in
+another format, for example an `.f3d` design, opens as a new design, as
+**File › Open** opens it.
+
+When you download a zip file, MitCad lists the files in it that it can
+import, with their sizes. Select the files that you want, then click
+**Import**. Each file becomes a component, as above. If the zip holds
+only one such file, MitCad imports it immediately.
+
+MitCad deletes the downloaded files when it has read them: the design
+keeps its own copy of the component. If MitCad stops before it deletes
+them, it deletes them the next time it starts.
+
+The browser keeps its own cookies and sign-ins, apart from your other
+web browsers. Thus a site where you signed in remembers you the next
+time. **Sites › Clear Browsing Data…** removes the cookies, sign-ins and
+cache. Your sites stay. Only one MitCad at a time can use the browser:
+close it in the other MitCad first.
+
+#### The web browser component
+
+The browser is a separate download, the *web browser component* (the
+Chromium Embedded Framework). The MitCad installer does not include it.
+The first time that you use Component from Web…, MitCad tells you the
+size of the download and asks if it can download the component. If you
+click **Yes**, MitCad downloads it, makes sure that it is MitCad's own
+(it checks the signature of the release), installs it for your user and
+opens the browser. If you click **No**, nothing is downloaded; MitCad
+asks again the next time.
+
+MitCad updates the component by itself: when a newer one is available,
+MitCad downloads it in the background and uses it from the next start.
+Each version of MitCad uses only the components made for it. If no
+component for your version is available, MitCad tells you to update
+MitCad.
 
 ### Image references
 
@@ -10580,13 +10702,18 @@ parameters as properties ([Properties](#properties)).
 
 ### SolidCraft import
 
-A SolidCraft design (`.solidcraft`) opens as a new design with its
-history. The file is plain JSON or SolidCraft's container. MitCad reads
-designs of every file format version. Older designs are upgraded as
-SolidCraft upgrades them. Use File › Open or Import, `mitcad-cli
-import-solidcraft`, or the MCP server's `document_open`. The file keeps
-the design's definitions, not its bodies. Thus MitCad builds every
-feature itself.
+A SolidCraft design (`.sc` or `.solidcraft`) opens as a new design with
+its history. The file is plain JSON or SolidCraft's container. MitCad
+reads designs of every file format version. Older designs are upgraded
+as SolidCraft upgrades them. Use File › Open or Import, drag the file
+onto the window, `mitcad-cli import-solidcraft`, or the MCP server's
+`document_open`. The file keeps the design's definitions, not its
+bodies. Thus MitCad builds every feature itself.
+
+Other programs save `.sc` files too. Thus MitCad opens a `.sc` file only
+when its content says that it is a SolidCraft design (its format key).
+It refuses any other `.sc` file with "Not a SolidCraft design" and the
+reason, and imports nothing.
 
 The import does this:
 
@@ -10719,7 +10846,9 @@ Printable bearings use `bearing_radial_clearance` (0.4 mm),
 `bearing_axial_clearance` (0.4 mm), `bearing_element_gap` (0.6 mm) and
 `bearing_fit_clearance` (0.5 mm). Press-fit holes use
 `press_fit_interference` (0.1 mm): how much smaller than the pin a hex's
-or square's flats or the crush ribs' tips are. Their comments explain which printer
+or square's flats or the crush ribs' tips are. Flat-roofed holes use
+`hole_roof_sag` (0.4 mm): how far above the circle the roof's bridge is
+printed. Their comments explain which printer
 quality affects each fit; bearing gaps are especially sensitive to circle
 accuracy and ringing.
 
@@ -11000,6 +11129,13 @@ body and mesh body. These are the options:
   are not overhangs.
 - **Thin Walls** and **Minimum wall** (0.8 mm): walls thinner than the
   printer can make.
+- **Narrow Gaps** and **Minimum gap** (0.3 mm): bodies printed in place,
+  such as a hinge and its pin, fuse when they are closer than this. With
+  two bodies or more, the analysis lists each pair that is apart but
+  closer than the gap. Bodies that touch or overlap are not listed: use
+  Interference for them. If the design has the user parameter
+  `print_in_place_gap`, the field shows its name and the analysis uses
+  its value.
 - **Estimate:** the material (the material of the bodies, else PLA), the
   line width, the walls, the layer height, the top and bottom layers,
   the infill, the filament diameter and the price per kg. If the price
@@ -11009,9 +11145,13 @@ The panel shows the overhang area for each body, and its share of the
 area. It shows the thinnest wall and the number of thin regions. Click
 the thinnest wall to zoom to it. The estimate looks like
 `41.5 g · 13.9 m · 1.04 €`. It is only an estimate: the slicer decides.
+The narrow gaps show the two bodies and their distance; click the
+distance to zoom to the gap.
 
-In the view, the overhangs are violet and the thin walls magenta,
-lighter on a dark view background. Only the thin part is colored: a thin rim at the
+In the view, the overhangs are violet, the thin walls magenta and the
+narrow gaps teal, lighter on a dark view background. A teal line joins
+the closest points of each narrow gap, and a marker shows the smallest
+gap. Only the thin part is colored: a thin rim at the
 edge of a large flat face shows as a band along the rim, not across the
 face. A marker shows the thinnest point. A legend in
 the lower left corner shows the colors, the angle and the minimum wall.
@@ -11313,7 +11453,9 @@ tools, as icons:
 
 A click picks an edge, a circle, a corner or a round face of the design
 as the view shows it; before you click, what the click would pick shows
-light orange under the pointer, and what it picked turns orange. While
+light blue under the pointer, and what it picked turns orange. Both are
+a little wider than the line they mark at any zoom, and the line shows
+through them. While
 you place a dimension, its lines follow the pointer as it will be made;
 a note, a symbol or a balloon shows its leader. A corner or a
 circle's center near the click wins over an edge: a circle or an arc
@@ -11822,7 +11964,7 @@ guide that explains its settings.
 |---|---|---|
 | **General** | The **Language** of the interface. The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts) |
 | **Navigation** | The mouse scheme for orbit, pan and zoom | [View and navigation](#view-and-navigation) |
-| **Display** | **Camera**, **Orientation cube**, **Interface size**, **Text size**, **Icon size**, **Font**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Layout**, **Browser background**, **Ghost inactive components**, **Pick the active component first**, **Small circles** | [The window](#the-window), [View and navigation](#view-and-navigation), [Layouts](#layouts), [Components](#components) |
+| **Display** | **Camera**, **Orientation cube**, **Interface size**, **Text size**, **Icon size**, **Font**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Layout**, **Show the menu bar** (Windows and Linux), **Browser background**, **Ghost inactive components**, **Pick the active component first**, **Small circles** | [The window](#the-window), [View and navigation](#view-and-navigation), [Layouts](#layouts), [Components](#components) |
 | **Cache** | The cache of computed results: on or off, the size, the folder, **Clear**, the memory limit | [Cache of computed results](#cache-of-computed-results) |
 | **Cloud** | The git program, the default author, the defaults of projects, live updates, the broker, **Known brokers** | [Sharing a project](#sharing-a-project), [Live updates](#live-updates) |
 | **Updates** | The automatic check for updates: on or off. Pre-releases: offered or not | [Updates](#updates) |
@@ -11831,7 +11973,7 @@ guide that explains its settings.
 | **Textures** | The *Local Folders* of the texture sources. *Allow texture sources on the internet* | [Textures](#textures) |
 | **AI Assistants** | Connect AI Assistant…, and the folders that an AI assistant connected through MCP can save to and open from | [mcp.md](mcp.md) |
 | **Fonts** | The folders of font files that the font chooser of Edit Text lists | [Text, fonts and QR codes](#text-fonts-and-qr-codes) |
-| **Sketch** | **Scale the sketch to its first dimension**: on or off. **Click adds to the selection in sketches**: on or off (off by default) | [Dimensions](#dimensions), [Selection in sketch mode](#selection-in-sketch-mode) |
+| **Sketch** | **Scale the sketch to its first dimension**: on or off. **Click adds to the selection in sketches**: on or off (off by default). **Esc leaves an unchanged sketch**: on or off (off by default; see Finish Sketch in [Shortcuts](#shortcuts)) | [Dimensions](#dimensions), [Selection in sketch mode](#selection-in-sketch-mode) |
 
 
 **Layout.** The **Layout** setting of the Display page selects how the
@@ -12240,11 +12382,11 @@ AppImage, `MitCad.AppImage cli <command>` runs it.
   of an `.rvt` project, one component per level. For an `.rfa` family,
   it imports its metadata. `--report-only` reads and reports without an
   import. `--elements` imports only the elements listed by id.
-- `import-solidcraft design.solidcraft --save design.mitcad [--report
+- `import-solidcraft design.sc --save design.mitcad [--report
   report.json] [--set name=expression]… [--expected values.json]`:
-  imports a SolidCraft design with its history. `--set` changes a
-  parameter, by the design's name, before the report measures the
-  bodies. `--expected` checks the bodies, timeline, parameters and
+  imports a SolidCraft design (`.sc` or `.solidcraft`) with its
+  history. `--set` changes a parameter, by the design's name, before the
+  report measures the bodies. `--expected` checks the bodies, timeline, parameters and
   sketches against given values. When they differ, the exit code is 1.
 - `export part.mitcad result.step [--bodies …] [--schema ap214|ap242]
   [--unit mm|in|…] [--refinement low|medium|high] [--ascii]`: exports a

@@ -5,9 +5,11 @@
 // itself painted from its picture while the pointer only moves over it,
 // painted again for a zoom (mitcad#759); a section's line's and a break's
 // clicks snapped to points, a section's second to 45 degrees, Shift as
-// clicked (mitcad#1362).
+// clicked (mitcad#1362); the hover's and the picks' marks as wide as the
+// line they mark at two zooms (mitcad#1618).
 #include "drawings/DrawingSheetView.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <initializer_list>
@@ -164,6 +166,65 @@ int drawingSheetViewTests() {
   CHECK(grey() < 192);
   sheet.setHoverMarks(QJsonArray());
   CHECK(grey() > 192);
+
+  // The marks of a line hovered and picked (mitcad#1618): as wide as the
+  // line is drawn at the zoom (its pen's width, here 0.7 mm)
+  // and 2 pixels more on each side, fitted and zoomed in; without a pen,
+  // the fixed widths.
+  {
+    QJsonObject withPens = sheetOf(420.0, 297.0);
+    withPens.insert(QStringLiteral("pens"),
+                    QJsonObject{{QStringLiteral("thick"), QJsonObject{{QStringLiteral("width"), 0.7}}}});
+    sheet.setSheet(withPens);
+    sheet.fit();
+    QJsonArray edge;
+    edge.append(xy(20.0, 20.0));
+    edge.append(xy(120.0, 20.0));
+    const QJsonObject marked{{QStringLiteral("line"), edge}, {QStringLiteral("pen"), QStringLiteral("thick")}};
+    const QJsonObject bare{{QStringLiteral("line"), edge}};
+    const auto expected = [&sheet] {
+      return std::max(0.7 * sheet.zoom(), 1.0) + 2.0 * DrawingSheetView::kMarkMargin;
+    };
+    const double fittedZoom = sheet.zoom();
+    CHECK(std::abs(sheet.markWidth(marked, false) - std::max(expected(), DrawingSheetView::kHoverMarkWidth)) < 1e-9);
+    CHECK(std::abs(sheet.markWidth(marked, true) - std::max(expected(), DrawingSheetView::kPickMarkWidth)) < 1e-9);
+    CHECK(sheet.markWidth(bare, false) == DrawingSheetView::kHoverMarkWidth);
+    CHECK(sheet.markWidth(bare, true) == DrawingSheetView::kPickMarkWidth);
+    // Zoomed in about the edge's middle: wider with the line.
+    const QPointF middle(70.0, 20.0);
+    wheel(sheet, sheet.toWidget(middle), 16);
+    CHECK(sheet.zoom() > 4.0 * fittedZoom);
+    const double drawn = 0.7 * sheet.zoom();
+    CHECK(drawn > 8.0);
+    CHECK(std::abs(sheet.markWidth(marked, false) - (drawn + 4.0)) < 1e-9);
+    CHECK(std::abs(sheet.markWidth(marked, true) - (drawn + 4.0)) < 1e-9);
+    CHECK(sheet.markWidth(bare, true) == DrawingSheetView::kPickMarkWidth);
+    // On the screen, the pixel whose centre lies midway between the drawn
+    // line's edge and the mark's (1 pixel from each): the paper without
+    // the mark, the hover's blue or the pick's orange with it; the line
+    // itself still dark under the mark.
+    const QPointF centre = sheet.toWidget(middle);
+    const QPoint beside(static_cast<int>(std::floor(centre.x())),
+                        static_cast<int>(std::floor(centre.y() + drawn / 2.0 + 1.0)));
+    const QPoint onLine(static_cast<int>(std::floor(centre.x())), static_cast<int>(std::floor(centre.y())));
+    const auto colourAt = [&sheet](const QPoint& at) { return QColor(sheet.grab().toImage().pixel(at)); };
+    CHECK(qGray(colourAt(beside).rgb()) > 192);
+    CHECK(qGray(colourAt(onLine).rgb()) < 64);
+    QJsonArray markedItems;
+    markedItems.append(marked);
+    sheet.setHoverMarks(markedItems);
+    const QColor hoveredBeside = colourAt(beside);
+    CHECK(hoveredBeside.blue() > hoveredBeside.red() + 40);
+    CHECK(qGray(colourAt(onLine).rgb()) < 128);
+    sheet.setHoverMarks(QJsonArray());
+    sheet.setPickMarks(markedItems);
+    const QColor pickedBeside = colourAt(beside);
+    CHECK(pickedBeside.red() > pickedBeside.blue() + 40);
+    CHECK(qGray(colourAt(onLine).rgb()) < 128);
+    sheet.setPickMarks(QJsonArray());
+    CHECK(qGray(colourAt(beside).rgb()) > 192);
+    sheet.fit();
+  }
 
   // A section's line and a break's sides (mitcad#1362): each click snaps
   // to the point the model gives (here a hole's centre at (50, 35) and a

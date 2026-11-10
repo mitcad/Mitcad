@@ -211,6 +211,7 @@ void reservedHueTests() {
       ColorRole::Component4, ColorRole::Component5, ColorRole::Component6, ColorRole::Component7,
       ColorRole::RuleFrame,  ColorRole::RuleName,   ColorRole::RuleLiteral, ColorRole::RuleFormula,
       ColorRole::RuleLogic,  ColorRole::RuleAction, ColorRole::PrintOverhang, ColorRole::PrintThin,
+      ColorRole::PrintGap,
       ColorRole::SearchMatch, ColorRole::JointA,    ColorRole::JointB,     ColorRole::JointOrigin,
   };
   for (const ColorRole role : domain) {

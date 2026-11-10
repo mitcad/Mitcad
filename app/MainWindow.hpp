@@ -102,6 +102,8 @@ class NativeCommandForm;
 class NativeWidgetView;
 #endif
 struct BrowserNode;
+enum class WebFileKind;
+struct BrowserComponentInfo;
 struct JointHighlight;
 struct FileVersion;
 struct MountPart;
@@ -312,6 +314,12 @@ public:
   void clearSelection();
   void pick(const Selection& items, Qt::KeyboardModifiers modifiers) override;
   void showError(const QString& message) override;
+  // An error of a source that lasts while it is open, and that source
+  // closing (mitcad#1621): the Docked status line and the message band
+  // lose its error; logged `Status error source: <source>` and `Status line
+  // cleared (<source> closed)`.
+  void showSourceError(const QString& message, const QString& source) override;
+  void closeMessageSource(const QString& source) override;
   bool sketchClickable(const SelectionItem& item, bool expanded) const override; // mitcad#217
   bool sketchAxesPickable() const override;                                      // mitcad#876
   QStringList sketchAxisPicks() const override;                                  // mitcad#876
@@ -541,6 +549,11 @@ private:
   void onCommandFinished(bool committed);
   void confirm();
   void cancel();
+  // Enter repeats the last command (mitcad#1620): whether it is available
+  // now (its action enabled), and the OK action's (Enter's) state for the
+  // mode, the last command and the focus.
+  bool repeatableCommand() const;
+  void updateConfirmEnabled();
 
   // Model access. command() runs a model command as a job (MainWindowJobs.cpp)
   // and throws rust::Error when the model rejects it, ComputationCancelled
@@ -800,6 +813,15 @@ private:
   // edit was cancelled (P7).
   bool finishSketch();
   void leaveSketchMode();
+  // Esc in a sketch with nothing else to cancel, while the preference
+  // "Esc leaves an unchanged sketch" is on (mitcad#1623): a sketch
+  // nothing was changed in since it was entered is left as Finish Sketch
+  // leaves it (a new one, still empty, taken back with it); a changed one
+  // stays, and the status line says how to leave it, once.
+  void escapeSketch();
+  // The document's revision (`document` query): the same while nothing
+  // changes the design.
+  qint64 documentRevision() const;
   // A feature command started from sketch mode (Extrude: E) shows what it
   // works on (mitcad#1227): the sketch `uid` just left and the body it lies
   // on, inside the view's free area once the command's card is placed
@@ -1297,6 +1319,22 @@ private:
   void insertDxf();
   void insertComponent(const QString& path = QString());
   void insertOpenDesign();
+  // Insert › Component from Web (mitcad#1579, webbrowser/MainWindowComponentWeb.cpp):
+  // the command where Qt WebEngine is built in, its window (one per design
+  // window, ended with it), and a downloaded file brought in: a component of
+  // this design, named and numbered from the file's name and placed with
+  // Move, or a design of another format opened as File › Open opens it.
+  void registerComponentWebCommand();
+  void openComponentBrowser();
+  bool importWebDownload(const QString& path, WebFileKind kind, QString* error);
+  QPointer<QDialog> m_componentBrowser;
+  // The web browser component (CEF and the module, BrowserComponent.hpp):
+  // the installed one's window, the first download (asked once, with its
+  // size), and the check for a newer one of this MitCad's interface.
+  bool showComponentBrowser(const BrowserComponentInfo& component);
+  void downloadBrowserComponent(const QString& why);
+  void updateBrowserComponent(const BrowserComponentInfo& component);
+  QPointer<QObject> m_browserDownload;
   // `rerun`: the options of an .f3d import run again with the items whose
   // deviating results the user keeps (mitcad#379); empty for a new import.
   // `ask`: the import asks its choices (File > Open and Import: an .iam
@@ -1599,6 +1637,7 @@ private:
 
   QAction* m_confirmAction = nullptr;
   QAction* m_cancelAction = nullptr;
+  QMetaObject::Connection m_focusRepeat; // focus changes update Enter's state (mitcad#1620)
   QHash<int, QAction*> m_filterActions; // SELECT group, by SelectFilter
 
   BrowserController* m_controller = nullptr;
@@ -1661,6 +1700,12 @@ private:
   QLabel* m_statusLabel = nullptr;
   // The status line message's level and its icon beside it (mitcad#1040).
   NoticeLevel m_statusLevel = NoticeLevel::Hint;
+  // The source of the status line's error (mitcad#1621, showSourceError):
+  // empty for none; the one the next status message takes; the source of
+  // an error raised in this turn of the event loop.
+  QString m_statusSource;
+  QString m_nextStatusSource;
+  QString m_freshSourceError;
   QLabel* m_statusIcon = nullptr;
   // What the status shows is a hint (showHint), not a warning or an error:
   // an open drawing clears it (mitcad#1008, updateDrawingChrome).
@@ -1887,6 +1932,10 @@ private:
   // The occurrence path sketch mode shows the sketch at (mitcad#505;
   // empty: the root): its frame and curves are placed by it once.
   QString& m_sketchOccurrence = m_documentSession->state().sketchOccurrence;
+  // The revision as the sketch was entered, and Esc's hint given
+  // (mitcad#1623, escapeSketch).
+  qint64& m_sketchEnterRevision = m_documentSession->state().sketchEnterRevision;
+  bool& m_sketchEscHinted = m_documentSession->state().sketchEscHinted;
 
   // Sketch selection filters (mitcad#217, MainWindowSelection.cpp): the
   // three-state filter of sketch mode, Project's context while it runs, the

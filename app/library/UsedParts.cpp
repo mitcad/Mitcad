@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "UsedParts.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <exception>
 
@@ -61,7 +62,7 @@ QList<UsedPart> usedLibraryParts(const CommandContext& context) {
     answer = context.query(QJsonObject{{QStringLiteral("query"), QStringLiteral("library_usage")}}).toObject();
   } catch (const std::exception& error) {
     qWarning().noquote() << QStringLiteral("Part picker: the design's library parts not read: %1")
-                                .arg(QString::fromUtf8(error.what()));
+                                .arg(mitcad::modelMessage(error.what()));
     return parts;
   }
   for (const QJsonValue& value : answer.value(QStringLiteral("parts")).toArray()) {

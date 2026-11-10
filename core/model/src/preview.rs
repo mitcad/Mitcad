@@ -313,6 +313,7 @@ impl<K: Kernel> Document<K> {
         &self,
         instances: &[InstanceView],
         looks: &inspect::Looks,
+        print_colors: bool,
         warnings: &mut Vec<String>,
     ) -> (Scene, Vec<BodyUid>) {
         struct Meshed {
@@ -345,7 +346,7 @@ impl<K: Kernel> Document<K> {
             // colors and highlight (mitcad#1487); a cut face has the body's
             // colour.
             let look = looks.instances.get(index).cloned().unwrap_or_default();
-            scene.meshes.push(placed_mesh(
+            let mut mesh = placed_mesh(
                 &body.faces,
                 &instance.transform,
                 Mesh {
@@ -361,9 +362,86 @@ impl<K: Kernel> Document<K> {
                     faceted: body.kind == BodyKind::Mesh,
                     ..Mesh::default()
                 },
-            ));
+            );
+            // The print colours by height (mitcad#1596).
+            if print_colors {
+                self.print_color_mesh(&mut mesh, instance, warnings);
+            }
+            scene.meshes.push(mesh);
         }
         (scene, bodies)
+    }
+
+    /// A placed mesh in the colours of the filaments its placement prints
+    /// with by height (mitcad#1596, [`crate::print_changes`]): its
+    /// triangles cut at the layer boundaries of the changes, measured
+    /// along its print direction from its lowest point, each face's piece
+    /// in a band a face of its own in that band's colour (so the boundary
+    /// is drawn as an edge). The shape is not touched.
+    fn print_color_mesh(
+        &self,
+        mesh: &mut Mesh,
+        instance: &InstanceView,
+        warnings: &mut Vec<String>,
+    ) {
+        let colors = self.print_colors(
+            instance.body,
+            Some(instance.path.as_slice()),
+            &instance.transform,
+        );
+        let name = self.body_name(instance.body);
+        for note in &colors.notes {
+            let note = format!("{name}: {note}");
+            if !warnings.contains(&note) {
+                warnings.push(note);
+            }
+        }
+        let height = |p: [f64; 3]| dot(p, colors.up);
+        let (low, high) = mesh
+            .vertices
+            .iter()
+            .map(|&p| height(p))
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), h| {
+                (lo.min(h), hi.max(h))
+            });
+        if low > high {
+            return;
+        }
+        let bands = crate::print_changes::Bands::new(colors.start, &colors.changes, low, high);
+        let banded = crate::print_changes::band_mesh(
+            &mesh.vertices,
+            &mesh.normals,
+            &mesh.triangles,
+            height,
+            &bands.cuts,
+        );
+        // Each original triangle's face.
+        let mut face_of = Vec::with_capacity(mesh.triangles.len());
+        for (face, &count) in mesh.face_triangles.iter().enumerate() {
+            face_of.extend(std::iter::repeat_n(face, count as usize));
+        }
+        let last = mesh.face_triangles.len();
+        let mut groups: BTreeMap<(usize, usize), Vec<[u32; 3]>> = BTreeMap::new();
+        for ((triangle, &source), &band) in banded
+            .triangles
+            .iter()
+            .zip(&banded.source)
+            .zip(&banded.band)
+        {
+            let face = face_of.get(source as usize).copied().unwrap_or(last);
+            groups.entry((face, band)).or_default().push(*triangle);
+        }
+        mesh.vertices = banded.vertices;
+        mesh.normals = banded.normals;
+        mesh.triangles = Vec::with_capacity(banded.triangles.len());
+        mesh.face_triangles = Vec::with_capacity(groups.len());
+        mesh.face_colors = Vec::with_capacity(groups.len());
+        for ((_, band), triangles) in groups {
+            mesh.face_triangles.push(triangles.len() as u32);
+            mesh.face_colors.push(bands.colors[band]);
+            mesh.triangles.extend(triangles);
+        }
+        mesh.cap_color = Some(bands.colors[0]);
     }
 
     /// A body's display mesh and each face's colour; None (with a
@@ -437,7 +515,12 @@ impl<K: Kernel> Document<K> {
         let plan = self.preview_camera(args)?;
         let mut warnings = plan.warnings;
         let looks = self.preview_looks(&plan.instances, &args.inspect, &mut warnings);
-        let (mut scene, bodies) = self.preview_scene(&plan.instances, &looks, &mut warnings);
+        let (mut scene, bodies) = self.preview_scene(
+            &plan.instances,
+            &looks,
+            args.inspect.print_colors,
+            &mut warnings,
+        );
         // What an analysis finds, over the bodies drawn (mitcad#1488).
         let overlay_started = Instant::now();
         let overlay = match &args.overlay {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "Dialogs.hpp"
+#include "ModelMessages.hpp"
 
 #include <QAbstractItemView>
 #include <QCompleter>
@@ -420,7 +421,9 @@ namespace {
 
 QMessageBox::StandardButton show(QMessageBox::Icon icon, QWidget* parent, const QString& title, const QString& text,
                                  QMessageBox::StandardButtons buttons, QMessageBox::StandardButton defaultButton) {
-  QMessageBox box(icon, title, text, buttons, parent);
+  // A warning, an error or a note may be (or end in) the model's message:
+  // shown in the interface language (mitcad#1284). A question is MitCad's.
+  QMessageBox box(icon, title, icon == QMessageBox::Question ? text : modelMessage(text), buttons, parent);
   if (defaultButton != QMessageBox::NoButton) {
     box.setDefaultButton(defaultButton);
   }

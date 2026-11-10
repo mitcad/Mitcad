@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "AppearanceDialog.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <initializer_list>
@@ -735,7 +736,7 @@ void AppearanceDialog::finishUse(const QString& sourceId, const TextureAsset& as
   try {
     listed = m_host.model().queryArray(QStringLiteral("appearances"));
   } catch (const std::exception& e) {
-    refuse(QString::fromUtf8(e.what()));
+    refuse(mitcad::modelMessage(e.what()));
     return;
   }
   const TextureUse use = textureUseCommand(sourceId, asset, files, name, embeddedImageDigests(listed));
@@ -745,7 +746,7 @@ void AppearanceDialog::finishUse(const QString& sourceId, const TextureAsset& as
   }
   QJsonObject result;
   if (!m_host.runModelCommand(use.command, &result)) {
-    refuse(m_host.lastError());
+    refuse(mitcad::modelMessage(m_host.lastError()));
     return;
   }
   m_message->clear();
@@ -843,7 +844,7 @@ void AppearanceDialog::refresh() {
   try {
     m_appearances = appearancesOf(m_host.model().queryArray(QStringLiteral("appearances")));
   } catch (const std::exception& e) {
-    m_message->setText(QString::fromUtf8(e.what()));
+    m_message->setText(mitcad::modelMessage(e.what()));
     return;
   }
   // Whether each texture's image is there (mitcad#53).
@@ -1003,7 +1004,7 @@ void AppearanceDialog::change(const QString& key, const QJsonValue& value) {
     m_message->clear();
     qDebug().noquote() << QStringLiteral("Appearance %1 %2 = %3").arg(id, key, text);
   } else {
-    m_message->setText(m_host.lastError());
+    m_message->setText(mitcad::modelMessage(m_host.lastError()));
     qDebug().noquote() << QStringLiteral("Appearance %1 %2 = %3 refused: %4").arg(id, key, text, m_host.lastError());
   }
   refresh();
@@ -1040,7 +1041,7 @@ void AppearanceDialog::newAppearance() {
                                {QStringLiteral("based_on"), base},
                                {QStringLiteral("name"), name}},
                               &result)) {
-    m_message->setText(m_host.lastError());
+    m_message->setText(mitcad::modelMessage(m_host.lastError()));
     return;
   }
   m_message->clear();
@@ -1058,7 +1059,7 @@ void AppearanceDialog::deleteAppearance() {
   }
   const QString id = a->id;
   if (!m_host.runModelCommand({{QStringLiteral("cmd"), QStringLiteral("delete_appearance")}, {QStringLiteral("id"), id}})) {
-    m_message->setText(m_host.lastError());
+    m_message->setText(mitcad::modelMessage(m_host.lastError()));
     return;
   }
   m_message->clear();
@@ -1270,7 +1271,7 @@ void AppearanceDialog::sendTexture(const QJsonValue& texture, const QString& wha
     m_message->clear();
     qDebug().noquote() << QStringLiteral("Appearance %1 texture %2").arg(id, what);
   } else {
-    m_message->setText(m_host.lastError());
+    m_message->setText(mitcad::modelMessage(m_host.lastError()));
     qDebug().noquote() << QStringLiteral("Appearance %1 texture %2 refused: %3").arg(id, what, m_host.lastError());
   }
   refresh();

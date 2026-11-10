@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "RulesPage.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <optional>
@@ -452,7 +453,7 @@ QStringList RulesPage::savedProblems(int index, NoticeLevel level) const {
     const QJsonObject problem = value.toObject();
     if (problem.value(QStringLiteral("index")).toInt(-1) == index &&
         noticeLevelFromModel(problem.value(QStringLiteral("level")).toString(), NoticeLevel::Error) == level) {
-      found << problem.value(QStringLiteral("message")).toString();
+      found << mitcad::modelMessage(problem.value(QStringLiteral("message")).toString());
     }
   }
   return found;
@@ -485,7 +486,7 @@ std::vector<BlockMark> RulesPage::blockMarks(int index) const {
   }
   for (const QJsonValue& value : refusal ? m_refusalProblems : m_ruleProblems) {
     const QJsonObject problem = value.toObject();
-    const QString message = problem.value(QStringLiteral("message")).toString();
+    const QString message = mitcad::modelMessage(problem.value(QStringLiteral("message")).toString());
     const NoticeLevel level =
         noticeLevelFromModel(problem.value(QStringLiteral("level")).toString(), NoticeLevel::Error);
     if (problem.value(QStringLiteral("index")).toInt(-1) != index ||
@@ -990,7 +991,7 @@ void RulesPage::checkRules() {
     lines << QStringLiteral("The saved rules were checked; the changes not saved yet were not.");
   }
   if (report.contains(QStringLiteral("error"))) {
-    lines << QStringLiteral("Check Rules failed: %1").arg(report.value(QStringLiteral("error")).toString());
+    lines << QStringLiteral("Check Rules failed: %1").arg(mitcad::modelMessage(report.value(QStringLiteral("error")).toString()));
   } else {
     QStringList found = strings(report.value(QStringLiteral("lines")));
     if (found.isEmpty()) {

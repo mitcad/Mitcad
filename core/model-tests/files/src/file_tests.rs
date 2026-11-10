@@ -623,6 +623,19 @@ fn malformed_files_are_rejected() {
     }
 }
 
+/// A fuzzed design file (core/fuzz, `design_file`): a byte order mark
+/// before a curve of a profile's region once panicked the name reader
+/// slicing inside the character; the file is refused with the name.
+#[test]
+fn a_wide_character_inside_a_region_name_is_refused() {
+    let error = rejected(&edited(EXAMPLE, |v| {
+        v["features"][1]["profiles"][0]["region"] =
+            json!("r{c1[c4,c2],c2[c1,c3],c3[c2,c4],\u{feff}c4[c3,c1]}")
+    }));
+    assert!(matches!(error, FileError::Schema(_)), "{error:?}");
+    assert_message(error, &["invalid name r{c1[c4,c2]"]);
+}
+
 #[test]
 fn schema_errors_say_where() {
     type Edit = fn(&mut Value);

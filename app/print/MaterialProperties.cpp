@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "MaterialProperties.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -470,7 +471,7 @@ void MaterialDatasetDialog::search(const QString& wanted) {
     m_entries = m_about.value(QStringLiteral("materials")).toArray();
   } catch (const std::exception& e) {
     m_entries = QJsonArray();
-    m_details->setText(QString::fromUtf8(e.what()));
+    m_details->setText(mitcad::modelMessage(e.what()));
   }
   const QString selected = chosenId();
   m_list->clear();

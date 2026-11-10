@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<!-- The Info.plist of a helper app of the web browser component's
+     subprocess helper on macOS (mitcad#1579, app/webbrowser/BrowserComponent.cmake). -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>@MITCAD_HELPER_NAME@</string>
+  <key>CFBundleExecutable</key>
+  <string>@MITCAD_HELPER_NAME@</string>
+  <key>CFBundleIdentifier</key>
+  <string>@MITCAD_HELPER_ID@</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>@MITCAD_HELPER_NAME@</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleSignature</key>
+  <string>????</string>
+  <key>LSEnvironment</key>
+  <dict>
+    <key>MallocNanoZone</key>
+    <string>0</string>
+  </dict>
+  <key>LSFileQuarantineEnabled</key>
+  <true/>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.4</string>
+  <key>LSUIElement</key>
+  <string>1</string>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+</dict>
+</plist>

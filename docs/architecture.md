@@ -58,7 +58,7 @@ the probe cannot use the document's tools or replace its conversation.
 | `core/dxf` | Rust | DXF read and write. |
 | `core/dwg` (`mitcad-dwg`) | Rust | `.dwg` drawings, R13 to R2018: the containers and their compression, header variables, classes, the object map, objects, the data storage; the 3D content (B-rep records parsed by `core/asm`, meshes, blocks and inserts) and the plan of components; the writer of 2D drawings in R2000 for the drawing export (mitcad#728) ([README](../core/dwg/README.md)). No geometry. |
 | `core/3mf` (`mitcad-3mf`) | Rust | 3MF writer (one object of parts) and a checking reader for tests. |
-| `core/usdz` (`mitcad-usdz`) | Rust | USDZ writer: the binary USD layer (crate format 0.8.0, LZ4 and USD's integer coding written here, no USD library) of a scene of meshes, `Xform`s and `UsdPreviewSurface` materials, packed with its textures 64-byte aligned; a checking reader for tests (mitcad#123). |
+| `core/usdz` (`mitcad-usdz`) | Rust | USDZ writer: the binary USD layer (crate format 0.8.0, LZ4 and USD's integer coding written here, no USD library) of a scene of meshes, `Xform`s and `UsdPreviewSurface` materials, packed with its textures 64-byte aligned; time-sampled transforms of an animated scene (mitcad#1597); a checking reader for tests (mitcad#123). |
 | `core/vcs` (`mitcad-vcs`) | Rust | Version history of projects in git (gitoxide, only here); remotes through the system's git; component libraries and community indexes in git repositories ([libraries.md](libraries.md)). |
 | `core/update` (`mitcad-update`) | Rust | Release manifest, signatures, version selection; the `mitcad-release` tool. No network ([updates.md](updates.md)). |
 | `core/mcp` (`mitcad-mcp`) | Rust | MCP lifecycle, JSON-RPC envelopes, tool schemas, the command-reference resource and `model_reference`, the reference in sections (mitcad#714); the guides for agents (`core/mcp/guide/`, Agent Skills layout, behind `model_reference {"guide": …}` and `mitcad://guide/<id>`, mitcad#1508); headless stdio and live application profiles. No geometry dependency; its tests read the model API's permitted names ([mcp.md](mcp.md)). |
@@ -391,6 +391,110 @@ design in a project.
   within a budget checked against the declared sizes before reading: at
   most 4096 entries and a 256 MiB model part, other files over 64 MiB
   left out and 256 MiB for the files read in all, mitcad#927).
+- **Filament changes at print heights** (mitcad#1596,
+  `core/model/src/print_changes.rs`, `document/filament_changes.rs`,
+  `print_files/layer_events.rs`): a schedule of heights and what happens
+  there on a single extruder (a manual change to a filament, a material
+  with its appearance; or a pause), kept in the design file
+  (`filament_changes`) and set as one undo step (`set_filament_changes`).
+  The design's geometry is never cut or changed for it. Decisions:
+  - *Scope: a plate, never a body.* A manual change swaps the one filament
+    loaded, so it changes the whole layer of every object on the plate.
+    The design's own schedule is that of an export of bodies and of every
+    print plate without its own; a print plate may have its own, which
+    goes with it when it is deleted. Below the first event every part on
+    the plate must print with one filament (material and appearance):
+    parts of several filaments on a plate are a conflict, a warning of
+    the export, and none of that plate's events is written. Several
+    filaments at once are a multi-material print, which the filament
+    slots already write.
+  - *Coordinates.* Heights are millimetres above the print bed, whatever
+    the design's unit: the bed's Z after the export's turn (a print bed
+    face, the automatic orientation) and drop. In a 3MF each build object
+    is measured from its own lowest point (where the slicer lays it); a
+    plate's top is its tallest object's. `model_render` and USDZ measure
+    each placement along its print direction (away from its print bed
+    face, else +Z) from its own lowest point.
+  - *Layers.* An event happens at a layer boundary: its height moves to
+    the nearest top of a layer (`first_layer_height`, then `layer_height`
+    of the plate's process, 0.2 mm each when unset; a tie upwards), never
+    within the first layer, which always prints the plate's own filament.
+    It is written at the top of the first layer printed after it, which
+    every supported slicer assigns to that very layer. An event at or
+    above the plate's top, the earlier of two events on one boundary, and
+    a change to a material the design no longer has are left out with a
+    warning. Heights are above 0 and at most 2000 mm, one event per
+    height, at most 64 events; variable layer heights are the slicer's.
+  - *Filaments and dialects; no printer G-code in the model.* The design
+    keeps the material and appearance; each slicer gets its own per-layer
+    event file, and emits its printer profile's own change or pause
+    G-code. PrusaSlicer (read from its release 2.9.7,
+    `src/libslic3r/Format/3mf.cpp`: `CUSTOM_GCODE_PER_PRINT_Z_FILE`,
+    `_add_custom_gcode_per_print_z_file_to_archive`,
+    `_extract_custom_gcode_per_print_z_from_archive`;
+    `src/libslic3r/CustomGCode.hpp`: `Type` ColorChange 0, PausePrint 1;
+    `GCode/ToolOrdering.cpp` `assign_custom_gcodes`, which gives an event
+    the lowest layer whose `print_z` is at or above it, and `GCode.cpp`,
+    which emits a colour change of a single extruder only for
+    `extruder >= 1`) gets
+    `Metadata/Prusa_Slicer_custom_gcode_per_print_z.xml`: a
+    `custom_gcodes_per_print_z` element per bed (`bed_idx`, bed 0
+    always), a `code` per event (`print_z`, `type`, `extruder`, `color`,
+    `extra`, the pause's message) and the `mode` (`SingleExtruder` for a
+    project of one filament; `MultiExtruder`, or `MultiAsSingle` with
+    `single_extruder_multi_material`, for more, which PrusaSlicer compares
+    with its printer before taking a change). A change is a colour change
+    (M600) of the plate's extruder: the filament's settings stay the first
+    one's, a warning when the two differ in type or temperatures. The
+    Bambu family (Bambu Studio release v02.09.01.70, OrcaSlicer v2.5.0 and
+    QIDI Studio: `bbs_3mf.cpp` / `qds_3mf.cpp`,
+    `_add_custom_gcode_per_print_z_file_to_archive` and
+    `_extract_custom_gcode_per_print_z_from_archive`) gets
+    `Metadata/custom_gcode_per_layer.xml`: `custom_gcodes_per_layer`, a
+    `plate` per plate (`plate_info id` from 1), a `layer` per event
+    (`top_z`, `type`, `extruder` from 1, `color`, `extra`) and the
+    `mode`. Their G-code export leaves a colour change (type 0) out
+    (`GCode.cpp`, "inserting color gcode is removed"), so a change is a
+    filament change (type 2, ToolChange) to the filament's own slot in
+    `MultiAsSingle` mode, the slot the export adds for each filament
+    changed to; their `assign_custom_gcodes` takes the nearest layer,
+    which a `top_z` at a layer's own top is. No printer G-code is written
+    (the readers take the legacy `gcode` attribute only without `type`).
+    When every plate's parts print with one filament, the slot a change
+    adds is only the manual change's, and the project's
+    `enable_prime_tower` is written off: the slicers would otherwise
+    build a tower at their default `wipe_tower_x`/`wipe_tower_y`, which
+    fell outside a 256 mm bed in real runs (Bambu Studio and QIDI Studio
+    stop with -104), and a manual change purges in the printer's own
+    filament-change code. Every family export also keeps relative
+    extrusion valid: with `use_relative_e_distances` on (their default)
+    and no `G92 E0` line in the layer change G-code, `G92 E0` is added to
+    `before_layer_change_gcode` (OrcaSlicer refuses the project
+    otherwise). The slicers count filaments by `filament_diameter`
+    (OrcaSlicer's `ToolOrdering`), and with one entry a change becomes a
+    colour change, whose G-code their export leaves out: a project of
+    several slots always has an entry per slot. For a manual change on a
+    printer without `change_filament_gcode`, the export writes M600
+    there, guarded by `previous_extruder` so that the print's first
+    filament does not stop. A slicer's 3MF not put on the bed
+    (`on_bed`) is centred on the plate as a whole (`center`), as the
+    slicers take a project's positions as bed coordinates.
+    Cura keeps such events only as post-processing scripts of the
+    machine's settings, not in what its 3MF export writes per object: the
+    export warns with each event's layer number to add there. A 3MF
+    without a slicer warns that the events go with one. Object height
+    ranges (per-object layer settings) are not filament changes and are
+    not used for them.
+  - *Preview.* `model_render`'s `print_colors` and the USDZ export's
+    `print_colors` (opt in) cut the drawn or written triangles at the
+    boundaries of the changes (`print_changes::band_mesh`: a triangle
+    across a cut becomes a convex piece per band, new vertices on the
+    cut, normals interpolated) and colour each band with its filament's
+    colour, in place of the face appearances, which stay the design's
+    for every other picture and file. Both take the same placement's
+    schedule, layers and direction (`Document::print_colors`), so they
+    agree; USDZ writes the first band as the mesh's material and each
+    other band as a subset. Pauses change no colour.
 - **Appearances** (mitcad#46, `core/model-base/src/appearance.rs`): physically
   based parameter sets (base colour, metalness, roughness, specular,
   transmission, IOR, coat, emission, opacity, and a texture for the base
@@ -442,7 +546,9 @@ design in a project.
   the bodies' `Kernel::triangle_mesh` and `physical_properties`, with a
   bounding volume hierarchy of their own for the wall rays, no kernel
   method of their own; the results are kept in memory by the bodies'
-  shape versions and the settings.
+  shape versions and the settings. Their narrow gaps between bodies
+  printed in place (mitcad#1519, `print_min_gap`) are a box test in Rust
+  and the kernel's exact `measure_between` for the pairs left.
 - **Image references** (mitcad#782;
   `core/model/src/document/image_references.rs`,
   `core/model-base/src/image_header.rs`, `api/image_references.rs`):
@@ -1303,6 +1409,19 @@ the `Shape` type.
   united: they change no body, and a large pattern of holes over a round
   plate had most of its copies off the plate. Copies whose boxes come
   that near each other are kept or left out together.
+- Patterns leave out a copy that is the same solid at the same place as
+  its original or as a copy kept before it (mitcad#1588,
+  `coincident_copies` in `core/model/src/features/pattern.rs`): a body of
+  revolution turned about its own axis, or two products of a circular
+  pattern about two axes on one place. A join of two equal solids whose
+  surfaces are parametrized differently (two spheres with their poles
+  elsewhere) goes through faces that lie on each other, where the kernel's
+  booleans are least reliable; such a copy adds nothing, so no boolean is
+  made. Only copies that turn or mirror their object are compared, first
+  by their centres of mass and tight boxes, then by points on the faces of each against
+  the faces of the other (`Kernel::face_points`,
+  `Kernel::boundary_distances`); a kernel that cannot measure makes every
+  copy as before.
 - A pattern of several features (mitcad#855,
   `Copying::together` in `core/model/src/features/pattern.rs`) applies
   a run of consecutive features that all join, or all cut, the same one
@@ -1468,7 +1587,11 @@ the `Shape` type.
   the surface's normals, in the order `Kernel::faces` lists them, so
   face appearances find their triangles): a mesh per placement under
   `Xform`s of the occurrences, materials from the appearances
-  (`core/model/src/exchange/usdz.rs`, `core/usdz`). Drawings (mitcad#471,
+  (`core/model/src/exchange/usdz.rs`, `core/usdz`); with `animation`
+  (mitcad#1597, `exchange/usdz_animation.rs`) the occurrences' and bodies'
+  placements are time-sampled, from poses given or from a motion study's
+  steps evaluated apart from the document (`Document::study_placements`),
+  the meshes written once. Drawings (mitcad#471,
   `export_drawing`): `Kernel::project_view` gives a view's edges with
   hidden lines removed (OCCT's `HLRBRep_Algo`, lines and circles exact,
   other curves as polylines; `HLRBRep_PolyAlgo` on a triangulated copy
@@ -2239,17 +2362,26 @@ not recompute.
   bodies that share their faces; and no run starts after a job that was
   asked to stop, whose meshing may have left bodies the view meshes on
   its own thread. The view itself, which goes on while a run reads the
-  bodies, never meshes a model shape (mitcad#1553): highlights, the hover
-  chain and the hidden-edge styles' edges are drawn from the meshes the
-  jobs made (a shape without faces from its curves), plates draw bodies
-  no job meshed through a copy, and the section clips made on the UI
-  thread clip detached copies (`prepare_clips`); an edge highlight that
-  meshed the body's own edge there damaged the heap under a run's join
+  bodies, never meshes a model shape (mitcad#1553): faces are drawn from
+  the meshes the jobs made, and every line (a body's edges in every visual
+  style, highlights, the hover, the hover chain) from detached copies of
+  the edges (`app/view/ViewEdges.hpp`, mitcad#1633): new edges on the same
+  curves, made when a body is shown and dropped with it, each with its
+  polyline cut at 0.001 mm and at most 4° a step, whatever the body's
+  size; a highlight of a body's edge takes the body's copy, so that it
+  lies on the line it highlights, and the hover's owners draw their face
+  or edge so too. Plates draw bodies no job meshed through a copy, and the
+  section clips made on the UI thread clip detached copies
+  (`prepare_clips`); an edge highlight that meshed the body's own edge
+  there damaged the heap under a run's join
   (`tools/ui-view-mesh-writes-test.sh`). What the view does mesh on its
   thread is its own: sketch profiles, sketch curves and datums are built
   there anew from the model's numbers (`Document::profile_shape`, the
   sketch and datums queries) and handed to no model thread (mitcad#1586,
-  the test's driver check `expect-view-own-shapes`). A command or a sketch that
+  the test's driver check `expect-view-own-shapes`); sketch curves and
+  projected curves get their polylines with the same parameters as the
+  bodies' lines, so that a projected curve lies on the edge under it
+  (`tools/ui-edge-mesh-test.sh`). A command or a sketch that
   opens cancels it at once
   without waiting (`cancelBackgroundEvaluation`). When it ends (or a job
   stops it), the document adopts what it evaluated on the session's
@@ -2567,6 +2699,29 @@ not recompute.
   while the model is idle); `writePageOfFile` loads a design file without
   a window (`load_design`, links followed, computed with the result
   store) and may run on any thread.
+- **Component from Web** (`app/webbrowser/`, mitcad#1579): the only part
+  of the application on a web engine, the Chromium Embedded Framework, in
+  the web browser component: a package of its own (the module
+  `mitcad-webbrowser`, CEF's subprocess helper and runtime) that MitCad
+  downloads on first use, verifies against the signed update manifest
+  (`BrowserComponentInstall`, the bridge's `update_browser_check` and
+  `update_verify_browser_download` in `core/update`), installs in the
+  user's application data and loads at run time; never in the installers.
+  The module links Qt and CEF only and asks the application for the rest
+  through `ComponentBrowserHost` (the import, the bridge's zip reader,
+  dialogs, menus, sizes, colors, folders), whose `kComponentBrowserAbi`
+  both sides check. CEF runs windowless, its loop pumped from Qt's, each
+  page painted from its software buffer into a widget (`CefView`) that
+  forwards input. `ComponentBrowser` is a window of its own with
+  one browsing profile for the application; its downloads go into
+  temporary folders (`WebDownloadFolders`, one locked folder per run) and
+  pass the format filter (`ComponentWebFiles`, plain Qt Core, by name and
+  first bytes), and a zip's files are listed and unpacked through the
+  host and the bridge (`zip_list`, `zip_extract`, `mitcad-zip`). The design side
+  (`MainWindowComponentWeb.cpp`) is ordinary JSON commands:
+  `create_component`, `import_file`, `set_property` (the part number) and
+  `merge_undo` into one step, then Move/Copy
+  ([app/COMMANDS.md](../app/COMMANDS.md#component-from-web-mitcad1579)).
 - **Texture sources** (`app/materials/`, mitcad#315): where Edit
   Appearances finds sets of texture maps. Each source is one class behind
   `TextureSource` (asynchronous categories, search, thumbnails and fetch;
@@ -2642,7 +2797,9 @@ not recompute.
   by its size (mitcad#1275): a thousandth of its bounding box's diagonal,
   at least 0.01 mm (parts under 10 mm across) and at most 0.5 mm, in steps
   of the square root of 2 (`io::shape_deviation`); its edges with 12° (cut
-  in steps of 6°), its faces' insides with 15°. Small circles and arcs
+  in steps of 6°), its faces' insides with 15°. Those are the faces'
+  meshes; the lines drawn over them are cut apart, finely and the same for
+  every shape (mitcad#1633, `app/view/ViewEdges.hpp`). Small circles and arcs
   (Preferences › Display › Small circles, Adaptive by default, mitcad#879)
   are cut by that deviation alone where it allows fewer pieces than the
   angle, in at least 12 a turn: their edges' angular deflection widened
@@ -2719,8 +2876,17 @@ not recompute.
   context-free part of the catalogue for texts whose context at run time
   differs from the source's, and keeps the English source of every
   translated text (the command search matches English names). A language
-  is data: no code lists languages. The model's messages (Rust) stay
-  English for now.
+  is data: no code lists languages. The model's messages (mitcad#1284)
+  stay English in the model, the JSON API, MCP and the command line; the
+  application translates what it shows (`framework/ModelMessages`): a
+  message is matched to its template, the English text of its Rust source
+  with the values as `%1`, `%2`, ... (its id), and the template's
+  translation (context `ModelMessage`, `app/translations/model_<code>.ts`)
+  gets the values back, a value that is a message translated in turn. The
+  templates are generated from `core/` (`tools/translations`, `messages`;
+  `app/framework/ModelMessageTemplates.cpp`, checked by the ctest
+  `repo.model-messages`), so the model needs no change to make a message
+  translatable: a new message is a new template.
 
 ## Window layouts and the macOS layer
 
@@ -3916,8 +4082,9 @@ files) in components of their own (`core/ffi/src/rvt_import.rs`; the
 `import_rvt` command), in the import process like the others, under the
 memory guard.
 
-SolidCraft designs (`.solidcraft`, mitcad#450) come in with their history
-through `core/solidcraft` (the reader: the JSON document or its container,
+SolidCraft designs (`.sc` or `.solidcraft`, mitcad#450; a `.sc` file
+only when its format key is SolidCraft's, as other programs use `.sc` too,
+mitcad#1622) come in with their history through `core/solidcraft` (the reader: the JSON document or its container,
 every file format upgraded to one by SolidCraft's own steps, adapted in
 `third_party/solidcraft`; no geometry) and `mitcad-import-solidcraft`
 module on the `Kernel` trait (`core/ffi/src/solidcraft_import.rs`; the

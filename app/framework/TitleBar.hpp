@@ -46,6 +46,11 @@ public:
   // The quick-access group (mitcad#1090), right of the tabs. It folds into
   // its menu when the row is too narrow for it and the whole document name.
   void setQuickAccess(QuickAccessGroup* group);
+  // The ☰ button of the hidden menu bar (mitcad#1620, MenuBarButton): at the
+  // left of the row, before Undo and Redo, in a capsule of its own (the row
+  // part "titleMenu"); shown only while setMenuButtonVisible says so.
+  void setMenuButton(QWidget* button);
+  void setMenuButtonVisible(bool visible);
 
   // The height of the row.
   static int rowHeight();
@@ -67,7 +72,7 @@ public:
   void setFloatingRow(bool floating);
   bool isFloatingRow() const { return m_floatingRow; }
   // setFloatingRow: the controls shown and the title's box, named
-  // ("titleHistory", "titleTabs", "titleQuickAccess", "titleBox",
+  // ("titleMenu", "titleHistory", "titleTabs", "titleQuickAccess", "titleBox",
   // "titleIndicator", "titleAgent", "titleChat", "titleSearch"), in the
   // row's coordinates, left to right.
   std::vector<std::pair<QString, QRect>> rowParts() const;
@@ -116,6 +121,7 @@ private:
   QString documentTitle() const;
 
   QWidget* m_inset = nullptr;
+  CapsuleFrame* m_menu = nullptr; // the ☰ button's capsule (setMenuButton)
   CapsuleFrame* m_history = nullptr;
   QWidget* m_tabs = nullptr;
   QWidget* m_search = nullptr;

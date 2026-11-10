@@ -13,6 +13,7 @@
 // always did, to be joined later with Joint (its frames are joint origins
 // of its component).
 #include "MountCommands.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <cmath>
 #include <exception>
@@ -229,7 +230,7 @@ QJsonObject fieldsOf(const MountPart& part, const CommandState& state, const std
 QString problemsOf(const QJsonObject& answer) {
   QStringList texts;
   for (const QJsonValue& problem : answer.value(QStringLiteral("problems")).toArray()) {
-    texts << problem.toString();
+    texts << mitcad::modelMessage(problem.toString());
   }
   return texts.join(QLatin1Char(' '));
 }

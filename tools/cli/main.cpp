@@ -261,10 +261,11 @@ const char* const kUsage = R"(usage:
       JSON, --report-only reads and reports without importing, --mesh-only
       builds no features, --elements imports only the elements listed (by
       id) and leaves the others out.
-  mitcad-cli import-solidcraft <file.solidcraft> [--save <out.mitcad>] [--report <report.json>]
+  mitcad-cli import-solidcraft <file.sc|file.solidcraft> [--save <out.mitcad>] [--report <report.json>]
                                [--expected <values.json>] [--set <name>=<expression>]... [--json]
       Imports a SolidCraft design (any file format version, plain JSON or
-      its container) with its history: parameters, sketches with their
+      its container; a .sc file only when its format key is SolidCraft's,
+      as other programs use .sc too) with its history: parameters, sketches with their
       constraints and dimensions, features, components, occurrences and
       joints, editable; features without a MitCad counterpart are named in
       the report and hold their place as suppressed placeholders. Prints

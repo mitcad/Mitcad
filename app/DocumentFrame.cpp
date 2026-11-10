@@ -5,6 +5,7 @@
 #include "framework/Dialogs.hpp"
 #include "framework/FitToScreen.hpp"
 #include "framework/InterfaceSize.hpp"
+#include "framework/MenuBarReveal.hpp"
 
 #include <QApplication>
 #include <QCloseEvent>
@@ -153,6 +154,9 @@ DocumentFrame::DocumentFrame(WindowManager& manager)
   layout->addWidget(m_tabs);
   layout->addWidget(m_stack, 1);
   setCentralWidget(root);
+  // Its menu bar (with the tabs) hidden as the documents' own while
+  // Preferences › Display › Show the menu bar is cleared (mitcad#1620).
+  MenuBarReveal::instance().watch(menuBar());
   // Within the screen at a larger Interface size (mitcad#1495).
   resize(startWindowSize());
   connect(m_tabs, &QTabBar::currentChanged, this, [this](int index) {

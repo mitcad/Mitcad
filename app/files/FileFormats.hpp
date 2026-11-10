@@ -17,7 +17,7 @@ enum class FileKind {
   Ipt,     // .ipt or .iam: a new document with the part or the assembly (mitcad#60)
   Ifc,     // .ifc, .ifczip: a new document with the building model (mitcad#273)
   Rvt,     // .rvt, .rfa, .rte, .rft: a new document with the project's elements by level (mitcad#274)
-  Solidcraft, // .solidcraft: a new document with the design's history (mitcad#450)
+  Solidcraft, // .sc, .solidcraft: a new document with the design's history (mitcad#450, mitcad#1622)
   Dwg,     // .dwg: a new document with the drawing's 3D content (mitcad#453)
 };
 

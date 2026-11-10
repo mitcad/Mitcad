@@ -7,7 +7,8 @@
 # the view's deviation, which added a 3D polygon to the body's own edge
 # while the background evaluation's join copied that edge: the heap was
 # damaged and a later join crashed. The body's edges must keep only the
-# polygons the job's display meshing gave them.
+# polygons the job's display meshing gave them; the view draws its lines
+# from detached copies of them (mitcad#1633, expect-view-edges).
 #   1. At the idle point after set_parameter, while the background
 #      evaluation runs: two edges and a face picked (the pick places are
 #      logged by a command's input: Fillet opened and closed first).
@@ -34,6 +35,10 @@ click-pick 'edge F6[.]b0/E[{]F10:side[(]c1[)][|]F10:side' ctrl
 wait-log '^Selected: 2 edges' 30
 click-pick 'face F6[.]b0/F6:side[(]c1[)]' ctrl
 wait-log '^Selected: .*face F6:side[(]c1[)] of F6[.]b0' 30
+expect-body-edges-unmeshed F6.b0
+# Their highlights drawn from the body's own detached copies of its edges,
+# cut finely (mitcad#1633): never by meshing the body's edges.
+expect-view-edges F6.b0 20 2
 expect-body-edges-unmeshed F6.b0
 wait-log '^Background evaluation: 1 features in [0-9]+ ms, adopted 1$' 120
 expect-body-edges-unmeshed F6.b0

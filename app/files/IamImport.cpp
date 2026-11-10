@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "IamImport.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <initializer_list>
 
@@ -57,7 +58,7 @@ QString iamPartOutcome(const QJsonObject& part) {
         .arg(part.value(QStringLiteral("parameters")).toInt());
   }
   if (outcome == QLatin1String("bodies")) {
-    return Text::tr("stored bodies: %1").arg(part.value(QStringLiteral("reason")).toString());
+    return Text::tr("stored bodies: %1").arg(mitcad::modelMessage(part.value(QStringLiteral("reason")).toString()));
   }
   return QString();
 }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "motion/MotionStudyDialog.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -365,8 +366,8 @@ bool MotionStudyDialog::goTo(double step) {
                              {QStringLiteral("step"), step},
                              {QStringLiteral("from"), from}});
   } catch (const std::exception& e) {
-    stop(QString::fromUtf8(e.what()));
-    m_message->setText(QString::fromUtf8(e.what()));
+    stop(mitcad::modelMessage(e.what()));
+    m_message->setText(mitcad::modelMessage(e.what()));
     return false;
   }
   m_previewed = true;

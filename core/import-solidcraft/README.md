@@ -13,8 +13,15 @@ only on `mitcad-import-base` (vector helpers, the timeline notes' finish),
 not on the replay (mitcad#785). `mitcad-import` re-exports it as
 `mitcad_import::solidcraft`, so its callers keep that path.
 
+A `.sc` file (SolidCraft's extension now, which other programs use too,
+mitcad#1622) is imported only when the reader finds SolidCraft's format
+key in it; any other is refused with "Not a SolidCraft design: …"
+(`mitcad_solidcraft::check_design`, re-exported here with `check_file`
+and `has_design_extension`).
+
 Tests: `cargo test -p mitcad-import-solidcraft` (ctest
 `core.import-solidcraft`), on the reader's test designs
-(`core/solidcraft/tests/designs`) with the mock kernel. The corpus
+(`core/solidcraft/tests/designs`) with the mock kernel; `tests/sc_extension.rs`
+imports them copied to `.sc`. The corpus
 (`MITCAD_SOLIDCRAFT_CORPUS`) runs through `mitcad-cli`
 (`solidcraft.corpus`).

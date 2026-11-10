@@ -221,6 +221,9 @@ impl<S> Cache<S> {
                     Read::Param(id, bits) => walk.params.read_bits(*id) == *bits,
                     Read::JoinTolerance(bits) => state.join_tolerance.map(f64::to_bits) == *bits,
                     Read::Source(id, version) => state.library_sources.version(*id) == *version,
+                    Read::PrintBed(uid, face) => {
+                        super::print_bed_of(&state.body_attributes, *uid) == face.as_ref()
+                    }
                     Read::Sketch(uid, version) if before(uid).is_some() => {
                         done.sketches.get(uid).map(|s| s.version) == *version
                     }

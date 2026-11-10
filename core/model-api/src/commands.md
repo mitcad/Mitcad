@@ -174,7 +174,8 @@ expression (`"d1 / 2 + 5 mm"`, `"30 deg"`; syntax and unit rules in
   an expression there makes a unitless parameter (`3`, never `3 mm`), in
   every document unit:
   - counts: a pattern's `quantity` (rectangular `direction1.quantity`,
-    `direction2.quantity` and `direction3.quantity`, circular, path and
+    `direction2.quantity` and `direction3.quantity`, circular (and its
+    `axis2.quantity`), path and
     scale patterns), a
     pattern's or mirror's `scale_groups` and `scale_copies` and
     `scales[i].groups` and `scales[i].copies`, a gear's `teeth` and
@@ -1718,6 +1719,42 @@ their segments' names); a full turn has no caps.
   `press_fit_hole_tests` (core/model-tests/features-profile),
   `test_press_fits` (geometry/tests/test_hole.cpp),
   `tools/cli/tests/press_fit_holes.json`.
+- `print_shape` (optional, mitcad#1515): how a hole printed lying is
+  shaped, for FDM printing: `round` (the default), `teardrop` or
+  `flat_roof`. A round hole whose axis lies parallel to the print bed
+  prints with an unsupported roof that sags, out-of-round and undersized.
+  Over the hole's cylindrical part (and a counterbore's or counterdrill's
+  wider one) its upper arc then gives way to two sides at 45° to the
+  bed's normal, tangent to the circle: a `teardrop` meets them at a point
+  the radius × √2 above the axis; a `flat_roof` cuts them short with a
+  flat roof that bridges, `roof_sag` above the circle so that the bridge
+  sags onto it (a roof above the point leaves the point). The lower arc
+  keeps the diameter.
+  - The bed is the participant bodies' [print bed
+    faces](#print-bed-faces) (`set_print_bed_face`): the first participant
+    that has one, as it is found before the hole, its outward normal
+    down; the design's −Z is down when none has one (as the 3D print
+    export and Print Analysis take it). Each hole whose axis lies
+    parallel to the bed gets its roof pointing away from it; a hole whose
+    axis does not stays round (all of them round: an information on the
+    feature). A bed face the participants have that is not found before
+    the hole leaves the holes round, with a warning. Setting or clearing
+    a print bed face evaluates print-shaped holes again.
+  - `roof_sag` (`flat_roof` only, greater than zero, 0.4 mm when left
+    out): usually the [printed fit parameter](#printed-fit-parameters)
+    `hole_roof_sag` (0.4 mm, created when a field names it).
+  - Only the solid is shaped: the hole keeps its `diameter`, its callout
+    and the drawing's size (`hole_callouts`). Not with a `press_fit`, a
+    `taper`, or a modelled or tapering thread (a cosmetic thread is fine:
+    its bore takes the roof).
+  - Faces besides the round hole's: `hole<i>.roof0` and `hole<i>.roof1`
+    (the sides, counterclockwise about the hole's direction after the
+    wall), `hole<i>.roof` (the flat roof), `hole<i>.roof_end` (the roof's
+    end where the cylindrical part ends; on a flat bottom the bottom, also
+    `hole<i>.tip`), and a counterbore's `hole<i>.cbore_roof0`,
+    `cbore_roof1`, `cbore_roof` and `cbore_roof_end`.
+  - Tests: `print_shape_hole_tests` (core/model-tests/features-profile),
+    `test_print_shapes` (geometry/tests/test_hole.cpp).
 - `participants`: the bodies to cut, all when left out.
 
 A simple hole (no taper, no thread) into one sheet-metal body, every axis
@@ -3403,7 +3440,8 @@ sinks; `core/import/docs/f3d-components.md`).
  "direction2": {"axis": "y", "quantity": 2, "distance": 20, "symmetric": false},
  "distance_type": "spacing", "compute": "adjust", "suppressed_elements": [4]}
 {"type": "circular_pattern", "objects": {"type": "bodies", "bodies": ["F2.b0"]},
- "axis": "z", "quantity": 4, "angle": 6.283185307179586, "symmetric": false}
+ "axis": "z", "quantity": 4, "angle": 6.283185307179586, "symmetric": false,
+ "axis2": {"axis": "x", "quantity": 3, "angle": 3.141592653589793, "symmetric": true}}
 {"type": "path_pattern", "objects": {"type": "faces", "body": "F2.b0", "faces": ["F4:side(c1)"]},
  "path": {"sketch": "F9", "curve": "c1"}, "quantity": 4, "distance": 15,
  "distance_type": "spacing", "start": 0, "flip": false, "along_path": false, "symmetric": false}
@@ -3447,6 +3485,44 @@ Patterns, mirrors, combine, moves and primitives: modules `pattern.rs`,
   `a_third_direction_makes_a_grid_of_features`,
   `a_third_direction_counts_in_the_scale_runs` and
   `an_old_document_without_a_third_direction_loads_unchanged`.
+- `axis2` (optional, circular patterns; mitcad#1588): a second axis,
+  `{"axis": …, "quantity": …, "angle": …, "symmetric": false}` (any axis
+  `axis` takes; `quantity`, `angle` and `symmetric` as the first axis's,
+  the slots `axis2.quantity` and `axis2.angle`). Every copy about `axis`
+  is turned again about `axis2`: the elements are every product of the two
+  turns, numbered about `axis` first (element = k1 + n1 · k2, the turn
+  about the first axis applied first, as an inner pattern of a pattern of
+  patterns), and `scale`, `scale_groups`, `scale_copies`, `scales`,
+  `combine`, `skipped_copies` and `suppressed_elements` count them as a
+  rectangular pattern's two directions. Without it a pattern reads and
+  saves as before (the key is left out). The Circular Pattern panel's
+  Axis 2 sets it (app/COMMANDS.md). Tests: `core.model.features-solid`'s
+  `a_second_axis_turns_every_copy_about_it_again` and
+  `an_old_circular_pattern_without_a_second_axis_loads_unchanged`,
+  `cli.f4_pattern_two_axes`, `cli.f4_pattern_lattice`.
+- Copies that add nothing (rectangular, circular and path patterns;
+  mitcad#1588): a copy that is the same solid at the same place as its
+  original, or as a copy made before it at the same place of the
+  pattern's originals (a body of revolution turned about its own axis;
+  two products of a two-axis pattern on one place), is left out instead
+  of joined, so that no boolean meets the faces both have: the copies of
+  the features with a tool at each place (not fillets, chamfers, sheet
+  features or scoped cuts), every compute option, and the copies of
+  bodies with `combine` (and `combine_any`, and patterns of bodies among
+  the features with them). Only a copy that turns or mirrors its object
+  can land there: its centre of mass must land within 1e-5 mm of the
+  other's, their tight boxes agree (`Kernel::bounding_box`), then the points the kernel spreads over the faces of each
+  (`Kernel::face_points`) must lie within 1e-5 mm of the faces of the
+  other (`Kernel::boundary_distances`), whatever their surfaces'
+  parametrizations. A left-out copy has no faces (`<pattern>:inst<e>(…)`
+  names nothing); copies that overlap only partly are joined as before.
+  Mirrors, scale patterns and Pattern at Points keep every copy. Tests:
+  `copies_that_land_on_the_original_or_on_each_other_are_left_out`,
+  `joined_copies_of_bodies_that_add_nothing_are_left_out`,
+  `cli.f4_pattern_two_axes` (a ball's rod turned about X and Z) and
+  `cli.f4_pattern_lattice` (a cubic lattice of one revolve with its
+  centre ball, one pipe and one pattern about two axes, filleted at all
+  40 joints).
 - Quantities include the original. `distance_type`: `spacing` between
   neighbours or `extent` from the first element to the last. A negative
   distance or angle goes the other way. A full turn spaces a circular
@@ -5365,7 +5441,7 @@ check the document after the steps before them. Examples:
 | Expectation | Checks |
 |---|---|
 | `"bodies": n` | bodies at the marker |
-| `"body": "Body1"` (name or uid) | `"volume"`, `"area"` (relative `"tolerance"`, default 1e-6), `"faces"`, `"edges"` (counts), `"has_face"`, `"has_edge"`, `"no_edge"` (names), `"min"`, `"max"` (bounding box corners, the same tolerance), `"bbox": {"min", "max"}`, `"center"` (of mass; `"tolerance"` in mm), `"min_face_area"` (every face has at least this area, mm²: no slivers) |
+| `"body": "Body1"` (name or uid) | `"volume"`, `"area"` (relative `"tolerance"`, default 1e-6), `"faces"`, `"edges"` (counts), `"has_face"`, `"no_face"` (mitcad#1588), `"has_edge"`, `"no_edge"` (names), `"min"`, `"max"` (bounding box corners, the same tolerance), `"bbox": {"min", "max"}`, `"center"` (of mass; `"tolerance"` in mm), `"min_face_area"` (every face has at least this area, mm²: no slivers) |
 | `"total_volume"` | all bodies |
 | `"occurrence"` (a path, or an occurrence placed once) with `"body"` | the body as placed: `volume`, `area`, `center`, `bbox`, `min`, `max` |
 | `"instances"`, `"world_volume"` | the visible placed bodies: count, sum of volumes |
@@ -6800,7 +6876,7 @@ constraints.
 | Command | Fields | Result |
 |---|---|---|
 | `import_file` | `path` (.step/.stp, .iges/.igs, .brep/.brp, .stl, .obj), `name` (of the feature, optional), `unit_mm` (STL and OBJ: mm per file unit, default 1), `structure` (STEP: `components` default, `base`; [STEP assemblies as components](#step-assemblies-as-components-mitcad1274)) | `uid`, `name`, `bodies`: `uid`, `name`, `kind`; `warnings` when empty bodies were left out; a STEP assembly kept also `structure`, `components`, `occurrences` |
-| `export` | `path`, `bodies` (uids or names; all at the marker when left out), `format` (by extension when left out: `step`, `iges`, `stl`, `obj`, `brep`, `3mf`, `usdz`), `schema` (`ap214` default, `ap242`), `unit` (STEP, IGES, STL, OBJ, 3MF: `mm` default, `cm`, `m`, `in`, `ft`; [Mesh files](#mesh-files-in-a-unit-with-a-longest-edge)), `refinement` (STL, OBJ, 3MF, USDZ: `low`, `medium` default, `high` or `{"deviation": mm, "angle": radians, "face_triangles": n, "max_edge": mm}`; see [Mesh refinement](#mesh-refinement)), `ascii` (STL), `colors` (body uid or name: sRGB in [0, 1]), `coordinates` (`design` default, `component`), `occurrence` (a path), `design_folder` (USDZ: the folder relative texture paths are relative to, the design file's), `dialect` (3MF: the slicer whose print settings go with the bodies, [Print profiles](#print-profiles)), `on_bed` (3MF, STL, OBJ: on the print bed faces, [Print bed faces](#print-bed-faces)), `center`, `drop` and `auto_orient` (on the bed, each true by default: [Centered, dropped and oriented on the bed](#centered-dropped-and-oriented-on-the-bed)), `spacing` (on the bed: mm between neighbouring pieces beyond their brims, 5 default; [Spacing beyond the brims](#spacing-beyond-the-brims)), `occurrences` and `whole` (3MF: the placements written and the occurrences sent whole, [Export by occurrences](#export-by-occurrences)) | `path`, `format`, `bodies` (uids); 3MF also `meshes`, `skipped`, and with `dialect` `dialect`, `filaments`, `warnings`, `printed` ([Print profiles](#print-profiles), mitcad#1052); USDZ also `materials`, `skipped`, `warnings` |
+| `export` | `path`, `bodies` (uids or names; all at the marker when left out), `format` (by extension when left out: `step`, `iges`, `stl`, `obj`, `brep`, `3mf`, `usdz`), `schema` (`ap214` default, `ap242`), `unit` (STEP, IGES, STL, OBJ, 3MF: `mm` default, `cm`, `m`, `in`, `ft`; [Mesh files](#mesh-files-in-a-unit-with-a-longest-edge)), `refinement` (STL, OBJ, 3MF, USDZ: `low`, `medium` default, `high` or `{"deviation": mm, "angle": radians, "face_triangles": n, "max_edge": mm}`; see [Mesh refinement](#mesh-refinement)), `ascii` (STL), `colors` (body uid or name: sRGB in [0, 1]), `coordinates` (`design` default, `component`), `occurrence` (a path), `design_folder` (USDZ: the folder relative texture paths are relative to, the design file's), `dialect` (3MF: the slicer whose print settings go with the bodies, [Print profiles](#print-profiles)), `on_bed` (3MF, STL, OBJ: on the print bed faces, [Print bed faces](#print-bed-faces)), `center`, `drop` and `auto_orient` (on the bed, each true by default: [Centered, dropped and oriented on the bed](#centered-dropped-and-oriented-on-the-bed)), `spacing` (on the bed: mm between neighbouring pieces beyond their brims, 5 default; [Spacing beyond the brims](#spacing-beyond-the-brims)), `occurrences` and `whole` (3MF: the placements written and the occurrences sent whole, [Export by occurrences](#export-by-occurrences)), `animation` (USDZ: time-sampled placements, [Animated USDZ](#animated-usdz)), `print_colors` (USDZ: the print colours by height, [Filament changes at print heights](#filament-changes-at-print-heights)) | `path`, `format`, `bodies` (uids); 3MF also `meshes`, `skipped`, and with `dialect` `dialect`, `filaments`, `warnings`, `printed` ([Print profiles](#print-profiles), mitcad#1052), `filament_changes` (the events written, mitcad#1596); USDZ also `materials`, `skipped`, `warnings`, and with `animation` `animation` (`fps`, `start`, `end`, `frames`, `moved`) |
 | `export_sketch` | `sketch` (uid or name; of a shared name the only sketch, [Feature names are not unique](#feature-names-are-not-unique-mitcad1107)), `path` (.dxf), `version` (`r2000` default, `r12`), `units` (the file's length unit, `mm`, `in`, … as `set_units` reads them; the design's when left out, [DXF units](#the-length-unit-of-dxf-exports-mitcad1408)), `construction` (bool, default false: also the construction curves and center lines, on the layer `construction`; [construction geometry](#construction-geometry-in-a-sketchs-dxf-mitcad1445)) | `path`, `entities`, `units` (the unit written), `construction` (whether construction geometry was written) |
 
 - `import_file` adds one base feature: a body per STEP part or solid,
@@ -7108,6 +7184,92 @@ meshes in the design's component hierarchy, with their appearances.
   (`face_meshes`: face order, normals out of the body that agree with the
   triangles), `core.exchange` and `cli.export_usdz` (with OCCT),
   `tools/ui-import-test.sh` (File > Export's type).
+
+### Animated USDZ
+
+```json
+{"cmd": "export", "path": "slider.usdz", "animation": {"fps": 24, "tracks": [
+  {"occurrence": "Pin:1", "transforms": [
+    [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]],
+    [[1, 0, 0, 5], [0, 1, 0, 0], [0, 0, 1, 0]],
+    [[1, 0, 0, 10], [0, 1, 0, 0], [0, 0, 1, 0]]]},
+  {"body": "Body2", "transforms": [[1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0],
+    [0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0], [-1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1, 0]]}]}}
+{"cmd": "export", "path": "study.usdz",
+ "animation": {"fps": 30, "study": "Study1", "from": 0, "to": 40, "frames": 41}}
+```
+
+`export`'s `animation` (USDZ only, mitcad#1597; `core/model/src/exchange/usdz_animation.rs`)
+writes a mechanism's motion: the occurrences' `Xform`s and the bodies'
+meshes get their `xformOp:transform` sampled along time (`timeSamples`),
+while the meshes and materials are written once, as in a still export
+(no copy per frame). Without `animation` the file is still, as before.
+
+- **Timing:** `fps` frames per second (positive; the layer's
+  `timeCodesPerSecond` and `framesPerSecond`). Frame k is at time code
+  `start` + k (`start` 0 by default), or at `times[k]` (increasing; one
+  per frame). The layer's `startTimeCode` and `endTimeCode` are the first
+  and last frames'. Readers interpolate linearly between samples, matrix
+  element by element: exact at the frames, so a large turn wants frames
+  close enough together.
+- **Poses given** (`tracks`): each track names an `occurrence` (a path
+  from the root, `O1/O4` or `Arm:1/Pin:2`) or a `body` (uid or name) and
+  its `transforms`, one per frame (every track as many). A transform is
+  three or four rows of four numbers, the rotation's rows with the
+  translation last (`p' = M p`, as occurrence transforms are; a fourth row
+  must be `[0, 0, 0, 1]`), or the same 12 or 16 numbers row by row; a
+  rotation and a translation only (no scale or mirror). A matrix with the
+  translation in its last row (USD's own, transposed layout) is refused
+  with a hint.
+  - **Identity:** each occurrence path is its own placement: two
+    placements of one component, or a nested occurrence in each of them,
+    move independently. A body moves its mesh; a body written by more than
+    one placement is refused as ambiguous (`Body1 is written by 2
+    placements (Body1:1, Body1:2): animate one of them by its occurrence
+    instead`). Targets not given stay where the design has them; a
+    child occurrence moves with its moving parent.
+  - **`space`:** `parent` (the default): an occurrence's placement in its
+    parent occurrence (its own transform's coordinates; the identity is
+    its parent's origin), a body's motion in its component's coordinates
+    (the identity: where it is). `design`: where the occurrence's
+    component, or the body, is in the design at that frame (the identity:
+    at the design's origin); each frame is turned into its parent's
+    coordinates with the parents' motion at that frame.
+- **From a motion study** (`study`, [Motion studies and contact sets](#motion-studies-and-contact-sets)):
+  frames from step `from` (default 0) to `to` (default the study's
+  `steps`), `frames` of them evenly apart (default one per step, both ends
+  included). At each frame the study's keyed joints are driven to their
+  values there and solved as `play_study` solves them; contact sets do not
+  stop it. The occurrences written whose placement differs from the
+  design's at some frame are sampled; a study that moves none of them, or
+  whose keyed joint fails at a step, is refused.
+- **Units and axes:** millimetres and the design's Z up, as the still
+  export: the root's quarter turn about X (Z up to Y up) turns the samples
+  too.
+- **The document does not change:** sampling a study evaluates its steps
+  apart from the document; its joints, its pose and its undo steps stay.
+- **Refused:** `fps` not a positive number; `times` not increasing or not
+  one per frame; `start` with `times`; a track with both or neither of
+  `occurrence` and `body`, poses not one per frame, a pose that is not
+  finite or not a rotation and a translation; an occurrence that does not
+  exist or is not written (hidden, outside `occurrence`); the root
+  (`""`); a body not written or written more than once; a target given
+  twice; `tracks` with `study`, `from`, `to` or `frames`; `space` with
+  `study`; another format or `coordinates: component`. More than 100000
+  frames or 1000000 samples (frames times moving targets) are refused.
+- The result adds `animation`: `fps`, `start`, `end`, `frames` and
+  `moved` (the occurrences by path name and the bodies by name, as
+  written).
+- MCP: `model_export`'s `animation` passes it to `export`, for format
+  `usdz` only, with the normal path and `overwrite` rules.
+- Tests: `core.usdz` (the time samples and the layer's time read back,
+  the checks), `core.model` (the files tests' `usdz_animation_tests`: a
+  slider mechanism's three poses, a component placed twice with a nested
+  occurrence moving independently, the design space, a body, a study's
+  frames, the refusals, the document's pose and undo steps unchanged, a
+  still export unchanged), `cli.export_usdz_animation` (with OCCT); OpenUSD
+  reads the samples back with `tools/usdz-check/check-animation.py`
+  (`docs/development.md`, *USDZ files*).
 
 ### DXF into sketches
 
@@ -8316,6 +8478,16 @@ feature and notes); the bodies measured (volume, area, world box per placed body
 without a MitCad counterpart with their counts; notes; and `check` with
 `expected`.
 
+- Files: `.sc`, as SolidCraft saves designs now (mitcad#1622),
+  `.solidcraft` and the legacy `.solvecraft`, in any case. Other programs
+  use `.sc` too, so a `.sc` file is read only when its JSON's top-level
+  `format` (within its first 64 KiB) starts with `solidcraft/` (or the
+  legacy `solvecraft/`), or when it is a design container; any other is
+  refused with "Not a SolidCraft design: …" and the reason (not a JSON
+  object, no `format` key, another format, a SolidCraft drawing, a zip
+  that is no design container), before anything is imported. File ›
+  Open, Import, drag and drop and the system's open refuse it so before
+  the import starts (the bridge's `solidcraft_file_check`).
 - Formats: any `solidcraft/N` (or the legacy `solvecraft/N`) up to 50,
   SolidCraft 0.40's (mitcad#1331), and a design saved while changes were
   pending (`format_pending`) with changes this import knows; upgraded first
@@ -8350,8 +8522,11 @@ without a MitCad counterpart with their counts; notes; and `check` with
   features with the reason as their import note ([The import's outcomes
   on the timeline](#the-imports-outcomes-on-the-timeline)).
 
-Tests: `core.solidcraft` (the reader, formats and upgrades, the container),
-`core.import` (`solidcraft::tests`, mock kernel), `cli.import_solidcraft`
+Tests: `core.solidcraft` (the reader, formats and upgrades, the container;
+`tests/sc_extension.rs`: every test design copied to `.sc` reads as its
+original, other programs' `.sc` files refused), `core.import-solidcraft`
+(`tests/sc_extension.rs`: a `.sc` copy imports as its original, mock
+kernel), `core.import` (`solidcraft::tests`, mock kernel), `cli.import_solidcraft`
 (`tools/cli/solidcraft-test.cmake`: the hand-written test designs of
 `core/solidcraft/tests/designs` against their worked-out values, a
 parameter change, the container, the MCP open), `solidcraft.corpus`
@@ -16855,6 +17030,8 @@ come from one table in `core/model/src/print_fits.rs`:
 | `bearing_element_gap` | printable bearing `element_gap` | 0.6 mm |
 | `bearing_fit_clearance` | printable bearing `fit_clearance` | 0.5 mm |
 | `press_fit_interference` | press-fit hole `press_fit.interference` (mitcad#1517) | 0.1 mm |
+| `print_in_place_gap` | none: Print Analysis' narrow gap reads it ([Narrow gaps between bodies printed in place](#narrow-gaps-between-bodies-printed-in-place), mitcad#1519) | 0.3 mm |
+| `hole_roof_sag` | flat-roofed hole `roof_sag` (mitcad#1515) | 0.4 mm |
 
 An explicit feature-field expression referencing one of these names
 creates the missing user parameter with its default, unit and a comment
@@ -16873,7 +17050,8 @@ Deleting an in-use parameter is refused as for any other user parameter.
 Omitted fields keep their existing JSON API defaults. Numeric definitions,
 old files and imports acquire no fit parameters merely by opening or
 recomputing. Plain Hole has no new clearance field; its Press Fit offers
-`press_fit_interference` in Interference.
+`press_fit_interference` in Interference, and its Flat Roof print shape
+`hole_roof_sag` in Roof Sag (mitcad#1515).
 
 `{"query":"printed_fit_parameters"}` returns the table as an array of
 `name`, `field`, `features`, `value` (millimetres), `unit` and `comment`.
@@ -16917,6 +17095,7 @@ A print analysis is kept in the document as an [analysis](#analyses) with
 | `bed_face` | a planar face of one of the bodies ([face reference](#references-to-geometry)) lying on the bed: its outward normal is the print direction (down). It follows the model by its topological name, as a section's plane does. `null` (the default): the design's −Z is down and each body lies on its lowest point |
 | `overhang` | `enabled`, `angle` (degrees from the vertical, 0 to 90; 45 by default) |
 | `thin_wall` | `enabled`, `minimum` (mm, greater than zero; 0.8 by default, two line widths) |
+| `min_gap` | `enabled`, `gap` (mm, greater than zero; `null`, the default: the design's `print_in_place_gap`, else 0.3 mm): [Narrow gaps between bodies printed in place](#narrow-gaps-between-bodies-printed-in-place) (mitcad#1519) |
 | `estimate` | `enabled`, `material` (a material id or name, [Visibility and display](#visibility-and-display) lists them; `null`: each body's own material, PLA for a body without one), `line_width` (mm, 0.4), `walls` (a whole number, 2), `layer_height` (mm, 0.2), `top_bottom_layers` (a whole number, 4), `infill` (a fraction from 0 to 1, 0.15), `filament_diameter` (mm, 1.75), `price_per_kg` (a number in any currency, `null` for no cost) |
 
 Fields left out take these defaults, also inside `overhang`, `thin_wall`
@@ -20043,7 +20222,7 @@ body. A body has one; setting another replaces it.
 
 | Command | Fields | Result |
 |---|---|---|
-| `set_print_bed_face` | `uid` (body), `face` (a topological name of a planar face of the body at the marker; null or left out takes it away) | undo step `Set Print Bed Face of Body1` / `Clear Print Bed Face of Body1` unless nothing changes; it recomputes nothing. A body that is not there or is no solid or mesh body (a surface body is not printed), a name that is no face name or names no face of the body, and a face that is not planar are refused |
+| `set_print_bed_face` | `uid` (body), `face` (a topological name of a planar face of the body at the marker; null or left out takes it away) | undo step `Set Print Bed Face of Body1` / `Clear Print Bed Face of Body1` unless nothing changes; it recomputes nothing but print-shaped holes ([hole](#hole) `print_shape`, mitcad#1515), whose roofs point away from it. A body that is not there or is no solid or mesh body (a surface body is not printed), a name that is no face name or names no face of the body, and a face that is not planar are refused |
 
 - The `bodies` query gives a body's `print_bed_face`: `{"face"` (as
   assigned), `"faces"` (a name of each face it finds at the marker),
@@ -20239,7 +20418,8 @@ as assembled).
 Send to Slicer puts every piece on the plate (mitcad#1109): a body
 without a print bed face is no longer written where the design has it,
 off the plate. `export` with `on_bed` (3MF, STL and OBJ) takes, each
-`true` when left out and refused without `on_bed`:
+`true` when left out and refused without `on_bed` (but `center` of a 3MF
+with a `dialect`, below):
 
 - `center`: the middle of each piece's box over the plate's center (the
   design's printer's `bed_shape`, else (128, 128)); false keeps its X and
@@ -20253,6 +20433,17 @@ off the plate. `export` with `on_bed` (3MF, STL and OBJ) takes, each
   `bed_face`, and the several faces of a piece kept as assembled
   ([Print bed face chosen](#print-bed-face-chosen)) always come first:
   the automatic face is computed again on every export and never stored.
+
+A 3MF with a slicer's `dialect` but without `on_bed` is centred too
+(mitcad#1596): its whole build moved alike in X and Y so that the box
+of its bodies is over the plate's center, their arrangement and heights
+as designed. A slicer's project keeps its objects where the file puts
+them, in the bed's coordinates, and the design's origin is no place on
+the bed: a box from the origin lay at the bed's corner, its skirt or
+brim outside the printable area, which Bambu Studio and QIDI Studio
+refuse. `center: false` (allowed without `on_bed` only with a
+`dialect`) keeps the design's X and Y; the print plates' files keep
+their plates' places.
 
 `center` and `drop` apply after the turn to every piece: turned onto a
 face, oriented automatically, kept as assembled or as designed; the
@@ -24275,6 +24466,7 @@ suppressed definitions.
 | `overhang` | warning | Unsupported area from the existing print-overhang query, using the assigned bed face or design -Z, at 45 degrees. |
 | `thin-wall` | warning | Thin regions from the existing print-thickness query, with a minimum of two nozzle diameters. |
 | `outside-build-volume` | warning | The existing build-volume query lists the body's current shown placement outside the printer bed, height or permitted area. |
+| `min-gap` | warning | Two checked bodies on the same plate (or, without plates, in the design) are apart but closer than the design's `print_in_place_gap`, else 0.3 mm, as `print_min_gap` finds them (mitcad#1519); the target is the pair's first body. |
 
 With `print: auto`, only scoped final bodies with an assigned print bed
 face, a print plate or an effective printer profile are checked. Explicit
@@ -24318,3 +24510,249 @@ Set `"hints": false` beside `command` to omit feedback and avoid the review
 query. It is a boolean. This works with `timeline: "changed"`, `"full"`, or
 `"none"` in both headless and live MCP; it is not a field of an individual
 model command. These are modeling suggestions, not errors or extra edits.
+
+## Narrow gaps between bodies printed in place
+
+mitcad#1519: parts printed in place (a hinge and its pin, a captive part)
+fuse when the gap between them is under about 0.3 mm. `interference` finds
+bodies that overlap; `print_min_gap` finds those that do not touch but lie
+too close. It is an analysis only: no body, feature or export changes. The
+logic is Rust (`print_analysis::gap_candidates`, `gap_kind`, the query in
+`api/print.rs`); the distances are the kernel's exact ones
+(`Kernel::measure_between` of the two whole bodies, the same minimum
+distance `measure` gives), so no new kernel method is involved.
+
+| Query | Fields | Result |
+|---|---|---|
+| `print_min_gap` | `bodies` (body uids; empty or left out: the printed bodies at the marker, solids and mesh bodies), or `plate` (a [print plate](#print-plates) by id or name: the printed bodies that print on it; not both), `gap` (mm, greater than zero; left out: the design's user parameter `print_in_place_gap` when it is a length greater than zero, else 0.3 mm) | `gap`, `gap_from` (`query`, `parameter` or `default`), `bodies` (how many were checked), `pairs`: [{`a`, `b` (body uids), `names`, `distance` (mm), `on_a`, `on_b` (the closest points, design coordinates)}], the closest first, `closest` (the smallest distance, `null` without pairs), `touching` (pairs that touch or overlap, left to `interference`) |
+
+- **Narrow:** a pair whose smallest distance is more than 0.000 001 mm and
+  less than the gap by more than 0.000 001 mm. Bodies that touch, overlap
+  or lie one inside the other are counted in `touching` and not reported;
+  a pair at the gap or farther is not reported.
+- **Where:** each body where it is shown in the design, as the other print
+  queries place it (its first shown occurrence, else its first one), so a
+  plate's occurrence item is measured as assembled. The 3MF export lays
+  separate pieces of a plate apart; this query measures the bodies in place.
+- **Cost:** only pairs whose boxes lie within the gap of each other are
+  measured; their distances are kept by the two bodies' shapes and
+  placements, so asking again, with another gap too, measures nothing
+  again. Run inside a model job, the query checks the cancel request
+  between pairs (`the computation was canceled`).
+- **Errors:** a body that is not there at the marker, or a distance the
+  kernel cannot measure, answers `{"error": "..."}`; an unknown plate,
+  `bodies` with `plate`, a gap that is not greater than zero and unknown
+  fields are refused.
+- **Print Analysis:** a print analysis' `min_gap` (`{"enabled": true, "gap":
+  null}` by default, see [Print analysis](#print-analysis)) asks this query
+  for its bodies when it has two or more. The application lists the pairs
+  with their distances, draws each gap's closest points and a marker at the
+  smallest one, and logs `narrow gaps under 0.3 mm: Body1-Body2 0.20 mm`.
+- **Design review:** the rule `min-gap` ([Design review](#design-review))
+  asks it for the checked bodies of each plate.
+
+```json
+{"query": "print_min_gap"}
+{"query": "print_min_gap", "plate": "Hinge", "gap": 0.4}
+→ {"gap": 0.4, "gap_from": "query", "bodies": 2, "closest": 0.2, "touching": 0,
+   "pairs": [{"a": "F2.b0", "b": "F4.b0", "names": ["Pin", "Knuckle"], "distance": 0.2,
+              "on_a": [20, 10, 10], "on_b": [20.2, 10, 10]}]}
+```
+
+Tests: `print_analysis_tests` (the kinds of a gap, the pairs measured),
+`core/model-tests/print/src/print_min_gap_tests.rs` (mock kernel: blocks
+0.2 mm and 0.5 mm apart and touching ones, the gap from the query, the
+parameter or the default, a plate's bodies, the distances kept,
+cancellation, the analysis' settings, the `min-gap` rule),
+`tools/cli/tests/print_min_gap.json` (the same blocks on the OCCT kernel),
+`app/tests/print_analysis.cpp` and `tools/ui-print-gaps-test.sh`.
+
+## Filament changes at print heights
+
+mitcad#1596 (`core/model/src/print_changes.rs`,
+`document/filament_changes.rs`, `api/filament_changes.rs`,
+`print_files/layer_events.rs`): a schedule of print heights and what
+happens there on a single extruder: a manual **change** to another
+filament (a material with one of its appearances) or a **pause** (for
+inserts, magnets, nuts). The design keeps it, the 3MF export writes it
+into the slicer's project, and `model_render` and the USDZ export can show
+it as print colours. The design's geometry is never cut or changed for it.
+
+- **Scope: a plate.** A manual change swaps the one filament loaded, so it
+  changes the whole layer of every object on the plate. The design's own
+  schedule (no `plate`) is that of an export of bodies and of every
+  [print plate](#print-plates) without one of its own; a plate may have
+  its own (`plate`), which is deleted with the plate. Below the first
+  event every part on the plate must print with one filament (one
+  material and appearance): a plate whose parts print with several is a
+  conflict, which the export reports, writing none of that plate's
+  events (several filaments at once are a multi-material print: give the
+  bodies their materials).
+- **Heights** are millimetres above the print bed (JSON numbers, whatever
+  the design's length unit), the bed's Z after the export's turn (a print
+  bed face, the automatic orientation) and drop, not the design's Z: in a
+  3MF each object is measured from its own lowest point, where the slicer
+  lays it; a plate's top is its tallest object's. An export that does not
+  put the bodies on the bed (no `on_bed`) measures each object as it is
+  written, from its lowest point, as a slicer that drops it onto the bed
+  prints it.
+- **Layers.** An event happens at a layer boundary: its height moves to
+  the nearest top of a layer (the plate's process: `first_layer_height`,
+  then `layer_height`, 0.2 mm each when unset; a tie upwards), never
+  within the first layer, which always prints with the plate's own
+  filament (the bodies' material and appearance). The slicer gets the top
+  of the first layer printed after it (`print_z`), which it assigns to
+  that very layer. Variable layer heights are not known to the design.
+- **Left out, with a warning:** an event at or above the plate's top, the
+  earlier of two events on one layer boundary, a change to a material the
+  design no longer has, every event of a plate in conflict.
+- **Limits:** heights above 0 and at most 2000 mm, one event per height,
+  at most 64 events per schedule; a change names a material (and
+  optionally one of the design's appearances; the material's default
+  when left out) and no message; a pause names no material and may carry
+  a message of one line, at most 120 characters.
+
+| Command | Fields | Result |
+|---|---|---|
+| `set_filament_changes` | `plate` (a print plate's id or name; the design's own schedule when left out); `changes`: the whole schedule, `[{height, kind, material, appearance, message}]` (`kind` `change`, the default, or `pause`); `[]` takes it away (a plate then prints with the design's) | `{"changes"}`, the schedule as kept (sorted upwards); undo step `Set Filament Changes`, `Set Filament Changes of Short`, or `Clear Filament Changes…`, which recomputes nothing; none when nothing changes. Refused: an unknown plate, material or appearance, a height out of range, two events at one height, a change without a material, a pause with one, a message on a change |
+
+| Query | Fields | Result |
+|---|---|---|
+| `filament_changes` | `plate` (id or name; the design's own schedule when left out) | `plate` (`{id, name}` or null), `inherited` (the plate takes the design's), `layer_height`, `first_layer_height` (the plate's process), `changes`: `[{height, kind, material, appearance, message, material_name, color, boundary, print_z, layer}]` (`boundary` the layer boundary it happens at, `print_z` what the slicer gets, `layer` that layer's number from 1; `left_out` for the earlier of two on one boundary; `error` for an unknown material), `notes`, `schedules`: `[{plate, name, events}]` of the whole design |
+
+**Export** (`export` of a 3MF with a `dialect`; the result's
+`filament_changes` lists each event written: `{plate, height, print_z,
+layer, kind, material}`, `plate` from 0 in the design's plates' order):
+
+- **PrusaSlicer** (`Metadata/Prusa_Slicer_custom_gcode_per_print_z.xml`,
+  as PrusaSlicer 2.9.7's own reader and writer in
+  `src/libslic3r/Format/3mf.cpp` take it): a `custom_gcodes_per_print_z`
+  element per bed (`bed_idx`; bed 0 always, the others with events), a
+  `code` per event and the `mode`. A change is a colour change (`type`
+  0, M600 from the printer profile) of the plate's extruder (`extruder` 1
+  in a project of one filament) with the filament's `color`; a pause is
+  `type` 1 with its message as `extra`. A colour change keeps the first
+  filament's settings: a warning says so when the two differ in type or
+  temperatures.
+- **The Bambu family** (Bambu Studio, OrcaSlicer, QIDI Studio:
+  `Metadata/custom_gcode_per_layer.xml`, as their `bbs_3mf.cpp` /
+  `qds_3mf.cpp` take it): `custom_gcodes_per_layer` with a `plate` per
+  plate (`plate_info id` from 1), a `layer` per event (`top_z`) and the
+  `mode`. Their G-code export leaves colour changes out, so a change is a
+  filament change (`type` 2) to the filament's own slot (`extruder` from
+  1), which the export adds to the project's filaments, in
+  `MultiAsSingle` mode; a pause is `type` 1. A change to the filament
+  already printing changes nothing there: left out with a warning (a
+  pause stops for a new spool).
+  - *Prime tower off.* When every plate's parts print with one filament
+    (the second filament slot is only the manual change's), the project's
+    `enable_prime_tower` is written `0` (and named in the process's
+    `different_settings_to_system`), with a warning when the design had
+    turned it on. With it on, the slicers build a tower for every plate
+    of two filaments at the project's `wipe_tower_x` / `wipe_tower_y`
+    (per plate; their defaults are a corner of their own printers' beds,
+    and the export does not know the tower's depth, which they compute
+    from the purge volumes): on a printer of another bed it falls
+    outside the printable area, and Bambu Studio and QIDI Studio stop
+    with -104 ("G-code outside of the printable area"). A manual change
+    needs no tower: the printer purges the old filament in its own
+    filament-change G-code, and the tower's other layers would only
+    print waste. A project with a plate whose parts print with several
+    filaments keeps the slicer's tower.
+  - *Filament count.* The slicers count a project's filaments by its
+    `filament_diameter` list (OrcaSlicer's `ToolOrdering`:
+    `num_filaments = filament_diameter.size()`), and with one entry they
+    take a filament change as a colour change, whose G-code their export
+    leaves out (`GCode.cpp`, `emit_custom_gcode_per_print_z`: "inserting
+    color gcode is removed"): a real OrcaSlicer run wrote no change. So a
+    project of several filament slots always has `filament_diameter`
+    with an entry per slot (1.75, their default, where no slot sets it).
+    With two, a `MultiAsSingle` change becomes a tool change of that
+    layer (`ToolOrdering`'s `custom_tool_changes`), which runs the
+    printer's `change_filament_gcode` and writes `T<n>`.
+  - *Filament change G-code.* For such manual changes (the prime tower
+    off) on a printer without a `change_filament_gcode` of its own, the
+    export writes `{if previous_extruder > -1}{if previous_extruder !=
+    next_extruder}M600{endif}{endif}`, with a warning: M600 (Marlin's
+    filament change, PrusaSlicer's default colour change) at each change,
+    not at the print's first filament, for which the slicers run the same
+    G-code with `previous_extruder` -1 (`GCode::set_extruder`). The
+    slicers still write the tool change `T<n>`, which a printer of one
+    extruder ignores or reports. A printer's own G-code stays.
+  - *Relative extrusion.* Every Bambu-family export (with changes or
+    without): with `use_relative_e_distances` on (the slicers' default
+    when the printer does not say) and no line resetting E (`G92 E0`) in
+    `before_layer_change_gcode` or `layer_change_gcode`, the export adds
+    `G92 E0` as the last line of `before_layer_change_gcode` (where the
+    family's own printer profiles keep it), writes
+    `use_relative_e_distances` `1` when the printer did not say, and
+    names both in the printer's `different_settings_to_system`.
+    OrcaSlicer refuses a project with relative E and no reset at each
+    layer (its `Print::validate`). Relative E stays, as the prime tower
+    needs it; a printer with relative E off is left as it is.
+- **PrusaSlicer** is not changed by these: it writes a colour change
+  (M600 from its printer profile) and no second filament.
+- **Cura** keeps no such events in a project (they are post-processing
+  scripts of the machine's settings): nothing is written, and a warning
+  names each event's layer and height to add in Cura (Extensions, Post
+  Processing: Filament Change or Pause at Height).
+- **Without a dialect** nothing is written, with a warning.
+
+The slicer emits its printer profile's own filament change and pause
+code; the export writes printer G-code only for the Bambu family's
+manual changes on a printer without filament change G-code (M600, above)
+and the `G92 E0` of relative extrusion.
+
+**Print colours** (opt in): `model_render`'s `print_colors: true` and the
+`export` of a USDZ with `print_colors: true` draw each placement in the
+colours of the filaments it prints with by height, in place of the
+appearances: the schedule of the plate the body prints on (the design's
+without plates), its own filament below the first change, measured along
+its print direction (away from its print bed face, else +Z) from its own
+lowest point, its triangles cut at the layer boundaries of the changes
+(edges drawn there). Both use the same cuts; USDZ writes the first band as
+the mesh's material and each other band as a subset `PrintColor_<n>` with
+a material `print color rrggbb`. Pauses change no colour. Other formats
+refuse `print_colors`.
+
+The design file keeps the schedules as `"filament_changes": [{"plate",
+"changes": [...]}]` (`plate` left out for the design's own), left out when
+there are none.
+
+```json
+{"cmd": "set_filament_changes", "changes": [
+  {"height": 10, "material": "pla_two", "appearance": "blue_pla"},
+  {"height": 4, "kind": "pause", "message": "Insert the magnets"}]}
+{"query": "filament_changes"}
+→ {"plate": null, "inherited": false, "layer_height": 0.2, "first_layer_height": 0.2,
+   "changes": [{"height": 4.0, "kind": "pause", "message": "Insert the magnets",
+                "boundary": 4.0, "print_z": 4.2, "layer": 21, ...},
+               {"height": 10.0, "kind": "change", "material": "pla_two",
+                "appearance": "blue_pla", "material_name": "PLA Two", "color": "#0000FF",
+                "boundary": 10.0, "print_z": 10.2, "layer": 51, ...}], ...}
+```
+
+Tests: `print_changes` (validation, layer rounding, the events placed,
+the triangles cut into bands), `core/model-tests/print/src/filament_change_tests.rs`
+(mock kernel: the two-colour box edited, undone, redone, saved and
+reopened; each slicer's file read back; a rotated print bed; two bodies
+sharing a plate and a conflict; a plate's own schedule; `model_render`'s
+and USDZ's print colours).
+
+## Pick marks as wide as their lines (mitcad#1618)
+
+The `drawing_pick` query's `items` of a line, a circle or an arc carry
+the `pen` (a name of the `drawing` query's `pens` table) of the lines the
+view draws there: of the projected lines that lie on it, the widest one's,
+with the view's chosen line styles (mitcad#1546); a line along a centre
+mark (`center_line`) is `chain` unless it lies on a line of the view. An
+item the view draws no line under has
+no `pen`; a `point` never has one. The application draws a hover's or a
+pick's mark that wide at the zoom (at least a pixel) and 2 pixels more on
+each side, never narrower than 2 pixels (the hover) or 2.5 (a pick), and
+see-through so that the line shows under it; a point keeps its own size
+(mitcad#1338). Tests: `line_style_tests.rs`
+(`a_picks_mark_carries_the_pen_of_the_lines_it_lies_on`) and
+`app/tests/drawing_sheet_view.cpp` (the mark's width at two zooms and its
+pixels beside the line); pictures of a hovered and a picked edge, fitted
+and zoomed in: `tools/ui-drawing-mark-width-look.sh <dir>`.

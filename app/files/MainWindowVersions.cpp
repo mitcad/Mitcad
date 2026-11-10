@@ -15,6 +15,7 @@
 // Open makes one a new design, Restore the latest version, Save Copy As a
 // file of its own; Save keeps a preview of each version.
 #include "../MainWindow.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <utility>
 
@@ -331,7 +332,7 @@ MainWindow::VersionRecord MainWindow::recordVersion(const Project& project, cons
   }
   QStringList warnings;
   for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
-    warnings << warning.toString();
+    warnings << mitcad::modelMessage(warning.toString());
     qWarning().noquote() << QStringLiteral("Version warning: %1").arg(warning.toString());
   }
   const QString skipped = result.value(QStringLiteral("skipped")).toString();
@@ -715,7 +716,7 @@ void MainWindow::restoreVersion(const QString& file, const FileVersion& version,
   }
   QStringList warnings;
   for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
-    warnings << warning.toString();
+    warnings << mitcad::modelMessage(warning.toString());
     qWarning().noquote() << QStringLiteral("Version warning: %1").arg(warning.toString());
   }
   const QString skipped = result.value(QStringLiteral("skipped")).toString();

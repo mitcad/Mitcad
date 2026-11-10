@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "LiveController.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <exception>
 #include <utility>
@@ -257,7 +258,7 @@ void LiveController::handleEvent(const QJsonObject& event) {
       line += QStringLiteral(", again in %1 ms").arg(event.value(QStringLiteral("retry_in_ms")).toInt());
     }
     if (!error.isEmpty()) {
-      line += QStringLiteral(" (%1: %2)").arg(cls, error.value(QStringLiteral("message")).toString());
+      line += QStringLiteral(" (%1: %2)").arg(cls, mitcad::modelMessage(error.value(QStringLiteral("message")).toString()));
     }
     qInfo().noquote() << line;
     for (const QString& root : roots) {
@@ -265,7 +266,7 @@ void LiveController::handleEvent(const QJsonObject& event) {
       project.state = state;
       if (!error.isEmpty()) {
         project.errorClass = cls;
-        project.error = error.value(QStringLiteral("message")).toString();
+        project.error = mitcad::modelMessage(error.value(QStringLiteral("message")).toString());
       } else if (state == QLatin1String("connected")) {
         project.errorClass.clear();
         project.error.clear();
@@ -297,7 +298,7 @@ void LiveController::handleEvent(const QJsonObject& event) {
       } else {
         project.subscribed = false;
         project.errorClass = error.value(QStringLiteral("class")).toString();
-        project.error = error.value(QStringLiteral("message")).toString();
+        project.error = mitcad::modelMessage(error.value(QStringLiteral("message")).toString());
         qInfo().noquote() << QStringLiteral("Live: %1 subscription refused (%2: %3)")
                                  .arg(project.name, project.errorClass, project.error);
       }
@@ -342,7 +343,7 @@ void LiveController::handleEvent(const QJsonObject& event) {
                         event.value(QStringLiteral("state")).toString());
       } else if (type == QLatin1String("dropped")) {
         line = QStringLiteral("dropped %1 (%2 so far)")
-                   .arg(event.value(QStringLiteral("reason")).toString())
+                   .arg(mitcad::modelMessage(event.value(QStringLiteral("reason")).toString()))
                    .arg(event.value(QStringLiteral("count")).toInt());
       } else {
         line = type;
@@ -548,7 +549,7 @@ void LiveController::subscribeProject(Project& project) {
   }
   const QJsonObject answer = command(json);
   if (answer.value(QStringLiteral("error")).isString()) {
-    project.error = answer.value(QStringLiteral("error")).toString();
+    project.error = mitcad::modelMessage(answer.value(QStringLiteral("error")).toString());
     qWarning().noquote() << QStringLiteral("Live: %1: cannot connect to %2: %3")
                                 .arg(project.name, project.broker, project.error);
     setStep(project, Step::Failed);
@@ -701,7 +702,7 @@ QString LiveController::details(const QString& root) {
                .arg(project->broker,
                     user.isEmpty() ? QString() : tr(" as %1").arg(user),
                     connection.value(QStringLiteral("state")).toString());
-    const QString error = connection.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString();
+    const QString error = mitcad::modelMessage(connection.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString());
     if (!error.isEmpty()) {
       text += QStringLiteral(" (%1)").arg(error);
     }
@@ -767,7 +768,7 @@ void LiveController::signIn(const QString& root) {
                                              {QStringLiteral("session"), session},
                                              {QStringLiteral("user"), answer.credentials.user},
                                              {QStringLiteral("password"), answer.credentials.password}});
-        return refused.value(QStringLiteral("error")).toString();
+        return mitcad::modelMessage(refused.value(QStringLiteral("error")).toString());
       });
   project = find(root);
   if (!chosen || project == nullptr) {
@@ -883,7 +884,7 @@ void LiveController::publish(Project& project, const QJsonObject& message) {
   const QString type = message.value(QStringLiteral("type")).toString();
   if (answer.value(QStringLiteral("error")).isString()) {
     qWarning().noquote() << QStringLiteral("Live: %1: publishing %2 failed: %3")
-                                .arg(project.name, type, answer.value(QStringLiteral("error")).toString());
+                                .arg(project.name, type, mitcad::modelMessage(answer.value(QStringLiteral("error")).toString()));
     return;
   }
   qInfo().noquote() << QStringLiteral("Live: %1 published %2 %3")
@@ -1036,7 +1037,7 @@ void LiveController::testBroker(QWidget* parent, const QString& broker, const QS
                                         ? QStringLiteral("ok")
                                         : QStringLiteral("failed (%1: %2)")
                                               .arg(error.value(QStringLiteral("class")).toString(),
-                                                   error.value(QStringLiteral("message")).toString()),
+                                                   mitcad::modelMessage(error.value(QStringLiteral("message")).toString())),
                                     steps.join(QStringLiteral(", ")));
       if (shown != nullptr) {
         shown->setText(describeLiveTest(answer));

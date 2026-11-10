@@ -2667,6 +2667,33 @@ sketch moves the timeline marker to just after it and back when it is
 finished; everything in between, marker moves included, becomes one undo
 step `Edit Sketch1` (`merge_undo`, commands.md, "Undo, revisions and the saved state").
 
+Esc in a sketch cancels, in this order: a value editor, a drag, the
+running tool's step or the tool itself, the selection; otherwise it does
+nothing, so pressing it again and again to be sure no tool runs never
+leaves the sketch. The preference **Esc leaves an unchanged sketch**
+(Preferences › Sketch, settings `sketch/escLeavesUnchangedSketch`, off by
+default; mitcad#1623, GitHub mitcad/Mitcad#227;
+`sketch::escLeavesUnchangedSketch`) changes that: while it is on and there
+is nothing of these to cancel and nothing in the sketch has changed since
+it was entered, Esc leaves it as Finish Sketch does
+(`MainWindow::escapeSketch`): a sketch Create Sketch made is still empty
+and is taken back with its creation, so an accidental Create Sketch leaves
+no sketch and no undo step; an edited sketch is left as it was, the
+timeline marker rolled forward again with no undo step. "Changed" is the
+document's revision (the `document` query): the one recorded as the sketch
+was entered means no change, also after Ctrl+Z took the changes back. With the
+preference on, a changed sketch stays open, and the first such Esc says on
+the status line
+`Finish Sketch (or Ctrl+Z to undo) to leave the sketch.`; later ones say
+nothing. Logs: `Esc: leaving Sketch1, nothing changed in it`, `Esc:
+Sketch2 taken back, it was new and empty`, `Esc: Sketch1 changed, it stays
+open; hint: <the hint>` (the first) and `Esc: Sketch1 changed, it stays
+open` (later ones); turning the preference on or off logs `Preferences:
+Esc leaves an unchanged sketch on|off`. Tests (the preference off first,
+then on): `tools/ui-sketch-esc-leaves-test.sh` and
+`app.ui-windows-sketch-esc-leaves` (the shared script
+`tools/ui-scripts/sketch-esc-leaves.mitcad-ui`).
+
 `sketch::SketchController` is sketch mode: an event filter on the view's
 mouse events; it keeps the edited sketch as the `sketch` query gives it
 (`SketchModel`, re-read after every change by `refreshScene`), and owns
@@ -3557,7 +3584,22 @@ shared by Qt and AppKit (its word, icon, color role and lifetime).
   progress, information or a success fades after 6 s, a warning after
   10 s; an error stays until it is closed or the next command starts (a
   command with a panel or a tool, `MainWindow::trigger`, or an edit,
-  `startFeatureCommand`; not an action). A message of a lower level does
+  `startFeatureCommand`; not an action). An error raised by a source that
+  is open only for a while goes when that source closes (mitcad#1621,
+  `MessageEntry::source`, `MessageLog::sourceClosed`,
+  `MainWindow::closeMessageSource`): sketch mode raises its errors through
+  `SketchHost::showSourceError` as `sketch/editor` (an inline value
+  editor's own check, which says *Enter a value.* for an empty text, never
+  with a leading colon), `sketch/tool` (the running tool's) or `sketch`
+  (without a tool), and closes them in `closeEditor` (closed or its value
+  taken), `stopTool` (ended or switched) and `leave` (the sketch
+  finished, `sketch` covering the other two); an error of no feature
+  shown while a command panel is open is the panel's (`command`), closed
+  in `onCommandFinished` (OK or Cancel). Such an error becomes the stub
+  and the Docked status line is cleared; one raised in the same turn of
+  the event loop as its source's closing stays (a tool that ends on its
+  failure says why); errors of no source (a failed feature, an import)
+  keep the rule above. A message of a lower level does
   not replace an error or a warning that shows. Faded or closed, the band
   is a dimmed one-line stub of the latest message in the band's row; a
   click on it opens the history: this session's messages newest first
@@ -3577,7 +3619,11 @@ shared by Qt and AppKit (its word, icon, color role and lifetime).
   `Message band: <level> <text>` for each message, `Message band full:
   <level> <text>`, `Message band stub: <level> <text> (faded|closed|next
   command|cleared)`, `Message band cleared (another design)` and `Status
-  line cleared (another design)`, `Message band placed: full|stub x,y wxh, row <h>,
+  line cleared (another design)`, `Message band source closed: <level>
+  <text> (<source>)`, `Status error source: <source>` and `Status line
+  cleared (<source> closed)` (mitcad#1621; tests:
+  `tools/ui-sketch-value-error-clears-test.sh`,
+  `app.ui-windows-sketch-value-error-clears`), `Message band placed: full|stub x,y wxh, row <h>,
   timeline x,y wxh`, `Message band close at x,y`, `Message stub at x,y`,
   `Message history button at x,y`, `Message history: <n> entries`,
   `Message history row <i>: <level> <text> at x,y` (1 the newest),
@@ -7733,7 +7779,12 @@ settings in the user's settings (`ViewSettings`, group `view`);
   background rather than the theme), their names painted with Qt into
   their textures (only the faces in front are drawn, so no names show
   mirrored from behind), the edges and corners AIS_ViewCube's flat bevels
-  a shade apart (they are parts to click), the axes X red, Y green, Z
+  a shade apart (they are parts to click), about twice as wide as
+  AIS_ViewCube's own (mitcad#1620, `sizeViewCube`: the face 0.86 of the
+  nominal size, the bevels 0.29 of it against 0.15, so the edges and
+  corners are about twice as easy to hit; the cube a tenth larger across,
+  still inside its arrows and below the Home button; the face names drawn
+  as large as before), the axes X red, Y green, Z
   blue, the hover in the accent. The Home button above it
   (`ViewCubeHomeButton`, `viewHome`) is a capsule of the same glass, its
   house in the names' color, the accent on hover. A drag that starts on
@@ -8129,8 +8180,9 @@ settings in the user's settings (`ViewSettings`, group `view`);
   folders of font files Edit Text offers, mitcad#473, Sketch: **Scale the
   sketch to its first dimension**, `sketch/SketchPreferences.*`, logged
   `Preferences: scale the sketch to its first dimension on|off`,
-  mitcad#860, and **Click adds to the selection in sketches**, mitcad#1403,
-  [Sketch selection filters](#sketch-selection-filters), Suppliers: `SupplierPreferencesBox`, the Region of the
+  mitcad#860, **Click adds to the selection in sketches**, mitcad#1403,
+  [Sketch selection filters](#sketch-selection-filters), and **Esc leaves
+  an unchanged sketch**, mitcad#1623, under Finish Sketch, Suppliers: `SupplierPreferencesBox`, the Region of the
   product links and the Shops you buy from, mitcad#950, [Suppliers'
   shops](#suppliers-shops)) so the window fits 1366 × 768; each page is also a command
   `tools.preferences.<page>` that the search finds by its settings. OK
@@ -8991,7 +9043,7 @@ same ways without questions (mm, the XY plane, linked).
 | `.ipt` | a new document with the part's stored bodies, one base feature each (`import_ipt`, same worker, `hang_limit` 90 s; commands.md, ".ipt import"); no Stop; the report lists the bodies, part number, material and units |
 | `.iam` | a new document with the assembly's components and occurrences, each part imported once (`import_ipt`, which imports an assembly with `import_iam`; same worker; commands.md, ".iam import"); no Stop; the report lists the occurrences, how each file was found, missing files and the checks against the file. **Import Assembly** (`askIamImport`, object name `importAssembly`, mitcad#507), asked by File › Open and Import (not `--open` or MCP, which take the choice made last): **Parts with their design history** (`iamPartsHistory`, on by default, remembered as `import/iamPartsHistory`; `files/IamImport`) sends `history` true, so each part's design is replayed into its component (parameters, sketches, features), else its stored bodies come in as one base feature; **Import** (default) or Cancel (the import does not start). The worker's trace `import: [t] part <n> of <m>: <file>` (and `…: <file>: replayed in <s> s`, `bodies`) shows in the progress dialog as `Part 3 of 7: <file>`, with `, timeline item <k>: <name>` while the part's items are replayed, the bar counting parts. The report says how the parts came in (`Parts with their design history: 6 replayed, 1 as their stored bodies.`) and, per part, `imported, replayed, 12 items (10 parametric, …), 9 verified, 3 parameters` or `imported, stored bodies: <reason>` (a replay that failed or hung, a part without a design history) |
 | `.rvt`, `.rte`, `.rfa`, `.rft` | a new document with a project's building elements, one component per level (`import_rvt`, same worker, mitcad#274; commands.md, ".rvt import"); a family file: its metadata only; no Stop; the report lists the bodies per level, what was left out and why, and the components are logged (`Imported <file>: components <name> (<n> bodies), …`) |
-| `.solidcraft` | a new document with the design's history (`import_solidcraft`, same worker, mitcad#450; commands.md, ".solidcraft import"); no Stop; the report lists every feature and joint with how it came in (parametric, partial, unmapped, failed) and the kinds without a MitCad counterpart, and is logged (`Import report: <file>: <counts>`) |
+| `.sc`, `.solidcraft` | a new document with the design's history (`import_solidcraft`, same worker, mitcad#450; a `.sc` file of another program, by its format key, is refused before the worker starts with "Not a SolidCraft design: …", mitcad#1622; commands.md, ".solidcraft import"); no Stop; the report lists every feature and joint with how it came in (parametric, partial, unmapped, failed) and the kinds without a MitCad counterpart, and is logged (`Import report: <file>: <counts>`) |
 | STEP, IGES, BRep | a base feature (`import_file`, one undo step `Import part.step`). A STEP file with an assembly (the `file_structure` query, mitcad#1274) first asks **Import STEP Assembly** (`askStepStructure`, object name `importStepStructure`; `MainWindow::askImportStructure`), from File › Import, a drop and File › Open (not `--open` or MCP, which take the default): **Components (keep the assembly)** (default; `structure` `components`: a component per distinct part, an occurrence per instance; commands.md, "STEP assemblies as components") or **One base feature** (`structure` `base`); Cancel imports nothing. The log line then ends `, <n> component(s), <m> occurrence(s)`. Its check box **Find repeated parts** (object name `importRepeatedParts`, Alt+R, off by default and not remembered; mitcad#1277) sends `repeated_parts` true: in the import's undo step the copies among the one base feature's bodies, or among each part's with Components, become occurrences of one component each (commands.md, *Find Repeated Parts*); the log line then adds `, repeated parts: <n> component(s), <m> copies`. A STEP file without an assembly asks nothing; its bodies' copies are found afterwards with the browser's Find Repeated Parts |
 | STL, OBJ | mesh bodies, after asking the unit (Insert Mesh) |
 | DXF | a new sketch on a plane (`sketch.create` + `sketch.import_dxf`, one undo step `Insert drawing.dxf`), or into the edited sketch; the dialog uses the `dxf_info` query (origin placement, layers) |
@@ -11622,6 +11674,20 @@ priority), so it covers its point's marker. Logged as `Sketch layers:` and
 backgrounds (not a recurring test): `tools/ui-sketch-points-look.sh
 <dir>`.
 
+A sketch curve's highlights keep the curve's line type (mitcad#1619): the
+view's selection highlight (`OcctViewer::setHighlights`) and the overlay's
+4 px highlight of a selected, picked or hovered curve
+(`sketch::HighlightStroke::style`) are dashed for construction geometry
+and dash-dot for a center line, as the curve itself, so that Construction
+(X) or Centerline on a selected curve shows at once; the view draws the
+selection again when a shown curve's line type changes under it
+(`OcctViewer::refreshSketchHighlightLines`). OCCT's own hover of a curve
+redraws the curve's presentation in the hover color and so keeps its
+line type too. Body edges and other highlights stay solid. Logged as
+`Sketch highlight lines:` and `Sketch overlay lines:`; tests:
+`tools/ui-sketch-highlight-line-test.sh`, unit test
+`tests/sketch_point_markers.cpp` (the patterns painted into an image).
+
 ### Selection inputs
 
 A command's selection input keeps each model item once (mitcad#199,
@@ -12032,6 +12098,25 @@ SVG at several sizes (`themeIcon`).
   `tools/ui-create-test.sh` (Hole1 edited to a hex press fit at the
   printed fit, its volume, opened again), `tools/ui-windows-workflow-test.ps1`
   (12., the same).
+- **Hole: Print shapes for holes printed lying** (mitcad#1515): Print
+  Shape (`print_shape`: Round, Teardrop, Flat Roof; Round first), after
+  the thread's fields, and for Flat Roof Roof Sag (`roof_sag`, a length:
+  a new hole's starts as the printed fit `hole_roof_sag`,
+  `withPrintedFit("hole")`, created with the hole; choosing Flat Roof puts
+  it in the field of an edited hole too while the field holds its plain
+  default 0.4 mm, logged `Hole roof sag: the printed fit hole_roof_sag`).
+  Print Shape shows when a body of the design has a print bed face
+  (`init` and `load` note it from the `bodies` query, a check of the
+  state no input shows) or the hole has a print shape, and not for a
+  press fit or a modeled thread, which the model refuses with it. The
+  definition gets `"print_shape"` (left out for Round) and for a flat
+  roof `"roof_sag"` (the model's
+  [hole](../core/model-api/src/commands.md#hole): the roof points away
+  from the print bed face, holes not lying parallel to it stay round, the
+  hole keeps its diameter). `load` sets them from the hole. The
+  description adds `(print teardrop)` or `(print flat_roof, roof sag
+  0.4)` to the diameter. Tests: the model's `print_shape_hole_tests`
+  (core/model-tests/features-profile).
 - **Press Pull** on one face of a fillet opens the fillet for the radius
   of the set that rounds its edge (`Built::editing`).
 - **Fillet and Chamfer handles** (`withManipulator`, mitcad#534): each
@@ -12292,6 +12377,31 @@ SVG at several sizes (`themeIcon`).
   (Direction 3 set in the panel, the preview's 24 elements, the saved
   copies' places), `app/tests/pattern_options.cpp` (the options text of
   three directions).
+- **Circular Pattern's Axis 2** (mitcad#1588, `PatternCommands.cpp`;
+  commands.md, *Patterns*, `axis2`): below Symmetric the panel offers
+  Axis 2 (any axis Axis takes; none: one axis), the copies turned again
+  about a second axis in one feature. Its rows are Axis's: Quantity 2
+  (default 2), Total Angle 2 (default 360 deg) with its ring about Axis 2
+  in the view, and Symmetric 2; they stay hidden until an axis is picked,
+  as Direction 2's rows of Rectangular Pattern do. The elements are every
+  product of the two turns, numbered about Axis first (the dots of
+  Suppressed too; the preview logs `Preview Circular Pattern elements:
+  12`). The definition gets `axis2` only when an axis is picked, so a
+  pattern without it saves as before; `load` shows a saved one's second
+  axis and its rows, and `canEdit` checks its axis as the first's. The
+  added line names it (`Added circular pattern of 1 bodies: symmetric,
+  quantity 3, angle 180 deg; axis 2 one direction, quantity 4, angle 360
+  deg`), and the panel's checks list Symmetric 2 (`Panel Circular Pattern
+  checks: symmetric=on, symmetric2=off`). A pattern leaves out the copies
+  that land where their original or another copy already is (commands.md,
+  *Patterns*, *Copies that add nothing*). Tests:
+  `tools/ui-pattern-two-axes-test.sh` and
+  `tools/ui-windows-pattern-two-axes-test.ps1` (ctest
+  `app.ui-windows-pattern-two-axes`: the rows hidden until Axis 2 is
+  picked, the preview's 12 elements, the saved copies' places, the
+  reopened panel; every feature of the cubic lattice of
+  `tools/cli/tests/f4_pattern_lattice.json` opens in its panel),
+  `app/tests/pattern_options.cpp` (the options text of two axes).
 - **Extrude** chooses the operation of a new extrusion until the user
   picks one (mitcad#289, `CommandDef::autoOperation`,
   `framework/CommandSessionAuto.cpp`, `framework/AutoOperationPolicy.hpp`):
@@ -13106,13 +13216,20 @@ SVG at several sizes (`themeIcon`).
     with **Material** (the bodies' own, else PLA; or a physical
     material), **Line width** 0.4 mm, **Walls** 2, **Layer height**
     0.2 mm, **Top/bottom layers** 4, **Infill %** 15, **Filament
-    diameter** 1.75 mm, **Price €/kg** (a text: empty, no cost). The
+    diameter** 1.75 mm, **Price €/kg** (a text: empty, no cost);
+    **Narrow Gaps** (on, mitcad#1519) with **Minimum gap**: the analysis'
+    own gap, else `print_in_place_gap` (the field shows the design's
+    printed fit parameter by its name and the analysis then keeps no gap
+    of its own, `"gap": null`, following the parameter), else 0.3 mm. The
     rows of a part switched off are hidden and not checked.
   - The result area: per body (and in total for several) the overhang
     area in mm² with its share of the area, the thinnest wall as a link
     that frames the view around it, the thin regions; then the estimate
     `41.5 g · 13.9 m · 1.04 €` with the material, its density and the
-    filament's volume, labelled as an estimate. Overhangs and walls are
+    filament's volume, labelled as an estimate. With two bodies or more,
+    before the estimate, the narrow gaps (`print_min_gap`, a job as the
+    walls are, "Measuring the gaps"): each pair of bodies apart but closer
+    than the gap, its distance a link to the middle of its closest points. Overhangs and walls are
     `CommandHost::jobQuery` jobs on the model's worker (the progress
     dialog's Cancel stops them; the panel then shows the cancel as its
     error), the estimate a plain query; in the native macOS window the
@@ -13129,8 +13246,11 @@ SVG at several sizes (`themeIcon`).
     (raised 0.05 and 0.08 mm along their normals, with a polygon offset,
     as the analysis' mesh and the view's differ on curved faces), not
     pickable; a marker and a label `Thinnest 0.50 mm` at the thinnest
-    point, over everything; a legend in the lower left corner with the
-    analysis' name, the colors, the angle and the minimum wall
+    point, over everything; each narrow gap's closest points joined by a
+    line with a dot at each end, over everything (`PrintGaps`, in the
+    `PrintGap` role's teal), and a marker `Gap 0.20 mm` at the middle of
+    the smallest; a legend in the lower left corner with the
+    analysis' name, the colors, the angle, the minimum wall and the gap
     (`PrintOverlayLabels`: cards painted once into images at the
     screen's pixel ratio and drawn by the view itself in its overlay
     layers, the marker's where its point lies, facing the screen at its
@@ -13145,7 +13265,9 @@ SVG at several sizes (`themeIcon`).
   panel open and one with Print1 shown that compute nothing again,
   set no overlay and paint no widget over the view, Print1 kept, light
   bulb, edit with a bed face and a minimum wall, save with the STL
-  export unchanged, delete and undo), the unit test
+  export unchanged, delete and undo), `tools/ui-print-gaps-test.sh`
+  (two blocks 0.2 mm apart: the gap from `print_in_place_gap`, the view's
+  gap and marker, a smaller gap that finds none, kept and saved), the unit test
   `app/tests/print_analysis.cpp`; the model's tests in
   `core/model` (commands.md).
 - **Mortise and Tenon** (`solid.mortise_tenon`, `MortiseTenonCommands.cpp`,
@@ -13367,6 +13489,8 @@ next screenshot.
 | `Sketch halos: 5 dark` (`light`) | the halos shown changed in number or tone: fully constrained curves and center lines are drawn over a wider line in the background's tone (`OcctViewer::styleSketchHalo`), dark on a dark background and light on a light one, so that they stay readable over a body's face; points, construction and projected geometry and unconstrained curves have none (mitcad#302) |
 | `Sketch layers: halos < curves and highlights < points and point highlights; points keep the scene's depth; point highlights over the markers` | the order OCCT draws the sketch layers in, read from the viewer when sketch entities are shown and it changed (`OcctViewer::logSketchLayers`: the layers that are not immediate first, then the immediate ones, each in its place in the list); whether the points' layer still tests the depth drawn before it (`lose` if it cleared it), and whether a selected point's ball is drawn after the plain markers in it (mitcad#897; `tools/ui-sketch-spline-test.sh`, `app.ui-windows-sketch-spline`) |
 | `Sketch highlights: 1 curve, 0 points` | the selection's highlights of sketch curves (in the top layer) and sketch points (in the points' layer) changed in number (mitcad#897) |
+| `Sketch highlight lines: 1 dashed` (`2 solid, 1 dash-dot`, `none`) | the line types of the view's selection highlights of sketch curves changed: each is drawn in its curve's own line type, dashed for construction geometry, dash-dot for a center line, else solid, and follows a toggle of Construction or Centerline at once (mitcad#1619; `tools/ui-sketch-highlight-line-test.sh`) |
+| `Sketch overlay lines: 1 dashed` (`1 solid`, `none`) | the same for the overlay's 4 px highlights of sketch curves in sketch mode (the selection's, the picks' and the hover's), counted once per curve (mitcad#1619) |
 | `Sketch dimension halos: 3 dark` (`light`) | the dimensions shown in sketch mode changed in number or the halo's tone: every dimension (normal, driven, hovered, selected, and the tool preview's) is painted over a halo under its dimension and extension lines, angle arcs and arrowheads (`SketchOverlay::paintDimensionHalo`: 3 px strokes under the 1 px lines, a 2 px outline round the arrowheads, all halos before any line; the values' boxes unchanged), in the same tone as the geometry's halo (`OcctViewer::sketchHaloColor`, the background's tone, the opposite of the lines'), so that the lines stay readable over a body's face of their own tone (mitcad#633). The lines and arrow tips are moved by less than a device pixel onto whole device pixels, so that a level or upright line is one sharp row in its own tone between whole rows of its halo instead of two half-tone rows blurred into it; `tools/ui-sketch-view-test.sh` also reads the pixels |
 | `Sketch colours: F1 8 fully constrained, 0 unconstrained; F3 in O1 4 fully constrained, 3 unconstrained` (`none`) | the shown sketches changed how they are colored, in sketch mode and outside it: per sketch (with the occurrence that places a component's sketch) the entities drawn in the fully constrained color of the background and those in the unconstrained blue; construction, center lines and projected geometry are not counted (mitcad#286) |
 | `Sketch tool Line`, `Sketch tool ended: Line` (mitcad#1085), `Added line c2 from (0, 0) to (40, 0) (horizontal)`, `Line chain closed`, `Line chain ended` (by any of its ways; mitcad#1085), `Sketch right-click: Esc of the tool` (mitcad#1085), `Added rectangle 40 x 25 mm at (0, 0) [c1, …]`, `Added rounded rectangle 40 x 20 mm, corner radius 5 mm at (0, 0) [c1, …]` (mitcad#867), `Added circle, diameter 20 mm at (x, y) [c5]`, `Added arc …`, `Added polygon (6 sides) …`, `Added slot, width 12 mm …`, `Added ellipse …`, `Added spline c9 through 3 points` (`Added closed spline c9 through 4 points`, mitcad#783), `Added point p4 at …`, `Added text t7 "…" at …` (or `in a frame from (x, y) to (x, y)`), `Trimmed c3 at (x, y)`, `Extended c1 at (x, y)` (with ` (joined p5)` when the end joined an existing point, mitcad#259) | the tools |
@@ -13414,7 +13538,7 @@ next screenshot.
 | `Feature warnings: Fillet1: <warning>` / `none`, `Preview Fillet: ok, warning: <warning>` | features that succeeded with warnings, when they change; a preview's warning |
 | `Warnings badge: Fillet1: <message>; Tilted: <message>` / `none`, `Warnings button at x,y` | the yellow badge's features (built with warnings; an import note is information since mitcad#1040), when they change |
 | `Status <level>: <text>`, `Native message band: full\|stub <level> <text>`, `Browser level <path>: <level>`, `Selection card level <feature>: <level>`, `Panel <command> message box: <level>: <text>`, `Sketch Palette solve: <level>: <text>; …` / `none`, `Sketch notice level: <level>`, `View message level: <level>`, `Rules status level: <level>`, `Configurations option marks: …` / `Configurations row marks: …`, `Annotations level <name>: <level>` | a message's level on each surface (mitcad#1040, mitcad#1051, "Messages and their levels") |
-| `Message band: <level> <text>`, `Message band full: <level> <text>`, `Message band stub: <level> <text> (faded)` (or `closed`, `next command`, `cleared`, `withdrawn`), `Message band cleared (another design)`, `Status line cleared (another design)`, `Message band placed: full x,y wxh, row <h>, timeline x,y wxh` (`stub`), `Message band close at x,y`, `Message stub at x,y`, `Message history button at x,y`, `Message history: <n> entries`, `Message history row <i>: <level> <text> at x,y`, `Message history: selected <uid>`, `Message history: closed` | the message band, its stub and the session's message history (mitcad#1042, "Messages and their levels"; `tools/ui-message-band-test.sh`) |
+| `Message band: <level> <text>`, `Message band full: <level> <text>`, `Message band stub: <level> <text> (faded)` (or `closed`, `next command`, `cleared`, `withdrawn`), `Message band cleared (another design)`, `Status line cleared (another design)`, `Message band source closed: <level> <text> (<source>)`, `Status error source: <source>`, `Status line cleared (<source> closed)` (mitcad#1621), `Message band placed: full x,y wxh, row <h>, timeline x,y wxh` (`stub`), `Message band close at x,y`, `Message stub at x,y`, `Message history button at x,y`, `Message history: <n> entries`, `Message history row <i>: <level> <text> at x,y`, `Message history: selected <uid>`, `Message history: closed` | the message band, its stub and the session's message history (mitcad#1042, "Messages and their levels"; `tools/ui-message-band-test.sh`) |
 | `Browser sketch DOF: Sketch1 0, Sketch2 4` | the sketches' degrees of freedom the browser shows, when they change |
 | `Browser joints: Joint1 placed, AsBuiltJoint1 satisfied, DOF Root 1` | the joints' states and each component's degrees of freedom (mitcad#55), when they change |
 | `Added joint Joint1 (revolute): placed, rz 30 deg, moved O2; DOF 7` (a failure: `failed: <error>`), `Added as-built joint …`, `Added joint origin JointOrigin1: origin (5, 5, 10), normal (0, 0, 1)`, `Added rigid group RigidGroup1: Pin:1, Cap:1`, `Drove joint Joint1 (revolute): placed, rz 45 deg, …`, `Added constraint Constraint1: insert placed, moved O2; DOF 1` (each row's type, `(does not hold)` after one that does not), `Preview Joint moves O2` | the ASSEMBLE group's commands (mitcad#55, mitcad#148; the joint as the `joints` query has it after OK) and a preview that places occurrences elsewhere |
@@ -13451,8 +13575,8 @@ next screenshot.
 | `Measure history: 3 rows`, `Measure history row 3: <picks>: <values>`, `Measure history row 3 at x,y`, `Measure history Copy at x,y`, `Measure history showed row 1`, `Measure history copied row 1: 1 \| …`, `Measure history cleared` | Measure's history (mitcad#648, *Measure's history*) |
 | `Computing section view started`, `Computing section view done in 12 ms` (`cancelled after`; `measure`), `Section clips at {"plane":…} off the UI thread (section worker): 3 bodies, 3 new, 3 meshed in 40 ms`, `Section measured off the UI thread (section worker)`, `Section view ready at {"plane":…}: 3 bodies from the section worker`, `Section round view superseded`, `Section round view replaced` | Section Analysis' rounds off the UI thread (mitcad#438, `framework/SectionWorker.hpp`): started and ended, what the worker's thread clipped and meshed, the view about to show them, a running round stopped by a newer one, a waiting one dropped |
 | `Kept Section Analysis as Section1`, `Edited analysis Section1`, `Deleted analysis Section1`, `Section analysis at {"plane":{"normal":[1,0,0],"origin":[10,0,0]}}`, `Section analysis off` | Section Analysis kept in the document (mitcad#41); the plane the bodies are cut at changed |
-| `Inspect Print Analysis: Body1 overhang 412.5 mm^2 (6.2 %), thinnest 0.50 mm, 3 thin region(s), estimate 41.5 g 13.9 m` (`, cost 1.04` with a price; bodies separated by `; `), `Kept Print Analysis as Print1`, `Print analysis Print1: <the same words>` (`failed: <reason>`, `cancelled`) | Print Analysis (mitcad#620): the panel's result, and the shown analysis computed again (after OK, a light bulb, an edit, a change of its bodies) |
-| `Print overlay: 12 overhang triangle(s) #rrggbb, 4 thin triangle(s) #rrggbb (150.0 mm^2), marker Thinnest 0.50 mm at (x, y, z); legend Print1: #rrggbb Overhang, angle 45° \| #rrggbb Thin wall, under 0.8 mm`, `Print overlay: none` | what the view draws of a Print Analysis, when it changes (`no marker` without thin walls; in brackets the area drawn thin, only where the walls are thin, mitcad#767) |
+| `Inspect Print Analysis: Body1 overhang 412.5 mm^2 (6.2 %), thinnest 0.50 mm, 3 thin region(s), estimate 41.5 g 13.9 m` (`, cost 1.04` with a price; bodies separated by `; `; with two bodies or more and Narrow Gaps on, then `; narrow gaps under 0.3 mm: Body1-Body2 0.20 mm` or `: none`, mitcad#1519), `Kept Print Analysis as Print1`, `Print analysis Print1: <the same words>` (`failed: <reason>`, `cancelled`) | Print Analysis (mitcad#620): the panel's result, and the shown analysis computed again (after OK, a light bulb, an edit, a change of its bodies) |
+| `Print overlay: 12 overhang triangle(s) #rrggbb, 4 thin triangle(s) #rrggbb (150.0 mm^2), marker Thinnest 0.50 mm at (x, y, z); legend Print1: #rrggbb Overhang, angle 45° \| #rrggbb Thin wall, under 0.8 mm` (with narrow gaps `, 1 narrow gap(s) #rrggbb, marker Gap 0.20 mm at (x, y, z)` before the legend and `\| #rrggbb Narrow gap, under 0.3 mm` in it, mitcad#1519), `Print overlay: none` | what the view draws of a Print Analysis, when it changes (`no marker` without thin walls; in brackets the area drawn thin, only where the walls are thin, mitcad#767) |
 | `Physical properties: Body1 volume … mass … center (…)` (a body of a component once per occurrence, `Body1 in Component1:1 volume …`, mitcad#1110) | the Properties dialog opened |
 | `Physical properties window "Properties": Body1: Bounding Box 10 x 20 x 20 mm, Faces / Edges / Vertices 6 / 12 / 8; Total: Bounding Box …, Faces / Edges / Vertices …` (the title `Properties: Arm` for a selected component; a body of a component is a group per occurrence, `Body1 in Arm:2: …`, mitcad#1110) | what the Properties window shows of the boxes along the design's axes and the counts (mitcad#1095; `×` logged as `x`) |
 | `Done <command>` | a model command panel's OK |
@@ -13464,6 +13588,7 @@ next screenshot.
 | `3D mouse: Raw Input connected (SpaceMouse Compact (HID 256f:c635))` (`spacenavd connected (/var/run/spnav.sock)`, `IOKit HID connected (…)`; also when a device comes later), `3D mouse: none` (no device or daemon at start; the backend keeps listening), `3D mouse: off` (Preferences has it off), `3D mouse: Raw Input disconnected`, `3D mouse: button 1 runs view.fit` (debug; `3D mouse: button 3 has no command`, `3D mouse: view.look_at is not available now`), `3D mouse motion: 42 frame(s), 0.70 s, 58.6 fps, longest frame 33.4 ms, 1 grid rebuild(s), turned 12.3 degrees, panned 0.41 view heights, zoom 1.25x, object mode` (debug; when the cap comes to rest: its frames' timing, the time from the first frame to the last, their rate, the longest interval between two of them, `longest frame 41.0 ms with a grid rebuild` when the layout grid was rebuilt in it, and how many times the grid was rebuilt in the motion (mitcad#1023: an uneven motion shows as a low rate or a long frame); what the motion did, a zoom above 1 closer, and the Navigation mode, `camera mode` or `fly mode`, then `, horizon locked` with Lock horizon; mitcad#978); on Windows (debug, mitcad#1034) `3D mouse: SpaceNavigator (HID 046d:c626): reports of 13 bytes (dwSizeHid), the longest input report 13 bytes, the rotation in report 2 of its own by its report descriptor` (at a device's first report; the rotation also `in report 1 with the translation` or `not known`), `3D mouse: SpaceNavigator (HID 046d:c626) sends report ids 1, 2, its rotation in report 2 of its own` (when a new report id comes), `3D mouse report: id 1 [01 5e 01 00 00 00 00 00 00 00 00 00 00], id 2 [02 00 00 00 00 64 00 00 00 00 00 00 00]; 12 report(s); t 350 0 0, r 0 0 100` (while the cap moves, at most one line per 100 ms and one when it comes to rest: the last report of each id with its padding, how many came, and the HID translation and rotation read from them) | a 3D mouse (mitcad#951, `view/SpaceMouseController.*`, `view/SpaceMouseView.cpp`); the test driver's `space-mouse` and `space-mouse-button` steps give the same input |
 | `Layout grid 5 mm, major 25 mm, 18.2 px apart` | the layout grid's spacing changed, logged when the camera rests, and again after a change of the spacing or the design's unit; in the design's unit (`Layout grid 0.25 in, major 1 in, 22.5 px apart`, mitcad#1210) |
 | `Orientation cube places:` then `Orientation cube front at x,y`, `Orientation cube front-top at …`, `Orientation cube front-right-top at …` | with `MITCAD_LOG_ORIENTATION_CUBE=1`, before each camera line: where a click picks each face, edge and corner of the cube in sight |
+| `Orientation cube zones: front 3624, front-top 1448, front-right-top 780, …` | with `MITCAD_LOG_ORIENTATION_CUBE=1`, after the cube's places: how many square pixels of the window pick each part in sight (mitcad#1620: the edges' and corners' zones against the faces'; `tools/ui-view-cube-zones-test.sh`) |
 | `Orientation cube outline x0,y0 to x1,y1, picks x0,y0 to x1,y1, looking 0 1 0 (perspective), cube orthographic` | with `MITCAD_LOG_ORIENTATION_CUBE=1`, after the cube's places: the cube's box as drawn (through its own perspective, if any) and the extent of the places that pick it, in window pixels, with the camera's direction and projection and the cube's projection (`follow-view`, `orthographic`, `perspective`, mitcad#774); an orthographic or perspective cube is drawn and picked the same in either view projection (mitcad#766), so both stay the same when only the view's projection changes |
 | `Orientation cube projection perspective`, `Preferences: orientation cube perspective` | the cube's projection changed (the view; Preferences when a change is saved); the cube's places and outline are logged again |
 | `Orientation cube pressed on front at x,y`, `View home at x,y`, `View home`, `View top`, `Look at …` | the cube, the house, standard views |
@@ -17380,6 +17505,235 @@ Preferences › Display, under Interface size (GitHub mitcad/Mitcad#207):
   application's style wrapped only at an Icon size other than 100%, also
   when it is replaced by its key.
 
+## Component from Web (mitcad#1579)
+
+GitHub mitcad/Mitcad#191. **Insert › Component from Web…**
+(`insert.component_web`, the SOLID tab's INSERT group after From an Open
+Design…; `webbrowser/MainWindowComponentWeb.cpp`) opens a browser window
+of its own (`webbrowser/ComponentBrowser.cpp`): not a supplier
+integration but a generic browser to which users add any site themselves
+(a supplier, a model library, their own server). Its downloads of the
+formats MitCad imports come into the open design as components.
+
+- **The web browser component.** The browser is the Chromium Embedded
+  Framework (CEF, owner 10.11.2026; Qt WebEngine 6.12.0's packages did not
+  load with qtbase 6.12.0 on Windows). It is not in the installers, the
+  AppImage or the disk image: the module `mitcad-webbrowser` (the window,
+  `ComponentBrowser`, on CEF), CEF's subprocess helper
+  (`mitcad-webbrowser-helper`; on macOS the helper apps `MitCad Browser
+  Helper.app` and its (GPU), (Renderer), (Plugin) and (Alerts) variants)
+  and CEF's runtime are a package of its own per platform
+  (`mitcad-browser-<version>-<platform>.zip`, with `component.json`:
+  `abi`, `version`, `cef`, `platform`, `module`, `executables`), listed
+  in the signed update manifest with its size, SHA-256, interface (ABI)
+  and a signature of its own (docs/updates.md, "The web browser
+  component"). `mitcad` links nothing of CEF and starts without it.
+- **First use.** Component from Web… with no component installed reads
+  the update manifest (the updates' address and release key,
+  `UpdateSource`), takes the package for this platform and this MitCad's
+  interface (`kComponentBrowserAbi`, `ComponentBrowserHost.hpp`; the
+  bridge's `update_browser_check`), and asks once: `Component from Web
+  needs MitCad's web browser component (the Chromium Embedded Framework
+  <version>), a download of <size>. Download it now?` Yes downloads it
+  (HTTPS only, with a progress dialog that cancels), verifies it against
+  the manifest (`update_verify_browser_download`: signature, size,
+  SHA-256), unpacks it into the user's application data folder
+  (`browser/<version>`, through `<version>.partial`), checks its
+  `component.json` against the manifest's entry and this MitCad's
+  interface, makes its helper executable, makes it the one in use
+  (`browser/current.json`) and opens the window. No: nothing happens,
+  and the next use asks again. Without a package for the platform, or
+  with packages only for other interfaces, MitCad says so (`Update
+  MitCad to use Component from Web.`).
+- **Interfaces.** A MitCad loads only a component of its own interface:
+  an installed one of another interface is replaced by a download of the
+  matching one (the message says why first); a module that answers
+  another interface than its `component.json` is refused with a message.
+- **Updates.** The component updates on its own cadence, whatever
+  MitCad's version: once a run, when the window first opens, MitCad reads
+  the manifest again and, when it lists a newer package of its
+  interface (and the manifest has not expired), downloads, verifies and
+  installs it beside the one in use, which this run keeps; the status
+  line says MitCad uses it from its next start. At start-up the versions
+  other than the one in use are removed, with a download's leftovers.
+- **The window** (`Component from Web`, not modal, one per design window
+  and ended with it; not kept above the design's window, so that the
+  design comes to the front for Move): Back, Forward, Reload, the address
+  field (an address without a scheme gets `https://`; what the user types is
+  never overwritten by the page's address changes: the field follows the
+  page again after the user's own navigation, Escape or leaving it
+  unedited, and shows the start page as empty), **Sites** and the
+  page. The first open, and an empty address, shows a start page that
+  explains adding a site and lists the sites there are as links.
+- **The browser** (`webbrowser/cef/CefView.cpp`, `CefEngine.cpp`): CEF
+  started once for the process from the component's folder, its message
+  loop run from Qt's (external message pump: CEF's browser thread is
+  Qt's main thread), each browser windowless (off-screen): the page is
+  painted from `CefRenderHandler::OnPaint`'s software buffer into the
+  widget (never a GPU texture: CEF runs with `--disable-gpu
+  --disable-gpu-compositing`, as VMs and test sessions have no GPU), and
+  the widget's mouse, wheel, keys, input method (composition and commit),
+  clipboard (Paste types Qt's clipboard text; Copy, Cut, Select All,
+  Undo and Redo are the page's own commands) and cursor shapes are
+  forwarded. No native child window, so Wayland and macOS need no native
+  embedding (on macOS the module adds CEF's application protocol to Qt's
+  NSApplication). Links that open another window open in this one; CEF's
+  own context menu is left out. CEF ends as MitCad ends, its browsers
+  closed first.
+- **Sites** (the button's menu): the user's sites, each opening its base
+  URL; **Add This Page…** and **Edit Sites…** (a list of names and
+  addresses edited in place, Add and Remove); **Clear Browsing Data…**
+  (asks, then removes the cookies and site sign-ins, HTTP authentication
+  and the cache; the sites stay). The sites are kept in the settings
+  (`componentBrowser/sites`, JSON `[{"name", "url"}]`); none are bundled.
+- **Browsing data.** A request context of MitCad's own (CEF's
+  `root_cache_path` the user's application data folder's `web`,
+  `MITCAD_WEB_PROFILE_DIR` for tests; the context's cache `web/MitCad`,
+  session cookies kept) keeps cookies, so that a site's sign-in lasts
+  between runs, apart from any other browser's. One running MitCad uses
+  it at a time: another MitCad's browser does not start while one runs.
+- **Downloads.** Only files MitCad imports, by extension
+  (`webbrowser/ComponentWebFiles.cpp`, `checkWebFileName`): STEP, IGES,
+  BRep, STL, OBJ and `.mitcad` as components; the formats that open as a
+  design of their own (`.f3d`, `.f3z`, `.FCStd`, `.ipt`, `.iam`, `.ifc`,
+  `.rvt`, `.solidcraft`, `.dwg`) open as File › Open opens them; `.zip`.
+  Anything else is refused before it downloads (`CefDownloadHandler`:
+  never continued, and canceled), with a note under the page that names
+  its type (`MitCad cannot import PDF documents (.pdf).`; DXF and SVG
+  drawings come in through Insert DXF and Insert SVG; 3MF has no import
+  of its bodies). An accepted download goes, without a save dialog, into
+  a folder of its own under MitCad's temporary folder
+  (`mitcad-web-downloads/run-<pid>-<time>/d<n>` in the system's temporary
+  folder, `MITCAD_WEB_DOWNLOADS_DIR` for tests), its progress under the
+  page. Then its first bytes are checked where that is cheap
+  (`checkWebFileContent`): a STEP file starts with `ISO-10303-21`, a zip
+  with its signature, and a web page (a site's sign-in page under the
+  file's name) or a PDF is refused whatever its name.
+- **Import** (`MainWindow::importWebDownload`), as Insert does it, one
+  undo step `Insert <file>`: a new component of the active one, named
+  after the file without its extension, holding the file's bodies
+  (`create_component`, `import_file` in it, a STEP assembly's parts as
+  components inside it; a mesh in millimeters), or a `.mitcad` design as
+  a copy (`insert_component`, `link` false); then the component's
+  property `Identity/Part number` (`set_property`): the name's first part
+  up to the first `_` or space, when that looks like a part number
+  (letters and digits, at least one digit; `webPartNumber`):
+  `6494K13_NO THREADS_Bearing.step` is the component
+  `6494K13_NO THREADS_Bearing` with Part Number `6494K13`. The parts list
+  (`parts_list`, the Bill of Materials) shows a component's own stored
+  `Part number` when it is no library or BUILD part. Both can be edited
+  after. The design's window comes to the front and **Move/Copy**
+  starts with the new occurrence selected, so that it can be placed. While
+  a command is open the import is refused (`Finish or cancel the open
+  command first.`).
+- **Zips** (`zip_list`, `zip_extract` of the bridge,
+  `core/ffi/src/web_downloads.rs`, through `mitcad-zip`, asked of the
+  application by the module, `ComponentBrowserHost`): the files of the
+  formats above are unpacked into the download's folder (`unpacked/`;
+  entry paths that would leave it are left out) and listed with their
+  sizes in **Files in <zip>** (check boxes; **Import** brings in those
+  checked, each as above); a zip with one such file imports it at once,
+  one with none says so.
+- **Temporary files.** A download's folder is removed as soon as its
+  import has read it (the component keeps its own copy, as Insert's does);
+  a design of its own still being imported keeps its file until the
+  window ends. The run's folder goes with the window and as MitCad ends;
+  at the next start the folders of earlier runs that no running MitCad
+  holds (a lock file of the run's) are removed (`WebDownloadFolders`,
+  `app/main.cpp`).
+- **The module's interface** (`ComponentBrowserHost.hpp`): the module
+  links Qt and CEF only and asks the application for the import, the
+  bridge's zip reader, MitCad's dialogs, menus, window sizes and colors,
+  and its folders; its entry points `mitcad_component_browser_abi` and
+  `mitcad_create_component_browser` (which starts CEF). On Windows the
+  component's folder is the DLL directory while the module loads
+  (`BrowserModuleLoad.cpp`), elsewhere its run path finds CEF beside it.
+- **Logs:** `Component from Web: reading the update manifest <url>`,
+  `Component from Web: downloading the web browser component <url> (<n>
+  bytes)`, `Component from Web: installed the web browser component
+  <version> (CEF <version>) in <folder>`, `Component from Web: loaded
+  <module> (component <version>, CEF <version>)`, `Component from Web: the
+  download of the web browser component was declined` (`canceled`),
+  `Component from Web: the web browser component <version> is current`,
+  `Component from Web: the update of the web browser component failed:
+  <reason>`, `Component from Web: the browser module did not load:
+  <reason>`, `Component from Web: removed 1 earlier web browser
+  component(s)` (at start-up), `Component browser: CEF <version> started
+  from <folder>, profile <folder>`, `Component browser: CEF ended`,
+  `Component browser opened: 0 site(s)`, `Component browser open: <url>`,
+  `Component browser page: <url> (3 links)` (each page loaded, its links
+  counted by a script whose answer comes back through the page's console),
+  `Component browser page failed: <url>`, `Component browser page error
+  <code> (<text>): <url>`, `Component browser sites: <name> <<url>> | …`
+  (or `none`), `Component browser: browsing data cleared`, `Component
+  browser download: <file> from <url>`, `Component browser downloaded
+  <file> (<n> bytes)`, `Component browser download of <file> canceled`
+  (`failed: <reason>`), `Component browser refused <file> from <url>:
+  <note>` (by name) and `Component browser refused <file>: <note>` (by
+  content), `Component browser zip <zip>: 2 file(s) MitCad imports:
+  pins/a.step (1234 bytes) | pins/b.step (2345 bytes); 1 other(s)`,
+  `Component browser zip picked: pins/b.step` (each change of the check
+  boxes, `none`), `Component browser zip <zip>: nothing imported`,
+  `Component from Web: inserted <file> as component <name> (C1,
+  occurrence O1, 1 body(ies)), part number 6494K13` (or `none`),
+  `Component from Web: <file> opens as a design of its own`, `Component
+  from Web: Move did not start for <name>`, `Component browser could not
+  import <file>: <reason>`, `Component browser removed the temporary
+  files of <file>`, `Component browser: removed 2 earlier run(s)'
+  downloads` (at start-up), `Component browser closed`.
+- **Test step** (`framework/TestDriver.cpp`): `invoke-widget <object name>
+  <method> [<text>]` calls a named widget's invokable method (the target
+  window's own name too), with one text or none: `invoke-widget
+  componentBrowser clickLink 'Bearing'` clicks the page's first link whose
+  text or address contains the text: the link scrolled into sight and a
+  real mouse click sent at its middle, which the page takes as the user's
+  gesture (a script's click is none, and Chromium blocks a site's second
+  download without one) (`Component browser followed <url>`,
+  `Component browser: no link with <text>`). Each navigation and load is
+  logged: `Component browser navigates to <url> (a user's gesture|no
+  gesture[, redirected])`, `Component browser loading: yes|no`,
+  `Component browser load end <url> (status <code>)`, and each download's
+  `Component browser download <id>: continued into <path>` (or `not
+  continued (refused)`) and `Component browser download <id>: in
+  progress|complete|canceled|interrupted, <n> of <total> bytes[, <reason>],
+  <path>` (each state and tenth).
+- **Variables:** `MITCAD_BROWSER_COMPONENT_DIR` (a component's folder used
+  as it is, never updated or downloaded: a build's
+  `<build>/browser-component`, the UI tests'),
+  `MITCAD_BROWSER_COMPONENTS_DIR` (where components are installed, for
+  tests), `MITCAD_WEB_PROFILE_DIR`, `MITCAD_WEB_DOWNLOADS_DIR`; the
+  manifest's address and keys are the updates' (`MITCAD_UPDATE_URL`,
+  `MITCAD_UPDATE_TEST_KEY` in a test build, docs/updates.md).
+- **Tests:** `app.ui-<platform>-component-web`
+  (`tools/ui-component-web-test.py`, macOS through
+  `tools/ui-macos-component-web-test.sh`; where the build made the
+  component, which the test uses from the build tree, no download): a
+  small HTTP server of the test's own serves a page with links to
+  `6494K13_NO THREADS_Bearing.step`, a zip of two STEP files and a text
+  file, and a PDF, each sent as an attachment. The STEP comes in as the
+  component `6494K13_NO THREADS_Bearing` with Part Number `6494K13` and
+  Move started; the zip lists its two STEP files, and the second,
+  checked, is the one brought in (Part Number `PB200`); the PDF is
+  refused with its note; each import is one undo step, and no temporary
+  file is left. `app.browser_component_flow`
+  (`tests/browser_component_flow.cpp`): the first use with a local
+  manifest and package signed by `mitcad-release` with a test key: the
+  offer, the verified package installed and in use, its helper
+  executable, nothing newer offered after; another interface, another
+  platform, a tampered package, a manifest of another key and a package
+  of another interface refused, nothing of them left. `app.unit`
+  (`tests/component_web_files.cpp`): the part-number rule, the name, the
+  format filter by name and by content, typed addresses, the sites'
+  settings and the temporary folders; (`tests/browser_component.cpp`)
+  component.json, the component in use (current.json, a build's folder),
+  old versions removed, the manifest's offers, an unpacked package
+  against the offer and the interface, the messages. `core.update`
+  (`tests.rs`): browser packages signed, picked by interface and version,
+  verified, and refused when tampered, of another key or invalid; a
+  manifest with them read by a MitCad that does not know them.
+  `core.model.assembly`
+  (`a_components_own_part_number_is_its_parts_list_part_number`).
+
 ## See-through previews without a triangle pattern (mitcad#1575)
 
 A command's new bodies (`BodyDisplay::Style::New`), its tool overlays
@@ -17450,3 +17804,85 @@ where they were drawn after them.
   (`preview-back-faces draw`, logged `both sides drawn`) is measured and
   logged only (Mesa's software renderer shows no pattern there), then the
   fix is back on and smooth again.
+
+## Enter repeats the last command (mitcad#1620)
+
+- **What:** Enter is the window's OK action (`MainWindow::m_confirmAction`,
+  Return and Enter). While a command runs it commits it, in a sketch it
+  confirms what the sketch tool waits for (`SketchController::confirm`);
+  outside commands and sketches (the window's mode Idle), Enter starts
+  the last command (`m_lastCommand`) as the view's context menu's Repeat
+  does, when that command is available now (its registry action enabled,
+  `MainWindow::repeatableCommand`). Not in a sketch: there Enter ends a
+  tool's step, and pressed once more after it must do nothing (a model
+  command such as Extrude would even finish the sketch;
+  `tools/ui-sketch-field-keyboard-test.sh` presses Enter after a tool
+  ended). Esc cancels it as any
+  command. Logged `Repeat Extrude (Enter)` (and `repeat <id>` among the
+  error report's recent actions), then the command's own `Command
+  Extrude started`.
+- **Where Enter keeps its meaning:** while the widget with the keyboard
+  focus takes Enter itself (`framework/EnterRepeat`, `focusTakesEnter`: a
+  text or number field, a rename's editor, a drop-down list, a list or
+  tree such as the browser and the Projects panel, a button), the action
+  is disabled outside commands and sketches, so the key reaches that
+  widget; `MainWindow::updateConfirmEnabled` follows the mode, the last
+  command and every focus change (`QApplication::focusChanged`). A
+  command's panel keeps Enter as OK, as before. After a command the 3D
+  view has the focus (`onCommandFinished`), so Enter repeats at once.
+- **Tests:** `tools/ui-enter-repeat-test.sh` (both layouts: Extrude by E,
+  Enter in its Distance field is OK; Enter with no command repeats
+  Extrude, Esc cancels it; Enter in a browser rename repeats nothing) and
+  `app/tests/menu_bar.cpp` (`app.unit`: the widgets that take Enter).
+
+## The hidden menu bar (mitcad#1620)
+
+- **The setting:** Preferences › Display › **Show the menu bar** (Alt+E,
+  object name `menuBarVisible`; `view/menuBar`, shown by default; Windows
+  and Linux only, `MenuBarSettings::offered`: on macOS the system's menu
+  bar has the menus, and the Display page keeps its own Show the menu bar
+  in the window there). Saved at once on OK (`MenuBarSettings::saveShown`,
+  logged `Preferences: menu bar hidden` or `shown`) and applied at once
+  to every window (`MenuBarNotifier`). The command search finds it as
+  "menu bar".
+- **Hidden:** `framework/MenuBarReveal` keeps the watched menu bars (each
+  design window's own, `MainWindow::createMenus`, and a document frame's,
+  which shows the active design's menus above its tabs) no higher than
+  nothing (their maximum height 0) rather than hidden: Qt takes the
+  shortcuts of a hidden menu bar's menus away (a hidden widget's
+  shortcuts do not match), so the commands' keys and the menus' mnemonics
+  would stop working. The 3D view then starts that much higher, in either
+  layout.
+- **The ☰ button** (`MenuBarButton`, the icon `menu`, object name
+  `menuBarButton`): shown only while the bar is hidden, at the left of
+  the Floating title row before Undo and Redo (`TitleBar::setMenuButton`,
+  a capsule of its own, the row part `titleMenu`), and first in the Docked
+  toolbar, before Undo and Redo. A click opens a menu of the menu bar's
+  own menus as submenus (File, Edit, View, Tools, Window, Help: the same
+  actions, read as the menu opens). Logs `Menu bar button at x,y`,
+  `Context menu: File | Edit | View | Tools | Window | Help` and, as one
+  of them opens from it, `Context menu File: New Design… | Open… | …`.
+- **Alt:** while the bars are hidden, an event filter on the application
+  (`MenuBarReveal::eventFilter`) shows the active window's bar for its
+  menus. Alt pressed and released with nothing else between (no key, no
+  click, no wheel: Alt with the mouse orbits or clicks) shows it; where
+  the style goes to the menu bar on Alt itself
+  (`SH_MenuBar_AltKeyNavigation`: Qt's portable style on Linux, the
+  Windows styles), Qt then gives the shown bar the keyboard with an entry highlighted, as with
+  a shown bar, and elsewhere its first menu opens. While the shown bar has
+  the keyboard, Esc is the bar's (it leaves the bar; accepted at its
+  `ShortcutOverride`), not the window's Cancel. Alt with a menu's
+  mnemonic (Alt+F) shows the bar first, at its `ShortcutOverride`, and
+  the mnemonic opens that menu under its entry. The bar is laid out at
+  once (`QLayout::activate`). It hides again once no menu of it is open
+  and it has neither the keyboard nor the pointer (a command chosen, Esc,
+  a click elsewhere). Logs `Menu bar shown (Alt)`, `Menu bar shown
+  (Alt+F)`, `Menu bar File opened` (a menu of the shown bar) and `Menu
+  bar hidden again`. The menus therefore stay
+  reachable with the quick-access group hidden too.
+- **Tests:** `tools/ui-menu-bar-test.sh` (both layouts, the quick-access
+  group hidden: the setting cleared, saved and applied, the view moved up
+  by the bar's height, the ☰ button (Floating: before Undo and Redo)
+  opening File, Alt and Alt+F showing the bar and Esc hiding it, the
+  setting checked again) and `app/tests/menu_bar.cpp` (`app.unit`: the
+  setting, a watched bar's height, the menus' names in the logs).

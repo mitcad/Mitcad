@@ -1,0 +1,22 @@
+[
+  {"comment": "Animated USDZ export (mitcad#1597), headless: two extruded boxes in a new document, Body1 40 x 20 x 20 at x 0..40 (F1, F2) and Body2 20 x 20 x 20 at x 60..80 (F3, F4). The export moves Body2 over three frames at 24 frames per second: where it is, 10 mm up, then turned a quarter about Z through its middle (70, 10) and 20 mm up; Body1 stays. The file is two_boxes.usdz in the working directory (tools/usdz-check/two-boxes.json lists its samples for OpenUSD's reading)."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [60, 0], "width": 20, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F3", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"expect": {"bodies": 2, "body": "Body2", "volume": 8000}},
+  {"cmd": "export", "path": "two_boxes.usdz", "refinement": "low",
+   "animation": {"fps": 24, "tracks": [{"body": "Body2", "transforms": [
+     [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]],
+     [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 10]],
+     [[0, -1, 0, 80], [1, 0, 0, -60], [0, 0, 1, 20]]]}]}},
+  {"comment": "The export moved nothing in the document."},
+  {"expect": {"body": "Body2", "bbox": {"min": [60, 0, 0], "max": [80, 20, 20]}, "tolerance": 1e-3}},
+  {"expect": {"body": "Body1", "bbox": {"min": [0, 0, 0], "max": [40, 20, 20]}, "tolerance": 1e-3}}
+]

@@ -485,6 +485,11 @@ target_sources(mitcad PRIVATE
   commands/ExtrudeDragProxy.cpp
   commands/ExtrudeDragProxy.hpp
   view/ProvisionalMesh.cpp)
+# The view's lines from detached copies of the edges, cut finely
+# (mitcad#1633): bodies, highlights, the hover, sketch curves.
+target_sources(mitcad PRIVATE
+  view/ViewEdges.cpp
+  view/ViewEdges.hpp)
 # A dragged Move/Copy's bodies or components follow the handle at once
 # (mitcad#838): their meshes moved, the exact preview after the drag.
 target_sources(mitcad PRIVATE
@@ -943,6 +948,12 @@ if(BUILD_TESTING)
   target_link_libraries(test_view_tessellation PRIVATE mitcad_geometry_io mitcad_geometry TKV3d TKPrim TKBO mitcad_warnings)
   add_test(NAME app.view_tessellation COMMAND test_view_tessellation
     "${CMAKE_CURRENT_BINARY_DIR}/view-tessellation-files")
+  # The view's lines (mitcad#1633): detached copies of a body's edges cut
+  # finely, the body's own edges unwritten, a highlight's copy the body's.
+  add_executable(test_view_edges tests/view_edges.cpp view/ViewEdges.cpp)
+  target_include_directories(test_view_edges PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(test_view_edges PRIVATE mitcad_geometry_io mitcad_geometry TKV3d TKPrim TKBO mitcad_warnings)
+  add_test(NAME app.view_edges COMMAND test_view_edges)
   # A dragged Extrude's preview meshes on the synthetic 83-hole fixture
   # (mitcad#635): the model's commands and the preview job's meshing,
   # without a window; `--bench` times them.
@@ -1310,7 +1321,71 @@ target_sources(mitcad PRIVATE framework/Language.cpp framework/Language.hpp)
 if(BUILD_TESTING)
   target_sources(test_app PRIVATE tests/language.cpp framework/Language.cpp framework/Language.hpp)
 endif()
+# The model's messages in the interface language (mitcad#1284): matched to
+# their templates (ModelMessageTemplates.cpp, generated from core/ by
+# tools/translations) and translated in the context ModelMessage.
+target_sources(mitcad PRIVATE framework/ModelMessages.cpp framework/ModelMessages.hpp
+               framework/ModelMessageTemplates.cpp)
+if(BUILD_TESTING)
+  # The matching, the values, the English fallback, and the catalogues: every
+  # template translated in Finnish and in the pseudo-language.
+  target_sources(test_app PRIVATE tests/model_messages.cpp framework/ModelMessages.cpp framework/ModelMessages.hpp
+                 framework/ModelMessageTemplates.cpp)
+endif()
 include("${PROJECT_SOURCE_DIR}/cmake/Translations.cmake")
+
+# Insert › Component from Web (mitcad#1579, GitHub mitcad/Mitcad#191,
+# app/COMMANDS.md "Component from Web"): an embedded browser with the user's
+# own sites whose downloads of the formats MitCad imports, and zips of them,
+# come into the design as components. The browser is the Chromium Embedded
+# Framework (CEF, BSD-3-Clause, with Chromium's components under their
+# licences), in the web browser component: the module mitcad-webbrowser, its
+# subprocess helper and CEF's runtime, a package of its own per platform that
+# MitCad downloads on first use and verifies with the release key; never
+# part of the installers, the AppImage or the disk image. mitcad links
+# nothing of CEF and starts without the component. What MitCad decides
+# without the browser (the format filter, the name and part number, the
+# sites, the temporary folders, the component's installation and checks)
+# is in mitcad itself; the component is built by
+# app/webbrowser/CMakeLists.txt, a directory of its own, where a CEF
+# distribution is.
+target_sources(mitcad PRIVATE
+  webbrowser/BrowserComponent.cpp
+  webbrowser/BrowserComponent.hpp
+  webbrowser/BrowserComponentDownload.cpp
+  webbrowser/BrowserComponentDownload.hpp
+  webbrowser/BrowserComponentInstall.cpp
+  webbrowser/BrowserComponentInstall.hpp
+  webbrowser/BrowserModuleLoad.cpp
+  webbrowser/BrowserModuleLoad.hpp
+  webbrowser/ComponentBrowserHost.hpp
+  webbrowser/ComponentWebFiles.cpp
+  webbrowser/ComponentWebFiles.hpp
+  webbrowser/MainWindowComponentWeb.cpp)
+if(BUILD_TESTING)
+  # The part-number rule, the format filter, the sites and the temporary
+  # folders; the installed component, its interface, the manifest's offer:
+  # plain Qt Core.
+  target_sources(test_app PRIVATE tests/component_web_files.cpp webbrowser/ComponentWebFiles.cpp
+                 webbrowser/ComponentWebFiles.hpp files/FileFormats.cpp files/FileFormats.hpp
+                 tests/browser_component.cpp webbrowser/BrowserComponent.cpp webbrowser/BrowserComponent.hpp)
+endif()
+# The first use with a local manifest (mitcad#1579): a package and a manifest
+# signed by mitcad-release with a test key, checked, verified, unpacked and
+# installed through the bridge; a tampered package and another interface
+# refused.
+if(BUILD_TESTING AND TARGET mitcad-release)
+  add_executable(test_browser_component_flow tests/browser_component_flow.cpp webbrowser/BrowserComponent.cpp
+    webbrowser/BrowserComponent.hpp webbrowser/BrowserComponentInstall.cpp webbrowser/BrowserComponentInstall.hpp)
+  target_include_directories(test_browser_component_flow PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(test_browser_component_flow PRIVATE Qt6::Core Qt6::Gui mitcad_ffi mitcad_warnings)
+  add_dependencies(test_browser_component_flow mitcad-release)
+  add_test(NAME app.browser_component_flow
+    COMMAND test_browser_component_flow "$<TARGET_FILE:mitcad-release>")
+  set_tests_properties(app.browser_component_flow PROPERTIES TIMEOUT 120
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
+add_subdirectory(webbrowser)
 
 if(APPLE)
   # Configure the bundle after its render worker exists, so its
@@ -2914,4 +2989,17 @@ if(BUILD_TESTING)
   # Two close parallel lines, a line through a row, a text over it: plain
   # Qt Core.
   target_sources(test_app PRIVATE tests/sketch_glyph_rows.cpp sketch/GlyphRows.cpp sketch/GlyphRows.hpp)
+endif()
+
+# The hidden menu bar and Enter's repeat (mitcad#1620, app/COMMANDS.md "The
+# hidden menu bar", "Enter repeats the last command"): Preferences › Display
+# › Show the menu bar, the ☰ button before Undo and Redo, Alt showing the
+# bar for its menus; the widgets that take Enter themselves.
+target_sources(mitcad PRIVATE framework/MenuBarReveal.cpp framework/MenuBarReveal.hpp framework/EnterRepeat.cpp
+               framework/EnterRepeat.hpp)
+if(BUILD_TESTING)
+  # The setting, a watched bar's height, the menus' names and the focus:
+  # Qt Core, Gui and Widgets.
+  target_sources(test_app PRIVATE tests/menu_bar.cpp framework/MenuBarReveal.cpp framework/MenuBarReveal.hpp
+                 framework/EnterRepeat.cpp framework/EnterRepeat.hpp)
 endif()

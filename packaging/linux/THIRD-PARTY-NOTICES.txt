@@ -13,6 +13,11 @@ Qt's translations (usr/share/mitcad/translations/qtbase_*.qm)
   unchanged as Qt builds them; the texts of Qt's standard dialogs and buttons
   in MitCad's interface languages.
 
+The web browser of Insert > Component from Web (the Chromium Embedded
+Framework and Chromium) is not part of this distribution: MitCad downloads
+it on first use as a package of its own, which carries its own
+third-party notices.
+
 ICU (usr/lib/libicu*.so*, used by Qt)
   Licence: the Unicode licence (https://www.unicode.org/license.txt).
 

@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: MIT
+# The view's lines (mitcad#1633) on edge-mesh.json: a block 200 mm tall
+# (F1.b0) with a rounded upright edge of 4 mm (F2) and Sketch1 (F4) on a
+# plane on its top face, 200 mm from the origin, with a line and an arc
+# through (30, 20). The body's lines are drawn from detached copies of its
+# edges cut finely, whatever its size; its own edges get no 3D polygon
+# (mitcad#1553); a highlight of its edge lies on the polyline it is drawn
+# with; a sketch curve's highlight lies on the curve, zoomed in.
+#   1. The body shown: its circles and arcs in at least 20 segments a
+#      quarter turn, its edges unmeshed.
+#   2. The rounding's top edge picked (the pick places logged by Fillet's
+#      input, opened and closed) and zoomed in on: its highlight on the
+#      body's own copy.
+#   3. Sketch1 edited, looked at and fitted, its arc and line selected and
+#      the view zoomed in on (30, 20): both highlights on their curves
+#      within a pixel.
+# Run by tools/ui-edge-mesh-test.sh and, in the Windows build VM,
+# tools/ui-windows-edge-mesh-test.ps1.
+expect-ever 'View area'
+wait-idle
+
+# 1. The body's lines.
+expect-view-edges F1.b0 20
+expect-body-edges-unmeshed F1.b0
+command solid.fillet
+wait-log '^Pick places:' 30
+key Escape
+wait-idle
+
+# 2. The rounding's bottom arc zoomed in on, then selected. The whole
+# block's rounding is a few pixels wide: a click there hits a vertex or
+# the sketch on the top face, so the view zooms in over the arc's logged
+# pick place first and picks the arc when it is large.
+mark
+command solid.fillet
+wait-log '^Pick places:' 30
+key Escape
+wait-idle
+wheel-logged '^Pick edge F1[.]b0/E[{]F1:bottom[|]F2:fillet[(]' 12
+wait-idle
+wheel-logged '^Pick edge F1[.]b0/E[{]F1:bottom[|]F2:fillet[(]' 12
+wait-idle
+mark
+command solid.fillet
+wait-log '^Pick places:' 30
+key Escape
+wait-idle
+click-pick 'edge F1[.]b0/E[{]F1:bottom[|]F2:fillet[(][^ ]*[)][}] at'
+wait-log '^Selected: 1 edge' 30
+expect-view-edges F1.b0 20 1
+expect-body-edges-unmeshed F1.b0
+key Escape
+wait-idle
+
+# 3. Sketch1's arc and line selected, zoomed in on far from the origin.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F4 \(Sketch1\)' 30
+command view.look_at
+wait-log '^Look at sketch F4' 30
+command view.fit
+wait-log '^Fit: ' 30
+wait-idle
+sketch-click 37.0711 17.0711
+wait-log '^Selected: 1 ' 30
+sketch-click 25 22 ctrl
+wait-log '^Selected: 2 ' 30
+wheel 50 50 20
+wait-idle
+wheel 50 50 20
+wait-idle
+expect-sketch-highlights-on-curves 2
+expect-body-edges-unmeshed F1.b0
+key Escape
+wait-idle
+expect-never 'TestDriver: FAIL'

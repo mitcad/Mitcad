@@ -60,6 +60,11 @@ QString startInterfaceLanguage(const QString& option);
 // The code of the language in use ("en" before startInterfaceLanguage).
 QString interfaceLanguage();
 
+// Whether texts left untranslated are logged (MITCAD_LOG_UNTRANSLATED=1,
+// read by startInterfaceLanguage): the catalogues' `Untranslated:` lines
+// and the model's messages' (ModelMessages.hpp).
+bool logUntranslatedTexts();
+
 // The English source of a text the installed catalogue translated (a
 // command's name in the command search, which also finds the English
 // names); the text itself when it was not translated.

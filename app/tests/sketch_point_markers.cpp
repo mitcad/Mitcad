@@ -20,6 +20,7 @@
 #include <QPainter>
 #include <QPointF>
 #include <QPolygonF>
+#include <QString>
 
 namespace {
 
@@ -106,7 +107,7 @@ HighlightLayers splineSelected(bool dark) {
   HighlightLayers layers;
   QPolygonF path;
   path << QPointF(4.0, 20.5) << QPointF(40.5, 20.5) << QPointF(76.0, 20.5);
-  layers.strokes.push_back({path, kSelection, false});
+  layers.strokes.push_back({path, kSelection, false, Qt::SolidLine});
   for (const double x : {20.5, 40.5, 60.5}) {
     layers.markers.push_back({QPointF(x, 20.5), pointMarkerLook(PointState::Free, dark)});
   }
@@ -242,6 +243,66 @@ void imageTests() {
   CHECK(pointBallKey(kSelection, 1.0) != pointBallKey(kHover, 1.0));
 }
 
+// The lengths of the runs of pixels in `color` along row y, from x = from
+// to x = to.
+std::vector<int> runsAlong(const QImage& image, int y, int from, int to, const QColor& color) {
+  std::vector<int> runs;
+  int run = 0;
+  for (int x = from; x <= to; ++x) {
+    if (alike(image.pixelColor(x, y), color, 40)) {
+      ++run;
+    } else if (run > 0) {
+      runs.push_back(run);
+      run = 0;
+    }
+  }
+  if (run > 0) {
+    runs.push_back(run);
+  }
+  return runs;
+}
+
+void lineTypeTests() {
+  // A sketch curve's line type, its highlight's too (mitcad#1619).
+  CHECK(sketchCurvePenStyle(false, false) == Qt::SolidLine);
+  CHECK(sketchCurvePenStyle(true, false) == Qt::DashLine);
+  CHECK(sketchCurvePenStyle(false, true) == Qt::DashDotLine);
+  CHECK(sketchCurvePenStyle(true, true) == Qt::DashLine); // construction first, as the view draws it
+  CHECK(penStyleName(Qt::SolidLine) == QStringLiteral("solid"));
+  CHECK(penStyleName(Qt::DashLine) == QStringLiteral("dashed"));
+  CHECK(penStyleName(Qt::DashDotLine) == QStringLiteral("dash-dot"));
+  // A level 4 px highlight from x = 2 to 78, read along its middle row
+  // away from its ends.
+  const auto painted = [](Qt::PenStyle style) {
+    HighlightLayers layers;
+    QPolygonF path;
+    path << QPointF(2.0, 20.0) << QPointF(78.0, 20.0);
+    layers.strokes.push_back({path, kSelection, false, style});
+    QImage image = canvas(kLightBackground);
+    {
+      QPainter painter(&image);
+      painter.setRenderHint(QPainter::Antialiasing);
+      paintHighlightLayers(painter, layers);
+    }
+    return image;
+  };
+  // Solid: the selection's blue all along.
+  const std::vector<int> solid = runsAlong(painted(Qt::SolidLine), 20, 4, 72, kSelection);
+  CHECK(solid.size() == 1 && solid.front() == 69);
+  // Dashed: dashes 16 px long with gaps of the background between them,
+  // which the line's ends do not close.
+  const QImage dashedImage = painted(Qt::DashLine);
+  const std::vector<int> dashed = runsAlong(dashedImage, 20, 4, 72, kSelection);
+  CHECK(dashed.size() >= 3);
+  CHECK(std::all_of(dashed.begin(), dashed.end(), [](int run) { return run >= 10; }));
+  CHECK(runsAlong(dashedImage, 20, 4, 72, kLightBackground).size() >= 2);
+  // Dash-dot: long dashes and short dots between them.
+  const std::vector<int> dashDot = runsAlong(painted(Qt::DashDotLine), 20, 4, 72, kSelection);
+  CHECK(dashDot.size() >= 3);
+  CHECK(std::any_of(dashDot.begin(), dashDot.end(), [](int run) { return run <= 7; }));
+  CHECK(std::any_of(dashDot.begin(), dashDot.end(), [](int run) { return run >= 10; }));
+}
+
 } // namespace
 
 int sketchPointMarkersTests() {
@@ -250,5 +311,6 @@ int sketchPointMarkersTests() {
   orderTests();
   ballTests();
   imageTests();
+  lineTypeTests();
   return failures;
 }

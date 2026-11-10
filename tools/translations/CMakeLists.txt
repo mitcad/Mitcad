@@ -14,4 +14,8 @@ if(BUILD_TESTING)
            COMMAND mitcad-translations check "${PROJECT_SOURCE_DIR}/app/translations/languages.txt")
   # The scan and the pseudo-language on planted catalogues.
   add_test(NAME repo.translations-self-test COMMAND mitcad-translations --self-test)
+  # Every message template of core/'s Rust sources is in the generated list
+  # app/framework/ModelMessageTemplates.cpp, and so in the model_<code>.ts
+  # files, and none that is gone (mitcad#1284).
+  add_test(NAME repo.model-messages COMMAND mitcad-translations messages "${PROJECT_SOURCE_DIR}")
 endif()

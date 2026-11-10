@@ -75,6 +75,11 @@ public:
     int sketchEnterDepth = 0;
     int sketchRestoreMarker = -1;
     QString sketchOccurrence; // where sketch mode shows the sketch's component (mitcad#505)
+    // The document's revision as the sketch was entered (mitcad#1623): the
+    // same revision means nothing changed in it, so Esc leaves it; and
+    // whether Esc already said how to leave a changed one.
+    qint64 sketchEnterRevision = -1;
+    bool sketchEscHinted = false;
   };
 
   struct Snapshot {

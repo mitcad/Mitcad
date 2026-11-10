@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <optional>
 #include <vector>
 
@@ -1582,11 +1583,34 @@ std::string overflow_tangent(const Shape& body, const std::vector<int>& owner,
           if (std::abs(extreme) > touching || edge < 0) {
             continue;
           }
-          // (In plain words, mitcad#1327, mitcad#1613: the edge, the faces
-          // and the point are for the error's places, mitcad#1612.)
-          return "the chamfer reaches exactly to the far edge of the narrow face beside its edge: its contact "
-                 "touches that edge in a point, and the chamfer cannot be built there as a sound solid at this "
-                 "size";
+          // In plain words for the person (mitcad#1327, mitcad#1613); the
+          // chamfered edge, the far edge and the point where the contact
+          // touches it painted, and their names, the faces and the point
+          // for agents (mitcad#1612, mitcad#1617).
+          std::vector<std::string> beyond;
+          for (const int f : edge_faces.at(r)) {
+            if (f != n && !body.face_names(f).empty()) {
+              beyond.push_back(body.face_names(f).front());
+            }
+          }
+          const std::string& chamfered = body.edge_name(edge);
+          const std::string& far_edge = body.edge_name(r);
+          const std::vector<ErrorPlace> places{edge_place(chamfered), edge_place(far_edge), point_place(p)};
+          char touch[96];
+          std::snprintf(touch, sizeof touch, "(%.4g, %.4g, %.4g)", std::abs(p.X()) < 5.0e-5 ? 0.0 : p.X(),
+                        std::abs(p.Y()) < 5.0e-5 ? 0.0 : p.Y(), std::abs(p.Z()) < 5.0e-5 ? 0.0 : p.Z());
+          return placed_error(
+              "the chamfer reaches exactly to the far edge of the narrow face beside its edge: its contact "
+              "touches that edge in a point, and the chamfer cannot be built there as a sound solid at this "
+              "size",
+              "the chamfer of " + (chamfered.empty() ? std::string("an unnamed edge") : "edge " + chamfered) +
+                  " reaches exactly to the far edge " + (far_edge.empty() ? std::string("(unnamed)") : far_edge) +
+                  " of face " + (body.face_names(n).empty() ? std::string("?") : body.face_names(n).front()) +
+                  (beyond.empty() ? std::string() : " where face " + beyond.front() + " lies beyond it") +
+                  ", at " + touch +
+                  ": its contact touches that edge there, so that the face would end in a point; it cannot be "
+                  "built there as a sound solid at this size",
+              places);
         }
       }
     }

@@ -556,6 +556,17 @@ if(MITCAD_MESA_DIR)
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-pattern-options PROPERTIES TIMEOUT 300)
 
+    # Circular Pattern's Axis 2 (mitcad#1588): a cube about X and Z, its
+    # rows hidden until Axis 2 is picked, the 12 copies' places, the
+    # reopened panel with its second axis; every feature of a cubic lattice
+    # (tools/cli/tests/f4_pattern_lattice.json) opens in its panel.
+    add_test(NAME app.ui-windows-pattern-two-axes
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-pattern-two-axes-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-pattern-two-axes"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-pattern-two-axes PROPERTIES TIMEOUT 600)
+
     # The sketches a command shows for its time (mitcad#546): an edited
     # Extrude's hidden sketch shown, its square picked, hidden again after
     # OK and Cancel; a sketch shown by its light bulb stays; the saved
@@ -2031,6 +2042,19 @@ if(MITCAD_MESA_DIR)
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-view-mesh-writes PROPERTIES TIMEOUT 420)
 
+    # The view's lines (mitcad#1633): a body's round edges from fine
+    # detached copies of its edges, an edge's highlight on the body's
+    # polyline, a sketch's selected line and arc 200 mm from the origin on
+    # their curves zoomed in. The Linux test's shared input script
+    # (tools/ui-edge-mesh-test.sh).
+    add_test(NAME app.ui-windows-edge-mesh
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-edge-mesh-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-edge-mesh"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-edge-mesh PROPERTIES TIMEOUT 420)
+
     # A constraint symbol keeps clear of the curves (mitcad#1594): with two
     # close parallel lines, a click on the upper line's middle selects the
     # line, not the Parallel whose second symbol covered it, and both of its
@@ -2055,6 +2079,16 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-remove-dimension-name"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-sketch-remove-dimension-name PROPERTIES TIMEOUT 300)
+    # A sketch value editor's error goes when the editor closes, from the
+    # status line and the message band (mitcad#1621). The Linux test's
+    # shared input script (tools/ui-sketch-value-error-clears-test.sh).
+    add_test(NAME app.ui-windows-sketch-value-error-clears
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-value-error-clears-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-value-error-clears"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-value-error-clears PROPERTIES TIMEOUT 300)
     # New Project's Create as Local for Now (mitcad#1601): in a folder with
     # a file and a Cloud address that is not reached, the project is made
     # in the new subfolder, not in the folder itself; the test's folders are
@@ -2079,6 +2113,17 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-extrude-to-point"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-extrude-to-point PROPERTIES TIMEOUT 300)
+    # Esc leaves a sketch nothing was changed in, a new empty one taken
+    # back, and keeps a changed one open with a hint once (mitcad#1623).
+    # The Linux test's shared input script
+    # (tools/ui-sketch-esc-leaves-test.sh).
+    add_test(NAME app.ui-windows-sketch-esc-leaves
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-esc-leaves-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-esc-leaves"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-esc-leaves PROPERTIES TIMEOUT 300)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

@@ -129,6 +129,7 @@ enum class ColorRole {
   JointOrigin,
   PrintOverhang, // Print Analysis' categories: no status hues
   PrintThin,
+  PrintGap, // narrow gaps between bodies printed in place (mitcad#1519)
   RuleFrame, // configuration rule blocks (#808, #851): category hues with white text
   RuleName,
   RuleLiteral,

@@ -4,7 +4,8 @@
 //! topological name as it was assigned. It is found at the marker as a face
 //! appearance's face is, so it follows the body's edits, and it applies to
 //! every occurrence of the body. Setting and clearing it is an undo step
-//! that recomputes nothing.
+//! that recomputes nothing but print-shaped holes, whose roofs point away
+//! from it (mitcad#1515).
 //!
 //! The 3D print export turns the bodies onto it (`exchange/bed.rs`), and
 //! Print Analysis starts from it. A face that is gone or no longer planar
@@ -20,6 +21,7 @@ use serde_json::{Value, json};
 use super::{Document, ModelError, invalid};
 use crate::datum::DatumPlane;
 use crate::exchange::BodyKind;
+use crate::features::FeatureDef;
 use crate::features::geom_ref::GeomRef;
 use crate::features::renamed::faces_found;
 use crate::ids::BodyUid;
@@ -117,7 +119,8 @@ impl<K: Kernel> Document<K> {
     /// Sets the face of a body that lies on the print bed, a planar face of
     /// the body at the marker by its topological name (a body has one: it
     /// replaces another), or with None takes it away: one undo step, which
-    /// recomputes nothing, unless nothing changes.
+    /// recomputes nothing but print-shaped holes (mitcad#1515), unless
+    /// nothing changes.
     pub fn set_print_bed_face(
         &mut self,
         uid: BodyUid,
@@ -133,7 +136,12 @@ impl<K: Kernel> Document<K> {
         };
         let mut attributes = self.body_attributes(uid);
         attributes.print_bed_face = assigned;
-        self.set_attributes(uid, verb, attributes)
+        // Print-shaped holes take their roofs' direction from the bed
+        // (mitcad#1515): they are evaluated again, the rest stays.
+        let print_shaped = self.state.features.iter().any(
+            |entry| matches!(&entry.def, FeatureDef::Hole(hole) if !hole.print_shape.is_round()),
+        );
+        self.set_attributes_with(uid, verb, attributes, print_shaped)
     }
 
     /// The canonical name of a face that can lie on the bed, or why not: it

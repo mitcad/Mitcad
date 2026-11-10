@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "PartPicker.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -2253,7 +2254,7 @@ void PartPicker::readDesign() {
     m_grid->setUsedParts(m_readDesign());
   } catch (const std::exception& error) {
     qWarning().noquote() << QStringLiteral("Part picker: the design's parts not read: %1")
-                                .arg(QString::fromUtf8(error.what()));
+                                .arg(mitcad::modelMessage(error.what()));
   }
 }
 

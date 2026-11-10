@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "BrowserController.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -2010,7 +2011,7 @@ void BrowserController::deleteTargets(const QStringList& features, const QJsonAr
       }
     }
   } catch (const std::exception& e) {
-    m_host.showStatus(QString::fromUtf8(e.what()), NoticeLevel::Error);
+    m_host.showStatus(mitcad::modelMessage(e.what()), NoticeLevel::Error);
     return;
   }
   QStringList names, dependents, allNames;
@@ -2441,14 +2442,14 @@ void BrowserController::projectAgain(const QString& sketch) {
   QJsonObject result;
   if (!m_host.runModelCommand(cmd("sketch.project_again", {{QStringLiteral("sketch"), sketch}}), &result)) {
     qDebug().noquote() << QStringLiteral("Project Again refused: %1").arg(m_host.lastError());
-    m_host.showStatus(m_host.lastError(), NoticeLevel::Warning);
+    m_host.showStatus(mitcad::modelMessage(m_host.lastError()), NoticeLevel::Warning);
     return;
   }
   // "Project Again in Sketch2: done" or with what stays on the old curves
   // (the model's warnings), for the status line and UI tests.
   QStringList warnings;
   for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
-    warnings << warning.toString();
+    warnings << mitcad::modelMessage(warning.toString());
   }
   const DocumentSnapshot::Feature* feature = m_snapshot.feature(sketch);
   const QString name = feature != nullptr ? feature->name : sketch;
@@ -2737,7 +2738,7 @@ void BrowserController::openFind() {
         }
         return owners;
       } catch (const std::exception& e) {
-        *error = QString::fromUtf8(e.what());
+        *error = mitcad::modelMessage(e.what());
         return std::nullopt;
       }
     });
@@ -3269,7 +3270,7 @@ void BrowserController::editOptions(const QString& component, const QString& nam
           return m_host.model().queryObject(query);
         } catch (const std::exception& error) {
           return QJsonObject{{QStringLiteral("error"),
-                              QJsonObject{{QStringLiteral("message"), QString::fromUtf8(error.what())}}}};
+                              QJsonObject{{QStringLiteral("message"), mitcad::modelMessage(error.what())}}}};
         }
       },
       component, name, libraryTable, m_window);
@@ -3438,7 +3439,7 @@ void BrowserController::openReorient() {
   }
   ReorientDialog dialog([this](const QJsonObject& command,
                                QJsonObject* result) { return m_host.runModelCommand(command, result); },
-                        [this] { return m_host.lastError(); }, m_window);
+                        [this] { return mitcad::modelMessage(m_host.lastError()); }, m_window);
   prepareModal(&dialog);
   if (execDialog(&dialog) != QDialog::Accepted) {
     return;

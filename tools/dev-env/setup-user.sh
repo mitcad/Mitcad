@@ -84,6 +84,15 @@ fi
 for file in bin/lrelease bin/lupdate translations/qtbase_fi.qm; do
   [ -e "$HOME/Qt/$QT_VERSION/gcc_64/$file" ] || { echo "Qt $QT_VERSION has no $file" >&2; exit 1; }
 done
+# The Chromium Embedded Framework of the web browser component (Insert >
+# Component from Web, mitcad#1579): the pinned distribution, named in the
+# login profile as MITCAD_CEF_ROOT, which the build reads; its system
+# libraries come from install-packages.sh.
+echo "== CEF $CEF_VERSION"
+CEF_ROOT=$("$SCRIPT_DIR/fetch-cef.sh")
+touch "$HOME/.profile"
+sed -i '/^export MITCAD_CEF_ROOT=/d' "$HOME/.profile"
+echo "export MITCAD_CEF_ROOT=\"$CEF_ROOT\"" >> "$HOME/.profile"
 
 # Every build has the render worker (docs/rendering.md "Building"): Cycles
 # and Open Image Denoise, built once outside the build folders; re-running

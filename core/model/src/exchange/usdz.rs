@@ -18,18 +18,23 @@
 //!   their own are subsets with theirs. A texture's image goes into the
 //!   package and the meshes get texture coordinates from its projection,
 //!   as the rendered view projects it.
+//! - With an animation (mitcad#1597, `usdz_animation`), the occurrences'
+//!   `Xform`s and the bodies' meshes it moves get time-sampled placements;
+//!   the meshes are written once.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use mitcad_usdz::{Image, Material, Mesh, Node, Placement, Scene, Subset, TexCoords};
-use mitcad_vec3::{cross, sub};
+use mitcad_vec3::{cross, dot, sub};
 
-use super::{BodyKind, Exported, MeshTolerance, invalid, kernel_error};
+use super::usdz_animation::{MeshPlaces, UsdzAnimation};
+use super::{BodyKind, Exported, FaceMeshes, MeshTolerance, invalid, kernel_error};
 use crate::appearance::{Appearance, Projection, Texture, image_format};
-use crate::document::{BodyView, Document, InstanceView, ModelError};
+use crate::document::{BodyView, Document, InstanceView, ModelError, PrintColors};
 use crate::ids::{BodyUid, OccurrenceUid};
 use crate::kernel::Kernel;
+use crate::print_changes::{Bands, band_mesh};
 use crate::transform::Transform;
 
 /// An sRGB component in [0, 1] as linear light.
@@ -179,7 +184,8 @@ impl<K: Kernel> Document<K> {
     /// `instances` are the placements in the design's coordinates (within
     /// the occurrence asked for), none for the components' coordinates;
     /// `within_depth` the length of that occurrence's path (0 without one);
-    /// `all` when all bodies are written.
+    /// `all` when all bodies are written; `animation` the time-sampled
+    /// placements (mitcad#1597), checked here against what is written.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn export_usdz(
         &self,
@@ -191,6 +197,8 @@ impl<K: Kernel> Document<K> {
         instances: Option<&[InstanceView]>,
         within_depth: usize,
         folder: Option<&Path>,
+        animation: Option<&UsdzAnimation>,
+        print_colors: bool,
     ) -> Result<Exported, ModelError> {
         let mut exported = Exported::default();
         let mut materials = Materials::default();
@@ -201,6 +209,9 @@ impl<K: Kernel> Document<K> {
         let mut root = Node::new(name);
         // Nodes by occurrence path, made as placements need them.
         let mut nodes: BTreeMap<Vec<OccurrenceUid>, Node> = BTreeMap::new();
+        // Where each body's meshes go (mitcad#1597): the node's path and
+        // the mesh's index in it.
+        let mut mesh_places = MeshPlaces::new();
         for body in chosen {
             let attributes = self.body_attributes(body.uid);
             if all && !attributes.visible {
@@ -265,6 +276,48 @@ impl<K: Kernel> Document<K> {
                 .map_err(|e| invalid(super::body_failure(&body.name, body.uid, &e)))?;
             if faces.triangles.is_empty() {
                 return Err(invalid(format!("{} has no triangles", body.name)));
+            }
+            // Print colours by height (mitcad#1596): a mesh per placement,
+            // cut where its filament changes.
+            if print_colors {
+                let places = mesh_places.entry(body.uid).or_default();
+                for occurrences in paths {
+                    let transform = instances
+                        .and_then(|all| {
+                            all.iter()
+                                .find(|i| i.body == body.uid && i.path == occurrences)
+                        })
+                        .map_or(Transform::IDENTITY, |i| i.transform);
+                    let at = instances.map(|_| occurrences.as_slice());
+                    let colors = self.print_colors(body.uid, at, &transform);
+                    for note in &colors.notes {
+                        let note = format!("{}: {note}", body.name);
+                        if !exported.warnings.contains(&note) {
+                            exported.warnings.push(note);
+                        }
+                    }
+                    let mesh = print_color_mesh(
+                        &body.name,
+                        &faces,
+                        &transform,
+                        &colors,
+                        kind == BodyKind::Sheet,
+                        &mut materials,
+                    );
+                    // Where it goes, for the animation's samples
+                    // (mitcad#1597).
+                    let node = if occurrences.is_empty() {
+                        &mut root
+                    } else {
+                        nodes
+                            .entry(occurrences.clone())
+                            .or_insert_with(|| Node::new(""))
+                    };
+                    places.push((occurrences, node.meshes.len()));
+                    node.meshes.push(mesh);
+                }
+                exported.bodies.push(body.uid);
+                continue;
             }
             // The body's material, and those of faces of their own.
             let fallback = || {
@@ -349,17 +402,19 @@ impl<K: Kernel> Document<K> {
                 double_sided: kind == BodyKind::Sheet,
                 material,
                 subsets,
+                samples: Vec::new(),
             };
+            let places = mesh_places.entry(body.uid).or_default();
             for occurrences in paths {
-                if occurrences.is_empty() {
-                    root.meshes.push(mesh.clone());
+                let node = if occurrences.is_empty() {
+                    &mut root
                 } else {
                     nodes
-                        .entry(occurrences)
+                        .entry(occurrences.clone())
                         .or_insert_with(|| Node::new(""))
-                        .meshes
-                        .push(mesh.clone());
-                }
+                };
+                places.push((occurrences, node.meshes.len()));
+                node.meshes.push(mesh.clone());
             }
             exported.bodies.push(body.uid);
         }
@@ -377,6 +432,11 @@ impl<K: Kernel> Document<K> {
                     paths.push(parent);
                 }
             }
+        }
+        // The animation's samples (mitcad#1597), with every node in place.
+        if let Some(animation) = animation {
+            exported.animation =
+                Some(self.usdz_samples(animation, &mut root, &mut nodes, &mesh_places)?);
         }
         // Deepest first, so that a node has its children when it goes into
         // its parent; siblings in the order the occurrences were made.
@@ -408,11 +468,87 @@ impl<K: Kernel> Document<K> {
             materials: made,
             images,
             documentation: format!("MitCad {}", env!("CARGO_PKG_VERSION")),
+            animation: animation.map(|a| mitcad_usdz::Animation {
+                fps: a.fps,
+                times: a.times.clone(),
+            }),
         };
         let data = mitcad_usdz::write(&scene).map_err(|e| invalid(e.to_string()))?;
         std::fs::write(path, data).map_err(|e| invalid(format!("cannot write {path}: {e}")))?;
         exported.materials = names;
-        exported.warnings = warnings;
+        exported.warnings.extend(warnings);
         Ok(exported)
+    }
+}
+
+/// A placement's mesh in its print colours (mitcad#1596): the body's
+/// triangles cut at the layer boundaries of its filament changes, measured
+/// along its print direction from its lowest point
+/// ([`crate::print_changes::band_mesh`], as `model_render`'s print colours
+/// cut them), the first band in the mesh's material and each other band a
+/// subset with its filament's colour.
+fn print_color_mesh(
+    name: &str,
+    faces: &FaceMeshes,
+    transform: &Transform,
+    colors: &PrintColors,
+    double_sided: bool,
+    materials: &mut Materials,
+) -> Mesh {
+    let height = |p: [f64; 3]| dot(transform.apply_point(p), colors.up);
+    let (low, high) = faces
+        .vertices
+        .iter()
+        .map(|&p| height(p))
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), h| {
+            (lo.min(h), hi.max(h))
+        });
+    let bands = Bands::new(colors.start, &colors.changes, low, high);
+    let banded = band_mesh(
+        &faces.vertices,
+        &faces.normals,
+        &faces.triangles,
+        height,
+        &bands.cuts,
+    );
+    let ids: Vec<usize> = bands
+        .colors
+        .iter()
+        .map(|&c| {
+            let look = Appearance {
+                base_color: c,
+                ..Appearance::default()
+            };
+            let [r, g, b] = c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+            // A key no appearance id has (a space).
+            materials.of(&format!("print color {r:02x}{g:02x}{b:02x}"), &look, None)
+        })
+        .collect();
+    let subsets = (1..ids.len())
+        .filter_map(|b| {
+            let triangles: Vec<u32> = banded
+                .band
+                .iter()
+                .enumerate()
+                .filter(|(_, band)| **band == b)
+                .map(|(t, _)| t as u32)
+                .collect();
+            (!triangles.is_empty()).then(|| Subset {
+                name: format!("PrintColor_{b}"),
+                triangles,
+                material: ids[b],
+            })
+        })
+        .collect();
+    Mesh {
+        name: name.to_owned(),
+        points: banded.vertices,
+        normals: banded.normals,
+        triangles: banded.triangles,
+        tex_coords: None,
+        double_sided,
+        material: ids[0],
+        subsets,
+        samples: Vec::new(),
     }
 }

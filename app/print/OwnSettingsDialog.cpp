@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "OwnSettingsDialog.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <exception>
 #include <utility>
@@ -103,7 +104,7 @@ void OwnSettingsDialog::refresh() {
     }
     print = query();
   } catch (const std::exception& e) {
-    m_message->setText(m_keys.plainText(QString::fromUtf8(e.what())));
+    m_message->setText(m_keys.plainText(mitcad::modelMessage(e.what())));
     m_message->show();
     return;
   }
@@ -164,7 +165,7 @@ void OwnSettingsDialog::edit(const QString& key, const QJsonValue& value) {
     } else if (!m_host.lastCancelled()) {
       qDebug().noquote() << QStringLiteral("Own settings: %1 refused: %2").arg(key, m_host.lastError());
       refresh();
-      m_form->setError(key, m_keys.plainText(m_host.lastError()));
+      m_form->setError(key, m_keys.plainText(mitcad::modelMessage(m_host.lastError())));
       return;
     }
     refresh();

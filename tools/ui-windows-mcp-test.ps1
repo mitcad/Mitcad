@@ -309,8 +309,11 @@ foreach ($whole in @($false, $true)) {
 Write-Host '--- Clean Up Stale Projections and Finish Sketch through ui_command'
 $cleaned = Mcp-Tool 'ui_command' @{ document = $document; id = 'sketch.clean_up_stale_projections' }
 Mcp-Check ($cleaned.committed -eq $true) 'ui_command ran Clean Up Stale Projections' ($cleaned | ConvertTo-Json -Compress -Depth 10)
-Mcp-Check (@($cleaned.previews | Where-Object { $_.StartsWith('Preview Clean Up Stale Projections: ok, warning: 1 stale curve removed: c8') }).Count -ge 1) `
-  'the result has the preview and its warning' (@($cleaned.previews) -join ' / ')
+# The shown warning names no curves (mitcad#1612); the highlights line names
+# the one the clean-up removes.
+Mcp-Check ((@($cleaned.previews | Where-Object { $_.StartsWith('Preview Clean Up Stale Projections: ok, warning: 1 stale curve removed: a curve;') }).Count -ge 1) -and
+  (@($cleaned.previews | Where-Object { $_.StartsWith('Preview highlights: removed c8;') }).Count -ge 1)) `
+  'the result has the preview, its warning and the highlights' (@($cleaned.previews) -join ' / ')
 Mcp-Check (@($cleaned.log | Where-Object { $_.Contains('Cleaned up stale projections') }).Count -ge 1) 'the result has the log' (@($cleaned.log) -join ' / ')
 Mcp-Check ($cleaned.undo.EndsWith(' (agent)')) "the clean-up is the agent's in the undo text" $cleaned.undo
 $finished = Mcp-Tool 'ui_command' @{ document = $document; id = 'sketch.finish' }

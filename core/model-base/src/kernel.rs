@@ -2658,6 +2658,33 @@ pub struct HoleSpec<'a, S> {
     /// instead of the round one, along the whole hole with a flat bottom
     /// (`diameter`, `shape`, `tip_angle` and `taper` are then not used).
     pub press_fit: Option<HolePressFit>,
+    /// A print shape for holes whose axis lies parallel to the print bed
+    /// (mitcad#1515): their roof instead of the round wall's upper arc;
+    /// None for round holes.
+    pub print_shape: Option<HolePrintShape>,
+}
+
+/// The print shape of holes printed lying (mitcad#1515): over the hole's
+/// cylindrical part (a counterbore's or counterdrill's wider one too) the
+/// upper arc of its section gives way to two sides at 45 degrees to the
+/// roof's direction, tangent to the circle, that meet at a point the
+/// radius times the square root of 2 above the axis (a teardrop), or that a
+/// flat roof `flat_roof` above the circle cuts short (a roof above the
+/// point leaves the point). The lower arc keeps the diameter. Faces besides the round hole's: `hole<i>.roof0` and
+/// `hole<i>.roof1` (the sides, counterclockwise about the hole's direction
+/// after the wall), `hole<i>.roof` (the flat roof), `hole<i>.roof_end` (the
+/// roof's end where the cylindrical part ends: on a flat bottom, the
+/// bottom); a counterbore's `cbore_roof0`, `cbore_roof1`, `cbore_roof` and
+/// `cbore_roof_end`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HolePrintShape {
+    /// Per position, the roof's direction: a unit vector at right angles to
+    /// the hole's axis, away from the print bed; None leaves that hole
+    /// round.
+    pub roofs: Vec<Option<[f64; 3]>>,
+    /// A flat roof's height above the circle, its bridge's sag allowance
+    /// (greater than zero); None for a teardrop's point.
+    pub flat_roof: Option<f64>,
 }
 
 /// The section of a press-fit hole (mitcad#1517), swept from the start

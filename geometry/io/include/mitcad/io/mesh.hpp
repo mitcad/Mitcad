@@ -62,6 +62,9 @@ struct MeshOptions {
   // linearly with the points: a plane with 83 small holes (12 000 points
   // at the view's deviation) takes about 0.5 s, Delabella's 30 ms
   // (mitcad#635). The view's interactive preview tier (ViewTessellation.hpp).
+  // Tori go through Delabella's base triangulation whatever this says
+  // (mitcad#1624): the default's insertion left out many of a thin
+  // rounding's inside nodes and spanned triangles over the whole rounding.
   bool fast_planes = false;
   // With fast_planes: each plane's triangulation checked (mitcad#644). A
   // plane that Delabella leaves without one, or whose triangles' area

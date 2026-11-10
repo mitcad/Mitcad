@@ -57,6 +57,10 @@ pub use report::{
     BodyReport, CheckReport, FeatureReport, JointReport, Outcome, ParameterReport, SketchReport,
     SolidcraftReport,
 };
+// A design's file: its extensions (`.sc`, `.solidcraft`, `.solvecraft`)
+// and the format key check of a `.sc` file, which other programs use too
+// (mitcad#1622).
+pub use mitcad_solidcraft::{EXTENSIONS, check_file, has_design_extension};
 
 /// Import settings.
 #[derive(Debug, Clone, Default)]
@@ -249,10 +253,12 @@ impl<K: Kernel> Importer<'_, '_, K> {
         // Point clouds (format 43): references only, which MitCad keeps none of.
         let clouds = self.design.point_clouds.len();
         if clouds > 0 {
-            self.report.notes.push(format!(
-                "{clouds} point cloud{} (scanned reference points): not mapped",
-                if clouds > 1 { "s" } else { "" }
-            ));
+            // One and several as whole messages (mitcad#1284).
+            self.report.notes.push(if clouds == 1 {
+                "a point cloud (scanned reference points): not mapped".to_owned()
+            } else {
+                format!("{clouds} point clouds (scanned reference points): not mapped")
+            });
         }
         if let Some(position) = marker
             && let Err(e) = self.doc.set_marker(position)

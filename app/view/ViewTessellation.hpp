@@ -46,8 +46,11 @@ namespace mitcad {
 // with kViewInteriorAngle; and every face that is not a plane is held
 // within kViewFaceTriangles, a small one within a quarter of a triangle
 // per square of its deviation in its area
-// (io::MeshOptions::hold_face_triangles). The view's drawers draw their
-// curves with kViewCurveAngle (wireframe and free edges, as before). On
+// (io::MeshOptions::hold_face_triangles). The view's drawers draw the
+// curves that have no polyline with kViewCurveAngle; the lines of bodies,
+// highlights, the hover and sketches are not these meshes' polygons but
+// polylines of their own, cut finely and the same for every shape
+// (view/ViewEdges.hpp, mitcad#1633). On
 // the reporter's machine (mitcad-cli mesh-compare, the final tier): 780 000
 // triangles, the part above 35 000, meshed in 2.4 s.
 constexpr double kViewDeviation = 0.01;

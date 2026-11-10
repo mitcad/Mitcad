@@ -33,6 +33,7 @@
 #include "view/CameraHeight.hpp"
 #include "view/CameraTurn.hpp"
 #include "view/ViewCube.hpp"
+#include "view/ViewEdges.hpp"
 #include "view/ViewTessellation.hpp"
 #include "sketch/PointMarkers.hpp"
 #ifdef __APPLE__
@@ -106,6 +107,7 @@
 #include <Image_PixMap.hxx>
 #include <IntCurvesFace_ShapeIntersector.hxx>
 #include <ShapeAnalysis_Curve.hxx>
+#include <gp_Circ.hxx>
 #include <gp_Lin.hxx>
 #include <Graphic3d_ZLayerSettings.hxx>
 #include <NCollection_IndexedMap.hxx>
@@ -611,6 +613,26 @@ void setEdgeStyle(const occ::handle<AIS_Shape>& object, const Quantity_Color& co
   drawer->SetUnFreeBoundaryAspect(new Prs3d_LineAspect(color, type, width));
 }
 
+// A sketch curve's line type: dashed construction geometry, a dash-dot
+// centre line, else solid; its selection highlight's too (mitcad#1619).
+Aspect_TypeOfLine sketchLineType(bool construction, bool centerline) {
+  return construction ? Aspect_TOL_DASH : centerline ? Aspect_TOL_DOTDASH : Aspect_TOL_SOLID;
+}
+
+// A line type as the log names it.
+QString lineTypeName(Aspect_TypeOfLine type) {
+  switch (type) {
+  case Aspect_TOL_DASH:
+    return QStringLiteral("dashed");
+  case Aspect_TOL_DOTDASH:
+    return QStringLiteral("dash-dot");
+  case Aspect_TOL_DOT:
+    return QStringLiteral("dotted");
+  default:
+    return QStringLiteral("solid");
+  }
+}
+
 void setPointStyle(const occ::handle<AIS_Shape>& object, const Quantity_Color& color,
                    Aspect_TypeOfMarker marker, double scale) {
   object->SetColor(color);
@@ -833,10 +855,18 @@ QString seeThroughLook(const occ::handle<AIS_Shape>& object, bool culled) {
 
 occ::handle<AIS_Shape> makeBodyObject(const geometry::Shape& named, BodyDisplay::Style style, const QColor& color,
                                       const std::vector<BodyDisplay::FaceLook>& faceLooks, VisualStyle visual,
-                                      const QColor& paper, bool sectioned) {
+                                      const QColor& paper, bool sectioned,
+                                      const std::shared_ptr<const ViewEdges>& edges) {
   const TopoDS_Shape& shape = named.occt();
+  // Its lines from the copies of its edges where it has them (mitcad#1633).
+  const auto object = [&shape, &edges]() -> occ::handle<AIS_Shape> {
+    if (edges) {
+      return new FineEdges<AIS_Shape>(edges, shape);
+    }
+    return new AIS_Shape(shape);
+  };
   if (style == BodyDisplay::Style::New) {
-    occ::handle<AIS_Shape> body = new AIS_Shape(shape);
+    occ::handle<AIS_Shape> body = object();
     body->SetColor(kPreviewColor);
     behindSection(body, sectioned);
     body->SetTransparency(0.5);
@@ -844,7 +874,7 @@ occ::handle<AIS_Shape> makeBodyObject(const geometry::Shape& named, BodyDisplay:
   }
   if (style == BodyDisplay::Style::Tool || style == BodyDisplay::Style::CutTool) {
     // As the command's tool preview (setPreview), but pickable (mitcad#561).
-    occ::handle<AIS_Shape> body = new AIS_Shape(shape);
+    occ::handle<AIS_Shape> body = object();
     body->SetColor(style == BodyDisplay::Style::CutTool ? kCutPreviewColor : kPreviewColor);
     behindSection(body, sectioned);
     body->SetTransparency(0.5);
@@ -852,7 +882,7 @@ occ::handle<AIS_Shape> makeBodyObject(const geometry::Shape& named, BodyDisplay:
   }
   if (style == BodyDisplay::Style::Ghost) {
     // Faint enough to see and pick what lies behind (mitcad#147).
-    occ::handle<AIS_Shape> body = new AIS_Shape(shape);
+    occ::handle<AIS_Shape> body = object();
     body->SetColor(color.isValid() ? occtColor(color) : kBodyColor);
     behindSection(body, sectioned);
     body->SetTransparency(0.8);
@@ -861,8 +891,11 @@ occ::handle<AIS_Shape> makeBodyObject(const geometry::Shape& named, BodyDisplay:
   // Faces with appearances of their own (mitcad#53) in their colours, in
   // the shaded styles.
   const bool faceColors = !faceLooks.empty() && shadedFaces(visual);
-  occ::handle<AIS_ColoredShape> colored = faceColors ? new AIS_ColoredShape(shape) : nullptr;
-  occ::handle<AIS_Shape> body = faceColors ? occ::handle<AIS_Shape>(colored) : new AIS_Shape(shape);
+  occ::handle<AIS_ColoredShape> colored;
+  if (faceColors) {
+    colored = edges ? new FineEdges<AIS_ColoredShape>(edges, shape) : new AIS_ColoredShape(shape);
+  }
+  occ::handle<AIS_Shape> body = faceColors ? occ::handle<AIS_Shape>(colored) : object();
   body->SetColor(color.isValid() ? occtColor(color) : kBodyColor);
   // Before the faces' own colours: their aspects copy the body's.
   behindSection(body, sectioned);
@@ -889,11 +922,11 @@ occ::handle<AIS_Shape> makeBodyObject(const geometry::Shape& named, BodyDisplay:
     drawer->SetFaceBoundaryAspect(new Prs3d_LineAspect(kEdgeColor, Aspect_TOL_SOLID, 1.0));
     break;
   case VisualStyle::Wireframe: {
-    const Quantity_Color edges = wireColor(color);
-    setEdgeStyle(body, edges, 1.0);
+    const Quantity_Color wire = wireColor(color);
+    setEdgeStyle(body, wire, 1.0);
     // Edges only, no lines across the faces.
-    drawer->SetUIsoAspect(new Prs3d_IsoAspect(edges, Aspect_TOL_SOLID, 1.0, 0));
-    drawer->SetVIsoAspect(new Prs3d_IsoAspect(edges, Aspect_TOL_SOLID, 1.0, 0));
+    drawer->SetUIsoAspect(new Prs3d_IsoAspect(wire, Aspect_TOL_SOLID, 1.0, 0));
+    drawer->SetVIsoAspect(new Prs3d_IsoAspect(wire, Aspect_TOL_SOLID, 1.0, 0));
     break;
   }
   case VisualStyle::WireframeHiddenEdges:
@@ -934,13 +967,17 @@ bool hasAnyTriangulation(const TopoDS_Shape& shape) {
 // threads (an input copy walks each edge's curve records), and a
 // presentation that meshed one here added a 3D polygon to an edge's records
 // meanwhile (an edge highlight at the view's deviation): that damaged the
-// heap, and a join crashed later where memory was freed. A shape with no
-// faces is drawn from its curves, and one whose faces a job meshed (each
-// face triangulated, each edge with its polygon on it) from those meshes;
-// only a shape with a face left without a triangulation (a body no job
-// meshed, and the view's own sketch profiles and datum planes, which no
-// model thread reads: setProfiles, setDatums, mitcad#1586) is still meshed
-// by its presentation, as before.
+// heap, and a join crashed later where memory was freed. Faces a job
+// meshed (each face triangulated, each edge with its polygon on it) are
+// drawn from those meshes; only a shape with a face left without a
+// triangulation (a body no job meshed, and the view's own sketch profiles
+// and datum planes, which no model thread reads: setProfiles, setDatums,
+// mitcad#1586) is still meshed by its presentation, as before. The lines
+// (edges, face boundaries) of bodies, highlights and the hover are drawn
+// from detached copies of the edges, cut finely (fineShape, FineEdges,
+// view/ViewEdges.hpp, mitcad#1633): never from the faces' meshes, whose
+// deviation grows with the body's size, and never by meshing an edge of
+// the model's.
 void drawWithoutMeshing(const occ::handle<AIS_Shape>& object) {
   const TopoDS_Shape& shape = object->Shape();
   if (shape.IsNull()) {
@@ -953,8 +990,9 @@ void drawWithoutMeshing(const occ::handle<AIS_Shape>& object) {
 
 occ::handle<AIS_Shape> makeBody(const geometry::Shape& named, BodyDisplay::Style style, const QColor& color,
                                 const std::vector<BodyDisplay::FaceLook>& faceLooks, VisualStyle visual,
-                                const QColor& paper, bool sectioned) {
-  occ::handle<AIS_Shape> body = makeBodyObject(named, style, color, faceLooks, visual, paper, sectioned);
+                                const QColor& paper, bool sectioned,
+                                const std::shared_ptr<const ViewEdges>& edges) {
+  occ::handle<AIS_Shape> body = makeBodyObject(named, style, color, faceLooks, visual, paper, sectioned, edges);
   if (!drawerMeshes(named)) {
     body->Attributes()->SetAutoTriangulation(false);
   }
@@ -1313,9 +1351,12 @@ TopoDS_Shape hatchOf(const TopoDS_Shape& caps, const gp_Ax3& plane, bool mirrore
 // A sketch profile's presentation. Its face has no triangulation, and the
 // presentation meshes it here, on the UI thread, with auto-triangulation on
 // (its faces and their edges): that is safe because the face is the view's
-// own, not shared with a model thread (mitcad#1586, see setProfiles).
+// own, not shared with a model thread (mitcad#1586, see setProfiles). Its
+// outline is drawn from copies of its edges cut as the sketch's curves are
+// (mitcad#1633, view/ViewEdges.hpp), so that it lies on them: the face's
+// own mesh is cut by the profile's size.
 occ::handle<AIS_Shape> makeProfile(const TopoDS_Shape& face) {
-  occ::handle<AIS_Shape> profile = new AIS_Shape(face);
+  occ::handle<AIS_Shape> profile = new FineEdges<AIS_Shape>(std::make_shared<const ViewEdges>(face), face);
   profile->SetColor(kProfileFill);
   profile->SetTransparency(0.6);
   // In front of a body face the sketch lies on.
@@ -1676,7 +1717,7 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   m_orientationCube->SetAutoStartAnimation(true);
   // In the upper right corner, with its labels in capitals.
   m_orientationCube->SetTransformPersistence(cubePersistence(1.0, QMargins(), false));
-  m_cubeBaseSize = m_orientationCube->Size();
+  m_cubeBaseSize = viewCubeSize(*m_orientationCube); // the nominal size, not the face's (mitcad#1620)
   m_cubeBaseFont = m_orientationCube->FontHeight();
   for (const auto& [side, label] :
        {std::pair{V3d_Yneg, "FRONT"}, std::pair{V3d_Ypos, "BACK"}, std::pair{V3d_Xneg, "LEFT"},
@@ -2482,9 +2523,35 @@ void OcctViewer::showBody(BodyEntry& entry) {
   // it as they draw every body.
   const bool seeThrough = entry.transparent && entry.style == BodyDisplay::Style::Normal && !inactive &&
                           shadedFaces(m_visualStyle);
+  // A normal body's lines from detached copies of its edges, cut finely
+  // (mitcad#1633, view/ViewEdges.hpp): its edges in every visual style, and
+  // the highlights and the hover of its faces and edges, which take the
+  // same copies. Made once for its shape (a style change, a placement or a
+  // redraw keeps them); a mesh body's edges stay drawn from its mesh.
+  if (entry.style != BodyDisplay::Style::Normal || geometry::body_kind(shape) == geometry::BodyKind::Mesh) {
+    entry.edges.reset();
+  } else if (!entry.edges || !entry.edges->source().IsSame(shape)) {
+    // Another place of the same body (an occurrence, a pattern's copy)
+    // shares them, or their copies where it has the shape elsewhere.
+    std::shared_ptr<const ViewEdges> same;
+    std::vector<const ViewEdges*> partners;
+    for (const auto& [key, other] : m_bodies) {
+      if (&other == &entry || !other.edges) {
+        continue;
+      }
+      if (other.edges->source().IsSame(shape)) {
+        same = other.edges;
+        break;
+      }
+      if (partners.empty() && other.edges->source().IsPartner(shape)) {
+        partners.push_back(other.edges.get());
+      }
+    }
+    entry.edges = same ? same : std::make_shared<const ViewEdges>(shape, partners);
+  }
   entry.object = makeBody(*entry.shape, inactive || seeThrough ? BodyDisplay::Style::Ghost : entry.style, color,
                          componentColors ? std::vector<BodyDisplay::FaceLook>{} : entry.faceLooks,
-                         m_visualStyle, m_paper, entry.sectioned);
+                         m_visualStyle, m_paper, entry.sectioned, entry.edges);
   if (seeThrough) {
     entry.object->SetTransparency(kTransparentBodyTransparency);
     const occ::handle<Prs3d_Drawer>& drawer = entry.object->Attributes();
@@ -2533,7 +2600,9 @@ void OcctViewer::showBody(BodyEntry& entry) {
     }
     return;
   }
-  const TopoDS_Shape edges = edgesOf(shape);
+  // The copies of its edges (mitcad#1633), the view's own: drawn as they
+  // are, never meshed; a mesh body's edges from its mesh (mitcad#1553).
+  const TopoDS_Shape edges = entry.edges ? entry.edges->drawn() : edgesOf(shape);
   entry.hiddenEdges = new AIS_Shape(edges);
   drawWithoutMeshing(entry.hiddenEdges);
   setEdgeStyle(entry.hiddenEdges, kHiddenEdgeColor, 1.0, Aspect_TOL_DASH);
@@ -2571,6 +2640,80 @@ void OcctViewer::removeBody(BodyEntry& entry) {
       edges->Nullify();
     }
   }
+}
+
+const ViewEdges* OcctViewer::bodyEdges(const geometry::Shape* body) const {
+  if (body == nullptr) {
+    return nullptr;
+  }
+  for (const auto& [key, entry] : m_bodies) {
+    if (entry.edges && (entry.shape.get() == body || entry.edges->source().IsPartner(body->occt()))) {
+      return entry.edges.get();
+    }
+  }
+  return nullptr;
+}
+
+occ::handle<AIS_Shape> OcctViewer::fineShape(const TopoDS_Shape& shape, const ViewEdges* first) const {
+  if (shape.IsNull() || !TopExp_Explorer(shape, TopAbs_EDGE).More()) {
+    return new AIS_Shape(shape);
+  }
+  std::vector<const ViewEdges*> caches;
+  if (first != nullptr) {
+    caches.push_back(first);
+  }
+  for (const auto& [key, entry] : m_bodies) {
+    if (entry.edges && entry.edges.get() != first) {
+      caches.push_back(entry.edges.get());
+    }
+  }
+  return new FineEdges<AIS_Shape>(std::make_shared<const ViewEdges>(shape, caches), shape);
+}
+
+OcctViewer::EdgeDrawing OcctViewer::edgeDrawing(const std::string& uid) const {
+  EdgeDrawing drawing;
+  const auto found = std::find_if(m_bodies.begin(), m_bodies.end(),
+                                  [&uid](const auto& body) { return body.second.uid == uid && body.second.edges; });
+  if (found == m_bodies.end()) {
+    return drawing;
+  }
+  const ViewEdges& edges = *found->second.edges;
+  drawing.shown = true;
+  drawing.edges = static_cast<int>(edges.size());
+  for (const auto& [key, copy] : edges.copies()) {
+    TopLoc_Location location;
+    const occ::handle<Poly_Polygon3D>& polygon = BRep_Tool::Polygon3D(copy, location);
+    if (polygon.IsNull()) {
+      continue;
+    }
+    const BRepAdaptor_Curve curve(copy);
+    if (curve.GetType() != GeomAbs_Circle) {
+      continue;
+    }
+    const double turn = std::abs(curve.LastParameter() - curve.FirstParameter());
+    if (turn < 1e-3 || polygon->NbNodes() < 2) {
+      continue;
+    }
+    const gp_Circ circle = curve.Circle();
+    const double perQuarter = (polygon->NbNodes() - 1) / (turn / (0.5 * 3.14159265358979323846));
+    drawing.fewestPerQuarter = drawing.circles == 0 ? perQuarter : std::min(drawing.fewestPerQuarter, perQuarter);
+    ++drawing.circles;
+    const NCollection_Array1<gp_Pnt>& nodes = polygon->Nodes();
+    for (int i = nodes.Lower(); i < nodes.Upper(); ++i) {
+      const gp_Pnt middle((nodes(i).XYZ() + nodes(i + 1).XYZ()) * 0.5);
+      drawing.largestSag = std::max(drawing.largestSag, std::abs(circle.Radius() - middle.Distance(circle.Location())));
+    }
+  }
+  for (const occ::handle<AIS_Shape>& highlight : m_highlights) {
+    const auto* fine = dynamic_cast<const FineLines<AIS_Shape>*>(highlight.get());
+    if (fine == nullptr || !fine->viewEdges()) {
+      continue;
+    }
+    const auto [both, shared] = fine->viewEdges()->sharedWith(edges);
+    drawing.highlightEdges += static_cast<int>(both);
+    drawing.highlightShared += static_cast<int>(shared);
+  }
+  return drawing;
 }
 
 void OcctViewer::setComponentColors(bool on) {
@@ -2680,9 +2823,10 @@ void OcctViewer::removeSketchProfiles(const QString& sketch) {
 void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entities) {
   ScopedTiming timing("display sketch entities");
   // An entity with the signature it was shown with keeps its display.
-  // The entities' edges and vertices are meshed by their presentations (a
-  // free edge gets a 3D polygon) on the UI thread, and no model thread reads
-  // them (mitcad#1586): sketchEntities (framework/ModelShapes) builds each
+  // The entities' edges get their 3D polygons here, on the UI thread (cut
+  // as the view's lines are, giveViewEdgePolygons, mitcad#1633; before,
+  // their presentations meshed them by their size), and no model thread
+  // reads them (mitcad#1586): sketchEntities (framework/ModelShapes) builds each
   // anew from the sketch query's numbers, projected and intersected curves
   // too (their geometry comes as numbers, not as the bodies' edges).
   std::map<QString, std::pair<QString, occ::handle<AIS_Shape>>> shown = std::move(m_sketchEntityKeys);
@@ -2713,7 +2857,14 @@ void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entit
       continue;
     }
     ++made;
+    // Its curve cut as every line of the view is (mitcad#1633,
+    // view/ViewEdges.hpp), in its own edge, which no model thread reads
+    // (mitcad#1586): a projected curve lies on the body's edge under it, and
+    // the curve's highlight (cut the same) on the curve. Drawn from that
+    // polyline, never meshed by its size.
+    giveViewEdgePolygons(entity.shape);
     occ::handle<AIS_Shape> object = new AIS_Shape(entity.shape);
+    object->Attributes()->SetAutoTriangulation(false);
     const bool isPoint = entity.geometry == QStringLiteral("point");
     SketchEntityLook look;
     look.point = isPoint;
@@ -2745,6 +2896,7 @@ void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entit
       // as the entity, whose line passes OCCT's depth test (less or equal)
       // over it.
       occ::handle<AIS_Shape> halo = new AIS_Shape(entity.shape);
+      halo->Attributes()->SetAutoTriangulation(false);
       styleSketchHalo(halo, look);
       display(halo, AIS_WireFrame, PickInfo(), false);
       m_context->SetZLayer(halo, m_sketchHaloLayer);
@@ -2802,6 +2954,9 @@ void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entit
     qDebug().noquote() << QStringLiteral("Sketch colours: %1").arg(line);
   }
   timing.setDetail(QStringLiteral("%1 entities, %2 new").arg(entities.size()).arg(made));
+  // A selected curve now construction geometry or a centre line, or no
+  // longer: its highlight in its new line type (mitcad#1619).
+  refreshSketchHighlightLines();
   sceneChanged();
 }
 
@@ -2833,10 +2988,48 @@ void OcctViewer::styleSketchEntity(const occ::handle<AIS_Shape>& object, const S
   const Quantity_Color color = drawnInactive(object) ? inactiveColor(own, m_paper)
                                : look.temporary      ? inactiveColor(own, m_paper, kTemporaryFade)
                                                      : own;
-  setEdgeStyle(object, color, kSketchLineWidth,
-               look.construction ? Aspect_TOL_DASH
-               : look.centerline ? Aspect_TOL_DOTDASH
-                                 : Aspect_TOL_SOLID);
+  setEdgeStyle(object, color, kSketchLineWidth, sketchLineType(look.construction, look.centerline));
+}
+
+Aspect_TypeOfLine OcctViewer::sketchCurveLineType(const SelectionItem& item) const {
+  // The shown entity of the same sketch and id, in the item's occurrence
+  // (the key setSketchEntities shows it under), else in any.
+  const auto drawn = [this](const occ::handle<AIS_Shape>& object) {
+    const auto look = m_sketchEntityLooks.find(object.get());
+    return look == m_sketchEntityLooks.end() ? Aspect_TOL_SOLID
+                                             : sketchLineType(look->second.construction, look->second.centerline);
+  };
+  const QString prefix = QStringLiteral("%1/%2@").arg(item.owner, item.name);
+  const auto exact = m_sketchEntityKeys.find(prefix + item.occurrence);
+  if (exact != m_sketchEntityKeys.end()) {
+    return drawn(exact->second.second);
+  }
+  for (const auto& [key, entry] : m_sketchEntityKeys) {
+    if (key.startsWith(prefix)) {
+      return drawn(entry.second);
+    }
+  }
+  return Aspect_TOL_SOLID;
+}
+
+std::vector<Aspect_TypeOfLine> OcctViewer::sketchHighlightLines(const std::vector<HighlightDisplay>& highlights) const {
+  // The highlights setHighlights draws as sketch curves: a feature's input
+  // lines keep their own look.
+  std::vector<Aspect_TypeOfLine> lines;
+  for (const HighlightDisplay& highlight : highlights) {
+    if (!highlight.shape.IsNull() && !highlight.inputLines && highlight.item.kind == SelectKind::SketchCurve) {
+      lines.push_back(sketchCurveLineType(highlight.item));
+    }
+  }
+  return lines;
+}
+
+void OcctViewer::refreshSketchHighlightLines() {
+  // X on a selected line (sketch.construction) changes the curve under its
+  // highlight; the highlight follows at once.
+  if (sketchHighlightLines(m_shownHighlights) != m_sketchHighlightLines) {
+    setHighlights(m_shownHighlights);
+  }
 }
 
 bool OcctViewer::hasSketchHalo(const SketchEntityLook& look) {
@@ -2973,6 +3166,98 @@ void OcctViewer::setDatums(const std::vector<DatumDisplay>& datums) {
   sceneChanged();
 }
 
+namespace {
+
+// The points of the polylines an object's lines are drawn with (its edges'
+// 3D polygons, the copies' for a FineLines), placed as the object is.
+std::vector<std::vector<gp_Pnt>> drawnPolylines(const occ::handle<AIS_Shape>& object) {
+  std::vector<std::vector<gp_Pnt>> polylines;
+  if (object.IsNull()) {
+    return polylines;
+  }
+  TopoDS_Shape shape = object->Shape();
+  if (const auto* fine = dynamic_cast<const FineLines<AIS_Shape>*>(object.get()); fine && fine->viewEdges()) {
+    shape = fine->viewEdges()->drawn();
+  }
+  const gp_Trsf placement = object->LocalTransformation();
+  for (TopExp_Explorer it(shape, TopAbs_EDGE); it.More(); it.Next()) {
+    TopLoc_Location location;
+    const occ::handle<Poly_Polygon3D>& polygon = BRep_Tool::Polygon3D(TopoDS::Edge(it.Current()), location);
+    if (polygon.IsNull()) {
+      continue;
+    }
+    std::vector<gp_Pnt> points;
+    const NCollection_Array1<gp_Pnt>& nodes = polygon->Nodes();
+    for (int i = nodes.Lower(); i <= nodes.Upper(); ++i) {
+      points.push_back(nodes(i).Transformed(location.Transformation()).Transformed(placement));
+    }
+    polylines.push_back(std::move(points));
+  }
+  return polylines;
+}
+
+// The nearest point to `p` on polylines.
+gp_Pnt nearestOn(const std::vector<std::vector<gp_Pnt>>& polylines, const gp_Pnt& p) {
+  gp_Pnt nearest = p;
+  double best = std::numeric_limits<double>::infinity();
+  for (const std::vector<gp_Pnt>& line : polylines) {
+    for (std::size_t i = 0; i < line.size(); ++i) {
+      const gp_Pnt& a = line[i];
+      gp_Pnt on = a;
+      if (i + 1 < line.size()) {
+        const gp_Vec ab(a, line[i + 1]);
+        const double length2 = ab.SquareMagnitude();
+        const double t = length2 > 1e-24 ? std::clamp(gp_Vec(a, p).Dot(ab) / length2, 0.0, 1.0) : 0.0;
+        on = a.Translated(ab * t);
+      }
+      const double d = on.Distance(p);
+      if (d < best) {
+        best = d;
+        nearest = on;
+      }
+    }
+  }
+  return nearest;
+}
+
+} // namespace
+
+OcctViewer::SketchHighlightFit OcctViewer::sketchHighlightFit() const {
+  SketchHighlightFit fit;
+  for (const occ::handle<AIS_Shape>& highlight : m_highlights) {
+    const auto info = m_pickInfo.find(highlight.get());
+    if (info == m_pickInfo.end() || info->second.item.kind != SelectKind::SketchCurve) {
+      continue;
+    }
+    const SelectionItem& item = info->second.item;
+    const auto curve = std::find_if(m_sketchEntities.begin(), m_sketchEntities.end(), [this, &item](const auto& entity) {
+      const auto shown = m_pickInfo.find(entity.get());
+      return shown != m_pickInfo.end() && shown->second.item.kind == SelectKind::SketchCurve &&
+             shown->second.item.owner == item.owner && shown->second.item.name == item.name &&
+             shown->second.item.occurrence == item.occurrence;
+    });
+    if (curve == m_sketchEntities.end()) {
+      continue;
+    }
+    const std::vector<std::vector<gp_Pnt>> drawn = drawnPolylines(*curve);
+    const std::vector<std::vector<gp_Pnt>> highlighted = drawnPolylines(highlight);
+    if (drawn.empty() || highlighted.empty()) {
+      continue;
+    }
+    ++fit.curves;
+    for (const std::vector<gp_Pnt>& line : highlighted) {
+      for (const gp_Pnt& p : line) {
+        const gp_Pnt on = nearestOn(drawn, p);
+        fit.millimetres = std::max(fit.millimetres, on.Distance(p));
+        const QPointF a = toWidgetF(p);
+        const QPointF b = toWidgetF(on);
+        fit.pixels = std::max(fit.pixels, std::hypot(a.x() - b.x(), a.y() - b.y()));
+      }
+    }
+  }
+  return fit;
+}
+
 OcctViewer::OwnShapes OcctViewer::ownShapes() const {
   OwnShapes shapes;
   for (const auto& [key, profile] : m_profiles) {
@@ -3071,6 +3356,8 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
   // The sketch curves and points highlighted, for the log (mitcad#897).
   int sketchCurveHighlights = 0;
   int sketchPointHighlights = 0;
+  // The sketch curves' highlights' line types, in order (mitcad#1619).
+  std::vector<Aspect_TypeOfLine> sketchLines;
   for (const HighlightDisplay& highlight : highlights) {
     if (highlight.shape.IsNull()) {
       continue;
@@ -3111,10 +3398,19 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
     // available when its original body disappears behind a preview.
     const bool boundaryPicks = highlight.body &&
         (kind == SelectKind::Face || kind == SelectKind::Edge);
-    occ::handle<AIS_Shape> object = new AIS_Shape(boundaryPicks
-        ? highlight.shape.Located(TopLoc_Location()) : highlight.shape);
+    // Its lines from the copies its body is drawn with where it has the
+    // edges, so that the highlight lies on the line it highlights; a
+    // sketch's curve's from a copy cut as the curve is (mitcad#1633).
+    const ViewEdges* ownBody = bodyEdges(highlight.body.get());
+    occ::handle<AIS_Shape> object =
+        fineShape(boundaryPicks ? highlight.shape.Located(TopLoc_Location()) : highlight.shape, ownBody);
     if (boundaryPicks && !highlight.shape.Location().IsIdentity()) {
       object->SetLocalTransformation(highlight.shape.Location().Transformation());
+    }
+    // Its halo, see-through and hidden copies on the same polylines.
+    const ViewEdges* lines = ownBody;
+    if (const auto* fine = dynamic_cast<const FineLines<AIS_Shape>*>(object.get()); fine && fine->viewEdges()) {
+      lines = fine->viewEdges().get();
     }
     // A body's faces and edges, a sketch's curves: drawn as they are, never
     // meshed here (drawWithoutMeshing, mitcad#1553).
@@ -3169,6 +3465,12 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
         // Lighter on a dark background, where the plain selection blue
         // has little contrast (mitcad#957).
         setEdgeStyle(object, m_backgroundDark ? occtColor(kInputLineColorDark) : color, kInputLineWidth);
+      } else if (kind == SelectKind::SketchCurve) {
+        // In the curve's own line type (mitcad#1619): a selected
+        // construction line stays dashed, a centre line dash-dot.
+        const Aspect_TypeOfLine type = sketchCurveLineType(highlight.item);
+        sketchLines.push_back(type);
+        setEdgeStyle(object, color, 3.5, type);
       } else {
         setEdgeStyle(object, color, 3.5);
       }
@@ -3178,7 +3480,7 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
       // The dark halo of a sketch's lines under the part in sight, against
       // the scene's depth: the lines stand apart from the background and
       // from the amber faces of their feature.
-      occ::handle<AIS_Shape> halo = new AIS_Shape(highlight.shape);
+      occ::handle<AIS_Shape> halo = fineShape(highlight.shape, lines);
       drawWithoutMeshing(halo);
       setEdgeStyle(halo, kSketchHaloDark, kSketchHaloWidth);
       PickInfo haloInfo;
@@ -3192,7 +3494,7 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
       // Through what hides it, as the Browser's hover (drawBrowserHover):
       // the faces fainter in the layer without a depth test, their
       // boundaries opaque, so that a part hidden inside shows its outline.
-      occ::handle<AIS_Shape> through = new AIS_Shape(highlight.shape);
+      occ::handle<AIS_Shape> through = fineShape(highlight.shape, lines);
       drawWithoutMeshing(through);
       through->SetColor(color);
       through->SetMaterial(flatMaterial(0.0f));
@@ -3214,7 +3516,7 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
       // own after the top one, in the selection colour: the line in sight,
       // drawn after it, covers its copy, so only the hidden parts show
       // dashed, over the model's own edges.
-      occ::handle<AIS_Shape> hidden = new AIS_Shape(highlight.shape);
+      occ::handle<AIS_Shape> hidden = fineShape(highlight.shape, lines);
       drawWithoutMeshing(hidden);
       if (highlight.inputLines) {
         setEdgeStyle(hidden, color, kInputLineHiddenWidth, Aspect_TOL_DASH);
@@ -3274,6 +3576,21 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
   if (loggedSketch != m_loggedSketchHighlights) {
     m_loggedSketchHighlights = loggedSketch;
     qDebug().noquote() << QStringLiteral("Sketch highlights: %1").arg(loggedSketch);
+  }
+  // "Sketch highlight lines: 1 dashed" (mitcad#1619): how many of the
+  // sketch curves' highlights are drawn in each line type.
+  QStringList lineCounts;
+  for (const Aspect_TypeOfLine type : {Aspect_TOL_SOLID, Aspect_TOL_DASH, Aspect_TOL_DOTDASH}) {
+    const int count = static_cast<int>(std::count(sketchLines.cbegin(), sketchLines.cend(), type));
+    if (count > 0) {
+      lineCounts << QStringLiteral("%1 %2").arg(count).arg(lineTypeName(type));
+    }
+  }
+  m_sketchHighlightLines = std::move(sketchLines);
+  const QString loggedLines = lineCounts.isEmpty() ? QStringLiteral("none") : lineCounts.join(QStringLiteral(", "));
+  if (loggedLines != m_loggedSketchHighlightLines) {
+    m_loggedSketchHighlightLines = loggedLines;
+    qDebug().noquote() << QStringLiteral("Sketch highlight lines: %1").arg(loggedLines);
   }
   const QString logged = bodies.isEmpty() ? QStringLiteral("none") : bodies.join(QStringLiteral(", "));
   if (logged != m_loggedBodyHighlights) {
@@ -3543,7 +3860,8 @@ void OcctViewer::setHoverChain(const TopoDS_Shape& shape) {
     // As the hover draws a face, edge (setHighlightStyle): faces
     // see-through in a colour light does not change, with their boundaries,
     // and edges opaque, in the top layer, which keeps the scene's depth.
-    m_hoverChain = new AIS_Shape(shape);
+    // Its lines on the bodies' own (fineShape, mitcad#1633).
+    m_hoverChain = fineShape(shape);
     drawWithoutMeshing(m_hoverChain);
     const Quantity_Color color = occtColor(m_hoverColor);
     bool faces = false;
@@ -5200,9 +5518,9 @@ void OcctViewer::applyCubePlacement() {
   if (displayed) {
     m_context->Remove(m_orientationCube, false);
   }
-  m_orientationCube->SetSize(m_cubeBaseSize * m_cubeRatio);
+  // The face and the wider bevels for the size (mitcad#1620).
+  sizeViewCube(*m_orientationCube, m_cubeBaseSize * m_cubeRatio);
   m_orientationCube->SetFontHeight(m_cubeBaseFont * m_cubeRatio);
-  scaleViewCube(*m_orientationCube);
   m_orientationCube->SetTransformPersistence(
       cubePersistence(m_cubeRatio, m_overlayInsets, m_cubeProjection != CubeProjection::FollowView));
   if (displayed) {
@@ -5544,6 +5862,18 @@ void OcctViewer::logOrientationCube() {
                               .arg(cubeName(static_cast<V3d_TypeOfOrientation>(orientation)))
                               .arg(corner.x() + best->first * kStep)
                               .arg(corner.y() + best->second * kStep);
+  }
+  // How much of the view's pixels each part in sight picks (mitcad#1620:
+  // the edges' and corners' zones against the faces'), in square pixels of
+  // the window, in the order of the parts above.
+  QStringList zones;
+  for (const auto& [orientation, cells] : places) {
+    zones << QStringLiteral("%1 %2")
+                 .arg(cubeName(static_cast<V3d_TypeOfOrientation>(orientation)))
+                 .arg(static_cast<qsizetype>(cells.size()) * kStep * kStep);
+  }
+  if (!zones.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Orientation cube zones: %1").arg(zones.join(QStringLiteral(", ")));
   }
   // The cube's outline as drawn and the extent of its picks, in window
   // pixels, with the camera's direction and projection and the cube's

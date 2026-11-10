@@ -279,6 +279,8 @@ QString startInterfaceLanguage(const QString& option) {
 
 QString interfaceLanguage() { return state().code; }
 
+bool logUntranslatedTexts() { return state().logMisses; }
+
 QString englishText(const QString& shown) {
   LanguageState& current = state();
   QMutexLocker lock(&current.mutex);

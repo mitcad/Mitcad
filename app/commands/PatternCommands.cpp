@@ -231,6 +231,31 @@ alongAxis(const QString& axis, const QString& flip, const QString& type) {
   };
 }
 
+// A ring about an axis input's line through the foot of the objects'
+// middle, its reference toward the middle: a circular pattern's Total
+// Angle about that axis.
+std::function<std::optional<Manipulator>(const CommandState&, const CommandContext&)> ringAbout(const QString& id) {
+  return [id](const CommandState& state, const CommandContext& model) -> std::optional<Manipulator> {
+    const Selection& axis = state.items(id);
+    const auto center = centerOf(state.items(objectsKey(state)), model);
+    if (axis.isEmpty() || !center) {
+      return std::nullopt;
+    }
+    const auto line = axisOf(axis.first(), model);
+    if (!line) {
+      return std::nullopt;
+    }
+    const gp_Vec along(line->second);
+    const gp_Vec out(line->first, *center);
+    const gp_Pnt foot = line->first.Translated(along * out.Dot(along));
+    Manipulator m = ring(foot, line->second);
+    if (foot.Distance(*center) > 1e-9) {
+      m.reference = gp_Dir(gp_Vec(foot, *center));
+    }
+    return m;
+  };
+}
+
 InputDef lineInput(const QString& id, const QString& name, int min) {
   return selectionInput(id, name, SelectKind::Axis | SelectKind::Edge | SelectKind::SketchCurve, min, 1)
       .withTooltip(QObject::tr("An axis, a straight edge or a sketch line"))
@@ -404,6 +429,10 @@ CommandDef circularPatternCommand(const CommandContext& context) {
   def.subgroup = QStringLiteral("Pattern");
   def.keywords = {QStringLiteral("array"), QStringLiteral("polar pattern"), QStringLiteral("radial")};
   def.featureType = QStringLiteral("circular_pattern");
+  // Axis 2 (mitcad#1588): the copies turned again about a second axis; its
+  // rows stay hidden until it is picked, as Rectangular Pattern's
+  // Direction 2 rows do.
+  const auto second = [](const CommandState& s) { return !s.items(QStringLiteral("axis2")).isEmpty(); };
   def.inputs = patternObjects();
   choosePatternTypeOnPreselection(def);
   // The hover text names the Pattern Type first (mitcad#1235).
@@ -415,29 +444,23 @@ CommandDef circularPatternCommand(const CommandContext& context) {
           .withAccepts(isAxial),
       valueInput(QStringLiteral("quantity"), QObject::tr("Quantity"), ValueKind::Unitless, QStringLiteral("4")).withStepMinimum(1),
       valueInput(QStringLiteral("angle"), QObject::tr("Total Angle"), ValueKind::Angle, QStringLiteral("360 deg"))
-          .withManipulator([](const CommandState& state, const CommandContext& model) -> std::optional<Manipulator> {
-            const Selection& axis = state.items(QStringLiteral("axis"));
-            const auto center = centerOf(state.items(objectsKey(state)), model);
-            if (axis.isEmpty() || !center) {
-              return std::nullopt;
-            }
-            const auto line = axisOf(axis.first(), model);
-            if (!line) {
-              return std::nullopt;
-            }
-            const gp_Vec along(line->second);
-            const gp_Vec out(line->first, *center);
-            const gp_Pnt foot = line->first.Translated(along * out.Dot(along));
-            Manipulator m = ring(foot, line->second);
-            if (foot.Distance(*center) > 1e-9) {
-              m.reference = gp_Dir(gp_Vec(foot, *center));
-            }
-            return m;
-          }),
+          .withManipulator(ringAbout(QStringLiteral("axis"))),
       // The angle centred on the originals (mitcad#545); a full turn is the
       // same either way.
       checkInput(QStringLiteral("symmetric"), QObject::tr("Symmetric"), false)
           .withTooltip(QObject::tr("Copies on both sides of the original, the angle centered on it")),
+      selectionInput(QStringLiteral("axis2"), QObject::tr("Axis 2"), kAxisKinds, 0, 1)
+          .withTooltip(QObject::tr("A second axis the copies turn about again; none: one axis"))
+          .withAccepts(isAxial),
+      valueInput(QStringLiteral("quantity2"), QObject::tr("Quantity 2"), ValueKind::Unitless, QStringLiteral("2"))
+          .withStepMinimum(1)
+          .withVisible(second),
+      valueInput(QStringLiteral("angle2"), QObject::tr("Total Angle 2"), ValueKind::Angle, QStringLiteral("360 deg"))
+          .withVisible(second)
+          .withManipulator(ringAbout(QStringLiteral("axis2"))),
+      checkInput(QStringLiteral("symmetric2"), QObject::tr("Symmetric 2"), false)
+          .withTooltip(QObject::tr("Copies on both sides about the second axis, the angle centered on them"))
+          .withVisible(second),
       suppressedInput(),
   };
   def.enabled = [&context] { return hasBodies(context); };
@@ -456,6 +479,17 @@ CommandDef circularPatternCommand(const CommandContext& context) {
     if (state.checked(QStringLiteral("symmetric"))) {
       result.def.insert(QStringLiteral("symmetric"), true);
     }
+    // The definition gets `axis2` only when a second axis is picked, so a
+    // pattern without one saves as before.
+    if (!state.items(QStringLiteral("axis2")).isEmpty()) {
+      QJsonObject axis2{{QStringLiteral("axis"), state.items(QStringLiteral("axis2")).first().reference()},
+                        {QStringLiteral("quantity"), state.expression(QStringLiteral("quantity2"))},
+                        {QStringLiteral("angle"), state.expression(QStringLiteral("angle2"))}};
+      if (state.checked(QStringLiteral("symmetric2"))) {
+        axis2.insert(QStringLiteral("symmetric"), true);
+      }
+      result.def.insert(QStringLiteral("axis2"), axis2);
+    }
     addCompute(result.def, state);
     addSuppressed(result.def, state);
     return result;
@@ -467,11 +501,20 @@ CommandDef circularPatternCommand(const CommandContext& context) {
     loadCount(state, QStringLiteral("quantity"), feature.value(QStringLiteral("quantity")), feature, context);
     loadValue(state, QStringLiteral("angle"), feature.value(QStringLiteral("angle")), feature, context);
     state.setChecked(QStringLiteral("symmetric"), feature.value(QStringLiteral("symmetric")).toBool());
+    const QJsonObject axis2 = feature.value(QStringLiteral("axis2")).toObject();
+    if (!axis2.isEmpty()) {
+      state.setItems(QStringLiteral("axis2"), {itemOf(axis2.value(QStringLiteral("axis")), context)});
+      loadCount(state, QStringLiteral("quantity2"), axis2.value(QStringLiteral("quantity")), feature, context);
+      loadValue(state, QStringLiteral("angle2"), axis2.value(QStringLiteral("angle")), feature, context);
+      state.setChecked(QStringLiteral("symmetric2"), axis2.value(QStringLiteral("symmetric")).toBool());
+    }
     loadSuppressed(feature, state);
   };
 
   def.canEdit = [&context](const QJsonObject& feature) {
-    return isShowable(feature.value(QStringLiteral("axis")), context);
+    const QJsonObject axis2 = feature.value(QStringLiteral("axis2")).toObject();
+    return isShowable(feature.value(QStringLiteral("axis")), context) &&
+           (axis2.isEmpty() || isShowable(axis2.value(QStringLiteral("axis")), context));
   };
 
   def.describe = [build = def.build](const CommandState& state, const CommandContext& model) {

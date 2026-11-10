@@ -11,6 +11,7 @@
 // Mesh and Insert DXF, and Insert Component in the ASSEMBLE group; files
 // dropped on the window.
 #include "../MainWindow.hpp"
+#include "framework/ModelMessages.hpp"
 #include "../WindowManager.hpp"
 
 #include <algorithm>
@@ -68,6 +69,15 @@ const QString kRecentKey = recent::recentFilesKey();
 QJsonObject cmd(const char* name, QJsonObject fields = {}) {
   fields.insert(QStringLiteral("cmd"), QLatin1String(name));
   return fields;
+}
+
+// Why a file with a SolidCraft extension is not opened (mitcad#1622): a .sc
+// file of another program, by its format key, "Not a SolidCraft design:
+// …"; empty for a design and for any other file.
+QString solidcraftRefusal(const QString& path) {
+  const QByteArray file = QFileInfo(path).absoluteFilePath().toUtf8();
+  const rust::String refused = solidcraft_file_check(rustStr(file));
+  return QString::fromUtf8(refused.data(), static_cast<qsizetype>(refused.size()));
 }
 
 // What a selection stands for when bodies are exported: bodies, and the
@@ -134,7 +144,7 @@ QStringList resultWarnings(const QJsonObject& result) {
   for (const QJsonValue& value : result.value(QStringLiteral("notices")).toArray()) {
     const QJsonObject notice = value.toObject();
     if (notice.value(QStringLiteral("level")).toString() != QStringLiteral("info")) {
-      warnings << notice.value(QStringLiteral("message")).toString();
+      warnings << mitcad::modelMessage(notice.value(QStringLiteral("message")).toString());
     }
   }
   if (warnings.isEmpty()) {
@@ -263,6 +273,8 @@ void MainWindow::registerFileCommands() {
   openDesign.keywords = {QStringLiteral("window"), QStringLiteral("tab"), QStringLiteral("assembly"),
                         QStringLiteral("component")};
   m_registry->add(openDesign);
+  // Component from Web… (mitcad#1579, webbrowser/MainWindowComponentWeb.cpp).
+  registerComponentWebCommand();
   CommandDef importDef = def("file.import", tr("Import…"), "import",
                              tr("Brings in STEP, IGES, STL, DXF and other CAD files, or opens them as designs"),
                              [this] { importFile(); });
@@ -270,8 +282,8 @@ void MainWindow::registerFileCommands() {
                         QStringLiteral("f3d"),     QStringLiteral("f3z"),   QStringLiteral("freecad"),
                         QStringLiteral("fcstd"),   QStringLiteral("ipt"),   QStringLiteral("iam"),
                         QStringLiteral("ifc"),     QStringLiteral("ifczip"), QStringLiteral("rvt"),
-                        QStringLiteral("rfa"),     QStringLiteral("solidcraft"), QStringLiteral("dwg"),
-                        QStringLiteral("open")};
+                        QStringLiteral("rfa"),     QStringLiteral("solidcraft"), QStringLiteral("sc"),
+                        QStringLiteral("dwg"),     QStringLiteral("open")};
   m_registry->add(importDef);
   CommandDef exportDef = def("file.export", tr("Export…"), "export",
                              tr("Bodies to STEP, IGES, STL, OBJ or BRep; a sketch to DXF"),
@@ -486,6 +498,13 @@ bool MainWindow::openFile(const QString& path, QString& error) {
   if (kind != FileKind::Design && !info.isFile()) {
     error = tr("The file does not exist.");
     return false;
+  }
+  // A .sc file of another program is refused before the import starts.
+  if (kind == FileKind::Solidcraft) {
+    if (const QString refused = solidcraftRefusal(path); !refused.isEmpty()) {
+      error = refused;
+      return false;
+    }
   }
   switch (kind) {
   case FileKind::Design:
@@ -739,6 +758,15 @@ bool MainWindow::importPath(const QString& path, bool interactive, QString* erro
   case FileKind::Rvt:
   case FileKind::Solidcraft:
   case FileKind::Dwg:
+    // A .sc file of another program is refused before the import starts
+    // (mitcad#1622).
+    if (fileKind(path) == FileKind::Solidcraft) {
+      reason = solidcraftRefusal(path);
+      if (!reason.isEmpty()) {
+        ok = false;
+        break;
+      }
+    }
     // A design with its history is a document of its own (a FreeCAD
     // document too, and a part file, whose history comes later).
     if (interactive && !maybeSave()) {

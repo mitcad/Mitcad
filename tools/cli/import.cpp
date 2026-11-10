@@ -694,7 +694,7 @@ int import_solidcraft(const std::vector<std::string>& args) {
     return usage(problem);
   }
   if (a.positional.size() != 1) {
-    return usage(a.positional.empty() ? "no .solidcraft file" : "more than one .solidcraft file");
+    return usage(a.positional.empty() ? "no SolidCraft design (.sc, .solidcraft)" : "more than one design file");
   }
   const bool json = a.flag("--json");
   std::string options = std::string(R"({"text": )") + (json ? "false" : "true");

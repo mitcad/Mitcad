@@ -654,6 +654,50 @@ impl<K: Kernel> Document<K> {
         Ok(outcome)
     }
 
+    /// The occurrences' placements in their parents at steps of a study
+    /// (mitcad#1597, an animated USDZ export): at each step the keyed
+    /// joints driven to the study's values there and solved as Play Study
+    /// solves them, from the document's state; contact sets do not stop
+    /// it. Nothing of the document changes but its cache: not its joints,
+    /// its pose or its undo steps. A keyed joint that fails at a step is
+    /// refused.
+    pub fn study_placements(
+        &mut self,
+        name: &str,
+        steps: &[f64],
+    ) -> Result<Vec<BTreeMap<crate::ids::OccurrenceUid, crate::transform::Transform>>, ModelError>
+    {
+        let study = self.motion_study(name)?.clone();
+        if study.keys.is_empty() {
+            return Err(invalid(format!("{name} has no keys")));
+        }
+        let joints: BTreeSet<FeatureUid> = study.keys.iter().map(|k| k.joint).collect();
+        let mut out = Vec::with_capacity(steps.len());
+        for &step in steps {
+            if !step.is_finite() {
+                return Err(invalid("the step must be finite"));
+            }
+            let state = driven(&self.state, &study.values_at(step))?;
+            let result = self.compute(&state)?;
+            if let Some((uid, why)) = result.results.iter().find_map(|r| match &r.status {
+                crate::recompute::FeatureStatus::Failed(why) if joints.contains(&r.uid) => {
+                    Some((r.uid, why.clone()))
+                }
+                _ => None,
+            }) {
+                let joint = self
+                    .state
+                    .entry(uid)
+                    .map_or_else(|| uid.to_string(), |e| e.name.clone());
+                return Err(invalid(format!(
+                    "{name} at step {step}: {joint} fails ({why})"
+                )));
+            }
+            out.push(result.placements);
+        }
+        Ok(out)
+    }
+
     /// A preview of a study at a step (the application's playback): the
     /// joints driven to the study's values there, from where they are
     /// (`from` None) or along the study from step `from`, stopping at the

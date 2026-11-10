@@ -2,6 +2,7 @@
 // The Bindings tab of the Configurations window (mitcad#862,
 // ConfigurationBindingsPage.hpp).
 #include "ConfigurationBindingsPage.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -359,7 +360,7 @@ void ConfigurationBindingsPage::removeSelected() {
     if (m_host.lastCancelled()) {
       return;
     }
-    reason = m_host.lastError();
+    reason = mitcad::modelMessage(m_host.lastError());
   }
   m_message->setText(reason);
   m_message->show();

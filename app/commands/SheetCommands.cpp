@@ -8,6 +8,7 @@
 // boundaries, corners) the definitions keep, and `load` turns those back
 // into the faces and edges that carry their names.
 #include <cmath>
+#include "framework/ModelMessages.hpp"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -102,7 +103,7 @@ QJsonObject sheetPick(const SelectionItem& item, const CommandContext& context, 
   try {
     return context.queryObject(query);
   } catch (const std::exception& error) {
-    built = Built::failure(QString::fromUtf8(error.what()), input);
+    built = Built::failure(mitcad::modelMessage(error.what()), input);
     return {};
   }
 }
@@ -732,7 +733,7 @@ CommandDef sheetBendCommand(const CommandContext& context) {
         stationaryRef = seam.value(QStringLiteral("stationary"));
         movingRef = seam.value(QStringLiteral("moving"));
       } catch (const std::exception& error) {
-        return Built::failure(QString::fromUtf8(error.what()), QStringLiteral("moving"));
+        return Built::failure(mitcad::modelMessage(error.what()), QStringLiteral("moving"));
       }
     } else {
       stationaryRef = sheetPick(fixed, context, result, QStringLiteral("stationary")).value(QStringLiteral("boundary"));
@@ -1136,7 +1137,7 @@ CommandDef sheetRefoldCommand(const CommandContext& context) {
                  .value(QStringLiteral("body"))
                  .toString();
     } catch (const std::exception& error) {
-      return Built::failure(QString::fromUtf8(error.what()), QStringLiteral("unfold"));
+      return Built::failure(mitcad::modelMessage(error.what()), QStringLiteral("unfold"));
     }
     result.def = {{QStringLiteral("type"), QStringLiteral("sheet_refold")},
                   {QStringLiteral("body"), body},

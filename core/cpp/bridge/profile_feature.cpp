@@ -7,6 +7,8 @@
 #include <stdexcept>
 #include <string>
 
+#include <gp_Vec.hxx>
+
 #include "bridge/profile.hpp"
 #include "mitcad/geometry/extrude.hpp"
 #include "mitcad/geometry/hole.hpp"
@@ -157,6 +159,21 @@ std::shared_ptr<geometry::Shape> hole_tool(rust::Str feature, const HoleInput& i
   spec.press_fit_inner = input.press_fit_inner;
   spec.press_fit_bore = input.press_fit_bore;
   spec.press_fit_angle = input.press_fit_angle;
+  // A print shape's roofs (mitcad#1515): a zero vector leaves its hole round.
+  if (!input.print_roofs.empty()) {
+    if (input.print_roofs.size() != input.origins.size()) {
+      throw std::invalid_argument("the print shape has no roof direction for every hole");
+    }
+    for (std::size_t i = 0; i + 2 < input.print_roofs.size(); i += 3) {
+      const gp_Vec roof(input.print_roofs[i], input.print_roofs[i + 1], input.print_roofs[i + 2]);
+      if (roof.Magnitude() > 0.5) {
+        spec.roofs.emplace_back(gp_Dir(roof));
+      } else {
+        spec.roofs.emplace_back(std::nullopt);
+      }
+    }
+    spec.roof_sag = input.print_roof_sag;
+  }
   switch (input.extent) {
   case 1:
     spec.extent = geometry::HoleExtent::ThroughAll;

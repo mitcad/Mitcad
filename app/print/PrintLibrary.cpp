@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "PrintLibrary.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -103,7 +104,7 @@ QJsonArray itemRows(const CommandContext& model, const QString& kind, const QStr
     return answer.isArray() ? answer.toArray() : answer.toObject().value(QStringLiteral("items")).toArray();
   } catch (const std::exception& e) {
     if (error != nullptr) {
-      *error = QString::fromUtf8(e.what());
+      *error = mitcad::modelMessage(e.what());
     }
     return {};
   }
@@ -680,7 +681,7 @@ QString plainModelError(const QString& error, const PrintKeyTable& keys, const Q
   // Else the plain names, without paths and with a capital letter, when
   // short; a long one only says what was not done (mitcad#655).
   static const QRegularExpression path(QStringLiteral("(?<!\\w)(?:[A-Za-z]:)?[\\\\/][^\\s:]+"));
-  QString text = keys.plainText(message);
+  QString text = keys.plainText(mitcad::modelMessage(message));
   text.replace(path, QObject::tr("the file"));
   if (text.isEmpty() || text.size() > 80) {
     return name.isEmpty() ? QObject::tr("Could not make the change. Check the values and try again.")

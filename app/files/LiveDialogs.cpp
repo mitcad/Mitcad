@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "LiveDialogs.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -203,11 +204,11 @@ QString describeLiveTest(const QJsonObject& answer) {
                  .arg(what)
                  .arg(step.value(QStringLiteral("ms")).toInt());
   }
-  const QString warning = answer.value(QStringLiteral("warning")).toString();
+  const QString warning = mitcad::modelMessage(answer.value(QStringLiteral("warning")).toString());
   if (!warning.isEmpty()) {
     lines << Text::tr("Warning: %1.").arg(warning);
   }
-  const QString error = answer.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString();
+  const QString error = mitcad::modelMessage(answer.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString());
   lines << (error.isEmpty() ? Text::tr("Live updates work through this broker.") : Text::tr("Failed: %1").arg(error));
   return lines.join(QLatin1Char('\n'));
 }

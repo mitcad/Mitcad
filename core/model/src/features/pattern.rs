@@ -224,6 +224,12 @@ pub struct CircularPatternDef<P = ParamId> {
     /// (not for a full turn).
     #[serde(default, skip_serializing_if = "is_false")]
     pub symmetric: bool,
+    /// A second axis (mitcad#1588): the copies about `axis` turned again
+    /// about this one, the elements every product of the two turns,
+    /// numbered along `axis` first, then this one (element = k1 + n1 ·
+    /// k2), as a rectangular pattern numbers two directions.
+    #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+    pub axis2: Option<CircularAxis<P>>,
     #[serde(default, skip_serializing_if = "is_adjust")]
     pub compute: ComputeOption,
     /// Copies of features act only on the bodies each feature changed
@@ -258,6 +264,37 @@ pub struct CircularPatternDef<P = ParamId> {
     pub skipped_copies: Vec<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suppressed_elements: Vec<u32>,
+}
+
+/// The second axis of a circular pattern (mitcad#1588): its own quantity,
+/// total angle and symmetric, as the first axis has them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CircularAxis<P = ParamId> {
+    pub axis: GeomRef,
+    /// Elements about the axis, the original included.
+    pub quantity: P,
+    /// The total angle (radians), as [`CircularPatternDef::angle`].
+    pub angle: P,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub symmetric: bool,
+}
+
+/// Maps a circular pattern's second axis with its prefix
+/// (`axis2.quantity`, `axis2.angle`).
+fn map_axis2<P, Q, E>(
+    axis2: &Option<CircularAxis<P>>,
+    f: &mut dyn FnMut(&str, &P) -> Result<Q, E>,
+) -> Result<Option<CircularAxis<Q>>, E> {
+    match axis2 {
+        Some(second) => Ok(Some(CircularAxis {
+            axis: second.axis.clone(),
+            quantity: f("axis2.quantity", &second.quantity)?,
+            angle: f("axis2.angle", &second.angle)?,
+            symmetric: second.symmetric,
+        })),
+        None => Ok(None),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -473,6 +510,7 @@ impl<P> CircularPatternDef<P> {
             quantity: param,
             angle: param,
             symmetric: copy,
+            axis2: with(map_axis2),
             compute: copy,
             original_bodies: copy,
             scale: with(map_scale),
@@ -1158,6 +1196,7 @@ fn repeat_body_places<K: Kernel>(
     let mut joined_sheets: Vec<(BodyUid, Option<crate::sheet::SheetState>)> = Vec::new();
     let mut pending = Vec::new();
     let mut next = 0u32;
+    let leaves_out = combine && leaves_out_coincident(ctx);
     for (place, elements) in places.iter().zip(own) {
         let bodies = body_leaf(ctx, place.feature)?.unwrap_or_default();
         for body in bodies {
@@ -1166,6 +1205,17 @@ fn repeat_body_places<K: Kernel>(
                 // Copies of a mesh body are not joined (mitcad#399).
                 ctx.require_surfaces(body, &source)?;
             }
+            // Copies joined to the body that add nothing to it are left
+            // out (mitcad#1588).
+            let left_out = if leaves_out {
+                coincident_placed_copies(ctx, &source, &place.steps, elements)
+            } else {
+                Vec::new()
+            };
+            let elements: Vec<&Element> = elements
+                .iter()
+                .filter(|e| !left_out.contains(&e.index))
+                .collect();
             // Copies of a sheet metal body as it was before its pattern
             // are sheets (mitcad#1462).
             let sheet = crate::sheet::body_copy::source_before(ctx, place.feature, body);
@@ -1331,11 +1381,23 @@ fn repeat_body_places_joining_any<K: Kernel>(
     }
     let mut joining = Joining::new(ctx.kernel, start);
     let mut next = 0u32;
+    let leaves_out = leaves_out_coincident(ctx);
     for (place, elements) in places.iter().zip(own) {
         let bodies = body_leaf(ctx, place.feature)?.unwrap_or_default();
         for body in bodies {
             let source = source_body(ctx, place.feature, body)?;
             ctx.require_surfaces(body, &source)?;
+            // Copies that add nothing to the body are left out
+            // (mitcad#1588).
+            let left_out = if leaves_out {
+                coincident_placed_copies(ctx, &source, &place.steps, elements)
+            } else {
+                Vec::new()
+            };
+            let elements: Vec<&Element> = elements
+                .iter()
+                .filter(|e| !left_out.contains(&e.index))
+                .collect();
             // Copies of a sheet as it was before its pattern are sheets.
             let sheet = crate::sheet::body_copy::source_before(ctx, place.feature, body);
             let at = place.at();
@@ -1799,29 +1861,68 @@ impl RectangularPatternDef {
     }
 }
 
+/// The turns about one axis of a circular pattern, element 0 the identity.
+fn turns<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    axis: &GeomRef,
+    quantity_param: ParamId,
+    angle_param: ParamId,
+    symmetric: bool,
+) -> Result<Vec<Transform>, String> {
+    let q = quantity(&ctx.param_name(quantity_param), ctx.param(quantity_param)?)?;
+    let angle = ctx.param(angle_param)?;
+    if !angle.is_finite() || (q > 1 && angle == 0.0) {
+        return Err(format!("{} must not be zero", ctx.param_name(angle_param)));
+    }
+    let full = (angle.abs() - std::f64::consts::TAU).abs() <= 1e-9;
+    let step = if full {
+        angle / f64::from(q)
+    } else if q > 1 {
+        angle / f64::from(q - 1)
+    } else {
+        0.0
+    };
+    let axis = ctx.axis(axis)?;
+    Ok(positions(q, symmetric && !full)
+        .into_iter()
+        .map(|i| {
+            Transform::rotation(axis.origin, axis.direction, i * step)
+                .expect("a unit axis direction")
+        })
+        .collect())
+}
+
 impl CircularPatternDef {
     fn elements<K: Kernel>(&self, ctx: &mut EvalContext<'_, K>) -> Result<Elements, String> {
-        let q = quantity(&ctx.param_name(self.quantity), ctx.param(self.quantity)?)?;
-        let angle = ctx.param(self.angle)?;
-        if !angle.is_finite() || (q > 1 && angle == 0.0) {
-            return Err(format!("{} must not be zero", ctx.param_name(self.angle)));
-        }
-        let full = (angle.abs() - std::f64::consts::TAU).abs() <= 1e-9;
-        let step = if full {
-            angle / f64::from(q)
-        } else if q > 1 {
-            angle / f64::from(q - 1)
-        } else {
-            0.0
+        let first = turns(ctx, &self.axis, self.quantity, self.angle, self.symmetric)?;
+        // A second axis (mitcad#1588): every turn about the first axis turned
+        // again about the second, the first axis's elements first.
+        let all: Vec<Transform> = match &self.axis2 {
+            None => first,
+            Some(second) => {
+                let second = turns(
+                    ctx,
+                    &second.axis,
+                    second.quantity,
+                    second.angle,
+                    second.symmetric,
+                )
+                .map_err(|e| format!("axis 2: {e}"))?;
+                let count = first.len() * second.len();
+                if count > MAX_ELEMENTS as usize {
+                    return Err(format!(
+                        "the pattern has {count} elements, at most {MAX_ELEMENTS} are allowed"
+                    ));
+                }
+                let mut all = Vec::with_capacity(count);
+                for outer in &second {
+                    for inner in &first {
+                        all.push(outer.after(inner));
+                    }
+                }
+                all
+            }
         };
-        let axis = ctx.axis(&self.axis)?;
-        let all: Vec<Transform> = positions(q, self.symmetric && !full)
-            .into_iter()
-            .map(|i| {
-                Transform::rotation(axis.origin, axis.direction, i * step)
-                    .expect("a unit axis direction")
-            })
-            .collect();
         let (all, scaling) = scale_elements(ctx, &self.objects, &self.scale_spec(), all)?;
         ctx.elements.clone_from(&all);
         Ok((active(all, &self.suppressed_elements)?, scaling))
@@ -2004,9 +2105,19 @@ pub(crate) fn repeat<K: Kernel>(
                 // (mitcad#1462).
                 let mut joinable = sheet.is_some();
                 let mut pending = Vec::new();
+                // Copies joined to the body that add nothing to it are left
+                // out (mitcad#1588).
+                let left_out = if combine && leaves_out_coincident(ctx) {
+                    coincident_copies(ctx, &shape, elements)
+                } else {
+                    Vec::new()
+                };
                 // Skipped copies (mitcad#547): their numbers are the
                 // elements'.
-                for element in elements.iter().filter(|e| !skipped.contains(&e.index)) {
+                for element in elements
+                    .iter()
+                    .filter(|e| !skipped.contains(&e.index) && !left_out.contains(&e.index))
+                {
                     let copy = body_copy(
                         ctx,
                         &shape,
@@ -2232,6 +2343,11 @@ pub(crate) fn repeat<K: Kernel>(
                     });
                 }
                 per_place = Some(own);
+            }
+            // Copies that add nothing (mitcad#1588): a tool turned onto
+            // itself, or two products of a two-axis pattern on one place.
+            if leaves_out_coincident(ctx) {
+                per_place = without_coincident(ctx, &places, elements, per_place);
             }
             // Patterns of bodies among the features (mitcad#547): their
             // bodies copied at every place.
@@ -3469,9 +3585,19 @@ fn repeat_bodies_joining_any<K: Kernel>(
         sources.push(sheet);
     }
     let mut next = elements.iter().map(|e| e.index).max().unwrap_or(0) * count;
+    let leaves_out = leaves_out_coincident(ctx);
     for (j, (body, shape)) in originals.iter().enumerate() {
+        // Copies that add nothing to their body are left out (mitcad#1588).
+        let left_out = if leaves_out {
+            coincident_copies(ctx, shape, elements)
+        } else {
+            Vec::new()
+        };
         // Skipped copies (mitcad#547): their numbers are the elements'.
-        for element in elements.iter().filter(|e| !skipped.contains(&e.index)) {
+        for element in elements
+            .iter()
+            .filter(|e| !skipped.contains(&e.index) && !left_out.contains(&e.index))
+        {
             let instance = Instance {
                 feature: ctx.uid,
                 index: element.index,
@@ -3678,6 +3804,204 @@ fn moved_copies<K: Kernel>(
     }
     let refs: Vec<&K::Shape> = copies.iter().collect();
     ctx.kernel.unite(&refs).map(Some).map_err(|e| e.to_string())
+}
+
+/// How near (mm) the faces of two copies lie to each other, and their
+/// centres of mass, where they are the same solid at the same place
+/// ([`coincident_copies`]).
+const SAME_PLACE: f64 = 1e-5;
+
+/// How far apart, relative to their size (at least 1 mm), the tight boxes
+/// of two copies may be where they are the same solid ([`same_solid`]):
+/// only a first test, the faces decide.
+const SAME_BOX: f64 = 1e-4;
+
+/// Whether the feature being evaluated leaves out the copies that add
+/// nothing ([`coincident_copies`], mitcad#1588): the patterns do; mirrors,
+/// scale patterns and Pattern at Points keep every copy.
+fn leaves_out_coincident<K: Kernel>(ctx: &EvalContext<'_, K>) -> bool {
+    ctx.feature_entry(ctx.uid).is_ok_and(|entry| {
+        matches!(
+            entry.def,
+            FeatureDef::RectangularPattern(_)
+                | FeatureDef::CircularPattern(_)
+                | FeatureDef::PathPattern(_)
+        )
+    })
+}
+
+/// The elements of `elements` whose copy of `shape` adds nothing
+/// (mitcad#1588): the same solid at the same place as `shape` itself (a
+/// body of revolution turned about its own axis) or as the copy at an
+/// earlier element of the list that is kept (two products of a two-axis
+/// pattern that land on one place). Their element numbers, in order.
+///
+/// Only copies that turn or mirror `shape` (orthogonal transforms other
+/// than a translation) can land where another one is. A copy is compared
+/// with another only when its centre of mass lands within [`SAME_PLACE`]
+/// of the other's; it is then the same solid when every point the kernel
+/// spreads over the faces of either lies within [`SAME_PLACE`] of the
+/// faces of the other ([`Kernel::face_points`],
+/// [`Kernel::boundary_distances`]), whatever their surfaces'
+/// parametrizations (two spheres with different poles are one sphere).
+/// None where the kernel cannot measure: the copies are then made as
+/// before.
+fn coincident_copies<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    shape: &K::Shape,
+    elements: &[Element],
+) -> Vec<u32> {
+    let turned = |t: &Transform| t.is_orthogonal() && t.linear != Transform::IDENTITY.linear;
+    if !elements.iter().any(|e| turned(&e.transform)) {
+        return Vec::new();
+    }
+    let Ok(properties) = ctx.kernel.mass_properties(shape) else {
+        return Vec::new();
+    };
+    let center = properties.center;
+    let near = |a: [f64; 3], b: [f64; 3]| (0..3).all(|i| (a[i] - b[i]).abs() <= SAME_PLACE);
+    // The places kept so far: the original's (None) and the kept copies'
+    // (their position in `elements`), each with its centre.
+    let mut kept: Vec<(Option<usize>, [f64; 3])> = vec![(None, center)];
+    let mut copies: Vec<Option<K::Shape>> = vec![None; elements.len()];
+    let mut out = Vec::new();
+    for (i, element) in elements.iter().enumerate() {
+        let at = element.transform.apply_point(center);
+        let candidates: Vec<Option<usize>> = if turned(&element.transform) {
+            kept.iter()
+                .filter(|(_, c)| near(at, *c))
+                .map(|(k, _)| *k)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut same = false;
+        if !candidates.is_empty() {
+            let Ok(copy) = ctx.kernel.transform_shape(shape, &element.transform, None) else {
+                kept.push((Some(i), at));
+                continue;
+            };
+            for candidate in candidates {
+                let other = match candidate {
+                    None => Some(shape.clone()),
+                    Some(j) => {
+                        if copies[j].is_none() {
+                            copies[j] = ctx
+                                .kernel
+                                .transform_shape(shape, &elements[j].transform, None)
+                                .ok();
+                        }
+                        copies[j].clone()
+                    }
+                };
+                if other.is_some_and(|other| same_solid(ctx, &copy, &other)) {
+                    same = true;
+                    break;
+                }
+            }
+            copies[i] = Some(copy);
+        }
+        if same {
+            out.push(element.index);
+        } else {
+            kept.push((Some(i), at));
+        }
+    }
+    out
+}
+
+/// Whether two shapes are the same solid at the same place: their tight
+/// boxes agree (within [`SAME_BOX`] of their size), and the points the
+/// kernel spreads over the faces of each lie on the faces of the other
+/// (within [`SAME_PLACE`]). False where the kernel cannot tell (no box: a
+/// kernel that answers the face points by the faces' names alone, as the
+/// importers' test kernels do, cannot tell solids apart by them).
+fn same_solid<K: Kernel>(ctx: &EvalContext<'_, K>, a: &K::Shape, b: &K::Shape) -> bool {
+    let (Ok(Some(box_a)), Ok(Some(box_b))) =
+        (ctx.kernel.bounding_box(a), ctx.kernel.bounding_box(b))
+    else {
+        return false;
+    };
+    let size = (0..3)
+        .map(|i| box_a.max[i] - box_a.min[i])
+        .fold(0.0, f64::max);
+    let slack = SAME_BOX * size.max(1.0);
+    if !(0..3).all(|i| {
+        (box_a.min[i] - box_b.min[i]).abs() <= slack && (box_a.max[i] - box_b.max[i]).abs() <= slack
+    }) {
+        return false;
+    }
+    let on = |from: &K::Shape, to: &K::Shape| {
+        let Ok(faces) = ctx.kernel.face_points(from) else {
+            return false;
+        };
+        let points: Vec<[f64; 3]> = faces.into_iter().flat_map(|f| f.points).collect();
+        !points.is_empty()
+            && ctx
+                .kernel
+                .boundary_distances(to, &points)
+                .is_ok_and(|d| d.len() == points.len() && d.iter().all(|d| *d <= SAME_PLACE))
+    };
+    on(a, b) && on(b, a)
+}
+
+/// [`coincident_copies`] of a shape that a place's steps (patterns among
+/// the features) move first.
+fn coincident_placed_copies<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    shape: &K::Shape,
+    steps: &[(Transform, Instance)],
+    elements: &[Element],
+) -> Vec<u32> {
+    let mut placed = shape.clone();
+    for (t, _) in steps {
+        match ctx.kernel.transform_shape(&placed, t, None) {
+            Ok(moved) => placed = moved,
+            Err(_) => return Vec::new(),
+        }
+    }
+    coincident_copies(ctx, &placed, elements)
+}
+
+/// The copies of the features at `places` that add nothing (mitcad#1588,
+/// [`coincident_copies`]) taken out of each place's elements: the copies
+/// of the tools of features that join, cut, intersect or make bodies, at
+/// each place (fillets, chamfers, sheet features and scoped cuts keep
+/// theirs). `per_place` as [`Copying::per_place`]; it stays None when no
+/// copy is left out. A place whose tool cannot be read keeps its copies
+/// (the copying then says what is wrong).
+fn without_coincident<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    places: &[Placed],
+    elements: &[Element],
+    per_place: Option<Vec<Vec<Element>>>,
+) -> Option<Vec<Vec<Element>>> {
+    let mut own = per_place
+        .clone()
+        .unwrap_or_else(|| places.iter().map(|_| elements.to_vec()).collect());
+    let mut changed = false;
+    for (list, place) in own.iter_mut().zip(places) {
+        let Ok(entry) = ctx.feature_entry(place.feature) else {
+            continue;
+        };
+        if is_dressup(&entry.def)
+            || changes_sheet(&entry.def)
+            || makes_sheets(&entry.def)
+            || matches!(&entry.def, FeatureDef::Extrude(e) if e.active_cut_scope().is_some())
+            || !matches!(replay_tool_definition(&entry), Ok(Some(_)))
+        {
+            continue;
+        }
+        let Ok(tool) = ctx.feature_tool(place.feature) else {
+            continue;
+        };
+        let left_out = coincident_placed_copies(ctx, &tool, &place.steps, list);
+        if !left_out.is_empty() {
+            list.retain(|e| !left_out.contains(&e.index));
+            changed = true;
+        }
+    }
+    if changed { Some(own) } else { per_place }
 }
 
 /// How far (mm) the boxes of copies may be from a body's box and still be
@@ -4124,6 +4448,9 @@ impl FeatureInfo for CircularPatternDef {
         let mut references = References::default();
         self.objects.add_references(&mut references);
         self.axis.add_to(&mut references);
+        if let Some(second) = &self.axis2 {
+            second.axis.add_to(&mut references);
+        }
         add_scale_references(&self.scale_spec(), &mut references);
         references
     }
@@ -4131,6 +4458,12 @@ impl FeatureInfo for CircularPatternDef {
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
         self.objects.check(ctx)?;
         self.axis.check(ctx, Want::Axis)?;
+        if let Some(second) = &self.axis2 {
+            second
+                .axis
+                .check(ctx, Want::Axis)
+                .map_err(|e| format!("axis 2: {e}"))?;
+        }
         check_combine_any(self.combine, self.combine_any)?;
         check_options(
             ctx,
@@ -4145,6 +4478,10 @@ impl FeatureInfo for CircularPatternDef {
     fn check_values(&self, value: &dyn Fn(ParamId) -> f64) -> Result<(), String> {
         let q = quantity("pattern quantity", value(self.quantity))?;
         check_distance("pattern angle", q, value(self.angle))?;
+        if let Some(second) = &self.axis2 {
+            let q = quantity("pattern quantity of axis 2", value(second.quantity))?;
+            check_distance("pattern angle of axis 2", q, value(second.angle))?;
+        }
         check_scale_values(value, &self.scale_spec())
     }
 

@@ -1819,11 +1819,12 @@ impl<K: ImportKernel> Joints<K> for Importer<'_, K> {
                             .to_owned(),
                     );
                 }
-                return Err(format!(
-                    "it joins {} occurrence{} of its component",
-                    tops.len(),
-                    if tops.len() == 1 { "" } else { "s" }
-                ));
+                // One and several as whole messages (mitcad#1284).
+                return Err(if tops.len() == 1 {
+                    "it joins an occurrence of its component".to_owned()
+                } else {
+                    format!("it joins {} occurrences of its component", tops.len())
+                });
             }
             let occurrences: Vec<Value> = tops.iter().map(|o| json!(o.to_string())).collect();
             let def = json!({"type": "rigid_group", "occurrences": occurrences});

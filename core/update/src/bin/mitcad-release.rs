@@ -10,8 +10,9 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use mitcad_update::{
-    MANIFEST_FORMAT, MANIFEST_VALIDITY_DAYS, Manifest, TrustedKeys, assess, date_text, parse_date,
-    parse_version, public_key, sign_file, signing_key, today,
+    BrowserPackage, MANIFEST_FORMAT, MANIFEST_VALIDITY_DAYS, Manifest, TrustedKeys, assess,
+    date_text, parse_date, parse_version, public_key, sign_browser_package, sign_file, signing_key,
+    today,
 };
 
 const USAGE: &str = "\
@@ -20,16 +21,27 @@ Usage:
       Prints the public key of the release key (to build into MitCad).
   mitcad-release manifest --version VERSION --notes URL [--date YYYY-MM-DD]
                           [--expires YYYY-MM-DD]
-                          [--asset PLATFORM FILE URL]... --out FILE
+                          [--asset PLATFORM FILE URL]...
+                          [--keep-browser MANIFEST]
+                          [--browser PLATFORM ABI VERSION CEF FINGERPRINT FILE URL]...
+                          --out FILE
       Signs each file as the download for its platform (windows-x64,
       linux-x64) at URL and writes the signed manifest. The date defaults
-      to today (UTC), the expiry to 90 days from today.
+      to today (UTC), the expiry to 90 days from today. --keep-browser
+      takes the web browser component's packages of an earlier release's
+      manifest (checked against the release key) into this one;
+      --browser signs a new package (mitcad#1579), which replaces a kept
+      one of the same platform and interface (ABI).
   mitcad-release renew --manifest FILE [--expires YYYY-MM-DD] --out FILE
       Signs a release's manifest again with a new expiry (90 days from
       today by default), after checking it against the release key; run it
       for the latest release before its manifest expires.
   mitcad-release verify --manifest FILE --key PUBLIC-KEY [--asset PLATFORM FILE]...
+                        [--browser PLATFORM ABI VERSION FILE]...
       Checks a manifest and files against a public key.
+  mitcad-release browser --manifest FILE --key PUBLIC-KEY --platform PLATFORM --abi ABI
+      Prints the browser package of the platform and interface the
+      manifest lists (version, CEF, fingerprint, URL), or nothing.
 
 The release key (64 hex digits, the Ed25519 seed; for example from
 `openssl rand -hex 32`) is MITCAD_RELEASE_KEY, or the content of the file
@@ -71,6 +83,7 @@ fn run(args: &[String]) -> Result<(), Failure> {
         "manifest" => manifest(rest),
         "renew" => renew(rest),
         "verify" => verify(rest),
+        "browser" => browser(rest),
         "help" | "--help" | "-h" => {
             println!("{USAGE}");
             Ok(())
@@ -139,6 +152,8 @@ fn manifest(args: &[String]) -> Result<(), Failure> {
             ("--date", 1),
             ("--expires", 1),
             ("--asset", 3),
+            ("--keep-browser", 1),
+            ("--browser", 7),
             ("--out", 1),
         ],
     )?;
@@ -168,6 +183,7 @@ fn manifest(args: &[String]) -> Result<(), Failure> {
         );
         assets.insert(platform.clone(), asset);
     }
+    let browser = browser_packages(&found, &key)?;
     let manifest = Manifest {
         format: MANIFEST_FORMAT,
         version,
@@ -175,8 +191,85 @@ fn manifest(args: &[String]) -> Result<(), Failure> {
         expires: Some(expires),
         notes: notes.to_string(),
         assets,
+        browser,
     };
     write_signed(&manifest, &key, out)
+}
+
+/// The browser component's packages of the manifest (mitcad#1579): those
+/// of `--keep-browser`'s manifest, then each `--browser` signed, which
+/// replaces a kept one of the same platform and interface.
+fn browser_packages(
+    found: &[(&str, &[String])],
+    key: &ed25519_dalek::SigningKey,
+) -> Result<Vec<BrowserPackage>, Failure> {
+    let mut packages: Vec<BrowserPackage> = Vec::new();
+    if let Some(path) = single(found, "--keep-browser") {
+        let data = fs::read(path).map_err(|e| error(format!("cannot read {path}: {e}")))?;
+        let earlier = Manifest::read(&data, &TrustedKeys::parse(&public_key(key)).map_err(error)?)
+            .map_err(|e| error(format!("{path}: {e}")))?;
+        for package in earlier.browser {
+            println!(
+                "browser {} (interface {}): kept {} (CEF {})",
+                package.platform, package.abi, package.version, package.cef
+            );
+            packages.push(package);
+        }
+    }
+    for (_, values) in found.iter().filter(|(option, _)| *option == "--browser") {
+        let abi: u32 = values[1].parse().map_err(|_| {
+            Failure::Usage(format!("--browser: '{}' is no interface number", values[1]))
+        })?;
+        let file = Path::new(&values[5]);
+        let package = sign_browser_package(
+            &values[0], abi, &values[2], &values[3], &values[4], file, &values[6], key,
+        )
+        .map_err(error)?;
+        println!(
+            "browser {} (interface {}): {} {} (CEF {}, {} bytes, SHA-256 {})",
+            package.platform,
+            package.abi,
+            package.version,
+            file.display(),
+            package.cef,
+            package.size,
+            package.sha256
+        );
+        packages.retain(|p| !(p.platform == package.platform && p.abi == package.abi));
+        packages.push(package);
+    }
+    Ok(packages)
+}
+
+/// The browser package a manifest lists for a platform and interface
+/// (mitcad#1579): what the release tooling compares its fingerprint with.
+fn browser(args: &[String]) -> Result<(), Failure> {
+    let found = options(
+        args,
+        &[
+            ("--manifest", 1),
+            ("--key", 1),
+            ("--platform", 1),
+            ("--abi", 1),
+        ],
+    )?;
+    let required = |name: &str| {
+        single(&found, name).ok_or_else(|| Failure::Usage(format!("{name} is required")))
+    };
+    let path = required("--manifest")?;
+    let keys = TrustedKeys::parse(required("--key")?).map_err(error)?;
+    let abi: u32 = required("--abi")?
+        .parse()
+        .map_err(|_| Failure::Usage("--abi takes a number".into()))?;
+    let data = fs::read(path).map_err(|e| error(format!("cannot read {path}: {e}")))?;
+    let manifest = Manifest::read(&data, &keys).map_err(|e| error(format!("{path}: {e}")))?;
+    if let Some(package) = manifest.browser_for(required("--platform")?, abi) {
+        println!("version {}", package.version);
+        println!("cef {}", package.cef);
+        println!("fingerprint {}", package.fingerprint);
+        println!("url {}", package.url);
+    }
+    Ok(())
 }
 
 /// `--expires`, checked, or the default validity from today.
@@ -243,6 +336,7 @@ fn verify(args: &[String]) -> Result<(), Failure> {
             ("--manifest", 1),
             ("--key", 1),
             ("--asset", 2),
+            ("--browser", 4),
             ("--current", 1),
         ],
     )?;
@@ -268,6 +362,18 @@ fn verify(args: &[String]) -> Result<(), Failure> {
             .verify_file(&values[0], Path::new(&values[1]), &keys)
             .map_err(|e| error(format!("{}: {e}", values[1])))?;
         println!("{}: {} download good", values[1], values[0]);
+    }
+    for (_, values) in found.iter().filter(|(option, _)| *option == "--browser") {
+        let abi: u32 = values[1].parse().map_err(|_| {
+            Failure::Usage(format!("--browser: '{}' is no interface number", values[1]))
+        })?;
+        manifest
+            .verify_browser_file(&values[0], abi, &values[2], Path::new(&values[3]), &keys)
+            .map_err(|e| error(format!("{}: {e}", values[3])))?;
+        println!(
+            "{}: browser {} for {} (interface {abi}) good",
+            values[3], values[2], values[0]
+        );
     }
     if let Some(current) = single(&found, "--current") {
         let status =

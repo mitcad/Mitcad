@@ -16,7 +16,7 @@ Language ([user guide](user-guide.md#language)).
 - **Catalogues.** Each language has a Qt Linguist file
   `app/translations/mitcad_<code>.ts` and a line in
   `app/translations/languages.txt`: its code and its baseline of unfinished
-  entries. The `.ts` files are the source of truth for translations; nothing
+  entries; its `model_<code>.ts` holds the model's messages (below). The `.ts` files are the source of truth for translations; nothing
   else holds translated text.
 - **Build.** `cmake/Translations.cmake` reads the list, prepares each `.ts`
   (`tools/translations`, `prepare`: a context-free copy of every translated
@@ -97,8 +97,9 @@ Language ([user guide](user-guide.md#language)).
          -DWORK=<build>/translations-work -DADD_LANGUAGE=de -P tools/translations-update.cmake
    ```
 
-   This writes `app/translations/mitcad_de.ts` with every text unfinished
-   and the line `de <count>` in `languages.txt`.
+   This writes `app/translations/mitcad_de.ts` and `model_de.ts` (the
+   model's messages, [below](#the-models-messages)) with every text
+   unfinished and the line `de <count>` in `languages.txt`.
 2. Translate (below). The first message to translate is the language's own
    name: the context `LanguageName`, source `English`, translated as the
    language names itself (`Deutsch`). Preferences lists the language by it.
@@ -151,9 +152,79 @@ Language ([user guide](user-guide.md#language)).
   or needs its case rephrases around it ("Valittu %1 kuuluu…") rather than
   bracketing it. A list joined in code gets its conjunction from a whole
   translated text (`walls %1 and %2`), never a joined `" and "`.
-- **The model's messages** (Rust: errors, warnings, the timeline's feature
-  names) come through the JSON API in English; translating them is a later
-  phase of mitcad#1284.
+- **The model's messages** (Rust, `core/`: refusals, errors, warnings,
+  notes) are translated as they are shown: [below](#the-models-messages).
+
+## The model's messages
+
+The model (Rust, `core/`) writes its refusals of commands, the errors and
+warnings of features, import notes, project and version errors and its
+other texts for the user in English, and the JSON API, MCP and the command
+line keep them English: agents and scripts read them. The application
+translates what it shows the user, as it shows it (mitcad#1284).
+
+- **Ids.** A message's id is its *template*: the English text of the Rust
+  source with its values as `%1`, `%2`, ... (`format!("feature {uid} does
+  not exist")` is `feature %1 does not exist`), as Qt names a text by its
+  English source. `mitcad-translations messages` (`tools/translations`)
+  finds them: every string literal of `core/`'s Rust sources with two words
+  side by side, outside comments, test modules (`#[cfg(test)] mod`, test
+  files and crates), the arguments of panics, assertions, `expect` and log
+  macros, and the texts only agents and the command line read (`mcp`,
+  `chat.rs`, `cli.rs`, `bin/`). They are listed in
+  `app/framework/ModelMessageTemplates.cpp` (generated: 10090 templates
+  when this was written), which lupdate reads into the context
+  `ModelMessage` of each language's `app/translations/model_<code>.ts`. That
+  file is compiled with `mitcad_<code>.ts` into one catalogue, is checked by
+  `repo.translations` with it and counts in its baseline; it is apart only
+  because one file would pass the size the repository takes.
+- **On display.** `modelMessage` (`app/framework/ModelMessages.hpp`)
+  matches a message to its template (the whole message; of several that
+  match, the one with the most fixed text), takes its values, translates
+  the template and puts the values back: names, numbers with units and
+  references stay as they are, and a value that is a message of its own
+  (`%1: %2`, `the geometry kernel does not support %1`) is translated in
+  turn. A message that is no template is translated line by line and after
+  a lead-in of the application's that ends in `: `. A template the
+  catalogue has not translated, and a text of no template, stay English.
+  English shows the model's texts untouched. Where it is applied: the
+  status line and the message band, a command panel's message, the warning
+  and error boxes, the browser's and the timeline's feature errors and
+  notices, and wherever the application keeps a model's text to show it:
+  a refusal caught from a command or query (`modelMessage(e.what())`), the
+  host's `lastError()` as a dialog or panel shows it, and the `error`,
+  `warning`, `reason`, `problem` and `note` texts and `warnings` of the
+  model's answers (imports, exports, versions, projects and live updates,
+  libraries, configurations and tables, drawings, BUILD and the machine
+  elements). The texts the application matches against the model's English
+  (the print library's known refusals, the binding warnings' prefixes, a
+  linked component's refusal) are matched first and translated after. A
+  log line written where only the English is at hand keeps it; one written
+  from the shown text shows the language.
+- **New and changed messages.** A message added or changed in `core/` makes
+  the ctest `repo.model-messages` fail until the list is written again:
+  `cmake --build <build> --target update_translations` writes
+  `ModelMessageTemplates.cpp` (`mitcad-translations messages <source root>
+  --write`) and then the `.ts` files, where the new templates come in
+  unfinished, to be translated as any other text. A message keeps its
+  translation as long as its template's text stays the same.
+- **Translating them.** As the interface's texts (above). Keep every `%N`
+  and never give one a case ending: a value is a name, a number or another
+  message, so a translation puts a noun before it ("piirrettä %1", "arvo
+  %1") or a colon after it. A template that is a fragment put after another
+  text (" and along their sides") stays a fragment with its leading space.
+  A template whose value is an English word ending (`%1 occurrence%2`)
+  cannot be translated well; such messages are worded in `core/` without
+  it as they are touched.
+- **Tests.** `test_app`'s model message tests check the matching, the
+  values and the English fallback, and that every template has its Finnish
+  and its pseudo-language translation. The pseudo-language marks the
+  model's messages too, so a model message left English shows without
+  brackets; `MITCAD_LOG_UNTRANSLATED=1` logs each shown text that stayed
+  English (`Untranslated model message: <text>`; the application's own
+  texts that pass the same displays may show there too). The language UI
+  tests show the model's refusal of a feature that does not exist in
+  English, Finnish and the pseudo-language.
 
 ## The check
 
@@ -330,7 +401,7 @@ Finnish CAD and engineering usage.
 | Create, Modify, Inspect, Insert, Select | Luo, Muokkaa, Tarkastele, Lisää, Valitse | the groups |
 | Auto | Auto | an input's automatic value: Auto (%1) |
 | Cancel | Peruuta | every Cancel button, Qt's own dialogs too (Qt's catalogue says Peru) |
-| member (Build) | rakenneosa | timber: puutavara; stud: tolppa; plate: juoksu; joist: palkki; rafter: kattokannattaja; header: ylityspalkki; trimmer: pielitolppa |
+| member (Build) | rakenneosa | timber: puutavara; stud: pylväs; plate: juoksu; joist: palkki; rafter: kattokannattaja; header: ylityspalkki; trimmer: pielipylväs |
 | connector | liitin | junction: liitoskohta |
 | fastener | kiinnike | wood screw: puuruuvi; nail: naula; set screw: pidätysruuvi |
 | miter | jiiri | butt: puskuliitos |
@@ -353,5 +424,12 @@ Finnish CAD and engineering usage.
 | thicken | paksunna | |
 | boss, rib (plastic) | torni, ripa | |
 | Anaglyph 3D | Anaglyfi-3D | stereo depth: stereosyvyys; convergence: konvergenssi |
+| suppressed (a feature) | vaimennettu | |
+| pattern instance | kopio | not esiintymä, an occurrence |
+| helix, coil | kierukka | |
+| replay (an import's history) | toisto | translated (an imported item): muunnettu; not translated: ei muunneta; decoded: purettu |
+| counterbore, countersink, counterdrill | lieriöupotus, kartioupotus, porausupotus | |
+| stair run, riser, tread | syöksy, nousu, askelma | landing: tasanne |
+| prime tower (3D print) | esitäyttötorni | brim: reunus; skirt: helma; raft: lautta; ironing: silitys; retraction: takaisinveto |
 | key names | Shift, Ctrl, Alt, Enter | as on the keyboard, never translated (not Vaihto) |
 | navigation bar, toolbar | navigointipalkki, työkalurivi | Pin to Navigation Bar: Kiinnitä navigointipalkkiin; Unpin from Navigation Bar: Irrota navigointipalkista; Pin to Toolbar: Kiinnitä työkaluriville |

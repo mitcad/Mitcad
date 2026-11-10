@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "FormulaEditor.hpp"
+#include "ModelMessages.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -317,7 +318,7 @@ void FormulaEditor::updateHelp() {
     inspectAt(cursor.selectionStart(),cursor.selectionEnd());
     qDebug().noquote() << QStringLiteral("Formula signature: %1").arg(m_signature->text());
   } catch (const std::exception& error) {
-    m_error->setText(QString::fromUtf8(error.what()));
+    m_error->setText(mitcad::modelMessage(error.what()));
     m_signature->clear();
     m_value->clear();
     m_part->clear();
@@ -384,7 +385,7 @@ void FormulaEditor::indentLet() {
     if (result.contains(QStringLiteral("formatted"))) {
       m_expression->setPlainText(result.value(QStringLiteral("formatted")).toString());
     }
-  } catch (const std::exception& error) { m_error->setText(QString::fromUtf8(error.what())); }
+  } catch (const std::exception& error) { m_error->setText(mitcad::modelMessage(error.what())); }
 }
 
 void FormulaEditor::accept() {
@@ -396,7 +397,7 @@ void FormulaEditor::accept() {
     }
     if (expression().isEmpty()) { m_error->setText(tr("Enter a formula.")); return; }
     QDialog::accept();
-  } catch (const std::exception& error) { m_error->setText(QString::fromUtf8(error.what())); }
+  } catch (const std::exception& error) { m_error->setText(mitcad::modelMessage(error.what())); }
 }
 
 void FormulaEditor::loadCompletions() {

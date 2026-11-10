@@ -58,6 +58,9 @@ qt_generate_deploy_app_script(
   NO_COMPILER_RUNTIME
   DEPLOY_TOOL_OPTIONS --no-opengl-sw --no-system-d3d-compiler --no-system-dxc-compiler)
 install(SCRIPT "${mitcad_qt_deploy_script}")
+# Insert > Component from Web's web browser component (mitcad#1579: the
+# module mitcad-webbrowser and CEF's runtime) is not in the installer: it is
+# a package of its own, downloaded on first use (app/webbrowser/CMakeLists.txt).
 
 # The DLLs the executables load: Qt (windeployqt adds its plugins to them),
 # OCCT and what OCCT needs (FreeType, libpng, ...) from vcpkg. The system's

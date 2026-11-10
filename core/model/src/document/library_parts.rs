@@ -591,6 +591,7 @@ impl<K: Kernel> Document<K> {
                         .as_ref()
                         .map(|b| b.part_number.clone())
                         .or_else(|| library.as_ref().map(|l| l.part_number.clone()))
+                        .or_else(|| self.stored_part_number(c.uid))
                         .unwrap_or_default(),
                     supplier_url: library
                         .as_ref()
@@ -604,6 +605,26 @@ impl<K: Kernel> Document<K> {
                 }
             })
             .collect()
+    }
+
+    /// A component's own stored `Part number` (of any set), the parts
+    /// list's for a component that is no library or BUILD part: one
+    /// brought in from the web gets its file name's first part
+    /// (mitcad#1579), and a user may give any component one.
+    fn stored_part_number(&self, component: ComponentUid) -> Option<String> {
+        use crate::properties::{PropertyOwner, PropertyValue, same_name};
+        self.state
+            .properties
+            .sets(PropertyOwner::Component(component))
+            .iter()
+            .flat_map(|group| group.properties.iter())
+            .find(|p| same_name(&p.key, "Part number"))
+            .and_then(|p| match &p.value {
+                PropertyValue::Text(text) => Some(text.trim().to_owned()),
+                PropertyValue::Integer(number) => Some(number.to_string()),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
     }
 }
 

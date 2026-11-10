@@ -38,8 +38,8 @@ wsl -d mitcad-dev --cd "~/src/mitcad" -- bash -lc "cmake --preset dev && cmake -
 | Script (`tools/dev-env`) | Use |
 |---|---|
 | `sync-to-wsl.sh [distro] [dir]` | Mirrors tracked and non-ignored untracked files into the distro (default `mitcad-dev`, `~/src/mitcad`). Only files whose content differs are replaced and get the sync time, so switching branches rebuilds exactly what changed. Deletes removed files; keeps `build/` and `CMakeUserPresets.json`. |
-| `install-packages.sh` | System packages (compilers, CMake, Ninja, ccache, rsync, X11/OpenGL headers, gdb, Xvfb, xdotool, rsvg-convert, ImageMagick; mosquitto for the live updates' tests, its service disabled; libsecret's headers for QtKeychain and GNOME's keyring for the keychain's test). Run as root. |
-| `setup-user.sh` | Pinned per-user toolchain: Rust from `rust-toolchain.toml`, cargo-deny, vcpkg at `vcpkg.json`'s `builtin-baseline`, Qt via aqtinstall, the render worker's Cycles with its CUDA device and Open Image Denoise (`build-cycles.sh --cuda`, once; `MITCAD_RENDER_CUDA=0` without CUDA); writes `CMakeUserPresets.json` (`dev` = Linux debug). Under WSLg sets `GALLIUM_DRIVER=d3d12`; `MITCAD_GPU_ADAPTER=NVIDIA` picks a GPU. |
+| `install-packages.sh` | System packages (compilers, CMake, Ninja, ccache, rsync, X11/OpenGL headers, gdb, Xvfb, xdotool, rsvg-convert, ImageMagick; mosquitto for the live updates' tests, its service disabled; libsecret's headers for QtKeychain and GNOME's keyring for the keychain's test; the system libraries CEF's runtime loads, for the web browser component). Run as root. |
+| `setup-user.sh` | Pinned per-user toolchain: Rust from `rust-toolchain.toml`, cargo-deny, vcpkg at `vcpkg.json`'s `builtin-baseline`, Qt via aqtinstall, the pinned CEF distribution (`fetch-cef.sh`, `MITCAD_CEF_ROOT` in `~/.profile`; [the web browser component](#the-web-browser-component)), the render worker's Cycles with its CUDA device and Open Image Denoise (`build-cycles.sh --cuda`, once; `MITCAD_RENDER_CUDA=0` without CUDA); writes `CMakeUserPresets.json` (`dev` = Linux debug). Under WSLg sets `GALLIUM_DRIVER=d3d12`; `MITCAD_GPU_ADAPTER=NVIDIA` picks a GPU. |
 | `install-appimage-tools.sh` | AppImage tools into `~/appimage-tools` (`MITCAD_APPIMAGE_TOOLS`), see [below](#tools-downloaded-from-releases). |
 | `build-root.sh` | An Ubuntu 24.04 build root on a newer Linux host, entered with bubblewrap, see [below](#linux-on-a-newer-host). |
 
@@ -129,7 +129,7 @@ ssh -i <key> <user>@<vm-host> "cd /d C:\dev\src\mitcad && tools\dev-env\msvc.cmd
 | Script | Use |
 |---|---|
 | `sync-to-vm.sh [user@host] [dir]` | Like `sync-to-wsl.sh`, over SSH. Defaults: `MITCAD_VM`, `MITCAD_VM_DIR` (`C:/dev/src/mitcad`), `MITCAD_VM_KEY` (`~/.ssh/mitcad_vm`). |
-| `setup-windows.ps1 [-Repo <dir>]` | Installs Git, CMake, Ninja, Rustup, Python, NSIS (winget), ccache, the pinned Rust toolchain, cargo-deny, vcpkg and Qt under `C:\dev`, the render worker's libraries (`build-cycles.ps1 -Cuda`, once; `MITCAD_RENDER_CUDA=0` without CUDA); writes `CMakeUserPresets.json` (`dev` = Windows release). Run as administrator. |
+| `setup-windows.ps1 [-Repo <dir>]` | Installs Git, CMake, Ninja, Rustup, Python, NSIS (winget), ccache, the pinned Rust toolchain, cargo-deny, vcpkg, Qt and the pinned CEF distribution (`fetch-cef.ps1`, the user's `MITCAD_CEF_ROOT`) under `C:\dev`, the render worker's libraries (`build-cycles.ps1 -Cuda`, once; `MITCAD_RENDER_CUDA=0` without CUDA); writes `CMakeUserPresets.json` (`dev` = Windows release). Run as administrator. |
 | `setup-ccache-windows.ps1 [-Dir] [-MaxSize]` | ccache into `C:\dev\ccache`, on the machine `PATH`, cache limit 4G (a build with the render worker; 2G was cleaned over and over). |
 | `setup-mesa-windows.ps1 [-Out] [-Vcpkg] [-Jobs]` | Builds Mesa's llvmpipe (~20 min) into `<Out>\bin` (default `C:\dev\mesa`). Needed in a VM without a GPU (Windows offers only OpenGL 1.1). |
 | `msvc.cmd <command>` | Runs a command in the VS x64 environment, rebuilding `PATH` from the registry first (SSH sessions keep a stale one). |
@@ -180,7 +180,7 @@ ssh -i ~/.ssh/mitcad_mac $MITCAD_MAC "cd ~/src/mitcad && cmake --preset dev && c
 | Script | Use |
 |---|---|
 | `sync-to-mac.sh [user@host] [dir]` | Like `sync-to-vm.sh`: stages the archive, compares contents and replaces only changed files with the sync time; unchanged files keep their times, and deleted files disappear. Keeps `build/` and `CMakeUserPresets.json`; no `._*` files or extended attributes. Defaults: `MITCAD_MAC`, `MITCAD_MAC_DIR` (`~/src/mitcad`), `MITCAD_MAC_KEY` (`~/.ssh/mitcad_mac`). |
-| `setup-macos.sh [--compiler-caches-only]` | CMake, Ninja, ccache (universal) and sccache (arm64) release archives into `~/.local` (not Homebrew), the pinned Rust toolchain, cargo-deny, vcpkg at `vcpkg.json`'s baseline, Qt via aqtinstall (`~/Qt/<version>/macos`), the render worker's libraries (`build-cycles-macos.sh`, once); writes `CMakeUserPresets.json` (`dev` = `macos-debug`). Downloads are checked against the SHA-256 pins in `versions.sh`; an empty pin stops it unless `MITCAD_SKIP_HASH=1`. The optional flag installs only the two compiler caches, leaving other dependencies, shell files and presets alone. |
+| `setup-macos.sh [--compiler-caches-only]` | CMake, Ninja, ccache (universal) and sccache (arm64) release archives into `~/.local` (not Homebrew), the pinned Rust toolchain, cargo-deny, vcpkg at `vcpkg.json`'s baseline, Qt via aqtinstall (`~/Qt/<version>/macos`), the pinned CEF distribution (`fetch-cef.sh`), the render worker's libraries (`build-cycles-macos.sh`, once); writes `CMakeUserPresets.json` (`dev` = `macos-debug`). Downloads are checked against the SHA-256 pins in `versions.sh`; an empty pin stops it unless `MITCAD_SKIP_HASH=1`. The optional flag installs only the two compiler caches, leaving other dependencies, shell files and presets alone. |
 
 `tools/dev-env/versions.sh` holds the pins `setup-user.sh` and
 `setup-macos.sh` share; the Windows script mirrors them by hand. The
@@ -843,6 +843,52 @@ AppImage only. That last step needs a build with the update test hooks
 AppImage, without them, is checked to ignore the update tests' variables
 instead ([updates.md](updates.md#the-test-hooks)).
 
+## The web browser component
+
+Insert › Component from Web (mitcad#1579, [app/COMMANDS.md](../app/COMMANDS.md#component-from-web-mitcad1579))
+runs its browser on the Chromium Embedded Framework (CEF), in a component
+that MitCad downloads on first use and that no installer, AppImage or disk
+image carries: the module `mitcad-webbrowser` (the window), CEF's
+subprocess helper and CEF's runtime.
+
+- **CEF.** The official binary distribution, pinned in
+  `tools/dev-env/versions.sh` (`CEF_VERSION`, the "minimal" distribution,
+  its SHA-1 per platform), fetched and unpacked by
+  `tools/dev-env/fetch-cef.sh` (Linux, macOS: `~/cef/<version>/…`) or
+  `tools/dev-env/fetch-cef.ps1` (Windows: `C:\dev\cef\<version>\…`); the
+  setup scripts run them. The build takes `MITCAD_CEF_ROOT` (the
+  environment's, else that folder). `libcef_dll_wrapper` is built from the
+  distribution's sources with its own CMake files, with the DLL runtime on
+  Windows and without CEF's sandbox.
+- **The build** (`app/webbrowser/CMakeLists.txt`, a directory scope of its own: CEF's CMake files change their directory's compiler flags, which reach neither MitCad's other targets nor the module):
+  `MITCAD_BROWSER_COMPONENT` `AUTO` (default) builds the component where
+  the distribution is, `ON` requires it, `OFF` leaves it out. Built, it is
+  staged in `<build>/browser-component` as the package unpacks it
+  (`component.json`, the module, the helper, CEF's runtime, its resources
+  and locales, the notices `packaging/browser/THIRD-PARTY-NOTICES.txt` and
+  CEF's licence); `MITCAD_BROWSER_COMPONENT_DIR=<build>/browser-component`
+  makes a build's MitCad use it without a download (the UI test
+  `app.ui-<platform>-component-web` does). The target `browser-package`
+  zips it as `mitcad-browser-<MITCAD_BROWSER_VERSION>-<platform>.zip`. The
+  module's own code is C++17, compiled as C++20 for CEF's headers, which
+  are included as system headers.
+- **Its interface.** `kComponentBrowserAbi` in
+  `app/webbrowser/ComponentBrowserHost.hpp` is the module's interface
+  version and the package's (`component.json`'s `abi`, the manifest's):
+  raise it with every change of that header. A MitCad loads only its own.
+- **A release** builds the package only when what it is built from
+  changed: `tools/browser-package.sh <build> <latest update-manifest.json>
+  <release public key>` (Linux, macOS; `tools/browser-package.ps1` on
+  Windows in the MSVC environment) compares the fingerprint (the CEF
+  version, the interface, the module's sources) with the latest
+  manifest's package (`mitcad-release browser`), and either keeps it
+  (`unchanged`) or builds a new package versioned by the build's time
+  (YYYY.MDD.HMM), signed on macOS, and writes the line that
+  `mitcad-release manifest --browser … <url>` takes ([updates.md](updates.md#the-web-browser-component)).
+- **Licences.** CEF and Chromium are BSD-3-Clause with Chromium's bundled
+  components under their own (FFmpeg's LGPL-2.1 inside libcef, a shared
+  library of its own in the package); the package carries its notices and
+  CEF's licence. Nothing of CEF is linked into `mitcad`.
 ## Tests
 
 **Tolerance:** every geometric comparison in a test (lengths, positions,
@@ -1607,7 +1653,7 @@ designs, written by hand (`core/solidcraft/tests/designs`, with their
 expected values worked out from SolidCraft's definitions; SolidCraft is
 not built or run for them). `MITCAD_SOLIDCRAFT_CORPUS` (a `PATH`-like
 list of folders) points at real ones: ctest `solidcraft.corpus`
-(`tools/cli/solidcraft-corpus.cmake`) imports every `.solidcraft` with
+(`tools/cli/solidcraft-corpus.cmake`) imports every `.sc` and `.solidcraft` with
 `mitcad-cli import-solidcraft` and checks one with `<name>.expected.json`
 next to it (SolidCraft's `solidcraft-cli eval` of it) against it; a folder's
 `known.txt` (file name, a tab, the reason) lists files allowed to fail
@@ -1660,6 +1706,34 @@ header and metadata, prims, points, indices, normals, materials, subsets,
 texture coordinates and transforms). The format was checked once with
 OpenUSD's own validators when the export was written (mitcad#123); no USD
 library is needed to build or test.
+
+Animated USDZ (mitcad#1597,
+[commands.md](../core/model-api/src/commands.md#animated-usdz)) is read
+back the same way (the time samples and the layer's time code range and
+rate). OpenUSD's own reading of the samples is a manual check, run in an
+isolated environment (the Linux distro or a VM, never the host) when the
+writer's time samples change, with OpenUSD's Python package (`usd-core`,
+in a virtual environment):
+
+```
+python3 -m venv ~/usd-check && ~/usd-check/bin/pip install usd-core
+MITCAD_USDZ_ANIMATED_SAMPLE=$HOME/animated.usdz \
+  cargo test --manifest-path core/Cargo.toml -p mitcad-usdz animated_sample_for_validators
+~/usd-check/bin/python tools/usdz-check/check-animation.py \
+  ~/animated.usdz tools/usdz-check/animated-sample.json
+# The CLI's two-box design with OCCT (ctest cli.export_usdz_animation):
+~/usd-check/bin/python tools/usdz-check/check-animation.py \
+  build/dev/tools/cli/usdz-animation/two_boxes.usdz tools/usdz-check/two-boxes.json
+```
+
+The script opens the package with OpenUSD, checks the stage's time code
+range and rate, reads each listed prim's `xformOp:transform` samples
+(their count and times) and its local transform at the first, middle and
+last samples against the expected poses (MitCad's layout), and runs
+OpenUSD's validators on it (`usdchecker`'s: the `UsdValidation`
+framework, all registered validators, as `usd-core` 26 has it; the
+older `UsdUtils.ComplianceChecker` where that framework is missing); it
+prints `OK` or each difference and exits non-zero on any.
 
 ## Branches
 

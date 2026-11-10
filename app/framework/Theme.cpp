@@ -339,10 +339,13 @@ const std::vector<RoleEntry>& roleTable() {
       MITCAD_SAME(JointA, hex(0xf28c28), View),
       MITCAD_SAME(JointB, hex(0x2ab57d), View),
       MITCAD_SAME(JointOrigin, hex(0x17a2b8), View),
-      // Print Analysis' categories, violet and magenta, by the view's
+      // Print Analysis' categories, violet, magenta and teal, by the view's
       // background.
       MITCAD_ROLE(PrintOverhang, hex(0x7e3fd0), hex(0xb48cff), View, PrintOverhang),
       MITCAD_ROLE(PrintThin, hex(0xc2188b), hex(0xff6ec7), View, PrintThin),
+      // Narrow gaps between bodies printed in place (mitcad#1519): teal,
+      // apart from the other two and from the status hues.
+      MITCAD_ROLE(PrintGap, hex(0x00897b), hex(0x4dd0c0), View, PrintGap),
       // Rule blocks: category hues no status uses, each at least 4.5:1
       // under white text, the same on both themes.
       MITCAD_ROLE(RuleFrame, hex(0x7b55bd), hex(0x7b55bd), Badge, RuleText),

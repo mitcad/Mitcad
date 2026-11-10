@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "DrawingWorkspace.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -706,7 +707,8 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
   if (m_cutSheet) {
     QStringList warnings;
     for (const QJsonValue& warning : sheet.value(QStringLiteral("warnings")).toArray()) {
-      warnings << userText(warning.toString()); // in plain words (mitcad#1612)
+      // In plain words (mitcad#1612), in the interface language (mitcad#1284).
+      warnings << mitcad::modelMessage(userText(warning.toString()));
     }
     const QString told = warnings.join(QStringLiteral("; "));
     if (told != m_cutWarnings) {
@@ -722,7 +724,7 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
     const QJsonObject view = value.toObject();
     if (view.contains(QStringLiteral("error"))) {
       problems << tr("View %1: %2").arg(view.value(QStringLiteral("id")).toInt())
-                      .arg(view.value(QStringLiteral("error")).toString());
+                      .arg(mitcad::modelMessage(view.value(QStringLiteral("error")).toString()));
     }
     // What of the bodies it keeps is gone from the design (mitcad#1293): a
     // warning, the rest drawn.
@@ -1867,7 +1869,7 @@ std::optional<QJsonObject> DrawingWorkspace::askPick(int view, QPointF at) {
   try {
     return m_host.model().queryObject(query);
   } catch (const std::exception& e) {
-    setStatus(QString::fromUtf8(e.what()), true);
+    setStatus(mitcad::modelMessage(e.what()), true);
     return std::nullopt;
   }
 }
@@ -2027,7 +2029,7 @@ bool DrawingWorkspace::askAnnotationFields(const DrawingToolDef& tool, QHash<QSt
     try {
       characteristics = m_host.model().queryArray(QStringLiteral("geometric_characteristics"));
     } catch (const std::exception& e) {
-      setStatus(QString::fromUtf8(e.what()), true);
+      setStatus(mitcad::modelMessage(e.what()), true);
       return false;
     }
     const std::optional<QJsonObject> frame =
@@ -2253,7 +2255,7 @@ void DrawingWorkspace::fillAnnotationPanel(int id) {
       try {
         characteristics = m_host.model().queryArray(QStringLiteral("geometric_characteristics"));
       } catch (const std::exception& e) {
-        setStatus(QString::fromUtf8(e.what()), true);
+        setStatus(mitcad::modelMessage(e.what()), true);
         return;
       }
       const std::optional<QJsonObject> chosen =
@@ -2599,7 +2601,7 @@ void DrawingWorkspace::deleteSelection() {
     m_sheetView->clearSelection();
   } else if (!m_host.lastCancelled()) {
     qDebug().noquote() << QStringLiteral("Drawing command refused: %1").arg(m_host.lastError());
-    setStatus(m_host.lastError(), true);
+    setStatus(mitcad::modelMessage(m_host.lastError()), true);
   }
 }
 
@@ -2655,7 +2657,7 @@ void DrawingWorkspace::selectionMoved(QPointF delta) {
   if (!m_host.runModelCommands(commands, tr("Move %1 items of %2").arg(commands.size()).arg(m_name)) &&
       !m_host.lastCancelled()) {
     qDebug().noquote() << QStringLiteral("Drawing command refused: %1").arg(m_host.lastError());
-    setStatus(m_host.lastError(), true);
+    setStatus(mitcad::modelMessage(m_host.lastError()), true);
   }
 }
 
@@ -2913,7 +2915,7 @@ bool DrawingWorkspace::run(const QJsonObject& command, QJsonObject* result) {
   if (!m_host.runModelCommand(command, result)) {
     if (!m_host.lastCancelled()) {
       qDebug().noquote() << QStringLiteral("Drawing command refused: %1").arg(m_host.lastError());
-      setStatus(m_host.lastError(), true);
+      setStatus(mitcad::modelMessage(m_host.lastError()), true);
     }
     return false;
   }
@@ -3286,7 +3288,7 @@ bool DrawingWorkspace::exportTo(const QString& path, const QString& units) {
     QJsonObject result;
     qDebug().noquote() << QStringLiteral("Drawing export: %1").arg(QDir::toNativeSeparators(path));
     if (!m_host.runModelCommand(command, &result)) {
-      setStatus(m_host.lastError(), true);
+      setStatus(mitcad::modelMessage(m_host.lastError()), true);
       return false;
     }
     const int parts = result.value(QStringLiteral("parts")).toInt();
@@ -3312,7 +3314,7 @@ bool DrawingWorkspace::exportTo(const QString& path, const QString& units) {
   QJsonObject result;
   qDebug().noquote() << QStringLiteral("Drawing export: %1").arg(QDir::toNativeSeparators(path));
   if (!m_host.runModelCommand(command, &result)) {
-    setStatus(m_host.lastError(), true);
+    setStatus(mitcad::modelMessage(m_host.lastError()), true);
     return false;
   }
   const int sheets = result.value(QStringLiteral("sheets")).toInt();
@@ -3341,7 +3343,7 @@ QStringList DrawingWorkspace::writeSheetsSvg(const QString& folder, QString& err
   }
   QJsonObject result;
   if (!m_host.runModelCommand(command, &result)) {
-    error = m_host.lastError();
+    error = mitcad::modelMessage(m_host.lastError());
     return {};
   }
   // A drawing's SVG files, one per sheet (the second sheet.svg's sheet-2.svg,
@@ -3737,7 +3739,7 @@ void DrawingWorkspace::addParts() {
   try {
     bodies = m_host.model().queryArray(QStringLiteral("bodies"));
   } catch (const std::exception& e) {
-    setStatus(QString::fromUtf8(e.what()), true);
+    setStatus(mitcad::modelMessage(e.what()), true);
     return;
   }
   const QString component = m_answer.value(QStringLiteral("component")).toString();

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <gp_Ax1.hxx>
+#include <gp_Dir.hxx>
 
 #include "mitcad/geometry/shape.hpp"
 #include "mitcad/geometry/target.hpp"
@@ -68,6 +69,18 @@ struct HoleSpec {
   double press_fit_inner = 0.0;
   double press_fit_bore = 0.0;
   double press_fit_angle = 0.0;
+  // A print shape for holes printed lying (mitcad#1515): per position (none
+  // or one per position) the roof's direction, at right angles to the axis
+  // and away from the print bed, or nullopt for a round hole. Over the
+  // cylindrical part, and a counterbore's or counterdrill's wider one, the
+  // section's upper arc gives way to two sides at 45 degrees to the roof's
+  // direction, tangent to the circle, meeting at a point the radius times
+  // the square root of 2 above the axis (a teardrop); a `roof_sag` above 0
+  // cuts them short with a flat roof that far above the circle (the sag
+  // allowance of its bridge; a roof above the point leaves the point). Not
+  // with a taper or a press fit.
+  std::vector<std::optional<gp_Dir>> roofs;
+  double roof_sag = 0.0;
 };
 
 // One solid per position, faces named <feature>:hole<i>.<part>, i the
@@ -79,7 +92,12 @@ struct HoleSpec {
 // its section's sides: `flat<k>` (a polygon's flats, counterclockwise about
 // the hole's direction from the first), or per rib k `rib<k>.side0` and
 // `rib<k>.side1` (its flanks before and after its tip) and `wall<k>` (the
-// bore after it).
+// bore after it). A print-shaped hole's solid has besides the round hole's
+// faces `roof0` and `roof1` (the roof's sides, counterclockwise about the
+// hole's direction after the wall), `roof` (the flat roof) and `roof_end`
+// (the roof's end where the cylindrical part ends; on a flat bottom the
+// bottom, which is `tip` too), and a counterbore's or counterdrill's
+// `cbore_roof0`, `cbore_roof1`, `cbore_roof` and `cbore_roof_end`.
 ShapePtr hole_tool(const HoleSpec& spec);
 
 } // namespace mitcad::geometry

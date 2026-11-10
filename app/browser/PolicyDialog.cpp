@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "PolicyDialog.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <exception>
 #include <utility>
@@ -194,7 +195,7 @@ void PolicyDialog::applyPreset(const QString& preset) {
                  .value(QStringLiteral("policy"))
                  .toObject();
   } catch (const std::exception& e) {
-    m_message->setText(QString::fromUtf8(e.what()));
+    m_message->setText(mitcad::modelMessage(e.what()));
     m_message->show();
     return;
   }
@@ -215,7 +216,7 @@ void PolicyDialog::refresh() {
                       {QStringLiteral("policy"), policy()}});
     m_message->hide();
   } catch (const std::exception& e) {
-    m_message->setText(QString::fromUtf8(e.what()));
+    m_message->setText(mitcad::modelMessage(e.what()));
     m_message->show();
     return;
   }

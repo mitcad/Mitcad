@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "ProfilesDialog.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -518,7 +519,7 @@ void ProfilesPanel::refresh() {
       m_keys = PrintKeyTable(m_host->model().queryObject({{QStringLiteral("query"), QStringLiteral("print_keys")}}));
     }
   } catch (const std::exception& e) {
-    error = QString::fromUtf8(e.what());
+    error = mitcad::modelMessage(e.what());
   }
   if (!error.isEmpty()) {
     setMessage(error, true);
@@ -819,7 +820,7 @@ bool ProfilesPanel::run(const QJsonObject& command, QJsonObject* result) {
                true); // plain words (mitcad#655)
   }
   qDebug().noquote() << QStringLiteral("%1: %2 refused: %3").arg(m_log)
-                            .arg(command.value(QStringLiteral("cmd")).toString(), m_host->lastError());
+                            .arg(command.value(QStringLiteral("cmd")).toString(), mitcad::modelMessage(m_host->lastError()));
   return false;
 }
 
@@ -867,7 +868,7 @@ void ProfilesPanel::edit(const QJsonObject& change, const QString& what, const Q
     if (!done && !field.isEmpty() && !m_host->lastCancelled()) {
       // A refusal of a setting under its field (mitcad#655).
       setMessage(QString());
-      m_form->setError(field, m_keys.plainText(m_host->lastError()));
+      m_form->setError(field, m_keys.plainText(mitcad::modelMessage(m_host->lastError())));
     }
   });
 }

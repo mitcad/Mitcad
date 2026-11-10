@@ -189,6 +189,13 @@ QRectF clearPlace(const QRectF& row, const QPointF& away, const QRectF& bounds, 
   return bestCost < kNone ? best : crowded;
 }
 
+// The sources of sketch mode's errors (mitcad#1621,
+// SketchHost::showSourceError): each goes when its source closes, the
+// sketch's with all of them.
+const QString kSketchSource = QStringLiteral("sketch");
+const QString kToolSource = QStringLiteral("sketch/tool");
+const QString kEditorSource = QStringLiteral("sketch/editor");
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -688,6 +695,8 @@ void SketchController::enter(const QString& uid) {
 void SketchController::leave() {
   stopTool();
   closeEditor();
+  // The sketch finished: its errors go with it (mitcad#1621).
+  m_host.closeMessageSource(kSketchSource);
   m_notice.clear();
   m_pressed = false;
   m_dragging = false;
@@ -983,6 +992,8 @@ void SketchController::stopTool() {
   }
   // For UI tests (mitcad#1085: a right-click with nothing in progress).
   qDebug().noquote() << QStringLiteral("Sketch tool ended: %1").arg(m_tool->name());
+  // Ended or switched: its errors go with it (mitcad#1621).
+  m_host.closeMessageSource(kToolSource);
   // A tool may end itself from one of its own handlers: delete it later.
   SketchTool* retired = m_tool.release();
   QTimer::singleShot(0, this, [retired] { delete retired; });
@@ -2545,9 +2556,14 @@ void SketchController::notice(const QString& message, NoticeLevel level) {
 }
 
 void SketchController::error(const QString& message) {
+  // Its source (mitcad#1621): the running tool, or sketch mode itself.
+  sourceError(message, m_tool ? kToolSource : kSketchSource);
+}
+
+void SketchController::sourceError(const QString& message, const QString& source) {
   m_notice.clear();
   m_noticeLevel = NoticeLevel::Hint;
-  m_host.showError(message);
+  m_host.showSourceError(message, source);
 }
 
 void SketchController::updateCursor(const QPointF& position) {
@@ -3804,7 +3820,9 @@ void SketchController::acceptEditor() {
   if (!evaluate(text, m_editorKind, expression, value, problem)) {
     m_editor->setStyleSheet(kInvalidFieldStyle);
     m_editor->setProperty("nativeInlineInvalid", true);
-    error(tr("%1: %2").arg(text, problem));
+    // The editor's own error, until it closes (mitcad#1621); with what was
+    // typed before it, never an empty text and a colon.
+    sourceError(text.isEmpty() ? problem : tr("%1: %2").arg(text, problem), kEditorSource);
     return;
   }
   if (!rename.isEmpty()) {
@@ -3858,6 +3876,8 @@ void SketchController::closeEditor() {
     m_editor = nullptr;
     m_viewer.setFocus();
     qDebug().noquote() << QStringLiteral("Sketch value editor closed");
+    // Closed, or its value taken: its error goes (mitcad#1621).
+    m_host.closeMessageSource(kEditorSource);
   }
   m_editorAccept = nullptr;
   m_editorToolSession.reset();
@@ -3870,6 +3890,9 @@ bool SketchController::evaluate(const QString& text, FieldSpec::Kind kind, QStri
                                 double& value, QString& problem) const {
   if (kind == FieldSpec::Kind::Text) {
     expression = text;
+    if (text.isEmpty()) {
+      problem = tr("Enter some text."); // what the error says (mitcad#1621)
+    }
     return !text.isEmpty();
   }
   if (text.trimmed().isEmpty()) {

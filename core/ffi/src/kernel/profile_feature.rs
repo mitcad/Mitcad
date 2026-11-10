@@ -92,6 +92,12 @@ pub mod ffi {
         press_fit_inner: f64,
         press_fit_bore: f64,
         press_fit_angle: f64,
+        /// A print shape (mitcad#1515): per position the roof's direction
+        /// as x, y, z (a zero vector: a round hole), empty for none;
+        /// `print_roof_sag` a flat roof's height above the circle, 0 for
+        /// a teardrop's point.
+        print_roofs: Vec<f64>,
+        print_roof_sag: f64,
     }
 
     #[derive(Clone, Debug)]
@@ -372,6 +378,18 @@ pub fn hole_input(
         press_fit_inner: 0.0,
         press_fit_bore: 0.0,
         press_fit_angle: 0.0,
+        print_roofs: spec.print_shape.as_ref().map_or_else(Vec::new, |print| {
+            print
+                .roofs
+                .iter()
+                .flat_map(|roof| roof.unwrap_or([0.0; 3]))
+                .collect()
+        }),
+        print_roof_sag: spec
+            .print_shape
+            .as_ref()
+            .and_then(|print| print.flat_roof)
+            .unwrap_or(0.0),
     };
     match spec.press_fit {
         None => {}

@@ -23,6 +23,7 @@
 //   - the Browser's markers on the Make tab: the bodies whose material or
 //     print settings differ from their component's (make_differences).
 #include "MainWindow.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -316,7 +317,7 @@ bool MainWindow::addAnnotationFrom(const CommandState& state, const QString& kin
   m_measurementKept = true;
   if (!runAnnotationCommand(command, label)) {
     m_measurementKept = false;
-    showHint(lastError());
+    showHint(mitcad::modelMessage(lastError()));
     qDebug().noquote() << QStringLiteral("Annotation %1 not added: %2").arg(kind, lastError());
     return false;
   }
@@ -525,7 +526,7 @@ void MainWindow::setMakeCardMaterial(const QString& key) {
     qInfo().noquote()
         << QStringLiteral("Material %1 set for 1 body(ies), appearance %2").arg(id, assignment.appearance);
   } else {
-    showError(tr("Material: %1").arg(lastError()));
+    showError(tr("Material: %1").arg(mitcad::modelMessage(lastError())));
     qInfo().noquote() << QStringLiteral("Make card material refused: %1").arg(lastError());
   }
   updateMakeCard();
@@ -572,7 +573,7 @@ void MainWindow::setMakeCardProfile(const QString& kind, const QString& key) {
   if (runModelCommand(command)) {
     qInfo().noquote() << QStringLiteral("Make card %1 set: %2").arg(plain, name);
   } else {
-    showError(tr("%1: %2").arg(plain, lastError()));
+    showError(tr("%1: %2").arg(plain, mitcad::modelMessage(lastError())));
     qInfo().noquote() << QStringLiteral("Make card %1: %2 refused: %3").arg(plain, name, lastError());
   }
   updateMakeCard();
@@ -594,7 +595,7 @@ void MainWindow::setMakeCardProperty(const QString& set, const QString& key, con
                        {QStringLiteral("value"), value}})) {
     qInfo().noquote() << QStringLiteral("Make card %1 set: %2").arg(plain, shown);
   } else {
-    showError(tr("%1: %2").arg(plain, lastError()));
+    showError(tr("%1: %2").arg(plain, mitcad::modelMessage(lastError())));
     qInfo().noquote() << QStringLiteral("Make card %1: %2 refused: %3").arg(plain, shown, lastError());
   }
   updateMakeCard();
@@ -605,7 +606,7 @@ void MainWindow::setMakeCardValue(const QString& set, const QString& key, const 
   try {
     keys = PrintKeyTable(query({{QStringLiteral("query"), QStringLiteral("print_keys")}}).toObject());
   } catch (const std::exception& e) {
-    showError(QString::fromUtf8(e.what()));
+    showError(mitcad::modelMessage(e.what()));
     return;
   }
   const PrintKey* printKey = keys.find(key);
@@ -646,7 +647,7 @@ void MainWindow::addMakeCardValue() {
     }
     choices = printValueChoices(keys, query(settingsQuery).toObject());
   } catch (const std::exception& e) {
-    showError(QString::fromUtf8(e.what()));
+    showError(mitcad::modelMessage(e.what()));
     return;
   }
   // Without the pending one: it is on the card already.
@@ -687,7 +688,7 @@ void MainWindow::addMakeCardValue() {
         qInfo().noquote() << QStringLiteral("Make card %1 added: %2").arg(choice.name, choice.text);
         updateMakeCard();
       } else {
-        showError(tr("%1: %2").arg(choice.name, lastError()));
+        showError(tr("%1: %2").arg(choice.name, mitcad::modelMessage(lastError())));
         qInfo().noquote() << QStringLiteral("Make card %1: adding refused: %2").arg(choice.name, lastError());
         updateMakeCard();
         return;
@@ -724,7 +725,7 @@ void MainWindow::removeMakeCardValue(const QString& set, const QString& key, con
                        {QStringLiteral("key"), key}})) {
     qInfo().noquote() << QStringLiteral("Make card %1 removed").arg(name);
   } else {
-    showError(tr("%1: %2").arg(name, lastError()));
+    showError(tr("%1: %2").arg(name, mitcad::modelMessage(lastError())));
     qInfo().noquote() << QStringLiteral("Make card %1: removing refused: %2").arg(name, lastError());
   }
   updateMakeCard();

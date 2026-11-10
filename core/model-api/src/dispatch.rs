@@ -91,11 +91,11 @@ pub(super) trait DispatchOps<K: Kernel> {
     /// The families of commands besides the document's own (`Command`,
     /// which takes every other name, so that its error lists its commands
     /// for an unknown one). A new family is one row here.
-    fn command_families() -> [CommandFamily<K>; 27];
+    fn command_families() -> [CommandFamily<K>; 28];
 }
 
 impl<K: Kernel> DispatchOps<K> for Document<K> {
-    fn command_families() -> [CommandFamily<K>; 27] {
+    fn command_families() -> [CommandFamily<K>; 28] {
         [
             // Gears: the motion link of a mesh (mitcad#472, `gears.rs`),
             // run as the `add_motion_link` worked out from the gears. It has
@@ -325,6 +325,18 @@ impl<K: Kernel> DispatchOps<K> for Document<K> {
                 prefix: None,
                 run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
                     super::auto_fix::run_auto_fix_command(doc, parse(value, "command")?)
+                },
+            },
+            // Filament changes at print heights (mitcad#1596,
+            // `filament_changes.rs`).
+            CommandFamily {
+                names: super::filament_changes::FilamentChangeCommand::NAMES,
+                prefix: None,
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    super::filament_changes::run_filament_change_command(
+                        doc,
+                        parse(value, "command")?,
+                    )
                 },
             },
         ]

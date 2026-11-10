@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Print Analysis queries (mitcad#620): `print_overhangs`,
-//! `print_thickness` and `print_estimate` on bodies at the timeline
-//! marker, worked out in Rust (`mitcad_model::print_analysis`) on the meshes and
+//! `print_thickness`, `print_estimate` and `print_min_gap` (mitcad#1519)
+//! on bodies at the timeline marker, worked out in Rust (`mitcad_model::print_analysis`) on the meshes and
 //! measures the kernel already gives (`Kernel::triangle_mesh`,
 //! `Kernel::physical_properties`). See `commands.md`, "Print analysis".
 //!
@@ -20,14 +20,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::ApiError;
-use mitcad_model::analysis;
+use mitcad_model::analysis::{self, Selection};
 use mitcad_model::datum::Vec3;
 use mitcad_model::exchange::{MeshTolerance, Refinement, TriangleMesh};
 use mitcad_model::features::geom_ref::GeomRef;
 use mitcad_model::ids::BodyUid;
 use mitcad_model::internal::document::{check_minimum_wall, check_overhang_angle, print_material};
 use mitcad_model::internal::fingerprint::Fingerprint;
-use mitcad_model::kernel::Kernel;
+use mitcad_model::kernel::{BoundingBox, Kernel};
 use mitcad_model::print_analysis::{self, Bed, EstimateSettings};
 use mitcad_model::transform::Transform;
 use mitcad_model::{Document, ModelError};
@@ -154,6 +154,24 @@ impl EstimateQuery {
     }
 }
 
+/// `print_min_gap` (mitcad#1519): the bodies printed in place whose gaps
+/// are measured, and the gap under which they fuse.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MinGapQuery {
+    /// Empty (and no plate): the printed bodies at the marker, solids and
+    /// mesh bodies.
+    #[serde(default)]
+    bodies: Vec<BodyUid>,
+    /// A print plate by its id or name: the printed bodies that print on
+    /// it (not with `bodies`).
+    #[serde(default)]
+    plate: Option<String>,
+    /// mm; left out, the design's `print_in_place_gap`, else 0.3 mm.
+    #[serde(default)]
+    gap: Option<f64>,
+}
+
 /// A body to analyse: its shape, the identity of the shape and where it
 /// is printed from.
 struct PrintBody<'a, S> {
@@ -224,6 +242,11 @@ pub(super) trait PrintOps<K: Kernel> {
     /// `print_estimate`: per body and in total the volume, area, shell,
     /// infill and filament, the filament's mass and length and its cost.
     fn print_estimate_json(&self, query: &EstimateQuery) -> Result<Value, ApiError>;
+
+    /// `print_min_gap` (mitcad#1519): the pairs of the bodies, as they are
+    /// placed, apart but closer than the gap, with their distance and
+    /// closest points in design coordinates, the closest first.
+    fn print_min_gap_json(&self, query: &MinGapQuery) -> Result<Value, ApiError>;
 }
 
 impl<K: Kernel> PrintOps<K> for Document<K> {
@@ -482,6 +505,148 @@ impl<K: Kernel> PrintOps<K> for Document<K> {
         value["bodies"] = json!(results);
         Ok(value)
     }
+
+    fn print_min_gap_json(&self, query: &MinGapQuery) -> Result<Value, ApiError> {
+        let (gap, from) = match query.gap {
+            Some(gap) => {
+                print_analysis::check_min_gap(gap).map_err(ApiError)?;
+                (gap, "query")
+            }
+            None => self.print_min_gap_default(),
+        };
+        if query.plate.is_some() && !query.bodies.is_empty() {
+            return Err(ApiError(
+                "give the bodies either as bodies or as a plate".to_owned(),
+            ));
+        }
+        let uids = match &query.plate {
+            Some(plate) => {
+                let index = self.plate_index(plate)?;
+                self.printed_bodies(Some(index))
+            }
+            None if query.bodies.is_empty() => self.printed_bodies(None),
+            None => query.bodies.clone(),
+        };
+        let bodies = match self.print_bodies(&uids) {
+            Ok(bodies) => bodies,
+            Err(error) => return Ok(json!({"error": error})),
+        };
+        let kernel = self.kernel();
+        // Only bodies whose boxes lie within the gap can be closer; a box
+        // the kernel cannot give rules nothing out.
+        let boxes: Vec<Option<BoundingBox>> = bodies
+            .iter()
+            .map(|body| match kernel.enclosing_box(body.shape) {
+                Ok(Some(found)) => Some(placed_box(&found, &body.placement)),
+                Ok(None) => None,
+                Err(_) => Some(BoundingBox {
+                    min: [f64::NEG_INFINITY; 3],
+                    max: [f64::INFINITY; 3],
+                }),
+            })
+            .collect();
+        let candidates = print_analysis::gap_candidates(&boxes, gap);
+        // The bodies of the candidates moved where they are printed from,
+        // each once.
+        let mut moved: Vec<Option<K::Shape>> = (0..bodies.len()).map(|_| None).collect();
+        let mut pairs = Vec::new();
+        let mut touching = 0;
+        for (i, j) in candidates {
+            self.print_stop()?;
+            let (a, b) = (&bodies[i], &bodies[j]);
+            let key = print_analysis::gap_key(
+                (a.uid, a.version, &a.placement),
+                (b.uid, b.version, &b.placement),
+            );
+            let value = match self.print_cache().result(key) {
+                Some(value) => value,
+                None => {
+                    for k in [i, j] {
+                        if moved[k].is_none() && !bodies[k].placement.is_identity() {
+                            match kernel.transform_shape(
+                                bodies[k].shape,
+                                &bodies[k].placement,
+                                None,
+                            ) {
+                                Ok(shape) => moved[k] = Some(shape),
+                                Err(e) => {
+                                    return Ok(
+                                        json!({"error": format!("{}: {e}", bodies[k].name)}),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    let shape_a = moved[i].as_ref().unwrap_or(a.shape);
+                    let shape_b = moved[j].as_ref().unwrap_or(b.shape);
+                    let separation = match kernel.measure_between(
+                        &Selection {
+                            shape: shape_a,
+                            name: None,
+                        },
+                        &Selection {
+                            shape: shape_b,
+                            name: None,
+                        },
+                    ) {
+                        Ok(separation) => separation,
+                        Err(e) => {
+                            return Ok(json!({
+                                "error": format!("{} and {}: {e}", a.name, b.name)
+                            }));
+                        }
+                    };
+                    let value = Arc::new(json!({
+                        "distance": separation.distance,
+                        "on_a": separation.on_a,
+                        "on_b": separation.on_b,
+                        "inside": separation.inside,
+                    }));
+                    self.print_cache().keep_result(key, Arc::clone(&value));
+                    value
+                }
+            };
+            let distance = value["distance"].as_f64().unwrap_or_default();
+            let inside = value["inside"].as_bool().unwrap_or_default();
+            match print_analysis::gap_kind(distance, inside, gap) {
+                print_analysis::GapKind::Touching => touching += 1,
+                print_analysis::GapKind::Narrow => pairs.push(json!({
+                    "a": a.uid, "b": b.uid, "names": [a.name, b.name],
+                    "distance": distance, "on_a": value["on_a"], "on_b": value["on_b"],
+                })),
+                print_analysis::GapKind::Clear => {}
+            }
+        }
+        pairs.sort_by(|x, y| {
+            let d = |v: &Value| v["distance"].as_f64().unwrap_or_default();
+            d(x).total_cmp(&d(y))
+        });
+        let closest = pairs.first().map_or(Value::Null, |p| p["distance"].clone());
+        Ok(json!({
+            "gap": gap,
+            "gap_from": from,
+            "bodies": bodies.len(),
+            "pairs": pairs,
+            "closest": closest,
+            "touching": touching,
+        }))
+    }
+}
+
+/// A box placed: the box of its corners moved by the placement.
+fn placed_box(found: &BoundingBox, placement: &Transform) -> BoundingBox {
+    let mut corners = found.corners().map(|c| placement.apply_point(c));
+    let first = corners.next().unwrap_or(found.min);
+    corners.fold(
+        BoundingBox {
+            min: first,
+            max: first,
+        },
+        |acc, p| BoundingBox {
+            min: std::array::from_fn(|i| acc.min[i].min(p[i])),
+            max: std::array::from_fn(|i| acc.max[i].max(p[i])),
+        },
+    )
 }
 
 /// The document's methods used only in this module, as an
@@ -494,6 +659,12 @@ trait PrintLocal<K: Kernel> {
 
     /// Stops a query that runs in a cancelled model job.
     fn print_stop(&self) -> Result<(), ApiError>;
+
+    /// The printed bodies at the marker (solids and mesh bodies; a body
+    /// whose kind the kernel cannot tell too), in order; with a plate's
+    /// index, those that print on it by their first shown placement
+    /// (mitcad#1519).
+    fn printed_bodies(&self, plate: Option<usize>) -> Vec<BodyUid>;
 
     /// The body's triangle mesh in its own coordinates, kept by its shape.
     fn print_mesh(
@@ -537,6 +708,35 @@ impl<K: Kernel> PrintLocal<K> for Document<K> {
         } else {
             Ok(())
         }
+    }
+
+    fn printed_bodies(&self, plate: Option<usize>) -> Vec<BodyUid> {
+        let instances = self.instances();
+        self.bodies()
+            .into_iter()
+            .filter(|body| {
+                !self.kernel().body_kind(body.shape).is_ok_and(|kind| {
+                    !matches!(
+                        kind,
+                        mitcad_model::exchange::BodyKind::Solid
+                            | mitcad_model::exchange::BodyKind::Mesh
+                    )
+                })
+            })
+            .filter(|body| {
+                let Some(index) = plate else {
+                    return true;
+                };
+                let first = instances.iter().find(|i| i.body == body.uid);
+                let path = instances
+                    .iter()
+                    .find(|i| i.body == body.uid && i.visible)
+                    .or(first)
+                    .map_or(&[][..], |i| i.path.as_slice());
+                self.plate_of_body(body.uid, Some(path)) == Some(index)
+            })
+            .map(|body| body.uid)
+            .collect()
     }
 
     fn print_mesh(

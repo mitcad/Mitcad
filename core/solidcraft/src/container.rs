@@ -14,6 +14,24 @@ use serde_json::{Value, json};
 /// The largest blob expanded: SolidCraft's cap on a mesh blob (format 39).
 pub const MAX_BLOB_BYTES: u64 = 512 << 20;
 
+/// Whether the bytes are a zip whose `container.json` names a design
+/// container (its format key only; the document is not read), for
+/// [`crate::check_design`] (mitcad#1622).
+pub fn is_container(bytes: &[u8]) -> bool {
+    let Ok(archive) = Archive::new(bytes.to_vec()) else {
+        return false;
+    };
+    let Ok(text) = archive.read_by_name("container.json") else {
+        return false;
+    };
+    serde_json::from_slice::<Value>(&text).is_ok_and(|v| {
+        matches!(
+            v.get("format").and_then(Value::as_str),
+            Some("solidcraft-container/1" | "solvecraft-container/1")
+        )
+    })
+}
+
 /// The container's JSON document with its blobs put back.
 pub fn read(bytes: &[u8]) -> Result<Value, String> {
     let archive = Archive::new(bytes.to_vec()).map_err(|e| format!("design container: {e}"))?;

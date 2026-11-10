@@ -14,6 +14,9 @@
 // of 80 mm).
 // The check of mitcad#1253 warns of such a chamfer hanging out past the rim
 // (made by hand here: the chamfer on a larger disc, the disc cut back).
+// Where a chamfer reaching exactly to a far edge is refused, the refusal
+// says it in plain words, its places and detail for agents (mitcad#1617: a
+// block with a hole whose rim the chamfer's contact touches).
 //
 // The expected numbers are those of the reference results (MITCAD_GEOMETRY_CASES,
 // case `chamfer-overflow-concave`, STEP files; built-in when it is not set).
@@ -21,6 +24,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -58,6 +62,7 @@
 #include "../src/dressup_check.hpp"
 #include "mitcad/analysis/properties.hpp"
 #include "mitcad/geometry/dressup.hpp"
+#include "mitcad/geometry/user_error.hpp"
 #include "mitcad/io/step.hpp"
 
 namespace test {
@@ -445,9 +450,196 @@ void test_octagon_foot_to_the_rim() {
     }
     const std::string text = detail::overflow_tangent(*body, owner, [](int, int) { return 4.0; });
     std::printf("%s, tangent: %s\n", label.c_str(), text.c_str());
-    CHECK(text.find("reaches exactly to the far edge of the narrow face") != std::string::npos);
-    CHECK(text.find("E{") == std::string::npos && text.find("face N") == std::string::npos &&
-          text.find("(40") == std::string::npos);
+    const std::string message = error_message(text);
+    CHECK(message.find("reaches exactly to the far edge of the narrow face") != std::string::npos);
+    CHECK(message.find("E{") == std::string::npos && message.find("face N") == std::string::npos &&
+          message.find("(40") == std::string::npos);
+    // The edge's name for agents, in the detail and the places
+    // (mitcad#1617).
+    if (edge >= 0) {
+      CHECK(text.find("\"detail\":\"the chamfer of edge " + body->edge_name(edge)) != std::string::npos);
+    }
+  }
+}
+
+// The refusal of a chamfer reaching exactly to a far edge (mitcad#1617):
+// the message a person reads in plain words (mitcad#1613), its places the
+// chamfered edge, the far edge and the point where the contact touches it,
+// and the detail naming them for agents (placed_error, mitcad#1612). A
+// block 60 x 40 x 10 with a vertical hole of radius 5 at (30, 9), its top
+// front edge chamfered 4 mm: the chamfer's contact on the top face, 4 mm
+// from the edge, touches the hole's rim in one point, (30, 4, 10). There
+// the strip of the top face between the chamfer and the hole would end in
+// a point. (Not the octagon's foot on the disc above, which now builds,
+// mitcad#1613.)
+TopoDS_Shape block_with_hole() {
+  const TopoDS_Shape block = BRepPrimAPI_MakeBox(60.0, 40.0, 10.0).Shape();
+  const TopoDS_Shape hole = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(30, 9, -1), gp_Dir(0, 0, 1)), 5.0, 12.0).Shape();
+  return BRepAlgoAPI_Cut(block, hole).Shape();
+}
+
+// The index of the edge whose curve's middle is at `at` (-1 for none).
+int edge_with_middle_at(const Shape& body, const gp_Pnt& at) {
+  int found = -1;
+  for (int i = 0; i < body.edge_count(); ++i) {
+    const TopoDS_Edge& edge = TopoDS::Edge(body.edge(i));
+    if (BRep_Tool::Degenerated(edge)) {
+      continue;
+    }
+    double first = 0.0;
+    double last = 0.0;
+    const occ::handle<Geom_Curve> curve = BRep_Tool::Curve(edge, first, last);
+    if (!curve.IsNull() && curve->Value(0.5 * (first + last)).Distance(at) < 1e-6) {
+      CHECK(found < 0);
+      found = i;
+    }
+  }
+  return found;
+}
+
+// The names of the edges of the hole's rim on the top face (one closed
+// edge, or its pieces).
+std::vector<std::string> hole_rim_edges(const Shape& body) {
+  std::vector<std::string> names;
+  for (int i = 0; i < body.edge_count(); ++i) {
+    const TopoDS_Edge& edge = TopoDS::Edge(body.edge(i));
+    if (BRep_Tool::Degenerated(edge)) {
+      continue;
+    }
+    double first = 0.0;
+    double last = 0.0;
+    const occ::handle<Geom_Curve> curve = BRep_Tool::Curve(edge, first, last);
+    if (curve.IsNull()) {
+      continue;
+    }
+    const gp_Pnt middle = curve->Value(0.5 * (first + last));
+    if (std::abs(middle.Z() - 10.0) < 1e-6 && std::abs(std::hypot(middle.X() - 30.0, middle.Y() - 9.0) - 5.0) < 1e-6) {
+      names.push_back(body.edge_name(i));
+    }
+  }
+  return names;
+}
+
+// How many times `piece` is in `text`.
+int count_of(const std::string& text, const std::string& piece) {
+  int count = 0;
+  for (std::size_t at = text.find(piece); at != std::string::npos; at = text.find(piece, at + piece.size())) {
+    ++count;
+  }
+  return count;
+}
+
+// The point place of an error's text ("kind":"point","at":[x,y,z]), false
+// when it has none.
+bool point_of(const std::string& text, gp_Pnt& point) {
+  const std::string head = "{\"kind\":\"point\",\"at\":[";
+  const std::size_t at = text.find(head);
+  if (at == std::string::npos) {
+    return false;
+  }
+  const char* p = text.c_str() + at + head.size();
+  char* end = nullptr;
+  double xyz[3] = {0.0, 0.0, 0.0};
+  for (double& value : xyz) {
+    value = std::strtod(p, &end);
+    if (end == p) {
+      return false;
+    }
+    p = end;
+    if (*p == ',') {
+      ++p;
+    }
+  }
+  point.SetCoord(xyz[0], xyz[1], xyz[2]);
+  return true;
+}
+
+// The refusal's message, places and detail (`text`, as overflow_tangent
+// gives it, or as the chamfer throws it with its context after it).
+void check_far_edge_refusal(const std::string& label, const Shape& body, const std::string& text, int chamfered,
+                            const std::vector<std::string>& rims) {
+  std::printf("%s: %s\n", label.c_str(), text.c_str());
+  // The person: the plain sentence only.
+  CHECK(error_message(text) ==
+        "the chamfer reaches exactly to the far edge of the narrow face beside its edge: its contact touches that "
+        "edge in a point, and the chamfer cannot be built there as a sound solid at this size");
+  const std::size_t tail = text.find(kPlacedTail);
+  CHECK(tail != std::string::npos);
+  if (tail == std::string::npos) {
+    return;
+  }
+  const std::string placed = text.substr(tail);
+  // The places: the chamfered edge, the far edge (the hole's rim) and the
+  // touch point.
+  CHECK(chamfered >= 0 && !body.edge_name(chamfered).empty());
+  if (chamfered >= 0) {
+    CHECK(placed.find("{\"kind\":\"edge\",\"name\":" + json_text(body.edge_name(chamfered)) + "}") !=
+          std::string::npos);
+  }
+  CHECK(!rims.empty());
+  CHECK(std::any_of(rims.begin(), rims.end(), [&](const std::string& rim) {
+    return !rim.empty() && placed.find("{\"kind\":\"edge\",\"name\":" + json_text(rim) + "}") != std::string::npos;
+  }));
+  gp_Pnt touch;
+  CHECK(point_of(placed, touch));
+  std::printf("%s: touch point (%.9f, %.9f, %.9f)\n", label.c_str(), touch.X(), touch.Y(), touch.Z());
+  // (Within the 0.1 um the contact may come near the rim's extreme and
+  // count as touching it.)
+  CHECK(touch.Distance(gp_Pnt(30.0, 4.0, 10.0)) < 1e-4);
+  // The agents: the detail names the edges, the faces and the point.
+  CHECK(chamfered >= 0 &&
+        placed.find("\"detail\":\"the chamfer of edge " + body.edge_name(chamfered) + " reaches exactly to the far "
+                    "edge ") != std::string::npos);
+  CHECK(std::any_of(rims.begin(), rims.end(), [&](const std::string& rim) {
+    return placed.find("far edge " + rim + " of face N") != std::string::npos;
+  }));
+  CHECK(placed.find("lies beyond it, at (30, 4, 10): its contact touches that edge there") != std::string::npos);
+}
+
+void test_far_edge_refusal_places() {
+  const ShapePtr body = named(block_with_hole());
+  CHECK(BRepCheck_Analyzer(body->occt()).IsValid());
+  const int edge = edge_with_middle_at(*body, gp_Pnt(30, 0, 10));
+  CHECK(edge >= 0);
+  if (edge < 0) {
+    return;
+  }
+  const std::vector<std::string> rims = hole_rim_edges(*body);
+  std::vector<int> owner(static_cast<std::size_t>(body->edge_count()), -1);
+  owner[static_cast<std::size_t>(edge)] = 0;
+  // Short of the rim (3 mm) and past it (5 mm, the chamfer wider than the
+  // strip there: overflow_failure's case): no tangent.
+  CHECK(detail::overflow_tangent(*body, owner, [](int, int) { return 3.0; }).empty());
+  CHECK(detail::overflow_tangent(*body, owner, [](int, int) { return 5.0; }).empty());
+  // Exactly to it: refused, with its places and detail.
+  const std::string text = detail::overflow_tangent(*body, owner, [](int, int) { return 4.0; });
+  CHECK(!text.empty());
+  if (!text.empty()) {
+    check_far_edge_refusal("far edge refusal", *body, text, edge, rims);
+  }
+  // The chamfer itself: either built as one valid closed solid, or refused
+  // with that message, its places and detail kept (the chamfer's context
+  // after them, chamfer()'s with_detail).
+  ChamferSet set;
+  set.edges.push_back(body->edge_name(edge));
+  set.spec.type = ChamferType::EqualDistance;
+  set.spec.distance = 4.0;
+  try {
+    const ShapePtr result = chamfer("C", *body, {set});
+    std::printf("far edge chamfer: built, valid %d, volume %.4f\n",
+                BRepCheck_Analyzer(result->occt()).IsValid() ? 1 : 0, volume_of(result->occt()));
+    CHECK(BRepCheck_Analyzer(result->occt()).IsValid());
+    CHECK(one_closed_solid(result->occt()));
+  } catch (const std::exception& error) {
+    const std::string thrown = error.what();
+    if (thrown.find("reaches exactly to the far edge") != std::string::npos) {
+      check_far_edge_refusal("far edge chamfer refused", *body, thrown, edge, rims);
+      // (Two lines of places: the refusal's, then the chamfer's context.)
+      CHECK(count_of(thrown, kPlacedTail) >= 2);
+    } else {
+      std::fprintf(stderr, "far edge chamfer: %s\n", thrown.c_str());
+      CHECK(false);
+    }
   }
 }
 
@@ -546,6 +738,7 @@ int main() {
   test::guarded("octagon foot", test::test_octagon_foot);
   test::guarded("octagon foot to the rim", test::test_octagon_foot_to_the_rim);
   test::guarded("warning on an eave", test::test_warning_on_an_eave);
+  test::guarded("far edge refusal places", test::test_far_edge_refusal_places);
   if (test::failures == 0) {
     std::puts("test_chamfer_overflow_concave: all checks passed");
   }

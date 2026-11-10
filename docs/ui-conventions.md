@@ -560,6 +560,18 @@ Where the window's messages are shown and kept (mitcad#1042,
   message of a lower level does not replace an error or a warning that
   shows; it goes to the history only. A newer message of the same or a
   higher level replaces it.
+- **An error goes with its source.** An error raised by something that is
+  open only for a while, a sketch's inline value editor, a sketch tool, the
+  sketch itself or a command panel, goes when that closes (mitcad#1621):
+  the editor closed or its value taken, the tool ended or another one
+  chosen, the sketch finished, the panel's OK or Cancel. It turns into the
+  stub, and the Docked status line is cleared too; the history keeps it.
+  An error that the closing itself raised (a tool that ends on its own
+  failure) stays, as it says why. Errors from elsewhere (a failed feature,
+  an import, a refused file) keep the rule above.
+- **No empty start.** A message built from what was typed names the typed
+  text only when there is some: an empty value says *Enter a value.*, never
+  *: Enter a value.*
 - **Stub.** When the message fades or is closed, a dimmed one-line stub
   of the latest message (its icon, word and text) stays in the band's
   place, which keeps its height, so the cards above do not move. A click
@@ -666,7 +678,7 @@ dynamic value.
 | Domain | `Component0`–`Component7` | #e0892a, #3aa35b, #8e5bd0, #2aa7a7, #5560c8, #8d6e63, #c45a9a, #3d8bd9 | the components: timeline bands, section caps, Component Colors (no red, no olive) | |
 | | `AxisX`, `AxisY`, `AxisZ` | #e84f4f, #4cb05e, #3f8cff | the axes: view cube, joint triad, Free Move's arrows and rings (mitcad#1581) | |
 | | `JointA`, `JointB`, `JointOrigin` | #f28c28, #2ab57d, #17a2b8 | a joint's sides and motion origin | |
-| | `PrintOverhang`, `PrintThin` | #7e3fd0 / #b48cff, #c2188b / #ff6ec7 | Print Analysis' categories (violet, magenta), by the view's background, with the legend | |
+| | `PrintOverhang`, `PrintThin`, `PrintGap` | #7e3fd0 / #b48cff, #c2188b / #ff6ec7, #00897b / #4dd0c0 | Print Analysis' categories (violet, magenta, teal: narrow gaps, mitcad#1519), by the view's background, with the legend | |
 | | `RuleFrame` … `RuleAction`, `RuleText` | see [configurations.md](configurations.md) | the rule blocks' categories under white text | |
 
 The table's order is the enum's; `allColorRoles`, `colorRoleName`,

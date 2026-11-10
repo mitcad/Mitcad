@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: MIT
+# A sketch value editor's error goes when the editor closes (mitcad#1621),
+# on sketch-value-error-clears.json (Sketch1: the width k5 is d1 = 20 mm),
+# in the Docked and the Floating layout alike:
+#   1. k5's value editor emptied and Enter: the error says "Enter a
+#      value." without a leading colon, on the status line and in the
+#      message band; the editor stays open.
+#   2. Esc closes the editor: the error goes from the status line and the
+#      band (its stub, cleared); the history still lists it.
+#   3. The editor emptied again, Enter, then a value and Enter: the value
+#      taken closes the editor, and its error goes too.
+#   4. Finish Sketch.
+# Run by tools/ui-sketch-value-error-clears-test.sh (Linux).
+expect-ever 'View area'
+wait-idle
+
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+wait-log '^Dimension k5 text at '
+
+# 1. An empty value: "Enter a value." alone.
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at .* with d1 = 20 mm$'
+key ctrl+a
+key Delete
+expect-widget-property sketchValueEditor text ''
+key Return
+wait-log '^Status error: Enter a value\.$'
+wait-log '^Status error source: sketch/editor$'
+wait-log '^Message band: error Enter a value\.$'
+expect-no-log '^Status error: : '
+expect-no-log '^Message band: error : '
+expect-no-log '^Sketch value editor closed$'
+
+# 2. Esc closes the editor and its error.
+mark
+key Escape
+wait-log '^Sketch value editor closed$'
+wait-log '^Status line cleared \(sketch/editor closed\)$'
+wait-log '^Message band source closed: error Enter a value\. \(sketch/editor\)$'
+wait-log '^Message band stub: [a-z]+ .* \(cleared\)$'
+# The history keeps it: the band's stub (Floating) or the status bar's
+# history button (Docked) opens it.
+mark
+click-logged '^Message (stub|history button) at '
+wait-log '^Message history: [0-9]+ entries$'
+wait-log '^Message history row [0-9]+: error Enter a value\. at '
+key Escape
+wait-log '^Message history: closed$'
+
+# 3. The error again; a value taken closes the editor and the error.
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at .* with d1 = 20 mm$'
+key ctrl+a
+key Delete
+key Return
+wait-log '^Status error: Enter a value\.$'
+mark
+type '25 mm'
+key Return
+wait-log '^Dimension k5 = 25 mm [(]d1[)]$'
+wait-log '^Sketch value editor closed$'
+# (The status line may say what the value did by now: the band, where a
+# hint does not push an error away, shows that the error went.)
+wait-log '^Message band source closed: error Enter a value\. \(sketch/editor\)$'
+wait-log '^Message band stub: [a-z]+ .* \(cleared\)$'
+expect-model-parameter d1 25 model
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

@@ -440,6 +440,18 @@ pub enum Read {
     /// (mitcad#408): the fingerprints the result fits, the memory it was
     /// evaluated with and the memory it leaves.
     Pieces(FeatureUid, Vec<u128>),
+    /// A body's print bed face as it was assigned, None without one
+    /// (print-shaped holes, mitcad#1515).
+    PrintBed(BodyUid, Option<String>),
+}
+
+/// A body's print bed face as it was assigned (mitcad#731), for
+/// [`Read::PrintBed`].
+pub(crate) fn print_bed_of(
+    attributes: &BTreeMap<BodyUid, crate::document::BodyAttributes>,
+    body: BodyUid,
+) -> Option<&String> {
+    attributes.get(&body)?.print_bed_face.as_ref()
 }
 
 /// A placement's matrix as bits, for [`Read::Placement`].
@@ -498,6 +510,7 @@ impl Read {
             Self::Pieces(uid, fits) => fits.contains(&crate::features::pieces::fingerprint(
                 env.split_pieces.get(uid),
             )),
+            Self::PrintBed(uid, face) => print_bed_of(env.body_attributes, *uid) == face.as_ref(),
         }
     }
 
@@ -573,6 +586,12 @@ impl Read {
                 for fit in fits {
                     fingerprint.u128(*fit);
                 }
+            }
+            Self::PrintBed(uid, face) => {
+                body(fingerprint.u8(15), *uid);
+                fingerprint.option(face.as_deref(), |f, face| {
+                    f.str(face);
+                });
             }
         }
     }
@@ -1799,6 +1818,7 @@ impl<'s, S> Walk<'s, S> {
             split_pieces: &state.split_pieces,
             changed_pieces: &self.done.changed_pieces,
             gone_pieces: &self.done.gone_pieces,
+            body_attributes: &state.body_attributes,
         }
     }
 }
@@ -2075,6 +2095,9 @@ fn resume_point<'b, S>(before: &'b Recomputed<S>, state: &DocState) -> Option<&'
             Read::Pieces(uid, fits) => fits.contains(&crate::features::pieces::fingerprint(
                 state.split_pieces.get(uid),
             )),
+            Read::PrintBed(uid, face) => {
+                print_bed_of(&state.body_attributes, *uid) == face.as_ref()
+            }
             // What earlier features made and the assembly: the same.
             _ => true,
         });

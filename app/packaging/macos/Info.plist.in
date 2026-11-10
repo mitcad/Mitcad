@@ -271,6 +271,7 @@
       </array>
       <key>CFBundleTypeExtensions</key>
       <array>
+        <string>sc</string>
         <string>solidcraft</string>
         <string>solvecraft</string>
       </array>
@@ -524,6 +525,7 @@
       <dict>
         <key>public.filename-extension</key>
         <array>
+          <string>sc</string>
           <string>solidcraft</string>
           <string>solvecraft</string>
         </array>

@@ -257,7 +257,7 @@ if(BUILD_TESTING)
 
   # Construction geometry and analysis (F5): datums checked through queries,
   # physical properties, measurement and comparison with a STEP file.
-  foreach(script construction analysis holed_block face_separation face_geometry)
+  foreach(script construction analysis holed_block face_separation face_geometry print_min_gap)
     add_test(NAME cli.${script} COMMAND mitcad-cli run "${scripts}/${script}.json")
   endforeach()
   add_test(NAME cli.properties COMMAND mitcad-cli run "${scripts}/analysis.json" --properties)
@@ -339,6 +339,13 @@ if(BUILD_TESTING)
     COMMAND mitcad-cli export "${exchange}/exchange.mitcad" "${exchange}/out.usdz" --refinement low)
   set_tests_properties(cli.export_usdz PROPERTIES FIXTURES_REQUIRED cli_exchange PASS_REGULAR_EXPRESSION
     "\"format\":\"usdz\",\"materials\":\\[[^]]+\\].*\"warnings\":\\[\\]")
+  # Animated USDZ (mitcad#1597): two boxes, one moved over three frames by
+  # a run script; two_boxes.usdz stays in the folder for OpenUSD's reading
+  # (tools/usdz-check/check-animation.py, docs/development.md).
+  set(usdz_animation "${CMAKE_CURRENT_BINARY_DIR}/usdz-animation")
+  file(MAKE_DIRECTORY "${usdz_animation}")
+  add_test(NAME cli.export_usdz_animation COMMAND mitcad-cli run "${scripts}/usdz_animation.json")
+  set_tests_properties(cli.export_usdz_animation PROPERTIES WORKING_DIRECTORY "${usdz_animation}")
   # The bodies in their components' coordinates (mitcad#19).
   add_test(NAME cli.export_component
     COMMAND mitcad-cli export "${exchange}/exchange.mitcad" "${exchange}/local-out.step"
@@ -1803,5 +1810,35 @@ if(BUILD_TESTING)
   if(WIN32)
     set_property(TEST cli.emboss_taper APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Circular Pattern about two axes and copies that add nothing (mitcad#1588):
+# a cube's copies at every product of the turns about Z and X; a ball's rod
+# patterned about X and Z, whose turns about its own axis and products on
+# one place are left out; a cubic lattice of one revolve (corner balls,
+# centre ball and diagonal), one pipe, one pattern about two axes and a
+# fillet at all 40 joints. Then the reported cubic lattice under
+# MITCAD_MITCAD_REPORTED, as saved and as one pattern of Revolve1 (with its
+# centre ball) and Pipe1 with Fillet1 on all its joints (skipped without
+# the report's file).
+if(BUILD_TESTING)
+  add_test(NAME cli.f4_pattern_two_axes
+    COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/f4_pattern_two_axes.json")
+  add_test(NAME cli.f4_pattern_lattice
+    COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/f4_pattern_lattice.json")
+  add_test(NAME cli.pattern_two_axes_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/pattern-two-axes-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/pattern-two-axes-reported-test.cmake")
+  set_tests_properties(cli.f4_pattern_lattice PROPERTIES TIMEOUT 600)
+  set_tests_properties(cli.pattern_two_axes_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "pattern two axes reported: skipped" TIMEOUT 600)
+  if(WIN32)
+    foreach(test cli.f4_pattern_two_axes cli.f4_pattern_lattice cli.pattern_two_axes_reported)
+      set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
   endif()
 endif()

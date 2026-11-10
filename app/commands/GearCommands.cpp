@@ -16,6 +16,7 @@
 // `mesh_with.angle` opens placed where it is and is saved as it was until
 // its placement changes.
 #include <cmath>
+#include "framework/ModelMessages.hpp"
 #include <memory>
 
 #include <QCoreApplication>
@@ -676,7 +677,7 @@ void linkLater(DocumentHost& host, const QString& editing) {
         const QJsonObject command = link.value(QStringLiteral("command")).toObject();
         if (command.isEmpty()) {
           qDebug().noquote() << QStringLiteral("Gear %1 not linked: %2")
-                                    .arg(uid, link.value(QStringLiteral("reason")).toString());
+                                    .arg(uid, mitcad::modelMessage(link.value(QStringLiteral("reason")).toString()));
           return;
         }
         if (host.runModelCommand(command)) {

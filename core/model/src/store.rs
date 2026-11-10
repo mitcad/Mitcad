@@ -313,6 +313,7 @@ enum StoredRead {
     JoinTolerance(Option<u64>),
     Source(crate::build::SourceId, Option<Hex>),
     Pieces(FeatureUid, Vec<Hex>),
+    PrintBed(BodyUid, Option<String>),
 }
 
 impl StoredRead {
@@ -339,6 +340,7 @@ impl StoredRead {
             Read::JoinTolerance(bits) => Self::JoinTolerance(*bits),
             Read::Source(id, v) => Self::Source(*id, hex(v)),
             Read::Pieces(uid, fits) => Self::Pieces(*uid, fits.iter().map(|f| Hex(*f)).collect()),
+            Read::PrintBed(uid, face) => Self::PrintBed(*uid, face.clone()),
         }
     }
 
@@ -367,6 +369,7 @@ impl StoredRead {
             Self::JoinTolerance(bits) => Read::JoinTolerance(*bits),
             Self::Source(id, v) => Read::Source(*id, version(v)),
             Self::Pieces(uid, fits) => Read::Pieces(*uid, fits.iter().map(|f| f.0).collect()),
+            Self::PrintBed(uid, face) => Read::PrintBed(*uid, face.clone()),
         })
     }
 }

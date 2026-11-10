@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -1161,6 +1162,10 @@ QVector<QPair<QString, QString>> printMaterials() {
   return choices;
 }
 
+// The printed fit parameter of the gap between bodies printed in place
+// (commands.md, "Printed fit parameters").
+const QString kPrintInPlaceGap = QStringLiteral("print_in_place_gap");
+
 // The panel's inputs from settings: the settings group's (a new analysis)
 // or an analysis' own (its definition).
 void setPrintSettings(CommandState& state, const PrintAnalysisSettings& s, const CommandContext& context) {
@@ -1177,6 +1182,25 @@ void setPrintSettings(CommandState& state, const PrintAnalysisSettings& s, const
   state.setText(QStringLiteral("infill"), n(s.infill * 100.0));
   state.setText(QStringLiteral("filament_diameter"), lengthText(s.filamentDiameter, context));
   state.setText(QStringLiteral("price"), s.pricePerKg ? n(*s.pricePerKg, 2) : QString());
+  // Narrow gaps (mitcad#1519): the analysis' own gap, else the design's
+  // printed fit parameter by its name (the analysis then follows it), else
+  // the default.
+  state.setChecked(QStringLiteral("min_gap"), s.minGap);
+  QString gap = lengthText(0.3, context);
+  if (s.gap) {
+    gap = lengthText(*s.gap, context);
+  } else {
+    try {
+      const QJsonObject answer = context.queryObject({{QStringLiteral("query"), QStringLiteral("evaluate")},
+                                                      {QStringLiteral("expression"), kPrintInPlaceGap}});
+      if (std::isfinite(answer.value(QStringLiteral("value")).toDouble(std::numeric_limits<double>::quiet_NaN()))) {
+        gap = kPrintInPlaceGap;
+      }
+    } catch (const std::exception&) {
+      // The design has no such parameter: the default.
+    }
+  }
+  state.setText(QStringLiteral("gap"), gap);
 }
 
 // The panel's values as an analysis' definition, or what is wrong (and in
@@ -1246,6 +1270,17 @@ Built printDefinition(const CommandState& state) {
       s.pricePerKg = *perKg;
     }
   }
+  s.minGap = state.checked(QStringLiteral("min_gap"));
+  if (s.minGap) {
+    // The parameter's name: the analysis follows the design's gap.
+    if (state.text(QStringLiteral("gap")).trimmed() != kPrintInPlaceGap) {
+      const double gap = valueOf("gap");
+      if (!(gap > 0.0 && gap <= 100.0)) {
+        return Built::failure(QObject::tr("Minimum gap: more than 0 mm."), QStringLiteral("gap"));
+      }
+      s.gap = gap;
+    }
+  }
   // Each body once, in the order picked (a body shown more than once is
   // one body of the analysis).
   QJsonArray bodies;
@@ -1266,9 +1301,12 @@ Built printDefinition(const CommandState& state) {
 
 // What a long query's progress says.
 QString printStage(const QJsonObject& request) {
-  return request.value(QStringLiteral("query")).toString() == QStringLiteral("print_thickness")
-             ? QObject::tr("Measuring the walls")
-             : QObject::tr("Finding the overhangs");
+  const QString query = request.value(QStringLiteral("query")).toString();
+  if (query == QStringLiteral("print_min_gap")) {
+    return QObject::tr("Measuring the gaps");
+  }
+  return query == QStringLiteral("print_thickness") ? QObject::tr("Measuring the walls")
+                                                    : QObject::tr("Finding the overhangs");
 }
 
 // Overhangs and thickness, which may take long on large meshes: in the
@@ -1322,14 +1360,14 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
   def.id = QStringLiteral("inspect.print_analysis");
   def.name = QObject::tr("Print Analysis");
   def.icon = QStringLiteral("print-analysis");
-  def.tooltip = QObject::tr("Overhangs, thin walls and an estimate of weight, filament and cost");
+  def.tooltip = QObject::tr("Overhangs, thin walls, narrow gaps and an estimate of weight, filament and cost");
   // The Make tab's 3D Print group (mitcad#1049).
   def.tab = QStringLiteral("MAKE");
   def.group = QStringLiteral("3D PRINT");
   def.pinned = true;
   def.keywords = {QStringLiteral("3d print"), QStringLiteral("overhang"), QStringLiteral("thin wall"),
                   QStringLiteral("filament"), QStringLiteral("weight"), QStringLiteral("support"),
-                  QStringLiteral("print estimate")};
+                  QStringLiteral("print estimate"), QStringLiteral("gap"), QStringLiteral("print in place")};
   // OK keeps it in the document as an analysis, shown (mitcad#41).
   def.keepsSection = true;
   const auto checked = [](const QString& key) {
@@ -1338,6 +1376,7 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
   const auto overhang = checked(QStringLiteral("overhang"));
   const auto thin = checked(QStringLiteral("thin_wall"));
   const auto estimate = checked(QStringLiteral("estimate"));
+  const auto gaps = checked(QStringLiteral("min_gap"));
   def.inputs = {
       selectionInput(QStringLiteral("bodies"), QObject::tr("Bodies"), SelectKind::Body, 1, 0)
           .withAccepts([&model](const SelectionItem& item) { return printable(model.bodyShape(item.owner)); })
@@ -1356,6 +1395,13 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
           .withExactDefault()
           .withVisible(thin)
           .withTooltip(QObject::tr("The thinnest wall the printer makes: about twice the line width")),
+      checkInput(QStringLiteral("min_gap"), QObject::tr("Narrow Gaps"), true)
+          .withTooltip(QObject::tr("Bodies printed in place closer than the gap may fuse")),
+      valueInput(QStringLiteral("gap"), QObject::tr("Minimum gap"), ValueKind::Length, QStringLiteral("0.3 mm"))
+          .withStepMinimum(0.0, true)
+          .withExactDefault()
+          .withVisible(gaps)
+          .withTooltip(QObject::tr("The narrowest gap the printer keeps open between bodies, or print_in_place_gap")),
       checkInput(QStringLiteral("estimate"), QObject::tr("Estimate"), true)
           .withTooltip(QObject::tr("About the weight, filament length and cost of the print")),
       choiceInput(QStringLiteral("material"), QObject::tr("Material"), printMaterials(), QStringLiteral("bodies"))

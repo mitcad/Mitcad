@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "DocumentSnapshot.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -167,7 +168,7 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
       snapshot.centerOfMass = model.queryObject({{QStringLiteral("query"), QStringLiteral("center_of_mass")}});
     } catch (const std::exception& e) {
       snapshot.centerOfMass = QJsonObject{{QStringLiteral("marker"), centerMarker},
-                                          {QStringLiteral("error"), QString::fromUtf8(e.what())}};
+                                          {QStringLiteral("error"), mitcad::modelMessage(e.what())}};
     }
   }
   for (const QJsonValue& value : display.value(QStringLiteral("isolated")).toArray()) {
@@ -217,7 +218,7 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     // Its level and notices (mitcad#1040): the error of a failed feature,
     // else its import note and its warnings, as one message.
     feature.level = text(f, "level");
-    feature.error = text(f, "error");
+    feature.error = modelMessage(text(f, "error"));
     const QJsonArray notices = f.value(QStringLiteral("notices")).toArray();
     // The places its notices name, painted while the pointer is over it
     // (mitcad#1327), and a failure's error in plain words, as its notice
@@ -227,7 +228,7 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
       for (const QJsonValue& value : notices) {
         const QJsonObject notice = value.toObject();
         if (notice.value(QStringLiteral("level")).toString() == QStringLiteral("error")) {
-          feature.error = notice.value(QStringLiteral("message")).toString();
+          feature.error = modelMessage(notice.value(QStringLiteral("message")).toString());
           break;
         }
       }
@@ -237,7 +238,7 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
       QStringList others;
       for (const QJsonValue& value : notices) {
         const QJsonObject notice = value.toObject();
-        const QString message = notice.value(QStringLiteral("message")).toString();
+        const QString message = modelMessage(notice.value(QStringLiteral("message")).toString());
         (notice.value(QStringLiteral("level")).toString() == QStringLiteral("info") ? notes : others) << message;
       }
       feature.error = (notes + others).join(QStringLiteral("; "));
@@ -296,14 +297,14 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     for (const QJsonValue& face : bed.value(QStringLiteral("faces")).toArray()) {
       body.printBedFaces << face.toString();
     }
-    body.printBedError = bed.value(QStringLiteral("error")).toString();
+    body.printBedError = modelMessage(bed.value(QStringLiteral("error")).toString());
     // Bindings (mitcad#800, mitcad#809).
     body.appearanceExpr = text(b, "appearance_expr");
     body.materialExpr = text(b, "material_expr");
     body.visibleWhen = text(b, "visible_when");
     body.faceAppearanceExprs = b.value(QStringLiteral("face_appearance_exprs")).toObject();
     for (const QJsonValue& warning : b.value(QStringLiteral("warnings")).toArray()) {
-      body.warnings << warning.toString();
+      body.warnings << modelMessage(warning.toString());
     }
     snapshot.bodies.insert(body.uid, body);
   }

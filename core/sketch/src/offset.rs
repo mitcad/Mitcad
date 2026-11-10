@@ -3482,17 +3482,29 @@ impl SketchEdit<'_> {
             "curve"
         };
         let names: Vec<String> = dropped.iter().map(|c| format!("c{}", c.0)).collect();
-        let note = if names.len() == 1 {
-            crate::said(
-                format!("{} {what} vanishes at this distance", article(what)),
-                format!("{what} {} vanishes at this distance", names[0]),
-            )
-        } else {
-            crate::said(
-                format!("{} {what}s vanish at this distance", names.len()),
-                format!("{what}s {} vanish at this distance", listed(&names)),
-            )
+        // Whole messages for each kind and number (mitcad#1284: no plural
+        // ending put on a value), in plain words with the names as agent
+        // detail (mitcad#1612).
+        let one = names.len() == 1;
+        let plain = match (what, one) {
+            ("corner arc", true) => "a corner arc vanishes at this distance".to_owned(),
+            ("corner arc", false) => format!("{} corner arcs vanish at this distance", names.len()),
+            ("line", true) => "a line vanishes at this distance".to_owned(),
+            ("line", false) => format!("{} lines vanish at this distance", names.len()),
+            (_, true) => "a curve vanishes at this distance".to_owned(),
+            (_, false) => format!("{} curves vanish at this distance", names.len()),
         };
+        let named = match (what, one) {
+            ("corner arc", true) => format!("corner arc {} vanishes at this distance", names[0]),
+            ("corner arc", false) => {
+                format!("corner arcs {} vanish at this distance", listed(&names))
+            }
+            ("line", true) => format!("line {} vanishes at this distance", names[0]),
+            ("line", false) => format!("lines {} vanish at this distance", listed(&names)),
+            (_, true) => format!("curve {} vanishes at this distance", names[0]),
+            (_, false) => format!("curves {} vanish at this distance", listed(&names)),
+        };
+        let note = crate::said(plain, named);
         self.report.notes.push(note);
     }
 
@@ -3845,15 +3857,26 @@ impl SketchEdit<'_> {
             let built = built?;
             if !lost.is_empty() {
                 let names: Vec<String> = lost.iter().map(|c| format!("c{}", c.0)).collect();
-                let (curves, vanish) = if names.len() == 1 {
-                    ("a curve".to_owned(), "vanishes")
+                // Whole messages for one and for several (mitcad#1284: no
+                // word ending put on a value).
+                let (plain, vanish) = if names.len() == 1 {
+                    (
+                        "an offset is made again without a curve, which vanishes at this distance"
+                            .to_owned(),
+                        "vanishes",
+                    )
                 } else {
-                    (format!("{} curves", names.len()), "vanish")
+                    (
+                        format!(
+                            "an offset is made again without {} curves, which vanish at this \
+                             distance",
+                            names.len()
+                        ),
+                        "vanish",
+                    )
                 };
                 self.report.notes.push(crate::said(
-                    format!(
-                        "an offset is made again without {curves}, which {vanish} at this distance"
-                    ),
+                    plain,
                     format!(
                         "offset {} is made again without {}, which {vanish} at this distance",
                         t.offset.id,
@@ -4432,15 +4455,5 @@ impl SketchEdit<'_> {
             }
         }
         Ok(())
-    }
-}
-
-/// "a" or "an" before `word` (mitcad#1612: notes that count instead of
-/// naming).
-fn article(word: &str) -> &'static str {
-    if word.starts_with(['a', 'e', 'i', 'o', 'u']) {
-        "an"
-    } else {
-        "a"
     }
 }

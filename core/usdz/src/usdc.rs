@@ -22,6 +22,12 @@
 //! when it fits in 32 bits (tokens, strings and asset paths by their index)
 //! or else the offset of its data in the file. Arrays start 8-byte aligned
 //! with their 64-bit length; int arrays of 16 or more are compressed.
+//!
+//! Time samples (mitcad#1597) are written as OpenUSD writes them: the
+//! times (a `std::vector<double>`: its 64-bit count and the doubles) and
+//! each value's data first, then at the value's offset a 64-bit jump (8:
+//! to what follows it) to the times' reference, another jump of 8, the
+//! number of values and a reference per value.
 
 use std::collections::HashMap;
 
@@ -52,6 +58,8 @@ pub mod types {
     pub const TOKEN_VECTOR: u8 = 41;
     pub const SPECIFIER: u8 = 42;
     pub const VARIABILITY: u8 = 44;
+    pub const TIME_SAMPLES: u8 = 46;
+    pub const DOUBLE_VECTOR: u8 = 48;
 }
 
 pub const ARRAY_BIT: u64 = 1 << 63;
@@ -456,6 +464,33 @@ fn pack(value: &Value, tables: &mut Tables, out: &mut Vec<u8>) -> u64 {
                 indexes.len(),
                 indexes.iter().flat_map(|i| i.to_le_bytes()),
             )
+        }
+        Value::DoubleVector(values) => {
+            let offset = at(out);
+            out.extend((values.len() as u64).to_le_bytes());
+            for v in values {
+                out.extend(v.to_le_bytes());
+            }
+            rep(DOUBLE_VECTOR, offset)
+        }
+        Value::TimeSamples(samples) => {
+            // The times' and the values' data, then the jumps and the
+            // references (see the module documentation).
+            let times = Value::DoubleVector(samples.iter().map(|(t, _)| *t).collect());
+            let times = pack(&times, tables, out);
+            let values: Vec<u64> = samples
+                .iter()
+                .map(|(_, value)| pack(value, tables, out))
+                .collect();
+            let offset = at(out);
+            out.extend(8i64.to_le_bytes());
+            out.extend(times.to_le_bytes());
+            out.extend(8i64.to_le_bytes());
+            out.extend((values.len() as u64).to_le_bytes());
+            for value in values {
+                out.extend(value.to_le_bytes());
+            }
+            rep(TIME_SAMPLES, offset)
         }
     }
 }

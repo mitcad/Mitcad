@@ -33,6 +33,7 @@
 #include <AIS_Shape.hxx>
 #include <AIS_ViewController.hxx>
 #include <AIS_ViewCube.hxx>
+#include <Aspect_TypeOfLine.hxx>
 #include <Bnd_Box.hxx>
 #include <Graphic3d_Camera.hxx>
 #include <Graphic3d_Structure.hxx>
@@ -84,6 +85,7 @@ struct Look;
 #endif
 
 class ViewCubeHomeButton;
+class ViewEdges;
 class PrintOverlayLabels;
 class MeasurementOverlay;
 struct PrintOverlay;
@@ -352,8 +354,9 @@ public:
   void setThreads(const TopoDS_Shape& rings);
   // Print Analysis (mitcad#620, view/PrintOverlay.cpp): the overhang and
   // thin-wall triangles drawn over the bodies in their colours, not
-  // pickable, a marker and a label at the thinnest point and the legend in
-  // the lower left corner; an empty overlay clears them. Logs "Print
+  // pickable, a marker and a label at the thinnest point, the narrow gaps'
+  // closest points over everything with a marker at the smallest
+  // (mitcad#1519) and the legend in the lower left corner; an empty overlay clears them. Logs "Print
   // overlay: …" when it changes. The overlay's colours are its categories'
   // roles for the view's background (mitcad#1041), drawn again when the
   // background turns from light to dark or back.
@@ -694,6 +697,33 @@ public:
     std::vector<TopoDS_Shape> datums;
   };
   OwnShapes ownShapes() const;
+  // How a shown body's lines are drawn, for UI tests (mitcad#1633,
+  // expect-view-edges): from detached copies of its edges (ViewEdges), how
+  // many, the fewest segments a quarter turn its circles and arcs are cut
+  // in and the largest distance of a segment's middle from its circle; and
+  // of the edges of the highlights shown that are the body's, how many
+  // are drawn with the body's own copies (on the same polylines).
+  struct EdgeDrawing {
+    bool shown = false;
+    int edges = 0;
+    int circles = 0;
+    double fewestPerQuarter = 0.0;
+    double largestSag = 0.0;
+    int highlightEdges = 0;
+    int highlightShared = 0;
+  };
+  EdgeDrawing edgeDrawing(const std::string& uid) const;
+  // The highlights of sketch curves against the curves they highlight, for
+  // UI tests (mitcad#1633, expect-sketch-highlights-on-curves): how many
+  // were matched with their shown curve, and the farthest a highlight's
+  // polyline point lies from the curve's polyline, in millimetres and in
+  // the view's pixels now.
+  struct SketchHighlightFit {
+    int curves = 0;
+    double millimetres = 0.0;
+    double pixels = 0.0;
+  };
+  SketchHighlightFit sketchHighlightFit() const;
   void setHighlights(const std::vector<HighlightDisplay>& highlights);
   // Semi-transparent preview of the active command; null clears it.
   void setPreview(const TopoDS_Shape& shape, PreviewStyle style = PreviewStyle::Add);
@@ -1066,6 +1096,10 @@ private:
     // The hidden-edge styles' edges: dashed through faces, solid in sight.
     occ::handle<AIS_Shape> hiddenEdges;
     occ::handle<AIS_Shape> visibleEdges;
+    // Detached copies of its edges, which its lines and those of its
+    // highlights and hover are drawn from (mitcad#1633): made when it is
+    // shown with a shape they are not of, dropped with it.
+    std::shared_ptr<const ViewEdges> edges;
     // Its faces placed, for occluded() (mitcad#217).
     mutable std::shared_ptr<Occluder> occluder;
   };
@@ -1092,6 +1126,14 @@ private:
                bool pickable);
   // Shows a body in the visual style; the entry's objects are made here.
   void showBody(BodyEntry& entry);
+  // A shape (of the model's or the view's) drawn with the view's lines
+  // (mitcad#1633, view/ViewEdges.hpp): its edges from detached copies, the
+  // shown bodies' own where they have the edge (`first` tried first), so
+  // that a highlight lies on the line it highlights; a shape without edges
+  // as a plain AIS_Shape.
+  occ::handle<AIS_Shape> fineShape(const TopoDS_Shape& shape, const ViewEdges* first = nullptr) const;
+  // The shown body's copies for a body shape, null when none.
+  const ViewEdges* bodyEdges(const geometry::Shape* body) const;
   // A body shown elsewhere (mitcad#838): its objects take the placement,
   // drawn from what they have (no presentation computed again).
   void placeBody(BodyEntry& entry, const TopLoc_Location& placement);
@@ -1195,6 +1237,15 @@ private:
   static bool hasSketchHalo(const SketchEntityLook& look);
   // The halo: a wider line in the background's tone under the entity's.
   void styleSketchHalo(const occ::handle<AIS_Shape>& halo, const SketchEntityLook& look) const;
+  // The line type of a sketch curve's selection highlight: the curve's own
+  // (mitcad#1619), dashed for construction geometry, dash-dot for a centre
+  // line, else (and for a curve not shown) solid.
+  Aspect_TypeOfLine sketchCurveLineType(const SelectionItem& item) const;
+  // Those of the sketch curves' highlights among `highlights`, in order.
+  std::vector<Aspect_TypeOfLine> sketchHighlightLines(const std::vector<HighlightDisplay>& highlights) const;
+  // Draws the shown highlights again when a sketch curve under one changed
+  // its line type (Construction, Centerline; mitcad#1619).
+  void refreshSketchHighlightLines();
   // Logs "Sketch halos: <n> dark|light" when it changed (for UI tests).
   void logSketchHalos();
   // Logs "Sketch layers: halos < curves and highlights < points and point
@@ -1346,6 +1397,10 @@ private:
   // ("Sketch layers:", "Sketch highlights:", mitcad#897).
   QString m_loggedSketchLayers;
   QString m_loggedSketchHighlights;
+  // The line types the sketch curves' highlights were drawn with, in
+  // order, and as last logged ("Sketch highlight lines:", mitcad#1619).
+  std::vector<Aspect_TypeOfLine> m_sketchHighlightLines;
+  QString m_loggedSketchHighlightLines;
   // The shown sketches' colours as last logged ("Sketch colours:", for UI
   // tests; mitcad#286).
   QString m_loggedSketchColours;
@@ -1517,6 +1572,8 @@ private:
   // Print Analysis' triangles, and its marker, label and legend over the
   // view (setPrintOverlay, mitcad#620).
   occ::handle<AIS_InteractiveObject> m_printTriangles;
+  // The narrow gaps between bodies over everything (mitcad#1519).
+  occ::handle<AIS_InteractiveObject> m_printGaps;
   // The build volume's lines and the boxes of bodies outside it
   // (setBuildVolume, mitcad#640).
   occ::handle<AIS_Shape> m_buildFrame;

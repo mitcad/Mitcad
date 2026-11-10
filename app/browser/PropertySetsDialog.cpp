@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "PropertySetsDialog.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -356,7 +357,7 @@ private:
       accept();
       return;
     }
-    m_error->setText(m_host.lastError());
+    m_error->setText(mitcad::modelMessage(m_host.lastError()));
     qDebug().noquote() << QStringLiteral("Add property %1 refused: %2").arg(key, m_host.lastError());
   }
 
@@ -450,7 +451,7 @@ private:
         item->setToolTip(text(type, "description"));
       }
     } catch (const std::exception& e) {
-      m_error->setText(QString::fromUtf8(e.what()));
+      m_error->setText(mitcad::modelMessage(e.what()));
     }
   }
 
@@ -478,7 +479,7 @@ private:
       m_unit->clear();
       m_description->clear();
     } else {
-      m_error->setText(m_host.lastError());
+      m_error->setText(mitcad::modelMessage(m_host.lastError()));
       qDebug().noquote() << QStringLiteral("Property type %1 refused: %2").arg(name, m_host.lastError());
     }
     load();
@@ -495,7 +496,7 @@ private:
       m_error->clear();
       qDebug().noquote() << QStringLiteral("Property type removed: %1").arg(name);
     } else {
-      m_error->setText(m_host.lastError());
+      m_error->setText(mitcad::modelMessage(m_host.lastError()));
     }
     load();
   }
@@ -800,7 +801,7 @@ void PropertySetsDialog::refresh() {
     m_answer = m_host.model().queryObject(query);
   } catch (const std::exception& e) {
     // The item is gone (deleted, rolled back): nothing to show.
-    m_message->setText(QString::fromUtf8(e.what()));
+    m_message->setText(mitcad::modelMessage(e.what()));
     m_answer = QJsonObject();
   }
   // Folded sets stay folded.
@@ -1370,7 +1371,7 @@ void PropertySetsDialog::setPrint(const QString& set, const QString& key, const 
       // By the plain name, never the raw key (mitcad#655).
       const QString plain = m_keys.plainName(key);
       m_message->setText(QStringLiteral("%1: %2").arg(plain.isEmpty() ? tr("Profile") : plain,
-                                                      m_keys.plainText(m_host.lastError())));
+                                                      m_keys.plainText(mitcad::modelMessage(m_host.lastError()))));
       qDebug().noquote() << QStringLiteral("Property %1: %2 refused: %3").arg(name, shown, m_host.lastError());
     }
     refresh();
@@ -1425,7 +1426,7 @@ void PropertySetsDialog::editChoice(QTreeWidgetItem* item, const QStringList& ch
         m_message->clear();
         qDebug().noquote() << QStringLiteral("Property %1 chosen: %2").arg(name, chosen);
       } else {
-        m_message->setText(QStringLiteral("%1: %2").arg(key, m_host.lastError()));
+        m_message->setText(QStringLiteral("%1: %2").arg(key, mitcad::modelMessage(m_host.lastError())));
         qDebug().noquote() << QStringLiteral("Property %1: %2 refused: %3").arg(name, chosen, m_host.lastError());
       }
       refresh();
@@ -1473,7 +1474,7 @@ void PropertySetsDialog::setValue(QTreeWidgetItem* item, const QString& typed) {
       m_message->clear();
       qDebug().noquote() << QStringLiteral("Property %1 set: %2").arg(name, typed);
     } else {
-      m_message->setText(QStringLiteral("%1: %2").arg(key, m_host.lastError()));
+      m_message->setText(QStringLiteral("%1: %2").arg(key, mitcad::modelMessage(m_host.lastError())));
       qDebug().noquote() << QStringLiteral("Property %1: %2 refused: %3").arg(name, typed, m_host.lastError());
     }
     refresh();
@@ -1511,7 +1512,7 @@ void PropertySetsDialog::removeProperty() {
     m_message->clear();
     qDebug().noquote() << QStringLiteral("Removed property %1").arg(name);
   } else {
-    m_message->setText(m_host.lastError());
+    m_message->setText(mitcad::modelMessage(m_host.lastError()));
     qDebug().noquote() << QStringLiteral("Remove property %1 refused: %2").arg(name, m_host.lastError());
   }
   refresh();

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "render/RenderImageDialog.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <array>
@@ -394,7 +395,7 @@ void RenderImageDialog::refresh() {
   try {
     m_settings = m_host.model().queryObject({{QStringLiteral("query"), QStringLiteral("render_settings")}});
   } catch (const std::exception& e) {
-    m_message->setText(QString::fromUtf8(e.what()));
+    m_message->setText(mitcad::modelMessage(e.what()));
     return;
   }
   m_building = true;
@@ -462,7 +463,7 @@ void RenderImageDialog::change(const QString& field, const QJsonValue& value) {
     m_message->clear();
     qDebug().noquote() << QStringLiteral("Render setting %1 = %2").arg(key, text);
   } else {
-    m_message->setText(m_host.lastError());
+    m_message->setText(mitcad::modelMessage(m_host.lastError()));
     qDebug().noquote() << QStringLiteral("Render setting %1 = %2 refused: %3").arg(key, text, m_host.lastError());
   }
   refresh();
@@ -486,7 +487,7 @@ void RenderImageDialog::choosePreset(int index) {
     m_message->clear();
     qDebug().noquote() << QStringLiteral("Render setting output.size = %1 x %2").arg(preset.width).arg(preset.height);
   } else {
-    m_message->setText(m_host.lastError());
+    m_message->setText(mitcad::modelMessage(m_host.lastError()));
   }
   refresh();
 }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "MoveOccurrenceDialog.hpp"
+#include "ModelMessages.hpp"
 
 #include <exception>
 #include <utility>
@@ -67,7 +68,7 @@ public:
     try {
       m_info = m_model.query(query(QString(), false));
     } catch (const std::exception& e) {
-      m_error = QString::fromUtf8(e.what());
+      m_error = mitcad::modelMessage(e.what());
     }
     const QString name = m_info.value(QStringLiteral("name")).toString();
     m_heading->setText(tr("Move %1 (%2) with everything in it to another parent. It stays where it is in "
@@ -160,7 +161,7 @@ private:
                      .value(QStringLiteral("plan"))
                      .toObject();
       } catch (const std::exception& e) {
-        problems << QString::fromUtf8(e.what());
+        problems << mitcad::modelMessage(e.what());
       }
       for (const QJsonValue& problem : m_plan.value(QStringLiteral("problems")).toArray()) {
         problems << problem.toString();

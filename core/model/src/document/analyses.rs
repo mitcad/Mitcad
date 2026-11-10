@@ -86,6 +86,9 @@ pub struct PrintAnalysis {
     pub thin_wall: ThinWallCheck,
     #[serde(default)]
     pub estimate: EstimateCheck,
+    /// Narrow gaps between the bodies (mitcad#1519).
+    #[serde(default)]
+    pub min_gap: MinGapCheck,
 }
 
 fn yes() -> bool {
@@ -220,6 +223,28 @@ impl EstimateCheck {
     }
 }
 
+/// Narrow gaps (mitcad#1519): pairs of the bodies, as they are placed,
+/// apart but closer than `gap` mm, which fuse when printed in place.
+/// `gap` null: the design's printed fit parameter `print_in_place_gap`,
+/// else [`print_analysis::DEFAULT_MIN_GAP`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinGapCheck {
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub gap: Option<f64>,
+}
+
+impl Default for MinGapCheck {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            gap: None,
+        }
+    }
+}
+
 impl PrintAnalysis {
     /// Why the settings cannot be kept, if they cannot (not the geometry).
     fn check(&self) -> Result<(), String> {
@@ -228,6 +253,9 @@ impl PrintAnalysis {
         }
         check_overhang_angle(self.overhang.angle)?;
         check_minimum_wall(self.thin_wall.minimum)?;
+        if let Some(gap) = self.min_gap.gap {
+            print_analysis::check_min_gap(gap)?;
+        }
         self.estimate.settings().check()?;
         if let Some(material) = &self.estimate.material {
             print_material(material)?;
@@ -555,6 +583,28 @@ impl<K: Kernel> Document<K> {
                     .map_or(Transform::IDENTITY, |i| i.transform)
             })
             .collect()
+    }
+
+    /// The gap (mm) under which bodies printed in place fuse, when none is
+    /// given (mitcad#1519), and where it comes from: the design's user
+    /// parameter `print_in_place_gap` when it is a length greater than
+    /// zero (`"parameter"`), else [`print_analysis::DEFAULT_MIN_GAP`]
+    /// (`"default"`).
+    pub fn print_min_gap_default(&self) -> (f64, &'static str) {
+        let params = self.parameters();
+        params
+            .find(crate::print_fits::PRINT_IN_PLACE_GAP)
+            .and_then(|id| {
+                let parameter = params.get(id)?;
+                let value = params.value(id)?;
+                (parameter.unit().dims() == crate::expr::Dims::LENGTH
+                    && value > 0.0
+                    && value.is_finite())
+                .then_some(value)
+            })
+            .map_or((print_analysis::DEFAULT_MIN_GAP, "default"), |value| {
+                (value, "parameter")
+            })
     }
 
     /// The print direction (unit, towards the bed) and a point of the bed

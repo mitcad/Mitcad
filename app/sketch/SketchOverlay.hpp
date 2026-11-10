@@ -20,6 +20,7 @@
 #include <QPolygonF>
 #include <QRectF>
 #include <QString>
+#include <QStringList>
 #include <QWidget>
 
 #include "PointMarkers.hpp"
@@ -203,6 +204,9 @@ private:
     int points = 0;
     int markers = 0;
     bool markersOver = false;
+    // The highlighted sketch curves' line types, once per curve
+    // ("solid", "dashed", "dash-dot"; mitcad#1619).
+    QStringList curveLines;
   };
   // The highlights with no tool or a picking tool running: the selection's
   // curves and points, the axes a command's input holds, a tool's picks and
@@ -231,6 +235,8 @@ private:
   QString m_loggedAxes;
   // The last "Sketch overlay:" line logged (mitcad#946).
   QString m_loggedHighlights;
+  // The last "Sketch overlay lines:" line logged (mitcad#1619).
+  QString m_loggedHighlightLines;
 };
 
 } // namespace mitcad::sketch

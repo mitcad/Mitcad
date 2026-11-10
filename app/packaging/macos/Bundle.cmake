@@ -251,6 +251,9 @@ Qt's translations (Contents/Resources/translations/qtbase_*.qm): BSD-3-Clause
   (Qt's translations module, qttranslations), shipped unchanged as Qt builds
   them; the texts of Qt's standard dialogs and buttons in MitCad's interface
   languages.
+The web browser of Insert > Component from Web (the Chromium Embedded Framework and
+  Chromium) is not in this bundle: MitCad downloads it on first use as a package of its
+  own, which carries its own third-party notices.
 Open CASCADE Technology ${OpenCASCADE_VERSION}: GNU LGPL-2.1 with the Open CASCADE exception,
   linked dynamically (libTK*.dylib in Contents/Frameworks); source code at
   https://dev.opencascade.org/ . With changes of MitCad's that speed up

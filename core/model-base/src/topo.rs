@@ -598,11 +598,14 @@ impl<'a> Parser<'a> {
         prefix: &str,
         expected: &'static str,
     ) -> Result<T, TopoError> {
-        let digits = self.rest()[prefix.len().min(self.rest().len())..]
-            .bytes()
-            .take_while(u8::is_ascii_digit)
-            .count();
-        let token = &self.rest()[..(prefix.len() + digits).min(self.rest().len())];
+        // The prefix is matched as text first: a byte offset past it could
+        // fall inside a character of an untrusted name ("\u{feff}c4").
+        let rest = self.rest();
+        let Some(after) = rest.strip_prefix(prefix) else {
+            return self.error(expected);
+        };
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        let token = &rest[..prefix.len() + digits];
         match parse_number(token, prefix) {
             Some(value) => {
                 self.pos += token.len();
@@ -1082,5 +1085,29 @@ mod tests {
         );
         let error = serde_json::from_str::<EdgeName>("\"E{F3:a}\"").unwrap_err();
         assert!(error.to_string().contains("expected '|'"), "{error}");
+    }
+
+    /// A character of several bytes where a number's prefix ("c", "F",
+    /// "#") is expected is refused, not sliced inside (a fuzzed design
+    /// file's region with a byte order mark before a curve).
+    #[test]
+    fn names_with_a_wide_character_before_a_number_are_refused() {
+        for text in [
+            "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],\u{feff}c4[c3,c1]}",
+            "r{\u{e9}1}",
+            "c\u{e9}",
+            "\u{feff}",
+        ] {
+            assert!(text.parse::<RegionKey>().is_err(), "accepted {text:?}");
+        }
+        for text in [
+            "\u{feff}F3:side(c1)",
+            "F3:side(\u{feff}c1)",
+            "F3:side(c1[\u{e9}2,c3])",
+            "F3:side(c1)#\u{e9}",
+            "E{F3:a|\u{e9}F3:b}",
+        ] {
+            assert!(text.parse::<TopoName>().is_err(), "accepted {text:?}");
+        }
     }
 }

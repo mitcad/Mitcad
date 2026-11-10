@@ -23,4 +23,10 @@ systemctl disable --now mosquitto 2> /dev/null || true
 # tools/ui-live-test.sh, a test tool started by the test in a D-Bus session
 # of its own.
 apt-get install -y -qq --no-install-recommends libsecret-1-dev gnome-keyring
+# The Chromium Embedded Framework (Insert > Component from Web's web browser
+# component, mitcad#1579): the system libraries CEF's libcef loads, for the
+# build's tests (every desktop with a browser has them).
+apt-get install -y -qq --no-install-recommends \
+  libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libxcomposite1 libxdamage1 \
+  libxfixes3 libxrandr2 libxtst6 libxshmfence1 libgbm1 libdrm2 libpango-1.0-0 libcairo2 libasound2t64
 echo "System packages installed."

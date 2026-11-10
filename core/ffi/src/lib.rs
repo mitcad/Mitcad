@@ -54,6 +54,7 @@ mod rvt_import;
 use rvt_import::{rvt_write_building_test, rvt_write_test_file};
 // The .solidcraft import (mitcad#450).
 mod solidcraft_import;
+use solidcraft_import::solidcraft_file_check;
 // The .dwg import (mitcad#453).
 mod dwg_import;
 use dwg_import::{dwg_report_passes, dwg_report_text, dwg_write_test_file};
@@ -107,6 +108,9 @@ mod command_memory;
 use command_memory::guard_command_memory;
 // model_render's ray-traced picture on the headless server (mitcad#1489).
 use mcp::run_mcp_raytraced;
+// The component browser's zip downloads (mitcad#1579).
+mod web_downloads;
+use web_downloads::{zip_extract, zip_list};
 
 #[cxx::bridge(namespace = "mitcad")]
 mod ffi {
@@ -361,6 +365,10 @@ mod ffi {
         /// commands.md, `import_solidcraft`); returns the import report as
         /// JSON, or text with `{"text": true}`.
         fn import_solidcraft(self: &mut Document, path: &str, json: &str) -> Result<String>;
+        /// "Not a SolidCraft design: …" for a .sc file whose format key is
+        /// not SolidCraft's (other programs use .sc too), empty for any
+        /// other file (mitcad#1622).
+        fn solidcraft_file_check(path: &str) -> String;
         /// Imports a .dwg drawing's 3D content: its solids and meshes as
         /// bodies, its blocks as components with their occurrences
         /// (options in commands.md, `import_dwg`); returns the import
@@ -787,6 +795,21 @@ mod ffi {
             memory_limit_mib: f64,
             raytracer: UniquePtr<McpRaytracer>,
         ) -> Result<()>;
+    }
+
+    // The component browser's zip downloads (mitcad#1579,
+    // web_downloads.rs; app/webbrowser/ComponentBrowser.cpp).
+
+    extern "Rust" {
+        /// The files of a zip (not its folders) as JSON `[{"name",
+        /// "size"}]`, names with `/` between folders; names that would
+        /// leave their folder are left out. An error for a file that is
+        /// not a zip.
+        fn zip_list(zip: &str) -> Result<String>;
+        /// Writes the zip's file `name` (as zip_list names it) to the file
+        /// `target`, its folders made; refused for an encrypted entry or
+        /// one over the reader's limits.
+        fn zip_extract(zip: &str, name: &str, target: &str) -> Result<()>;
     }
 }
 

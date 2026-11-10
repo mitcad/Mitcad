@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "ParameterField.hpp"
+#include "ModelMessages.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -265,7 +266,7 @@ private:
       try {
         added = m_setup.source->addParameter && m_setup.source->addParameter(command, &error);
       } catch (const std::exception& e) {
-        error = QString::fromUtf8(e.what());
+        error = mitcad::modelMessage(e.what());
       }
       if (added) {
         m_chosen = name;
@@ -456,7 +457,7 @@ void ParameterField::fetch() {
   } catch (const std::exception& e) {
     // A job computes the model: the parameters read last.
     qDebug().noquote() << QStringLiteral("Parameter suggestions for %1: parameters not read now: %2")
-                              .arg(m_options.label, QString::fromUtf8(e.what()));
+                              .arg(m_options.label, mitcad::modelMessage(e.what()));
   }
 }
 
@@ -1033,7 +1034,7 @@ bool ParameterField::stepText(const QString& before, const ParameterFieldOptions
         bareUnit = lengthUnitSize(source->lengthUnit());
       } catch (const std::exception& error) {
         qDebug().noquote() << QStringLiteral("Value field %1: %2 not stepped: %3")
-                                  .arg(what, how, QString::fromUtf8(error.what()));
+                                  .arg(what, how, mitcad::modelMessage(error.what()));
         return false;
       }
     }

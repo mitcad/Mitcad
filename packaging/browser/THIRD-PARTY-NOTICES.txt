@@ -1,0 +1,31 @@
+MitCad's web browser component (Insert > Component from Web) is a package
+of its own that MitCad downloads on first use. MitCad's own parts in it
+(the module mitcad-webbrowser and its subprocess helper) are released under
+the MIT licence (see LICENSE in MitCad's source code). The package also
+contains the following third-party components.
+
+Chromium Embedded Framework (CEF), version @MITCAD_CEF_VERSION@
+(libcef, its resources and locales, chrome_elf on Windows; on macOS the
+"Chromium Embedded Framework.framework"), and the client library
+libcef_dll_wrapper built from CEF's binary distribution and linked into the
+module
+  Licence: BSD-3-Clause, Copyright The Chromium Embedded Framework Authors;
+  the text is CEF-LICENSE.txt in this package. Source code:
+  https://bitbucket.org/chromiumembedded/cef (the version above); the binary
+  distribution is CEF's official one (https://cef-builds.spotifycdn.com/),
+  unchanged.
+
+Chromium, inside CEF's runtime
+  Licence: BSD-3-Clause, Copyright The Chromium Authors, with the
+  third-party code Chromium bundles under its own licences (BSD-style, MIT,
+  Apache-2.0, ISC, the GNU LGPL-2.1 of FFmpeg and others). Their texts are
+  in Chromium's credits page, built into the runtime (chrome://credits, the
+  resources of libcef), which lists every component with its licence.
+  Source code: https://chromium.googlesource.com/chromium/src/ at the
+  Chromium version CEF names in its version.
+  The LGPL components (FFmpeg) are inside libcef, a shared library this
+  package ships as a file of its own: it can be replaced with an
+  interface-compatible build of the same CEF version.
+
+Qt 6 is not in this package: the module uses the Qt libraries of the MitCad
+it is loaded into, under the GNU LGPL version 3 (see MitCad's own notices).

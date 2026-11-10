@@ -59,6 +59,8 @@ struct Allowed {
 };
 const Allowed kAllowed[] = {
     // Not UI colors.
+    {"framework/ModelMessageTemplates.cpp", 1,
+     "the generated list of the model's message templates (mitcad#1284): a message text, not a color"},
     {"render/RenderWorker.cpp", 21, "the rendered view's lights, sky, ground and studio: physical colors of a scene"},
     {"render/RenderLights.cpp", 6, "the rendered view's light markers, drawn as the lights they stand for"},
     {"render/RenderImageDialog.cpp", 1, "the dimming outside the image's frame"},

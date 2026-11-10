@@ -30,7 +30,7 @@ int MessageLog::lifetime(NoticeLevel level) {
 }
 
 bool MessageLog::add(const QString& text, NoticeLevel level, const QString& feature, const QDateTime& time,
-                     const QString& action) {
+                     const QString& action, const QString& source) {
   // A message with a button waits for its answer (mitcad#1416): a hint, a
   // progress line or a cleared status line does not take it away.
   const bool waiting = m_full && !m_full->action.isEmpty() &&
@@ -47,9 +47,10 @@ bool MessageLog::add(const QString& text, NoticeLevel level, const QString& feat
     MessageEntry& same = m_entries.front();
     same.time = time;
     same.action = action;
+    same.source = source; // the newest one's (mitcad#1621)
     ++same.count;
   } else {
-    m_entries.push_front({time, level, text, feature, 1, action});
+    m_entries.push_front({time, level, text, feature, 1, action, source});
     while (static_cast<int>(m_entries.size()) > kMaxEntries) {
       m_entries.pop_back();
     }
@@ -98,6 +99,22 @@ bool MessageLog::withdraw(const QString& text) {
   }
   m_full.reset();
   return true;
+}
+
+bool MessageLog::sourceClosed(const QString& source) {
+  if (!m_full || !sourceCovers(source, m_full->source)) {
+    return false;
+  }
+  m_full.reset();
+  return true;
+}
+
+bool MessageLog::sourceCovers(const QString& closing, const QString& raised) {
+  if (closing.isEmpty() || raised.isEmpty()) {
+    return false;
+  }
+  return raised == closing ||
+         (raised.size() > closing.size() && raised.startsWith(closing) && raised.at(closing.size()) == QLatin1Char('/'));
 }
 
 MessageLog::Shown MessageLog::shown() const {

@@ -237,7 +237,11 @@ impl<K: Kernel> Document<K> {
         let i = self.plate_index(plate)?;
         let label = format!("Delete {}", self.state.print_plates[i].name);
         self.apply_with(move |state| {
-            state.print_plates.remove(i);
+            let gone = state.print_plates.remove(i);
+            // Its own filament changes go with it (mitcad#1596).
+            state
+                .filament_changes
+                .retain(|s| s.plate.as_deref() != Some(gone.id.as_str()));
             Ok((label, (), false))
         })
     }

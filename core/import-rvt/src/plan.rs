@@ -178,7 +178,7 @@ pub fn plan(model: &Model, e: &Element) -> Result<Plan, String> {
         "landing" => landing(model, e, b.landings.get(&e.id).ok_or("no landing")?),
         "sweep" | "rail" => sweep(model, e, b.sweeps.get(&e.id).ok_or("no sweep")?, true),
         "panel" => panel(b, b.instances.get(&e.id).ok_or("no instance")?),
-        other => Err(format!("{other}s are not built")),
+        other => Err(format!("elements of the kind {other} are not built")),
     }
 }
 

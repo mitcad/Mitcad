@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "TimelineWidget.hpp"
+#include "framework/ModelMessages.hpp"
 #include "Bindings.hpp"
 #include "TimelinePresentation.hpp"
 
@@ -568,7 +569,7 @@ private:
           error = answer.value(QStringLiteral("error")).toString(tr("It cannot go there."));
         }
       } catch (const std::exception& e) {
-        error = QString::fromUtf8(e.what());
+        error = mitcad::modelMessage(e.what());
       }
       cached = m_reorder.insert(index, error);
     }

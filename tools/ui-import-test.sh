@@ -36,7 +36,9 @@
 #     products failed.
 #   - A SolidCraft design through File > Open (mitcad#450): one of the
 #     import's hand-written test designs, its features in with their
-#     parameters, its report shown.
+#     parameters, its report shown; the same design saved as .sc
+#     (mitcad#1622) likewise, and a .sc file of another program refused
+#     by its format key ("Not a SolidCraft design: ...").
 #   - A DWG drawing through File > Open (mitcad#453): the reader's test
 #     drawing (mitcad-cli import-dwg --write-test), its entities accounted
 #     for, its blocks as components.
@@ -475,6 +477,19 @@ ui_step "close the report (Enter)"         ui_key Return
 ui_focus_main
 ui_expect_new "Imported box-fillet-hole.solidcraft: 1 bodies" "a new document with the block"
 expect_title "box-fillet-hole* - MitCad"
+# The same design saved as .sc, as SolidCraft saves designs now
+# (mitcad#1622): recognised by its format key, it comes in the same.
+cp "$WORK/box-fillet-hole.solidcraft" "$WORK/box-fillet-hole-copy.sc" || ui_fail "cannot copy the test design"
+ui_mark
+ui_step "open the design saved as .sc (Ctrl+O)" open_fcstd "$WORK/box-fillet-hole-copy.sc"
+ui_expect_new "Import of box-fillet-hole-copy.sc started" "a .sc design is imported as SolidCraft's"
+ui_expect_new "Import report: box-fillet-hole-copy.sc: 5 parametric, 0 partial, 0 unmapped, 0 failed, 0 skipped" \
+  "every feature came in, as from the .solidcraft file" 120
+ui_focus_dialog '^Import Report$'
+ui_step "close the report (Enter)"         ui_key Return
+ui_focus_main
+ui_expect_new "Imported box-fillet-hole-copy.sc: 1 bodies" "a new document with the block"
+expect_title "box-fillet-hole-copy* - MitCad"
 
 echo "--- IFC building model (mitcad#273)"
 "$CLI" import-ifc --write-test "$WORK/building.ifc" || ui_fail "cannot write the test building"
@@ -734,6 +749,21 @@ ui_expect_new "pins.step as Base1: 2 body(ies), repeated parts: 1 component(s), 
   "the two pins one component placed twice"
 ui_step "undo the import (Ctrl+Z)"         ui_key ctrl+z
 ui_expect_new "Undo: Import pins.step" "the import and its repeated parts are one undo step"
+
+echo "--- A .sc file of another program (mitcad#1622)"
+# Other programs use .sc too: one whose format key is not SolidCraft's is
+# refused by its content before an import starts.
+printf '{"format": "other/1", "name": "A"}\n' > "$WORK/other-program.sc"
+ui_stop_app
+timeout 120 "$UI_APP" --no-recovery --open "$WORK/other-program.sc" --no-native-dialogs > "$WORK/other-program.log" 2>&1
+status=$?
+[ "$status" = 2 ] || { cat "$WORK/other-program.log"; ui_fail "--open of another program's .sc file exited with $status"; }
+grep -q "Not a SolidCraft design: the file's format is \`other/1\`" "$WORK/other-program.log" ||
+  { cat "$WORK/other-program.log"; ui_fail "no clear refusal for another program's .sc file"; }
+grep -q "Import of other-program.sc started" "$WORK/other-program.log" &&
+  { cat "$WORK/other-program.log"; ui_fail "an import started for another program's .sc file"; }
+echo "ok   another program's .sc file refused: Not a SolidCraft design"
+ui_start_app --demo --no-native-dialogs
 
 echo "--- Saving in a project (P12a)"
 # A project folder: its files are saved in version 3, the B-rep data of

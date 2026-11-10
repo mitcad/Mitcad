@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # SolidCraft designs kept outside the repository (never committed): every
-# .solidcraft under the folders of MITCAD_SOLIDCRAFT_CORPUS (a path list,
+# .sc or .solidcraft under the folders of MITCAD_SOLIDCRAFT_CORPUS (a path list,
 # like PATH) is imported with mitcad-cli import-solidcraft; one with
 # <name>.expected.json next to it (SolidCraft's own evaluation of the
 # design, `solidcraft-cli eval`, or a subset of it) is checked against it.
@@ -16,7 +16,7 @@ foreach(var CLI WORK)
   endif()
 endforeach()
 if(NOT DEFINED ENV{MITCAD_SOLIDCRAFT_CORPUS} OR "$ENV{MITCAD_SOLIDCRAFT_CORPUS}" STREQUAL "")
-  message("SolidCraft corpus: skipped (set MITCAD_SOLIDCRAFT_CORPUS to folders of .solidcraft files)")
+  message("SolidCraft corpus: skipped (set MITCAD_SOLIDCRAFT_CORPUS to folders of .sc or .solidcraft files)")
   return()
 endif()
 file(MAKE_DIRECTORY "${WORK}")
@@ -26,9 +26,12 @@ if(NOT WIN32)
 endif()
 set(files)
 foreach(dir IN LISTS folders)
-  file(GLOB_RECURSE found "${dir}/*.solidcraft")
+  # .sc as SolidCraft saves designs now (mitcad#1622); any case.
+  file(GLOB_RECURSE found "${dir}/*.solidcraft" "${dir}/*.sc" "${dir}/*.SC")
   list(APPEND files ${found})
 endforeach()
+# *.sc and *.SC find a file twice where names ignore case (Windows, macOS).
+list(REMOVE_DUPLICATES files)
 list(SORT files)
 set(failed 0)
 set(total 0)
@@ -36,6 +39,7 @@ foreach(file IN LISTS files)
   math(EXPR total "${total} + 1")
   get_filename_component(dir "${file}" DIRECTORY)
   get_filename_component(stem "${file}" NAME_WE)
+  get_filename_component(name "${file}" NAME)
   set(arguments import-solidcraft "${file}" --report "${WORK}/${stem}.json")
   if(EXISTS "${dir}/${stem}.expected.json")
     list(APPEND arguments --expected "${dir}/${stem}.expected.json")
@@ -48,7 +52,7 @@ foreach(file IN LISTS files)
   if(EXISTS "${dir}/known.txt")
     file(STRINGS "${dir}/known.txt" lines)
     foreach(line IN LISTS lines)
-      if(line MATCHES "^${stem}\\.solidcraft\t(.*)$")
+      if(line MATCHES "^${name}\t(.*)$")
         set(known "${CMAKE_MATCH_1}")
       endif()
     endforeach()

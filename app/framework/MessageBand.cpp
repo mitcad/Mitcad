@@ -114,7 +114,7 @@ MessageCenter::MessageCenter(QObject* parent) : QObject(parent) {
   });
 }
 
-void MessageCenter::post(const QString& text, NoticeLevel level, const QString& feature) {
+void MessageCenter::post(const QString& text, NoticeLevel level, const QString& feature, const QString& source) {
   if (text.isEmpty()) {
     const bool full = m_log.shown() == MessageLog::Shown::Full;
     m_log.add(text, level, feature, QDateTime::currentDateTime());
@@ -126,7 +126,7 @@ void MessageCenter::post(const QString& text, NoticeLevel level, const QString& 
     return;
   }
   qDebug().noquote() << QStringLiteral("Message band: %1 %2").arg(noticeLevelName(level), text);
-  if (m_log.add(text, level, feature, QDateTime::currentDateTime())) {
+  if (m_log.add(text, level, feature, QDateTime::currentDateTime(), QString(), source)) {
     qDebug().noquote() << QStringLiteral("Message band full: %1 %2").arg(noticeLevelName(level), text);
     restartTimer();
   }
@@ -198,6 +198,19 @@ void MessageCenter::withdraw(const QString& text) {
   if (m_log.withdraw(text)) {
     m_timer.stop();
     toStub("withdrawn");
+    emit changed();
+  }
+}
+
+void MessageCenter::closeSource(const QString& source) {
+  const MessageEntry* full = m_log.full();
+  const QString text = full != nullptr ? full->text : QString();
+  const NoticeLevel level = full != nullptr ? full->level : NoticeLevel::Hint;
+  if (m_log.sourceClosed(source)) {
+    qDebug().noquote() << QStringLiteral("Message band source closed: %1 %2 (%3)")
+                              .arg(noticeLevelName(level), text, source);
+    m_timer.stop();
+    toStub("cleared");
     emit changed();
   }
 }

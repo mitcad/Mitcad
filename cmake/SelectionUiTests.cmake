@@ -184,3 +184,34 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter
     set_property(TEST "${bom_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   endif()
 endif()
+
+# Insert > Component from Web (mitcad#1579): a page of the test's own HTTP
+# server with a STEP file, a zip of two and a PDF, through the real CEF
+# window of the web browser component the build made, used from the build
+# tree (MITCAD_BROWSER_COMPONENT_DIR: no download, no network beyond the
+# test's own server); only where the component is built
+# (app/webbrowser/CMakeLists.txt).
+get_property(selection_ui_web_browser GLOBAL PROPERTY MITCAD_BROWSER_COMPONENT_DIR)
+if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter_FOUND
+   AND selection_ui_platform AND selection_ui_web_browser)
+  set(web_ui_test "app.ui-${selection_ui_platform}-component-web")
+  if(APPLE)
+    add_test(NAME "${web_ui_test}"
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-component-web-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-macos-component-web" "${selection_ui_web_browser}")
+  else()
+    selection_ui_command_prefix(400)
+    add_test(NAME "${web_ui_test}"
+      COMMAND ${selection_ui_prefix} "${Python3_EXECUTABLE}"
+              "${CMAKE_SOURCE_DIR}/tools/ui-component-web-test.py"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+              "${CMAKE_BINARY_DIR}/ui-${selection_ui_platform}-component-web"
+              "$<TARGET_FILE_DIR:Qt6::Core>" "${selection_ui_web_browser}")
+  endif()
+  set_tests_properties("${web_ui_test}" PROPERTIES TIMEOUT 420 ${selection_ui_alone}
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  if(selection_ui_platform STREQUAL "linux")
+    set_property(TEST "${web_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+  endif()
+endif()

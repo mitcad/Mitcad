@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "CommandMessage.hpp"
+#include "ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -63,7 +64,9 @@ CommandMessage::CommandMessage(QWidget* parent) : QTextEdit(parent) {
   hide();
 }
 
-void CommandMessage::setMessage(const QString& text) {
+void CommandMessage::setMessage(const QString& given) {
+  // The model's messages in the interface language (mitcad#1284).
+  const QString text = modelMessage(given);
   if (text == m_text) {
     return;
   }

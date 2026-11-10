@@ -1011,7 +1011,12 @@ std::vector<Violation> scan(const std::vector<std::string>& paths, const std::ve
       const std::string stem = it->path().stem().string();
       const bool test = stem == "tests" || stem == "testdata" ||
                         (stem.size() > 6 && stem.compare(stem.size() - 6, 6, "_tests") == 0);
-      if (it->is_regular_file() && (ext == ".cpp" || ext == ".hpp" || ext == ".mm" || (ext == ".rs" && !test))) {
+      // The generated list of the model's message templates (mitcad#1284,
+      // `mitcad-translations messages`) copies the Rust sources' texts: they
+      // are checked where they are written, not again in the copy.
+      const bool generated = it->path().filename() == "ModelMessageTemplates.cpp";
+      if (it->is_regular_file() && !generated &&
+          (ext == ".cpp" || ext == ".hpp" || ext == ".mm" || (ext == ".rs" && !test))) {
         files.push_back(it->path());
       }
     }

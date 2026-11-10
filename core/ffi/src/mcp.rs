@@ -693,11 +693,9 @@ impl CadBackend {
             ));
         }
         let path = self.workspace.read_path(path)?;
-        if path
-            .extension()
-            .and_then(|s| s.to_str())
-            .is_some_and(|s| s.eq_ignore_ascii_case("solidcraft"))
-        {
+        // A SolidCraft design: `.sc` (refused unless its format key is
+        // SolidCraft's, mitcad#1622), `.solidcraft` or `.solvecraft`.
+        if mitcad_import::solidcraft::has_design_extension(&path) {
             return self.open_solidcraft(&path);
         }
         require_extension(&path, "mitcad")?;
@@ -1228,7 +1226,7 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
         .into_iter()
         .chain(THREE_MF_FIELDS)
         .chain(BED_FIELDS)
-        .chain(["occurrence", "refinement"])
+        .chain(["occurrence", "refinement", "animation", "print_colors"])
         .find(|k| arguments.get(*k).is_some())
         {
             return Err(format!("cut_sheet does not take {key}"));
@@ -1308,15 +1306,29 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
     // plates).
     // A mesh's tolerances (mitcad#1569), checked by `export` as the CLI's
     // and the application's are.
+    // A USDZ's animation (mitcad#1597), checked by `export`.
     let given: Vec<&str> = THREE_MF_FIELDS
         .into_iter()
         .chain(BED_FIELDS)
-        .chain(["occurrence", "refinement"])
+        .chain(["occurrence", "refinement", "animation", "print_colors"])
         .filter(|k| arguments.get(*k).is_some())
         .collect();
     if given.contains(&"refinement") && !matches!(format, "stl" | "obj" | "3mf" | "usdz") {
         return Err(format!(
             "refinement is for the mesh of an STL, OBJ, 3MF or USDZ export, not {format}"
+        ));
+    }
+    if given.contains(&"animation") && format != "usdz" {
+        return Err(format!(
+            "animation is for USDZ export (format usdz), not {format}: time-sampled placements \
+             of the occurrences and bodies"
+        ));
+    }
+    // Print colours by height (mitcad#1596): a USDZ's.
+    if given.contains(&"print_colors") && format != "usdz" {
+        return Err(format!(
+            "print_colors is for a USDZ export, not {format}: a 3MF for a slicer gets the \
+             filament changes themselves with dialect"
         ));
     }
     let body_export = drawing.is_none() && sketch.is_none() && flat.is_none();

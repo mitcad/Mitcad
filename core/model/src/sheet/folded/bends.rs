@@ -1691,9 +1691,10 @@ fn listed(names: &[String]) -> String {
 fn second_path_message(bending: Bending, joining: &[(String, bool)]) -> String {
     let names: Vec<String> = joining.iter().map(|(name, _)| name.clone()).collect();
     let all_folds = joining.iter().all(|(_, fold)| *fold);
-    // The features as the subject, the object and the subject again of
-    // the sentences, and the verb forms that agree with them.
-    let (all, them, they, joins, does) = match names.as_slice() {
+    // The features by their names; one feature and several are whole
+    // sentences of their own, so that a translation needs no verb forms put
+    // in (mitcad#1284).
+    let all = match names.as_slice() {
         [] => {
             return match bending {
                 Bending::Fold => "Both sides of the fold line are also joined elsewhere, \
@@ -1704,41 +1705,50 @@ fn second_path_message(bending: Bending, joining: &[(String, bool)]) -> String {
                     .to_owned(),
             };
         }
-        [only] => (
-            only.clone(),
-            only.clone(),
-            only.clone(),
-            "whose bend joins",
-            "does",
-        ),
-        _ => (
-            listed(&names),
-            "them".to_owned(),
-            "they".to_owned(),
-            "whose bends join",
-            "do",
-        ),
+        [only] => only.clone(),
+        _ => listed(&names),
     };
+    let one = names.len() == 1;
     match bending {
         Bending::Fold => {
             let instead = if !all_folds {
-                let pronoun = if names.len() == 1 { "it" } else { "they" };
-                format!("change {them} so that {pronoun} {does} not join both sides")
-            } else if names.len() == 1 {
-                format!("make {them} with a separate line on each side")
+                if one {
+                    format!("change {all} so that it does not join both sides")
+                } else {
+                    "change them so that they do not join both sides".to_owned()
+                }
+            } else if one {
+                format!("make {all} with a separate line on each side")
             } else {
                 "make each of them with a separate line on each side".to_owned()
             };
-            format!(
-                "This fold would also have to bend {all}, {joins} both sides of the \
-                 fold line. Fold here before {them}, or {instead}."
-            )
+            if one {
+                format!(
+                    "This fold would also have to bend {all}, whose bend joins both sides of the \
+                     fold line. Fold here before {all}, or {instead}."
+                )
+            } else {
+                format!(
+                    "This fold would also have to bend {all}, whose bends join both sides of the \
+                     fold line. Fold here before them, or {instead}."
+                )
+            }
         }
-        Bending::Bend => format!(
-            "This bend would also have to bend {all}, {joins} the moving panel to \
-             the stationary one too. Bend here before {them}, or choose panels that \
-             {they} {does} not join."
-        ),
+        Bending::Bend => {
+            if one {
+                format!(
+                    "This bend would also have to bend {all}, whose bend joins the moving panel to \
+                     the stationary one too. Bend here before {all}, or choose panels that \
+                     {all} does not join."
+                )
+            } else {
+                format!(
+                    "This bend would also have to bend {all}, whose bends join the moving panel to \
+                     the stationary one too. Bend here before them, or choose panels that \
+                     they do not join."
+                )
+            }
+        }
     }
 }
 

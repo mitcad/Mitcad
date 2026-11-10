@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Print Analysis in the 3D view (mitcad#620): the overhang and thin-wall
-// triangles over the bodies, the thinnest point's marker and label, and the
-// legend.
+// triangles over the bodies, the thinnest point's marker and label, the
+// narrow gaps between bodies (mitcad#1519) with the smallest one's marker
+// and label, and the legend.
 #include "PrintOverlay.hpp"
 
 #include <algorithm>
@@ -29,8 +30,12 @@
 #include <Aspect_PolygonOffsetMode.hxx>
 #include <Aspect_TypeOfTriedronPosition.hxx>
 #include <Graphic3d_AlphaMode.hxx>
+#include <Graphic3d_ArrayOfPoints.hxx>
+#include <Graphic3d_ArrayOfSegments.hxx>
 #include <Graphic3d_ArrayOfTriangles.hxx>
 #include <Graphic3d_AspectFillArea3d.hxx>
+#include <Graphic3d_AspectLine3d.hxx>
+#include <Graphic3d_AspectMarker3d.hxx>
 #include <Graphic3d_Group.hxx>
 #include <Graphic3d_Texture2D.hxx>
 #include <Graphic3d_TextureParams.hxx>
@@ -134,6 +139,55 @@ private:
   std::vector<float> m_thin;
   QColor m_overhangColor;
   QColor m_thinColor;
+};
+
+// The narrow gaps between bodies (mitcad#1519): a line between each gap's
+// closest points and a dot at each end, in the gaps' colour, over the
+// bodies (a gap lies between two faces, which would hide it); not
+// pickable.
+class PrintGaps : public AIS_InteractiveObject {
+public:
+  PrintGaps(const std::vector<float>& points, const QColor& color) : m_points(points), m_color(color) {}
+
+  bool AcceptDisplayMode(const int mode) const override { return mode == 0; }
+
+  // The gaps' colour for another background (mitcad#1041); the caller has
+  // the presentation computed again.
+  void setColor(const QColor& color) { m_color = color; }
+
+protected:
+  void Compute(const occ::handle<PrsMgr_PresentationManager>&, const occ::handle<Prs3d_Presentation>& presentation,
+               const int mode) override {
+    const std::size_t count = m_points.size() / 6;
+    if (mode != 0 || count == 0) {
+      return;
+    }
+    occ::handle<Graphic3d_ArrayOfSegments> lines = new Graphic3d_ArrayOfSegments(static_cast<int>(count * 2));
+    occ::handle<Graphic3d_ArrayOfPoints> ends = new Graphic3d_ArrayOfPoints(static_cast<int>(count * 2));
+    for (std::size_t g = 0; g < count; ++g) {
+      const float* v = m_points.data() + g * 6;
+      const gp_Pnt a(v[0], v[1], v[2]);
+      const gp_Pnt b(v[3], v[4], v[5]);
+      lines->AddVertex(a);
+      lines->AddVertex(b);
+      ends->AddVertex(a);
+      ends->AddVertex(b);
+    }
+    const Quantity_Color color = occtColor(m_color);
+    occ::handle<Graphic3d_AspectLine3d> lineAspect = new Graphic3d_AspectLine3d(color, Aspect_TOL_SOLID, 3.0);
+    const occ::handle<Graphic3d_Group> lineGroup = presentation->NewGroup();
+    lineGroup->SetGroupPrimitivesAspect(lineAspect);
+    lineGroup->AddPrimitiveArray(lines);
+    occ::handle<Graphic3d_AspectMarker3d> endAspect = new Graphic3d_AspectMarker3d(Aspect_TOM_BALL, color, 2.0);
+    const occ::handle<Graphic3d_Group> endGroup = presentation->NewGroup();
+    endGroup->SetGroupPrimitivesAspect(endAspect);
+    endGroup->AddPrimitiveArray(ends);
+  }
+  void ComputeSelection(const occ::handle<SelectMgr_Selection>&, const int) override {}
+
+private:
+  std::vector<float> m_points;
+  QColor m_color;
 };
 
 // A card over the view, as the view's banner draws one.
@@ -249,6 +303,50 @@ void showCard(const occ::handle<AIS_InteractiveContext>& context, const occ::han
   context->SetZLayer(card, layer);
 }
 
+// Paints a marker card: a ring in `color` with a white halo and a dot,
+// around the point at the image's origin, and the label's card beside it;
+// drawn at the point wherever the camera looks from, at its size on the
+// screen.
+void paintMarker(PrintCard& card, const gp_Pnt& point, const QString& label, const QColor& color, const QFont& font,
+                 const QPalette& palette, qreal ratio) {
+  const QFontMetrics metrics(font);
+  const qreal line = metrics.height();
+  constexpr qreal ring = kMarker + 2.0;
+  QRectF area(-ring, -ring, 2.0 * ring, 2.0 * ring);
+  QRectF labelCard;
+  if (!label.isEmpty()) {
+    labelCard = QRectF(kMarker + 6.0, -line / 2.0 - kPadding / 2.0, metrics.horizontalAdvance(label) + 2.0 * kPadding,
+                       line + kPadding);
+    area |= labelCard.adjusted(-1.0, -1.0, 1.0, 1.0);
+  }
+  // The point on a whole pixel of the image.
+  const QPoint origin(static_cast<int>(std::ceil(-area.left() * ratio)),
+                      static_cast<int>(std::ceil(-area.top() * ratio)));
+  QImage image =
+      cardImage(QSizeF(origin.x() / ratio + area.right() + 1.0, origin.y() / ratio + area.bottom() + 1.0), ratio);
+  QPainter painter(&image);
+  painter.setRenderHint(QPainter::Antialiasing);
+  painter.setFont(font);
+  painter.translate(origin.x() / ratio, origin.y() / ratio);
+  const QPointF at(0.0, 0.0);
+  painter.setBrush(Qt::NoBrush);
+  painter.setPen(QPen(QColor(255, 255, 255, 220), 4.0));
+  painter.drawEllipse(at, kMarker, kMarker);
+  painter.setPen(QPen(color, 2.0));
+  painter.drawEllipse(at, kMarker, kMarker);
+  painter.setPen(Qt::NoPen);
+  painter.setBrush(color);
+  painter.drawEllipse(at, 2.5, 2.5);
+  if (!label.isEmpty()) {
+    drawCard(painter, labelCard, palette);
+    painter.setPen(palette.color(QPalette::WindowText));
+    painter.drawText(labelCard, Qt::AlignCenter, label);
+  }
+  painter.end();
+  card.setImage(image, origin);
+  card.SetTransformPersistence(new Graphic3d_TransformPers(Graphic3d_TMF_ZoomRotatePers, point));
+}
+
 } // namespace
 
 void OcctViewer::setPrintOverlay(const PrintOverlay& overlay) {
@@ -259,6 +357,15 @@ void OcctViewer::setPrintOverlay(const PrintOverlay& overlay) {
   if (!overlay.overhangs.empty() || !overlay.thin.empty()) {
     m_printTriangles = new PrintTriangles(overlay);
     m_context->Display(m_printTriangles, 0, -1, false);
+  }
+  if (!m_printGaps.IsNull()) {
+    m_context->Remove(m_printGaps, false);
+    m_printGaps.Nullify();
+  }
+  if (!overlay.gaps.empty()) {
+    m_printGaps = new PrintGaps(overlay.gaps, overlay.gapColor);
+    m_context->Display(m_printGaps, 0, -1, false);
+    m_context->SetZLayer(m_printGaps, Graphic3d_ZLayerId_Topmost);
   }
   if (m_printLabels == nullptr && !overlay.isEmpty()) {
     m_printLabels = new PrintOverlayLabels(this, m_context, [this] { sceneChanged(); });
@@ -282,7 +389,7 @@ void OcctViewer::setPrintOverlay(const PrintOverlay& overlay) {
 PrintOverlayLabels::PrintOverlayLabels(OcctViewer* viewer, occ::handle<AIS_InteractiveContext> context,
                                        std::function<void()> changed)
     : QObject(viewer), m_viewer(viewer), m_context(std::move(context)), m_changed(std::move(changed)),
-      m_marker(new PrintCard()), m_legend(new PrintCard()) {
+      m_marker(new PrintCard()), m_gapMarker(new PrintCard()), m_legend(new PrintCard()) {
   // A frame was drawn: the screen, the theme or the cards over the view
   // may have changed (the camera alone changes nothing here: the view
   // keeps the marker at its point).
@@ -300,6 +407,13 @@ void PrintOverlayLabels::setOverlay(const PrintOverlay& overlay) {
     m_point = gp_Pnt(p[0], p[1], p[2]);
   }
   m_label = overlay.thinnestLabel;
+  m_gapPoint.reset();
+  if (overlay.narrowest) {
+    const std::array<double, 3>& g = *overlay.narrowest;
+    m_gapPoint = gp_Pnt(g[0], g[1], g[2]);
+  }
+  m_gapLabel = overlay.narrowestLabel;
+  m_gapColor = overlay.gapColor;
   m_title = overlay.title;
   m_entries = overlay.legend;
   m_markerColor = overlay.thinColor;
@@ -307,13 +421,15 @@ void PrintOverlayLabels::setOverlay(const PrintOverlay& overlay) {
   paintCards();
 }
 
-void PrintOverlayLabels::setColors(const QColor& overhang, const QColor& thin) {
-  // The legend's two categories: the thin walls' entry has the marker's
-  // colour, the other is the overhangs'.
+void PrintOverlayLabels::setColors(const QColor& overhang, const QColor& thin, const QColor& gap) {
+  // The legend's categories: the thin walls' entry has the marker's
+  // colour, the narrow gaps' the gap marker's, the other is the
+  // overhangs'.
   for (auto& entry : m_entries) {
-    entry.first = entry.first == m_markerColor ? thin : overhang;
+    entry.first = entry.first == m_markerColor ? thin : entry.first == m_gapColor ? gap : overhang;
   }
   m_markerColor = thin;
+  m_gapColor = gap;
   if (m_shown) {
     paintCards();
     m_changed();
@@ -323,12 +439,17 @@ void PrintOverlayLabels::setColors(const QColor& overhang, const QColor& thin) {
 void OcctViewer::recolorPrintOverlay() {
   const QColor overhang = viewColor(ColorRole::PrintOverhang, m_backgroundDark);
   const QColor thin = viewColor(ColorRole::PrintThin, m_backgroundDark);
+  const QColor gap = viewColor(ColorRole::PrintGap, m_backgroundDark);
   if (auto* triangles = dynamic_cast<PrintTriangles*>(m_printTriangles.get())) {
     triangles->setColors(overhang, thin);
     m_context->Redisplay(m_printTriangles, false);
   }
+  if (auto* gaps = dynamic_cast<PrintGaps*>(m_printGaps.get())) {
+    gaps->setColor(gap);
+    m_context->Redisplay(m_printGaps, false);
+  }
   if (m_printLabels != nullptr) {
-    m_printLabels->setColors(overhang, thin);
+    m_printLabels->setColors(overhang, thin, gap);
   }
 }
 
@@ -357,45 +478,16 @@ void PrintOverlayLabels::paintCards() {
   // the point wherever the camera looks from.
   const bool markerShown = m_shown && m_point.has_value();
   if (markerShown) {
-    // The ring with its white halo, and the label's card beside it,
-    // around the point at (0, 0).
-    constexpr qreal ring = kMarker + 2.0;
-    QRectF area(-ring, -ring, 2.0 * ring, 2.0 * ring);
-    QRectF card;
-    if (!m_label.isEmpty()) {
-      card = QRectF(kMarker + 6.0, -line / 2.0 - kPadding / 2.0,
-                    metrics.horizontalAdvance(m_label) + 2.0 * kPadding, line + kPadding);
-      area |= card.adjusted(-1.0, -1.0, 1.0, 1.0);
-    }
-    // The point on a whole pixel of the image.
-    const QPoint origin(static_cast<int>(std::ceil(-area.left() * m_ratio)),
-                        static_cast<int>(std::ceil(-area.top() * m_ratio)));
-    QImage image = cardImage(QSizeF(origin.x() / m_ratio + area.right() + 1.0,
-                                    origin.y() / m_ratio + area.bottom() + 1.0),
-                             m_ratio);
-    QPainter painter(&image);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setFont(font);
-    painter.translate(origin.x() / m_ratio, origin.y() / m_ratio);
-    const QPointF at(0.0, 0.0);
-    painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(QColor(255, 255, 255, 220), 4.0));
-    painter.drawEllipse(at, kMarker, kMarker);
-    painter.setPen(QPen(m_markerColor, 2.0));
-    painter.drawEllipse(at, kMarker, kMarker);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(m_markerColor);
-    painter.drawEllipse(at, 2.5, 2.5);
-    if (!m_label.isEmpty()) {
-      drawCard(painter, card, palette);
-      painter.setPen(palette.color(QPalette::WindowText));
-      painter.drawText(card, Qt::AlignCenter, m_label);
-    }
-    painter.end();
-    marker->setImage(image, origin);
-    marker->SetTransformPersistence(new Graphic3d_TransformPers(Graphic3d_TMF_ZoomRotatePers, *m_point));
+    paintMarker(*marker, *m_point, m_label, m_markerColor, font, palette, m_ratio);
   }
   showCard(m_context, m_marker, markerShown, Graphic3d_ZLayerId_Topmost);
+  // The smallest narrow gap (mitcad#1519) likewise, in the gaps' colour.
+  const bool gapShown = m_shown && m_gapPoint.has_value();
+  if (gapShown) {
+    paintMarker(*static_cast<PrintCard*>(m_gapMarker.get()), *m_gapPoint, m_gapLabel, m_gapColor, font, palette,
+                m_ratio);
+  }
+  showCard(m_context, m_gapMarker, gapShown, Graphic3d_ZLayerId_Topmost);
 
   // The legend in the lower left corner, clear of the cards over the view
   // (placeLegend).

@@ -30,7 +30,7 @@ use mitcad_model_base::kernel::{
     Kernel, KernelError, MassProperties,
 };
 use mitcad_model_base::kernel::{DraftSpec, FilletSet, FilletSize, ShellSpec, ToolInput};
-use mitcad_model_base::kernel::{FontGlyphs, FontRequest, Glyph};
+use mitcad_model_base::kernel::{FacePoints, FontGlyphs, FontRequest, Glyph};
 use mitcad_model_base::monitor::RecomputeMonitor;
 use mitcad_model_base::sweeps::PipeCorners;
 use mitcad_model_base::sweeps::{
@@ -363,6 +363,11 @@ pub struct MockKernel {
     /// do not overlap the tool's by volume is not touched; the others as
     /// without this.
     pub intersects_by_bounds: Cell<bool>,
+    /// A shape is its bounds for copies at the same place (mitcad#1588):
+    /// `face_points` gives the centres of the bounds' six faces (as one
+    /// face, the shape's first), `boundary_distances` each point's distance
+    /// from the bounds' surface; otherwise both are unsupported.
+    pub copies_by_bounds: Cell<bool>,
 }
 
 /// A whole round face of a mock body ([`MockKernel::round_faces`],
@@ -2226,11 +2231,37 @@ impl Kernel for MockKernel {
                     .collect()
             }
         });
+        // A print shape's roofs (mitcad#1515): each hole's roof direction,
+        // or `round`, and a flat roof's sag allowance.
+        if let Some(print) = &spec.print_shape {
+            let roofs: Vec<String> = print
+                .roofs
+                .iter()
+                .map(|roof| match roof {
+                    Some(r) => format!("({}, {}, {})", number(r[0]), number(r[1]), number(r[2])),
+                    None => "round".to_owned(),
+                })
+                .collect();
+            text += &format!(" print roofs [{}]", roofs.join(", "));
+            match print.flat_roof {
+                Some(sag) => text += &format!(" flat roof {sag:.6}"),
+                None => text += " teardrop",
+            }
+        }
         self.specs.borrow_mut().push(text);
         let mut faces = Vec::new();
         let mut edges = Vec::new();
         for i in 0..spec.positions.len() {
             let face = |part: &str| FaceName::new(spec.feature, &format!("hole{i}.{part}"), None);
+            // A roofed hole's roof sides and flat roof besides its wall.
+            if let Some(print) = &spec.print_shape
+                && print.roofs.get(i).is_some_and(Option::is_some)
+            {
+                faces.extend([face("roof0"), face("roof1")]);
+                if print.flat_roof.is_some() {
+                    faces.push(face("roof"));
+                }
+            }
             if let Some(parts) = &press_fit_parts {
                 for part in parts {
                     faces.push(face(part));
@@ -2523,6 +2554,61 @@ impl Kernel for MockKernel {
                     hi[axis] = at;
                 }
                 [lo, hi]
+            })
+            .collect())
+    }
+
+    /// With `copies_by_bounds` (mitcad#1588): the centres of the bounds'
+    /// six faces, as one face named after the shape's first.
+    fn face_points(&self, shape: &MockShape) -> Result<Vec<FacePoints>, KernelError> {
+        if !self.copies_by_bounds.get() {
+            return Err(KernelError::Unsupported("points inside faces"));
+        }
+        let b = shape.bounds.ok_or(KernelError::failed("no bounds"))?;
+        let middle: [f64; 3] = std::array::from_fn(|i| (b.min[i] + b.max[i]) / 2.0);
+        let mut points = Vec::with_capacity(6);
+        for axis in 0..3 {
+            for at in [b.min[axis], b.max[axis]] {
+                let mut point = middle;
+                point[axis] = at;
+                points.push(point);
+            }
+        }
+        Ok(vec![FacePoints {
+            name: shape
+                .faces
+                .first()
+                .map_or_else(|| "box".to_owned(), ToString::to_string),
+            points,
+        }])
+    }
+
+    /// With `copies_by_bounds` (mitcad#1588): each point's distance from
+    /// the surface of the bounds.
+    fn boundary_distances(
+        &self,
+        shape: &MockShape,
+        points: &[[f64; 3]],
+    ) -> Result<Vec<f64>, KernelError> {
+        if !self.copies_by_bounds.get() {
+            return Err(KernelError::Unsupported("distances to faces"));
+        }
+        let b = shape.bounds.ok_or(KernelError::failed("no bounds"))?;
+        Ok(points
+            .iter()
+            .map(|p| {
+                let inside = (0..3).all(|i| p[i] >= b.min[i] && p[i] <= b.max[i]);
+                if inside {
+                    (0..3)
+                        .map(|i| (p[i] - b.min[i]).min(b.max[i] - p[i]))
+                        .fold(f64::INFINITY, f64::min)
+                } else {
+                    (0..3)
+                        .map(|i| (b.min[i] - p[i]).max(p[i] - b.max[i]).max(0.0))
+                        .map(|d| d * d)
+                        .sum::<f64>()
+                        .sqrt()
+                }
             })
             .collect())
     }
@@ -3446,6 +3532,7 @@ impl Kernel for MockKernel {
             extrusion_directions: Arc::clone(&self.extrusion_directions),
             crossing: self.crossing.clone(),
             intersects_by_bounds: self.intersects_by_bounds.clone(),
+            copies_by_bounds: self.copies_by_bounds.clone(),
             ..MockKernel::default()
         })
     }

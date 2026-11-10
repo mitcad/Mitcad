@@ -18,6 +18,7 @@
 // Use the open slicer window (mitcad#1162): a send of a design whose
 // slicer window MitCad started still runs goes to that window.
 #include "../MainWindow.hpp"
+#include "framework/ModelMessages.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -130,7 +131,7 @@ QString bedLog(const QJsonObject& bed) { return printBedLog(bed); }
 QStringList exportWarnings(const QJsonObject& result) {
   QStringList warnings;
   for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
-    warnings << warning.toString();
+    warnings << mitcad::modelMessage(warning.toString());
   }
   return warnings;
 }
@@ -903,7 +904,7 @@ CommandDef MainWindow::print3dCommand() {
             }
             entry.insert(QStringLiteral("bed"), last);
           } catch (const std::exception& error) {
-            entry.insert(QStringLiteral("error"), QString::fromUtf8(error.what()));
+            entry.insert(QStringLiteral("error"), mitcad::modelMessage(error.what()));
           }
           planned.append(entry);
         }
@@ -934,7 +935,7 @@ CommandDef MainWindow::print3dCommand() {
           const QJsonObject entry = value.toObject();
           if (entry.contains(QStringLiteral("error"))) {
             qDebug().noquote() << QStringLiteral("3D Print bed plan: %1")
-                                      .arg(entry.value(QStringLiteral("error")).toString());
+                                      .arg(mitcad::modelMessage(entry.value(QStringLiteral("error")).toString()));
             continue;
           }
           if (asThreeMf) {
@@ -1973,7 +1974,7 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
     }
     QStringList warnings;
     for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
-      warnings << warning.toString();
+      warnings << mitcad::modelMessage(warning.toString());
     }
     if (!warnings.isEmpty()) {
       *warned = warnings.join(QLatin1Char('\n'));
@@ -2011,7 +2012,7 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
       }
       QStringList warnings;
       for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
-        warnings << warning.toString();
+        warnings << mitcad::modelMessage(warning.toString());
       }
       qInfo().noquote() << QStringLiteral("3D Print: print settings for %1, filaments %2%3")
                                .arg(dialect, filaments.join(QLatin1Char(',')),

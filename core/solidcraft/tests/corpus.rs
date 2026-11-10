@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-//! Every `.solidcraft` design under the folders of `MITCAD_SOLIDCRAFT_CORPUS`
+//! Every `.sc` or `.solidcraft` design under the folders of `MITCAD_SOLIDCRAFT_CORPUS`
 //! (a path list, like PATH) reads and upgrades, and its sketches and the
 //! kinds the import maps read typed. Skipped without the variable.
 
 use std::path::{Path, PathBuf};
 
-use mitcad_solidcraft::{SolidcraftFile, kinds};
+use mitcad_solidcraft::{SolidcraftFile, has_design_extension, kinds};
 
 fn designs(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -15,9 +15,9 @@ fn designs(dir: &Path, out: &mut Vec<PathBuf>) {
         let p = e.path();
         if p.is_dir() {
             designs(&p, out);
-        } else if p.extension().and_then(|x| x.to_str()).is_some_and(|x| {
-            x.eq_ignore_ascii_case("solidcraft") || x.eq_ignore_ascii_case("solvecraft")
-        }) {
+        } else if has_design_extension(&p) {
+            // `.sc` too (mitcad#1622), read only when its format key is
+            // SolidCraft's.
             out.push(p);
         }
     }

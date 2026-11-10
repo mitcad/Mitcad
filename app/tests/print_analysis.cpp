@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Print Analysis (mitcad#620): the settings group print_analysis kept and
-// read back, the analysis' definition and its defaults, the three queries
-// it asks, the answers in the log's line and the panel's words, and what
-// the view draws.
+// read back, the analysis' definition and its defaults, the queries it
+// asks (the narrow gaps', mitcad#1519, too), the answers in the log's line
+// and the panel's words, and what the view draws.
 #include "commands/PrintAnalysis.hpp"
 
 #include <cmath>
@@ -264,6 +264,104 @@ void overlayTests() {
   CHECK(mitcad::printOverlayLog(mitcad::PrintOverlay()) == QStringLiteral("Print overlay: none"));
 }
 
+// Narrow gaps between bodies printed in place (mitcad#1519).
+QJsonObject gapAnswer(bool any) {
+  QJsonArray pairs;
+  if (any) {
+    pairs.append(QJsonObject{{QStringLiteral("a"), QStringLiteral("F2.b0")},
+                             {QStringLiteral("b"), QStringLiteral("F4.b0")},
+                             {QStringLiteral("names"), QJsonArray{QStringLiteral("Body1"), QStringLiteral("Body2")}},
+                             {QStringLiteral("distance"), 0.2},
+                             {QStringLiteral("on_a"), QJsonArray{20, 10, 10}},
+                             {QStringLiteral("on_b"), QJsonArray{20.2, 10, 10}}});
+  }
+  return {{QStringLiteral("gap"), 0.3},
+          {QStringLiteral("gap_from"), QStringLiteral("default")},
+          {QStringLiteral("bodies"), 2},
+          {QStringLiteral("pairs"), pairs},
+          {QStringLiteral("closest"), any ? QJsonValue(0.2) : QJsonValue()},
+          {QStringLiteral("touching"), 0}};
+}
+
+void gapTests() {
+  const QJsonArray two{QStringLiteral("F2.b0"), QStringLiteral("F4.b0")};
+  PrintAnalysisSettings s;
+  CHECK(s.minGap && !s.gap);
+  // The definition: on, the gap null (the design's print_in_place_gap,
+  // else 0.3 mm), and back.
+  const QJsonObject def = s.def(two, QJsonValue());
+  const QJsonObject minGap = def.value(QStringLiteral("min_gap")).toObject();
+  CHECK(minGap.value(QStringLiteral("enabled")).toBool() && minGap.value(QStringLiteral("gap")).isNull());
+  PrintAnalysisSettings given = s;
+  given.gap = 0.4;
+  const PrintAnalysisSettings back = PrintAnalysisSettings::fromDef(given.def(two, QJsonValue()));
+  CHECK(back.minGap && back.gap && same(*back.gap, 0.4));
+
+  // The query: the bodies, the gap only when given; none for one body or
+  // switched off.
+  const QJsonObject request = mitcad::printMinGapQuery(def);
+  CHECK(request.value(QStringLiteral("query")).toString() == QStringLiteral("print_min_gap"));
+  CHECK(request.value(QStringLiteral("bodies")).toArray() == two && !request.contains(QStringLiteral("gap")));
+  CHECK(same(mitcad::printMinGapQuery(given.def(two, QJsonValue())).value(QStringLiteral("gap")).toDouble(), 0.4));
+  CHECK(mitcad::printMinGapQuery(s.def(QJsonArray{QStringLiteral("F2.b0")}, QJsonValue())).isEmpty());
+  PrintAnalysisSettings off;
+  off.minGap = false;
+  CHECK(mitcad::printMinGapQuery(off.def(two, QJsonValue())).isEmpty());
+
+  // Asked last, as a slow query.
+  QStringList asked;
+  PrintAnswers answers;
+  const QString error = mitcad::runPrintAnalysis(
+      def,
+      [&asked](const QJsonObject& r, bool slow) {
+        const QString query = r.value(QStringLiteral("query")).toString();
+        asked << QStringLiteral("%1 %2").arg(query, slow ? QStringLiteral("slow") : QStringLiteral("quick"));
+        return query == QStringLiteral("print_overhangs")   ? overhangAnswer()
+               : query == QStringLiteral("print_thickness") ? thicknessAnswer()
+               : query == QStringLiteral("print_estimate")  ? estimateAnswer(false)
+                                                             : gapAnswer(true);
+      },
+      answers);
+  CHECK(error.isEmpty());
+  CHECK(asked == (QStringList{QStringLiteral("print_overhangs slow"), QStringLiteral("print_thickness slow"),
+                              QStringLiteral("print_estimate quick"), QStringLiteral("print_min_gap slow")}));
+
+  // The log and the panel's words: the pair, its distance as a link to the
+  // middle of its closest points.
+  CHECK(mitcad::printAnalysisLog(answers, name).endsWith(
+      QStringLiteral("estimate 41.5 g 13.9 m; narrow gaps under 0.3 mm: Body1-Body2 0.20 mm")));
+  const QString text = mitcad::printAnalysisText(answers, name);
+  CHECK(text.contains(QStringLiteral("Narrow gaps</b> (under 0.3 mm)")));
+  CHECK(text.contains(QStringLiteral("Body1 and Body2: <a href='point:20.1,10,10'>0.20 mm</a>")));
+  PrintAnswers clear;
+  clear.minGap = gapAnswer(false);
+  CHECK(mitcad::printAnalysisLog(clear, name) == QStringLiteral("narrow gaps under 0.3 mm: none"));
+
+  // The view: the closest points, the smallest gap's marker, the legend.
+  const QColor overhang(0x7e, 0x3f, 0xd0);
+  const QColor thin(0xc2, 0x18, 0x8b);
+  const QColor gap(0x00, 0x89, 0x7b);
+  PrintAnswers onlyGaps;
+  onlyGaps.minGap = gapAnswer(true);
+  const mitcad::PrintOverlay overlay =
+      mitcad::printOverlayOf(mitcad::printOverlayJson(def, onlyGaps, QStringLiteral("Print1")), overhang, thin, gap);
+  CHECK(overlay.gaps.size() == 6 && same(overlay.gaps[0], 20.0) && std::abs(overlay.gaps[3] - 20.2) < 1e-5);
+  CHECK(overlay.narrowest && same((*overlay.narrowest)[0], 20.1));
+  CHECK(overlay.narrowestLabel == QStringLiteral("Gap 0.20 mm"));
+  CHECK(overlay.legend.size() == 1 && overlay.legend[0].first == gap &&
+        overlay.legend[0].second == QStringLiteral("Narrow gap, under 0.3 mm"));
+  CHECK(mitcad::printOverlayLog(overlay) ==
+        QStringLiteral("Print overlay: 0 overhang triangle(s) #7e3fd0, 0 thin triangle(s) #c2188b (0.0 mm^2), "
+                       "no marker, 1 narrow gap(s) #00897b, marker Gap 0.20 mm at (20.1, 10, 10); legend Print1: "
+                       "#00897b Narrow gap, under 0.3 mm"));
+  // None narrow: no gaps drawn, the legend still says what was checked.
+  PrintAnswers none;
+  none.minGap = gapAnswer(false);
+  const mitcad::PrintOverlay clearOverlay =
+      mitcad::printOverlayOf(mitcad::printOverlayJson(def, none, QStringLiteral("Print1")), overhang, thin, gap);
+  CHECK(clearOverlay.gaps.empty() && !clearOverlay.narrowest && clearOverlay.legend.size() == 1);
+}
+
 } // namespace
 
 int printAnalysisTests() {
@@ -272,5 +370,6 @@ int printAnalysisTests() {
   definitionTests();
   answerTests();
   overlayTests();
+  gapTests();
   return failures;
 }

@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: MIT
+# Pictures of the view's lines zoomed in (mitcad#1633), a one-off visual
+# check, before and after the fix: only steps the test driver had before
+# it (no expect-view-edges), so that the same script runs on older builds.
+# On edge-mesh.json (a block 200 mm tall with a rounded upright edge of
+# 4 mm, Sketch1 on its top face 200 mm from the origin with a line and an
+# arc through (30, 20)), saves in ${MITCAD_TEST_WORK}:
+#   edge-mesh-3d-whole.png            the design as it opens
+#   edge-mesh-3d-fillet-plain.png     zoomed in on the rounding's bottom arc
+#   edge-mesh-3d-fillet-selected.png  the same, the arc selected
+#   edge-mesh-sketch-fit.png          Sketch1 edited, its arc and line selected
+#   edge-mesh-sketch-zoom-1.png       zoomed in on (30, 20)
+#   edge-mesh-sketch-zoom-2.png       further
+#   edge-mesh-sketch-zoom-3.png       further still
+# Run by tools/ui-edge-mesh-look.sh and tools/ui-windows-edge-mesh-look.ps1.
+expect-ever 'View area'
+wait-idle
+screenshot-view '${MITCAD_TEST_WORK}/edge-mesh-3d-whole.png'
+# The whole block's rounding is a few pixels wide, so a click there hits a
+# vertex or the sketch on the top face: zoom in over the rounding's bottom
+# arc first (its logged pick place), then pick the arc when it is large.
+mark
+command solid.fillet
+wait-log '^Pick places:' 30
+key Escape
+wait-idle
+wheel-logged '^Pick edge F1[.]b0/E[{]F1:bottom[|]F2:fillet[(]' 12
+wait-idle
+wheel-logged '^Pick edge F1[.]b0/E[{]F1:bottom[|]F2:fillet[(]' 12
+wait-idle
+screenshot-view '${MITCAD_TEST_WORK}/edge-mesh-3d-fillet-plain.png'
+mark
+command solid.fillet
+wait-log '^Pick places:' 30
+key Escape
+wait-idle
+click-pick 'edge F1[.]b0/E[{]F1:bottom[|]F2:fillet[(][^ ]*[)][}] at'
+wait-log '^Selected: 1 ' 30
+wait-idle
+screenshot-view '${MITCAD_TEST_WORK}/edge-mesh-3d-fillet-selected.png'
+key Escape
+wait-idle
+
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F4 \(Sketch1\)' 30
+command view.look_at
+wait-log '^Look at sketch F4' 30
+command view.fit
+wait-log '^Fit: ' 30
+wait-idle
+sketch-click 37.0711 17.0711
+wait-log '^Selected: 1 ' 30
+sketch-click 25 22 ctrl
+wait-log '^Selected: 2 ' 30
+sketch-move 5 35
+wait-idle
+screenshot-view '${MITCAD_TEST_WORK}/edge-mesh-sketch-fit.png'
+# The wheel leaves the pointer at the middle of the view, on both curves:
+# their hover is drawn too.
+wheel 50 50 15
+wait-idle
+screenshot-view '${MITCAD_TEST_WORK}/edge-mesh-sketch-zoom-1.png'
+wheel 50 50 15
+wait-idle
+screenshot-view '${MITCAD_TEST_WORK}/edge-mesh-sketch-zoom-2.png'
+wheel 50 50 15
+wait-idle
+screenshot-view '${MITCAD_TEST_WORK}/edge-mesh-sketch-zoom-3.png'
+key Escape
+wait-idle

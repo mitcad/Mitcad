@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/OcctViewer.cpp app/MainWindow.cpp app/framework/TestDriver.cpp app/framework/DocumentSession.cpp
-# check-all sources: app/framework/ModelShapes.cpp app/commands/ExtrudeCommands.cpp
+# check-all sources: app/framework/ModelShapes.cpp app/commands/ExtrudeCommands.cpp app/view/ViewEdges.cpp app/view/ViewEdges.hpp
 # check-all sources: tools/cli tools/ui-scripts/view-mesh-writes.mitcad-ui tools/ui-scripts/view-mesh-writes.json
 # The view never meshes the model's shapes itself (mitcad#1553): an edge
 # highlight meshed the body's edge on the UI thread while the background

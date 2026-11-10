@@ -31,4 +31,12 @@ QJsonObject withFirstDimensionScale(const QJsonObject& command);
 bool clickAddsToSelection();
 void saveClickAddsToSelection(bool on);
 
+// "Esc leaves an unchanged sketch" (mitcad#1623, settings
+// "sketch/escLeavesUnchangedSketch"), off by default: while it is on, Esc
+// with nothing else to cancel in a sketch nothing was changed in leaves it
+// as Finish Sketch does (MainWindow::escapeSketch); while it is off, Esc in
+// a sketch only cancels and clears the selection.
+bool escLeavesUnchangedSketch();
+void saveEscLeavesUnchangedSketch(bool on);
+
 } // namespace mitcad::sketch

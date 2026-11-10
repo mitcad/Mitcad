@@ -4,11 +4,14 @@
 // models (hole_*).
 
 #include <cmath>
+#include <optional>
 #include <string>
 
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <TopoDS_Edge.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 
 #include "check.hpp"
@@ -226,6 +229,100 @@ void test_press_fits() {
   CHECK(throws_with([&] { hole_tool(ribs); }, "bore must be wider"));
 }
 
+// A 6 mm hole lying on the bed (mitcad#1515): into the block's side at
+// (30, 0, 10) along +y, its roof up +z.
+HoleSpec lying(double depth) {
+  HoleSpec spec;
+  spec.feature = "F3";
+  spec.positions = {gp_Ax1(gp_Pnt(30, 0, 10), gp_Dir(0, 1, 0))};
+  spec.diameter = 6;
+  spec.depth = depth;
+  spec.roofs = {gp_Dir(0, 0, 1)};
+  return spec;
+}
+
+// A teardrop's section of the radius r: the circle's lower three quarters
+// and the square of side r between the axis, the sides' feet and the point.
+double teardrop_area(double r) { return 0.75 * kPi * r * r + r * r; }
+
+void test_print_shapes() {
+  const ShapePtr body = block();
+  // A teardrop through the block: 40 mm of its section; the lower arc keeps
+  // the diameter, which the tangent sides keep too.
+  HoleSpec spec = lying(0);
+  spec.extent = HoleExtent::ThroughAll;
+  spec.bodies = {body};
+  const ShapePtr tool = hole_tool(spec);
+  CHECK(faces_named(*tool, "F3:hole0.roof0") == 1 && faces_named(*tool, "F3:hole0.roof1") == 1);
+  CHECK(faces_named(*tool, "F3:hole0.wall") == 1 && faces_named(*tool, "F3:hole0.top") == 1);
+  CHECK(faces_named(*tool, "F3:hole0.roof") == 0);
+  CHECK_NEAR(cut_volume(body, spec), 48000 - teardrop_area(3) * 40);
+  const BooleanResult cut = boolean(BooleanOp::Cut, {body.get()}, *tool);
+  CHECK(cut.pieces.size() == 1);
+  if (cut.pieces.size() == 1) {
+    const Shape& drilled = *cut.pieces.front().shape;
+    CHECK(faces_named(drilled, "F3:hole0.roof0") == 1 && faces_named(drilled, "F3:hole0.roof1") == 1);
+    CHECK(faces_named(drilled, "F3:hole0.wall") == 1);
+    CHECK(edge_names_unique(drilled));
+    const TopoDS_Edge axis = BRepBuilderAPI_MakeEdge(gp_Pnt(30, 5, 10), gp_Pnt(30, 35, 10)).Edge();
+    BRepExtrema_DistShapeShape distance(axis, drilled.occt());
+    CHECK(distance.IsDone() && near(distance.Value(), 3.0));
+  }
+
+  // A flat roof 0.4 mm above the circle cuts the point's top off: a
+  // triangle as high as the point stands above the roof, twice as wide.
+  spec.roof_sag = 0.4;
+  const ShapePtr flat = hole_tool(spec);
+  CHECK(faces_named(*flat, "F3:hole0.roof") == 1 && faces_named(*flat, "F3:hole0.roof0") == 1);
+  const double above = 3 * std::sqrt(2.0) - 3.4;
+  CHECK_NEAR(cut_volume(body, spec), 48000 - (teardrop_area(3) - above * above) * 40);
+  // A roof above the point leaves the point.
+  spec.roof_sag = 2;
+  CHECK(faces_named(*hole_tool(spec), "F3:hole0.roof") == 0);
+  CHECK_NEAR(cut_volume(body, spec), 48000 - teardrop_area(3) * 40);
+
+  // Blind, 15 deep: the drill point beyond the roof's end; flat, the end
+  // is the bottom too.
+  HoleSpec blind = lying(15);
+  const double point = 3 / std::tan(59 * kDegree);
+  const ShapePtr pointed = hole_tool(blind);
+  CHECK(faces_named(*pointed, "F3:hole0.tip") == 1 && faces_named(*pointed, "F3:hole0.roof_end") == 1);
+  CHECK_NEAR(volume(*pointed), teardrop_area(3) * 15 + kPi * 9 * point / 3);
+  blind.flat = true;
+  const ShapePtr bottomed = hole_tool(blind);
+  CHECK(faces_named(*bottomed, "F3:hole0.tip") == 1 && faces_named(*bottomed, "F3:hole0.roof_end") == 1);
+  CHECK(bottomed->find_faces("F3:hole0.tip") == bottomed->find_faces("F3:hole0.roof_end"));
+  CHECK_NEAR(volume(*bottomed), teardrop_area(3) * 15);
+
+  // A counterbore 11 wide, 6.4 deep gets its own roof; the hole's lies
+  // inside it there.
+  blind.type = HoleType::Counterbore;
+  blind.counterbore_diameter = 11;
+  blind.counterbore_depth = 6.4;
+  const ShapePtr bored = hole_tool(blind);
+  CHECK(faces_named(*bored, "F3:hole0.cbore_roof0") == 1 && faces_named(*bored, "F3:hole0.cbore_roof1") == 1);
+  CHECK(faces_named(*bored, "F3:hole0.cbore_wall") == 1 && faces_named(*bored, "F3:hole0.cbore_floor") == 1);
+  CHECK_NEAR(volume(*bored), teardrop_area(5.5) * 6.4 + teardrop_area(3) * (15 - 6.4));
+  CHECK(cut_volume(body, blind) > 0);
+
+  // A hole with no roof stays round.
+  HoleSpec plain = lying(15);
+  plain.flat = true;
+  plain.roofs = {std::nullopt};
+  CHECK_NEAR(volume(*hole_tool(plain)), kPi * 9 * 15);
+  CHECK(faces_named(*hole_tool(plain), "F3:hole0.roof0") == 0);
+
+  // A roof along the axis, a roof for only some holes, a taper.
+  HoleSpec wrong = lying(15);
+  wrong.roofs = {gp_Dir(0, 1, 0)};
+  CHECK(throws_with([&] { hole_tool(wrong); }, "right angles to the hole's axis"));
+  wrong.roofs = {gp_Dir(0, 0, 1), gp_Dir(0, 0, 1)};
+  CHECK(throws_with([&] { hole_tool(wrong); }, "every hole"));
+  wrong.roofs = {gp_Dir(0, 0, 1)};
+  wrong.taper = 5 * kDegree;
+  CHECK(throws_with([&] { hole_tool(wrong); }, "no print shape"));
+}
+
 } // namespace
 
 void hole_tests() {
@@ -234,6 +331,7 @@ void hole_tests() {
   guarded("test_targets_and_positions", test_targets_and_positions);
   guarded("test_queries", test_queries);
   guarded("test_press_fits", test_press_fits);
+  guarded("test_print_shapes", test_print_shapes);
 }
 
 } // namespace test

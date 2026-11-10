@@ -45,7 +45,7 @@ const char* const kMeshCompareUsage =
                            [--dump <folder>]
       Opens a design (.mitcad, or a script .json) or imports another file
       as the application imports it (.f3d, .FCStd, .ipt, .iam, .ifc, .rvt,
-      .solidcraft, .dwg; others by the generic import), and meshes every
+      .sc, .solidcraft, .dwg; others by the generic import), and meshes every
       body's faces twice, each time all bodies together as the 3D view's
       final tier meshes them (commit, opening a design), with the view's
       deviation, angle and face bound, (a) and (b) each one of three
@@ -116,7 +116,7 @@ QJsonObject import_command(const std::string& path) {
   if (suffix == "rvt" || suffix == "rfa") {
     return {{"cmd", "import_rvt"}, {"path", file}};
   }
-  if (suffix == "solidcraft") {
+  if (suffix == "sc" || suffix == "solidcraft") {
     return {{"cmd", "import_solidcraft"}, {"path", file}};
   }
   if (suffix == "dwg") {

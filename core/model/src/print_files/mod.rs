@@ -59,6 +59,11 @@ pub(crate) mod source;
 pub mod installed;
 // A filament's presets as one material with variants (mitcad#1054).
 pub mod filaments;
+// Filament changes and pauses at print heights (mitcad#1596).
+mod layer_events;
+pub use layer_events::{
+    BAMBU_FILE, ChangeExport, LayerAction, LayerEvent, PRUSA_FILE, PlateEvents, WrittenEvent,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -617,6 +622,8 @@ pub struct ExportOutput {
     /// values it does not share with the other parts.
     pub own_values: Vec<usize>,
     pub warnings: Vec<String>,
+    /// The filament changes and pauses written (mitcad#1596).
+    pub layer_events: Vec<WrittenEvent>,
 }
 
 /// A part of an export: its name, settings, number of triangles and of
@@ -643,26 +650,38 @@ pub(crate) struct Shared<'a> {
     pub parts: &'a [ExportPart<'a>],
     /// Each part's slot.
     pub slots: Vec<usize>,
-    /// Each slot's first part.
-    pub slot_parts: Vec<usize>,
+    /// Each slot's settings: its first part's, or for a slot that only a
+    /// filament change prints with (mitcad#1596), that filament's.
+    pub slot_settings: Vec<&'a EffectivePrint>,
     /// Printer and process values every part has alike.
     pub values: BTreeMap<String, Value>,
     /// Each part's values that are not shared.
     pub overrides: Vec<BTreeMap<String, Value>>,
     /// The purge table of the slots (mitcad#705).
     pub purge: print_purge::Matrix,
+    /// Whether the export writes filament changes at print heights that
+    /// change to filaments of their own slots (mitcad#1596: the Bambu
+    /// family's manual changes).
+    pub layer_changes: bool,
 }
 
 impl<'a> Shared<'a> {
-    fn new(dialect: Dialect, parts: &'a [ExportPart<'a>], purge: &[PurgeOverride]) -> Self {
+    /// The slots of the parts, then a slot for each filament of `extra`
+    /// (those the layer events change to, mitcad#1596) that no part prints
+    /// with.
+    fn new(
+        dialect: Dialect,
+        parts: &'a [ExportPart<'a>],
+        purge: &[PurgeOverride],
+        extra: &[&'a EffectivePrint],
+    ) -> Self {
         // A slot per material and appearance (mitcad#1055): two colours of
         // one material are two filaments of the same values.
         let mut filaments: Vec<(&str, Option<&str>)> = Vec::new();
-        let mut slot_parts = Vec::new();
+        let mut slot_settings: Vec<&'a EffectivePrint> = Vec::new();
         let slots = parts
             .iter()
-            .enumerate()
-            .map(|(i, p)| {
+            .map(|p| {
                 let filament = (
                     p.settings.material.as_str(),
                     p.settings.appearance.as_deref(),
@@ -671,12 +690,19 @@ impl<'a> Shared<'a> {
                     Some(slot) => slot,
                     None => {
                         filaments.push(filament);
-                        slot_parts.push(i);
+                        slot_settings.push(p.settings);
                         filaments.len() - 1
                     }
                 }
             })
             .collect();
+        for &settings in extra {
+            let filament = (settings.material.as_str(), settings.appearance.as_deref());
+            if !filaments.contains(&filament) {
+                filaments.push(filament);
+                slot_settings.push(settings);
+            }
+        }
         let mut values = BTreeMap::new();
         if let Some(first) = parts.first() {
             for (key, (value, _)) in &first.settings.values {
@@ -699,17 +725,25 @@ impl<'a> Shared<'a> {
                     .collect()
             })
             .collect();
-        let firsts: Vec<&EffectivePrint> = slot_parts.iter().map(|&i| parts[i].settings).collect();
-        let purge = purge_matrix(&firsts, purge);
+        let purge = purge_matrix(&slot_settings, purge);
         Shared {
             dialect,
             parts,
             slots,
-            slot_parts,
+            slot_settings,
             values,
             overrides,
             purge,
+            layer_changes: !extra.is_empty(),
         }
+    }
+
+    /// The slot of a filament (its material and appearance), when it has
+    /// one.
+    pub(crate) fn slot_of(&self, settings: &EffectivePrint) -> Option<usize> {
+        self.slot_settings
+            .iter()
+            .position(|s| s.material == settings.material && s.appearance == settings.appearance)
     }
 
     /// The settings of the design's printer: the first part's.
@@ -719,7 +753,7 @@ impl<'a> Shared<'a> {
 
     /// A slot's filament values.
     fn filament(&self, slot: usize) -> &BTreeMap<String, (Value, crate::document::PrintFrom)> {
-        &self.parts[self.slot_parts[slot]].settings.filament
+        &self.slot_settings[slot].filament
     }
 
     /// The printer's filament slots, when it says.
@@ -828,7 +862,38 @@ pub fn export_plates(
     purge: &[PurgeOverride],
     plates: &[ExportPlate<'_>],
 ) -> ExportOutput {
-    let shared = Shared::new(dialect, parts, purge);
+    export_print(
+        dialect,
+        model_name,
+        parts,
+        objects,
+        purge,
+        plates,
+        &ChangeExport::default(),
+    )
+}
+
+/// [`export_plates`] with the filament changes and pauses at print heights
+/// of its plates (mitcad#1596, `layer_events.rs`): the Bambu family gets a
+/// filament slot for each filament changed to that no part prints with,
+/// and its prime tower off when every plate's parts print with one
+/// filament (`bambu.rs`, `manual_changes_only`).
+pub fn export_print(
+    dialect: Dialect,
+    model_name: &str,
+    parts: &[ExportPart<'_>],
+    objects: &[ExportObject<'_>],
+    purge: &[PurgeOverride],
+    plates: &[ExportPlate<'_>],
+    changes: &ChangeExport,
+) -> ExportOutput {
+    let extra: Vec<&EffectivePrint> = match dialect {
+        Dialect::BambuStudio | Dialect::OrcaSlicer | Dialect::QidiStudio => {
+            changes.filaments.iter().collect()
+        }
+        Dialect::PrusaSlicer | Dialect::Cura => Vec::new(),
+    };
+    let shared = Shared::new(dialect, parts, purge, &extra);
     let mut out = match dialect {
         Dialect::BambuStudio | Dialect::OrcaSlicer | Dialect::QidiStudio => {
             bambu::export(&shared, model_name, objects, plates)
@@ -836,7 +901,7 @@ pub fn export_plates(
         Dialect::PrusaSlicer => prusa::export(&shared, !plates.is_empty()),
         Dialect::Cura => cura::export(&shared),
     };
-    let filaments = shared.slot_parts.len();
+    let filaments = shared.slot_settings.len();
     if let Some(slots) = shared.printer_slots()
         && filaments as i64 > slots
     {
@@ -856,6 +921,7 @@ pub fn export_plates(
             written + shared.overrides[i].len()
         })
         .collect();
+    layer_events::write(&shared, changes, &mut out);
     out
 }
 
@@ -950,7 +1016,7 @@ pub(crate) fn slot_values(
     own: impl Fn(&FilamentValues) -> Option<Value>,
     filled: &mut Filled,
 ) -> Vec<Option<Value>> {
-    let slots = shared.slot_parts.len().max(1);
+    let slots = shared.slot_settings.len().max(1);
     let mut values: Vec<Option<Value>> = (0..slots).map(|s| own(shared.filament(s))).collect();
     if def.per_dialect || def.overrides_printer() || OWN_FALLBACKS.contains(&def.key) {
         return values;
@@ -959,10 +1025,7 @@ pub(crate) fn slot_values(
         return values;
     };
     let first_value = values[first].clone();
-    let first_name = shared.parts[shared.slot_parts[first]]
-        .settings
-        .material_name
-        .clone();
+    let first_name = shared.slot_settings[first].material_name.clone();
     for (slot, value) in values.iter_mut().enumerate() {
         if value.is_some() {
             continue;
@@ -988,9 +1051,7 @@ pub(crate) fn filled_warnings(shared: &Shared<'_>, filled: &Filled) -> Vec<Strin
     filled
         .iter()
         .map(|((slot, source), names)| {
-            let material = &shared.parts[shared.slot_parts[*slot]]
-                .settings
-                .material_name;
+            let material = &shared.slot_settings[*slot].material_name;
             let names: Vec<String> = names.iter().map(|n| lower_first(n)).collect();
             format!(
                 "{material} (filament {}) sets no {}: written as {source}'s",

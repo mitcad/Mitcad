@@ -14,3 +14,9 @@ type preferences
 expect-command-search preferences tools.preferences
 key Escape
 focus-main
+
+# A model message (mitcad#1284): a refusal of the model, in English as the
+# model wrote it, in plain words without the feature's id (mitcad#1612).
+wait-idle
+model-command-refused '{"cmd":"rename_feature","uid":"F999","name":"Renamed"}'
+expect-ever '^Message band: error a feature does not exist$' 10

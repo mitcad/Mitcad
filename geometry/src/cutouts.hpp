@@ -122,7 +122,10 @@ std::string overflow_failure(const Shape& body, const std::vector<int>& owner, d
 // the parts the chamfer runs over and those it leaves): "the chamfer
 // reaches exactly to the far edge of the narrow face beside its edge: …",
 // in plain words (mitcad#1613), for an error where the chamfer built so is
-// not sound. `reach(e, f)` is how far
+// not sound; as placed_error() gives it (mitcad#1617), its places the
+// chamfered edge, the far edge and the point where the contact touches it,
+// its detail naming them, the face and the face beyond, and the point, for
+// agents. `reach(e, f)` is how far
 // the chamfer of selected edge `e` reaches along its face `f` (the faces'
 // far edges are those overflow_failure looks at). Empty when there is none.
 std::string overflow_tangent(const Shape& body, const std::vector<int>& owner,

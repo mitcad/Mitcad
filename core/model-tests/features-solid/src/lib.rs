@@ -22,3 +22,5 @@ mod auto_fix_tests;
 mod thread_end_tests;
 // A fillet on a face joined from pieces on one surface (mitcad#1261).
 mod same_surface_join_tests;
+// Circular Pattern about two axes; copies that add nothing (mitcad#1588).
+mod two_axis_pattern_tests;

@@ -122,6 +122,270 @@ pub(super) struct ExportCommand {
     /// neighbouring pieces beyond their brims, mm (default 5).
     #[serde(default)]
     spacing: Option<f64>,
+    /// USDZ (mitcad#1596): each placement in the colours of the filaments
+    /// it prints with by height, in place of the appearances.
+    #[serde(default)]
+    print_colors: bool,
+    /// USDZ (mitcad#1597): time-sampled placements, from poses given per
+    /// occurrence or body, or from a motion study.
+    #[serde(default)]
+    animation: Option<AnimationInput>,
+}
+
+/// `export`'s `animation` (mitcad#1597; commands.md, *Animated USDZ*).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnimationInput {
+    /// Frames per second.
+    fps: f64,
+    /// The first frame's time code (default 0); the others follow one
+    /// apart.
+    #[serde(default)]
+    start: Option<f64>,
+    /// Each frame's time code, increasing (instead of `start`).
+    #[serde(default)]
+    times: Option<Vec<f64>>,
+    /// The coordinates of the tracks' poses: `parent` (default) or
+    /// `design`.
+    #[serde(default)]
+    space: Option<mitcad_model::exchange::AnimationSpace>,
+    /// Poses given: per occurrence or body, one transform per frame.
+    #[serde(default)]
+    tracks: Option<Vec<TrackInput>>,
+    /// Or a motion study (name), sampled from step `from` (default 0) to
+    /// `to` (default its last step) at `frames` frames (default one per
+    /// step, both ends included).
+    #[serde(default)]
+    study: Option<String>,
+    #[serde(default)]
+    from: Option<f64>,
+    #[serde(default)]
+    to: Option<f64>,
+    #[serde(default)]
+    frames: Option<usize>,
+}
+
+/// A track of `animation`: an occurrence (path) or a body (uid or name)
+/// and its poses.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TrackInput {
+    #[serde(default)]
+    occurrence: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+    transforms: Vec<PoseInput>,
+}
+
+/// A pose: three or four rows of four numbers (the rotation's rows with
+/// the translation last; a fourth row `[0, 0, 0, 1]`), or the same 12 or
+/// 16 numbers row by row.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PoseInput {
+    Rows(Vec<Vec<f64>>),
+    Flat(Vec<f64>),
+}
+
+impl PoseInput {
+    fn transform(&self) -> Result<Transform, String> {
+        let rows: Vec<Vec<f64>> = match self {
+            Self::Rows(rows) => rows.clone(),
+            Self::Flat(numbers) if numbers.len() == 12 || numbers.len() == 16 => {
+                numbers.chunks(4).map(<[f64]>::to_vec).collect()
+            }
+            Self::Flat(numbers) => {
+                return Err(format!(
+                    "a pose is three or four rows of four numbers, or 12 or 16 numbers, not {}",
+                    numbers.len()
+                ));
+            }
+        };
+        if rows.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("the pose is not finite".to_owned());
+        }
+        mitcad_model::assembly::from_rows(&rows).map_err(|e| {
+            let e = e.replace("an occurrence transform", "a pose");
+            if e.contains("last row") {
+                format!(
+                    "{e} (a pose maps p to M·p: the translation is the last column; a matrix \
+                     with the translation in its last row is transposed)"
+                )
+            } else {
+                e
+            }
+        })
+    }
+}
+
+/// The most frames a study is sampled at (mitcad#1597).
+const MAX_STUDY_FRAMES: usize = mitcad_model::exchange::usdz_animation::MAX_FRAMES;
+
+/// An `animation` as the model takes it: the poses given, or the study's
+/// sampled without changing the document (mitcad#1597).
+fn animation_of<K: Kernel>(
+    doc: &mut Document<K>,
+    input: &AnimationInput,
+) -> Result<mitcad_model::exchange::UsdzAnimation, ApiError> {
+    use mitcad_model::exchange::{
+        AnimationPoses, AnimationTarget, AnimationTrack, UsdzAnimation, usdz_animation,
+    };
+    let err = |m: String| ApiError(format!("animation: {m}"));
+    if !(input.fps.is_finite() && input.fps > 0.0) {
+        return Err(err(format!(
+            "fps must be a positive number of frames per second, not {}",
+            input.fps
+        )));
+    }
+    if input.start.is_some() && input.times.is_some() {
+        return Err(err("give start or times, not both".to_owned()));
+    }
+    // The frames' time codes: given, or one apart from the start.
+    let times_for = |frames: usize| -> Result<Vec<f64>, ApiError> {
+        let times = match &input.times {
+            Some(times) => {
+                if times.len() != frames {
+                    return Err(err(format!(
+                        "{} times for {frames} frames: give one time code per frame",
+                        times.len()
+                    )));
+                }
+                times.clone()
+            }
+            None => {
+                let start = input.start.unwrap_or(0.0);
+                (0..frames).map(|k| start + k as f64).collect()
+            }
+        };
+        usdz_animation::check_timing(input.fps, &times).map_err(err)?;
+        Ok(times)
+    };
+    let poses = match (&input.tracks, &input.study) {
+        (Some(_), Some(_)) => {
+            return Err(err(
+                "give tracks (poses per occurrence or body) or study, not both".to_owned(),
+            ));
+        }
+        (None, None) => {
+            return Err(err(
+                "give tracks (poses per occurrence or body) or study (a motion study's name)"
+                    .to_owned(),
+            ));
+        }
+        (Some(tracks), None) => {
+            if let Some(key) = [
+                ("from", input.from.is_some()),
+                ("to", input.to.is_some()),
+                ("frames", input.frames.is_some()),
+            ]
+            .iter()
+            .find_map(|(k, given)| given.then_some(*k))
+            {
+                return Err(err(format!(
+                    "{key} is for a study; tracks have one pose per frame"
+                )));
+            }
+            let first = tracks
+                .first()
+                .ok_or_else(|| err("tracks is empty: give at least one".to_owned()))?;
+            let frames = first.transforms.len();
+            let mut made = Vec::with_capacity(tracks.len());
+            for (i, track) in tracks.iter().enumerate() {
+                let target = match (&track.occurrence, &track.body) {
+                    (Some(path), None) => AnimationTarget::Occurrence(
+                        doc.assembly()
+                            .find_path(path)
+                            .ok_or_else(|| err(format!("there is no occurrence {path}")))?,
+                    ),
+                    (None, Some(body)) => {
+                        AnimationTarget::Body(doc.body_by_uid_or_name(body).map_err(|e| err(e.0))?)
+                    }
+                    _ => {
+                        return Err(err(format!(
+                            "track {i} needs an occurrence (a path like Arm:1/Pin:1) or a body \
+                             (a uid or name), one of them"
+                        )));
+                    }
+                };
+                let label = track
+                    .occurrence
+                    .as_deref()
+                    .or(track.body.as_deref())
+                    .unwrap_or_default();
+                if track.transforms.len() != frames {
+                    return Err(err(format!(
+                        "{label} has {} poses, the first track {frames}: every track has one \
+                         pose per frame",
+                        track.transforms.len()
+                    )));
+                }
+                let transforms = track
+                    .transforms
+                    .iter()
+                    .enumerate()
+                    .map(|(k, pose)| {
+                        pose.transform()
+                            .map_err(|e| err(format!("{label}, frame {k}: {e}")))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                made.push(AnimationTrack { target, transforms });
+            }
+            if frames == 0 {
+                return Err(err("a track needs at least one pose".to_owned()));
+            }
+            let times = times_for(frames)?;
+            UsdzAnimation {
+                fps: input.fps,
+                times,
+                poses: AnimationPoses::Tracks {
+                    space: input.space.unwrap_or_default(),
+                    tracks: made,
+                },
+            }
+        }
+        (None, Some(study)) => {
+            if input.space.is_some() {
+                return Err(err(
+                    "space is for tracks; a study's placements are its own".to_owned()
+                ));
+            }
+            let steps = f64::from(doc.motion_study(study)?.steps);
+            let from = input.from.unwrap_or(0.0);
+            let to = input.to.unwrap_or(steps);
+            if !(from.is_finite() && to.is_finite()) {
+                return Err(err("from and to must be finite steps".to_owned()));
+            }
+            let frames = match input.frames {
+                Some(frames) => frames,
+                None => ((to - from).abs().round() as usize).saturating_add(1),
+            };
+            if frames == 0 || frames > MAX_STUDY_FRAMES {
+                return Err(err(format!(
+                    "frames must be 1 to {MAX_STUDY_FRAMES}, not {frames}"
+                )));
+            }
+            let times = times_for(frames)?;
+            let at: Vec<f64> = (0..frames)
+                .map(|k| {
+                    if frames == 1 {
+                        from
+                    } else {
+                        from + (to - from) * k as f64 / (frames - 1) as f64
+                    }
+                })
+                .collect();
+            let placements = doc.study_placements(study, &at)?;
+            UsdzAnimation {
+                fps: input.fps,
+                times,
+                poses: AnimationPoses::Study {
+                    name: study.clone(),
+                    placements,
+                },
+            }
+        }
+    };
+    Ok(poses)
 }
 
 /// `plates` (mitcad#1050).
@@ -237,7 +501,9 @@ fn components_json(components: &[ImportedComponent], warnings: &[String]) -> Val
 pub(super) trait ExchangeOps<K: Kernel> {
     fn import_file_command(&mut self, command: ImportFileCommand) -> Result<Value, ApiError>;
 
-    fn export_command(&self, command: ExportCommand) -> Result<Value, ApiError>;
+    /// `&mut`: an animation from a motion study evaluates its steps with
+    /// the document's cache (mitcad#1597); nothing else changes.
+    fn export_command(&mut self, command: ExportCommand) -> Result<Value, ApiError>;
 
     fn export_sketch_command(&self, command: ExportSketchCommand) -> Result<Value, ApiError>;
 
@@ -308,7 +574,7 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
         Ok(out)
     }
 
-    fn export_command(&self, command: ExportCommand) -> Result<Value, ApiError> {
+    fn export_command(&mut self, command: ExportCommand) -> Result<Value, ApiError> {
         let format = match command.format {
             Some(format) => format,
             None => ExportFormat::of_path(&command.path).ok_or_else(|| {
@@ -408,8 +674,15 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
         };
         let on_bed = command.on_bed || plates.is_some();
         // The automatic orientation and the settling (mitcad#1109): on the
-        // print bed only, each true unless given false.
-        let rules = [command.center, command.drop, command.auto_orient];
+        // print bed only, each true unless given false; `center` also for a
+        // slicer's 3MF, which is centred on the plate without `on_bed` too
+        // (mitcad#1596).
+        let centre_alone = dialect.is_some();
+        let rules = [
+            command.center.filter(|_| !centre_alone),
+            command.drop,
+            command.auto_orient,
+        ];
         if !on_bed && (rules.iter().any(Option::is_some) || command.spacing.is_some()) {
             return Err(ApiError(
                 "center, drop, auto_orient and spacing are for the bodies put on the print bed \
@@ -425,6 +698,17 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
                 "spacing is a clearance in mm from 0 to 1000, not {spacing}"
             )));
         }
+        // An animation (mitcad#1597): USDZ only; a study's steps sampled
+        // without changing the document.
+        let animation = match &command.animation {
+            Some(_) if format != ExportFormat::Usdz => {
+                return Err(ApiError(
+                    "animation is for USDZ export (format usdz)".to_owned(),
+                ));
+            }
+            Some(input) => Some(animation_of(self, input)?),
+            None => None,
+        };
         let placement = ExportPlacement {
             coordinates: command.coordinates,
             within,
@@ -440,6 +724,8 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             },
             plates,
             spacing: command.spacing,
+            animation,
+            print_colors: command.print_colors,
         };
         let exported = self.export_bodies(&command.path, &bodies, &options, &colors, &placement)?;
         let mut result =
@@ -485,6 +771,22 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
                                "material": material, "own_values": own})
                     })
                     .collect();
+                // The filament changes and pauses at print heights written
+                // (mitcad#1596).
+                if !exported.layer_events.is_empty() {
+                    result["filament_changes"] = exported
+                        .layer_events
+                        .iter()
+                        .map(|e| {
+                            json!({"plate": e.plate, "height": e.height, "print_z": e.print_z,
+                                   "layer": e.layer, "kind": e.kind.as_str(),
+                                   "material": e.material})
+                        })
+                        .collect();
+                }
+            } else if !exported.warnings.is_empty() {
+                // Filament changes without a slicer (mitcad#1596).
+                result["warnings"] = json!(exported.warnings);
             }
         }
         if format == ExportFormat::Usdz {
@@ -497,6 +799,16 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
                 .map(|(uid, why)| json!({"body": uid, "name": self.body_name(*uid), "reason": why}))
                 .collect();
             result["warnings"] = json!(exported.warnings);
+            // The frames and what moves (mitcad#1597).
+            if let Some(animation) = &exported.animation {
+                result["animation"] = json!({
+                    "fps": animation.fps,
+                    "start": animation.start,
+                    "end": animation.end,
+                    "frames": animation.frames,
+                    "moved": animation.moved,
+                });
+            }
         }
         // How the bodies were put on the print bed (mitcad#731).
         if let Some(on_bed) = &exported.on_bed {

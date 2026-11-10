@@ -12,6 +12,11 @@ Qt's translations (bin\translations\qtbase_*.qm)
   unchanged as Qt builds them; the texts of Qt's standard dialogs and buttons
   in MitCad's interface languages.
 
+The web browser of Insert > Component from Web (the Chromium Embedded
+Framework and Chromium) is not part of this distribution: MitCad downloads
+it on first use as a package of its own, which carries its own
+third-party notices.
+
 Open CASCADE Technology (TK*.dll in bin)
   Licence: GNU LGPL version 2.1 with the Open CASCADE exception. Linked
   dynamically; source code at https://dev.opencascade.org/ . Version 8.0.1

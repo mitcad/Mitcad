@@ -344,6 +344,40 @@ pub struct Manifest {
     /// The release notes, the release's page (HTTPS).
     pub notes: String,
     pub assets: BTreeMap<String, Asset>,
+    /// The web browser component's packages (mitcad#1579, [`BrowserPackage`]):
+    /// downloaded on the first Component from Web and updated on their own
+    /// cadence, whatever MitCad's version. Left out when there are none, so
+    /// that a manifest without them is signed as before; earlier versions
+    /// of MitCad ignore them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub browser: Vec<BrowserPackage>,
+}
+
+/// A package of the web browser component (mitcad#1579): the browser's
+/// module and the Chromium Embedded Framework's runtime for one platform,
+/// built for one version of the module's interface (`abi`). A MitCad takes
+/// only a package of its own interface; among those, the highest `version`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserPackage {
+    pub platform: String,
+    /// The browser module's interface version the package is built for.
+    pub abi: u32,
+    /// The package's own semantic version (the release tool makes it from
+    /// the build's date and time), compared to the installed one.
+    pub version: String,
+    /// The Chromium Embedded Framework version inside, for the log and the
+    /// notices.
+    pub cef: String,
+    /// The SHA-256 of what the package is built from (the pinned CEF
+    /// version, the module's sources, the interface version): the release
+    /// tool builds a new package only when it changes.
+    pub fingerprint: String,
+    /// HTTPS only.
+    pub url: String,
+    pub size: u64,
+    pub sha256: String,
+    /// Of the [`browser_statement`].
+    pub signature: String,
 }
 
 #[derive(Deserialize)]
@@ -359,6 +393,56 @@ pub fn file_statement(version: &str, platform: &str, size: u64, sha256: &str) ->
     format!(
         "{FILE_CONTEXT}\nversion {version}\nplatform {platform}\nsize {size}\nsha256 {sha256}\n"
     )
+}
+
+/// The first line of a browser package's statement: never a release
+/// download's.
+const BROWSER_CONTEXT: &str = "mitcad-browser-package";
+
+/// What a browser package's signature signs: its platform, interface,
+/// version, CEF version, fingerprint, size and SHA-256 (mitcad#1579).
+pub fn browser_statement(package: &BrowserPackage) -> String {
+    format!(
+        "{BROWSER_CONTEXT}\nplatform {}\nabi {}\nversion {}\ncef {}\nfingerprint {}\nsize {}\nsha256 {}\n",
+        package.platform,
+        package.abi,
+        package.version,
+        package.cef,
+        package.fingerprint,
+        package.size,
+        package.sha256
+    )
+}
+
+/// A browser package file signed with `key`: its size and SHA-256 and the
+/// signature of its statement (mitcad#1579, `mitcad-release manifest
+/// --browser`).
+#[allow(clippy::too_many_arguments)]
+pub fn sign_browser_package(
+    platform: &str,
+    abi: u32,
+    version: &str,
+    cef: &str,
+    fingerprint: &str,
+    path: &Path,
+    url: &str,
+    key: &SigningKey,
+) -> Result<BrowserPackage> {
+    let version = parse_version(version)?.to_string();
+    let (size, sha256) = digest_file(path)?;
+    let mut package = BrowserPackage {
+        platform: platform.to_string(),
+        abi,
+        version,
+        cef: cef.to_string(),
+        fingerprint: fingerprint.to_string(),
+        url: url.to_string(),
+        size,
+        sha256,
+        signature: String::new(),
+    };
+    package.signature = sign(key, browser_statement(&package).as_bytes());
+    Ok(package)
 }
 
 /// The size and SHA-256 (hex) of a file, read in pieces.
@@ -448,6 +532,99 @@ impl Manifest {
             if !is_lower_hex(&asset.sha256, 64) || !is_lower_hex(&asset.signature, 128) {
                 return invalid(format!("has an invalid digest or signature for {platform}"));
             }
+        }
+        for package in &self.browser {
+            let platform = &package.platform;
+            if platform.is_empty()
+                || !platform
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            {
+                return invalid(format!(
+                    "names an invalid platform “{platform}” for the browser"
+                ));
+            }
+            parse_version(&package.version)?;
+            if !https(&package.url) {
+                return invalid(format!(
+                    "has no HTTPS address for the browser of {platform}"
+                ));
+            }
+            if package.size == 0 || package.size > MAX_ASSET_SIZE {
+                return invalid(format!(
+                    "gives the browser of {platform} a size of {} bytes",
+                    package.size
+                ));
+            }
+            if !is_lower_hex(&package.sha256, 64)
+                || !is_lower_hex(&package.signature, 128)
+                || !is_lower_hex(&package.fingerprint, 64)
+                || package.cef.is_empty()
+                || package.cef.contains('\n')
+            {
+                return invalid(format!(
+                    "has an invalid digest, fingerprint, CEF version or signature for the browser of {platform}"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The browser package for `platform` built for interface `abi`: the
+    /// highest version among them; None when there is none.
+    pub fn browser_for(&self, platform: &str, abi: u32) -> Option<&BrowserPackage> {
+        self.browser
+            .iter()
+            .filter(|p| p.platform == platform && p.abi == abi)
+            .max_by(
+                |a, b| match (parse_version(&a.version), parse_version(&b.version)) {
+                    (Ok(a), Ok(b)) => a.cmp_precedence(&b),
+                    (Ok(_), Err(_)) => Ordering::Greater,
+                    (Err(_), Ok(_)) => Ordering::Less,
+                    (Err(_), Err(_)) => Ordering::Equal,
+                },
+            )
+    }
+
+    /// Checks a downloaded browser package: the signature of what the
+    /// manifest says of the package `version` for `platform` and `abi`,
+    /// then the file's size and SHA-256.
+    pub fn verify_browser_file(
+        &self,
+        platform: &str,
+        abi: u32,
+        version: &str,
+        path: &Path,
+        keys: &TrustedKeys,
+    ) -> Result<()> {
+        if keys.is_empty() {
+            return Err(UpdateError::NoReleaseKey);
+        }
+        let package = self
+            .browser
+            .iter()
+            .find(|p| p.platform == platform && p.abi == abi && p.version == version)
+            .ok_or_else(|| {
+                UpdateError::File(format!(
+                    "the manifest has no browser {version} for {platform} (interface {abi})"
+                ))
+            })?;
+        if !keys.verifies(browser_statement(package).as_bytes(), &package.signature) {
+            return Err(UpdateError::File(
+                "its signature does not match MitCad's release key".into(),
+            ));
+        }
+        let (size, sha256) = digest_file(path)?;
+        if size != package.size {
+            return Err(UpdateError::File(format!(
+                "it has {size} bytes instead of {}",
+                package.size
+            )));
+        }
+        if sha256 != package.sha256 {
+            return Err(UpdateError::File(
+                "its SHA-256 differs from the manifest's".into(),
+            ));
         }
         Ok(())
     }
@@ -668,6 +845,83 @@ pub fn check_on(
 pub fn verify_download(manifest: &[u8], keys: &str, platform: &str, path: &Path) -> Result<()> {
     let keys = TrustedKeys::parse(keys)?;
     Manifest::read(manifest, &keys)?.verify_file(platform, path, &keys)
+}
+
+/// What a manifest offers the web browser component (mitcad#1579,
+/// `update_browser_check` of the C++ bridge): reads and verifies the
+/// manifest, then picks the package for `platform` built for the module
+/// interface `abi` that this MitCad loads. JSON `{"status": "available" |
+/// "current" | "abi" | "none", "expired", "package": {"platform", "abi",
+/// "version", "cef", "fingerprint", "url", "size", "sha256", "signature"} or
+/// null, "abis": [...]}`: `available` a package newer than `installed` (or
+/// none installed, `installed` empty), `current` nothing newer, `abi`
+/// packages for the platform only for other interfaces (`abis`: MitCad
+/// itself needs an update), `none` no package for the platform. `expired`
+/// as for releases: the application installs from an expired manifest
+/// only when the user asked.
+pub fn browser_check(
+    manifest: &[u8],
+    keys: &str,
+    platform: &str,
+    abi: u32,
+    installed: &str,
+) -> Result<String> {
+    browser_check_on(manifest, keys, platform, abi, installed, today())
+}
+
+/// [`browser_check`] on the day `today` (days since 1970-01-01).
+pub fn browser_check_on(
+    manifest: &[u8],
+    keys: &str,
+    platform: &str,
+    abi: u32,
+    installed: &str,
+    today: i64,
+) -> Result<String> {
+    let manifest = Manifest::read(manifest, &TrustedKeys::parse(keys)?)?;
+    let package = manifest.browser_for(platform, abi);
+    let mut abis: Vec<u32> = manifest
+        .browser
+        .iter()
+        .filter(|p| p.platform == platform)
+        .map(|p| p.abi)
+        .collect();
+    abis.sort_unstable();
+    abis.dedup();
+    let status = match package {
+        None if abis.is_empty() => "none",
+        None => "abi",
+        Some(_) if installed.trim().is_empty() => "available",
+        Some(p) => {
+            if is_newer(&p.version, installed).unwrap_or(true) {
+                "available"
+            } else {
+                "current"
+            }
+        }
+    };
+    Ok(serde_json::json!({
+        "status": status,
+        "expired": manifest.expired_on(today),
+        "package": package,
+        "abis": abis,
+    })
+    .to_string())
+}
+
+/// The application's check of a downloaded browser package
+/// (`update_verify_browser_download`): the manifest read and verified
+/// again, then the file against its package.
+pub fn verify_browser_download(
+    manifest: &[u8],
+    keys: &str,
+    platform: &str,
+    abi: u32,
+    version: &str,
+    path: &Path,
+) -> Result<()> {
+    let keys = TrustedKeys::parse(keys)?;
+    Manifest::read(manifest, &keys)?.verify_browser_file(platform, abi, version, path, &keys)
 }
 
 /// The pre-release channel's manifest: from GitHub's list of releases

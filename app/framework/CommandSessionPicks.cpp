@@ -3,6 +3,7 @@
 // and a value field's full tooltip (mitcad#250). The rest of the session is
 // in CommandSession.cpp.
 #include <exception>
+#include "ModelMessages.hpp"
 #include <utility>
 #include <vector>
 
@@ -191,7 +192,7 @@ QString CommandSession::limitHint(const QString& key, const QString& text) {
   } catch (const std::exception& e) {
     // A strict parameter refuses it: said where the value is, as other
     // problems are told when the panel's OK is pressed.
-    about = tr("Refused by the limits of %1: %2").arg(own, QString::fromUtf8(e.what()));
+    about = tr("Refused by the limits of %1: %2").arg(own, mitcad::modelMessage(e.what()));
     hint = tr("refused by its limits");
   }
   if (!about.isEmpty()) {

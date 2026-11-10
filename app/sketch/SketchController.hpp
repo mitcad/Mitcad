@@ -58,6 +58,13 @@ public:
   // A message on the status line at its level (mitcad#1051; the main
   // window's DocumentHost::showStatus).
   virtual void showStatus(const QString& message, NoticeLevel level) = 0;
+  // An error raised by a source that lasts only while it is open
+  // (mitcad#1621, MessageEntry::source): `sketch/editor` (a value editor's
+  // own check), `sketch/tool` (the running tool), `sketch` (sketch mode).
+  // closeMessageSource takes it from the status line and the message band
+  // when that source closes; the history keeps it.
+  virtual void showSourceError(const QString& message, const QString& /*source*/) { showError(message); }
+  virtual void closeMessageSource(const QString& /*source*/) {}
   // Starts a command of the registry (an edit panel opened by a
   // double-click).
   virtual void trigger(const QString& id) = 0;
@@ -482,6 +489,9 @@ public:
   // (mitcad#1051): a warning (a dimension added as driven instead of
   // over-constraining the sketch) stays a warning with the prompt after it.
   void notice(const QString& message, NoticeLevel level = NoticeLevel::Hint);
+  // An error of the running tool, or of sketch mode without one: it goes
+  // from the status line and the message band when the tool ends or the
+  // sketch finishes (mitcad#1621, SketchHost::showSourceError).
   void error(const QString& message);
 
   // Values typed in the view.
@@ -610,6 +620,8 @@ private:
   void fieldEdited(int index);
   void acceptEditor();
   void closeEditor();
+  // An error of `source` (mitcad#1621): error() and the value editor's own.
+  void sourceError(const QString& message, const QString& source);
   // A `sketch.set_dimension` result's own parameters kept as user
   // parameters (mitcad#1535): logged, and the model's notes shown.
   void noteKeptParameters(const QJsonObject& result);

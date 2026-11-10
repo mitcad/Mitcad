@@ -204,6 +204,8 @@ const Allowed kAllowed[] = {
     {"dressup.cpp", "const std::string edges_named =", "the detail of the roundings' meeting, placed_error() below"},
     {"dressup_check.cpp", "\" of edge \" + inner(", "a warning's text (the model makes its message plain)"},
     {"face_join.cpp", "joined->add_info(", "an information's text (the model makes its message plain)"},
+    {"cutouts.cpp", "std::snprintf(touch, sizeof touch,",
+     "the touch point for the detail of the chamfer reaching a far edge, placed_error() below"},
 };
 
 bool allowed(const std::string& file, const std::string& text) {

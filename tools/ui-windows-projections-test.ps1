@@ -201,7 +201,8 @@ Ui-Mark
 Ui-Step 'clean up from the palette'      { Ui-ClickLogged 'Palette paletteCleanUpStale' }
 Ui-ExpectNew 'Palette: Clean Up Stale Projections from the warning' 'the warning started the command'
 Ui-ExpectNew 'Preview highlights: removed c8; trimmed c3, c7' 'the preview highlights what goes and what is trimmed'
-Ui-ExpectNew 'Preview Clean Up Stale Projections: ok, warning: 1 stale curve removed: c8' 'the preview lists it'
+# The shown warning names no curves (mitcad#1612); the highlights above do.
+Ui-ExpectNew 'Preview Clean Up Stale Projections: ok, warning: 1 stale curve removed: a curve;' 'the preview lists it in words'
 Ui-Step 'cancel (Esc)'                   { Ui-Key 'Escape' }
 Ui-ExpectNew 'Preview highlights: none' 'cancel takes the highlights away'
 
