@@ -35,7 +35,7 @@
   {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F7","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],"extent":{"type":"distance","distance":30},"flip":false,"operation":"cut","participants":["F3.b0"]}},
   {"expect":{"feature":"F8","status":"ok","body":"F3.b0","volume":3986.8583470577035}},
   {"comment":"The STEP file of the open corner reads back as the same solid."},
-  {"cmd":"import_file","path":"sheet_open_corner.step"},
+  {"cmd":"import_file","path":"sheet_open_corner.step","wrap":false},
   {"expect":{"bodies":2}},
   {"expect":{"body":"F9.b0","volume":4106.8583470577035,"faces":30}}
 ]

@@ -37,6 +37,14 @@ fn flat(doc: &Document<MockKernel>, body: BodyUid) -> Value {
     query(doc, json!({"query":"flat_pattern","body":body}))
 }
 
+/// Whether a text carries an internal feature id (`F26`), which text a
+/// person sees never does (mitcad#1327).
+fn has_feature_id(text: &str) -> bool {
+    text.as_bytes()
+        .windows(2)
+        .any(|w| w[0] == b'F' && w[1].is_ascii_digit())
+}
+
 fn command(doc: &mut Document<MockKernel>, command: Value) -> Result<String, String> {
     doc.command(&command.to_string()).map_err(|e| e.to_string())
 }
@@ -125,17 +133,52 @@ fn flat_pattern_follows_later_edits_and_refuses_stale_or_blocked_sheets() {
         doc.query(&json!({"query":"flat_point","body":body,"flat":[50.0,5.0]}).to_string())
             .is_err()
     );
-    // An ordinary scale invalidates the sheet: no usable pattern.
-    doc.add_feature(&def(json!({"type":"scale","bodies":[body],"point":{"type":"origin"},"scale":{"type":"uniform","factor":2}})), None).unwrap();
+    // An ordinary scale invalidates the sheet: no usable pattern. Its
+    // reason names the feature in words, as a sheet feature's refusal
+    // does, without ids (mitcad#1636); the ids are the `causes`.
+    let scale = doc.add_feature(&def(json!({"type":"scale","bodies":[body],"point":{"type":"origin"},"scale":{"type":"uniform","factor":2}})), None).unwrap().uid;
     let invalid = flat(&doc, body);
     assert_eq!(invalid["status"], "invalid");
     assert!(invalid.get("regions").is_none(), "no export payload");
+    let said = "this body is no longer sheet metal: Scale1 changed it in a way its sheet metal \
+                cannot hold (the feature has no sheet-metal form); to cut across bends, use \
+                Sheet Cut instead";
+    assert_eq!(invalid["diagnostics"], json!([said]), "{invalid}");
+    assert!(!has_feature_id(said));
+    assert_eq!(invalid["causes"][0]["feature"], json!(scale), "{invalid}");
+    // The browser's Flat Pattern row reads the same reason.
+    let rows = query(&doc, json!({"query":"sheet_bodies"}));
+    assert_eq!(
+        rows[0]["flat_pattern"]["diagnostics"],
+        json!([said]),
+        "{rows}"
+    );
+    // A renamed feature is named by its new name.
+    doc.rename_feature(scale, "Widen").unwrap();
+    let renamed = flat(&doc, body)["diagnostics"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        renamed.starts_with("this body is no longer sheet metal: Widen changed it"),
+        "{renamed}"
+    );
+    doc.undo();
     doc.undo();
     assert_eq!(flat(&doc, body)["status"], "valid");
-    // A later failure blocks the retained body and its pattern.
+    // A later failure blocks the retained body and its pattern, naming the
+    // feature that failed.
     doc.kernel().fail.borrow_mut().insert("transform");
     doc.add_feature(&def(json!({"type":"move","bodies":[body],"transform":{"type":"translate_xyz","x":1,"y":0,"z":0}})), None).unwrap();
-    assert_eq!(flat(&doc, body)["status"], "blocked");
+    let blocked = flat(&doc, body);
+    assert_eq!(blocked["status"], "blocked");
+    let said = blocked["diagnostics"][0].as_str().unwrap();
+    assert!(
+        said.starts_with("this body's sheet metal is blocked: Move")
+            && said.ends_with(" failed on it"),
+        "{blocked}"
+    );
+    assert!(!has_feature_id(said), "{said}");
     doc.kernel().fail.borrow_mut().clear();
     doc.undo();
     assert_eq!(flat(&doc, body)["status"], "valid");
@@ -392,4 +435,99 @@ fn paste_new_copies_the_flat_pattern_items_of_the_copied_bodies() {
     doc.undo();
     assert_eq!(doc.flat_pattern_defs().len(), 1);
     assert!(doc.flat_pattern_defs().contains_key(&body));
+}
+
+/// What the application shows of a model's error: the text before its
+/// tail, as `userText` (app/framework/UserText.hpp) takes it, without the
+/// model's cleaner of older texts.
+fn shown(error: &str) -> &str {
+    error.split("\n[placed: ").next().unwrap_or(error)
+}
+
+/// The Flat Pattern's errors a person reads name the body as the Browser
+/// does, or say "this body", and never carry an id (mitcad#1639, the rule
+/// of mitcad#1327); agents read the ids in the error's detail.
+#[test]
+fn flat_pattern_errors_name_the_body_in_words() {
+    use mitcad_model::notice::{FeatureError, user_text_leaks};
+    let (mut doc, rules, body) = fixture();
+    doc.rename_body(body, "Bracket").unwrap();
+    let plain = |error: &str| {
+        let said = shown(error).to_owned();
+        assert!(!has_feature_id(&said), "{said}");
+        assert_eq!(user_text_leaks(&said), None, "{said}");
+        said
+    };
+    // The Flat Pattern panel's refusals.
+    let error = command(
+        &mut doc,
+        json!({"cmd":"set_flat_pattern","body":body,"stationary":{"feature":body.feature,"slot":4}}),
+    )
+    .unwrap_err();
+    assert_eq!(
+        plain(&error),
+        "the chosen fixed panel is not a panel of Bracket"
+    );
+    assert!(
+        FeatureError::from_text(&error)
+            .agent_text()
+            .contains(&format!("slot 4 is not a panel of sheet {body}")),
+        "{error}"
+    );
+    let error = command(
+        &mut doc,
+        json!({"cmd":"set_flat_pattern","body":BodyUid::new(rules, 0)}),
+    )
+    .unwrap_err();
+    assert_eq!(
+        plain(&error),
+        "this body is not a sheet-metal body at the timeline marker"
+    );
+    let error = command(&mut doc, json!({"cmd":"remove_flat_pattern","body":body})).unwrap_err();
+    assert_eq!(plain(&error), "Bracket has no Flat Pattern");
+    assert_eq!(
+        flat(&doc, body)["diagnostics"],
+        json!(["this body has no Flat Pattern"])
+    );
+    assert_eq!(
+        flat(&doc, body)["details"],
+        json!([format!("body {body} has no Flat Pattern")])
+    );
+
+    // The export of an invalid sheet's Flat Pattern: with the item's own
+    // settings and with others (evaluated anew), the same words.
+    command(&mut doc, json!({"cmd":"set_flat_pattern","body":body})).unwrap();
+    let scale = doc.add_feature(&def(json!({"type":"scale","bodies":[body],"point":{"type":"origin"},"scale":{"type":"uniform","factor":2}})), None).unwrap().uid;
+    let dir = mitcad_model::testing::unique_temp_dir("flat-names");
+    let path = dir.join("flat.dxf").to_string_lossy().into_owned();
+    let said = "the Flat Pattern of Bracket is invalid: this body is no longer sheet metal: \
+                Scale1 changed it in a way its sheet metal cannot hold (the feature has no \
+                sheet-metal form); to cut across bends, use Sheet Cut instead";
+    for side in ["front", "back"] {
+        let error = command(
+            &mut doc,
+            json!({"cmd":"export_flat_pattern_dxf","body":body,"path":path,"reference_side":side}),
+        )
+        .unwrap_err();
+        assert_eq!(plain(&error), said, "{side}");
+        // Agents read the body's and the feature's ids.
+        let agents = FeatureError::from_text(&error).agent_text().to_owned();
+        assert!(
+            agents.starts_with(&format!("the Flat Pattern of {body} is invalid: ")),
+            "{agents}"
+        );
+        assert!(agents.contains(&format!("[{scale}: ")), "{agents}");
+    }
+    assert!(!std::path::Path::new(&path).exists(), "nothing is written");
+    // A body that is not there at the marker: "this body", never its id.
+    let error = command(
+        &mut doc,
+        json!({"cmd":"export_flat_pattern_dxf","body":"F9.b0","path":path}),
+    )
+    .unwrap_err();
+    assert_eq!(
+        plain(&error),
+        "this body is not a sheet-metal body at the timeline marker"
+    );
+    std::fs::remove_dir_all(&dir).ok();
 }

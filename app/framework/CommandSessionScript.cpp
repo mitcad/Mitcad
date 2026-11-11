@@ -239,6 +239,11 @@ QJsonObject CommandSession::scriptState() {
   if (warnings.isArray() && !warnings.toArray().isEmpty()) {
     answer.insert(QStringLiteral("preview_warnings"), warnings);
   }
+  if (!m_activationOffer.isEmpty()) {
+    // The component to activate for the picks (mitcad#1634): an agent's
+    // pick never activates it by itself.
+    answer.insert(QStringLiteral("activate"), m_activationOffer);
+  }
   if (m_presenter != nullptr) {
     answer.insert(QStringLiteral("panel"), m_presenter->shownState());
   }

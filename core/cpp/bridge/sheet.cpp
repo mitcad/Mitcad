@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "mitcad/geometry/sheet_footprint.hpp"
 #include "mitcad/geometry/sheet_trim.hpp"
 #include "mitcad_bridge/kernel/sheet.h"
 
@@ -147,6 +148,26 @@ SheetTrimOutput sheet_trim(rust::Slice<const SheetTrimDomain> domains, rust::Sli
   }
   for (const auto& p : trimmed.ports) result.ports.push_back({p.seam_token, output(p.axial_interval), output(p.first), output(p.second)});
   for (const auto& d : trimmed.diagnostics) result.diagnostics.push_back(rust::String(d));
+  return result;
+}
+
+rust::Vec<SheetFootprintFace> sheet_cylinder_footprint(const geometry::Shape& shape,
+                                                      const SheetFootprintCylinder& cylinder, double tolerance) {
+  unit_axis(cylinder.axis); unit_axis(cylinder.radial_start); unit_axis(cylinder.angular_direction);
+  geometry::CylinderEmbedding chart;
+  chart.centre = gp_Pnt(cylinder.centre[0], cylinder.centre[1], cylinder.centre[2]);
+  chart.axis = gp_Dir(cylinder.axis[0], cylinder.axis[1], cylinder.axis[2]);
+  chart.radial_start = gp_Dir(cylinder.radial_start[0], cylinder.radial_start[1], cylinder.radial_start[2]);
+  chart.angular_direction = gp_Dir(cylinder.angular_direction[0], cylinder.angular_direction[1],
+                                   cylinder.angular_direction[2]);
+  chart.neutral_radius = cylinder.neutral_radius;
+  chart.angle_extent = cylinder.angle_extent;
+  rust::Vec<SheetFootprintFace> result;
+  for (const auto& face : geometry::sheet_cylinder_footprint(shape, chart, cylinder.radius, tolerance)) {
+    SheetFootprintFace out;
+    for (const auto& edge : face) out.edges.push_back(output(edge));
+    result.push_back(std::move(out));
+  }
   return result;
 }
 

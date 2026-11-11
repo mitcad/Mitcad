@@ -60,4 +60,14 @@ gp_Ax3 toAx3(const geometry::Frame& frame);
 // The curves and points of a `sketch` query's answer in model space.
 std::vector<SketchEntityDisplay> sketchEntities(const QJsonObject& sketch);
 
+// The points and curves of a `sketch3d` query's answer (mitcad#1524) in
+// its component's coordinates: points, lines, arcs, circles and splines
+// where the last solve left them (a fit-point spline through its fit
+// points, by its hidden control points), a converted sketch's plane-bound
+// ellipses, and reference curves as found from their sources, drawn as
+// reference geometry. Each entity's id is its point or curve id, as the
+// sketch3d commands take it. Empty when the sketch has no frame (its
+// support was not found).
+std::vector<SketchEntityDisplay> spatialSketchEntities(const QJsonObject& sketch);
+
 } // namespace mitcad

@@ -32,6 +32,7 @@
 #include <QtLogging>
 
 #include "../framework/Json.hpp"
+#include "SketchClipboard.hpp"
 #include "SketchTool.hpp"
 #include "ToolSupport.hpp"
 
@@ -127,13 +128,7 @@ bool copyItems(SketchController& c, const QStringList& items, bool cut) {
     c.error(QObject::tr("Could not copy: %1").arg(errorText(e)));
     return false;
   }
-  const QByteArray json = QJsonDocument(answer).toJson(QJsonDocument::Compact);
-  keptFragment() = json;
-  if (QClipboard* clipboard = QGuiApplication::clipboard()) {
-    auto* data = new QMimeData;
-    data->setData(QString::fromLatin1(kSketchFragmentMime), json);
-    clipboard->setMimeData(data); // the clipboard owns it
-  }
+  putSketchFragment(QJsonDocument(answer).toJson(QJsonDocument::Compact));
   const int kept = answer.value(QStringLiteral("kept")).toInt();
   const int leftOut = answer.value(QStringLiteral("left_out")).toInt();
   qDebug().noquote() << QStringLiteral("%1 %2 from %3: %4 constraint(s) and dimension(s) kept, %5 left out, "
@@ -205,12 +200,13 @@ public:
 
   void move(const Snap& snap) override {
     m_at = snap.at;
+    m_snap = snap;
     live();
   }
 
   // The tool ends with the button's release, which is then its own and
   // not the view's.
-  void press(const Snap& snap) override { m_placed = place(target(snap.at)); }
+  void press(const Snap& snap) override { m_placed = place(target(snap.at), snap); }
 
   void release(const Snap& /*snap*/) override {
     if (m_placed) {
@@ -219,7 +215,7 @@ public:
   }
 
   bool confirm() override {
-    if (place(target(m_at))) {
+    if (place(target(m_at), m_snap)) {
       finish();
     }
     return true;
@@ -262,8 +258,10 @@ private:
   }
 
   // Runs `sketch.paste` with the base point at `at`, one undo step; false,
-  // with the model's reason shown, when it refused.
-  bool place(const V2& at) {
+  // with the model's reason shown, when it refused. Where `snap` put the
+  // base point on a point or a curve, it is held there in the same step
+  // (mitcad#1645).
+  bool place(const V2& at, const Snap& snap) {
     SketchOp op(m_c);
     QJsonObject cmd = op.command(QStringLiteral("sketch.paste"));
     cmd.insert(QStringLiteral("fragment"), m_answer.value(QStringLiteral("fragment")));
@@ -275,6 +273,7 @@ private:
       m_c.error(QObject::tr("Could not paste: %1").arg(reason));
       return false;
     }
+    holdBase(op, result, at, snap);
     op.commit();
     m_made.clear();
     for (const QJsonValue& id : result.value(QStringLiteral("made")).toArray()) {
@@ -290,6 +289,34 @@ private:
     // In plain words (mitcad#1612).
     m_notes << shownTexts(result, QStringLiteral("warnings"), QStringLiteral("warning_messages"));
     return true;
+  }
+
+  // The pasted base point (the first pasted point at `at`: a circle's or an
+  // arc's centre, a line's start, a point) held where the pointer dropped
+  // it on a point or a curve, as a drawing tool's point (SketchOp::constrain:
+  // coincident with a point, on a curve, at a middle, a quadrant, a
+  // crossing, on an axis). Not where typed X and Y or a held direction put
+  // it elsewhere, nor where no point of the copy is there (a text's anchor).
+  void holdBase(SketchOp& op, const QJsonObject& result, const V2& at, const Snap& snap) {
+    if (!snap.onGeometry() || dist(snap.at, at) > 1e-9) {
+      return;
+    }
+    const SketchModel& model = op.model();
+    QString base;
+    for (const QJsonValue& id : result.value(QStringLiteral("made")).toArray()) {
+      const auto where = model.pointAt(id.toString());
+      if (where && dist(*where, at) <= 1e-6) {
+        base = id.toString();
+        break;
+      }
+    }
+    if (base.isEmpty()) {
+      return;
+    }
+    op.constrain(base, snap);
+    // For UI tests; a refusal is logged as "Constraint coincident on …
+    // not added: …" and shown when the paste ends.
+    qDebug().noquote() << QStringLiteral("Paste of %1 dropped on %2").arg(base, snap.describe());
   }
 
   // Ends the tool with the pasted geometry selected, to move it on or
@@ -312,11 +339,23 @@ private:
   QStringList m_notes;
   V2 m_base;
   V2 m_at;
+  Snap m_snap; // where the pointer snapped last
   std::vector<std::vector<V2>> m_outline;
   std::vector<V2> m_points;
 };
 
 } // namespace
+
+void putSketchFragment(const QByteArray& json) {
+  keptFragment() = json;
+  if (QClipboard* clipboard = QGuiApplication::clipboard()) {
+    auto* data = new QMimeData;
+    data->setData(QString::fromLatin1(kSketchFragmentMime), json);
+    clipboard->setMimeData(data); // the clipboard owns it
+  }
+}
+
+QByteArray sketchFragmentOnClipboard(QString* source) { return clipboardFragment(source); }
 
 void SketchController::copySelection() {
   const QStringList items = selectedGeometry(*this);
@@ -367,6 +406,14 @@ void SketchController::paste() {
   const QJsonObject answer = document.object();
   if (!answer.value(QStringLiteral("fragment")).isObject()) {
     error(tr("The sketch geometry on the clipboard cannot be read."));
+    return;
+  }
+  // A 3D sketch's copy keeps its z and sources (mitcad#1661): a 3D sketch
+  // takes it, a 2D one has no place for them.
+  if (answer.value(QStringLiteral("kind")).toString() == QStringLiteral("3d")) {
+    qDebug().noquote() << QStringLiteral("Paste: the clipboard holds 3D sketch geometry of %1")
+                              .arg(answer.value(QStringLiteral("sketch_name")).toString());
+    error(tr("3D sketch geometry cannot be pasted into a 2D sketch: paste it into a 3D sketch."));
     return;
   }
   const std::array<bool, 2> held = heldOf(answer);

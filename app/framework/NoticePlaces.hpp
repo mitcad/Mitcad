@@ -7,6 +7,12 @@
 // it is about are its `places` (core/model-api/src/commands.md, "Notices"), which the view
 // paints while the pointer is over the notice (the command panel's message,
 // a Timeline item, a Browser row, the message band, the Docked status line).
+// The 3D Sketch Palette's rows (mitcad#1652) and a 3D sketch tool's snap
+// (mitcad#1653) paint theirs the same way, with
+// the application's own kinds besides the model's: `sketch_point` and
+// `sketch_curve` ({sketch, name}: a point or curve of a sketch), `feature`
+// ({name}: an Intersection Curve), and an `occurrence` on a face, edge or
+// vertex of another component's body.
 // Plain Qt Core.
 
 #include <QJsonArray>

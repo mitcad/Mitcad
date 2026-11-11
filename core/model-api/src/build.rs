@@ -499,7 +499,7 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                 if best.as_ref().is_none_or(|(d, ..)| t < *d) {
                     let far = box_along(&bounds, &world, start, along).1;
                     let value = match mode {
-                        BoundMode::Face => t,
+                        BoundMode::Face | BoundMode::ToFace => t,
                         BoundMode::Centre => (t + far) / 2.0,
                         BoundMode::Through => far,
                     };
@@ -646,6 +646,9 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                         "parameter": params.name(b.parameter),
                         "to": {"occurrence": b.to.occurrence.to_string(), "geometry": b.to.geometry},
                         "mode": b.mode.as_str(),
+                        // The offset of a length to a face (mitcad#1630),
+                        // else the overlap or gap.
+                        "add": b.add.and_then(|id| params.value(id)).unwrap_or(0.0),
                     }))
                 });
                 let (flip, rotate) = match info.record.joint.and_then(|j| self.feature(j)) {

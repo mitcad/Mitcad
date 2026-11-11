@@ -19,6 +19,7 @@
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QEvent>
+#include <QFile>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
@@ -55,6 +56,7 @@
 #include "../view/VersionWatermark.hpp"
 #include "DrawingPreferences.hpp"
 #include "DrawingSheetView.hpp"
+#include "SheetSizeRows.hpp"
 #include "../framework/UiSizes.hpp"
 #include "../framework/UserText.hpp"
 
@@ -80,18 +82,6 @@ void logProjections(const QJsonObject& answer) {
   for (const QString& line : projectionLines(answer.value(QStringLiteral("projections")).toArray())) {
     qDebug().noquote() << line;
   }
-}
-
-// The sheet sizes the model has, in its names, and their labels.
-const QList<QPair<QString, QString>>& sheetSizes() {
-  static const QList<QPair<QString, QString>> sizes = {
-      {QStringLiteral("A4"), QStringLiteral("A4")},       {QStringLiteral("A3"), QStringLiteral("A3")},
-      {QStringLiteral("A2"), QStringLiteral("A2")},       {QStringLiteral("A1"), QStringLiteral("A1")},
-      {QStringLiteral("A0"), QStringLiteral("A0")},       {QStringLiteral("ANSI_A"), QStringLiteral("ANSI A")},
-      {QStringLiteral("ANSI_B"), QStringLiteral("ANSI B")}, {QStringLiteral("ANSI_C"), QStringLiteral("ANSI C")},
-      {QStringLiteral("ANSI_D"), QStringLiteral("ANSI D")}, {QStringLiteral("ANSI_E"), QStringLiteral("ANSI E")},
-  };
-  return sizes;
 }
 
 QComboBox* comboOf(const QList<QPair<QString, QString>>& choices, const QString& current) {
@@ -508,6 +498,12 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
   connect(m_sheetView, &DrawingSheetView::selectionMoved, this, &DrawingWorkspace::selectionMoved);
   connect(m_sheetView, &DrawingSheetView::deleteSelectionRequested, this, &DrawingWorkspace::deleteSelection);
   connect(m_sheetView, &DrawingSheetView::contextMenuRequested, this, &DrawingWorkspace::contextMenu);
+  // The title block editor's clicks (mitcad#1625): its panel follows its
+  // tool and selection.
+  connect(m_sheetView, &DrawingSheetView::titleBlockEdited, this, [this] {
+    showHint();
+    fillPanel();
+  });
   connect(m_sheetView, &DrawingSheetView::annotationDoubleClicked, this, [this](int id) {
     // After the click's events: the dialog has an event loop of its own.
     QTimer::singleShot(0, this, [this, id] { editNoteText(id); });
@@ -556,6 +552,11 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
 }
 
 bool DrawingWorkspace::open(const QString& uid) {
+  // Another drawing: the title block edited on this one goes, as with
+  // Cancel (mitcad#1625).
+  if (m_blockEditor && uid != m_drawing) {
+    finishTitleBlock(false);
+  }
   const QString previous = m_drawing;
   m_drawing = uid;
   if (uid != previous) {
@@ -601,6 +602,9 @@ void DrawingWorkspace::closeDrawing() {
   if (!isOpen()) {
     hide();
     return;
+  }
+  if (m_blockEditor) {
+    finishTitleBlock(false);
   }
   m_drawing.clear();
   m_tool = nullptr;
@@ -797,6 +801,10 @@ void DrawingWorkspace::startTool(const QString& id) {
     setStatus(tr("A cut sheet holds components: Add Components… adds them."), true);
     return;
   }
+  if (m_blockEditor) {
+    setStatus(tr("The title block is being edited: Done or Cancel first."), true);
+    return;
+  }
   setTool(m_tool == tool ? nullptr : tool);
 }
 
@@ -821,6 +829,24 @@ void DrawingWorkspace::setTool(const DrawingToolDef* tool) {
 }
 
 void DrawingWorkspace::showHint() {
+  // The title block editor's tool (mitcad#1625).
+  if (m_blockEditor) {
+    switch (m_blockEditor->tool()) {
+    case TitleBlockEditor::Tool::Line:
+      m_sheetView->setHint(tr("Click the line's two ends"));
+      return;
+    case TitleBlockEditor::Tool::Field:
+      m_sheetView->setHint(tr("Click two opposite corners of the field's cell"));
+      return;
+    case TitleBlockEditor::Tool::Image:
+      m_sheetView->setHint(tr("Click two opposite corners of the image's box"));
+      return;
+    case TitleBlockEditor::Tool::Select:
+      break;
+    }
+    m_sheetView->setHint(tr("Click a line, field or image to select it, drag it to move it"));
+    return;
+  }
   if (m_tool == nullptr && m_cutSheet) {
     m_sheetView->setHint(tr("Add Components… adds bodies; drag a component to move it, its menu turns it"));
     return;
@@ -829,6 +855,20 @@ void DrawingWorkspace::showHint() {
 }
 
 void DrawingWorkspace::escape() {
+  // The title block editor's first click, tool or selection; it stays on
+  // until Done or Cancel (mitcad#1625).
+  if (m_blockEditor) {
+    if (m_blockEditor->escape()) {
+      qDebug().noquote() << QStringLiteral("Title block Esc: tool %1")
+                                .arg(titleBlockToolName(m_blockEditor->tool()));
+      m_sheetView->titleBlockChanged();
+      showHint();
+      fillPanel();
+    } else {
+      qDebug().noquote() << QStringLiteral("Title block Esc: nothing to end");
+    }
+    return;
+  }
   // Both: an annotation tool's picks are the workspace's, its placing
   // click the sheet's.
   const bool sheetPicks = m_sheetView->cancelPicks();
@@ -886,7 +926,9 @@ void DrawingWorkspace::fillPanel() {
     QTimer::singleShot(0, this, [this] { logButtons(); });
     return;
   }
-  if (m_tool != nullptr) {
+  if (m_blockEditor) {
+    fillTitleBlockPanel();
+  } else if (m_tool != nullptr) {
     fillToolPanel(*m_tool);
   } else if (m_sheetView->selectionSize() > 1) {
     fillSelectionPanel();
@@ -897,7 +939,13 @@ void DrawingWorkspace::fillPanel() {
   } else {
     m_panelTitle->setText(tr("Sheet %1").arg(m_sheet + 1));
     const QJsonObject sheet = m_answer.value(QStringLiteral("sheets")).toArray().at(m_sheet).toObject();
-    m_form->addRow(tr("Size"), new QLabel(sheet.value(QStringLiteral("size")).toString()));
+    // A size of its own as its width and height (mitcad#1625).
+    const QString size = sheet.value(QStringLiteral("size")).toString();
+    m_form->addRow(tr("Size"), new QLabel(size == QStringLiteral("custom")
+                                              ? tr("%1 × %2 mm")
+                                                    .arg(QString::number(sheet.value(QStringLiteral("width")).toDouble(), 'g', 6),
+                                                         QString::number(sheet.value(QStringLiteral("height")).toDouble(), 'g', 6))
+                                              : QString(size).replace(QLatin1Char('_'), QLatin1Char(' '))));
     m_form->addRow(tr("Scale"), new QLabel(sheet.value(QStringLiteral("scale")).toString()));
     const QString sheetUnits = sheet.value(QStringLiteral("units")).toString();
     m_form->addRow(tr("Units"), new QLabel(sheetUnits.isEmpty() ? tr("The Design's") : sheetUnits));
@@ -2518,6 +2566,11 @@ void DrawingWorkspace::switchSheet(int index) {
   if (!isOpen() || index < 0 || index >= m_tabs->count() || index == m_sheet) {
     return;
   }
+  // The title block edited on the sheet left goes, as with Cancel
+  // (mitcad#1625).
+  if (m_blockEditor && index != m_blockSheet) {
+    finishTitleBlock(false);
+  }
   m_sheet = index;
   // An annotation tool's picks, a half-drawn line or circle and a placing
   // click awaited were on the sheet left (mitcad#759); the tool stays.
@@ -2771,6 +2824,7 @@ void DrawingWorkspace::contextMenu(QPointF at, const QPoint& global) {
     add(tr("Delete View"), later([this, viewId] { deleteView(viewId); }));
   } else {
     add(tr("Sheet…"), later([this] { editSheet(); }));
+    add(tr("Edit Title Block"), later([this] { editTitleBlock(m_sheet); }));
     add(tr("Add Revision…"), later([this] { addRevision(); }));
     add(tr("Add Sheet"), later([this] { addSheet(); }));
   }
@@ -2949,11 +3003,18 @@ void DrawingWorkspace::editSheet() {
   }
   templateBox->setCurrentIndex(templateAt);
   form->addRow(tr("&Template"), templateBox);
-  QComboBox* sizes = comboOf(sheetSizes(), sheet.value(QStringLiteral("size")).toString());
-  form->addRow(tr("Size"), sizes);
+  // A named size or Custom: its width and height as the sheet lies
+  // (mitcad#1625).
+  SheetSizeRows sizes(form, QStringLiteral("drawingSheetSize"));
+  const QString size = sheet.value(QStringLiteral("size")).toString();
+  sizes.set(size == QStringLiteral("custom")
+                ? sheetSizeText(QJsonObject{{QStringLiteral("width"), sheet.value(QStringLiteral("width"))},
+                                            {QStringLiteral("height"), sheet.value(QStringLiteral("height"))}})
+                : size);
   QComboBox* orientation = comboOf({{QStringLiteral("landscape"), tr("Landscape")}, {QStringLiteral("portrait"), tr("Portrait")}},
                                    sheet.value(QStringLiteral("orientation")).toString());
   form->addRow(tr("Orientation"), orientation);
+  sizes.linkOrientation(orientation);
   QComboBox* projection =
       comboOf({{QStringLiteral("third_angle"), tr("Third Angle")}, {QStringLiteral("first_angle"), tr("First Angle")}},
               sheet.value(QStringLiteral("projection")).toString());
@@ -2962,15 +3023,12 @@ void DrawingWorkspace::editSheet() {
   // Another template brings its size and projection method, as in Create
   // Drawing (mitcad#725); the projected views turn with the method, the
   // sections and details drawn on them following (mitcad#729).
-  connect(templateBox, &QComboBox::currentIndexChanged, &dialog, [templateBox, sizes, projection, &choices] {
+  connect(templateBox, &QComboBox::currentIndexChanged, &dialog, [templateBox, &sizes, projection, &choices] {
     const int at = templateIndex(choices, templateBox->currentData().toString());
     if (at < 0) {
       return;
     }
-    const int size = sizes->findData(choices.at(at).size);
-    if (size >= 0) {
-      sizes->setCurrentIndex(size);
-    }
+    sizes.set(choices.at(at).size);
     const int method = projection->findData(choices.at(at).projection);
     if (method >= 0) {
       projection->setCurrentIndex(method);
@@ -3011,7 +3069,7 @@ void DrawingWorkspace::editSheet() {
   QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("edit_drawing_sheet")},
                       {QStringLiteral("drawing"), m_drawing},
                       {QStringLiteral("sheet"), m_sheet},
-                      {QStringLiteral("size"), sizes->currentData().toString()},
+                      {QStringLiteral("size"), sizes.value()},
                       {QStringLiteral("orientation"), orientation->currentData().toString()},
                       {QStringLiteral("projection"), projection->currentData().toString()},
                       {QStringLiteral("units"), units->currentData().toString()},
@@ -3097,6 +3155,9 @@ void DrawingWorkspace::sheetMenu(int index, const QPoint& at) {
   });
   QAction* remove = menu.addAction(tr("Delete Sheet"), this, [this, index] { deleteSheet(index); });
   remove->setEnabled(m_tabs->count() > 1);
+  // On the sheet (mitcad#1625); after the menu, the sheet shown first.
+  menu.addAction(tr("Edit Title Block"), this,
+                 [this, index] { QTimer::singleShot(0, this, [this, index] { editTitleBlock(index); }); });
   QAction* save = menu.addAction(tr("Save as Template…"), this, [this, index] { saveTemplate(index); });
   save->setEnabled(m_answer.value(QStringLiteral("sheets"))
                        .toArray()
@@ -3148,6 +3209,267 @@ void DrawingWorkspace::saveTemplate(int sheet) {
                              .arg(result.value(QStringLiteral("choice")).toString(), path);
     setStatus(tr("Template saved to %1.").arg(QDir::toNativeSeparators(path)), false);
   }
+}
+
+// --- The title block editor (mitcad#1625) ------------------------------------
+
+bool DrawingWorkspace::editTitleBlock(int sheet) {
+  if (!isOpen() || m_cutSheet || sheet < 0 || sheet >= m_tabs->count()) {
+    return false;
+  }
+  if (m_blockEditor && m_blockSheet == sheet) {
+    return true;
+  }
+  if (sheet != m_sheet) {
+    switchSheet(sheet);
+  }
+  const QJsonObject shown = m_answer.value(QStringLiteral("sheets")).toArray().at(m_sheet).toObject();
+  std::optional<TitleBlockEditor> editor = TitleBlockEditor::fromSheet(shown);
+  if (!editor) {
+    setStatus(tr("This sheet has no title block to edit."), true);
+    return false;
+  }
+  setTool(nullptr);
+  m_sheetView->clearSelection();
+  m_blockEditor = std::move(editor);
+  m_blockSheet = m_sheet;
+  m_sheetView->setTitleBlockEditor(&*m_blockEditor);
+  m_sheetView->setFocus(Qt::OtherFocusReason);
+  qDebug().noquote() << QStringLiteral("Title block editor: on, sheet %1: %2")
+                            .arg(m_sheet + 1)
+                            .arg(m_blockEditor->summary());
+  showHint();
+  fillPanel();
+  return true;
+}
+
+bool DrawingWorkspace::finishTitleBlock(bool keep) {
+  if (!m_blockEditor) {
+    return true;
+  }
+  if (keep && m_blockEditor->changed()) {
+    const QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("edit_drawing_title_block")},
+                              {QStringLiteral("drawing"), m_drawing},
+                              {QStringLiteral("sheet"), m_blockSheet},
+                              {QStringLiteral("title_block"), m_blockEditor->toJson()}};
+    // Refused (a block too large for the frame, …): the editor stays on,
+    // the reason in the status bar.
+    if (!run(command)) {
+      return false;
+    }
+  }
+  const QString summary = m_blockEditor->summary();
+  // Off before the sheet is drawn again: the model's block shows.
+  m_sheetView->setTitleBlockEditor(nullptr);
+  m_blockEditor.reset();
+  qDebug().noquote() << (keep ? QStringLiteral("Title block editor: done (%1)").arg(summary)
+                              : QStringLiteral("Title block editor: cancelled"));
+  showHint();
+  if (isOpen()) {
+    fillPanel();
+  }
+  return true;
+}
+
+void DrawingWorkspace::chooseTitleBlockImage() {
+  if (!m_blockEditor) {
+    return;
+  }
+  const QString path = dialogOpenFileName(this, tr("Title Block Image"),
+                                          dialogStartFolder(DialogGroup::Import, QDir::homePath()),
+                                          tr("Images (*.png *.jpg *.jpeg *.svg)"));
+  if (path.isEmpty() || !m_blockEditor) {
+    return;
+  }
+  rememberDialogFolder(DialogGroup::Import, path);
+  QFile file(path);
+  // The model holds an image of 4 MB at most.
+  constexpr qint64 kMaxImage = qint64(4) << 20;
+  if (!file.open(QIODevice::ReadOnly) || file.size() > kMaxImage) {
+    setStatus(tr("%1 cannot be read, or is larger than 4 MB.").arg(QFileInfo(path).fileName()), true);
+    return;
+  }
+  const QByteArray bytes = file.readAll();
+  const QString format = titleBlockImageFormat(bytes);
+  if (format.isEmpty()) {
+    setStatus(tr("%1 is no PNG, JPEG or SVG image.").arg(QFileInfo(path).fileName()), true);
+    return;
+  }
+  m_blockEditor->setPendingImage(QString::fromLatin1(bytes.toBase64()), format);
+  qDebug().noquote() << QStringLiteral("Title block image chosen: %1 (%2)").arg(QFileInfo(path).fileName(), format);
+  m_sheetView->titleBlockChanged();
+  m_sheetView->setFocus(Qt::OtherFocusReason);
+  showHint();
+  fillPanel();
+}
+
+void DrawingWorkspace::fillTitleBlockPanel() {
+  TitleBlockEditor& editor = *m_blockEditor;
+  m_panelTitle->setText(tr("Title Block"));
+  // The tools, the one on checked.
+  const auto toolButton = [this, &editor](TitleBlockEditor::Tool tool, const QString& text, const QString& tip) {
+    auto* button = new QPushButton(text);
+    button->setObjectName(QStringLiteral("titleBlockTool_") + titleBlockToolName(tool));
+    button->setCheckable(true);
+    button->setChecked(editor.tool() == tool);
+    button->setToolTip(tip);
+    connect(button, &QPushButton::clicked, this, [this, tool] {
+      if (!m_blockEditor) {
+        return;
+      }
+      if (tool == TitleBlockEditor::Tool::Image) {
+        // After the click: the file dialog has the events to itself.
+        QTimer::singleShot(0, this, [this] { chooseTitleBlockImage(); });
+        return;
+      }
+      m_blockEditor->setTool(tool);
+      qDebug().noquote() << QStringLiteral("Title block tool: %1").arg(titleBlockToolName(tool));
+      m_sheetView->titleBlockChanged();
+      m_sheetView->setFocus(Qt::OtherFocusReason);
+      showHint();
+      QTimer::singleShot(0, this, [this] {
+        if (m_blockEditor) {
+          fillPanel();
+        }
+      });
+    });
+    return button;
+  };
+  m_form->addRow(QString(), toolButton(TitleBlockEditor::Tool::Select, tr("Select"),
+                                       tr("Selects a line, field or image; a drag moves it")));
+  m_form->addRow(QString(), toolButton(TitleBlockEditor::Tool::Line, tr("Line"), tr("Draws a line between two clicks")));
+  m_form->addRow(QString(), toolButton(TitleBlockEditor::Tool::Field, tr("Field"),
+                                       tr("Adds a field whose cell two clicks give")));
+  m_form->addRow(QString(), toolButton(TitleBlockEditor::Tool::Image, tr("Image…"),
+                                       tr("Places a PNG, JPEG or SVG image, such as a logo, in a box two clicks give")));
+  // The grid the clicks snap to.
+  QList<QPair<QString, QString>> steps;
+  for (const double step : {0.5, 1.0, 2.0, 2.5, 5.0, 10.0}) {
+    steps.append({QString::number(step), tr("%1 mm").arg(QString::number(step))});
+  }
+  QComboBox* grid = comboOf(steps, QString::number(editor.grid()));
+  grid->setObjectName(QStringLiteral("titleBlockGrid"));
+  grid->setToolTip(tr("The step that clicks and moves snap to"));
+  connect(grid, &QComboBox::currentIndexChanged, this, [this, grid] {
+    if (m_blockEditor) {
+      m_blockEditor->setGrid(grid->currentData().toString().toDouble());
+      qDebug().noquote() << QStringLiteral("Title block grid: %1 mm").arg(grid->currentData().toString());
+      m_sheetView->titleBlockChanged();
+    }
+  });
+  m_form->addRow(tr("Grid"), grid);
+  // The block's size: it stays in the frame's lower right corner.
+  const auto sizeBox = [](const QString& name, double value) {
+    auto* box = new QDoubleSpinBox;
+    box->setObjectName(name);
+    box->setRange(5.0, 2000.0);
+    box->setDecimals(1);
+    box->setSuffix(QStringLiteral(" mm"));
+    box->setValue(value);
+    box->setKeyboardTracking(false);
+    return box;
+  };
+  QDoubleSpinBox* widthBox = sizeBox(QStringLiteral("titleBlockWidth"), editor.width());
+  QDoubleSpinBox* heightBox = sizeBox(QStringLiteral("titleBlockHeight"), editor.height());
+  const auto resized = [this, widthBox, heightBox] {
+    if (m_blockEditor) {
+      m_blockEditor->setSize(widthBox->value(), heightBox->value());
+      qDebug().noquote() << QStringLiteral("Title block size: %1 x %2")
+                                .arg(QString::number(m_blockEditor->width(), 'g', 6),
+                                     QString::number(m_blockEditor->height(), 'g', 6));
+      m_sheetView->titleBlockChanged();
+    }
+  };
+  connect(widthBox, &QDoubleSpinBox::valueChanged, this, resized);
+  connect(heightBox, &QDoubleSpinBox::valueChanged, this, resized);
+  m_form->addRow(tr("Width"), widthBox);
+  m_form->addRow(tr("Height"), heightBox);
+  // The selected field's label, text and text height.
+  if (editor.selectedKind() == TitleBlockEditor::Kind::Field) {
+    const int index = editor.selectedIndex();
+    const BlockField& field = editor.fields().at(index);
+    const auto logField = [this, index] {
+      if (!m_blockEditor || m_blockEditor->selectedKind() != TitleBlockEditor::Kind::Field ||
+          m_blockEditor->selectedIndex() != index) {
+        return;
+      }
+      const BlockField& f = m_blockEditor->fields().at(index);
+      qDebug().noquote() << QStringLiteral("Title block field %1: label %2, text %3, height %4")
+                                .arg(index + 1)
+                                .arg(f.label, f.text,
+                                     f.height > 0.0 ? QString::number(f.height, 'g', 6) : QStringLiteral("3.5"));
+    };
+    auto* label = new QLineEdit(field.label);
+    label->setObjectName(QStringLiteral("titleBlockFieldLabel"));
+    label->setToolTip(tr("Written small in the cell's upper left corner"));
+    connect(label, &QLineEdit::textEdited, this, [this](const QString& text) {
+      if (m_blockEditor && m_blockEditor->setFieldLabel(text)) {
+        m_sheetView->titleBlockChanged();
+      }
+    });
+    connect(label, &QLineEdit::editingFinished, this, logField);
+    m_form->addRow(tr("Label"), label);
+    auto* text = new QLineEdit(field.text);
+    text->setObjectName(QStringLiteral("titleBlockFieldText"));
+    text->setPlaceholderText(QStringLiteral("{title}"));
+    text->setToolTip(tr("Its value: names in braces, such as {material}, are filled in from the design"));
+    connect(text, &QLineEdit::textEdited, this, [this](const QString& value) {
+      if (m_blockEditor && m_blockEditor->setFieldText(value)) {
+        m_sheetView->titleBlockChanged();
+      }
+    });
+    connect(text, &QLineEdit::editingFinished, this, logField);
+    m_form->addRow(tr("Text"), text);
+    auto* letters = new QLineEdit(field.height > 0.0 ? QString::number(field.height, 'g', 6) : QString());
+    letters->setObjectName(QStringLiteral("titleBlockFieldHeight"));
+    letters->setPlaceholderText(QStringLiteral("3.5"));
+    letters->setToolTip(tr("The height of the text's capitals, mm"));
+    connect(letters, &QLineEdit::editingFinished, this, [this, letters, logField] {
+      const QString typed = letters->text().trimmed();
+      QString number;
+      if (!typed.isEmpty() && (!parsePlainNumber(typed, &number) || number.toDouble() <= 0.0)) {
+        setStatus(tr("A text height is a size in millimeters, not %1.").arg(typed), true);
+        return;
+      }
+      if (m_blockEditor && m_blockEditor->setFieldHeight(typed.isEmpty() ? 0.0 : number.toDouble())) {
+        m_sheetView->titleBlockChanged();
+      }
+      logField();
+    });
+    m_form->addRow(tr("Text Height (mm)"), letters);
+  }
+  if (editor.selectedKind() != TitleBlockEditor::Kind::None) {
+    auto* remove = new QPushButton(tr("Delete"));
+    remove->setObjectName(QStringLiteral("titleBlockDelete"));
+    remove->setToolTip(tr("Deletes the selected line, field or image"));
+    connect(remove, &QPushButton::clicked, this, [this] {
+      if (!m_blockEditor) {
+        return;
+      }
+      const QString gone = m_blockEditor->deleteSelected();
+      if (!gone.isEmpty()) {
+        qDebug().noquote() << QStringLiteral("Title block %1 deleted").arg(gone);
+      }
+      m_sheetView->titleBlockChanged();
+      QTimer::singleShot(0, this, [this] {
+        if (m_blockEditor) {
+          fillPanel();
+        }
+      });
+    });
+    m_form->addRow(QString(), remove);
+  }
+  auto* done = new QPushButton(tr("Done"));
+  done->setObjectName(QStringLiteral("titleBlockDone"));
+  done->setToolTip(tr("Stores the title block in the sheet; Save as Template… then keeps it in a library"));
+  connect(done, &QPushButton::clicked, this, [this] { QTimer::singleShot(0, this, [this] { finishTitleBlock(true); }); });
+  m_form->addRow(QString(), done);
+  auto* cancel = new QPushButton(tr("Cancel"));
+  cancel->setObjectName(QStringLiteral("titleBlockCancel"));
+  cancel->setToolTip(tr("Leaves the title block as it was"));
+  connect(cancel, &QPushButton::clicked, this,
+          [this] { QTimer::singleShot(0, this, [this] { finishTitleBlock(false); }); });
+  m_form->addRow(QString(), cancel);
 }
 
 void DrawingWorkspace::addRevision() {
@@ -3522,6 +3844,15 @@ void DrawingWorkspace::keyPressEvent(QKeyEvent* event) {
     return;
   }
   if (isOpen() && isDeleteKey(event->key())) {
+    if (m_blockEditor) {
+      const QString gone = m_blockEditor->deleteSelected();
+      if (!gone.isEmpty()) {
+        qDebug().noquote() << QStringLiteral("Title block %1 deleted").arg(gone);
+        m_sheetView->titleBlockChanged();
+        fillPanel();
+      }
+      return;
+    }
     if (m_tool == nullptr && m_sheetView->selectionSize() > 1) {
       deleteSelection();
     } else if (m_tool == nullptr && m_sheetView->selectedAnnotation() != 0) {

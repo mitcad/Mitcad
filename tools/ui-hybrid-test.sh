@@ -157,6 +157,13 @@ save
 expect_file 'doc.get("hybrid_assembly")' "True" "the design allows a hybrid assembly"
 
 echo "--- Move to Component on a feature in the timeline"
+# The new component is active, and the timeline starts at Active Component
+# (mitcad#1662): the root active again shows its Extrude1.
+ui_mark
+ui_step "activate Root (radio)"          ui_click_logged "Browser radio Root"
+ui_expect_new "Activated Root" "the root active again"
+ui_expect_new "Timeline filter: Active Component (Root) with Subcomponents: " "every feature in the timeline"
+ui_expect_new "Timeline Extrude1 at" "Extrude1 laid out in the timeline"
 ui_mark
 ui_step "right-click Extrude1"           ui_click_logged "Timeline Extrude1" 3
 ui_step "choose Move to Component..."    ui_menu_choose "Move to Component..."

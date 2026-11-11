@@ -349,12 +349,19 @@ pub struct Output<S> {
     /// A tapped hole's walls whose modelled thread has its crest off them,
     /// as they were (mitcad#436, mitcad#628).
     pub threaded_walls: Vec<crate::features::hole::ThreadedWall>,
+    /// A thread's faces that do not fit it, with what sets each
+    /// (mitcad#1632).
+    pub thread_fits: Vec<crate::features::thread::ThreadFitMiss>,
     /// What the feature picked, where it was (a Fillet's or a Chamfer's
     /// edges as polylines, mitcad#957): the `feature_inputs` query.
     pub inputs: Option<crate::features::FeatureInputs>,
     /// The 3D curve of an Intersection Curve (mitcad#1405): later
     /// features take it as a path. Not kept in the result store.
     pub curve: Option<Arc<Vec<crate::sweeps::PathCurve>>>,
+    /// What a 3D sketch's evaluation gave (mitcad#1521): its frame, solved
+    /// points and lines and status, or its failure without geometry. Not
+    /// kept in the result store.
+    pub spatial: Option<Arc<crate::features::SpatialSketchOutput>>,
 }
 
 pub struct FeatureResult<S> {
@@ -1644,6 +1651,11 @@ fn step<K: Kernel>(
         walk.measured_ids
             .extend(def.dimensions.iter().filter_map(|d| d.reference));
     }
+    // A 3D sketch's driven dimensions (mitcad#1661).
+    if let FeatureDef::SpatialSketch(def) = &entry.def {
+        walk.measured_ids
+            .extend(def.dimensions.iter().filter_map(|d| d.reference));
+    }
 
     // (The component's bodies are let go once the output is there: a
     // second holder of them would make each body the feature sets copy
@@ -2256,6 +2268,8 @@ fn evaluate<K: Kernel>(
     // Angles of more than one turn where one is the most (mitcad#714).
     let turns = turn_warnings(entry, params);
     let elements = std::mem::take(&mut ctx.elements);
+    // A 3D sketch's output, also of one that failed (mitcad#1521).
+    let spatial = ctx.spatial.take().map(Arc::new);
     let version = output_version(entry.uid, def_fp, &reads, params);
     let output = match result {
         Ok(produced) => Output {
@@ -2310,8 +2324,10 @@ fn evaluate<K: Kernel>(
             split_pieces,
             changed_pieces,
             threaded_walls: produced.threaded_walls,
+            thread_fits: produced.thread_fits,
             inputs: produced.inputs,
             curve: produced.curve.map(Arc::new),
+            spatial,
         },
         Err(message) => Output {
             sheet_rules: None,
@@ -2347,8 +2363,11 @@ fn evaluate<K: Kernel>(
             split_pieces: None,
             changed_pieces: Vec::new(),
             threaded_walls: Vec::new(),
+            thread_fits: Vec::new(),
             inputs: None,
             curve: None,
+            // Its frame and failure, without geometry (mitcad#1521).
+            spatial,
         },
     };
     Arc::new(output)

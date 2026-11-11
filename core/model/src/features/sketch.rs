@@ -82,15 +82,26 @@ impl FeatureInfo for SketchDef {
             SketchPlane::Xy | SketchPlane::Xz | SketchPlane::Yz => {}
         }
         for projection in &self.projections {
+            // The source's name is shown as its kind (mitcad#1650).
             for feature in topo_features(&projection.source) {
                 ctx.feature(feature)
-                    .map_err(|e| format!("projection of {}: {e}", projection.source))?;
+                    .map_err(|e| format!("projection of {topo}: {e}", topo = projection.source))?;
             }
             // Another sketch's curve or point (mitcad#904): of a sketch
-            // before this one.
+            // before this one, planar or 3D (mitcad#1543).
             if let ProjectionSource::Sketch(entity) = &projection.source {
-                ctx.sketch(entity.sketch)
+                let entry = ctx
+                    .feature(entity.sketch)
                     .map_err(|e| format!("projection of {}: {e}", projection.source))?;
+                if !matches!(
+                    entry.def,
+                    super::FeatureDef::Sketch(_) | super::FeatureDef::SpatialSketch(_)
+                ) {
+                    return Err(format!(
+                        "projection of {}: {} ({}) is not a sketch",
+                        projection.source, entry.name, entry.uid
+                    ));
+                }
             }
             // An Intersection Curve's curve (mitcad#1405).
             if let ProjectionSource::Curve(feature) = &projection.source {
@@ -109,7 +120,7 @@ impl FeatureInfo for SketchDef {
             }
             if let Some(after) = projection.after {
                 ctx.feature(after)
-                    .map_err(|e| format!("projection of {}: {e}", projection.source))?;
+                    .map_err(|e| format!("projection of {topo}: {e}", topo = projection.source))?;
             }
         }
         Ok(())
@@ -452,7 +463,7 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
 
 /// Implicit profile boundaries of the supporting face. They follow the
 /// body at every evaluation and never enter the stored sketch or solve.
-fn face_boundary<K: Kernel>(
+pub(crate) fn face_boundary<K: Kernel>(
     def: &SketchDef,
     plane: &SketchFrame,
     frame: &SketchFrame,
@@ -546,7 +557,7 @@ pub(crate) fn projected_curves<K: Kernel>(
 /// normal for a projection with [`Projection::outline`], mitcad#1265), or
 /// for section curves where the sketch's plane (`frame`) cuts it
 /// (mitcad#389).
-fn source_curves<K: Kernel>(
+pub(crate) fn source_curves<K: Kernel>(
     projection: &Projection,
     frame: &SketchFrame,
     ctx: &mut super::EvalContext<'_, K>,
@@ -689,20 +700,19 @@ fn source_curves<K: Kernel>(
     Ok(Vec::new())
 }
 
-/// The model curve of another sketch's curve or point (mitcad#904), where
-/// that sketch has it now, in this sketch's component's coordinates (moved
-/// there from another component's by `link`); none when the sketch no
-/// longer has the entity: the projection is lost and keeps its last
-/// geometry, as one of a body edge that is gone.
+/// The model curve of another sketch's curve or point (mitcad#904; a 3D
+/// sketch's too, mitcad#1543), where that sketch has it now, in this
+/// sketch's component's coordinates (moved there from another component's
+/// by `link`); none when the sketch no longer has the entity: the
+/// projection is lost and keeps its last geometry, as one of a body edge
+/// that is gone.
 fn sketch_entity_curves<K: Kernel>(
     entity: &SketchEntityRef,
     link: Option<&OccurrenceLink>,
     ctx: &mut super::EvalContext<'_, K>,
 ) -> Result<Vec<Curve3>, String> {
-    let output = ctx
-        .sketch(entity.sketch)
+    let curve = super::spatial_sketch::sketch_entity_geometry(ctx, *entity)
         .map_err(|e| format!("projection of {entity}: {e}"))?;
-    let curve = sketch_entity_curve(&output, entity.entity);
     let Some(curve) = curve else {
         return Ok(Vec::new());
     };
@@ -738,7 +748,7 @@ pub(crate) fn sketch_entity_curve(
 }
 
 /// The frame of a face plane from the bodies before the sketch.
-fn face_frame<K: Kernel>(
+pub(crate) fn face_frame<K: Kernel>(
     plane: &SketchPlane,
     ctx: &mut super::EvalContext<'_, K>,
 ) -> Result<SketchFrame, String> {
@@ -816,7 +826,7 @@ fn face_body<K: Kernel>(
 /// moved into the sketch's coordinates. An origin or construction plane
 /// keeps its own axes; a face gets the frame every planar face gets
 /// ([`SketchPlane::face_frame`]), in the sketch's coordinates.
-fn linked_frame<K: Kernel>(
+pub(crate) fn linked_frame<K: Kernel>(
     plane: &SketchPlane,
     link: &OccurrenceLink,
     ctx: &mut super::EvalContext<'_, K>,

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! Intersection Curve (mitcad#1405): the 3D curve whose views along two
 //! sketches' normals are curves of those sketches. Each input is a chain
-//! of one sketch's curves ([`SketchCurves`], as a sweep's path takes them);
+//! of one sketch's curves ([`SketchCurves`], as a sweep's path takes them),
+//! of a planar sketch or of a 3D sketch (mitcad#1550: its curves where they
+//! lie in space, swept along the normal of its support plane, as its
+//! Project takes geometry onto that plane);
 //! the geometry kernel sweeps each chain along its own sketch's normal,
 //! through the other's extent, and crosses the two surfaces
 //! ([`Kernel::intersection_curves`]). The pieces it gives are joined here
@@ -85,14 +88,15 @@ impl FeatureInfo for IntersectionCurveDef {
     }
 
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
+        // Curves of a planar or a 3D sketch (mitcad#1550).
         self.first
-            .check(ctx)
+            .check_any(ctx)
             .map_err(|e| format!("the first curves: {e}"))?;
         self.second
-            .check(ctx)
+            .check_any(ctx)
             .map_err(|e| format!("the second curves: {e}"))?;
         if self.first.sketch == self.second.sketch {
-            let (entry, _) = ctx.sketch(self.first.sketch)?;
+            let entry = ctx.feature(self.first.sketch)?;
             return Err(format!(
                 "both chains are curves of {}: take the second from another sketch, \
                  on a plane at an angle to the first",

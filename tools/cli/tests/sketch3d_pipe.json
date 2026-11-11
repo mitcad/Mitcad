@@ -1,0 +1,56 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Pipe and Sweep along 3D sketch curves (mitcad#1523) on the geometry kernel. 3DSketch1 (F1): A at the origin, AB along +X 40 (c3), a tangent arc of radius 10 on to C = (50, 10, 0) (c6), and a quadratic control-point spline from C by (50, 30, 0) to (50, 30, 20) (c9), its control points held by offsets from C: tangent at C, so the route is smooth. Its length is 40 + 5 pi + 32.464504803 (the spline, 40 times the integral of sqrt(t^2 + (1 - t)^2) over [0, 1]) = 88.172468071; an 8 mm section sweeps pi 4^2 times that."},
+  {"cmd": "sketch3d.create"},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": [0, 0, 0], "end": [38, 1, 0], "axis": "x", "length": 40, "start_source": "origin"},
+  {"comment": "The arc's two freedoms: its sweep, held by an arc length of a quarter turn (5 pi), and its circle's turn about AB, held by C's Delta Z of 0 from B. (Keep Plane along +Z would hold two coordinates of a normal that the tangency at B already keeps square to AB: one redundant.)"},
+  {"cmd": "sketch3d.add_arc", "sketch": "F1", "mode": "tangent", "from": "c3", "start": "p2", "end": [50, 10, 0], "radius": 10,
+    "arc_length": 15.707963267948966},
+  {"cmd": "sketch3d.add_dimension", "sketch": "F1", "dimension": {"type": "offset", "a": "p2", "b": "p5", "axis": "z"}, "value": 0},
+  {"cmd": "sketch3d.add_spline", "sketch": "F1", "points": ["p5", [50, 30, 0], [50, 30, 20]], "degree": 2},
+  {"cmd": "sketch3d.add_dimension", "sketch": "F1", "dimension": {"type": "offset", "a": "p5", "b": "p7", "axis": "x"}, "value": 0},
+  {"cmd": "sketch3d.add_dimension", "sketch": "F1", "dimension": {"type": "offset", "a": "p5", "b": "p7", "axis": "y"}, "value": 20},
+  {"cmd": "sketch3d.add_dimension", "sketch": "F1", "dimension": {"type": "offset", "a": "p5", "b": "p7", "axis": "z"}, "value": 0},
+  {"cmd": "sketch3d.add_dimension", "sketch": "F1", "dimension": {"type": "offset", "a": "p7", "b": "p8", "axis": "x"}, "value": 0},
+  {"cmd": "sketch3d.add_dimension", "sketch": "F1", "dimension": {"type": "offset", "a": "p7", "b": "p8", "axis": "y"}, "value": 0},
+  {"cmd": "sketch3d.add_dimension", "sketch": "F1", "dimension": {"type": "offset", "a": "p7", "b": "p8", "axis": "z"}, "value": 20},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 0},
+    "points": [
+      {"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [40, 0, 0]},
+      {"id": "p4", "at": [40, 10, 0]}, {"id": "p5", "at": [50, 10, 0]},
+      {"id": "p7", "at": [50, 30, 0]}, {"id": "p8", "at": [50, 30, 20]}],
+    "chains": [{"curves": ["c3", "c6", "c9"], "closed": false,
+                "path": {"spatial_sketch": "F1", "curves": ["c3", "c6", "c9"]}}]}}},
+
+  {"comment": "Pipe1 (F2) along the chain from AB: A to the spline's end."},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"spatial_sketch": "F1", "curves": ["c3"], "chain": true},
+    "size": 8, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F2.b0", "volume": 4432.031647, "tolerance": 1e-3,
+    "has_face": "F2:start"}},
+
+  {"comment": "Sweep1 (F4) of an 8 mm circle on YZ at A (Sketch1, F3) along the same curves picked whole."},
+  {"cmd": "sketch.create", "plane": "yz"},
+  {"cmd": "sketch.add_circle", "sketch": "F3", "center": [0, 0], "diameter": 8},
+  {"cmd": "add_feature", "def": {"type": "sweep", "profiles": [{"sketch": "F3", "region": "r{c1}"}],
+    "path": {"spatial_sketch": "F1", "curves": ["c3", "c6", "c9"]}, "operation": "new_body"}},
+  {"expect": {"feature": "Sweep1", "status": "ok", "body": "F4.b0", "volume": 4432.031647, "tolerance": 1e-3}},
+
+  {"comment": "Pipe2 (F5) the other way: from the spline's end back to A, every piece turned round."},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"spatial_sketch": "F1", "curves": ["c9"], "chain": true, "reversed": true},
+    "size": 8, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe2", "status": "ok", "body": "F5.b0", "volume": 4432.031647, "tolerance": 1e-3}},
+
+  {"comment": "AB to 60: the route grows by 20 and every consumer follows with the same curves and direction: pi 4^2 108.172468071."},
+  {"cmd": "sketch3d.set_dimension", "sketch": "F1", "dimension": "k3", "value": 60},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "points": [
+      {"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [60, 0, 0]},
+      {"id": "p4", "at": [60, 10, 0]}, {"id": "p5", "at": [70, 10, 0]},
+      {"id": "p7", "at": [70, 30, 0]}, {"id": "p8", "at": [70, 30, 20]}]}}},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F2.b0", "volume": 5437.341296, "tolerance": 1e-3}},
+  {"expect": {"feature": "Sweep1", "status": "ok", "body": "F4.b0", "volume": 5437.341296, "tolerance": 1e-3}},
+  {"expect": {"feature": "Pipe2", "status": "ok", "body": "F5.b0", "volume": 5437.341296, "tolerance": 1e-3}},
+  {"expect": {"query": {"query": "feature", "uid": "F5"}, "result": {
+    "def": {"path": {"spatial_sketch": "F1", "curves": ["c9"], "reversed": true, "chain": true}}}}}
+]

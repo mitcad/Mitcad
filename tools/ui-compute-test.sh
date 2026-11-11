@@ -357,8 +357,8 @@ ui_stop_app
 echo "--- --open at start-up, cancelled"
 # Slower, so that the dialog is still there when Esc comes.
 if [ "${UI_GDB:-0}" = 1 ] && command -v gdb > /dev/null; then
-  MITCAD_TEST_RECOMPUTE_DELAY_MS=1500 gdb -q -batch -ex "set debuginfod enabled off" -ex run -ex bt \
-    --args "$UI_APP" --no-recovery --chrome=docked --open "$FILE" > "$UI_LOG" 2>&1 &
+  MITCAD_TEST_RECOMPUTE_DELAY_MS=1500 gdb -q -batch -return-child-result -ex "set debuginfod enabled off" -ex run \
+    -ex "python (gdb.execute('bt') if gdb.selected_inferior().pid else None)" --args "$UI_APP" --no-recovery --chrome=docked --open "$FILE" > "$UI_LOG" 2>&1 &
 else
   MITCAD_TEST_RECOMPUTE_DELAY_MS=1500 "$UI_APP" --no-recovery --chrome=docked --open "$FILE" > "$UI_LOG" 2>&1 &
 fi

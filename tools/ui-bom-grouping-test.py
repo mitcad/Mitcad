@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/build core/model/src/document/bom.rs core/model-api/src/libraries.rs tools/cli
-"""Synthetic BOM fixture, actual Qt controls and exact exported CSV rows."""
+# check-all sources: app/build app/webbrowser core/model/src/document/bom.rs core/model/src/document/library_parts.rs core/model-api/src/libraries.rs tools/cli
+"""Synthetic BOM fixture, actual Qt controls and exact exported CSV rows; a
+STEP file of three bodies brought in by Component from Web's import (its
+test command, no web browser) is one numbered part and one row."""
 import csv
 import json
 import os
@@ -37,6 +39,50 @@ def prepare(cli, directory, environment=None):
         "expect-widget-property buildPartsGroupIdentical checked true\n"
         "expect-widget-property buildPartsList rowCount 2\n"
         "key Escape\nfocus-main\nquit\n", encoding="utf-8")
+    # A STEP file of three bodies, named as a supplier's download is: it
+    # comes in through Component from Web's import with a part number and
+    # is one Bill of Materials row, not three (mitcad#1663).
+    web = [{"cmd": "add_feature", "def": {
+               "type": "box", "plane": {"type": "origin", "plane": "xy"},
+               "corner": [40 * index, 0], "length": length, "width": 10, "height": 10,
+               "operation": "new_body"}}
+           for index, length in enumerate((30, 20, 10))]
+    web.append({"cmd": "export", "path": str(directory / WEB_FILE), "format": "step",
+                "bodies": ["F1.b0", "F2.b0", "F3.b0"]})
+    web_fixture = directory / "web-part.json"
+    web_fixture.write_text(json.dumps(web), encoding="utf-8")
+    with (directory / "web-setup.log").open("wb") as log:
+        subprocess.run([cli, "run", str(web_fixture)], check=True, env=environment, stdout=log,
+                       stderr=subprocess.STDOUT, timeout=90)
+    (directory / "web-part.mitcad-ui").write_text(web_workflow(), encoding="utf-8")
+
+
+# The download's name: the component's, and its part number 6494K13.
+WEB_FILE = "6494K13_NO THREADS_Bearing.step"
+
+
+def web_workflow():
+    """Insert Web File (Test), with MITCAD_TEST_WEB_FILE naming WEB_FILE: the
+    import Component from Web runs on a downloaded file, then the Bill of
+    Materials."""
+    name = WEB_FILE[:-len(".step")]
+    lines = ["wait-idle", "capture-undo-depth before", "mark",
+             "command test.component_web_file",
+             "expect-log '^Component from Web: inserted %s as component %s \\(C[0-9]+, occurrence O[0-9]+, "
+             "3 body\\(ies\\)\\), part number 6494K13$' 60" % (WEB_FILE.replace(".", "\\."), name),
+             "expect-log '^Command Move/Copy started$' 20",
+             "expect-model-bodies 3 6000", "expect-undo-depth ${before} 1",
+             "focus-main", "key Escape", "expect-log '^Command Move/Copy cancelled$' 20",
+             "mark", "command build.parts_list", "focus-dialog '^Bill of Materials$'",
+             # The new design's own empty Component1 is the other row; the
+             # bearing's three bodies are one row.
+             "expect-widget-property buildPartsList rowCount 2",
+             "expect-log '^Build parts list: 2 row\\(s\\)$'",
+             "expect-log '^Build BOM row: 1 x Component1$'",
+             "expect-log '^Build BOM row: 1 x %s$'" % name,
+             "key Escape", "expect-dialog-gone '^Bill of Materials$'", "focus-main",
+             "expect-undo-depth ${before} 1", "quit"]
+    return "\n".join(lines) + "\n"
 
 
 def workflow(directory):
@@ -103,18 +149,23 @@ def run(app, cli, directory, qt_bin=None):
         environment.update(MITCAD_TEST_INPUT=str(directory / "bom.mitcad-ui"), MITCAD_RESULT_STORE="off",
                            MITCAD_START_PAGE="0", MITCAD_LANGUAGE="en", MITCAD_NO_UPDATE_CHECK="1",
                            QT_FORCE_STDERR_LOGGING="1")
-        for name, script in (("bom", "bom.mitcad-ui"), ("remembered", "remembered.mitcad-ui")):
+        environment["MITCAD_TEST_WEB_FILE"] = str(directory / WEB_FILE)
+        for name, script in (("bom", "bom.mitcad-ui"), ("remembered", "remembered.mitcad-ui"),
+                             ("web-part", "web-part.mitcad-ui")):
             environment["MITCAD_TEST_INPUT"] = str(directory / script)
+            # The web part comes into a new design of its own.
+            opened = [] if name == "web-part" else ["--open", str(directory / "bom.mitcad")]
             log_path = directory / (name + ".log")
             with log_path.open("wb") as log:
-                result = subprocess.run([app, "--ui=qt", "--no-native-dialogs", "--no-recovery", "--no-mcp",
-                                         "--open", str(directory / "bom.mitcad")], env=environment,
+                result = subprocess.run([app, "--ui=qt", "--no-native-dialogs", "--no-recovery", "--no-mcp"]
+                                        + opened, env=environment,
                                         stdout=log, stderr=subprocess.STDOUT, timeout=180)
             text = log_path.read_text(encoding="utf-8", errors="replace")
             if result.returncode or any(line.startswith("TestDriver: FAIL") for line in text.splitlines()) or "TestDriver: quit" not in text:
                 raise RuntimeError("BOM UI workflow failed: " + str(log_path))
     verify(directory)
-    print("PASS: BOM grouping, remembered view, clipboard, displayed CSV/PDF and unchanged model")
+    print("PASS: BOM grouping, remembered view, clipboard, displayed CSV/PDF, unchanged model "
+          "and a numbered multi-body web part as one row")
 
 
 if __name__ == "__main__":

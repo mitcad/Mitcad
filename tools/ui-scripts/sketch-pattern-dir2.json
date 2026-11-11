@@ -1,0 +1,8 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY for the sketch Rectangular Pattern's second direction (mitcad#1640): two free points that frame the view's fit at (-40, -30) and (40, 30), and a circle of radius 3 about (-20, -15) to pattern."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-40,-30]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[40,30]},
+  {"cmd":"sketch.circle","sketch":"F1","mode":"center","center":[-20,-15],"radius":3}
+]

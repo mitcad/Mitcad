@@ -2823,6 +2823,7 @@ int formulaEditorTests();
 int drawingToolsTests();
 int saveAsMeshTests();
 int drawingSheetViewTests();
+int titleBlockEditorTests();
 int imageReferencesTests();
 int configurationsDataTests();
 int ruleBlocksTests();
@@ -2836,6 +2837,7 @@ int chatHistoryTests();
 int cameraHeightTests();
 int sketchNormalTests();
 int activateQuestionTests();
+int activateOnPickTests();
 int featureStatusTests();
 int sketchPointMarkersTests();
 int holeSizesTests();
@@ -2884,12 +2886,20 @@ int interfaceSizeTests();
 int uiSizesTests();
 int sketchPlacesTests();
 int iconSizeStyleTests();
+int sketch3dModelTests();
+int sketch3dDrawTests();
+int sketch3dEditTests();
+int sketch3dFilletTests();
+int spatialPathsTests();
 int sketchConflictTests();
 int componentWebFilesTests();
 int browserComponentTests();
 int navigationBarPinsTests();
 int sketchGlyphRowsTests();
 int menuBarTests();
+int listTablesTests();
+int pickerNewFolderTests();
+int startBackdropTests();
 
 int main(int argc, char* argv[]) {
   // The application's own class: its notify() is tested (busy_input.cpp).
@@ -2988,6 +2998,7 @@ int main(int argc, char* argv[]) {
     failures += drawingToolsTests();
     failures += saveAsMeshTests();
     failures += drawingSheetViewTests();
+    failures += titleBlockEditorTests();
     failures += imageReferencesTests();
     failures += configurationsDataTests();
     failures += ruleBlocksTests();
@@ -3001,6 +3012,7 @@ int main(int argc, char* argv[]) {
     failures += cameraHeightTests();
     failures += sketchNormalTests();
     failures += activateQuestionTests();
+    failures += activateOnPickTests();
     failures += featureStatusTests();
     failures += sketchPointMarkersTests();
     failures += holeSizesTests();
@@ -3049,12 +3061,20 @@ int main(int argc, char* argv[]) {
     failures += uiSizesTests();
     failures += sketchPlacesTests();
     failures += iconSizeStyleTests();
+    failures += sketch3dModelTests();
+    failures += sketch3dDrawTests();
+    failures += sketch3dEditTests();
+    failures += sketch3dFilletTests();
+    failures += spatialPathsTests();
     failures += sketchConflictTests();
     failures += componentWebFilesTests();
     failures += browserComponentTests();
     failures += navigationBarPinsTests();
     failures += sketchGlyphRowsTests();
     failures += menuBarTests();
+    failures += listTablesTests();
+    failures += pickerNewFolderTests();
+    failures += startBackdropTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

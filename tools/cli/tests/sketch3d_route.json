@@ -1,0 +1,44 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. A 3D sketch through its JSON commands (mitcad#1522, W11): the bent route A-F of three lines along +X, +Y and +Z (40, 30, 20) with two tangent arcs of Equal radius 10 between them, A at the origin: fully constrained. AB to 60 and the radius to 12 move it with its tangencies; the radius edit undone and redone. Ids as the commands give them out: points and curves share one numbering, constraints and dimensions another. Saved for sketch3d_route_reopen.json."},
+  {"cmd": "sketch3d.create"},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": [0, 0, 0], "end": [38, 1, 0], "axis": "x", "length": 40, "start_source": "origin"},
+  {"cmd": "sketch3d.add_arc", "sketch": "F1", "mode": "tangent", "from": "c3", "start": "p2", "end": [50, 10, 0], "radius": 10},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": "p5", "end": [50, 38, 0], "axis": "y", "length": 30},
+  {"cmd": "sketch3d.add_constraint", "sketch": "F1", "constraint": {"type": "tangent", "a": "c6", "b": "c8", "at": "p5"}},
+  {"cmd": "sketch3d.add_arc", "sketch": "F1", "mode": "tangent", "from": "c8", "start": "p7", "end": [50, 50, 10]},
+  {"cmd": "sketch3d.add_constraint", "sketch": "F1", "constraint": {"type": "equal", "a": "c6", "b": "c11"}},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": "p10", "end": [50, 50, 28], "axis": "z", "length": 20},
+  {"cmd": "sketch3d.add_constraint", "sketch": "F1", "constraint": {"type": "tangent", "a": "c11", "b": "c13", "at": "p10"}},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 0, "fully_constrained": true},
+    "points": [
+      {"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [40, 0, 0]},
+      {"id": "p4", "at": [40, 10, 0]}, {"id": "p5", "at": [50, 10, 0]},
+      {"id": "p7", "at": [50, 40, 0]}, {"id": "p9", "at": [50, 40, 10]},
+      {"id": "p10", "at": [50, 50, 10]}, {"id": "p12", "at": [50, 50, 30]}]}}},
+  {"cmd": "sketch3d.set_dimension", "sketch": "F1", "dimension": "k3", "value": 60},
+  {"cmd": "sketch3d.set_dimension", "sketch": "F1", "dimension": "k5", "value": 12},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 0},
+    "points": [
+      {"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [60, 0, 0]},
+      {"id": "p4", "at": [60, 12, 0]}, {"id": "p5", "at": [72, 12, 0]},
+      {"id": "p7", "at": [72, 42, 0]}, {"id": "p9", "at": [72, 42, 12]},
+      {"id": "p10", "at": [72, 54, 12]}, {"id": "p12", "at": [72, 54, 32]}]}}},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Edit Dimension in 3DSketch1"}}},
+  {"cmd": "undo"},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "points": [
+      {"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [60, 0, 0]},
+      {"id": "p4", "at": [60, 10, 0]}, {"id": "p5", "at": [70, 10, 0]},
+      {"id": "p7", "at": [70, 40, 0]}, {"id": "p9", "at": [70, 40, 10]},
+      {"id": "p10", "at": [70, 50, 10]}, {"id": "p12", "at": [70, 50, 30]}]}}},
+  {"cmd": "redo"},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "points": [
+      {"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [60, 0, 0]},
+      {"id": "p4", "at": [60, 12, 0]}, {"id": "p5", "at": [72, 12, 0]},
+      {"id": "p7", "at": [72, 42, 0]}, {"id": "p9", "at": [72, 42, 12]},
+      {"id": "p10", "at": [72, 54, 12]}, {"id": "p12", "at": [72, 54, 32]}]}}}
+]

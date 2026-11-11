@@ -6,10 +6,15 @@
 //! libraries, the built-in ones and their drawing on a sheet are the
 //! drawing crate's (`mitcad-model-drawing`, its `template`), above the
 //! model (mitcad#777).
+//!
+//! A title block may hold images (a company's logo, mitcad#1625): PNG,
+//! JPEG or SVG files kept in the template as base64, so that a sheet's
+//! copy of its template carries them.
 
 use serde::{Deserialize, Serialize};
 
-use super::{P2, Projection, SheetSize};
+use super::{Orientation, P2, Projection, SheetSize};
+use crate::appearance::ImageData;
 
 /// The `format` of a template's file.
 pub const TEMPLATE_FORMAT: &str = "mitcad-drawing-template";
@@ -74,6 +79,193 @@ pub struct BlockLayout {
     /// from the block's lower left corner; no symbol when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projection_symbol: Option<P2>,
+    /// Images in it, such as a logo (mitcad#1625), drawn under its lines
+    /// and texts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<BlockImage>,
+}
+
+/// The largest image a title block holds (decoded), 4 MB.
+pub const MAX_BLOCK_IMAGE: usize = 4 << 20;
+
+/// An image of a title block (mitcad#1625).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlockImage {
+    /// Its box's lower left corner, mm from the block's lower left corner.
+    pub at: P2,
+    /// Its box's width and height, mm: the image is drawn whole in its
+    /// middle, its proportions kept ([`fitted_box`]).
+    pub size: P2,
+    /// The file's bytes, base64: a PNG, JPEG or SVG image.
+    pub data: ImageData,
+}
+
+/// What an image of a title block is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageKind {
+    Png,
+    Jpeg,
+    Svg,
+}
+
+impl ImageKind {
+    /// `png`, `jpeg`, `svg`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpeg",
+            Self::Svg => "svg",
+        }
+    }
+
+    /// Its media type, as a data URL names it.
+    pub fn media_type(self) -> &'static str {
+        match self {
+            Self::Png => "image/png",
+            Self::Jpeg => "image/jpeg",
+            Self::Svg => "image/svg+xml",
+        }
+    }
+}
+
+/// What a file's bytes are, if they are a PNG, JPEG or SVG image: by the
+/// PNG's and the JPEG's signatures, an SVG's root element.
+pub fn image_kind(bytes: &[u8]) -> Option<ImageKind> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some(ImageKind::Png);
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some(ImageKind::Jpeg);
+    }
+    svg_root(bytes).map(|_| ImageKind::Svg)
+}
+
+/// The start tag of an SVG file's root element (`<svg …>`), within its
+/// first 4 kB after an XML declaration, comments and a doctype.
+fn svg_root(bytes: &[u8]) -> Option<&str> {
+    let head = &bytes[..bytes.len().min(4096)];
+    let text = match std::str::from_utf8(head) {
+        Ok(text) => text,
+        // Cut inside a character: the valid part.
+        Err(e) => std::str::from_utf8(&head[..e.valid_up_to()]).ok()?,
+    };
+    let start = text.find("<svg")?;
+    let after = text[start + 4..].chars().next()?;
+    if !(after.is_whitespace() || after == '>' || after == '/') {
+        return None;
+    }
+    let end = text[start..].find('>')?;
+    Some(&text[start..start + end + 1])
+}
+
+/// The value of an attribute in a start tag.
+fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let mut rest = tag;
+    while let Some(at) = rest.find(name) {
+        let before = rest[..at].chars().last();
+        let after = rest[at + name.len()..].trim_start();
+        rest = &rest[at + name.len()..];
+        if !before.is_some_and(char::is_whitespace) {
+            continue;
+        }
+        let Some(value) = after.strip_prefix('=') else {
+            continue;
+        };
+        let value = value.trim_start();
+        let quote = value.chars().next()?;
+        if quote != '"' && quote != '\'' {
+            continue;
+        }
+        let inner = &value[1..];
+        return inner.find(quote).map(|end| &inner[..end]);
+    }
+    None
+}
+
+/// A length of an SVG's `width` or `height` without its unit (`120`,
+/// `30mm`), not a percentage.
+fn svg_length(text: &str) -> Option<f64> {
+    let text = text.trim();
+    if text.ends_with('%') {
+        return None;
+    }
+    let number: String = text
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E'))
+        .collect();
+    number
+        .parse()
+        .ok()
+        .filter(|v: &f64| v.is_finite() && *v > 0.0)
+}
+
+/// An image's width per height: a PNG's and a JPEG's pixels, an SVG's
+/// `viewBox`, else its `width` and `height`; none when it does not say.
+pub fn image_aspect(bytes: &[u8], kind: ImageKind) -> Option<f64> {
+    let (w, h) = match kind {
+        ImageKind::Png | ImageKind::Jpeg => {
+            let header = crate::image_header::read(bytes).ok()?;
+            (f64::from(header.width), f64::from(header.height))
+        }
+        ImageKind::Svg => {
+            let root = svg_root(bytes)?;
+            let from_box = attribute(root, "viewBox").and_then(|b| {
+                let v: Vec<f64> = b
+                    .split(|c: char| c.is_whitespace() || c == ',')
+                    .filter(|p| !p.is_empty())
+                    .filter_map(|p| p.parse().ok())
+                    .collect();
+                (v.len() == 4).then(|| (v[2], v[3]))
+            });
+            match from_box {
+                Some(size) => size,
+                None => (
+                    svg_length(attribute(root, "width")?)?,
+                    svg_length(attribute(root, "height")?)?,
+                ),
+            }
+        }
+    };
+    (w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).then(|| w / h)
+}
+
+/// Where an image of this width per height goes in a box (its lower left
+/// corner and size): whole, its proportions kept, in the box's middle; the
+/// whole box when its proportions are not known.
+pub fn fitted_box(at: P2, size: P2, aspect: Option<f64>) -> (P2, P2) {
+    let Some(aspect) = aspect.filter(|a| a.is_finite() && *a > 0.0) else {
+        return (at, size);
+    };
+    let (w, h) = if size[0] / size[1] > aspect {
+        (size[1] * aspect, size[1])
+    } else {
+        (size[0], size[0] / aspect)
+    };
+    (
+        [at[0] + (size[0] - w) / 2.0, at[1] + (size[1] - h) / 2.0],
+        [w, h],
+    )
+}
+
+impl BlockImage {
+    /// The file's bytes and what they are, or why they are no image a
+    /// title block holds.
+    pub fn decoded(&self) -> Result<(Vec<u8>, ImageKind), String> {
+        let bytes = crate::base64::decode(self.data.base64())
+            .map_err(|e| format!("an image of its title block is no base64 data: {e}"))?;
+        if bytes.len() > MAX_BLOCK_IMAGE {
+            return Err(format!(
+                "an image of its title block is {} kB, more than the {} kB a title block \
+                 holds per image",
+                bytes.len() >> 10,
+                MAX_BLOCK_IMAGE >> 10
+            ));
+        }
+        let kind = image_kind(&bytes)
+            .ok_or_else(|| "an image of its title block is no PNG, JPEG or SVG image".to_owned())?;
+        Ok((bytes, kind))
+    }
 }
 
 /// A cell of a title block.
@@ -172,6 +364,13 @@ impl SheetTemplate {
         {
             return Err(format!("{at}: its lines and symbol are points"));
         }
+        for image in &block.images {
+            let finite = image.at.iter().chain(&image.size).all(|v| v.is_finite());
+            if !finite || image.size[0] <= 0.0 || image.size[1] <= 0.0 {
+                return Err(format!("{at}: an image of its title block has no box"));
+            }
+            image.decoded().map_err(|e| format!("{at}: {e}"))?;
+        }
         for field in &block.fields {
             let finite = field.at.iter().chain(&field.size).all(|v| v.is_finite());
             if !finite || field.size[0] <= 0.0 || field.size[1] <= 0.0 {
@@ -190,7 +389,7 @@ impl SheetTemplate {
         }
         // Its own sheet size, as a drawing made with it starts.
         if let Some(size) = self.size {
-            let (width, height) = size.landscape();
+            let (width, height) = size.oriented(Orientation::Landscape);
             self.fits(width, height)?;
         }
         Ok(())

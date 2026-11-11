@@ -144,6 +144,8 @@
 #include "platform/NativeDialogs.hpp"
 #endif
 #include "sketch/PaletteCreateTools.hpp"
+#include "sketch/Sketch3dController.hpp"
+#include "sketch/Sketch3dPalette.hpp"
 #include "sketch/SketchPalette.hpp"
 #include "sketch/SketchTool.hpp"
 // Click adds to the selection in sketches (mitcad#1403).
@@ -181,6 +183,9 @@ constexpr double kDatumSize = 100.0;
 const QStringList kOriginDatums = {QStringLiteral("xy"), QStringLiteral("xz"), QStringLiteral("yz"),
                                    QStringLiteral("x"),  QStringLiteral("y"),  QStringLiteral("z"),
                                    QStringLiteral("origin")};
+// The pick places a 3D sketch's drawing tool logs for UI tests: the faces
+// a point snaps onto and the body vertices a point is attached to.
+constexpr SelectFilter kSketch3dSourcePlaces = SelectKind::Face | SelectKind::Vertex;
 
 std::string utf8(const QString& text) { return text.toStdString(); }
 
@@ -638,6 +643,11 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
         }
       });
     });
+    // The datums' places keep clear of the cards as they are placed
+    // (mitcad#1524: the command card that shows Create Sketch's kind);
+    // logged again only when they moved.
+    connect(
+        m_viewer, &OcctViewer::coveredChanged, this, [this] { logDatumPlaces(); }, Qt::QueuedConnection);
   }
   connect(m_viewer, &OcctViewer::contextMenuRequested, this, &MainWindow::showContextMenu,
           Qt::QueuedConnection);
@@ -772,6 +782,7 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   createMenus();
   createRibbon();
   createPanels();
+  setUpSketch3d(); // 3D sketches (mitcad#1524): their palette page and Create Sketch's kind row
   m_controller->timeline()->setFeatureDetailsProvider([this](const QString& uid) {
     const auto* feature = m_snapshot.feature(uid);
     if (!feature) return QString();
@@ -1053,8 +1064,12 @@ void MainWindow::registerCommands() {
     return def;
   };
 
-  CommandDef sketch = action("sketch.create", tr("Create Sketch"), "sketch", CommandDef::Mode::Model,
-                             [this] { startSketch(); });
+  // 2D unless the kind is changed on the card while it waits for the plane
+  // (mitcad#1524).
+  CommandDef sketch = action("sketch.create", tr("Create Sketch"), "sketch", CommandDef::Mode::Model, [this] {
+    setSketchKind(false);
+    startSketch();
+  });
   sketch.tooltip = tr("Starts a sketch on a plane or a planar face: pick it, or select it first");
   sketch.tab = QStringLiteral("SOLID");
   sketch.group = QStringLiteral("CREATE");
@@ -1068,6 +1083,17 @@ void MainWindow::registerCommands() {
   // The SOLID tab's families (U4), in menu order: Create Sketch goes
   // into CREATE after New Component.
   registerCreateCommands(*m_registry, *this, sketch);
+  // Create Sketch with 3D chosen (mitcad#1524): from the command search,
+  // also on a selected plane.
+  CommandDef sketch3d = action("sketch.create_3d", tr("Create 3D Sketch"), "sketch", CommandDef::Mode::Model, [this] {
+    setSketchKind(true);
+    startSketch();
+  });
+  sketch3d.tooltip = tr("Starts a 3D sketch, whose points and curves can leave its plane");
+  sketch3d.keywords = {QStringLiteral("3d sketch"), QStringLiteral("spatial sketch"), QStringLiteral("route")};
+  m_registry->add(sketch3d);
+  // The 3D sketch manipulator's keys (mitcad#1661).
+  registerSketch3dKeys();
   // Gear (mitcad#472) ends the CREATE group, in its Machine Elements
   // submenu (mitcad#579).
   registerGearCommands(*m_registry, *this, *this);
@@ -2049,7 +2075,8 @@ void MainWindow::updateCommandCard() {
   }
   const bool idle = m_commandPages->currentWidget() == m_idlePage;
   m_commandCard->setVisible(!(idle && m_idleInfo->text().isEmpty() && !m_autoselect->available() &&
-                              m_selectionCreate->entries().isEmpty()));
+                              m_selectionCreate->entries().isEmpty() &&
+                              (m_sketchKindRow == nullptr || m_sketchKindRow->isHidden())));
   m_floating->requestLayout();
 }
 
@@ -2068,6 +2095,10 @@ bool MainWindow::isAvailable(const CommandDef& def) const {
   }
   if (m_mode == Mode::Command) {
     return def.duringCommands && (!def.enabled || def.enabled());
+  }
+  // A 3D sketch takes no 2D sketch tools and has no profiles (mitcad#1524).
+  if (m_mode == Mode::Sketch && !sketch3dRefusal(def).isEmpty()) {
+    return false;
   }
   switch (def.mode) {
   case CommandDef::Mode::Model:
@@ -2102,6 +2133,11 @@ QString MainWindow::unavailableReason(const CommandDef& def) const {
   if (m_mode == Mode::Command && !def.duringCommands) {
     return tr("finish or cancel the open command first");
   }
+  if (m_mode == Mode::Sketch) {
+    if (const QString refused = sketch3dRefusal(def); !refused.isEmpty()) {
+      return refused;
+    }
+  }
   if (m_mode != Mode::Command) {
     if (def.mode == CommandDef::Mode::Model && m_mode == Mode::Sketch) {
       return tr("finish the sketch first");
@@ -2135,6 +2171,11 @@ void MainWindow::updateActions() {
   m_registry->setShortcutContext(m_mode == Mode::Command  ? unsigned(CommandShortcutContext)
                                  : m_mode == Mode::Sketch ? unsigned(SketchShortcutContext)
                                                           : unsigned(ModelShortcutContext));
+  // A 3D sketch's drawing tool: its placement keys win over the same keys
+  // of the view (Up is Turn View Up's elsewhere; mitcad#1661).
+  const bool drawing3d =
+      m_mode == Mode::Sketch && m_sketch3d != nullptr && m_sketch3d->isActive() && m_sketch3d->takesPlacementKeys();
+  m_registry->setShortcutOverlay(drawing3d ? unsigned(Sketch3dToolShortcutContext) : 0u);
   m_registry->updateEnabled([this](const CommandDef& def) { return isAvailable(def); });
   // What File › Print prints now, for the UI tests (mitcad#1089).
   logPrintTarget();
@@ -2165,10 +2206,42 @@ void MainWindow::trigger(const QString& id) {
     return;
   }
   if (def == nullptr || !isAvailable(*def)) {
+    // A 3D sketch says why a 2D tool does nothing (mitcad#1524), rather
+    // than leaving the key or the click unanswered.
+    if (const QString refused = (def != nullptr && m_mode == Mode::Sketch) ? sketch3dRefusal(*def) : QString();
+        !refused.isEmpty()) {
+      showError(tr("%1: %2").arg(def->name, refused));
+      qInfo().noquote() << QStringLiteral("3D sketch: %1 refused: %2").arg(def->id, refused);
+    }
     return;
   }
   if (m_reports != nullptr) {
     m_reports->noteAction(QStringLiteral("command ") + id);
+  }
+  // Delete in a 3D sketch removes its own selection (mitcad#1524).
+  if (id == QStringLiteral("sketch.delete") && m_mode == Mode::Sketch && m_sketch3d != nullptr &&
+      m_sketch3d->isActive()) {
+    deleteSketch3dSelection();
+    return;
+  }
+  // So do Copy, Cut and Paste (mitcad#1661).
+  if (m_mode == Mode::Sketch && m_sketch3d != nullptr && m_sketch3d->isActive() && runSketch3dClipboard(id)) {
+    return;
+  }
+  // Point, Line, the arcs and the splines draw in space in a 3D sketch
+  // (mitcad#1525).
+  if (const sketch::Sketch3dTool tool = sketch::Sketch3dController::toolForCommand(id);
+      tool != sketch::Sketch3dTool::None && m_mode == Mode::Sketch && m_sketch3d != nullptr &&
+      m_sketch3d->isActive()) {
+    m_messages->commandStarted();
+    setSelection({});
+    m_sketch3d->startTool(tool);
+    return;
+  }
+  // Coincident, Tangent, Equal, Fix, Midpoint and Sketch Dimension apply
+  // to a 3D sketch's selection (mitcad#1526).
+  if (runSketch3dEdit(id)) {
+    return;
   }
   // A command with a panel or a tool is the next command: an error the
   // message band shows gives way to it (mitcad#1042); an action (Undo, a
@@ -2265,6 +2338,10 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
   beginCommandScope(def);
   const Selection preselection = editUid.isEmpty() && analysis.isEmpty() ? m_selection : Selection();
   setSelection({});
+  // A feature that changes the bodies it picks, on bodies of another
+  // component selected before it (mitcad#1634): that component is
+  // activated first, as its own undo step; the panel says so.
+  const QString preselectionNotice = activateForPreselection(def, preselection);
   m_placementNote.clear(); // what this command places, it says (mitcad#292)
   endAnnotationPick(); // an annotation's pick waited for ends with it
   endImageCalibration(true); // and a calibration of an image reference (mitcad#782)
@@ -2349,6 +2426,9 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
   scroll->setWidget(panel);
   addParametersButton(*panel, def); // mitcad#564
   addMeasureHistory(*panel, def);   // mitcad#648
+  if (!preselectionNotice.isEmpty()) {
+    session->setActivationNotice(preselectionNotice); // mitcad#1634
+  }
   if (m_floating != nullptr) {
     // The card's material shows through; a changed panel resizes the card.
     scroll->viewport()->setAutoFillBackground(false);
@@ -2421,7 +2501,9 @@ void MainWindow::editFeature(const QString& uid) {
   try {
     const QJsonObject feature =
         queryObject({{QStringLiteral("query"), QStringLiteral("feature")}, {QStringLiteral("uid"), uid}});
-    if (feature.value(QStringLiteral("type")).toString() == QStringLiteral("sketch")) {
+    // A planar or a 3D sketch (mitcad#1524) opens in sketch mode.
+    const QString type = feature.value(QStringLiteral("type")).toString();
+    if (type == QStringLiteral("sketch") || type == QStringLiteral("spatial_sketch")) {
       editSketch(uid);
       return;
     }
@@ -2574,8 +2656,14 @@ void MainWindow::confirm() {
     m_session->commit();
     return;
   }
-  if (m_mode == Mode::Sketch && m_sketch->confirm()) {
-    return;
+  if (m_mode == Mode::Sketch) {
+    if (m_sketch3d != nullptr && m_sketch3d->isActive()) {
+      m_sketch3d->confirm(); // a 3D sketch tool's typed values (mitcad#1525)
+      return;
+    }
+    if (m_sketch->confirm()) {
+      return;
+    }
   }
   // Outside commands and sketches nothing waits for Enter: it repeats the
   // last command (mitcad#1620), as the view's context menu's Repeat does,
@@ -2641,9 +2729,11 @@ void MainWindow::cancel() {
     return;
   }
   if (m_mode == Mode::Sketch) {
-    // An editor, a drag, the tool and the selection first; then, with the
-    // preference on (mitcad#1623, off by default), the sketch itself.
-    if (m_sketch->cancel()) {
+    // An editor, a drag, the tool and the selection first (a 3D sketch's
+    // tool steps back one layer, mitcad#1525); then, with the preference
+    // on (mitcad#1623, off by default), the sketch itself.
+    const bool stepped = m_sketch3d != nullptr && m_sketch3d->isActive() ? m_sketch3d->cancel() : m_sketch->cancel();
+    if (stepped) {
       return;
     }
     if (!m_selection.isEmpty() || !sketch::escLeavesUnchangedSketch()) {
@@ -2965,14 +3055,36 @@ void MainWindow::showSectionCaps(const std::vector<BodyDisplay>& bodies, bool pr
 void MainWindow::logSketchReach(const std::vector<BodyDisplay>& bodies) {
   if (!sketchShown()) {
     m_loggedReach.clear();
+    m_reachBoxes.clear();
     return;
   }
   const geometry::Frame& frame = m_sketch->model().frame;
   const gp_Vec normal(frame.normal());
   QStringList reach;
+  // Each placed shape's box once (mitcad#1646): a refresh in sketch mode,
+  // as after each dimension added, measured every body of an assembly of
+  // hundreds again (0.15 s). Keyed by the shape's data and where it is
+  // placed; the boxes of the shapes shown now are kept for the next time.
+  QHash<QByteArray, Bnd_Box> boxes;
   for (const BodyDisplay& body : bodies) {
+    const TopoDS_Shape placed = body.shape->occt().Moved(body.placement);
+    const gp_Trsf trsf = placed.Location().Transformation();
+    QByteArray key;
+    const void* shapeData = placed.TShape().get();
+    key.append(reinterpret_cast<const char*>(&shapeData), sizeof(shapeData));
+    for (int row = 1; row <= 3; ++row) {
+      for (int column = 1; column <= 4; ++column) {
+        const double value = trsf.Value(row, column);
+        key.append(reinterpret_cast<const char*>(&value), sizeof(value));
+      }
+    }
     Bnd_Box box;
-    BRepBndLib::Add(body.shape->occt().Moved(body.placement), box, false);
+    if (const auto known = m_reachBoxes.constFind(key); known != m_reachBoxes.cend()) {
+      box = known.value();
+    } else {
+      BRepBndLib::Add(placed, box, false);
+    }
+    boxes.insert(key, box);
     if (box.IsVoid()) {
       continue;
     }
@@ -2991,6 +3103,7 @@ void MainWindow::logSketchReach(const std::vector<BodyDisplay>& bodies) {
     }
     reach << QStringLiteral("%1 %2").arg(QString::fromStdString(body.uid)).arg(front, 0, 'f', 1);
   }
+  m_reachBoxes = boxes;
   const QString logged = QStringLiteral("In front of the sketch plane: %1").arg(reach.join(QStringLiteral(", ")));
   if (logged != m_loggedReach) {
     m_loggedReach = logged;
@@ -3351,12 +3464,10 @@ TopoDS_Shape MainWindow::itemShape(const SelectionItem& item) const {
       return compound;
     }
     case SelectKind::Sketch: {
-      const QJsonObject sketch = queryObject(
-          {{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), item.owner}});
       TopoDS_Compound compound;
       BRep_Builder builder;
       builder.MakeCompound(compound);
-      for (const SketchEntityDisplay& entity : sketchEntities(sketch)) {
+      for (const SketchEntityDisplay& entity : sketchDisplay(item.owner)) { // either kind (mitcad#1524)
         if (!entity.shape.IsNull()) {
           builder.Add(compound, entity.shape);
         }
@@ -3438,9 +3549,7 @@ TopoDS_Shape MainWindow::itemShape(const SelectionItem& item) const {
         auto known = m_sketchShapes->find(item.owner);
         if (known == m_sketchShapes->end()) {
           QHash<QString, TopoDS_Shape> shapes;
-          const QJsonObject sketch = queryObject(
-              {{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), item.owner}});
-          for (const SketchEntityDisplay& entity : sketchEntities(sketch)) {
+          for (const SketchEntityDisplay& entity : sketchDisplay(item.owner)) {
             if (!shapes.contains(entity.id)) { // the first, as below
               shapes.insert(entity.id, entity.shape);
             }
@@ -3449,9 +3558,7 @@ TopoDS_Shape MainWindow::itemShape(const SelectionItem& item) const {
         }
         return known->value(item.name);
       }
-      const QJsonObject sketch = queryObject(
-          {{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), item.owner}});
-      for (const SketchEntityDisplay& entity : sketchEntities(sketch)) {
+      for (const SketchEntityDisplay& entity : sketchDisplay(item.owner)) {
         if (entity.id == item.name) {
           return entity.shape;
         }
@@ -3505,8 +3612,8 @@ void MainWindow::refreshScene() {
   // The sketch being edited went with another change, such as its
   // component deleted (mitcad#99): sketch mode ends instead of editing
   // what is no longer there.
-  if (m_mode == Mode::Sketch && m_sketch->isActive() && m_snapshot.feature(m_sketch->uid()) == nullptr) {
-    qDebug().noquote() << QStringLiteral("Sketch %1 is gone; sketch mode ends").arg(m_sketch->uid());
+  if (m_mode == Mode::Sketch && !editingSketchUid().isEmpty() && m_snapshot.feature(editingSketchUid()) == nullptr) {
+    qDebug().noquote() << QStringLiteral("Sketch %1 is gone; sketch mode ends").arg(editingSketchUid());
     if (m_session) {
       m_session->discard();
     }
@@ -3561,7 +3668,7 @@ void MainWindow::refreshScene() {
   place(m_snapshot.occurrences);
   // Everything outside the active component as ghosts (mitcad#420), set
   // before the items are shown, which then take their look at once.
-  m_viewer->setActiveScope(activeScopeOf(m_snapshot, m_sketch->isActive() ? m_sketch->uid() : QString()));
+  m_viewer->setActiveScope(activeScopeOf(m_snapshot, editingSketchUid()));
 
   ScopedTiming bodies("refresh bodies");
   showBodies();
@@ -3582,6 +3689,10 @@ void MainWindow::refreshScene() {
   datums.finish();
   if (m_sketch->isActive()) {
     m_sketch->reload();
+  }
+  if (m_sketch3d != nullptr && m_sketch3d->isActive()) {
+    m_sketch3d->reload(); // mitcad#1524
+    logSketch3dEntities(); // what a tool drew, where a click picks it (mitcad#1525)
   }
   sketches.finish();
 
@@ -3940,7 +4051,9 @@ void MainWindow::showBodies() {
   // The panel's measurement once the view has the section's bodies
   // (mitcad#438).
   measureIfWaiting();
+  ScopedTiming reach("bodies sketch reach");
   logSketchReach(bodies);
+  reach.finish();
   ScopedTiming threads("bodies threads");
   showThreads(bodies);
   threads.finish();
@@ -4085,8 +4198,8 @@ void MainWindow::refreshAutoselect() {
 }
 
 QString MainWindow::placingOccurrence(const QString& feature) const {
-  if (m_sketch->isActive() && feature == m_sketch->uid()) {
-    return m_sketchOccurrence; // where sketch mode shows it (mitcad#505)
+  if (!feature.isEmpty() && feature == editingSketchUid()) {
+    return m_sketchOccurrence; // where sketch mode shows it (mitcad#505), either kind
   }
   const DocumentSnapshot::Feature* entry = m_snapshot.feature(feature);
   return entry != nullptr ? m_snapshot.firstOccurrence(entry->component) : QString();
@@ -4143,6 +4256,18 @@ gp_Trsf MainWindow::sketchPlacement(const QString& uid) const {
 
 QString MainWindow::sketchOccurrence(const QString& uid) const { return placingOccurrence(uid); }
 
+bool MainWindow::modelReadableNow() { return !modelBusy() || m_documentSession->yieldBackgroundJob(); }
+
+bool MainWindow::queryInBackground(const QJsonObject& query, const BackgroundRead& read, QObject* context,
+                                   const BackgroundDone& done) {
+  if (modelBusy()) {
+    return false;
+  }
+  return m_documentSession->queryAsync(
+      QStringLiteral("body geometry"), query, read, context,
+      [done](const DocumentSession::AsyncResult& outcome) { done(outcome.succeeded(), outcome.cancelled ? QString() : outcome.error); });
+}
+
 QString MainWindow::bodyOccurrence(const QString& body) const {
   const auto entry = m_snapshot.bodies.constFind(body);
   return entry != m_snapshot.bodies.cend() ? m_snapshot.firstOccurrence(entry->component) : QString();
@@ -4167,12 +4292,14 @@ gp_Trsf MainWindow::datumPlacement(const QString& datum) const {
 // command shows for its time (mitcad#546), drawn lighter while their light
 // bulbs are off.
 void MainWindow::showSketches() {
+  // Planar and 3D sketches alike (mitcad#1524).
   QStringList sketches;
-  if (m_sketch->isActive()) {
-    sketches << m_sketch->uid();
+  const QString editedUid = editingSketchUid();
+  if (!editedUid.isEmpty()) {
+    sketches << editedUid;
   }
   for (const DocumentSnapshot::Feature& feature : std::as_const(m_snapshot.features)) {
-    if (feature.isSketch() && feature.succeeded() &&
+    if (feature.isAnySketch() && feature.succeeded() &&
         sketchShown(feature.uid) && !sketches.contains(feature.uid)) {
       sketches << feature.uid;
     }
@@ -4181,8 +4308,7 @@ void MainWindow::showSketches() {
   QStringList shown;
   for (const QString& sketch : sketches) {
     try {
-      std::vector<SketchEntityDisplay> some = sketchEntities(queryObject(
-          {{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), sketch}}));
+      std::vector<SketchEntityDisplay> some = sketchDisplay(sketch);
       // Every shown sketch tells how constrained it is, edited or not
       // (mitcad#286): entering or leaving its edit keeps its colours.
       // A component's sketch where its occurrence places it.
@@ -4192,7 +4318,7 @@ void MainWindow::showSketches() {
         // The component's occurrence hidden: its sketches are not drawn,
         // but the edited one is, where its dimensions and constraints are
         // (mitcad#1194).
-        const bool edited = m_sketch->isActive() && sketch == m_sketch->uid();
+        const bool edited = sketch == editedUid;
         if (!edited && !m_snapshot.isOccurrenceShown(occurrence)) {
           continue;
         }
@@ -4209,8 +4335,7 @@ void MainWindow::showSketches() {
         }
       }
       // Shown only for a command (mitcad#546): lighter, as it hides again.
-      const bool temporary = !(m_sketch->isActive() && sketch == m_sketch->uid()) &&
-                             m_commandSketches.temporary(sketch, m_snapshot.isDrawn(sketch));
+      const bool temporary = sketch != editedUid && m_commandSketches.temporary(sketch, m_snapshot.isDrawn(sketch));
       // The signature also has how the entity is drawn and placed.
       for (SketchEntityDisplay& entity : some) {
         entity.temporary = temporary;
@@ -4227,6 +4352,7 @@ void MainWindow::showSketches() {
   }
   m_viewer->setSketchEntities(entities);
   m_sketchDisplay = std::move(entities);
+  logSketch3dEntities(); // where an edited 3D sketch's are (mitcad#1524)
   // For UI tests: whose curves the view shows, when that changes.
   const QString logged = shown.join(QStringLiteral(", "));
   if (logged != m_loggedSketches) {
@@ -4407,7 +4533,9 @@ void MainWindow::logDatumPlaces() {
           break;
         }
         const QPoint widget = m_viewer->toWidget(candidate);
-        if (cube.contains(widget)) {
+        // Nor under a card over the view, which takes the click too
+        // (mitcad#1524: Create Sketch's kind row on the command card).
+        if (cube.contains(widget) || m_viewer->isCovered(QPointF(widget))) {
           continue;
         }
         const std::vector<SelectionItem> items = m_viewer->itemsAt(QPointF(widget));
@@ -4785,6 +4913,7 @@ void MainWindow::clearDesignMessages() {
 void MainWindow::createSketchOn(const SelectionItem& plane) {
   if (m_mode == Mode::Idle && isSketchPlane(plane)) {
     leaveDrawing(); // mitcad#707
+    setSketchKind(false); // the browser's Create Sketch makes a 2D one (mitcad#1524)
     // The design policy (mitcad#220): of the active component, and of the
     // plane's owner.
     QString refused = refreshSketchSupports();
@@ -5134,8 +5263,11 @@ void MainWindow::onPicked(const Selection& items, Qt::KeyboardModifiers modifier
     ScopedTiming timing("window selection");
     const Selection taken = sketching ? sketchWindowItems(items) : items;
     const SelectKind kind = sketching ? SelectKind::None : preferredKind(items);
+    // By a set: a window over a large design takes thousands (mitcad#1631).
+    QSet<SelectionItem> kept(next.cbegin(), next.cend());
     for (const SelectionItem& item : taken) {
-      if ((sketching || item.kind == kind) && !next.contains(item)) {
+      if ((sketching || item.kind == kind) && !kept.contains(item)) {
+        kept.insert(item);
         next.append(item);
       }
     }
@@ -5170,9 +5302,15 @@ void MainWindow::setSelection(const Selection& items) {
     dropAnnotationHighlight();
     m_idleMeasurements.clear();
     m_locks->activity(); // a selection keeps the edit lock active (mitcad#89)
+    // The first items by name: a whole large design selected (mitcad#1631)
+    // would write tens of thousands.
+    constexpr int kLoggedNames = 100;
     QStringList names;
-    for (const SelectionItem& item : items) {
+    for (const SelectionItem& item : items.mid(0, kLoggedNames)) {
       names << item.describe();
+    }
+    if (items.size() > kLoggedNames) {
+      names << QStringLiteral("and %1 more").arg(items.size() - kLoggedNames);
     }
     qDebug().noquote() << QStringLiteral("Selected: %1%2").arg(
         summarize(items),
@@ -5189,6 +5327,9 @@ void MainWindow::setSelection(const Selection& items) {
   updateIdleView();
   const qint64 viewMs = selectionClock.restart();
   m_sketch->refreshView();
+  if (m_sketch3d != nullptr && m_sketch3d->isActive()) {
+    m_palette3d->refresh(); // the selection described (mitcad#1524)
+  }
   const qint64 sketchMs = selectionClock.restart();
   m_controller->showSelection(m_selection);
 #ifdef MITCAD_MACOS_NATIVE_UI
@@ -5244,7 +5385,56 @@ void MainWindow::updateIdleView() {
   // sketch mode, the sketch's selection filter decides (mitcad#217): only
   // the edited sketch's geometry, never another sketch's.
   const bool drawing = m_mode == Mode::Sketch && m_sketch->tool() != nullptr;
-  if (m_mode == Mode::Sketch) {
+  if (m_mode == Mode::Sketch && m_sketch3d != nullptr && m_sketch3d->isActive() && m_sketch3d->pickingNormal()) {
+    // A Center Point Arc's Pick Normal (mitcad#1525): lines and edges,
+    // datum axes and planar faces.
+    m_viewer->setPickFilter(SelectKind::SketchCurve | SelectKind::Edge | SelectKind::Axis | SelectKind::Face,
+                            [](const SelectionItem& item) {
+                              return item.kind != SelectKind::Face || item.geometry == QStringLiteral("plane");
+                            });
+  } else if (m_mode == Mode::Sketch && m_sketch3d != nullptr && m_sketch3d->isActive() &&
+             m_sketch3d->sourcePick() == sketch::Sketch3dController::SourcePick::Plane) {
+    // The plane of a Symmetric or On Plane relation (mitcad#1661): planar
+    // faces, construction planes and other sketches (their planes).
+    m_viewer->setPickFilter(SelectKind::Face | SelectKind::Plane | SelectKind::SketchPoint | SelectKind::SketchCurve,
+                            [this](const SelectionItem& item) {
+                              if (item.kind == SelectKind::Face) {
+                                return item.geometry == QStringLiteral("plane");
+                              }
+                              return item.kind == SelectKind::Plane || item.owner != m_sketch3d->uid();
+                            });
+  } else if (m_mode == Mode::Sketch && m_sketch3d != nullptr && m_sketch3d->isActive() &&
+             m_sketch3d->picksSources()) {
+    // A 3D sketch's drawing tool, or its Attach and Replace Reference
+    // (mitcad#1526), snaps to what the view shows (mitcad#1525):
+    // points and curves of sketches, body vertices, edges and faces
+    // (mitcad#1549), Intersection Curves; the clicks are the tool's.
+    m_viewer->setPickFilter(SelectKind::SketchPoint | SelectKind::SketchCurve | SelectKind::Vertex |
+                                SelectKind::Edge | SelectKind::Face | SelectKind::Feature,
+                            [this](const SelectionItem& item) {
+                              if (item.kind != SelectKind::Feature) {
+                                return true;
+                              }
+                              const DocumentSnapshot::Feature* feature = m_snapshot.feature(item.owner);
+                              return feature != nullptr && feature->type == QStringLiteral("intersection_curve");
+                            });
+    // Where a click meets each face and each body vertex, for UI tests
+    // (MITCAD_LOG_PICKS): a point snapped onto a face (mitcad#1549) or
+    // onto a vertex of another component (mitcad#1550, the route of
+    // GitHub mitcad/Mitcad#202); once as the pick starts.
+    if (m_pickPlacesFilter != kSketch3dSourcePlaces) {
+      m_pickPlacesFilter = kSketch3dSourcePlaces;
+      logPickPlaces(m_pickPlacesFilter);
+    }
+  } else if (m_mode == Mode::Sketch && m_sketch3d != nullptr && m_sketch3d->isActive()) {
+    // A 3D sketch's own points and curves (mitcad#1524).
+    if (m_pickPlacesFilter == kSketch3dSourcePlaces) {
+      m_pickPlacesFilter = SelectFilter();
+    }
+    const QString uid = m_sketch3d->uid();
+    m_viewer->setPickFilter(SelectKind::SketchPoint | SelectKind::SketchCurve,
+                            [uid](const SelectionItem& item) { return item.owner == uid; });
+  } else if (m_mode == Mode::Sketch) {
     applySketchScope(drawing);
   } else {
     m_viewer->setPickFilter(idleFilter());
@@ -5300,6 +5490,13 @@ void MainWindow::updateIdleHighlights() {
           (item.kind == SelectKind::Body && m_timelineSelection.contains(item.owner.section(QLatin1Char('.'), 0, 0)));
       if (item.kind == SelectKind::Face || item.kind == SelectKind::Edge) {
         shown.body = bodyShape(item.owner);
+      }
+      // No click outside a command takes a component (idleFilter has no
+      // such kind): its highlight takes none, so that the view draws it
+      // from its bodies' own presentations, not as a new object of all
+      // their faces (mitcad#1631: the root component of a large design).
+      if (item.kind == SelectKind::Component) {
+        shown.pickable = false;
       }
       // A Fillet's or Chamfer's picked edges where they were, its faces
       // in a colour apart from them (mitcad#957).
@@ -5978,6 +6175,10 @@ QString MainWindow::sketchSupportRefusal(const SelectionItem& item) const {
 }
 
 void MainWindow::createSketch(const QJsonObject& fields) {
+  if (m_sketchSpatial) {
+    createSpatialSketch(fields); // the kind chosen: 3D (mitcad#1524)
+    return;
+  }
   QJsonObject request = fields;
   request.insert(QStringLiteral("cmd"), QStringLiteral("sketch.create"));
   // A new sketch opens with the design's +Z up (+Y on a horizontal plane):
@@ -6179,6 +6380,11 @@ void MainWindow::editSketch(const QString& uid) {
     }
     m_sketchRestoreMarker = marker;
   }
+  if (features[position].toObject().value(QStringLiteral("type")).toString() == QStringLiteral("spatial_sketch")) {
+    enterSketch3d(uid, true); // mitcad#1524
+    qDebug().noquote() << QStringLiteral("Editing 3D sketch %1 (%2)").arg(uid, m_sketch3d->model().name);
+    return;
+  }
   enterSketch(uid, true);
   qDebug().noquote() << QStringLiteral("Editing sketch %1 (%2)").arg(uid, m_sketch->model().name);
 }
@@ -6193,10 +6399,30 @@ bool MainWindow::sketchExists(const QString& uid) const {
 }
 
 void MainWindow::leaveSketchMode() {
+  // A 3D sketch is seen from every side while it is edited: it is left with
+  // the view the user had in it, also one that was a 2D sketch when it was
+  // opened (mitcad#1592: that one's top view came back). A 2D sketch puts
+  // back the view it was opened from.
+  const bool spatial = m_sketch3d != nullptr && m_sketch3d->isActive();
   m_sketch->leave();
+  if (m_sketch3d != nullptr) {
+    m_sketch3d->leave(); // a 3D sketch's context (mitcad#1524)
+  }
   m_sketchOccurrence.clear();
   m_mode = Mode::Idle;
-  m_viewer->restoreCamera();
+  if (spatial) {
+    m_viewer->keepCamera();
+  } else {
+    m_viewer->restoreCamera();
+  }
+  {
+    // For UI tests: the view the sketch was left with.
+    const gp_Dir along = m_viewer->viewDirection();
+    const auto number = [](double value) { return QString::number(std::abs(value) < 5e-4 ? 0.0 : value, 'f', 3); };
+    qDebug().noquote() << QStringLiteral("Sketch left with %1: the view looks along (%2, %3, %4)")
+                              .arg(spatial ? QStringLiteral("the 3D sketch's view") : QStringLiteral("the view before it"),
+                                   number(along.X()), number(along.Y()), number(along.Z()));
+  }
   m_viewer->setGridPlane(gp_Ax3()); // back on XY
   m_ribbon->setSketchMode(false);
   m_commandPages->setCurrentWidget(m_idlePage);
@@ -6244,11 +6470,15 @@ bool MainWindow::finishSketch() {
   if (m_mode != Mode::Sketch) {
     return true;
   }
-  const QString uid = m_sketch->uid();
+  // Either kind of sketch (a 3D one: mitcad#1524) finishes alike.
+  const QString uid = editingSketchUid();
+  const bool spatial = m_sketch3d != nullptr && m_sketch3d->isActive();
   m_sketch->stopTool();
-  const sketch::SketchModel& model = m_sketch->model();
-  const QString name = model.name;
-  const bool empty = model.points.empty() && model.curves.empty() && model.texts.empty();
+  if (spatial) {
+    m_sketch3d->stopTool(); // what it has pending is not committed (mitcad#1525)
+  }
+  const QString name = editingSketchName();
+  const bool empty = editingSketchEmpty();
   if (empty && !m_sketchExisting && sketchExists(uid)) {
     // An empty sketch is of no use: take back its creation if that was the
     // last command, else delete it.
@@ -6288,7 +6518,8 @@ bool MainWindow::finishSketch() {
   const bool edited = m_sketchExisting;
   leaveSketchMode();
   recompute();
-  showHint(tr("Extrude (E) a profile, or create another sketch."));
+  showHint(spatial ? tr("3D sketch finished; create another sketch, or edit it again from the timeline.")
+                   : tr("Extrude (E) a profile, or create another sketch."));
   qDebug() << "Sketch finished";
   if (edited && volumesLogged()) {
     // What the edit did to the bodies, measured by the model.
@@ -6320,8 +6551,9 @@ void MainWindow::escapeSketch() {
   if (m_mode != Mode::Sketch) {
     return;
   }
-  const QString uid = m_sketch->uid();
-  const QString name = m_sketch->model().name;
+  // Either kind of sketch (a 3D one: mitcad#1524).
+  const QString uid = editingSketchUid();
+  const QString name = editingSketchName();
   // Undo back to where the sketch was entered gives that revision back, so
   // a change taken back counts as none.
   if (m_sketchEnterRevision >= 0 && documentRevision() == m_sketchEnterRevision) {
@@ -6356,8 +6588,12 @@ void MainWindow::undo() {
   }
   endAnnotationPick(); // the annotation it waits for may change or go
   if (m_mode == Mode::Sketch) {
-    // What a tool has half drawn goes first.
+    // What a tool has half drawn goes first (a 3D sketch's too: no anchor
+    // stays on a point the undo takes away, mitcad#1525).
     m_sketch->resetTool();
+    if (m_sketch3d != nullptr) {
+      m_sketch3d->clearPending();
+    }
     if (m_sketchRestoreMarker >= 0 && undoDepth() <= m_sketchEnterDepth) {
       // Nothing done in the edited sketch: leave it as it was.
       finishSketch();
@@ -6372,10 +6608,12 @@ void MainWindow::undo() {
   }
   qDebug().noquote() << "Undo:" << result.value(QStringLiteral("label")).toString();
   logVolumeChanges(*this, before);
-  if (m_mode == Mode::Sketch && !sketchExists(m_sketch->uid())) {
+  if (m_mode == Mode::Sketch && !sketchExists(editingSketchUid())) {
     // The active sketch itself was taken back.
     leaveSketchMode();
   }
+  // An undone conversion to a 3D sketch: the 2D editor again (mitcad#1544).
+  followSketchKind();
   refreshScene();
 }
 
@@ -6391,6 +6629,8 @@ void MainWindow::redo() {
   }
   qDebug().noquote() << "Redo:" << result.value(QStringLiteral("label")).toString();
   logVolumeChanges(*this, before);
+  // A redone conversion to a 3D sketch: the 3D editor again (mitcad#1544).
+  followSketchKind();
   refreshScene();
 }
 
@@ -6654,6 +6894,7 @@ bool MainWindow::saveAs() {
     options.name = m_filePath.isEmpty() ? documentName() : QFileInfo(m_filePath).completeBaseName();
     // Its own file is no clash, unless the window is read-only (a copy).
     options.ownFile = windowReadOnly() ? QString() : m_filePath;
+    offerNewFolder(options);
     const std::optional<ProjectPickerResult> picked = pickInProjects(this, options);
     if (!picked) {
       return false;

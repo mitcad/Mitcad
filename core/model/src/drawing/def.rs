@@ -1181,13 +1181,10 @@ impl DrawingSheet {
         }
     }
 
-    /// Width and height, mm.
+    /// Width and height, mm (a size of the user's as it is given,
+    /// mitcad#1625).
     pub fn dimensions(&self) -> (f64, f64) {
-        let (long, short) = self.size.landscape();
-        match self.orientation {
-            Orientation::Landscape => (long, short),
-            Orientation::Portrait => (short, long),
-        }
+        self.size.oriented(self.orientation)
     }
 
     pub fn view(&self, id: u32) -> Option<&DrawingView> {

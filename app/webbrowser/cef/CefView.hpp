@@ -15,6 +15,7 @@
 #include <set>
 
 #include <QImage>
+#include <QPointer>
 #include <QRect>
 #include <QString>
 #include <QUrl>
@@ -33,6 +34,7 @@ class QPaintEvent;
 class QResizeEvent;
 class QShowEvent;
 class QWheelEvent;
+class QWindow;
 
 namespace mitcad {
 
@@ -85,6 +87,7 @@ signals:
                        const QString& reason);
 
 protected:
+  bool event(QEvent* event) override;
   void paintEvent(QPaintEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;
   void showEvent(QShowEvent* event) override;
@@ -102,6 +105,11 @@ protected:
   void inputMethodEvent(QInputMethodEvent* event) override;
   QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
   bool focusNextPrevChild(bool next) override;
+
+private slots:
+  // The window's scale or screen changed (mitcad#1654): CEF asks for the
+  // screen's information again (GetScreenInfo). Invokable by the tests.
+  void screenChanged();
 
 private:
   friend class cef::BrowserClient;
@@ -138,6 +146,9 @@ private:
   bool m_canGoBack = false;
   bool m_canGoForward = false;
   QImage m_frame;
+  // The last frame's size and scale the log told (mitcad#1654).
+  QString m_frameLogged;
+  QPointer<QWindow> m_screenWindow; // whose screenChanged() is connected
   QImage m_popup;
   QRect m_popupRect;
   bool m_popupShown = false;

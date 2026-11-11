@@ -361,6 +361,14 @@ public:
   // roles for the view's background (mitcad#1041), drawn again when the
   // background turns from light to dark or back.
   void setPrintOverlay(const PrintOverlay& overlay);
+  // Filament changes (mitcad#1643, view/FilamentChangeOverlay.cpp): while
+  // Send to Slicer's Filament changes section is open, the bodies in their
+  // print colours by height (triangles of one colour each, nine numbers per
+  // triangle, design mm, drawn over the bodies) and each change's ring at
+  // its height (six numbers per segment, over the bodies); empty clears
+  // them. Logs "Filament change overlay: …" when it changes.
+  void setFilamentChangeOverlay(const std::vector<std::pair<QColor, std::vector<float>>>& bands,
+                                const std::vector<float>& rings);
   // Show Build Volume (mitcad#640, view/BuildVolume.cpp): the design
   // printer's bed and printable height as lines, and the boxes of the bodies
   // that do not fit in the warning's colour for the view's background
@@ -516,6 +524,10 @@ public:
   // them, and the view itself is not picked there.
   void setCoveredRects(const std::vector<QRect>& rects);
   bool isCovered(const QPointF& position) const;
+  // The part of the view no panel floats over (widget pixels; the whole
+  // view in the Docked layout): a 3D sketch's badges keep inside it
+  // (mitcad#1592).
+  QRectF uncoveredArea() const { return freeArea(); }
   // The value boxes of a command's handles (mitcad#656, widget pixels):
   // a click there edits a value, so they count as covered too.
   void setHandleBoxes(const std::vector<QRect>& boxes) { m_handleBoxes = boxes; }
@@ -697,6 +709,17 @@ public:
     std::vector<TopoDS_Shape> datums;
   };
   OwnShapes ownShapes() const;
+  // The design's origin as the view draws it, for UI tests (mitcad#1642,
+  // expect-view-origin and the log line "View origin drawn: ..."): the
+  // origin planes, axes and point displayed with something in their
+  // presentations, a plane's square with its face meshed.
+  struct OriginDrawing {
+    QStringList planes;
+    QStringList axes;
+    QStringList points;
+    bool empty() const { return planes.isEmpty() && axes.isEmpty() && points.isEmpty(); }
+  };
+  OriginDrawing originDrawing() const;
   // How a shown body's lines are drawn, for UI tests (mitcad#1633,
   // expect-view-edges): from detached copies of its edges (ViewEdges), how
   // many, the fewest segments a quarter turn its circles and arcs are cut
@@ -724,7 +747,14 @@ public:
     double pixels = 0.0;
   };
   SketchHighlightFit sketchHighlightFit() const;
+  // Draws the selection (replacing what it drew before). A large one is
+  // drawn in slices over later turns of the event loop (mitcad#1631), so
+  // that Esc, a click or another selection is handled meanwhile; the next
+  // call drops what is left. A whole body is drawn as shadows of the view's
+  // own presentations of it, a body's selected faces or edges as one object.
   void setHighlights(const std::vector<HighlightDisplay>& highlights);
+  // Whether setHighlights still has highlights to draw.
+  bool highlightsPending() const;
   // Semi-transparent preview of the active command; null clears it.
   void setPreview(const TopoDS_Shape& shape, PreviewStyle style = PreviewStyle::Add);
   // A provisional drag presentation (mitcad#636, framework/DragProxy.hpp):
@@ -797,6 +827,11 @@ public:
   // plane); none when the view looks along the plane or it lies behind
   // the eye there.
   std::optional<gp_Pnt> planePoint(const QPointF& position, const gp_Ax3& plane) const;
+  // The pointer's ray under a widget position, in the design: a point on it
+  // and its unit direction into the view (mitcad#1525: a 3D sketch's tools
+  // place points on planes and axes in space); none before the view has a
+  // window.
+  std::optional<std::pair<gp_Pnt, gp_Dir>> pointerRay(const QPointF& position) const;
   SelectFilter pickFilter() const { return m_filter; }
   // Colour of the highlight under the mouse: see-through and unlit, with
   // the face's boundary, edges and vertices opaque, hidden by nearer
@@ -847,6 +882,15 @@ public:
   // in window coordinates.
   void lookAtSketchPlane(bool saveCamera = true, const TopoDS_Shape& face = TopoDS_Shape());
   void restoreCamera();
+  // Drops the view lookAtSketchPlane saved: the camera stays where it is,
+  // an animation ended at its end (mitcad#1592: a 3D sketch, also one
+  // converted from a 2D sketch, is left with the view the user had in it).
+  void keepCamera();
+  // The view lookAtSketchPlane saved (null: none), and putting it back:
+  // a sketch that changes editors (2D and 3D) keeps the view it was opened
+  // from (mitcad#1592).
+  occ::handle<Graphic3d_Camera> savedCamera() const { return m_savedCamera; }
+  void setSavedCamera(const occ::handle<Graphic3d_Camera>& camera) { m_savedCamera = camera; }
   // Fits what the view shows, on the next frame; with nothing to fit (an
   // empty design's origin is hidden), frames the origin (setOriginBox).
   void fitAll();
@@ -1412,6 +1456,45 @@ private:
   // What setHighlights() drew last: drawn again when the background's tone
   // changes, as input lines have a variant for a dark one (mitcad#957).
   std::vector<HighlightDisplay> m_shownHighlights;
+  // setHighlights' work (mitcad#1631): the highlights as drawn (a body's
+  // faces or edges merged), how far it got, and what it logs once all are
+  // drawn; the timer draws the next slice.
+  struct HighlightBuild {
+    std::vector<HighlightDisplay> units;
+    std::size_t next = 0;
+    std::size_t asked = 0; // the highlights given, with a shape
+    int slices = 0;
+    QElapsedTimer clock;
+    bool logPlaces = false;
+    QString sketch;
+    QString bodies;
+    QString profiles;
+    QString places;
+  };
+  std::optional<HighlightBuild> m_highlightBuild;
+  QTimer* m_highlightTimer = nullptr;
+  // MITCAD_TEST_HIGHLIGHT_STEP_MS: one highlight a slice, this long apart
+  // (UI tests of Esc while they are drawn); -1 without it.
+  int m_highlightStepMs = -1;
+  bool m_drawingHighlights = false;
+  void drawHighlightSlice();
+  void drawHighlight(const HighlightDisplay& highlight);
+  // A whole body's highlight as shadows of its presentations (faces, and
+  // edges in sight where the style draws them apart): what they are made
+  // from, none when it is not drawn so.
+  struct ShadowSource {
+    occ::handle<Graphic3d_Structure> presentation;
+    bool edges = false;
+  };
+  std::vector<ShadowSource> shadowSources(const HighlightDisplay& highlight) const;
+  bool drawHighlightShadows(const HighlightDisplay& highlight);
+  void eraseSelectionShadows();
+  // After a scene change: the highlights drawn again when a body under
+  // their shadows was drawn anew, moved or taken away.
+  void refreshSelectionShadows();
+  std::vector<occ::handle<Graphic3d_Structure>> m_selectionShadows;
+  std::vector<std::pair<const void*, const void*>> m_selectionShadowSources;
+  std::vector<HighlightDisplay> m_shadowedHighlights;
   // The whole bodies highlighted, as last logged ("View body highlights:",
   // for UI tests: the bodies a command's selection input holds).
   QString m_loggedBodyHighlights = QStringLiteral("none");
@@ -1420,6 +1503,7 @@ private:
   // drawn", for UI tests, mitcad#1575).
   QString m_loggedPreviewBodyLook;
   QString m_loggedPreviewLook;
+  QString m_loggedOriginDrawing; // "View origin drawn: ..." (mitcad#1642)
   bool m_cullSeeThrough = true; // setSeeThroughCulling
   void logPreviewLook(const QString& what, bool culled);
   // The profiles highlighted with their faces, as last logged ("View
@@ -1574,6 +1658,11 @@ private:
   occ::handle<AIS_InteractiveObject> m_printTriangles;
   // The narrow gaps between bodies over everything (mitcad#1519).
   occ::handle<AIS_InteractiveObject> m_printGaps;
+  // Filament changes' print colours and rings (setFilamentChangeOverlay,
+  // mitcad#1643).
+  occ::handle<AIS_InteractiveObject> m_filamentBands;
+  occ::handle<AIS_InteractiveObject> m_filamentRings;
+  QString m_loggedFilamentOverlay = QStringLiteral("Filament change overlay: none");
   // The build volume's lines and the boxes of bodies outside it
   // (setBuildVolume, mitcad#640).
   occ::handle<AIS_Shape> m_buildFrame;

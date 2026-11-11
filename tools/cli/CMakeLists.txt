@@ -555,7 +555,7 @@ if(BUILD_TESTING)
   # the assembly and by name, one missing, a sub-assembly, hidden, grounded
   # and suppressed occurrences; every placement checked against the one
   # the file displays and every placed part against its stored range box. Real assemblies under
-  # MITCAD_IPT_CORPUS: iam-corpus.cmake.
+  # MITCAD_IAM_CORPUS (else MITCAD_IPT_CORPUS): iam-corpus.cmake.
   add_test(NAME cli.iam_files COMMAND test_exchange --write-iam "${exchange}/iam")
   set_tests_properties(cli.iam_files PROPERTIES FIXTURES_SETUP cli_iam)
   add_test(NAME cli.import_iam
@@ -591,7 +591,7 @@ if(BUILD_TESTING)
             "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/iam-corpus" -P "${CMAKE_CURRENT_SOURCE_DIR}/iam-corpus.cmake")
   set_tests_properties(iam.corpus PROPERTIES SKIP_REGULAR_EXPRESSION "iam corpus: skipped")
   # Reorient Design on the test files' bench (c71542a1) and drawer
-  # (1dc60c2a) assemblies, found by content id under MITCAD_IPT_CORPUS
+  # (1dc60c2a) assemblies, found by content id under MITCAD_IAM_CORPUS (else MITCAD_IPT_CORPUS)
   # (mitcad#537): every offered turn taken, the drawer also turned twice.
   add_test(NAME iam.corpus_reorient
     COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
@@ -1207,6 +1207,8 @@ if(BUILD_TESTING)
   add_test(NAME cli.sheet_fold_loop COMMAND mitcad-cli run "${scripts}/sheet_fold_loop.json")
   # A pattern of a straight sheet cut with many copies, cut at once (mitcad#288).
   add_test(NAME cli.sheet_pattern_holes COMMAND mitcad-cli run "${scripts}/sheet_pattern_holes.json")
+  # Ordinary cuts (Extrude, Hole) across a bend keep the sheet (mitcad#1628).
+  add_test(NAME cli.sheet_cut_across_bend COMMAND mitcad-cli run "${scripts}/sheet_cut_across_bend.json")
   # Contour Flange, Convert to Sheet Metal and Perforate (mitcad#461).
   foreach(sheet_case sheet_contour sheet_perforate sheet_convert)
     set(sheet_file "${CMAKE_CURRENT_BINARY_DIR}/${sheet_case}.mitcad")
@@ -1813,6 +1815,140 @@ if(BUILD_TESTING)
   endif()
 endif()
 
+# 3D sketches through their JSON commands (mitcad#1522): the bent route of
+# lines and tangent arcs (W11) made from the ids the commands give out,
+# edited, undone and redone, saved and opened again (W8).
+if(BUILD_TESTING)
+  set(sketch3d_route "${CMAKE_CURRENT_BINARY_DIR}/sketch3d-route")
+  file(MAKE_DIRECTORY "${sketch3d_route}")
+  add_test(NAME cli.sketch3d_route
+    COMMAND mitcad-cli run "${scripts}/sketch3d_route.json" --save "${sketch3d_route}/sketch3d_route.mitcad")
+  set_tests_properties(cli.sketch3d_route PROPERTIES WORKING_DIRECTORY "${sketch3d_route}"
+    FIXTURES_SETUP cli_sketch3d_route)
+  add_test(NAME cli.sketch3d_route_reopen
+    COMMAND mitcad-cli run "${scripts}/sketch3d_route_reopen.json" --open "${sketch3d_route}/sketch3d_route.mitcad")
+  set_tests_properties(cli.sketch3d_route_reopen PROPERTIES FIXTURES_REQUIRED cli_sketch3d_route)
+  # Linked reference geometry (mitcad#1543, W12): a box's edge middle and a
+  # point on its edge follow its resize; Replace Reference, Detach and a
+  # lost source.
+  add_test(NAME cli.sketch3d_links COMMAND mitcad-cli run "${scripts}/sketch3d_links.json")
+  # Pipe and Sweep along a line, a tangent arc and a spline of a 3D sketch
+  # (mitcad#1523): their volumes, either way, after an edit of the route.
+  add_test(NAME cli.sketch3d_pipe COMMAND mitcad-cli run "${scripts}/sketch3d_pipe.json")
+  # The commands the drawing tools send (mitcad#1525): typed Offsets with
+  # an explicit zero, Axis and Length, a free end, a Midpoint snap, a
+  # Point on Curve merged into its point's undo step, Keep Plane.
+  add_test(NAME cli.sketch3d_tools COMMAND mitcad-cli run "${scripts}/sketch3d_tools.json")
+  if(WIN32)
+    foreach(test cli.sketch3d_route cli.sketch3d_route_reopen cli.sketch3d_links
+                 cli.sketch3d_pipe cli.sketch3d_tools)
+      set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
+  endif()
+endif()
+# Editing a 3D sketch (mitcad#1526): a dimension edited and removed, a
+# free line's true length, Fix and Unfix, a drag and a spline's tangent
+# handle dragged as the editing context sends them.
+if(BUILD_TESTING)
+  add_test(NAME cli.sketch3d_edit COMMAND mitcad-cli run "${scripts}/sketch3d_edit.json")
+  if(WIN32)
+    set_property(TEST cli.sketch3d_edit APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+# A planar sketch turned into a 3D sketch in place (mitcad#1544): a fully
+# constrained rectangle kept fully constrained with its ids and in-plane
+# dimensions, undone and redone, and a Pipe's path rewritten.
+if(BUILD_TESTING)
+  add_test(NAME cli.sketch3d_convert COMMAND mitcad-cli run "${scripts}/sketch3d_convert.json")
+  if(WIN32)
+    set_property(TEST cli.sketch3d_convert APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+# The plane-bound drawing tools of a 3D sketch (mitcad#1550): a rectangle,
+# an ellipse with its minor radius solved, a polygon, a circle and a text
+# on the frame planes, one undo step each.
+if(BUILD_TESTING)
+  add_test(NAME cli.sketch3d_shapes COMMAND mitcad-cli run "${scripts}/sketch3d_shapes.json")
+  if(WIN32)
+    set_property(TEST cli.sketch3d_shapes APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+# A 3D sketch's profiles and a 3D sketch back to 2D (mitcad#1550): an
+# Extrude of a converted rectangle's region that follows its width, the
+# sketch turned back into 2D keeping the profile, undone.
+if(BUILD_TESTING)
+  add_test(NAME cli.sketch3d_to_2d COMMAND mitcad-cli run "${scripts}/sketch3d_to_2d.json")
+  if(WIN32)
+    set_property(TEST cli.sketch3d_to_2d APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+# A 3D sketch's Fillet (mitcad#1548): a three-segment route rounded at both
+# corners and piped, the pipe's volume; the radius edited; undone.
+if(BUILD_TESTING)
+  add_test(NAME cli.sketch3d_fillet COMMAND mitcad-cli run "${scripts}/sketch3d_fillet.json")
+  if(WIN32)
+    set_property(TEST cli.sketch3d_fillet APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+# A 3D sketch's point on a curved face of another body (mitcad#1549): a
+# line end on a cylinder's side, piped; the cylinder widened, the end and
+# the pipe follow; its lost face fails the sketch.
+if(BUILD_TESTING)
+  add_test(NAME cli.sketch3d_faces COMMAND mitcad-cli run "${scripts}/sketch3d_faces.json")
+  if(WIN32)
+    set_property(TEST cli.sketch3d_faces APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+# The 3D route workflow as the Pipe and Sweep panels write it (mitcad#1527):
+# a filleted route piped by one chained pick, reversed, and swept, the
+# route's listing, BC edited, undone and redone, saved and opened again.
+if(BUILD_TESTING)
+  set(sketch3d_workflow "${CMAKE_CURRENT_BINARY_DIR}/sketch3d-workflow")
+  file(MAKE_DIRECTORY "${sketch3d_workflow}")
+  add_test(NAME cli.sketch3d_workflow
+    COMMAND mitcad-cli run "${scripts}/sketch3d_workflow.json" --save "${sketch3d_workflow}/sketch3d_workflow.mitcad")
+  set_tests_properties(cli.sketch3d_workflow PROPERTIES WORKING_DIRECTORY "${sketch3d_workflow}"
+    FIXTURES_SETUP cli_sketch3d_workflow)
+  add_test(NAME cli.sketch3d_workflow_reopen
+    COMMAND mitcad-cli run "${scripts}/sketch3d_workflow_reopen.json" --open "${sketch3d_workflow}/sketch3d_workflow.mitcad")
+  set_tests_properties(cli.sketch3d_workflow_reopen PROPERTIES FIXTURES_REQUIRED cli_sketch3d_workflow)
+  if(WIN32)
+    foreach(test cli.sketch3d_workflow cli.sketch3d_workflow_reopen)
+      set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
+  endif()
+endif()
+# The other inputs that take a 3D sketch's curves (mitcad#1550): a plane and
+# a point along its route, an axis through its line and a point at its
+# point, a path pattern along it, all following an edit; a Pipe round its
+# circle, a closed path.
+if(BUILD_TESTING)
+  add_test(NAME cli.sketch3d_consumers COMMAND mitcad-cli run "${scripts}/sketch3d_consumers.json")
+  if(WIN32)
+    set_property(TEST cli.sketch3d_consumers APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+# Ribs, webs, thin walls and surfaces of a 3D sketch's curves in its sketch
+# plane (mitcad#1550): a web and thin walls along a route's curves in the
+# plane following an edit, a surface extrusion of them, a rib along the
+# curve out of the plane refused naming the sketch.
+if(BUILD_TESTING)
+  add_test(NAME cli.sketch3d_plane_curves COMMAND mitcad-cli run "${scripts}/sketch3d_plane_curves.json")
+  if(WIN32)
+    set_property(TEST cli.sketch3d_plane_curves APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
 # Circular Pattern about two axes and copies that add nothing (mitcad#1588):
 # a cube's copies at every product of the turns about Z and X; a ball's rod
 # patterned about X and Z, whose turns about its own axis and products on
@@ -1841,4 +1977,31 @@ if(BUILD_TESTING)
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endforeach()
   endif()
+endif()
+
+# Auto Fix of a thread on a hole too small for it (mitcad#1632) on the
+# reported design under MITCAD_MITCAD_REPORTED: the bore's radius dimension
+# 72/2 becomes 73.835/2, the wall stays 3 mm, nothing newly fails (skipped
+# without the report's design).
+if(BUILD_TESTING)
+  add_test(NAME cli.thread_fit_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/thread-fit-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/thread-fit-reported-test.cmake")
+  set_tests_properties(cli.thread_fit_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "thread fit reported: skipped" TIMEOUT 900)
+  if(WIN32)
+    set_property(TEST cli.thread_fit_reported APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# The body geometry in sketch planes (mitcad#1656): two sketches'
+# plane_geometry answers, in the plane and out of it, over bodies of many
+# kinds, as the listing before mitcad#1656 gave them (enclosing boxes first,
+# edges by index: the same answers).
+if(BUILD_TESTING)
+  add_test(NAME cli.plane_geometry_bodies
+    COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/plane_geometry_bodies.json")
 endif()

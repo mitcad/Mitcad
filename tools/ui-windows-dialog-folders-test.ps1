@@ -72,6 +72,9 @@ Ui-Mark
 Ui-Step 'import (F11)'                   { Ui-Key 'F11' }
 Ui-ExpectNew "Dialog folder import: $(Logged $designs)" "Import starts in the design's folder at first"
 Ui-Step 'type the path'                  { Type-Into-Dialog '^Import$' $part }
+# The design has content: asked where the file goes (mitcad#1629).
+Ui-ExpectNew 'Import place dialog opened: part.step' 'asked where the file goes'
+Ui-Step 'into a new component (Enter)'   { Ui-FocusDialog '^Where to Import$'; Ui-Key 'Return'; Ui-FocusMain }
 Ui-ExpectNew 'Imported part.step as' 'imported'
 Ui-ExpectNew "Dialog folder import remembered: $(Logged $imports)" 'the Import group remembers its folder'
 Ui-Step 'undo the import (Ctrl+Z)'       { Ui-Key 'ctrl+z' }

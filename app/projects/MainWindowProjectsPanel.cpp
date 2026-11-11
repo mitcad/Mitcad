@@ -604,6 +604,28 @@ void MainWindow::createFolderInProject(const QString& root, const QString& path)
   }
 }
 
+void MainWindow::offerNewFolder(ProjectPickerOptions& options) {
+  const QPointer<MainWindow> self(this);
+  options.makeFolder = [self](const QString& root, const QString& path) {
+    ProjectFolderMade made;
+    if (!self) {
+      return made;
+    }
+    QJsonObject refused;
+    const std::optional<QJsonObject> answer = self->projectWrite(
+        root, {{QStringLiteral("cmd"), QStringLiteral("create_folder")}, {QStringLiteral("path"), path}},
+        MainWindow::tr("New Folder"), &refused);
+    // The panel shows the folder, also when the picker is cancelled.
+    self->refreshProjectsPanel();
+    made.made = answer.has_value();
+    if (!made.made) {
+      made.errorClass = errorClassOf(refused);
+      made.message = errorMessageOf(refused);
+    }
+    return made;
+  };
+}
+
 void MainWindow::moveInProject(const QString& root, const QString& from, const QString& to, bool folder) {
   const bool rename = from.section(QLatin1Char('/'), 0, -2) == to.section(QLatin1Char('/'), 0, -2);
   QJsonArray openDesigns;

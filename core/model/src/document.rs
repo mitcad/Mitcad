@@ -628,6 +628,14 @@ impl DocState {
             .map_err(invalid)?;
             created.extend(new);
         }
+        // So do a 3D sketch's (mitcad#1661).
+        if let FeatureDef::SpatialSketch(sketch) = &mut resolved {
+            let new = mitcad_sketch::spatial_edit::settle_spatial_references(
+                sketch, params, owner, owner_name, None,
+            )
+            .map_err(invalid)?;
+            created.extend(new);
+        }
         // A bound length's parameter is its own reference (mitcad#375).
         if let FeatureDef::BoundLength(bound) = &resolved {
             crate::features::bound_length::settle_parameter(params, bound.parameter, owner)
@@ -792,6 +800,10 @@ impl DocState {
                 Some(FeatureDef::Sketch(def)) => {
                     def.dimensions.iter().filter_map(|d| d.reference).collect()
                 }
+                // A 3D sketch's driven dimensions too (mitcad#1661).
+                Some(FeatureDef::SpatialSketch(def)) => {
+                    def.dimensions.iter().filter_map(|d| d.reference).collect()
+                }
                 // A bound length keeps its own reference (mitcad#375).
                 Some(FeatureDef::BoundLength(def)) => BTreeSet::from([def.parameter]),
                 _ => BTreeSet::new(),
@@ -816,6 +828,14 @@ impl DocState {
             HashMap::new();
         for (position, entry) in self.features.iter().enumerate() {
             if let FeatureDef::Sketch(def) = &entry.def {
+                for d in &def.dimensions {
+                    if let Some(id) = d.reference {
+                        refs.insert(id, (position, entry.name.as_str(), d.id));
+                    }
+                }
+            }
+            // A 3D sketch's (mitcad#1661).
+            if let FeatureDef::SpatialSketch(def) = &entry.def {
                 for d in &def.dimensions {
                     if let Some(id) = d.reference {
                         refs.insert(id, (position, entry.name.as_str(), d.id));
@@ -858,6 +878,22 @@ impl DocState {
             let mut dimension_values = BTreeSet::new();
             let mut other_values = BTreeSet::new();
             if let FeatureDef::Sketch(def) = &entry.def {
+                for r in def.dimensions.iter().filter_map(|d| d.reference) {
+                    if let Some(i) = used.iter().position(|p| *p == r) {
+                        used.swap_remove(i);
+                    }
+                }
+                dimension_values.extend(def.dimensions.iter().filter_map(|d| d.value));
+                let _ = def.map_params(&mut |slot, id: &ParamId| {
+                    if !slot.starts_with("dimensions[") {
+                        other_values.insert(*id);
+                    }
+                    Ok::<_, ()>(())
+                });
+            }
+            // A 3D sketch's driving dimensions may use its own references
+            // too (mitcad#1661: solved in stages).
+            if let FeatureDef::SpatialSketch(def) = &entry.def {
                 for r in def.dimensions.iter().filter_map(|d| d.reference) {
                     if let Some(i) = used.iter().position(|p| *p == r) {
                         used.swap_remove(i);
@@ -972,6 +1008,27 @@ impl DocState {
     pub(crate) fn settle_references(&mut self) -> Result<(), ModelError> {
         for i in 0..self.features.len() {
             let entry = &self.features[i];
+            // A 3D sketch's (mitcad#1661).
+            if let FeatureDef::SpatialSketch(def) = &entry.def {
+                let mut def = def.clone();
+                let (uid, name) = (entry.uid, entry.name.clone());
+                mitcad_sketch::spatial_edit::settle_spatial_references(
+                    &mut def,
+                    &mut self.parameters,
+                    uid,
+                    &name,
+                    None,
+                )
+                .map_err(invalid)?;
+                if let FeatureDef::SpatialSketch(old) = &self.features[i].def
+                    && *old != def
+                {
+                    let mut entry = (*self.features[i]).clone();
+                    entry.def = FeatureDef::SpatialSketch(def);
+                    self.features[i] = Arc::new(entry);
+                }
+                continue;
+            }
             let FeatureDef::Sketch(def) = &entry.def else {
                 continue;
             };
@@ -1269,6 +1326,8 @@ pub(crate) fn check_components(
     // (mitcad#1035): the same.
     let linked: Vec<(FeatureUid, &crate::links::OccurrenceLink)> = match &entry.def {
         FeatureDef::Sketch(sketch) => sketch.linked_references(),
+        // A 3D sketch's linked reference records likewise (mitcad#1543).
+        FeatureDef::SpatialSketch(sketch) => sketch.linked_references(),
         FeatureDef::ConstructionPlane(p) => p.datum_links.iter().map(|(u, l)| (*u, l)).collect(),
         FeatureDef::ConstructionAxis(a) => a.datum_links.iter().map(|(u, l)| (*u, l)).collect(),
         FeatureDef::ConstructionPoint(p) => p.datum_links.iter().map(|(u, l)| (*u, l)).collect(),
@@ -1280,8 +1339,12 @@ pub(crate) fn check_components(
         };
         // An Intersection Curve's curve is in its component's coordinates
         // too (mitcad#1417): another component's only through a link.
+        // So is a 3D sketch's geometry (mitcad#1543).
         let placed = crate::joints::placed_geometry(&other.def)
-            || matches!(other.def, FeatureDef::IntersectionCurve(_));
+            || matches!(
+                other.def,
+                FeatureDef::IntersectionCurve(_) | FeatureDef::SpatialSketch(_)
+            );
         if let Some((_, link)) = linked.iter().find(|(u, _)| *u == uid) {
             if let Ok(component) = link.source_component(assembly)
                 && placed
@@ -3355,6 +3418,20 @@ impl<K: Kernel> Document<K> {
             let position = state.require(sketch)?;
             let entry = state.features[position].clone();
             let FeatureDef::Sketch(def) = &entry.def else {
+                // A 3D sketch's own commands take its points with three
+                // coordinates (mitcad#1522): none of the planar ones edits
+                // it, so none can drop its z or its references.
+                if matches!(entry.def, FeatureDef::SpatialSketch(_)) {
+                    // The name for a person, the uid for agents
+                    // (mitcad#1644).
+                    return Err(invalid(crate::notice::said(
+                        format!("{} is a 3D sketch, which this does not take", entry.name),
+                        format!(
+                            "{} ({sketch}) is a 3D sketch: the sketch3d.* commands edit it",
+                            entry.name
+                        ),
+                    )));
+                }
                 return Err(invalid(format!(
                     "{} ({sketch}) is not a sketch",
                     entry.name
@@ -3582,7 +3659,9 @@ impl<K: Kernel> Document<K> {
         let at = self.state.require(source)?;
         let entry = &self.state.features[at];
         let target_entry = &self.state.features[target.position];
-        if !matches!(entry.def, FeatureDef::Sketch(_)) {
+        // A 3D sketch's points and curves are projected too (mitcad#1543).
+        let spatial = matches!(entry.def, FeatureDef::SpatialSketch(_));
+        if !matches!(entry.def, FeatureDef::Sketch(_)) && !spatial {
             return Err(fail(format!("{} ({source}) is not a sketch", entry.name)));
         }
         if at > target.position {
@@ -3602,20 +3681,51 @@ impl<K: Kernel> Document<K> {
                 assembly.name(entry.component)
             )));
         }
-        let output = self.sketch_output(source).ok_or_else(|| {
+        let unevaluated = || {
             fail(format!(
                 "{} ({source}) does not evaluate; its geometry cannot be projected",
                 entry.name
             ))
-        })?;
-        let picked: Vec<crate::sketch::Ref> = match entities {
-            Some(list) => list.to_vec(),
-            None => output
-                .solved
-                .curves
-                .keys()
-                .map(|id| crate::sketch::Ref::Curve(*id))
-                .collect(),
+        };
+        // The picked points and curves where the source sketch has them: a
+        // planar sketch's solved ones, or a 3D sketch's (mitcad#1543).
+        let picked: Vec<(crate::sketch::Ref, Option<crate::kernel::Curve3>)> = if spatial {
+            let output = self
+                .spatial_sketch(source)
+                .filter(|o| o.is_solved())
+                .ok_or_else(unevaluated)?;
+            let picked: Vec<crate::sketch::Ref> = match entities {
+                Some(list) => list.to_vec(),
+                None => output
+                    .model_curves()
+                    .into_iter()
+                    .map(|(id, _)| crate::sketch::Ref::Curve(id))
+                    .collect(),
+            };
+            picked
+                .into_iter()
+                .map(|entity| (entity, output.entity_curve(entity)))
+                .collect()
+        } else {
+            let output = self.sketch_output(source).ok_or_else(unevaluated)?;
+            let picked: Vec<crate::sketch::Ref> = match entities {
+                Some(list) => list.to_vec(),
+                None => output
+                    .solved
+                    .curves
+                    .keys()
+                    .map(|id| crate::sketch::Ref::Curve(*id))
+                    .collect(),
+            };
+            picked
+                .into_iter()
+                .map(|entity| {
+                    (
+                        entity,
+                        crate::features::sketch::sketch_entity_curve(output, entity),
+                    )
+                })
+                .collect()
         };
         if picked.is_empty() {
             return Err(fail(format!("{} has no curves to project", entry.name)));
@@ -3636,9 +3746,8 @@ impl<K: Kernel> Document<K> {
             }
         });
         let mut groups = Vec::with_capacity(picked.len());
-        for entity in picked {
-            let curve = crate::features::sketch::sketch_entity_curve(output, entity)
-                .ok_or_else(|| fail(format!("{} has no {entity}", entry.name)))?;
+        for (entity, curve) in picked {
+            let curve = curve.ok_or_else(|| fail(format!("{} has no {entity}", entry.name)))?;
             let curves = match plane {
                 Some((origin, normal)) => {
                     let crossings: Vec<crate::kernel::Curve3> =
@@ -4787,7 +4896,17 @@ pub use link_updates::{LinkState, LinksUpdated};
 // The curve of an Intersection Curve projected into a later sketch
 // (mitcad#1405).
 mod intersection_curves;
+// 3D sketches: started, read and edited in one step (mitcad#1521).
+mod spatial_sketches;
+pub use spatial_sketches::SpatialEditError;
+// A planar sketch turned into a 3D sketch in place (mitcad#1544).
+mod sketch_conversion;
+pub use sketch_conversion::{PlanarConversion, SketchConversion, SketchConversionError};
 // Filament changes at print heights: the schedules, their query, the 3MF
 // events and the print colours of a placement (mitcad#1596).
 mod filament_changes;
 pub(crate) use filament_changes::PrintColors;
+// A thread's face fitted to the thread by a change of what sets its
+// diameter: Auto Fix and the Thread panel (mitcad#1632).
+mod thread_fit;
+pub use thread_fit::{AutoFixFit, NoFit, SharedChoice};

@@ -8,6 +8,15 @@
 // the pick was (the picked occurrence, also of a component placed several
 // times); a Construct command's preview is computed again in the new
 // component. Kept, the command goes on as before.
+//
+// A feature that changes the picked body (Fillet, Chamfer, Shell, ...;
+// mitcad#1634, browser/ActivateOnPick) asks nothing: such a feature goes
+// only into the body's own component, so its first pick of another
+// component's body activates that component, as the same undo step of its
+// own outside the panel's range, and the panel says where the feature goes.
+// Picks of several components keep the refusal (the command's or the
+// model's), beside which the panel offers to activate one of them, keeping
+// only its picks.
 #include "MainWindow.hpp"
 
 #include <exception>
@@ -17,6 +26,7 @@
 #include <QJsonObject>
 #include <QtLogging>
 
+#include "browser/ActivateOnPick.hpp"
 #include "browser/ActivateQuestion.hpp"
 
 namespace mitcad {
@@ -91,13 +101,114 @@ bool MainWindow::askToActivatePicked(const SelectionItem& item, const QString& r
   return activated;
 }
 
-void MainWindow::pickComing(const CommandDef& def, const SelectionItem& item) {
-  // Construction planes, axes and points only; other features on another
-  // component's geometry go on as before.
-  if (def.group != QStringLiteral("CONSTRUCT") || !m_session) {
+void MainWindow::pickComing(const CommandDef& def, const InputDef& input, const SelectionItem& item) {
+  if (!m_session) {
+    return;
+  }
+  // A feature that changes the picked body goes only into the body's own
+  // component (mitcad#1634): activated without a question.
+  if (activatingInputs(def.id).contains(input.id)) {
+    activateForPick(def, item);
+    return;
+  }
+  // Construction planes, axes and points ask (mitcad#960); other features
+  // on another component's geometry go on as before.
+  if (def.group != QStringLiteral("CONSTRUCT")) {
     return;
   }
   askToActivatePicked(item, QString(), madeBy(def.featureType));
 }
 
+bool MainWindow::activateForPick(const CommandDef& def, const SelectionItem& item) {
+  // An agent's request never activates by itself: it gets the model's
+  // refusal, and ui_state names the component to activate.
+  if (m_mcpRequestActive || m_mcpPicking || !m_session) {
+    return false;
+  }
+  const PickActivation activation =
+      activationForPick(m_snapshot, item, m_session->picksOf(activatingInputs(def.id)));
+  if (activation.isEmpty()) {
+    return false;
+  }
+  QJsonArray commands;
+  commands.append(activateCommand(activation.component));
+  // Outside the panel's undo range: its own undo step, kept on Cancel; the
+  // previews cached for the old component dropped.
+  if (!m_session->runActivation(commands, tr("Activate %1").arg(activation.name))) {
+    qDebug().noquote() << QStringLiteral("Activate %1 for %2 refused: %3")
+                              .arg(activation.name, def.name, m_lastError);
+    return false;
+  }
+  qDebug().noquote() << QStringLiteral("Activated %1 for %2 (picked %3)")
+                            .arg(activation.name, def.name, item.describe());
+  m_session->setActivationNotice(activatedNotice(def.name, activation.name, 0));
+  return true;
+}
+
+QString MainWindow::activateForPreselection(const CommandDef& def, const Selection& preselection) {
+  if (m_mcpRequestActive || m_mcpPicking || activatingInputs(def.id).isEmpty()) {
+    return QString();
+  }
+  // As the picks one by one: the first body pick, then each further one
+  // with those before it.
+  PickActivation activation;
+  Selection before;
+  for (const SelectionItem& item : preselection) {
+    if (bodyComponent(m_snapshot, item).isEmpty()) {
+      continue;
+    }
+    const PickActivation next = activationForPick(m_snapshot, item, before);
+    if (next.isEmpty() || (!activation.isEmpty() && next.component != activation.component)) {
+      return QString(); // the active component's, or two components: the refusal
+    }
+    activation = next;
+    before.append(item);
+  }
+  if (activation.isEmpty() || !runModelCommand(activateCommand(activation.component))) {
+    return QString();
+  }
+  qDebug().noquote() << QStringLiteral("Activated %1 for %2 (picked %3)")
+                            .arg(activation.name, def.name, activation.picked.describe());
+  return activatedNotice(def.name, activation.name, 0);
+}
+
+QJsonObject MainWindow::activationOffer(const CommandSession& session) const {
+  const QStringList inputs = activatingInputs(session.def().id);
+  if (inputs.isEmpty() || session.isEditing()) {
+    return {};
+  }
+  const PickActivation offer = activationForPicks(m_snapshot, session.picksOf(inputs));
+  if (offer.isEmpty()) {
+    return {};
+  }
+  return {{QStringLiteral("component"), offer.component},
+          {QStringLiteral("name"), offer.name},
+          {QStringLiteral("drops"), offer.dropped}};
+}
+
+void MainWindow::takeActivationOffer(CommandSession& session) {
+  const QStringList inputs = activatingInputs(session.def().id);
+  const PickActivation offer = activationForPicks(m_snapshot, session.picksOf(inputs));
+  if (offer.isEmpty()) {
+    return;
+  }
+  QJsonArray commands;
+  commands.append(activateCommand(offer.component));
+  if (!session.runActivation(commands, tr("Activate %1").arg(offer.name))) {
+    qDebug().noquote() << QStringLiteral("Activate %1 for %2 refused: %3")
+                              .arg(offer.name, session.def().name, m_lastError);
+    return;
+  }
+  // Only the picks of the activated component stay (and those of no
+  // component's body: a datum, a sketch's point).
+  const QString component = offer.component;
+  const int dropped = session.keepPicks(inputs, [this, &component](const SelectionItem& item) {
+    const QString of = bodyComponent(m_snapshot, item);
+    return of.isEmpty() || of == component;
+  });
+  qDebug().noquote() << QStringLiteral("Activated %1 for %2 (picked %3), %4 pick(s) dropped")
+                            .arg(offer.name, session.def().name, offer.picked.describe())
+                            .arg(dropped);
+  session.setActivationNotice(activatedNotice(session.def().name, offer.name, dropped));
+}
 } // namespace mitcad

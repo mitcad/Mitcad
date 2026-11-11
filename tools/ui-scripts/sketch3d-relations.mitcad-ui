@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: MIT
+# 3D relations from the 3D Sketch Palette (mitcad#1661, app/COMMANDS.md "3D
+# sketches"), on sketch3d-relations.json (Box1 F1.b0; 3DSketch1 F2 on its
+# top face with four free lines c3, c6, c9, c12 and two free points p13,
+# p14):
+#   1. Parallel of two lines in space: c3 and c6.
+#   2. Perpendicular of two lines: c3 and c9.
+#   3. Angle of two lines: c6 and c12 held at their angle, a driving angle
+#      dimension listed in degrees.
+#   4. Symmetric of two points about a plane of the sketch: p13 and p14,
+#      its plane picked with the palette's YZ.
+#   Each is one edit, listed in words: no shown text has an id, a
+#   topological name or a coordinate. Finish Sketch; the sketch solves.
+# Run by tools/ui-sketch3d-relations-test.sh (Linux) and
+# tools/ui-windows-sketch3d-relations-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+
+mark
+dblclick-logged '^Timeline 3DSketch1 at '
+wait-log '^Editing 3D sketch F2 [(]3DSketch1[)]'
+wait-log '^3D sketch entity F2/c3 at '
+wait-log '^3D sketch entity F2/c12 at '
+wait-log '^3D sketch entity F2/p14 at '
+wait-log '^3D sketch edit control parallel at '
+wait-idle
+
+# 1. Parallel: two lines with no point in common.
+mark
+click-logged '^3D sketch entity F2/c3 at '
+wait-log '\[sketch curve c3 of F2\]'
+click-logged '^3D sketch entity F2/c6 at ' ctrl
+wait-log 'Selected: 2 '
+wait-idle
+click-logged '^3D sketch edit control parallel at '
+wait-log '^3D sketch edit parallel: done, made k[0-9]+'
+wait-log '^3D sketch item k[0-9]+ Parallel c3, c6 [|] shown: Parallel 1 on Line 1, Line 2$'
+wait-idle
+
+# 2. Perpendicular.
+mark
+click-logged '^3D sketch entity F2/c3 at '
+wait-log 'Selected: 1 '
+click-logged '^3D sketch entity F2/c9 at ' ctrl
+wait-log 'Selected: 2 '
+wait-idle
+click-logged '^3D sketch edit control perpendicular at '
+wait-log '^3D sketch edit perpendicular: done, made k[0-9]+'
+wait-log '^3D sketch item k[0-9]+ Perpendicular c3, c9 [|] shown: Perpendicular 1 on Line 1, Line 3$'
+wait-idle
+
+# 3. Angle: the two lines held at their angle by a driving angle.
+mark
+click-logged '^3D sketch entity F2/c6 at '
+wait-log 'Selected: 1 '
+click-logged '^3D sketch entity F2/c12 at ' ctrl
+wait-log 'Selected: 2 '
+wait-idle
+click-logged '^3D sketch edit control angle_relation at '
+wait-log '^3D sketch edit angle_relation: done, made k[0-9]+'
+wait-log '^3D sketch item k[0-9]+ Angle c6, c12: [0-9]+[.][0-9]+ deg [|] shown: Angle 1 on Line 2, Line 4: [0-9]+[.][0-9]+°$'
+wait-idle
+
+# 4. Symmetric: two points, then the plane: the sketch's YZ.
+mark
+click-logged '^3D sketch entity F2/p13 at '
+wait-log 'Selected: 1 '
+click-logged '^3D sketch entity F2/p14 at ' ctrl
+wait-log 'Selected: 2 '
+wait-idle
+click-logged '^3D sketch edit control symmetric at '
+wait-log '^3D sketch symmetric: pick a plane$'
+wait-log '^3D sketch edit control plane YZ at '
+wait-idle
+click-logged '^3D sketch edit control plane YZ at '
+wait-log '^3D sketch edit symmetric about [{]"frame":"x"[}]: done, made k[0-9]+'
+wait-log '^3D sketch item k[0-9]+ Symmetric p13, p14 [|] shown: Symmetric 1 on Point 9, Point 10$'
+wait-idle
+expect-no-log '[|] shown: .*([pck][0-9]+([^0-9]|$)|[EV][{]|F[0-9]+[.:]|[0-9][.][0-9]+, -?[0-9])'
+
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle
+expect-never 'Recompute failed'

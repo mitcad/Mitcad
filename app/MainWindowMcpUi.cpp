@@ -64,6 +64,8 @@
 #include "mcp/ScreenshotBudget.hpp"
 #include "mcp/UiCommandList.hpp"
 #include "platform/MacChrome.hpp"
+#include "sketch/Sketch3dController.hpp"
+#include "sketch/Sketch3dPalette.hpp"
 #include "sketch/SketchPalette.hpp"
 #include "sketch/SketchTool.hpp"
 #include "view/ViewReveal.hpp"
@@ -442,6 +444,25 @@ QJsonObject MainWindow::mcpUiState() {
                              {QStringLiteral("tool"), m_sketch->tool() != nullptr ? QJsonValue(m_sketch->tool()->name())
                                                                                   : QJsonValue()},
                              {QStringLiteral("palette"), paletteState}});
+  } else if (m_sketch3d != nullptr && m_sketch3d->isActive()) {
+    // A 3D sketch (mitcad#1524): its own palette's status; its geometry
+    // is the sketch3d query's.
+    const sketch::Sketch3dModel& spatial = m_sketch3d->model();
+    state.insert(QStringLiteral("sketch"),
+                 QJsonObject{{QStringLiteral("uid"), spatial.uid},
+                             {QStringLiteral("name"), spatial.name},
+                             {QStringLiteral("kind"), QStringLiteral("3d")},
+                             {QStringLiteral("dof"), spatial.dof},
+                             {QStringLiteral("fully_constrained"), spatial.fullyConstrained},
+                             {QStringLiteral("existing"), m_sketchExisting},
+                             {QStringLiteral("tool"), m_sketch3d->toolActive() ? QJsonValue(m_sketch3d->toolName())
+                                                                               : QJsonValue()},
+                             {QStringLiteral("palette"),
+                              QJsonObject{{QStringLiteral("status"), m_palette3d->statusText()},
+                                          {QStringLiteral("details"),
+                                           QJsonArray::fromStringList(sketch::detailLines(spatial))},
+                                          // The lists' rows: the words shown, the ids (mitcad#1652).
+                                          {QStringLiteral("items"), m_palette3d->listState()}}}});
   } else {
     state.insert(QStringLiteral("sketch"), QJsonValue());
   }
@@ -1316,7 +1337,8 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
   }
   const QJsonObject document = queryObject({{QStringLiteral("query"), QStringLiteral("document")}});
   result.insert(QStringLiteral("mode"), modeName(m_mode));
-  result.insert(QStringLiteral("sketch"), m_sketch->isActive() ? QJsonValue(m_sketch->uid()) : QJsonValue());
+  const QString editedUid = editingSketchUid(); // either kind (mitcad#1524)
+  result.insert(QStringLiteral("sketch"), editedUid.isEmpty() ? QJsonValue() : QJsonValue(editedUid));
   result.insert(QStringLiteral("undo"), document.value(QStringLiteral("undo")));
   result.insert(QStringLiteral("previews"), previews);
   result.insert(QStringLiteral("log"), lines);

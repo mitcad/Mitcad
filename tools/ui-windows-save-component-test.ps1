@@ -201,6 +201,16 @@ Ui-Mark
 Menu-Choose $entry
 Ui-ExpectNew 'Save Component as Design dialog opened: Box; references: ' 'the dialog opened'
 Ui-FocusDialog '^Save Component as Design$'
+# The dialog made the active window before its mnemonic: Qt takes a window
+# shortcut such as Alt+R only in the active window, and posted input never
+# activates one. Beside other tests the dialog was not active yet when the
+# key came: the app logged "R with alt", the box stayed unchecked, and
+# Enter (a key of the dialog itself) saved without the link.
+[UiInput]::Note = ''
+$active = [UiInput]::Activate($script:UiTarget)
+if ([UiInput]::Note) { Write-Host "note: activating the dialog: $([UiInput]::Note)" }
+if (-not $active) { Write-Host 'note: the dialog is not the active window' }
+Ui-SyncOr 300
 Ui-Mark
 Ui-Step 'Replace with a link (Alt+R), Save... (Enter)' { Ui-Key 'alt+r', 'Return' }
 Ui-ExpectNew 'Save Component as Design dialog: replace with a link: yes' 'replaced'

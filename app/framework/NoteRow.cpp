@@ -4,11 +4,14 @@
 #include <algorithm>
 
 #include <QCursor>
+#include <QEnterEvent>
+#include <QEvent>
 #include <QFont>
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
+#include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPushButton>
@@ -127,6 +130,8 @@ private:
 } // namespace
 
 NoteRow::NoteRow(QWidget* parent) : QWidget(parent) {
+  // Moves over the row reach it (hovered, mitcad#1643).
+  setMouseTracking(true);
   auto* column = new QVBoxLayout(this);
   column->setContentsMargins(0, 0, 0, 0);
   column->setSpacing(2);
@@ -246,6 +251,32 @@ bool NoteRow::setNote(const QString& text, const QStringList& actions, const QSt
     m_buttonsWidget->setVisible(below > 0);
   }
   return true;
+}
+
+// The pointer over the row: by its entering or by a move over it (the row
+// tracks the mouse, so that a move over its label or buttons reaches it,
+// as the panel's message does), until it leaves.
+void NoteRow::enterEvent(QEnterEvent* event) {
+  QWidget::enterEvent(event);
+  setHovered(true);
+}
+
+void NoteRow::mouseMoveEvent(QMouseEvent* event) {
+  QWidget::mouseMoveEvent(event);
+  setHovered(true);
+}
+
+void NoteRow::leaveEvent(QEvent* event) {
+  QWidget::leaveEvent(event);
+  setHovered(false);
+}
+
+void NoteRow::setHovered(bool on) {
+  if (on == m_hovered) {
+    return;
+  }
+  m_hovered = on;
+  emit hovered(on);
 }
 
 } // namespace mitcad

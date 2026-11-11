@@ -298,9 +298,10 @@ pub(crate) fn sheet_profile_regions<'a, K: Kernel>(
             });
             if unselected {
                 return Err(format!(
-                    "region {} is split into {} after a change in {name}; select the profiles again",
+                    "region {} is split into {region_names} after a change in {name}; select \
+                     the profiles again",
                     profile.region,
-                    regions.keys()
+                    region_names = regions.keys()
                 ));
             }
         }

@@ -254,10 +254,11 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     feature.suppressedWhen = text(f, "suppressed_when");
     // Warnings Auto Fix can fix (mitcad#1223).
     feature.autoFix = f.value(QStringLiteral("auto_fix")).toInt();
+    feature.autoFixChoices = f.value(QStringLiteral("auto_fix_choices")).toArray();
     // Linked projections Project Again repairs (mitcad#1303).
     feature.projectAgain = f.value(QStringLiteral("project_again")).toInt();
     // A joint origin's light bulb is construction geometry's (mitcad#55).
-    if (feature.isSketch() || feature.isConstruction() || feature.type == QStringLiteral("joint_origin")) {
+    if (feature.isAnySketch() || feature.isConstruction() || feature.type == QStringLiteral("joint_origin")) {
       snapshot.featureShown.insert(feature.uid, feature.visible);
     }
     snapshot.featureIndex.insert(feature.uid, snapshot.features.size());
@@ -330,7 +331,7 @@ const DocumentSnapshot::Feature* DocumentSnapshot::feature(const QString& uid) c
 }
 
 bool DocumentSnapshot::kindHidden(const Feature& feature) const {
-  if (feature.isSketch()) {
+  if (feature.isAnySketch()) {
     return !showSketches;
   }
   if (feature.isConstruction()) {
@@ -561,6 +562,9 @@ QJsonObject DocumentSnapshot::sheet(const QString& body) const {
 QString featureIcon(const QString& type) {
   static const QHash<QString, QString> icons = {
       {QStringLiteral("sketch"), QStringLiteral("sketch")},
+      // A 3D sketch (mitcad#1524), its own icon since a 2D sketch turns into
+      // one in place (mitcad#1544).
+      {QStringLiteral("spatial_sketch"), QStringLiteral("sketch-3d")},
       {QStringLiteral("extrude"), QStringLiteral("extrude")},
       {QStringLiteral("revolve"), QStringLiteral("revolve")},
       {QStringLiteral("fillet"), QStringLiteral("fillet")},

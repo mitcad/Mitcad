@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Rational B-spline evaluation (Cox-de Boor recursion), generic over
 //! [`Scalar`] so that residuals through a spline are differentiated exactly,
-//! including with respect to the curve parameter.
+//! including with respect to the curve parameter, and over the points'
+//! coordinates ([`Coords`]: the planar sketch's two, the spatial system's
+//! three; the basis does not depend on them).
 
-use crate::scalar::{Scalar, V2};
+use crate::scalar::{Coords, Scalar, V2};
 
 /// Degree, knots and weights of a spline; fixed while solving.
 #[derive(Clone, Debug, PartialEq)]
@@ -13,11 +15,12 @@ pub(crate) struct SplineBasis {
     pub weights: Vec<f64>,
 }
 
-/// Curve point and derivatives at a parameter.
-pub(crate) struct CurveEval<T> {
-    pub p: V2<T>,
-    pub d1: V2<T>,
-    pub d2: V2<T>,
+/// Curve point and derivatives at a parameter (`P` is [`V2`] or
+/// [`crate::scalar::V3`]).
+pub(crate) struct CurveEval<P> {
+    pub p: P,
+    pub d1: P,
+    pub d2: P,
 }
 
 impl SplineBasis {
@@ -122,8 +125,8 @@ impl SplineBasis {
 
     /// Evaluates the curve with control points `ctrl` (all of them) at `t`.
     /// `ders` is the highest derivative needed (0, 1 or 2); higher ones are
-    /// zero in the result.
-    pub fn eval<T: Scalar>(&self, ctrl: &[V2<T>], t: T, ders: usize) -> CurveEval<T> {
+    /// zero in the result. The same code for two and three coordinates.
+    pub fn eval<T: Scalar, P: Coords<T>>(&self, ctrl: &[P], t: T, ders: usize) -> CurveEval<P> {
         let p = self.degree;
         let s = self.span(t.val());
         // Basis tables of degree 0..=p.
@@ -147,22 +150,23 @@ impl SplineBasis {
             vec![zero; p + 1]
         };
         // Homogeneous sums A^(k) = sum N^(k) w P, W^(k) = sum N^(k) w.
-        let mut a = [V2::new(zero, zero); 3];
+        let mut a = [P::zero(); 3];
         let mut w = [zero; 3];
         for r in 0..=p {
             let i = s - p + r;
             let wi = self.weights[i];
             for (k, n) in [n0, &n1, &n2].iter().enumerate() {
                 let c = n[r].mulf(wi);
-                a[k] = a[k].add(ctrl[i].mul(c));
+                a[k] = a[k].plus(ctrl[i].times(c));
                 w[k] = w[k] + c;
             }
         }
-        let pt = V2::new(a[0].x / w[0], a[0].y / w[0]);
-        let d1 = a[1].sub(pt.mul(w[1]));
-        let d1 = V2::new(d1.x / w[0], d1.y / w[0]);
-        let d2 = a[2].sub(d1.mul(w[1]).mulf(2.0)).sub(pt.mul(w[2]));
-        let d2 = V2::new(d2.x / w[0], d2.y / w[0]);
+        let pt = a[0].over(w[0]);
+        let d1 = a[1].minus(pt.times(w[1])).over(w[0]);
+        let d2 = a[2]
+            .minus(d1.times(w[1]).timesf(2.0))
+            .minus(pt.times(w[2]))
+            .over(w[0]);
         CurveEval { p: pt, d1, d2 }
     }
 
@@ -196,17 +200,20 @@ pub(crate) fn clamped_uniform_knots(n_ctrl: usize, degree: usize) -> Vec<f64> {
 /// clamped, so the curve is an ordinary B-spline that starts and ends at
 /// `fit[0]`: control points `[fit[0], h_1, ..., fit[0]]`, and `params` has
 /// the closing point's parameter 1 last.
-pub(crate) struct Interpolation {
+pub(crate) struct Interpolation<const N: usize = 2> {
     pub params: Vec<f64>,
     pub basis: SplineBasis,
-    pub ctrl: Vec<[f64; 2]>,
+    pub ctrl: Vec<[f64; N]>,
 }
 
-pub(crate) fn interpolate(fit: &[[f64; 2]], closed: bool) -> Option<Interpolation> {
+pub(crate) fn interpolate<const N: usize>(
+    fit: &[[f64; N]],
+    closed: bool,
+) -> Option<Interpolation<N>> {
     if closed && fit.len() < 3 {
         return None;
     }
-    let looped: Vec<[f64; 2]>;
+    let looped: Vec<[f64; N]>;
     let fit = if closed {
         looped = fit.iter().copied().chain(fit.first().copied()).collect();
         &looped[..]
@@ -217,7 +224,10 @@ pub(crate) fn interpolate(fit: &[[f64; 2]], closed: bool) -> Option<Interpolatio
     let mut params = vec![0.0];
     let mut total = 0.0;
     for w in fit.windows(2) {
-        total += ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt();
+        total += (0..N)
+            .map(|c| (w[1][c] - w[0][c]).powi(2))
+            .sum::<f64>()
+            .sqrt();
         params.push(total);
     }
     if total <= 0.0 {
@@ -243,7 +253,7 @@ pub(crate) fn interpolate(fit: &[[f64; 2]], closed: bool) -> Option<Interpolatio
     };
     // Linear system in all control points: rows are the end points, the
     // interior fit points and the two natural (or periodic) end conditions.
-    let mut rows: Vec<(Vec<f64>, [f64; 2])> = Vec::new();
+    let mut rows: Vec<(Vec<f64>, [f64; N])> = Vec::new();
     let unit = |i: usize| {
         let mut v = vec![0.0; n_ctrl];
         v[i] = 1.0;
@@ -277,14 +287,14 @@ pub(crate) fn interpolate(fit: &[[f64; 2]], closed: bool) -> Option<Interpolatio
                 .zip(basis_row(1.0, der))
                 .map(|(a, b)| a - b)
                 .collect();
-            rows.push((row, [0.0, 0.0]));
+            rows.push((row, [0.0; N]));
         }
     } else {
-        rows.push((basis_row(0.0, 2), [0.0, 0.0]));
-        rows.push((basis_row(1.0, 2), [0.0, 0.0]));
+        rows.push((basis_row(0.0, 2), [0.0; N]));
+        rows.push((basis_row(1.0, 2), [0.0; N]));
     }
     let mut a: Vec<Vec<f64>> = rows.iter().map(|r| r.0.clone()).collect();
-    let mut b: Vec<[f64; 2]> = rows.iter().map(|r| r.1).collect();
+    let mut b: Vec<[f64; N]> = rows.iter().map(|r| r.1).collect();
     let ctrl = solve_dense(&mut a, &mut b)?;
     Some(Interpolation {
         params,
@@ -294,8 +304,8 @@ pub(crate) fn interpolate(fit: &[[f64; 2]], closed: bool) -> Option<Interpolatio
 }
 
 /// Gaussian elimination with partial pivoting for a small square system with
-/// two right-hand sides.
-fn solve_dense(a: &mut [Vec<f64>], b: &mut [[f64; 2]]) -> Option<Vec<[f64; 2]>> {
+/// `N` right-hand sides (one per coordinate).
+fn solve_dense<const N: usize>(a: &mut [Vec<f64>], b: &mut [[f64; N]]) -> Option<Vec<[f64; N]>> {
     let n = a.len();
     for c in 0..n {
         let piv = (c..n).max_by(|&i, &j| a[i][c].abs().total_cmp(&a[j][c].abs()))?;
@@ -313,19 +323,22 @@ fn solve_dense(a: &mut [Vec<f64>], b: &mut [[f64; 2]]) -> Option<Vec<[f64; 2]>> 
                 for (x, &p) in row[c..n].iter_mut().zip(&pivot_row[c..n]) {
                     *x -= f * p;
                 }
-                b[r][0] -= f * b[c][0];
-                b[r][1] -= f * b[c][1];
+                let bc = b[c];
+                for (x, &v) in b[r].iter_mut().zip(&bc) {
+                    *x -= f * v;
+                }
             }
         }
     }
-    let mut x = vec![[0.0; 2]; n];
+    let mut x = vec![[0.0; N]; n];
     for c in (0..n).rev() {
         let mut s = b[c];
         for k in c + 1..n {
-            s[0] -= a[c][k] * x[k][0];
-            s[1] -= a[c][k] * x[k][1];
+            for (sd, &xd) in s.iter_mut().zip(&x[k]) {
+                *sd -= a[c][k] * xd;
+            }
         }
-        x[c] = [s[0] / a[c][c], s[1] / a[c][c]];
+        x[c] = s.map(|v| v / a[c][c]);
     }
     Some(x)
 }
@@ -333,7 +346,7 @@ fn solve_dense(a: &mut [Vec<f64>], b: &mut [[f64; 2]]) -> Option<Vec<[f64; 2]>> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scalar::Dual;
+    use crate::scalar::{Dual, V3};
 
     fn pts(c: &[[f64; 2]]) -> Vec<V2<f64>> {
         c.iter().map(|p| V2::new(p[0], p[1])).collect()
@@ -423,5 +436,60 @@ mod tests {
         assert!((e0.d2.x - e1.d2.x).abs() < 1e-9 && (e0.d2.y - e1.d2.y).abs() < 1e-9);
         // A closed curve needs three points.
         assert!(interpolate(&fit[..2], true).is_none());
+    }
+
+    /// The generalized evaluation (mitcad#1542): three coordinates by the
+    /// same basis, x and y exactly as the planar evaluation gives them.
+    #[test]
+    fn three_coordinates_use_the_same_basis() {
+        let b = SplineBasis {
+            degree: 2,
+            knots: vec![0.0, 0.0, 0.0, 0.4, 1.0, 1.0, 1.0],
+            weights: vec![1.0, 0.7, 1.6, 1.0],
+        };
+        let c = [
+            [0.0, 0.0, 1.0],
+            [1.0, 2.0, -1.0],
+            [3.0, 2.5, 4.0],
+            [4.0, 0.0, 2.0],
+        ];
+        let c2: Vec<V2<f64>> = c.iter().map(|p| V2::new(p[0], p[1])).collect();
+        let cz: Vec<V2<f64>> = c.iter().map(|p| V2::new(p[2], 0.0)).collect();
+        let c3: Vec<V3<f64>> = c.iter().map(|p| V3::new(p[0], p[1], p[2])).collect();
+        for &t in &[0.0, 0.2, 0.4, 0.75, 1.0] {
+            let (e2, ez, e3) = (b.eval(&c2, t, 2), b.eval(&cz, t, 2), b.eval(&c3, t, 2));
+            for (a, p, q) in [
+                (e3.p, e2.p, ez.p),
+                (e3.d1, e2.d1, ez.d1),
+                (e3.d2, e2.d2, ez.d2),
+            ] {
+                assert_eq!([a.x, a.y, a.z], [p.x, p.y, q.x]);
+            }
+        }
+        // Interpolation in three coordinates passes through the points.
+        let fit3 = [
+            [0.0, 0.0, 0.0],
+            [10.0, 5.0, 3.0],
+            [20.0, 0.0, -2.0],
+            [30.0, 8.0, 1.0],
+        ];
+        let it = interpolate(&fit3, false).expect("interpolates");
+        let cp: Vec<V3<f64>> = it.ctrl.iter().map(|p| V3::new(p[0], p[1], p[2])).collect();
+        for (j, &t) in it.params.iter().enumerate() {
+            let e = it.basis.eval(&cp, t, 0);
+            assert!((0..3).all(|k| (e.p.get(k) - fit3[j][k]).abs() < 1e-9));
+        }
+        // In the plane z = 0 it is the planar interpolation.
+        let flat = [[0.0, 0.0], [10.0, 5.0], [20.0, 0.0], [30.0, 8.0]];
+        let flat3 = flat.map(|p| [p[0], p[1], 0.0]);
+        let (a, b) = (
+            interpolate(&flat, false).expect("planar"),
+            interpolate(&flat3, false).expect("spatial"),
+        );
+        assert_eq!(a.params, b.params);
+        assert_eq!(a.basis, b.basis);
+        for (p, q) in a.ctrl.iter().zip(&b.ctrl) {
+            assert_eq!([p[0], p[1], 0.0], *q);
+        }
     }
 }

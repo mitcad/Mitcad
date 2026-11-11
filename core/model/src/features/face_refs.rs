@@ -277,17 +277,13 @@ pub(crate) fn require_faces<K: Kernel>(
 
 /// Why the body has no such face (mitcad#1612): the person reads "a face
 /// no longer exists after Extrude2", the face painted; agents read its
-/// name ([`missing_face_named`]).
+/// name ([`missing_face_said`]).
 pub(crate) fn missing_face<K: Kernel>(
     ctx: &EvalContext<'_, K>,
     body: BodyUid,
     face: &FaceName,
 ) -> String {
-    let named = missing_face_named(ctx, body, face);
-    let said = match named.strip_prefix(&format!("face {face} ")) {
-        Some(rest) => format!("a face {rest}"),
-        None => "the body has no such face".to_owned(),
-    };
+    let (said, named) = missing_face_said(ctx, body, face);
     crate::notice::placed(
         said,
         crate::notice::NoticePlace::face(face.to_string()).in_body(&body.to_string()),
@@ -295,11 +291,13 @@ pub(crate) fn missing_face<K: Kernel>(
     )
 }
 
-fn missing_face_named<K: Kernel>(
+/// What the person reads and what agents read, each a whole message
+/// (mitcad#1626).
+fn missing_face_said<K: Kernel>(
     ctx: &EvalContext<'_, K>,
     body: BodyUid,
     face: &FaceName,
-) -> String {
+) -> (String, String) {
     let count = |shape: &K::Shape| ctx.kernel.count_faces(shape, face).unwrap_or(0);
     let mut existed = false;
     let mut lost_after = None;
@@ -314,27 +312,41 @@ fn missing_face_named<K: Kernel>(
         existed = present;
     }
     if let Some(feature) = lost_after {
-        return format!(
-            "face {face} no longer exists after {}",
-            ctx.feature_name(feature)
+        let name = ctx.feature_name(feature);
+        return (
+            format!("a face no longer exists after {name}"),
+            format!("face {face} no longer exists after {name}"),
         );
     }
     for feature in face.features() {
-        let state = match ctx.env.result_of(feature) {
-            Some(r) => match r.status {
-                FeatureStatus::Ok => continue,
-                FeatureStatus::Failed(_) => "failed",
-                FeatureStatus::Suppressed => "is suppressed",
-                FeatureStatus::RolledBack => "is rolled back",
-            },
-            None => continue,
+        let Some(result) = ctx.env.result_of(feature) else {
+            continue;
         };
-        return format!(
-            "face {face} does not exist because {} {state}",
-            ctx.feature_name(feature)
+        let name = ctx.feature_name(feature);
+        let (said, state) = match result.status {
+            FeatureStatus::Ok => continue,
+            FeatureStatus::Failed(_) => (
+                format!("a face does not exist because {name} failed"),
+                "failed",
+            ),
+            FeatureStatus::Suppressed => (
+                format!("a face does not exist because {name} is suppressed"),
+                "is suppressed",
+            ),
+            FeatureStatus::RolledBack => (
+                format!("a face does not exist because {name} is rolled back"),
+                "is rolled back",
+            ),
+        };
+        return (
+            said,
+            format!("face {face} does not exist because {name} {state}"),
         );
     }
-    format!("the body has no face {face}")
+    (
+        "the body has no such face".to_owned(),
+        format!("the body has no face {face}"),
+    )
 }
 
 /// How far the preview of an extended tool reaches past its targets' box

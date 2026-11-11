@@ -3,6 +3,7 @@
 #include "CefView.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -24,6 +25,7 @@
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QWheelEvent>
+#include <QWindow>
 #include <QtLogging>
 
 #include "CefEngine.hpp"
@@ -540,7 +542,42 @@ void CefView::painted(bool popup, const void* buffer, int width, int height) {
   // CEF's BGRA pixels, premultiplied: Qt's ARGB32 on a little-endian machine.
   QImage image(static_cast<const uchar*>(buffer), width, height, width * 4, QImage::Format_ARGB32_Premultiplied);
   QImage copy = image.copy();
-  copy.setDevicePixelRatio(devicePixelRatioF());
+  // The frame's own scale (mitcad#1654), which need not be the view's: the
+  // pinned CEF paints its windowless frames at a scale of 1 whatever
+  // GetScreenInfo tells it (at 1.65 a frame of the view's size in logical
+  // pixels), and a scale it does take can lag behind the window's. Marked
+  // with the view's scale, such a frame filled only 1/1.65 of the view at
+  // its top left while the mouse events, in the view's coordinates, landed
+  // where the page would have been at full size. A frame of the view's size
+  // at another scale is marked with that one, so that it fills the view
+  // (blurred where it is of fewer pixels) and the page lies where the
+  // clicks land. A frame of another size (painted before a resize) keeps
+  // the view's scale.
+  const QSize logical = popup ? m_popupRect.size() : size();
+  double ratio = devicePixelRatioF();
+  if (logical.width() > 0 && logical.height() > 0) {
+    const double across = double(width) / logical.width();
+    const double down = double(height) / logical.height();
+    // CEF rounds the frame's pixels up: each way's scale is the frame's to
+    // within a pixel of the view.
+    if (std::abs(across - down) <= 1.0 / std::min(logical.width(), logical.height()) + 1e-9) {
+      ratio = across;
+    }
+  }
+  copy.setDevicePixelRatio(ratio);
+  if (!popup) {
+    const QString frame = QStringLiteral("%1x%2 px at scale %3 for a view of %4x%5 at scale %6")
+                              .arg(width)
+                              .arg(height)
+                              .arg(ratio, 0, 'f', 2)
+                              .arg(logical.width())
+                              .arg(logical.height())
+                              .arg(devicePixelRatioF(), 0, 'f', 2);
+    if (frame != m_frameLogged) {
+      m_frameLogged = frame;
+      qDebug().noquote() << QStringLiteral("Component browser frame: %1").arg(frame);
+    }
+  }
   if (popup) {
     m_popup = copy;
     update(m_popupRect);
@@ -625,6 +662,24 @@ void CefView::downloadChanged(std::uint32_t id, qint64 received, qint64 total, D
 
 // --- Qt's events ----------------------------------------------------------------
 
+void CefView::screenChanged() {
+  qDebug().noquote() << QStringLiteral("Component browser scale: %1").arg(devicePixelRatioF(), 0, 'f', 2);
+  if (CefRefPtr<CefBrowserHost> browserHost = host()) {
+    browserHost->NotifyScreenInfoChanged();
+    browserHost->WasResized();
+  }
+}
+
+bool CefView::event(QEvent* event) {
+  // Qt sends it when the window's scale changes (another screen, a display
+  // setting, Wayland's fractional scale arriving after the window shows):
+  // CEF is told, as the API asks, should it paint at the scale.
+  if (event->type() == QEvent::DevicePixelRatioChange) {
+    screenChanged();
+  }
+  return QWidget::event(event);
+}
+
 void CefView::paintEvent(QPaintEvent* event) {
   QPainter painter(this);
   painter.fillRect(event->rect(), palette().color(QPalette::Base));
@@ -646,6 +701,16 @@ void CefView::resizeEvent(QResizeEvent* event) {
 
 void CefView::showEvent(QShowEvent* event) {
   QWidget::showEvent(event);
+  // The window's screen, which the window has once it shows: another
+  // screen may have another scale or size.
+  QWindow* screenWindow = window()->windowHandle();
+  if (screenWindow != nullptr && screenWindow != m_screenWindow) {
+    if (m_screenWindow) {
+      disconnect(m_screenWindow, &QWindow::screenChanged, this, &CefView::screenChanged);
+    }
+    m_screenWindow = screenWindow;
+    connect(screenWindow, &QWindow::screenChanged, this, &CefView::screenChanged);
+  }
   if (CefRefPtr<CefBrowserHost> browserHost = host()) {
     browserHost->WasHidden(false);
     browserHost->NotifyScreenInfoChanged();

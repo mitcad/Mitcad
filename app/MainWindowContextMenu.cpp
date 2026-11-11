@@ -387,6 +387,15 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const S
       qDebug().noquote() << QStringLiteral("Print bed face shown: %1/%2").arg(uid, m_printBedShown.name);
     }
   }
+  // A filament change at a construction or origin plane, or at a flat face
+  // of a printed body (mitcad#1643): Send to Slicer opens with a change
+  // row at it.
+  if (selection.size() == 1 && !windowReadOnly() &&
+      (first.kind == SelectKind::Plane ||
+       (first.kind == SelectKind::Face && first.geometry == QStringLiteral("plane") && !surfaces))) {
+    const SelectionItem item = first;
+    addCall(QStringLiteral("print-3d"), tr("Filament Change Here…"), [this, item] { filamentChangeHere(item); });
+  }
   // Why a planar face of a surface body offers no print bed face
   // (mitcad#1182: a body a feature left open).
   if (selection.size() == 1 && first.kind == SelectKind::Face && surfaces &&

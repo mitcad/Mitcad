@@ -519,7 +519,7 @@ grep -q "Context menu:" <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && ui_fail "the r
 echo "ok   no menu"
 ui_mark
 ui_step "right-click with no tool"         sheet_click 60 200 3
-ui_expect_new "Context menu: Sheet… | Add Revision… | Add Sheet" "the sheet's menu"
+ui_expect_new "Context menu: Sheet… | Edit Title Block | Add Revision… | Add Sheet" "the sheet's menu"
 ui_step "Escape (close the menu)"          ui_key Escape
 no_refusal
 ui_crashed && ui_fail "crashed"

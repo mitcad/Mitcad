@@ -417,6 +417,26 @@ std::vector<NamedBoundaryCurve> face_boundary(const Shape& shape, const std::str
   });
 }
 
+std::vector<NamedBoundaryCurve> named_edge_curves(const Shape& shape) {
+  std::vector<NamedBoundaryCurve> result;
+  for (int e = 0; e < shape.edge_count(); ++e) {
+    const std::string& name = shape.edge_name(e);
+    if (name.empty()) {
+      continue;
+    }
+    // Each edge as curves_of reads its name's edge, failures included:
+    // one that fails is left out, as a name whose curves cannot be read.
+    try {
+      result.push_back({name, detail::run("model curves", [&] { return curve_of(shape.edge(e)); })});
+    } catch (const Cancelled&) {
+      throw;
+    } catch (const std::exception&) {
+      continue;
+    }
+  }
+  return result;
+}
+
 IndexedElement indexed_element(const Shape& shape, char kind, int index) {
   return detail::run("element by index", [&] {
     IndexedElement out;

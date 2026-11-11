@@ -39,8 +39,12 @@ pub use mitcad_model_base::drawing_view::{
 // --- The command's options --------------------------------------------------
 
 /// The sheet sizes: ISO 216 A4 to A0 and ANSI A to E (`ANSI_A`, …),
-/// width and height in millimetres in landscape.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// width and height in millimetres in landscape, or a size of the user's
+/// (mitcad#1625).
+///
+/// In files and commands a named size is its name (`"A3"`), a size of the
+/// user's `{"width": 500, "height": 300}` in mm.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum SheetSize {
     #[default]
     A4,
@@ -48,19 +52,25 @@ pub enum SheetSize {
     A2,
     A1,
     A0,
-    #[serde(rename = "ANSI_A")]
     AnsiA,
-    #[serde(rename = "ANSI_B")]
     AnsiB,
-    #[serde(rename = "ANSI_C")]
     AnsiC,
-    #[serde(rename = "ANSI_D")]
     AnsiD,
-    #[serde(rename = "ANSI_E")]
     AnsiE,
+    /// A size of the user's: the sheet's width and height (mm) as it lies,
+    /// so a sheet of it has no orientation of its own (mitcad#1625).
+    Custom {
+        width: f64,
+        height: f64,
+    },
 }
 
+/// The smallest and the largest side of a sheet of the user's, mm.
+pub const CUSTOM_SHEET_MIN: f64 = 10.0;
+pub const CUSTOM_SHEET_MAX: f64 = 10_000.0;
+
 impl SheetSize {
+    /// The named sizes.
     pub const ALL: [Self; 10] = [
         Self::A4,
         Self::A3,
@@ -74,8 +84,21 @@ impl SheetSize {
         Self::AnsiE,
     ];
 
-    /// The name in the command and in the title block.
-    pub fn name(self) -> &'static str {
+    /// A size of the user's, or why it is none: each side 10 to 10 000 mm.
+    pub fn custom(width: f64, height: f64) -> Result<Self, String> {
+        let side = |v: f64| v.is_finite() && (CUSTOM_SHEET_MIN..=CUSTOM_SHEET_MAX).contains(&v);
+        if side(width) && side(height) {
+            Ok(Self::Custom { width, height })
+        } else {
+            Err(format!(
+                "a sheet of its own size is {CUSTOM_SHEET_MIN} to {CUSTOM_SHEET_MAX} mm each way"
+            ))
+        }
+    }
+
+    /// The name in commands (`A3`, `ANSI_B`), `custom` for a size of the
+    /// user's.
+    pub fn key(self) -> &'static str {
         match self {
             Self::A4 => "A4",
             Self::A3 => "A3",
@@ -87,10 +110,27 @@ impl SheetSize {
             Self::AnsiC => "ANSI_C",
             Self::AnsiD => "ANSI_D",
             Self::AnsiE => "ANSI_E",
+            Self::Custom { .. } => "custom",
         }
     }
 
-    /// Width and height in landscape, mm.
+    /// The name in the title block and the lists: the named size's
+    /// (`A3`, `ANSI_B`), a size of the user's as `500 x 300 mm`.
+    pub fn name(self) -> String {
+        match self {
+            Self::Custom { width, height } => {
+                format!("{} x {} mm", trim_number(width, 2), trim_number(height, 2))
+            }
+            named => named.key().to_owned(),
+        }
+    }
+
+    pub fn is_custom(self) -> bool {
+        matches!(self, Self::Custom { .. })
+    }
+
+    /// Width and height in landscape, mm: a size of the user's with its
+    /// longer side first.
     pub fn landscape(self) -> (f64, f64) {
         const INCH: f64 = 25.4;
         match self {
@@ -104,7 +144,69 @@ impl SheetSize {
             Self::AnsiC => (22.0 * INCH, 17.0 * INCH),
             Self::AnsiD => (34.0 * INCH, 22.0 * INCH),
             Self::AnsiE => (44.0 * INCH, 34.0 * INCH),
+            Self::Custom { width, height } => (width.max(height), width.min(height)),
         }
+    }
+
+    /// Width and height of a sheet of this size lying so, mm: a size of
+    /// the user's as it is given, whatever the orientation.
+    pub fn oriented(self, orientation: Orientation) -> (f64, f64) {
+        if let Self::Custom { width, height } = self {
+            return (width, height);
+        }
+        let (long, short) = self.landscape();
+        match orientation {
+            Orientation::Landscape => (long, short),
+            Orientation::Portrait => (short, long),
+        }
+    }
+
+    /// A size from its JSON form: a name, or `{"width", "height"}` in mm.
+    pub fn from_json(value: &serde_json::Value) -> Result<Self, String> {
+        const WHAT: &str = "a sheet size is A4, A3, A2, A1, A0, ANSI_A to ANSI_E, or \
+                            {\"width\", \"height\"} in mm";
+        match value {
+            serde_json::Value::String(name) => Self::ALL
+                .into_iter()
+                .find(|s| s.key() == name.as_str())
+                .ok_or_else(|| format!("{WHAT}, not {name}")),
+            serde_json::Value::Object(fields) => {
+                if let Some(other) = fields.keys().find(|k| *k != "width" && *k != "height") {
+                    return Err(format!("{WHAT}: it has no field {other}"));
+                }
+                let side = |key: &str| {
+                    fields
+                        .get(key)
+                        .and_then(serde_json::Value::as_f64)
+                        .ok_or_else(|| format!("{WHAT}: its {key} is missing"))
+                };
+                Self::custom(side("width")?, side("height")?)
+            }
+            other => Err(format!("{WHAT}, not {other}")),
+        }
+    }
+}
+
+impl Serialize for SheetSize {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match *self {
+            Self::Custom { width, height } => {
+                use serde::ser::SerializeStruct;
+                let mut fields = serializer.serialize_struct("SheetSize", 2)?;
+                fields.serialize_field("width", &width)?;
+                fields.serialize_field("height", &height)?;
+                fields.end()
+            }
+            named => serializer.serialize_str(named.key()),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SheetSize {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Self::from_json(&value).map_err(D::Error::custom)
     }
 }
 

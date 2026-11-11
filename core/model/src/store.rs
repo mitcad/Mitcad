@@ -433,6 +433,10 @@ struct VariantHead {
     /// (mitcad#436).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     threaded_walls: Vec<crate::features::hole::ThreadedWall>,
+    /// A thread's faces that do not fit it (mitcad#1632), so that Auto Fix
+    /// finds them after a warm open.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    thread_fits: Vec<crate::features::thread::ThreadFitMiss>,
     /// A Fillet's or Chamfer's picked edges as polylines (mitcad#957), so
     /// that a warm open shows them as a build does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -493,6 +497,8 @@ pub(crate) fn storable(def: &FeatureDef) -> bool {
         FeatureDef::DerivedPart(_) | FeatureDef::BoundLength(_) => false,
         // Intersection curves (mitcad#1405): the curve is made again.
         FeatureDef::IntersectionCurve(_) => false,
+        // 3D sketches (mitcad#1521): solved again from their definitions.
+        FeatureDef::SpatialSketch(_) => false,
         // Base features too, also those that only bring in bodies
         // (mitcad#887): a stored body keeps the names evaluating derives.
         _ => true,
@@ -912,6 +918,7 @@ impl ResultStore {
                 split_pieces: output.split_pieces.as_deref().cloned(),
                 changed_pieces: output.changed_pieces.clone(),
                 threaded_walls: output.threaded_walls.clone(),
+                thread_fits: output.thread_fits.clone(),
                 inputs: output.inputs.clone(),
             },
             shapes,
@@ -1233,9 +1240,12 @@ fn restore<K: Kernel>(
         split_pieces: head.split_pieces.clone().map(std::sync::Arc::new),
         changed_pieces: head.changed_pieces.clone(),
         threaded_walls: head.threaded_walls.clone(),
+        thread_fits: head.thread_fits.clone(),
         inputs: head.inputs.clone(),
         // Not stored: an Intersection Curve is not storable.
         curve: None,
+        // Not stored: a 3D sketch is not storable (mitcad#1521).
+        spatial: None,
     })
 }
 

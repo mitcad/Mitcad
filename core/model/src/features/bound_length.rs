@@ -109,6 +109,10 @@ pub enum BoundMode {
     Centre,
     /// At that part's far side.
     Through,
+    /// At the plane of a picked face, frame or construction plane, which
+    /// need not be in the part's way (mitcad#1630): where the part's axis
+    /// meets that plane, `add` (the offset) further along the part.
+    ToFace,
 }
 
 impl BoundMode {
@@ -117,6 +121,7 @@ impl BoundMode {
             Self::Face => "face",
             Self::Centre => "centre",
             Self::Through => "through",
+            Self::ToFace => "to_face",
         }
     }
 
@@ -249,10 +254,14 @@ impl FeatureInfo for BoundLengthDef {
         from.check(ctx).map_err(|e| format!("from: {e}"))?;
         match &self.to.geometry {
             GeomRef::Face { .. } | GeomRef::Mount { .. } => {}
+            // To a face (mitcad#1630) also ends at a construction plane or
+            // an origin plane.
+            GeomRef::Origin(_) | GeomRef::Datum(_) | GeomRef::FixedPlane { .. }
+                if self.mode == BoundMode::ToFace => {}
             other => {
                 return Err(format!(
                     "to: {}",
-                    other.error(" is no planar face or frame")
+                    other.error(|what| format!("{what} is no planar face or frame"))
                 ));
             }
         }
@@ -331,6 +340,9 @@ pub fn measure_to<R: Resolver>(
     add: f64,
 ) -> Result<f64, String> {
     use crate::build::{box_along, ray_plane, unit};
+    if mode == BoundMode::ToFace {
+        return measure_to_plane(resolver, start, direction, geometry, placement, add);
+    }
     let (point, normal, bodies): (_, _, Vec<BodyUid>) = match geometry {
         GeomRef::Mount { feature, name } => {
             let frame = placement.after(
@@ -376,7 +388,7 @@ pub fn measure_to<R: Resolver>(
         other => {
             return Err(format!(
                 "to: {}",
-                other.error(" is no planar face or frame")
+                other.error(|what| format!("{what} is no planar face or frame"))
             ));
         }
     };
@@ -390,7 +402,7 @@ pub fn measure_to<R: Resolver>(
         ));
     }
     let length = match mode {
-        BoundMode::Face => distance,
+        BoundMode::Face | BoundMode::ToFace => distance,
         BoundMode::Centre | BoundMode::Through => {
             let mut far = f64::NEG_INFINITY;
             for body in &bodies {
@@ -416,6 +428,96 @@ pub fn measure_to<R: Resolver>(
     if value.is_nan() || value <= 0.0 {
         return Err(format!(
             "the length would be {} mm: the target is at the start",
+            crate::build::round(value)
+        ));
+    }
+    Ok(value)
+}
+
+/// The length `to_face` gives (mitcad#1630): from `start` along the unit
+/// `direction` (the part's axis) to where it meets the plane of
+/// `geometry` (a planar face, a frame, an origin or construction plane),
+/// which may lie beside the part rather than in its way, plus `add`, the
+/// offset along the part. A plane along the axis or behind the start is
+/// refused with the reason, the face's place painted.
+fn measure_to_plane<R: Resolver>(
+    resolver: &mut R,
+    start: [f64; 3],
+    direction: [f64; 3],
+    geometry: &GeomRef,
+    placement: Transform,
+    add: f64,
+) -> Result<f64, String> {
+    use crate::build::{ray_plane, unit};
+    // Errors about the picked geometry, whole messages: its words for the
+    // person, its name for agents, a face's place painted.
+    let fail = |said: &str| {
+        let error = crate::notice::FeatureError::new(said.to_owned())
+            .with_detail(format!("{said} ({geometry})"));
+        match geometry.place() {
+            Some(place) => error.at(place),
+            None => error,
+        }
+        .text()
+    };
+    let plane_of = |datum: Datum| match datum {
+        Datum::Plane(p) => Ok((p.origin, p.normal())),
+        _ => Err(fail("the geometry the length ends at is no plane")),
+    };
+    let (point, normal) = match geometry {
+        GeomRef::Face { body, face } => {
+            let shape = resolver.shape(*body).map_err(|e| format!("to: {e}"))?;
+            match resolver.kernel().face_geometry(&shape, face) {
+                Ok(SurfaceGeometry::Plane { origin, normal }) => (origin, normal),
+                Ok(other) => {
+                    return Err(crate::notice::placed(
+                        "the face is not planar: pick a flat face, a plane or a profile's end",
+                        crate::notice::NoticePlace::face(face.to_string())
+                            .in_body(&body.to_string()),
+                        format!("to: face {face} is not planar ({})", other.kind()),
+                    ));
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "to: {}",
+                        crate::notice::about_place(
+                            crate::notice::NoticePlace::face(face.to_string())
+                                .in_body(&body.to_string()),
+                            &e.to_string(),
+                        )
+                    ));
+                }
+            }
+        }
+        GeomRef::Mount { feature, name } => {
+            let frame = resolver
+                .mount(*feature, name)
+                .map_err(|e| format!("to: {e}"))?;
+            (frame.translation, crate::build::z_axis(&frame))
+        }
+        GeomRef::Origin(origin) => plane_of(origin.datum())?,
+        GeomRef::Datum(uid) => plane_of(resolver.datum(*uid).map_err(|e| format!("to: {e}"))?)?,
+        GeomRef::FixedPlane { origin, normal, .. } => (*origin, *normal),
+        _ => {
+            return Err(fail(
+                "the length can end only at a planar face, a plane or a frame",
+            ));
+        }
+    };
+    let point = placement.apply_point(point);
+    let normal = unit(placement.apply_vector(normal)).ok_or("to: the plane has no normal")?;
+    let Some(distance) = ray_plane(start, direction, point, normal) else {
+        return Err(fail(
+            "the plane runs along the profile: its axis never meets it",
+        ));
+    };
+    if distance < -1e-9 {
+        return Err(fail("the plane is behind the profile's start"));
+    }
+    let value = distance + add;
+    if value.is_nan() || value <= 0.0 {
+        return Err(format!(
+            "the length would be {} mm: the offset ends the profile at or before its start",
             crate::build::round(value)
         ));
     }

@@ -350,3 +350,77 @@ fn a_components_own_part_number_is_its_parts_list_part_number() {
     assert_eq!(row(&doc)["part_number"], "6494K13");
     assert_eq!(row(&doc)["name"], "6494K13_NO THREADS_Bearing");
 }
+
+// A component with a part number of its own is one part in the Bill of
+// Materials whatever its body count (mitcad#1663: a bearing of nine bodies
+// from Insert › Component from Web was listed nine times); without one, its
+// bodies keep their rows of their own.
+#[test]
+fn a_multi_body_component_with_a_part_number_is_one_bom_row() {
+    let mut doc = Document::new(MockKernel::default());
+    doc.kernel().measures.set(true);
+    let made = command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "6494K13_NO THREADS_Bearing"}),
+    );
+    let component = made["component"].as_str().unwrap().to_owned();
+    let occurrence = made["occurrence"].clone();
+    // Nine bodies of different lengths, so that no two are equal parts.
+    for length in 1..=9 {
+        block(&mut doc, 10.0 * f64::from(length));
+    }
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "C0"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "copy_occurrence", "occurrence": occurrence}),
+    );
+    let rows_of = |doc: &Document<MockKernel>, group: bool| -> Vec<Value> {
+        query(
+            doc,
+            json!({"query": "parts_list", "group_identical": group}),
+        )["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["component"] == component.as_str())
+            .cloned()
+            .collect()
+    };
+
+    // No part number: today's rows, one per body, each placed twice.
+    let plain = rows_of(&doc, false);
+    assert_eq!(plain.len(), 9, "{plain:?}");
+    assert!(
+        plain
+            .iter()
+            .all(|row| row["quantity"] == 2 && row["body"].is_string()),
+        "{plain:?}"
+    );
+
+    command(
+        &mut doc,
+        json!({"cmd": "set_property", "owner": component, "set": "Identity",
+               "key": "Part number", "value": "6494K13"}),
+    );
+    for group in [false, true] {
+        let numbered = rows_of(&doc, group);
+        assert_eq!(numbered.len(), 1, "group {group}: {numbered:?}");
+        let row = &numbered[0];
+        assert_eq!(row["quantity"], 2, "{row}");
+        assert!(row["body"].is_null(), "{row}");
+        assert_eq!(row["name"], "6494K13_NO THREADS_Bearing");
+        assert_eq!(row["part_number"], "6494K13");
+        assert_eq!(row["group_names"], json!(["6494K13_NO THREADS_Bearing"]));
+    }
+
+    // The part number removed: the bodies' rows again.
+    command(
+        &mut doc,
+        json!({"cmd": "remove_property", "owner": component, "set": "Identity",
+               "key": "Part number"}),
+    );
+    assert_eq!(rows_of(&doc, false).len(), 9);
+}

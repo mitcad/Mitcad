@@ -24,7 +24,7 @@
     "extent": {"type": "distance", "distance": 5}, "flip": true, "operation": "cut", "participants": ["F2.b0"]}},
   {"cmd": "rename_body", "uid": "F2.b0", "name": "Block"},
   {"cmd": "export", "path": "reorient-block.brep", "bodies": ["Block"]},
-  {"cmd": "import_file", "path": "reorient-block.brep"},
+  {"cmd": "import_file", "path": "reorient-block.brep", "wrap": false},
   {"cmd": "rename_body", "uid": "F10.b0", "name": "Imported"},
   {"expect": {"body": "Block", "volume": 49487.38943254999, "center": [30.12084806213477, 21.635288936618608, 9.939378495523817], "bbox": {"min": [0, 0, 0], "max": [60, 55, 20]},
     "has_face": "F7:hole0.wall", "has_edge": "E{F5:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F5:side(c1[c4,c2])}"}},

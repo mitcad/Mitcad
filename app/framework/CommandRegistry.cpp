@@ -21,9 +21,10 @@ QString settingsKey(const QString& id) { return kShortcutGroup + QLatin1Char('/'
 // A command's key in one context where its keys differ by context
 // (mitcad#720); "shortcuts/<id>" stays the key of every context.
 QString contextSettingsKey(const QString& id, unsigned context) {
-  const QString group = context == SketchShortcutContext    ? QStringLiteral("shortcuts.sketch")
-                        : context == CommandShortcutContext ? QStringLiteral("shortcuts.commands")
-                                                            : QStringLiteral("shortcuts.model");
+  const QString group = context == SketchShortcutContext         ? QStringLiteral("shortcuts.sketch")
+                        : context == CommandShortcutContext      ? QStringLiteral("shortcuts.commands")
+                        : context == Sketch3dToolShortcutContext ? QStringLiteral("shortcuts.sketch3d_tools")
+                                                                 : QStringLiteral("shortcuts.model");
   return group + QLatin1Char('/') + id;
 }
 
@@ -69,7 +70,7 @@ void CommandRegistry::alias(const QString& oldId, const QString& id) {
     }
   };
   move(settingsKey(oldId), settingsKey(id));
-  for (const unsigned context : shortcutContextList(AllShortcutContexts)) {
+  for (const unsigned context : shortcutContextList(EveryShortcutContext)) {
     move(contextSettingsKey(oldId, context), contextSettingsKey(id, context));
   }
 }
@@ -111,6 +112,8 @@ QKeySequence CommandRegistry::defaultShortcut(const QString& id) const {
 }
 
 unsigned CommandRegistry::contextsOf(const CommandDef& def) const {
+  // Its own (mitcad#1661: a 3D sketch drawing tool's keys).
+  if (def.shortcutContexts != 0) return def.shortcutContexts;
   unsigned contexts = def.mode == CommandDef::Mode::Sketch ? SketchShortcutContext : ModelShortcutContext;
   if (def.mode == CommandDef::Mode::Any) contexts = ModelShortcutContext | SketchShortcutContext;
   if (def.mode == CommandDef::Mode::Model && def.kind == CommandDef::Kind::Feature) {
@@ -274,7 +277,7 @@ void CommandRegistry::setShortcuts(const QHash<QString, ContextShortcuts>& propo
       keys.insert(context, it.value().contains(context) ? it.value().value(context)
                                                         : savedShortcut(settings, *def, context));
     }
-    for (const unsigned context : shortcutContextList(AllShortcutContexts)) {
+    for (const unsigned context : shortcutContextList(EveryShortcutContext)) {
       settings.remove(contextSettingsKey(def->id, context));
     }
     const QList<QKeySequence> values = keys.values();
@@ -305,6 +308,7 @@ void CommandRegistry::refreshShortcuts() {
     m_shortcutWarnings.append(conflict.description());
   }
   const QSettings settings;
+  updateOverlayKeys(settings); // before the keys are applied
   for (const auto& def : m_commands) {
     // A command's keys that differ by context, in the log (the UI tests).
     const QList<unsigned> contexts = shortcutContextList(contextsOf(*def));
@@ -337,7 +341,14 @@ void CommandRegistry::applyShortcut(const CommandDef& def, const QSettings& sett
   QAction* action = m_actions.value(def.id);
   if (action == nullptr) return;
   const QList<QKeySequence> keys = effectiveKeys(def, settings);
-  action->setShortcuts(keys);
+  // An active overlay context's keys are its commands' alone (mitcad#1661:
+  // Up goes to Placement Along Normal, not Turn View Up, while a 3D
+  // sketch's drawing tool is active); the others keep them otherwise.
+  QList<QKeySequence> installed = keys;
+  if (m_overlay != 0 && (contextsOf(def) & m_overlay) == 0) {
+    installed.removeIf([this](const QKeySequence& key) { return m_overlayKeys.contains(key); });
+  }
+  action->setShortcuts(installed);
   // The name before the description without its ellipsis ("Processes: …",
   // not "Processes…: …"), as the quick-access tooltips write it.
   QString name = def.name;
@@ -351,6 +362,24 @@ void CommandRegistry::applyShortcut(const CommandDef& def, const QSettings& sett
     tip += tr(" (conflicting shortcut disabled; change it in Keyboard Shortcuts)");
   }
   action->setToolTip(tip);
+}
+
+void CommandRegistry::setShortcutOverlay(unsigned contexts) {
+  if (contexts == m_overlay) return;
+  m_overlay = contexts;
+  const QSettings settings;
+  updateOverlayKeys(settings);
+  for (const auto& def : m_commands) applyShortcut(*def, settings);
+  qDebug().noquote() << QStringLiteral("Shortcut overlay: %1")
+                            .arg(contexts == 0 ? QStringLiteral("none") : shortcutContextName(contexts));
+}
+
+void CommandRegistry::updateOverlayKeys(const QSettings& settings) {
+  m_overlayKeys.clear();
+  if (m_overlay == 0) return;
+  for (const auto& def : m_commands) {
+    if ((contextsOf(*def) & m_overlay) != 0) m_overlayKeys.append(effectiveKeys(*def, settings));
+  }
 }
 
 void CommandRegistry::updateEnabled(const std::function<bool(const CommandDef&)>& available) {

@@ -248,6 +248,11 @@ public:
   QString axisLine(const QString& axis) const;
   // "x" or "y" for an axis line or an axis pick, else empty.
   QString axisOf(const QString& id) const;
+  // The unit direction of line `id`, from its start to its end; the
+  // sketch's x or y axis, by its line or its pick, runs along (1, 0) or
+  // (0, 1) (mitcad#1655: Rectangular Pattern's Direction). None for
+  // anything else or a line of no length.
+  std::optional<V2> lineDirection(const QString& id) const;
   // An axis line, an axis pick, the origin point or the origin pick: what
   // the sketch fixes in place, so that a constraint or dimension takes at
   // most one of them.

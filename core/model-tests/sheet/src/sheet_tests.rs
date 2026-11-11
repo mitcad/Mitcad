@@ -753,3 +753,48 @@ fn sheet_face_whose_profile_is_gone_names_its_sketch() {
     );
     assert_eq!(state(&doc, body)["status"], "unavailable");
 }
+
+/// A sheet feature on a sheet whose meaning an ordinary feature took away
+/// says why in the user's terms: that feature by its name, the reason, and
+/// Sheet Cut, without the body's internal id (mitcad#1628); on a blocked
+/// sheet it names the feature that failed.
+#[test]
+fn sheet_features_on_invalid_or_blocked_sheets_say_why_in_user_terms() {
+    let (mut doc, _, body, _) = fixture();
+    let unfold = |doc: &mut Document<MockKernel>| -> String {
+        let uid = doc
+            .add_feature(
+                &def(json!({"type":"sheet_unfold","body":body,
+                "stationary":{"feature":body.feature,"slot":0},
+                "bends":[{"feature":body.feature,"slot":0}]})),
+                None,
+            )
+            .unwrap()
+            .uid;
+        match doc.status(uid) {
+            Some(FeatureStatus::Failed(message)) => message.to_string(),
+            other => panic!("Unfold on a sheet that is not valid: {other:?}"),
+        }
+    };
+    doc.add_feature(&def(json!({"type":"scale","bodies":[body],"point":{"type":"origin"},"scale":{"type":"uniform","factor":2}})), None).unwrap();
+    assert_eq!(state(&doc, body)["status"], "invalid");
+    let message = unfold(&mut doc);
+    assert_eq!(
+        message,
+        "this body is no longer sheet metal: Scale1 changed it in a way its sheet metal \
+         cannot hold (the feature has no sheet-metal form); to cut across bends, use Sheet \
+         Cut instead"
+    );
+    assert!(!message.contains(&body.to_string()), "{message}");
+    doc.undo();
+    doc.undo();
+    assert_eq!(state(&doc, body)["status"], "valid");
+    doc.kernel().fail.borrow_mut().insert("transform");
+    doc.add_feature(&def(json!({"type":"move","bodies":[body],"transform":{"type":"translate_xyz","x":4,"y":0,"z":0}})), None).unwrap();
+    doc.kernel().fail.borrow_mut().clear();
+    assert_eq!(state(&doc, body)["status"], "blocked");
+    assert_eq!(
+        unfold(&mut doc),
+        "this body's sheet metal is blocked: Move1 failed on it"
+    );
+}

@@ -300,6 +300,22 @@ fn a_rotated_rectangle_keeps_its_shape_and_dimensions() {
     let notes = result["notes"].to_string();
     assert!(notes.contains("parallel or perpendicular"), "{result}");
     assert!(notes.contains("aligned distance"), "{result}");
+    // The person reads whole messages, the counts their only values, so
+    // that each is one template translated whole (mitcad#1626): the two
+    // horizontal and two vertical constraints, the two dimensions.
+    let shown: Vec<&str> = result["note_messages"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no note_messages in {result}"))
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    for said in [
+        "the rotation turned 4 constraints off the sketch's axes: their lines held parallel or \
+         perpendicular to the first line instead",
+        "the rotation turned 2 dimensions off the sketch's axes: now an aligned distance",
+    ] {
+        assert!(shown.contains(&said), "{said} in {shown:?}");
+    }
     let s = sketch(&d);
     let p: Vec<[f64; 2]> = corners.iter().map(|c| at(&s, c)).collect();
     for (i, side) in [20.0, 10.0, 20.0, 10.0].iter().enumerate() {

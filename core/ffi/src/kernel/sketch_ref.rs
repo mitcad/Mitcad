@@ -71,6 +71,10 @@ pub mod ffi {
         /// OCCT's order.
         fn indexed_element(shape: &Shape, kind: u8, index: usize) -> Result<IndexedElement>;
 
+        /// Every named edge with its curve, by index (mitcad#1656): what
+        /// `model_curves` gives for each edge's own name.
+        fn named_edge_curves(shape: &Shape) -> Result<Vec<NamedBoundaryCurve>>;
+
         /// Where the plane through `origin` with `normal` cuts the faces of
         /// the name (every face for an empty name), B-spline pieces that meet
         /// end to end joined (`geometry::section_curves`).

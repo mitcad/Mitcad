@@ -9,16 +9,18 @@
 //! (mitcad#866), projected along its normal as `sketch.project` projects
 //! them, with where they are above or below it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mitcad_vec3::unit_div_above;
 
 use super::{Document, ModelError, invalid};
 use crate::features::FeatureDef;
+use crate::fingerprint::Fingerprint;
 use crate::ids::{BodyUid, FeatureUid, OccurrenceUid};
-use crate::kernel::{Curve3, ElementKind, Kernel};
+use crate::kernel::{BoundingBox, Curve3, ElementKind, Kernel};
 use crate::links::OccurrenceLinkExt;
 use crate::profile::SketchFrame;
+use crate::recompute::{Change, Version, Versioned};
 use crate::sketch::geometry::{Curve2, P2};
 use crate::sketch::project::{Projected, project, transform_curve};
 use crate::topo::TopoName;
@@ -205,13 +207,51 @@ fn unit(v: [f64; 3]) -> [f64; 3] {
     unit_div_above(v, 0.0).unwrap_or(v)
 }
 
-/// A body to look at: its shape in its component's coordinates and the
-/// transform into the sketch's.
+/// Every named edge of a body with its curve: the kernel's
+/// [`Kernel::named_edge_curves`] (by index, mitcad#1656), else each name of
+/// [`Kernel::edges`] resolved by [`Kernel::curves_of`], as before it; an
+/// edge whose name gives no single curve is left out either way.
+fn named_edge_curves<K: Kernel>(kernel: &K, shape: &K::Shape) -> Vec<(TopoName, Curve3)> {
+    let edges = match kernel.named_edge_curves(shape) {
+        Ok(edges) => edges,
+        Err(_) => kernel
+            .edges(shape)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|edge| {
+                let source = edge.name?.parse::<TopoName>().ok()?;
+                if !matches!(source, TopoName::Edge(_)) {
+                    return None;
+                }
+                let curves = kernel.curves_of(shape, &source).ok()?;
+                let [curve] = <[Curve3; 1]>::try_from(curves).ok()?;
+                Some((source, curve))
+            })
+            .collect(),
+    };
+    edges
+        .into_iter()
+        .filter(|(source, _)| matches!(source, TopoName::Edge(_)))
+        .collect()
+}
+
+/// A body to look at: its shape in its component's coordinates (with the
+/// version of the result that made it) and the transform into the
+/// sketch's.
 struct Seen<'a, S> {
     body: BodyUid,
     shape: &'a S,
+    version: Version,
     occurrence: Option<Vec<OccurrenceUid>>,
     to_sketch: Option<Transform>,
+}
+
+/// The sketch's frame and the bodies the query looks at: everything its
+/// answer is made from, with the kernel's edges, vertices and boxes of
+/// those shapes.
+struct Inputs<'a, S> {
+    frame: SketchFrame,
+    seen: Vec<Seen<'a, S>>,
 }
 
 impl<K: Kernel> Document<K> {
@@ -237,6 +277,89 @@ impl<K: Kernel> Document<K> {
         sketch: FeatureUid,
         out_of_plane: bool,
     ) -> Result<Vec<PlaneItem>, ModelError> {
+        let Inputs { frame, seen } = self.plane_inputs(sketch)?;
+        let normal = unit(cross(frame.x_axis, frame.y_axis));
+        let mut items = Vec::new();
+        let mut others = Vec::new();
+        for body in &seen {
+            // A job that reads it in the background stops at a cancel
+            // between bodies (mitcad#1656: the application's read gives way
+            // to what the user does meanwhile).
+            if self.monitor().is_some_and(|m| m.is_cancelled()) {
+                return Err(ModelError::Cancelled);
+            }
+            let mut found = Vec::new();
+            self.plane_items_of(body, &frame, normal, out_of_plane, &mut found);
+            for item in found {
+                if item.out_of_plane.is_some() {
+                    others.push(item);
+                } else {
+                    items.push(item);
+                }
+            }
+        }
+        items.extend(others);
+        Ok(items)
+    }
+
+    /// A key of what [`Document::sketch_body_geometry`] answers for
+    /// `sketch` (the `plane_geometry_key` query, mitcad#1646): the sketch's
+    /// frame and, for each body it looks at, the body, the version of its
+    /// shape, the occurrence it is seen at and the transform into the
+    /// sketch. The same key means the same answer, in plane and out of it,
+    /// so a client keeps what it read while the key stays: an edit of the
+    /// sketch itself (a dimension added) leaves it, unlike the document's
+    /// revision. Cheap: no kernel call.
+    pub fn plane_geometry_key(&self, sketch: FeatureUid) -> Result<u128, ModelError> {
+        let Inputs { frame, seen } = self.plane_inputs(sketch)?;
+        let mut key = Fingerprint::new("plane_geometry");
+        for v in [frame.origin, frame.x_axis, frame.y_axis] {
+            for x in v {
+                key.f64(x);
+            }
+        }
+        key.u64(seen.len() as u64);
+        for body in &seen {
+            key.str(&body.body.to_string()).u128(body.version);
+            key.option(body.occurrence.as_ref(), |key, path| {
+                key.u64(path.len() as u64);
+                for o in path {
+                    key.str(&o.to_string());
+                }
+            });
+            key.option(body.to_sketch.as_ref(), |key, t| {
+                for x in t.linear.iter().flatten().chain(&t.translation) {
+                    key.f64(*x);
+                }
+            });
+        }
+        Ok(key.finish())
+    }
+
+    /// The bodies before the timeline position from the last recompute,
+    /// with their versions (as [`Document::bodies_before`], borrowed).
+    fn versioned_bodies_before(&self, position: usize) -> BTreeMap<BodyUid, &Versioned<K::Shape>> {
+        let mut bodies = BTreeMap::new();
+        for result in self.result.results.iter().take(position) {
+            let Some(output) = &result.output else {
+                continue;
+            };
+            for change in &output.changes {
+                match change {
+                    Change::Set(uid, shape) => {
+                        bodies.insert(*uid, shape);
+                    }
+                    Change::Remove(uid) => {
+                        bodies.remove(uid);
+                    }
+                }
+            }
+        }
+        bodies
+    }
+
+    /// What the `plane_geometry` query of `sketch` reads ([`Inputs`]).
+    fn plane_inputs(&self, sketch: FeatureUid) -> Result<Inputs<'_, K::Shape>, ModelError> {
         let position = self.state.require(sketch)?;
         let frame = match (
             self.sketch_output(sketch),
@@ -251,7 +374,7 @@ impl<K: Kernel> Document<K> {
             (None, _) => return Err(invalid(format!("{sketch} is not a sketch"))),
         };
         let component = self.state.features[position].component;
-        let bodies = self.bodies_before(position);
+        let bodies = self.versioned_bodies_before(position);
         let assembly = &self.state.assembly;
         let placements = &self.result.placements;
         let mut placement = |o: OccurrenceUid| {
@@ -278,7 +401,8 @@ impl<K: Kernel> Document<K> {
                 if own.insert(instance.body) {
                     seen.push(Seen {
                         body: instance.body,
-                        shape,
+                        shape: &shape.value,
+                        version: shape.version,
                         occurrence: None,
                         to_sketch: None,
                     });
@@ -299,27 +423,13 @@ impl<K: Kernel> Document<K> {
             };
             seen.push(Seen {
                 body: instance.body,
-                shape,
+                shape: &shape.value,
+                version: shape.version,
                 occurrence: Some(instance.path),
                 to_sketch: Some(to_sketch),
             });
         }
-        let normal = unit(cross(frame.x_axis, frame.y_axis));
-        let mut items = Vec::new();
-        let mut others = Vec::new();
-        for body in &seen {
-            let mut found = Vec::new();
-            self.plane_items_of(body, &frame, normal, out_of_plane, &mut found);
-            for item in found {
-                if item.out_of_plane.is_some() {
-                    others.push(item);
-                } else {
-                    items.push(item);
-                }
-            }
-        }
-        items.extend(others);
-        Ok(items)
+        Ok(Inputs { frame, seen })
     }
 
     /// The edges and vertices of one body in the plane, and with
@@ -339,8 +449,9 @@ impl<K: Kernel> Document<K> {
         };
         // The tolerance grows with the body's size; a body whose box does
         // not reach the plane has nothing in it (but what is out of it).
-        let mut size = 1.0_f64;
-        if let Ok(Some(b)) = kernel.bounding_box(seen.shape) {
+        // How far the box's corners are from the plane, lowest and highest,
+        // and its diagonal.
+        let reach = |b: &BoundingBox| -> (f64, f64, f64) {
             let mut low = f64::INFINITY;
             let mut high = f64::NEG_INFINITY;
             for i in 0..8 {
@@ -361,9 +472,35 @@ impl<K: Kernel> Document<K> {
                 .map(|k| (b.max[k] - b.min[k]).powi(2))
                 .sum::<f64>()
                 .sqrt();
-            size = size.max(diagonal);
+            (low, high, diagonal)
+        };
+        let off_plane = |low: f64, high: f64, size: f64| {
             let tolerance = mitcad_model_base::internal::datum::LINEAR * size;
-            if !out_of_plane && (low > tolerance || high < -tolerance) {
+            low > tolerance || high < -tolerance
+        };
+        // A cheap box that holds the body first (mitcad#1656): one that
+        // stays off the plane by its own tolerance has every edge and vertex
+        // off it by the body's tighter one too (the tight box lies inside),
+        // so the tight box, which the kernel works out at a cost on first
+        // use, is needed only for a body that can reach the plane.
+        let enclosing = match kernel.enclosing_box(seen.shape) {
+            Ok(Some(b)) => {
+                let (low, high, diagonal) = reach(&b);
+                let size = diagonal.max(1.0);
+                off_plane(low, high, size).then_some(size)
+            }
+            _ => None,
+        };
+        let mut size = 1.0_f64;
+        if let Some(enclosing) = enclosing {
+            if !out_of_plane {
+                return;
+            }
+            size = enclosing;
+        } else if let Ok(Some(b)) = kernel.bounding_box(seen.shape) {
+            let (low, high, diagonal) = reach(&b);
+            size = size.max(diagonal);
+            if !out_of_plane && off_plane(low, high, size) {
                 return;
             }
         }
@@ -376,18 +513,8 @@ impl<K: Kernel> Document<K> {
             out_of_plane: out,
         };
         // Edges whose every point is in the plane (and the others).
-        for edge in kernel.edges(seen.shape).unwrap_or_default() {
-            let Some(Ok(source @ TopoName::Edge(_))) = edge.name.map(|n| n.parse::<TopoName>())
-            else {
-                continue;
-            };
-            let Ok(curves) = kernel.curves_of(seen.shape, &source) else {
-                continue;
-            };
-            let [curve] = &curves[..] else {
-                continue;
-            };
-            let curve = moved(curve.clone());
+        for (source, curve) in named_edge_curves(kernel, seen.shape) {
+            let curve = moved(curve);
             if distance_from_plane(&curve, frame.origin, normal) > tolerance {
                 // Out of the plane (mitcad#866): projected along the normal,
                 // a line along it to a point.

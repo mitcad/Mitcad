@@ -61,6 +61,10 @@ ui_mark
 ui_step "File > Import"                    file_menu i
 ui_expect_new "Dialog folder import: $DESIGNS" "Import starts in the design's folder at first"
 ui_step "type the path, Enter"             ui_type_path "Import" "$IMPORTS/part.step"
+# The block is content: asked where the file goes (mitcad#1629).
+ui_expect_new "Import place dialog opened: part.step" "asked where the file goes"
+ui_focus_dialog '^Where to Import$'
+ui_step "into a new component (Enter)"     ui_key Return
 ui_focus_main
 ui_expect_new "Imported part.step as" "imported"
 ui_expect_new "Dialog folder import remembered: $IMPORTS" "the Import group remembers its folder"

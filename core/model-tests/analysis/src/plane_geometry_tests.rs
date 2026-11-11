@@ -629,3 +629,85 @@ fn a_distance_to_a_plate_edge_below_follows_the_plate() {
     let s = query(&doc, json!({"query": "sketch", "uid": "F5"}));
     assert_eq!(s["warnings"], json!([]), "{s}");
 }
+
+fn plane_geometry_key(doc: &Document<MockKernel>, sketch: &str) -> String {
+    let answer = query(
+        doc,
+        json!({"query": "plane_geometry_key", "sketch": sketch}),
+    );
+    let key = answer["key"].as_str().unwrap_or_else(|| panic!("{answer}"));
+    assert_eq!(key.len(), 32, "{answer}");
+    key.to_owned()
+}
+
+#[test]
+fn plane_geometry_key_stays_while_the_sketch_itself_is_edited() {
+    // mitcad#1646: the Dimension tool read every edge of a large assembly
+    // again after each dimension added; the key tells it nothing changed.
+    let Block { mut doc, top, .. } = block();
+    command(
+        &mut doc,
+        json!({"cmd": "sketch.create", "plane": {"face": top.to_string(), "body": "F2.b0"}}),
+    );
+    let key = plane_geometry_key(&doc, "F3");
+    let items = plane_geometry_all(&doc, "F3");
+    let line = command(
+        &mut doc,
+        json!({"cmd": "sketch.add_line", "sketch": "F3", "start": [10, 10], "end": [30, 20]}),
+    );
+    let line = line["made"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_str().unwrap().to_owned())
+        .find(|id| id.starts_with('c'))
+        .unwrap_or_else(|| panic!("no line in {line}"));
+    command(
+        &mut doc,
+        json!({"cmd": "sketch.add_dimension", "sketch": "F3",
+               "dimension": {"type": "length", "line": line}, "value": 25}),
+    );
+    assert_eq!(plane_geometry_key(&doc, "F3"), key);
+    assert_eq!(plane_geometry_all(&doc, "F3"), items);
+}
+
+#[test]
+fn plane_geometry_key_changes_with_the_bodies_before_the_sketch() {
+    let Block { mut doc, top, .. } = block();
+    command(
+        &mut doc,
+        json!({"cmd": "sketch.create", "plane": {"face": top.to_string(), "body": "F2.b0"}}),
+    );
+    let key = plane_geometry_key(&doc, "F3");
+    // Hidden: nothing to pick, another key; shown again: the same answer
+    // and key as before.
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_visible", "uid": "F2.b0", "visible": false}),
+    );
+    let hidden = plane_geometry_key(&doc, "F3");
+    assert_ne!(hidden, key);
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_visible", "uid": "F2.b0", "visible": true}),
+    );
+    assert_eq!(plane_geometry_key(&doc, "F3"), key);
+    // The block made 70 wide by Sketch1's width, before the sketch: Body1
+    // is built again, another key.
+    let changed = command(
+        &mut doc,
+        json!({"cmd": "set_parameter", "name": "d1", "value": 70}),
+    );
+    assert_eq!(changed["error"], Value::Null, "{changed}");
+    assert_ne!(plane_geometry_key(&doc, "F3"), key);
+}
+
+#[test]
+fn plane_geometry_key_is_refused_as_plane_geometry_is() {
+    let Block { doc, .. } = block();
+    for sketch in ["F9", "F2"] {
+        let key = doc.query(&json!({"query": "plane_geometry_key", "sketch": sketch}).to_string());
+        let all = doc.query(&json!({"query": "plane_geometry", "sketch": sketch}).to_string());
+        assert!(key.is_err() && all.is_err(), "{sketch}: {key:?} {all:?}");
+    }
+}

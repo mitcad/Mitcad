@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! A sheet as an SVG drawing in millimetres: one `<g class="…">` per group
 //! (`view` with the view's `id`, `dimension`, `hole-row`, …), black lines
-//! of ISO 128's widths, texts in Helvetica (or the viewer's sans serif).
+//! of ISO 128's widths, texts in Helvetica (or the viewer's sans serif),
+//! a title block's images (mitcad#1625) as `<image>`s with their files as
+//! data URLs.
 
 use std::f64::consts::{PI, TAU};
 use std::fmt::Write as _;
@@ -48,7 +50,7 @@ pub fn write(sheet: &Sheet) -> String {
     let _ = writeln!(out, r#"<?xml version="1.0" encoding="UTF-8"?>"#);
     let _ = writeln!(
         out,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}mm" height="{hh}mm" viewBox="0 0 {w} {hh}">"#,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{w}mm" height="{hh}mm" viewBox="0 0 {w} {hh}">"#,
         w = n(sheet.width),
         hh = n(h)
     );
@@ -151,6 +153,25 @@ pub fn write(sheet: &Sheet) -> String {
                         out,
                         r#"<polygon points="{}" fill="rgb({level},{level},{level})" stroke="none"/>"#,
                         list.join(" ")
+                    );
+                }
+                Item::Image {
+                    at,
+                    size,
+                    kind,
+                    data,
+                } => {
+                    // Stretched over its box, which has its proportions
+                    // already; `xlink:href` for the readers of SVG 1.1.
+                    let _ = writeln!(
+                        out,
+                        r#"<image x="{}" y="{}" width="{}" height="{}" preserveAspectRatio="none" xlink:href="data:{};base64,{}"/>"#,
+                        n(at[0]),
+                        n(h - at[1] - size[1]),
+                        n(size[0]),
+                        n(size[1]),
+                        kind.media_type(),
+                        data.base64()
                     );
                 }
                 Item::Text {

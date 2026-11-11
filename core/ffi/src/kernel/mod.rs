@@ -2785,6 +2785,35 @@ impl Kernel for OcctKernel {
         .map_err(failed)?;
         Ok(curves.iter().map(intersection_curve::curve).collect())
     }
+
+    // Sheet footprints (mitcad#1628).
+    fn sheet_cylinder_footprint(
+        &self,
+        shape: &Self::Shape,
+        chart: &mitcad_model::sheet::CylinderEmbedding,
+        radius: f64,
+        tolerance: f64,
+    ) -> Result<Vec<Vec<mitcad_model::sheet::BoundedCurve2>>, KernelError> {
+        sheet::cylinder_footprint(shape, chart, radius, tolerance)
+    }
+
+    // Body edges in a sketch's plane: every named edge at once (mitcad#1656).
+
+    fn named_edge_curves(
+        &self,
+        shape: &Self::Shape,
+    ) -> Result<Vec<(TopoName, mitcad_model::Curve3)>, KernelError> {
+        let edges = sketch_ref::ffi::named_edge_curves(occt(shape)?).map_err(failed)?;
+        Ok(edges
+            .iter()
+            .filter_map(|e| {
+                Some((
+                    e.name.parse::<TopoName>().ok()?,
+                    sketch_ref::curve(&e.curve),
+                ))
+            })
+            .collect())
+    }
 }
 
 /// Face or edge indices for the bridge (mitcad#714).

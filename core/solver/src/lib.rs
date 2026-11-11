@@ -13,6 +13,11 @@
 //! rigid bodies joined by joints with free motions, limits and driven
 //! values.
 //!
+//! [`SpatialSystem`] solves the points, lines, arcs, circles and splines of
+//! 3D sketches (three coordinates per point) with the same numerical
+//! engine, separate from the planar [`System`]; a converted sketch's planar
+//! relations keep their planar rows on the x and y columns.
+//!
 //! The solver is our own implementation (MIT) of well-known methods; see
 //! `README.md` for the formulation. It has no third-party dependencies.
 //!
@@ -56,6 +61,7 @@ mod rigid;
 mod scalar;
 mod solve;
 mod sparse;
+mod spatial;
 mod spline;
 mod system;
 mod types;
@@ -74,3 +80,23 @@ pub use types::{
 pub use types::{Anchor, SpacingMode};
 // Couplings of joints' motions (mitcad#466).
 pub use rigid::{Relation, RigidCoupling};
+// Spatial point/line system of 3D sketches (mitcad#1520).
+pub use spatial::{
+    Axis, AxisSense, SPATIAL_MIN_SEGMENT, SPATIAL_TOLERANCE, SpatialAnalysis, SpatialConstraint,
+    SpatialConstraintId, SpatialDependency, SpatialDragGoal, SpatialError, SpatialIssue,
+    SpatialLineId, SpatialOptions, SpatialPointId, SpatialSolveResult, SpatialStatus,
+    SpatialSystem,
+};
+// Spatial arcs, circles, splines, reference curves and in-plane relations
+// (mitcad#1542).
+pub use spatial::{
+    SpatialCircle, SpatialCurve, SpatialCurveId, SpatialEntityKind, SpatialNormal,
+    SpatialReferenceCurve, SpatialSplineGeometry, SpatialTangentGoal, circle_through,
+};
+// Points on faces of bodies (mitcad#1549).
+pub use spatial::SpatialSurface;
+// Directions of parallel, perpendicular and angle relations (mitcad#1661).
+pub use spatial::SpatialDir;
+// Relations along constant directions: a rotated placement plane's axes and
+// normal (mitcad#1661).
+pub use spatial::SpatialAlong;

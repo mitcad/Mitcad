@@ -111,6 +111,15 @@ public:
     commandLine->AppendSwitch("no-first-run");
     commandLine->AppendSwitch("no-default-browser-check");
 #if defined(__APPLE__)
+    // Chrome's updater clones its application and starts a cleanup helper
+    // at shutdown without CEF's external-framework arguments. MitCad and
+    // this separately installed component use their own update mechanism.
+    std::string disabledFeatures = commandLine->GetSwitchValue("disable-features").ToString();
+    if (!disabledFeatures.empty()) {
+      disabledFeatures += ",";
+    }
+    disabledFeatures += "MacAppCodeSignClone";
+    commandLine->AppendSwitchWithValue("disable-features", disabledFeatures);
     // The browsing profile's passwords not in the user's keychain.
     commandLine->AppendSwitch("use-mock-keychain");
 #elif defined(__linux__)
@@ -222,6 +231,10 @@ bool startEngine(const QString& componentFolder, const QString& profileFolder, Q
   CefString(&settings.browser_subprocess_path) = utf8(QDir::toNativeSeparators(helperPath(folder)));
 #if defined(__APPLE__)
   CefString(&settings.framework_dir_path) = utf8(framework);
+  // The component's helpers live outside the application's bundle. Give
+  // every CEF process the same outer bundle and Mach rendezvous namespace.
+  CefString(&settings.main_bundle_path) =
+      utf8(QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("../..")));
 #else
   CefString(&settings.resources_dir_path) = utf8(QDir::toNativeSeparators(folder));
   CefString(&settings.locales_dir_path) = utf8(QDir::toNativeSeparators(QDir(folder).filePath(QStringLiteral("locales"))));

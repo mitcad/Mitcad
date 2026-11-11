@@ -152,6 +152,8 @@ mod sketch_loop;
 // Widths and patterns of projected edges, bodies and occurrences in
 // drawing views (mitcad#1546).
 mod drawing_lines;
+// 3D sketches: the sketch3d.* commands and the sketch3d query (mitcad#1522).
+mod sketch3d;
 // Read-only modeling guidance and per-command hints (mitcad#1513).
 mod design_review;
 // Filament changes and pauses at print heights (mitcad#1596).
@@ -257,6 +259,8 @@ pub mod prelude {
     pub(crate) use super::print_plates::PrintPlatesOps;
     // Line styles in drawing views (mitcad#1546).
     pub(crate) use super::drawing_lines::DrawingLinesOps;
+    // 3D sketches (mitcad#1522).
+    pub(crate) use super::sketch3d::Sketch3dOps;
 }
 
 use std::fmt;
@@ -338,6 +342,15 @@ named_enum! {
             /// before it) instead of at the marker (mitcad#403).
             #[serde(default)]
             index: Option<usize>,
+            /// A thread whose faces do not fit it gets them fitted, in the
+            /// same undo step (mitcad#1632: the Thread panel's *Fit the
+            /// hole to the thread*).
+            #[serde(default)]
+            fit_faces: bool,
+            /// What that fit does with a named parameter other places use
+            /// too (`parameter` or `own`, as `auto_fix`'s `shared`).
+            #[serde(default)]
+            shared: Option<mitcad_model::SharedChoice>,
         },
         "edit_feature" => EditFeature {
             uid: FeatureUid,
@@ -702,6 +715,12 @@ enum PreviewCommand {
         /// report gets `auto_operation`.
         #[serde(default)]
         auto_operation: bool,
+        /// A thread with its faces fitted to it, as `add_feature` with
+        /// `fit_faces` (mitcad#1632); the report gets `fitted`.
+        #[serde(default)]
+        fit_faces: bool,
+        #[serde(default)]
+        shared: Option<mitcad_model::SharedChoice>,
     },
     EditFeature {
         uid: FeatureUid,
@@ -1103,12 +1122,30 @@ named_enum! {
         "feature_curves" => FeatureCurves,
         // The closed loop of a sketch curve (mitcad#1541, `sketch_loop.rs`).
         "sketch_loop" => SketchLoop(sketch_loop::SketchLoopQuery),
+        // A 3D sketch's definition with its last evaluation (mitcad#1522,
+        // `sketch3d.rs`).
+        "sketch3d" => Sketch3d {
+            uid: FeatureUid,
+            // Curves of it as a Pipe's or a Sweep's path (mitcad#1527):
+            // the answer's `route` orders them or says why they are no
+            // path.
+            #[serde(default)]
+            path: Option<sketch3d::RouteQuery>,
+        },
         "design_review" => DesignReview(design_review::ReviewQuery),
         // Narrow gaps between bodies printed in place (mitcad#1519, `print.rs`).
         "print_min_gap" => PrintMinGap(print::MinGapQuery),
         // Filament changes at print heights (mitcad#1596,
         // `filament_changes.rs`).
         "filament_changes" => FilamentChanges(filament_changes::FilamentChangesQuery),
+        // The print colours and rings Send to Slicer draws (mitcad#1643).
+        "filament_change_preview" => FilamentChangePreview(
+            filament_changes::FilamentChangePreviewQuery
+        ),
+        // A key of a sketch's plane_geometry answer (mitcad#1646, `sketch.rs`).
+        "plane_geometry_key" => PlaneGeometryKey {
+            sketch: FeatureUid,
+        },
     }
 }
 
@@ -1701,7 +1738,12 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::MaterialDataset(query) => materials::material_dataset_json(&query),
             Query::ExportMaterials(query) => self.export_materials_json(&query)?,
             Query::FileStructure { path } => {
-                json!({"assembly": mitcad_model::exchange::file_has_assembly(&path)?})
+                // And whether import_file wraps it in a component by
+                // default (mitcad#1629).
+                json!({
+                    "assembly": mitcad_model::exchange::file_has_assembly(&path)?,
+                    "wrap": self.import_wraps_by_default(&path),
+                })
             }
             // A sheet's visible corners (mitcad#1338).
             Query::DrawingCorners(query) => self.drawing_corners_json(&query)?,
@@ -1710,10 +1752,23 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::FeatureCurves => feature_curves::feature_curves_json(self),
             // The closed loop of a sketch curve (mitcad#1541).
             Query::SketchLoop(query) => sketch_loop::sketch_loop_json(self, &query)?,
+            // 3D sketches (mitcad#1522).
+            Query::Sketch3d { uid, path } => {
+                let mut value = self.sketch3d_json(uid)?;
+                // A path's route (mitcad#1527).
+                if let Some(path) = path {
+                    value["route"] = self.sketch3d_route_json(uid, &path);
+                }
+                value
+            }
             Query::DesignReview(query) => design_review::review(self, &query)?,
             Query::PrintMinGap(query) => self.print_min_gap_json(&query)?,
             // Filament changes at print heights (mitcad#1596).
             Query::FilamentChanges(query) => filament_changes::query(self, &query)?,
+            // The print colours and rings Send to Slicer draws (mitcad#1643).
+            Query::FilamentChangePreview(query) => filament_changes::preview(self, &query)?,
+            // A key of a sketch's plane_geometry answer (mitcad#1646).
+            Query::PlaneGeometryKey { sketch } => self.plane_geometry_key_json(sketch)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -1891,6 +1946,8 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 component,
                 after,
                 index,
+                fit_faces,
+                shared,
             } => {
                 let component = component
                     .as_deref()
@@ -1913,7 +1970,21 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                     (None, index) => index,
                 };
                 self.check_two_side_distances(&def, None)?;
+                // A thread with its faces fitted to it (mitcad#1632).
+                let mut fitted = None;
                 let added = match position {
+                    _ if fit_faces => {
+                        if position.is_some() {
+                            return Err(ApiError(
+                                "fit_faces adds the thread at the marker: no after or index"
+                                    .to_owned(),
+                            ));
+                        }
+                        let (added, fits, left) =
+                            self.add_feature_fitted(&def, name.as_deref(), component, shared)?;
+                        fitted = Some((fits, left));
+                        added
+                    }
                     Some(position) => {
                         self.add_feature_at(&def, name.as_deref(), component, position)?
                     }
@@ -1921,6 +1992,13 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 };
                 let mut reply = json!({"uid": added.uid, "name": added.name,
                                        "parameters": names(&added.parameters)});
+                if let Some((fits, left)) = fitted {
+                    reply["fitted"] =
+                        json!(fits.iter().map(auto_fix::fit_json).collect::<Vec<_>>());
+                    if !left.is_empty() {
+                        reply["fit_left"] = fit_left_json(&left);
+                    }
+                }
                 // What it built with caveats, such as an angle of more than
                 // one turn (mitcad#714).
                 let warnings = self.warnings(added.uid);
@@ -2509,6 +2587,8 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
         }
         // Extrude's automatic operation (mitcad#289).
         let mut auto = None;
+        // A thread's fits (mitcad#1632).
+        let mut fitted = None;
         let report = if let Some(rules) = inline_face_rules(&value) {
             let (rules, face, name) = face_with_rules(rules, &value)?;
             self.preview_face_with_rules(&rules, &face, name.as_deref())?
@@ -2524,10 +2604,24 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 }
             }
             match command {
+                // A thread with its faces fitted (mitcad#1632).
+                PreviewCommand::AddFeature {
+                    def,
+                    name,
+                    fit_faces: true,
+                    shared,
+                    ..
+                } => {
+                    let (report, fits, left) =
+                        self.preview_add_fitted(&def, name.as_deref(), shared)?;
+                    fitted = Some((fits, left));
+                    report
+                }
                 PreviewCommand::AddFeature {
                     def,
                     name,
                     auto_operation: false,
+                    ..
                 } => self.preview_add(&def, name.as_deref())?,
                 PreviewCommand::AddFeature { def, name, .. } => {
                     let (report, choice) = self.preview_add_auto(&def, name.as_deref())?;
@@ -2560,6 +2654,18 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
         if let Some(choice) = auto {
             value["auto_operation"] =
                 json!({"operation": choice.operation, "objects": choice.objects});
+        }
+        // A thread's faces that do not fit it, for the Thread panel's note
+        // (mitcad#1632), and the fits the preview made.
+        let misses = self.preview_thread_fits();
+        if !misses.is_empty() {
+            value["thread_fits"] = thread_fits_json(self, &misses);
+        }
+        if let Some((fits, left)) = fitted {
+            value["fitted"] = json!(fits.iter().map(auto_fix::fit_json).collect::<Vec<_>>());
+            if !left.is_empty() {
+                value["fit_left"] = fit_left_json(&left);
+            }
         }
         Ok(value.to_string())
     }
@@ -2628,6 +2734,14 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                         value["project_again"] = json!(again);
                     }
                 }
+                // A 3D sketch's too, when it solved (mitcad#1524).
+                if let Some(status) = self
+                    .spatial_sketch(item.entry.uid)
+                    .and_then(|o| o.solved.as_ref())
+                    .map(|s| &s.status)
+                {
+                    value["dof"] = json!(status.dof);
+                }
                 // The sketches it uses: the browser lists it under each
                 // (mitcad#177).
                 if let Some(uses) = sketches.get(&item.entry.uid) {
@@ -2640,6 +2754,19 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                     let fixable = self.auto_fixable(item.entry.uid);
                     if fixable > 0 {
                         value["auto_fix"] = json!(fixable);
+                    }
+                    // A thread's fit that would change a named parameter
+                    // other places use (mitcad#1632): the application asks
+                    // which way before Auto Fix.
+                    let choices = self.auto_fix_choices(item.entry.uid);
+                    if !choices.is_empty() {
+                        value["auto_fix_choices"] = json!(
+                            choices
+                                .iter()
+                                .map(|(parameter, others)| json!({"parameter": parameter,
+                                                                   "others": others}))
+                                .collect::<Vec<_>>()
+                        );
                     }
                 }
                 value
@@ -3055,4 +3182,63 @@ fn face_with_rules(
         })
     });
     Ok((rules, make, name))
+}
+
+/// What a thread's fit left (mitcad#1632): each face (its name, for
+/// agents) with why, in words.
+fn fit_left_json(left: &[(String, mitcad_model::NoFit)]) -> Value {
+    json!(
+        left.iter()
+            .map(|(face, why)| {
+                let mut value = json!({"face": face});
+                match why {
+                    mitcad_model::NoFit::Choice { parameter, others } => {
+                        value["choice"] = json!({"parameter": parameter, "others": others});
+                    }
+                    mitcad_model::NoFit::Source(reason) | mitcad_model::NoFit::Refused(reason) => {
+                        value["reason"] = json!(reason);
+                    }
+                }
+                value
+            })
+            .collect::<Vec<_>>()
+    )
+}
+
+/// A thread's faces that do not fit it (mitcad#1632): each face (its
+/// name, for agents), its diameter and the one the thread needs, the
+/// side, whether Auto Fix can fit it and else why, and the named
+/// parameter it would ask about.
+fn thread_fits_json<K: Kernel>(
+    doc: &Document<K>,
+    misses: &[mitcad_model::features::thread::ThreadFitMiss],
+) -> Value {
+    let items: Vec<Value> = misses
+        .iter()
+        .map(|miss| {
+            let mut value = json!({
+                "face": miss.face.to_string(), "body": miss.body,
+                "diameter": miss.diameter, "needed": miss.needed,
+                "internal": miss.internal, "fixable": miss.source.is_some(),
+            });
+            if let Some(reason) = &miss.reason {
+                value["reason"] = json!(reason);
+            }
+            if let Some(source) = &miss.source {
+                value["source"] = json!(source.feature);
+            }
+            match doc.fit_question(miss) {
+                Some(mitcad_model::NoFit::Choice { parameter, others }) => {
+                    value["choice"] = json!({"parameter": parameter, "others": others});
+                }
+                Some(mitcad_model::NoFit::Refused(reason)) => {
+                    value["fixable"] = json!(false);
+                    value["reason"] = json!(reason);
+                }
+                _ => {}
+            }
+            value
+        })
+        .collect();
+    json!(items)
 }

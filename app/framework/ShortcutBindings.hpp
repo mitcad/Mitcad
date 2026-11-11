@@ -13,35 +13,47 @@ namespace mitcad {
 
 // Potentially simultaneous states, independent of the current selection.
 // A model feature which accepts profiles also has SketchShortcutContext.
+// The 3D sketch drawing tools' context (mitcad#1661) is an overlay: while a
+// drawing tool of a 3D sketch is active, the keys of its commands win over
+// the same keys of the other contexts' commands (CommandRegistry::
+// setShortcutOverlay: Up is Turn View Up's in the view and a sketch, and
+// Placement Along Normal's while a 3D drawing tool is active). Its commands
+// share no context with the others, so Keyboard Shortcuts reports no
+// conflict between them. Not part of AllShortcutContexts, whose commands
+// work everywhere else; EveryShortcutContext has it too.
 enum ShortcutContext : unsigned {
   ModelShortcutContext = 1,
   SketchShortcutContext = 2,
   CommandShortcutContext = 4,
   AllShortcutContexts = ModelShortcutContext | SketchShortcutContext | CommandShortcutContext,
+  Sketch3dToolShortcutContext = 8,
+  EveryShortcutContext = AllShortcutContexts | Sketch3dToolShortcutContext,
 };
 
 // A command's key in each context it lives in (mitcad#720), by context.
 using ContextShortcuts = QMap<unsigned, QKeySequence>;
 
 // The single contexts of `contexts`, in the order the Keyboard Shortcuts
-// window lists them: Model, Sketch, Command Panel.
+// window lists them: Model, Sketch, Command Panel, 3D Sketch Tool.
 inline QList<unsigned> shortcutContextList(unsigned contexts) {
   QList<unsigned> list;
   for (const unsigned context : {unsigned(ModelShortcutContext), unsigned(SketchShortcutContext),
-                                 unsigned(CommandShortcutContext)}) {
+                                 unsigned(CommandShortcutContext), unsigned(Sketch3dToolShortcutContext)}) {
     if ((contexts & context) != 0) list.append(context);
   }
   return list;
 }
 
-// "Model", "Sketch", "Command Panel" (while a command's panel is open);
-// several joined by commas.
+// "Model", "Sketch", "Command Panel" (while a command's panel is open), "3D
+// Sketch Tool" (while a 3D sketch's drawing tool is active); several joined
+// by commas.
 inline QString shortcutContextName(unsigned contexts) {
   QStringList names;
   for (const unsigned context : shortcutContextList(contexts)) {
-    names.append(context == ModelShortcutContext    ? QObject::tr("3D View")
-                 : context == SketchShortcutContext ? QObject::tr("Sketch")
-                                                    : QObject::tr("Command Panel"));
+    names.append(context == ModelShortcutContext     ? QObject::tr("3D View")
+                 : context == SketchShortcutContext  ? QObject::tr("Sketch")
+                 : context == CommandShortcutContext ? QObject::tr("Command Panel")
+                                                     : QObject::tr("3D Sketch Tool"));
   }
   return names.join(QStringLiteral(", "));
 }
@@ -51,9 +63,10 @@ inline QString shortcutContextName(unsigned contexts) {
 inline QString shortcutContextPhrase(unsigned contexts) {
   QStringList parts;
   for (const unsigned context : shortcutContextList(contexts)) {
-    parts.append(context == ModelShortcutContext    ? QObject::tr("in the 3D view")
-                 : context == SketchShortcutContext ? QObject::tr("in a sketch")
-                                                    : QObject::tr("while a command panel is open"));
+    parts.append(context == ModelShortcutContext     ? QObject::tr("in the 3D view")
+                 : context == SketchShortcutContext  ? QObject::tr("in a sketch")
+                 : context == CommandShortcutContext ? QObject::tr("while a command panel is open")
+                                                     : QObject::tr("while a 3D sketch's drawing tool is active"));
   }
   if (parts.size() < 2) return parts.value(0);
   const QString last = parts.takeLast();

@@ -46,6 +46,9 @@ mod edges;
 // STEP assemblies as components and occurrences (mitcad#1274).
 mod assembly_import;
 pub use assembly_import::{ImportStructure, ImportedComponent, ImportedFile, file_has_assembly};
+// An import into a design with content wrapped in a component named after
+// the file (mitcad#1629).
+pub use assembly_import::ImportWrapper;
 
 // Animated USDZ export: time-sampled placements (mitcad#1597).
 pub mod usdz_animation;
@@ -132,6 +135,11 @@ pub(crate) struct Built3mf {
     pub model: mitcad_3mf::Model,
     pub settings: Vec<crate::document::EffectivePrint>,
     pub exported: Exported,
+    /// Each part's placements as the design places them (in the model's
+    /// order, before any turn onto the bed or move onto the plate):
+    /// filament changes at planes and faces are measured with them
+    /// (mitcad#1643).
+    pub design: Vec<Vec<Transform>>,
 }
 
 /// The print plate a 3MF model is built on (mitcad#1050): the plate whose
@@ -464,17 +472,21 @@ impl<K: Kernel> Document<K> {
             .kernel()
             .read_file(path, options)
             .map_err(kernel_error)?;
-        self.import_read_bodies(path, bodies, name)
+        self.import_read_bodies(path, bodies, name, false)
+            .map(|(imported, _)| imported)
     }
 
     /// The bodies read from the file at `path` as one base feature
-    /// ([`Document::import_file`]).
+    /// ([`Document::import_file`]); with `wrap` in a new component named
+    /// after the file, placed in the active component (mitcad#1629). One
+    /// undo step; nothing stays of a failed import.
     pub(crate) fn import_read_bodies(
         &mut self,
         path: &str,
         bodies: Vec<ImportBody<K::Shape>>,
         name: Option<&str>,
-    ) -> Result<Imported, ModelError> {
+        wrap: bool,
+    ) -> Result<(Imported, Option<ImportWrapper>), ModelError> {
         if bodies.is_empty() {
             return Err(invalid(format!("{path} has no bodies")));
         }
@@ -504,16 +516,31 @@ impl<K: Kernel> Document<K> {
             )));
         }
         let source = file_name(path);
+        let label = format!("Import {source}");
+        let depth = self.undo_depth();
+        let wrapper = if wrap {
+            Some(self.add_import_wrapper(path)?)
+        } else {
+            None
+        };
         let base = BaseInput {
             name: name.map(str::to_owned),
             source: Some(source.clone()),
+            component: wrapper.as_ref().map(|w| w.component),
             ..BaseInput::new(kept)
         };
-        let mut imported = self
-            .add_base_features(&format!("Import {source}"), vec![base])?
-            .remove(0);
+        let mut imported = match self.add_base_features(&label, vec![base]) {
+            Ok(mut added) => added.remove(0),
+            Err(e) => {
+                self.undo_back_to(depth);
+                return Err(e);
+            }
+        };
+        if wrapper.is_some() {
+            self.merge_undo(depth, &label);
+        }
         imported.warnings = warnings;
-        Ok(imported)
+        Ok((imported, wrapper))
     }
 
     /// Writes bodies at the marker to a file; all bodies when `bodies` is
@@ -1228,6 +1255,8 @@ impl<K: Kernel> Document<K> {
         };
         let mut exported = Exported::default();
         let mut parts = Vec::with_capacity(chosen.len());
+        // Each part's placements in the design (mitcad#1643).
+        let mut design: Vec<Vec<Transform>> = Vec::with_capacity(chosen.len());
         // With a slicer's settings, each part's effective ones (mitcad#640,
         // mitcad#1061), in `parts` order.
         let mut settings: Vec<crate::document::EffectivePrint> = Vec::new();
@@ -1250,7 +1279,8 @@ impl<K: Kernel> Document<K> {
                 continue;
             }
             let mesh = self.export_mesh(body, tolerance)?;
-            let placed: Vec<mitcad_3mf::Placement> = placements(body.uid)
+            let designed = placements(body.uid);
+            let placed: Vec<mitcad_3mf::Placement> = designed
                 .iter()
                 .map(|t| mitcad_3mf::Placement {
                     linear: t.linear,
@@ -1332,6 +1362,7 @@ impl<K: Kernel> Document<K> {
                     settings.push(effective);
                 }
                 exported.parts.push((body.uid, name.clone()));
+                design.push(members.iter().map(|&k| designed[k]).collect());
                 parts.push(mitcad_3mf::Part {
                     name,
                     color: color(body.uid),
@@ -1570,6 +1601,7 @@ impl<K: Kernel> Document<K> {
             model,
             settings,
             exported,
+            design,
         })
     }
 
@@ -1593,6 +1625,7 @@ impl<K: Kernel> Document<K> {
             mut model,
             settings,
             mut exported,
+            design,
         } = built;
         // Filament changes without a slicer's settings (mitcad#1596): the
         // events are a slicer's project's.
@@ -1637,7 +1670,8 @@ impl<K: Kernel> Document<K> {
                 .collect();
             // The plates' filament changes at print heights, placed on
             // their layers (mitcad#1596).
-            let changes = self.layer_events(&model, &settings, plates, plate_ids, &mut exported);
+            let changes =
+                self.layer_events(&model, &settings, plates, plate_ids, &design, &mut exported);
             // With the purge volumes set by hand (mitcad#705), on the
             // plates (mitcad#1050).
             let written = crate::print_files::export_print(

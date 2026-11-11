@@ -803,6 +803,34 @@ std::optional<QString> askStepStructure(QWidget* parent, const QString& file, bo
   return chosen;
 }
 
+std::optional<bool> askImportPlace(QWidget* parent, const QString& file) {
+  const QFileInfo info(file);
+  QMessageBox box(QMessageBox::Question, QObject::tr("Where to Import"),
+                  QObject::tr("Import %1 into a new component named %2, or into the active component?")
+                      .arg(info.fileName(), info.completeBaseName()),
+                  QMessageBox::Cancel, parent);
+  box.setObjectName(QStringLiteral("importPlace"));
+  QPushButton* component = box.addButton(QObject::tr("&New Component"), QMessageBox::AcceptRole);
+  component->setToolTip(QObject::tr("One component holds what the file brings, to move or hide at once"));
+  QPushButton* active = box.addButton(QObject::tr("Into the &Active Component"), QMessageBox::AcceptRole);
+  active->setToolTip(QObject::tr("The file's bodies or components go straight into the active component"));
+  box.setDefaultButton(component);
+  qDebug().noquote() << QStringLiteral("Import place dialog opened: %1").arg(info.fileName());
+  prepareModal(&box);
+  execDialog(&box);
+  std::optional<bool> chosen;
+  if (box.clickedButton() == component) {
+    chosen = true;
+  } else if (box.clickedButton() == active) {
+    chosen = false;
+  }
+  qDebug().noquote() << QStringLiteral("Import place: %1")
+                            .arg(!chosen  ? QStringLiteral("cancelled")
+                                 : *chosen ? QStringLiteral("new component")
+                                           : QStringLiteral("active component"));
+  return chosen;
+}
+
 std::optional<bool> askIamImport(QWidget* parent, const QString& file) {
   QDialog dialog(parent);
   dialog.setObjectName(QStringLiteral("importAssembly"));

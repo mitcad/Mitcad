@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: MIT
+# The Thread panel fits a hole too small for the thread to it
+# (mitcad#1632), on thread-fit.json: a rod of 20 with a hole of 5 through
+# it (Sketch2 F3, its diameter d3, cut by Extrude2 F4).
+#   1. Thread on the hole, M8x1.25 (two sizes up from the suggested M6x1):
+#      the preview warns, the panel's message says in words that the hole
+#      (5 mm) is 1.647 mm smaller than the thread's minor diameter, and its
+#      note offers Fit the Hole to the Thread.
+#   2. The button fits the hole: the preview has no warning, the note says
+#      what changed (Sketch2's dimension) and offers Keep the Hole; OK adds
+#      the thread and the fit as one undo step.
+#   3. One undo takes back both: the hole's dimension is 5 again.
+# Run by tools/ui-thread-fit-test.sh (Linux) and
+# tools/ui-windows-thread-fit-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+capture-undo-depth baseline
+expect-model-parameter d3 5 model
+
+# 1. Thread on the hole, a size too large for it.
+mark
+command solid.thread
+expect-log '^Command Thread started'
+wait-log '^Pick places:' 20
+click-pick 'face F2[.]b0/F4:side[(]c1[)]'
+wait-log '^Thread Faces: 1 face'
+wait-log '^Preview Thread: ok' 30
+wait-idle 30
+mark
+click-logged '^Panel Thread input size at '
+key Down Down Return
+wait-log '^Thread: Size = 8'
+wait-log '^Preview Thread: ok, warning: M8x1[.]25 ' 30
+wait-log '^Panel Thread message box: warning: M8x1[.]25 [(].8 mm, minor .6[.]647 mm[)] on a face [(].5 mm[)]: the hole.s diameter is 1[.]647 mm smaller'
+wait-log '^Panel Thread note fit_note: +\[Fit the Hole to the Thread\]'
+wait-idle 30
+
+# 2. Fit the hole: the preview shows the hole fitted, OK keeps both.
+mark
+click-logged '^Panel Thread action fit_note[.]0 at '
+wait-log '^Thread: Fit to Thread = Fit'
+wait-log '^Panel Thread note: The hole fitted to the thread: Sketch2.s dimension 5( mm)? is now 6[.]64' 30
+wait-log '^Panel Thread note fit_note: +\[Keep the Hole\]'
+wait-idle 30
+expect-no-log '^Preview Thread: ok, warning: M8x1[.]25 .*the hole.s diameter'
+mark
+button '^OK$'
+wait-log '^Added cosmetic thread M8x1[.]25 6H on 1 face[(]s[)]' 60
+wait-idle 60
+expect-undo-depth ${baseline} 1
+
+# 3. Undo: the thread and the fit go together.
+command edit.undo
+wait-idle 60
+expect-undo-depth ${baseline} 0
+expect-model-parameter d3 5 model
+expect-never 'TestDriver: FAIL'

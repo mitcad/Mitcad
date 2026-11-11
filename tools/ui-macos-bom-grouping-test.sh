@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/build core/model/src/document/bom.rs core/model-api/src/libraries.rs tools/cli
+# check-all sources: app/build app/webbrowser core/model/src/document/bom.rs core/model/src/document/library_parts.rs core/model-api/src/libraries.rs tools/cli
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$here/ui-macos-lib.sh"
@@ -24,4 +24,12 @@ MITCAD_TEST_INPUT=$MITCAD_TEST_WORK/remembered.mitcad-ui MITCAD_TEST_STEP_MS=100
 ui_expect_log '^TestDriver: quit' 'grouped view remembered across application restart'
 ui_expect_no_log 'TestDriver: FAIL' 'remembered BOM view assertions passed'
 [ "$UI_FAILURES" = 0 ] || exit 1
-echo 'PASS: Qt BOM grouping, shown CSV/PDF and unchanged design'
+# A numbered STEP file of three bodies through Component from Web's import
+# (mitcad#1663), into a new design: one Bill of Materials row.
+MITCAD_TEST_WEB_FILE="$MITCAD_TEST_WORK/6494K13_NO THREADS_Bearing.step" \
+  MITCAD_TEST_INPUT=$MITCAD_TEST_WORK/web-part.mitcad-ui MITCAD_TEST_STEP_MS=100 \
+  ui_run_app bom-web-part --ui=qt --no-native-dialogs --no-recovery --no-mcp
+ui_expect_log '^TestDriver: quit' 'numbered multi-body web part inserted and listed'
+ui_expect_no_log 'TestDriver: FAIL' 'the web part is one Bill of Materials row'
+[ "$UI_FAILURES" = 0 ] || exit 1
+echo 'PASS: Qt BOM grouping, shown CSV/PDF, unchanged design and a numbered web part as one row'

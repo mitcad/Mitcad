@@ -780,6 +780,7 @@ void MainWindow::saveVersionCopy(QWidget* parent, const QString& file, const Fil
     options.root = fileProject.root;
     options.folder = folderInProject(fileProject.root, info.absolutePath());
     options.name = QFileInfo(suggested).completeBaseName();
+    offerNewFolder(options);
     const std::optional<ProjectPickerResult> picked = pickInProjects(parent, options);
     if (!picked) {
       qInfo().noquote() << QStringLiteral("Save Copy As cancelled");

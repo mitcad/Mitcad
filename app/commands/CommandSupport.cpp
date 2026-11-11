@@ -15,6 +15,7 @@
 #include <TopoDS.hxx>
 #include <gp_Pln.hxx>
 
+#include <QDebug>
 #include <QHash>
 #include <QRegularExpression>
 
@@ -25,6 +26,7 @@
 #include "../framework/Numbers.hpp"
 #include "ProfilePicks.hpp"
 #include "SketchNormal.hpp"
+#include "SpatialPaths.hpp"
 
 namespace mitcad::cmd {
 namespace {
@@ -67,6 +69,11 @@ QString curveType(const TopoDS_Edge& edge) {
 }
 
 QString sketchCurveType(const QString& sketch, const QString& curve, const CommandContext& context) {
+  // A 3D sketch's curve in the planar form (a rib's, thin walls', a
+  // surface's curves, mitcad#1550): its type in the `sketch3d` query.
+  if (const QJsonObject spatial = spatialSketchOf(sketch, context); !spatial.isEmpty()) {
+    return spatialCurve(spatial, curve).value(QStringLiteral("type")).toString();
+  }
   try {
     const QJsonObject answer = context.queryObject(
         {{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), sketch}});
@@ -299,12 +306,81 @@ QJsonValue pathOf(const Selection& items, bool chain, Built& error, const QStrin
   return path;
 }
 
+bool isSpatialSketch(const QString& uid, const CommandContext& context) {
+  if (uid.isEmpty()) {
+    return false;
+  }
+  try {
+    return context.queryObject({{QStringLiteral("query"), QStringLiteral("feature")}, {QStringLiteral("uid"), uid}})
+               .value(QStringLiteral("type"))
+               .toString() == QStringLiteral("spatial_sketch");
+  } catch (const std::exception&) {
+    return false; // not a feature
+  }
+}
+
+QJsonObject spatialSketchOf(const QString& uid, const CommandContext& context) {
+  if (!isSpatialSketch(uid, context)) {
+    return QJsonObject();
+  }
+  try {
+    return context.queryObject({{QStringLiteral("query"), QStringLiteral("sketch3d")}, {QStringLiteral("uid"), uid}});
+  } catch (const std::exception&) {
+    return QJsonObject();
+  }
+}
+
+QJsonValue pathOf(const Selection& items, bool chain, Built& error, const QString& input,
+                  const CommandContext& context, bool reversed) {
+  // A whole 3D sketch (selected in the Browser before the command): its
+  // one open route.
+  if (items.size() == 1 && (items.first().kind == SelectKind::Sketch ||
+                            (items.first().kind == SelectKind::Feature && !isFeatureCurve(items.first())))) {
+    const QJsonObject sketch = spatialSketchOf(items.first().owner, context);
+    if (!sketch.isEmpty()) {
+      QString why;
+      const QStringList route = wholeRoute(sketch, &why);
+      if (route.isEmpty()) {
+        error = Built::failure(why, input);
+        return QJsonValue();
+      }
+      return spatialPath(items.first().owner, route, false, reversed);
+    }
+  }
+  const bool curves = !items.isEmpty() && std::all_of(items.begin(), items.end(), [&items](const SelectionItem& item) {
+    return item.kind == SelectKind::SketchCurve && item.owner == items.first().owner;
+  });
+  if (!curves || !isSpatialSketch(items.first().owner, context)) {
+    return pathOf(items, chain, error, input);
+  }
+  QStringList names;
+  for (const SelectionItem& item : items) {
+    names << item.name;
+  }
+  return spatialPath(items.first().owner, names, chain, reversed);
+}
+
 std::optional<Selection> pathItems(const QJsonValue& path, const CommandContext& context,
-                                   bool* chain) {
+                                   bool* chain, bool* reversed) {
   const QJsonObject o = path.toObject();
   Selection items;
   if (chain != nullptr) {
     *chain = o.value(QStringLiteral("chain")).toBool();
+  }
+  if (reversed != nullptr) {
+    *reversed = o.value(QStringLiteral("reversed")).toBool();
+  }
+  // Curves of a 3D sketch (mitcad#1527), as the view picks them.
+  if (const auto parts = spatialPathParts(path)) {
+    if (parts->curves.isEmpty()) {
+      return std::nullopt;
+    }
+    const QJsonObject sketch = spatialSketchOf(parts->sketch, context);
+    for (const QString& curve : parts->curves) {
+      items.append({SelectKind::SketchCurve, parts->sketch, curve,
+                    spatialCurve(sketch, curve).value(QStringLiteral("type")).toString()});
+    }
+    return items;
   }
   if (o.contains(QStringLiteral("sketch"))) {
     const QString sketch = str(o, "sketch");
@@ -863,12 +939,13 @@ bool hasBodies(const CommandContext& context) {
   return !context.queryArray(QStringLiteral("bodies")).isEmpty();
 }
 
-bool hasSketches(const CommandContext& context) {
+bool hasSketches(const CommandContext& context, bool spatial) {
   const QJsonArray features = context.queryObject({{QStringLiteral("query"), QStringLiteral("timeline")}})
                                   .value(QStringLiteral("features"))
                                   .toArray();
-  return std::any_of(features.begin(), features.end(), [](const QJsonValue& feature) {
-    return feature.toObject().value(QStringLiteral("type")).toString() == QStringLiteral("sketch");
+  return std::any_of(features.begin(), features.end(), [spatial](const QJsonValue& feature) {
+    const QString type = feature.toObject().value(QStringLiteral("type")).toString();
+    return type == QStringLiteral("sketch") || (spatial && type == QStringLiteral("spatial_sketch"));
   });
 }
 
@@ -1342,6 +1419,175 @@ InputDef toolOffsetInput() {
         const Selection& tool = s.items(QStringLiteral("tool"));
         return !tool.isEmpty() && tool.first().kind == SelectKind::Plane;
       });
+}
+
+// ---------------------------------------------------------------------------
+// Paths along 3D sketches in every path input (mitcad#1527, mitcad#1550)
+
+QString spatialOwner(const Selection& items, const CommandContext& context) {
+  if (items.isEmpty()) {
+    return QString();
+  }
+  for (const SelectionItem& item : items) {
+    if (item.kind != SelectKind::SketchCurve || item.owner != items.first().owner) {
+      return QString();
+    }
+  }
+  return isSpatialSketch(items.first().owner, context) ? items.first().owner : QString();
+}
+
+bool wholeSketchPick(const SelectionItem& item) {
+  return item.kind == SelectKind::Sketch || (item.kind == SelectKind::Feature && !isFeatureCurve(item));
+}
+
+// A line, an arc or a spline is a piece in any sketch: no query for those
+// while the pointer moves over them.
+bool spatialPathTakes(const SelectionItem& item, const CommandContext& context) {
+  switch (item.kind) {
+  case SelectKind::SketchCurve: {
+    if (item.geometry == QStringLiteral("line") || item.geometry == QStringLiteral("arc") ||
+        item.geometry == QStringLiteral("spline")) {
+      return true;
+    }
+    const QJsonObject sketch = spatialSketchOf(item.owner, context);
+    return sketch.isEmpty() || notAPiece(spatialCurve(sketch, item.name)).isEmpty();
+  }
+  case SelectKind::Feature:
+    if (isFeatureCurve(item)) {
+      return true;
+    }
+    return !wholeRoute(spatialSketchOf(item.owner, context)).isEmpty();
+  case SelectKind::Sketch:
+    return !wholeRoute(spatialSketchOf(item.owner, context)).isEmpty();
+  default:
+    return true;
+  }
+}
+
+QString spatialPathRefusal(const SelectionItem& item, const CommandContext& context) {
+  const QJsonObject sketch = spatialSketchOf(item.owner, context);
+  const QString name = sketch.value(QStringLiteral("name")).toString(item.owner);
+  if (item.kind == SelectKind::SketchCurve && !sketch.isEmpty()) {
+    const QString why = notAPiece(spatialCurve(sketch, item.name));
+    return why.isEmpty() ? QString() : QObject::tr("This curve of %1 %2.").arg(name, why);
+  }
+  if (wholeSketchPick(item)) {
+    if (sketch.isEmpty()) {
+      return item.kind == SelectKind::Sketch ? QObject::tr("Pick the curves of the sketch in the view.") : QString();
+    }
+    QString why;
+    wholeRoute(sketch, &why);
+    return why.isEmpty() ? QString() : QObject::tr("%1.").arg(why);
+  }
+  return QString();
+}
+
+QStringList itemNames(const Selection& items) {
+  QStringList names;
+  for (const SelectionItem& item : items) {
+    names << item.name;
+  }
+  return names;
+}
+
+void takeWholeRoute(const SelectionItem& item, CommandState& state, const CommandContext& context,
+                    const QString& id) {
+  if (!wholeSketchPick(item)) {
+    return;
+  }
+  const QJsonObject sketch = spatialSketchOf(item.owner, context);
+  const QStringList curves = wholeRoute(sketch);
+  if (curves.isEmpty()) {
+    return;
+  }
+  Selection items;
+  for (const QString& curve : curves) {
+    items.append({SelectKind::SketchCurve, item.owner, curve,
+                  spatialCurve(sketch, curve).value(QStringLiteral("type")).toString()});
+  }
+  state.setItems(id, items);
+  state.setObject(id + QStringLiteral("_direction"), QJsonObject());
+  qDebug().noquote() << QStringLiteral("Path %1: %2 taken whole: %3")
+                            .arg(id, sketch.value(QStringLiteral("name")).toString(item.owner),
+                                 curves.join(QStringLiteral(", ")));
+}
+
+QString spatialRouteListing(const Selection& items, bool chain, bool reversed, const CommandContext& context,
+                            const QString& id) {
+  // A whole 3D sketch picked: its route.
+  if (items.size() == 1 && wholeSketchPick(items.first())) {
+    const QJsonObject sketch = spatialSketchOf(items.first().owner, context);
+    const QStringList route = wholeRoute(sketch);
+    if (!route.isEmpty()) {
+      Selection curves;
+      for (const QString& curve : route) {
+        curves.append({SelectKind::SketchCurve, items.first().owner, curve, QString()});
+      }
+      return spatialRouteListing(curves, false, reversed, context, id);
+    }
+  }
+  const QString sketch = spatialOwner(items, context);
+  if (sketch.isEmpty()) {
+    return QString();
+  }
+  const QJsonObject path{{QStringLiteral("curves"), QJsonArray::fromStringList(itemNames(items))},
+                         {QStringLiteral("chain"), chain},
+                         {QStringLiteral("reversed"), reversed}};
+  try {
+    const QJsonObject answer = context.queryObject(
+        {{QStringLiteral("query"), QStringLiteral("sketch3d")}, {QStringLiteral("uid"), sketch}, {QStringLiteral("path"), path}});
+    QString why;
+    const QString text = routeText(answer.value(QStringLiteral("route")).toObject(), &why);
+    if (!why.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Path %1 of %2 is not one path: %3").arg(id, sketch, why);
+    }
+    return text;
+  } catch (const std::exception&) {
+    return QString();
+  }
+}
+
+void keepPathDirection(const QJsonValue& path, CommandState& state, const QString& id) {
+  if (const auto parts = spatialPathParts(path)) {
+    state.setObject(id + QStringLiteral("_direction"), keptDirection(*parts));
+  }
+}
+
+bool keptPathReversed(const CommandState& state, const QString& id) {
+  return reversedBy(state.object(id + QStringLiteral("_direction")), itemNames(state.items(id)));
+}
+
+// ---------------------------------------------------------------------------
+// Curves that grow walls and surfaces from their sketch's plane (mitcad#1550)
+
+bool planeCurveTakes(const SelectionItem& item, const CommandContext& context) {
+  return planeCurveRefusal(item, context).isEmpty();
+}
+
+QString planeCurveRefusal(const SelectionItem& item, const CommandContext& context) {
+  if (item.kind != SelectKind::SketchCurve) {
+    return QString();
+  }
+  const QJsonObject sketch = spatialSketchOf(item.owner, context);
+  // A 2D sketch's curve, or a 3D sketch that did not solve: the model says
+  // what is wrong with it.
+  if (sketch.isEmpty() || !sketch.contains(QStringLiteral("plane_curves"))) {
+    return QString();
+  }
+  const QString name = sketch.value(QStringLiteral("name")).toString(item.owner);
+  if (spatialCurve(sketch, item.name).value(QStringLiteral("type")).toString() == QStringLiteral("reference")) {
+    // In words: the curve's id is not for the person (mitcad#1612).
+    return QObject::tr("This curve of %1 is a reference curve, geometry from outside the sketch: draw a curve "
+                       "on it.")
+        .arg(name);
+  }
+  const QJsonArray inPlane = sketch.value(QStringLiteral("plane_curves")).toArray();
+  if (inPlane.contains(QJsonValue(item.name))) {
+    return QString();
+  }
+  return QObject::tr("This curve of %1 does not lie in its sketch plane: walls and surfaces grow from a 3D "
+                     "sketch's curves in its sketch plane.")
+      .arg(name);
 }
 
 } // namespace mitcad::cmd

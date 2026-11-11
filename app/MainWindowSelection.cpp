@@ -97,7 +97,7 @@ const SelectionScope* MainWindow::commandScope() const {
 }
 
 QString MainWindow::editedSketch() const {
-  return m_sketch != nullptr && m_sketch->isActive() ? m_sketch->uid() : QString();
+  return editingSketchUid(); // a planar or a 3D sketch (mitcad#1524)
 }
 
 SelectionScope* MainWindow::activeSelectionScope() {

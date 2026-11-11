@@ -269,11 +269,16 @@ CommandDef extrudeCommand(const CommandContext& context) {
                 return thin(state) ? SelectKind::Profile | SelectKind::SketchCurve
                                    : SelectKind::Profile | SelectKind::Face;
               },
-              // A face alone, or sketch items (mitcad#868, ProfilePicks).
-              [](const SelectionItem& item, const CommandState& state) {
-                return profilesTake(item, state.items(QStringLiteral("profiles")));
+              // A face alone, or sketch items (mitcad#868, ProfilePicks); a
+              // 3D sketch's curves in its sketch plane (mitcad#1550).
+              [&context](const SelectionItem& item, const CommandState& state) {
+                return profilesTake(item, state.items(QStringLiteral("profiles"))) &&
+                       planeCurveTakes(item, context);
               })
-          .withRefusedHint([](const SelectionItem& item, const CommandState& state) {
+          .withRefusedHint([&context](const SelectionItem& item, const CommandState& state) {
+            if (const QString why = planeCurveRefusal(item, context); !why.isEmpty()) {
+              return why;
+            }
             return profilesRefused(item, state.items(QStringLiteral("profiles")), isPlanar(item),
                                    ProfilesCommand::Extrude, state.choice(QStringLiteral("start")));
           }),
@@ -445,8 +450,9 @@ CommandDef extrudeCommand(const CommandContext& context) {
     return changed;
   };
   // Thin walls follow sketch curves too, so a sketch of open curves is
-  // enough (mitcad#463); a body's planar face is a profile too (mitcad#535).
-  def.enabled = [&context] { return hasProfiles(context) || hasSketches(context) || hasBodies(context); };
+  // enough (mitcad#463), a 3D sketch's too (mitcad#1550); a body's planar
+  // face is a profile too (mitcad#535).
+  def.enabled = [&context] { return hasProfiles(context) || hasSketches(context, true) || hasBodies(context); };
   // The view's context menu (mitcad#494) offers it for profiles and sketch
   // curves, and for one planar face, which the face alone completes: it is
   // the profile, not only where the extrusion goes.

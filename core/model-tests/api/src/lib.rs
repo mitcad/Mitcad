@@ -55,9 +55,21 @@ mod mcp_reference_tests;
 // A feature value that uses the field's own parameter keeps it as a user
 // parameter (mitcad#1536).
 mod feature_own_parameter_tests;
+// 3D sketches through their sketch3d.* commands and query (mitcad#1522).
+mod sketch3d_tests;
 // Read-only modeling guidance and bounded print analysis (mitcad#1513).
 mod design_review_tests;
 // Occurrence-specific print context in design review (mitcad#1513).
 mod design_review_print_context_tests;
 // What a person reads names no faces, edges, ids or points (mitcad#1612).
 mod user_text_guard_tests;
+// What a person reads of 3D sketches' refusals and failures names no ids
+// (mitcad#1644).
+mod sketch3d_user_text_tests;
+// 3D relations and dimensions: parallel, perpendicular, angle, symmetry,
+// concentric, curvature, On Plane, spline length, tangent magnitude and
+// driven dimensions used by the sketch's own (mitcad#1661).
+mod sketch3d_relations_tests;
+// Copy, Cut and Paste of 3D sketch geometry, and planar geometry pasted into
+// a 3D sketch (mitcad#1661).
+mod sketch3d_clipboard_tests;

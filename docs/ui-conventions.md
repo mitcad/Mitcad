@@ -470,7 +470,10 @@ edges, vertices, points).
   (a chamfer or fillet too large, a thread, sketch conflicts, an export)
   and checks every shown message. A scan test over `geometry/src/*.cpp`
   refuses thrown text that names an edge or a face, or prints a point,
-  outside `placed_error`. Old texts and imported ones are still cleaned on
+  outside `placed_error`; one over the 3D sketches' sources refuses a
+  message that names an id or a source outside `notice::said` and its
+  kin, and `sketch3d_user_text_tests.rs` checks their refusals as written
+  (mitcad#1644). Old texts and imported ones are still cleaned on
   the way (bare names and body uids become words, a coordinate tuple a
   point place), but new messages are written plain from the start.
 

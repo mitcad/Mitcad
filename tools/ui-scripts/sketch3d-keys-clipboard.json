@@ -1,0 +1,8 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design of the 3D sketch keys and clipboard UI test (mitcad#1661; tools/ui-sketch3d-keys-clipboard-test.sh, tools/ui-windows-sketch3d-keys-clipboard-test.ps1, tools/ui-scripts/sketch3d-keys-clipboard.mitcad-ui): two empty 3D sketches on XY, 3DSketch1 (F1), where a route is drawn with the manipulator's keys and copied, and 3DSketch2 (F2), where it is pasted."},
+  {"cmd": "sketch3d.create", "support": "xy"},
+  {"cmd": "sketch3d.create", "support": "xy"},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"expect": {"feature": "3DSketch2", "status": "ok"}}
+]

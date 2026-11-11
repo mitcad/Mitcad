@@ -1,0 +1,29 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. A 3D sketch's profiles and a 3D sketch back to 2D (mitcad#1550) on the geometry kernel. Sketch1 (F1): a fully constrained 40 x 30 rectangle (c1-c4, p5-p8, k1-k6) turned into a 3D sketch: its closed loop in the sketch plane bounds the region a planar rectangle has, under the same key, and it all lies in its plane."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "sketch3d.convert", "sketch": "F1"},
+  {"expect": {"feature": "Sketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "type": "spatial_sketch", "flat": true,
+    "regions": ["r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"]}}},
+
+  {"comment": "Extrude1 (F2) takes the 3D sketch's region: a 40 x 30 x 10 block."},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"expect": {"feature": "Extrude1", "status": "ok", "body": "F2.b0", "volume": 12000}},
+
+  {"comment": "d1 widens it in plane: the Extrude follows (50 x 30 x 10)."},
+  {"cmd": "set_parameter", "name": "d1", "value": 50},
+  {"expect": {"feature": "Extrude1", "status": "ok", "body": "F2.b0", "volume": 15000}},
+
+  {"comment": "Back to 2D in place: the planar sketch with its ids, the Extrude keeps its profile; undone, it is the 3D sketch again."},
+  {"cmd": "sketch3d.convert_to_2d", "sketch": "F1"},
+  {"expect": {"feature": "Sketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "timeline"}, "result": {"features": [{"uid": "F1", "type": "sketch"}, {"uid": "F2", "type": "extrude"}]}}},
+  {"expect": {"feature": "Extrude1", "status": "ok", "body": "F2.b0", "volume": 15000}},
+  {"cmd": "undo"},
+  {"expect": {"query": {"query": "timeline"}, "result": {"features": [{"uid": "F1", "type": "spatial_sketch"}, {"uid": "F2", "type": "extrude"}]}}},
+  {"expect": {"feature": "Extrude1", "status": "ok", "body": "F2.b0", "volume": 15000}}
+]

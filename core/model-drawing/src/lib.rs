@@ -33,11 +33,15 @@ pub mod cut_sheet;
 pub mod dwg;
 pub mod dxf;
 pub mod pdf;
+// A title block's images as PDF images (mitcad#1625).
+pub mod pdf_image;
 pub mod sheet;
 // Dimensions snapped to the spacing of the one placed before
 // (mitcad#1173).
 pub mod spacing;
 pub mod svg;
+// A title block's SVG images as paths for PDF, DXF and DWG (mitcad#1627).
+pub mod svg_image;
 pub mod tables;
 pub mod template;
 

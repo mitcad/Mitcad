@@ -309,16 +309,26 @@ impl SketchEdit<'_> {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             sorted_along(&at).map_err(|(a, b)| {
-                let along = match input.mode {
-                    SpacingMode::Horizontal => "x axis",
-                    SpacingMode::Vertical => "y axis",
-                    _ => "direction",
+                // Whole messages, each one template (mitcad#1626).
+                let (along, said) = match input.mode {
+                    SpacingMode::Horizontal => (
+                        "x axis",
+                        "equal spacing: two items are at the same place along the x axis; give \
+                         their order (keep the listed order) or measure another way",
+                    ),
+                    SpacingMode::Vertical => (
+                        "y axis",
+                        "equal spacing: two items are at the same place along the y axis; give \
+                         their order (keep the listed order) or measure another way",
+                    ),
+                    _ => (
+                        "direction",
+                        "equal spacing: two items are at the same place along the direction; \
+                         give their order (keep the listed order) or measure another way",
+                    ),
                 };
                 crate::said(
-                    format!(
-                        "equal spacing: two items are at the same place along the {along}; give \
-                         their order (keep the listed order) or measure another way"
-                    ),
+                    said,
                     format!(
                         "equal spacing: {a} and {b} are at the same place along the {along}; give \
                          their order (keep the listed order) or measure another way"

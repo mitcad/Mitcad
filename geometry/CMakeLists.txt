@@ -155,6 +155,10 @@ target_sources(mitcad_geometry PRIVATE
   include/mitcad/geometry/sheet_domain.hpp
   include/mitcad/geometry/sheet_trim.hpp
   include/mitcad/geometry/sheet.hpp)
+# Sheet footprints of ordinary cuts across bends (mitcad#1628).
+target_sources(mitcad_geometry PRIVATE
+  src/sheet_footprint.cpp
+  include/mitcad/geometry/sheet_footprint.hpp)
 # The faces a run of features made, as solids a pattern copies (its
 # optimized compute option).
 target_sources(mitcad_geometry PRIVATE

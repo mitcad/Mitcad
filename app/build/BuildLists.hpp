@@ -4,14 +4,17 @@
 // BUILD's OUTPUT group (mitcad#375): the cut list (the `build_cut_list`
 // query: the cut parts grouped by identical result, their stock and the
 // other parts) and the parts list (`parts_list`), each a table that copies
-// as CSV and saves CSV files. PDFs carry the design's name and the date,
-// with the same layout used for printing (mitcad#1089).
+// and saves as CSV and as an aligned plain-text table (mitcad#1641,
+// ListTables.hpp). PDFs carry the design's name and the date, with the same
+// layout used for printing (mitcad#1089).
 
 #include <QDialog>
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
 #include <QVector>
+
+#include "ListTables.hpp"
 
 class QCheckBox;
 class QDoubleSpinBox;
@@ -27,17 +30,6 @@ class CommandContext;
 
 namespace build {
 
-// A table of a list: its heading, the column names and the rows' cells.
-struct ListTable {
-  QString heading;
-  QStringList columns;
-  QVector<QStringList> rows;
-  QVector<QString> tooltips{};
-};
-
-// The tables as CSV: each table's columns and rows, a blank line between
-// tables, fields quoted where they need it.
-QString csvOf(const QVector<ListTable>& tables);
 // Writes the tables to a PDF (A4) under a title and a line with the
 // design's name and the date; false with the reason when it cannot.
 bool writeListPdf(const QString& path, const QString& title, const QString& subtitle,
@@ -89,6 +81,15 @@ private:
   void copyCsv();
   void savePdf();
   void saveCsv();
+  // The tab shown as an aligned plain-text table (mitcad#1641): Copy as
+  // Text, Save as Text….
+  void copyText();
+  void saveText();
+  // Asks where to save the tab shown (`caption`, `extension` with its
+  // `filter`) and writes `contents` there as UTF-8; `what` names the form
+  // in the log ("CSV", "text"). False when it was not written.
+  bool saveList(const QString& caption, const QString& extension, const QString& filter, const QString& errorTitle,
+                const QString& what, const QString& contents);
   QVector<ListTable> shownTables() const;
   // Logs where the property columns field is, for UI tests.
   void logLayout();

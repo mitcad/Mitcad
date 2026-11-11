@@ -1,0 +1,172 @@
+# SPDX-License-Identifier: MIT
+# Placements held where the snap marker showed (mitcad#1645, GitHub
+# mitcad/Mitcad#245), on sketch-snap-hold.json's designs. In Sketch1:
+#   1. The circle c6 copied and pasted with its centre on p3: the pasted
+#      centre is held on p3, in the paste's one undo step.
+#   2. Move/Copy's handle on the circle c8 (at its centre p9) dragged by
+#      its square onto p5: p9 is held on p5.
+#   3. Move/Copy with Create Copy, Point to Point from c6's centre p7 to
+#      p4: the copy's centre is held on p4, the original stays free.
+# The wrapper checks the saved design with sketch-snap-hold-check.json:
+# the three holds, and the centres follow their points when those move.
+# In Sketch2:
+#   4. A text's frame dragged from p3 to p4: both corners held there.
+#   5. A 3-Point Arc whose middle click is on p5: the arc held through p5.
+#   6. A Center Point Arc about (15, -10) from (15, -20) ending on p6, at
+#      its radius: the end held on p6.
+# No hold is refused. The clicks stay within x -30..30 mm, y -25..25 mm:
+# the free part of the view after the fit also in session 0's 1024x768
+# window on Windows. Run by tools/ui-sketch-snap-hold-test.sh (Linux) and
+# tools/ui-windows-sketch-snap-hold-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+capture-undo-depth start
+
+# 1. Copy c6, paste it with its centre on p3.
+mark
+sketch-click -17 0
+expect-selection 1 0
+mark
+command sketch.copy
+wait-log '^Copied c6 from Sketch1: .*base point at \(-20, 0\)$'
+mark
+command sketch.paste
+wait-log '^Sketch tool Paste'
+sketch-move 2 8
+sketch-move 5 10
+sketch-click 5 10
+wait-log '^Pasted p[0-9]+, c[0-9]+ into Sketch1 at \(5, 10\)'
+expect-log '^Paste of p[0-9]+ dropped on point p3$'
+expect-no-log 'not added: '
+expect-undo-depth ${start} 1
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/sketch-snap-hold-paste.png'
+
+# 2. Move/Copy's handle at c8's centre dragged onto p5.
+mark
+sketch-click -17 -15
+expect-selection 1 0
+mark
+command sketch.move
+wait-log '^Command Move/Copy started'
+wait-log '^Preview Move/Copy: ok'
+wait-log '^Sketch handle at \(-20\.000, -15\.000\)$'
+wait-idle
+mark
+sketch-pointer press -20 -15
+wait-log '^Sketch handle drag started on its square$'
+sketch-pointer move -12 -15
+sketch-pointer move -4 -13
+sketch-pointer move 4 -15
+sketch-pointer move 10 -15
+sketch-pointer release 10 -15
+wait-log '^Sketch handle holds p9 where it was dropped: point p5$'
+wait-log '^Sketch handle dropped: dx 30\.000, dy 0\.000$'
+wait-log '^Preview Move/Copy positions: .*\(10\.000, -15\.000\)'
+expect-input-text dx '^30 mm$'
+expect-no-log 'not held where it was dropped'
+screenshot '${MITCAD_TEST_WORK}/sketch-snap-hold-handle.png'
+mark
+button '^OK$'
+wait-log '^Added Move/Copy'
+wait-idle
+
+# 3. Move/Copy with Create Copy, Point to Point from c6's centre to p4.
+mark
+sketch-click -17 0
+expect-selection 1 0
+mark
+command sketch.move
+wait-log '^Command Move/Copy started'
+wait-log '^Preview Move/Copy: ok'
+# Point to Point first: no preview runs until both points are picked, so
+# no copy lies on the original when its centre is picked.
+mark
+qt-choice input_type 'Point to Point'
+wait-idle
+mark
+click-logged '^Panel Move/Copy input copy at '
+wait-log '^Move/Copy: Create Copy = on'
+wait-idle
+mark
+sketch-click -20 0
+wait-log '^Sketch point picked for the command: p7 at \(-20\.000, 0\.000\), (center|point) p7$'
+mark
+sketch-click 20 10
+wait-log '^Sketch point picked for the command: p4 at \(20\.000, 10\.000\), point p4$'
+wait-log '^Preview Move/Copy: ok'
+expect-no-log 'not held where it was dropped'
+screenshot '${MITCAD_TEST_WORK}/sketch-snap-hold-copy.png'
+mark
+button '^OK$'
+wait-log '^Added Move/Copy'
+wait-idle
+
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle
+
+# 4. In Sketch2, a text's frame dragged from p3 to p4.
+mark
+dblclick-logged '^Timeline Sketch2 at '
+wait-log '^Editing sketch F2 \(Sketch2\)'
+key F6
+wait-idle
+mark
+command sketch.text
+sketch-pointer press -25 15
+sketch-pointer move -18 18
+sketch-pointer move -10 22
+sketch-pointer move -5 25
+sketch-pointer release -5 25
+type Hold
+key Return
+wait-log '^Added text t[0-9]+ "Hold" in a frame from '
+expect-log '^Text frame corner p[0-9]+ dropped on point p3$'
+expect-log '^Text frame corner p[0-9]+ dropped on point p4$'
+expect-no-log 'not added: '
+key Escape
+key Escape
+wait-idle
+
+# 5. A 3-Point Arc from (5, 15) to (25, 15) through p5 at (15, 18).
+mark
+command sketch.arc
+sketch-click 5 15
+sketch-click 25 15
+sketch-move 15 17
+sketch-click 15 18
+wait-log '^Added arc c[0-9]+, radius '
+expect-log '^Arc c[0-9]+ held through point p5$'
+expect-no-log 'not added: '
+key Escape
+key Escape
+wait-idle
+
+# 6. A Center Point Arc about (15, -10) from (15, -20) to p6 at (25, -10),
+# counter-clockwise.
+mark
+command sketch.arc_center
+sketch-click 15 -10
+sketch-click 15 -20
+sketch-move 20 -19
+sketch-move 23 -16
+sketch-click 25 -10
+wait-log '^Added arc c[0-9]+, radius '
+expect-log '^Arc c[0-9]+ end p[0-9]+ dropped on point p6$'
+expect-no-log 'not added: '
+key Escape
+key Escape
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/sketch-snap-hold-sketch2.png'
+
+command sketch.finish
+wait-log '^Sketch finished'
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|not held where it was dropped|TestDriver: FAIL'

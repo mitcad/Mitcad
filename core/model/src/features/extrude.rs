@@ -503,7 +503,7 @@ pub(crate) fn check_profiles(
     let Some(first) = profiles.first() else {
         return Err("no profiles selected".to_owned());
     };
-    ctx.sketch(first.sketch)?;
+    ctx.profile_sketch(first.sketch)?;
     if profiles.iter().any(|p| p.sketch != first.sketch) {
         return Err("the profiles must come from one sketch".to_owned());
     }
@@ -722,7 +722,8 @@ impl FeatureInfo for ExtrudeDef {
             Some(_) if !self.profiles.is_empty() => {
                 return Err("thin walls along curves take no profiles".to_owned());
             }
-            Some(curves) => curves.check(ctx)?,
+            // A 3D sketch's in its sketch plane too (mitcad#1550).
+            Some(curves) => curves.check_in_plane(ctx)?,
             None => surface_sweeps::check_inputs(
                 ctx,
                 self.surface,

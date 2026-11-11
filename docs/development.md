@@ -760,7 +760,19 @@ icons, licences incl. `packaging/linux/THIRD-PARTY-NOTICES.txt`), then:
   executable in `usr/bin` and every library an `$ORIGIN` RUNPATH, so
   none of them loads a system's Qt; its Qt plugin adds the X11/GLX platform, image formats, SVG
   icons and TLS backends. glibc, libstdc++, X11/xcb, OpenGL, fontconfig
-  and FreeType stay the system's.
+  and FreeType stay the system's, and so do GLib, libcups and the GPU
+  drivers (`make-appimage.sh` excludes them for the Qt plugin too, through
+  `LINUXDEPLOY_EXCLUDED_LIBRARIES`, and fails when one is in `usr/lib`).
+  GLib (mitcad#1654): Insert › Component from Web's web browser component,
+  loaded at run time from the user's data folder, takes libgobject and
+  libgio from the system; with the build root's GLib 2.80 bundled, the
+  system's libgobject ran on the bundled libglib, and on GLib 2.86 or newer
+  the module did not load (`undefined symbol: g_string_copy`). Libraries
+  nothing in the AppDir needs (those an excluded library needs, such as
+  libmount of libgio) are removed; what is loaded by name (`--library`:
+  libssl, Open Image Denoise's device modules) stays. `appimage-test.sh`
+  loads the component in the running AppImage (`--browser`, or the build's
+  `browser-component`).
 - OpenSSL comes as a pair of one build (mitcad#954): the render worker
   links vcpkg's `libcrypto.so.3` (minizip-ng's), so `libssl.so.3` from
   the same folder goes in too, and Qt's OpenSSL TLS backend, which loads
@@ -885,6 +897,22 @@ subprocess helper and CEF's runtime.
   (`unchanged`) or builds a new package versioned by the build's time
   (YYYY.MDD.HMM), signed on macOS, and writes the line that
   `mitcad-release manifest --browser … <url>` takes ([updates.md](updates.md#the-web-browser-component)).
+- **No build machine's folders in the package** (mitcad#1658). Before it
+  signs and zips, `browser-package.sh` strips the module's and the
+  helpers' debug information (`strip --strip-unneeded` on Linux, as
+  `make-appimage.sh` strips the AppImage; `strip -S -x` on macOS, whose
+  app has no dSYM either: no release keeps symbols aside), then fails if
+  `strings` over them finds the source tree, the build folder or CEF's
+  distribution. The file names CEF's logging macros compile in
+  (`__FILE__`, `__builtin_FILE()`), which stripping leaves, are relative:
+  `app/webbrowser/CMakeLists.txt` maps CEF's folder to `cef/` for
+  `libcef_dll_wrapper` (`-ffile-prefix-map`) and the source tree and CEF's
+  folder for the module's and the helpers' macros only
+  (`-fmacro-prefix-map`; their debug information keeps the real paths for
+  a debugger in a build). A build's `browser-component` is not stripped.
+  `tools/appimage-test.sh --browser <package zip> <AppImage> <built mitcad>`
+  checks a package the same way before it loads it (section 2d). Windows
+  keeps its paths in the PDBs, which are not packaged.
 - **Licences.** CEF and Chromium are BSD-3-Clause with Chromium's bundled
   components under their own (FFmpeg's LGPL-2.1 inside libcef, a shared
   library of its own in the package); the package carries its notices and
@@ -1549,7 +1577,10 @@ with `mitcad-cli import-ipt`, compared with a STEP file of the same part
 next to it, `<name>.stp`, within 1e-6 or the limit the folder's
 `references.tsv` gives the file), `core/ipt/tests/corpus.rs` and a step
 of `ui-import-test.sh` (the smallest file). Files run as the other corpus
-tests do (the options above). See
+tests do (the options above). The assembly tests `iam.corpus` and
+`iam.corpus_reorient` read `MITCAD_IAM_CORPUS`, or `MITCAD_IPT_CORPUS` when
+it is unset, so that the assemblies' folders (with the parts they refer
+to) need not also be `ipt.corpus`'s parts. See
 [core/import/docs/ipt.md](../core/import/docs/ipt.md#ipt-import).
 
 ### .dwg corpus
@@ -1645,6 +1676,16 @@ in the distro only:
   ones with it on, every other sharp line still drawn, the body unchanged
   (mitcad#1438); skipped with a message without it. A synthetic filleted
   block in `geometry.drawing` runs the same checks without the file.
+  ctest `cli.thread_fit_reported` (`tools/cli/thread-fit-reported-test.cmake`)
+  finds a design by its content id in the folder's project subsets (the
+  folder may hold them in subfolders, each with its `.mitcad/` store),
+  runs Auto Fix on its thread on a bore too small for it and checks that
+  it is refused as the design is (a chamfer on the step between the bore
+  and the thread's crest would fail) and, with that chamfer suppressed,
+  that the bore's radius dimension `72/2` becomes `73.835/2`, the wall
+  dimension stays 3 mm and no feature newly fails (mitcad#1632); skipped
+  with a message without it. The mock kernel's model tests
+  (`thread_autofix_tests`) cover the same case without the file.
 
 ### SolidCraft designs
 
@@ -2069,7 +2110,12 @@ runs one step after another. Build and lint use half the cores unless
   string as it is. The model's tests assert it (`user_text_leaks`) and the
   ctest `geometry.user-text-scan` refuses thrown text in
   `geometry/src/*.cpp` that names an edge or a face, or prints a point,
-  outside `placed_error`.
+  outside `placed_error`. The 3D sketches' sources (`core/sketch/src/spatial*.rs`,
+  `core/model/src/features/spatial_*.rs`, their document and api files) are
+  scanned likewise by `core/model-tests/api/src/sketch3d_user_text_tests.rs`
+  (mitcad#1644): a message that puts an id or a source into its text is
+  refused unless `notice::said`, `said_at`, `said_after` or
+  `said_around` pairs it with plain words.
 - A color the user sees is a role of the role table
   (`themeColor`, `viewColor` in `app/framework/Theme.hpp`), never a
   literal: the ctest `repo.ui-colors` (`tools/ui-colors-check`) fails on

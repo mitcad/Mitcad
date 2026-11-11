@@ -1,0 +1,47 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. The plane-bound drawing tools of a 3D sketch (mitcad#1550), as they send their commands, on the geometry kernel: in 3DSketch1 (F1) a 2-point rectangle on the YZ plane through x = 10 (Horizontal and Vertical in that plane, its corners kept in it), its first corner fixed and its first side 50 long; an ellipse on the XY plane at z = 30 whose minor radius the solve takes from 5 to its dimension, 8; an inscribed hexagon with its circle's radius; a circle on the YZ plane; a text on the YZ plane. Each shape is one undo step."},
+  {"cmd": "sketch3d.create"},
+  {"cmd": "sketch3d.add_rectangle", "sketch": "F1", "mode": "two_point",
+    "a": [10, 0, 0], "b": [10, 40, 20], "plane": "yz"},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Add Rectangle in 3DSketch1"}}},
+  {"cmd": "sketch3d.fix", "sketch": "F1", "points": ["p1"]},
+  {"cmd": "sketch3d.add_dimension", "sketch": "F1",
+    "dimension": {"type": "length", "line": "c5"}, "value": 50},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 1, "fully_constrained": false},
+    "points": [{"id": "p1", "at": [10, 0, 0]}, {"id": "p2", "at": [10, 50, 0]},
+               {"id": "p3", "at": [10, 50, 20]}, {"id": "p4", "at": [10, 0, 20]}],
+    "constraints": [
+      {"id": "k1", "type": "in_plane", "normal": "x", "relation": {"type": "horizontal", "line": "c5"}},
+      {"id": "k2", "type": "in_plane", "normal": "x", "relation": {"type": "vertical", "line": "c6"}},
+      {"id": "k3", "type": "in_plane", "normal": "x", "relation": {"type": "horizontal", "line": "c7"}},
+      {"id": "k4", "type": "in_plane", "normal": "x", "relation": {"type": "vertical", "line": "c8"}},
+      {"id": "k5", "type": "plane_bound", "normal": "x", "points": ["p1", "p2", "p3", "p4"]},
+      {"id": "k6", "type": "fix"}]}}},
+
+  {"comment": "The ellipse: centre p9, major point p10, curve c11; its minor radius solved to the dimension."},
+  {"cmd": "sketch3d.add_ellipse", "sketch": "F1", "center": [0, 0, 30], "major": [25, 0, 30],
+    "minor_radius": 5, "plane": "xy", "major_value": 25, "minor_value": 8},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Add Ellipse in 3DSketch1"}}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "curves": [{}, {}, {}, {},
+               {"id": "c11", "type": "ellipse", "center": "p9", "major": "p10", "minor_radius": 8,
+                "geometry": {"major": 25, "minor": 8, "normal": [0, 0, 1]}}]}}},
+
+  {"comment": "An inscribed hexagon: corners p12-p17, sides c18-c23, centre p24, construction circle c25 with its radius 10 (k22)."},
+  {"cmd": "sketch3d.add_polygon", "sketch": "F1", "center": [50, 0, 0], "vertex": [60, 0, 0],
+    "sides": 6, "plane": "xy", "radius": 10},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Add Polygon in 3DSketch1"}}},
+
+  {"comment": "A circle on the YZ plane, its normal bound to X, and a text on that plane."},
+  {"cmd": "sketch3d.add_circle", "sketch": "F1", "center": [0, 40, 0], "radius": 7, "plane": "yz"},
+  {"cmd": "sketch3d.add_text", "sketch": "F1", "text": "AB", "at": [0, -30, 0], "plane": "yz",
+    "height": 5},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Add Text in 3DSketch1"}}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 12, "measured": {"k22": 10, "k23": 7, "k8": 25, "k9": 8}},
+    "texts": [{"id": "t28", "plane": "YZ", "normal": "x", "z": 0}]}}},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"cmd": "undo"},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Add Circle in 3DSketch1"}}}
+]

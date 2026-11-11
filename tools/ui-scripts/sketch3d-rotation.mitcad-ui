@@ -1,0 +1,179 @@
+# SPDX-License-Identifier: MIT
+# The free rotation of a 3D sketch's placement plane (mitcad#1661, app/COMMANDS.md
+# "3D sketch drawing tools"), on sketch3d-rotation.json (3DSketch1 F1 on XY
+# with the line p1 to p2 from the origin along X, 40 long): a route drawn
+# with the rotated plane.
+#   1. Edit 3DSketch1, Line: the rotation handles X, Y and Z are logged
+#      where they can be grabbed; the route starts at p2.
+#   2. Rotate X 90 typed: the plane is the rotated XY (its Y the sketch's
+#      Z, its normal the sketch's -Y). Axis and Length along the rotated Y,
+#      30: the end is (40, 0, 30); the line carries the rotated frame.
+#   3. The Z handle dragged to the X handle's place: the plane turns about
+#      its Z (the sketch's -Y) by a whole number of degrees; a click puts
+#      the next end along the turned Y, in the sketch's XZ plane (y 0).
+#   4. A Center Diameter Circle at p2 on the rotated plane, its Radius
+#      typed: its command carries the rotated plane's frame, and the sketch
+#      solves with it.
+#   5. Reset: the sketch's XY, On Plane. Show Handles and Show Plane off
+#      and on.
+#   6. Finish; reopened, the sketch's stored frame is as it was and Line
+#      starts on the sketch's XY, not rotated.
+# A field clicked is given the keyboard with focus-widget too: a click on
+# a card floating in its own window does not activate it under Xvfb.
+# Run by tools/ui-sketch3d-rotation-test.sh (Linux) and
+# tools/ui-windows-sketch3d-rotation-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. Edit 3DSketch1; Line from p2.
+mark
+dblclick-logged '^Timeline 3DSketch1 at '
+wait-log '^Editing 3D sketch F1 [(]3DSketch1[)]'
+wait-log '^3D sketch frame in the design: origin [(]0[.]000000, 0[.]000000, 0[.]000000[)], x axis [(]1[.]000000, 0[.]000000, 0[.]000000[)], normal [(]0[.]000000, 0[.]000000, 1[.]000000[)]$'
+wait-log '^3D sketch entity F1/p2 at '
+wait-idle
+mark
+command sketch.line
+wait-log '^3D sketch tool Line: started; on the XY plane'
+wait-log '^3D sketch rotation handle X at '
+wait-log '^3D sketch rotation handle Y at '
+wait-log '^3D sketch rotation handle Z at '
+wait-log '^3D sketch field rotate_x at '
+wait-log '^3D sketch control Reset Plane at '
+wait-idle
+mark
+click-logged '^3D sketch entity F1/p2 at '
+wait-log '^3D sketch Line: pending point 1 at [(]40[.]000, 0[.]000, 0[.]000[)] [(]Point: p2[)]'
+wait-log '^3D sketch field dz at '
+wait-idle
+
+# 2. Rotate X 90 typed; along the rotated Y with Axis and Length: +Y 30
+# along the rotated Y (the sketch's Z). The pointer moves off p2 first
+# (on the X handle's place): a snap to the segment's start would take the
+# typed values' place.
+mark
+click-logged '^3D sketch field rotate_x at '
+focus-widget 'sketch3dField rotate_x'
+type 90
+wait-log '^3D sketch field rotate_x: 90$'
+key Return
+wait-log '^3D sketch plane rotated 90. about X: on the rotated XY plane; frame x [(]1[.]000, 0[.]000, 0[.]000[)], y [(]0[.]000, 0[.]000, 1[.]000[)], z [(]0[.]000, -1[.]000, 0[.]000[)]$'
+wait-idle
+mark
+click-logged '^3D sketch control Axis Y at '
+wait-log '^3D sketch placement: along the rotated Y$'
+wait-idle
+mark
+hover-logged '^3D sketch rotation handle X at '
+wait-idle
+mark
+click-logged '^3D sketch control Axis and Length at '
+wait-log '^3D sketch input: Axis and Length'
+wait-log '^3D sketch control Length axis Y at '
+wait-idle
+click-logged '^3D sketch control Length axis Y at '
+wait-log '^3D sketch input axis: [+]Y'
+wait-log '^3D sketch field length at '
+wait-idle
+click-logged '^3D sketch field length at '
+focus-widget 'sketch3dField length'
+type 30
+wait-log '^3D sketch field length: 30'
+mark
+key Return
+wait-log '^3D sketch command: .*"end":\[40,0,30\]'
+wait-log '^3D sketch command: .*"frame":[{]'
+wait-log '^3D sketch Line: made c[0-9]+ from p2 to p[0-9]+'
+capture B '^3D sketch Line: made c[0-9]+ from p2 to (p[0-9]+)'
+wait-idle
+# The route fitted in the view: the handles at its new end in sight.
+mark
+command view.fit
+wait-log '^3D sketch rotation handle X at '
+wait-log '^3D sketch rotation handle Z at '
+wait-log '^3D sketch entity F1/p2 at '
+wait-idle
+
+# 3. The Z handle dragged: the plane turns about its Z; the next end
+# along the turned Y stays in the sketch's XZ plane.
+mark
+drag-logged '^3D sketch rotation handle Z at ' '^3D sketch rotation handle X at '
+wait-log '^3D sketch rotation handle Z: dragged'
+wait-log '^3D sketch plane rotated -?[1-9][0-9]*. about Z by its handle: along the rotated Y; frame '
+wait-log '^3D sketch rotation handle X at '
+wait-idle
+expect-no-log '^3D sketch Line: made '
+mark
+click-logged '^3D sketch rotation handle X at '
+wait-log '^3D sketch command: .*"end":\[-?[0-9][^,\]]*,0,-?[0-9]'
+wait-log '^3D sketch Line: made c[0-9]+ from ${B} to p[0-9]+'
+wait-idle
+
+# 4. A circle on the rotated plane.
+mark
+command sketch.circle
+wait-log '^3D sketch tool Center Diameter Circle: started; along the rotated Y'
+wait-log '^Message band: hint Center Diameter Circle: click its center; it lies on the rotated XY plane[.]'
+wait-log '^3D sketch rotation handle X at '
+wait-idle
+mark
+click-logged '^3D sketch entity F1/p2 at '
+wait-log '^3D sketch Center Diameter Circle: pending point 1 at [(]40[.]000, 0[.]000, 0[.]000[)] [(]Point: p2[)]'
+wait-log '^3D sketch field radius at '
+wait-idle
+# Off the centre for the radius's direction (see step 2).
+hover-logged '^3D sketch rotation handle X at '
+wait-idle
+click-logged '^3D sketch field radius at '
+focus-widget 'sketch3dField radius'
+type 6
+wait-log '^3D sketch field radius: 6'
+mark
+key Return
+wait-log '"cmd":"sketch3d[.]add_circle"'
+wait-log '"plane":[{]"normal":\[[^]]*\],"x":\['
+wait-log '^3D sketch Center Diameter Circle: made c[0-9]+ on the rotated XY plane through [(]40[.]000, 0[.]000, 0[.]000[)]'
+wait-log '^3D sketch F1 [(]3DSketch1[)]: 4 points, 4 curves, dof [0-9]+, .*failure none$'
+wait-idle
+
+# 5. Reset; the handles and the plane hidden and shown.
+mark
+click-logged '^3D sketch control Reset Plane at '
+wait-log '^3D sketch plane reset: on the XY plane at [(]'
+wait-idle
+mark
+click-logged '^3D sketch control Show Handles at '
+wait-log '^3D sketch manipulator: rotation handles hidden'
+wait-log '^3D sketch rotation handles: hidden'
+click-logged '^3D sketch control Show Plane at '
+wait-log '^3D sketch manipulator: plane hidden'
+wait-idle
+mark
+click-logged '^3D sketch control Show Handles at '
+wait-log '^3D sketch manipulator: rotation handles shown'
+wait-log '^3D sketch rotation handle X at '
+click-logged '^3D sketch control Show Plane at '
+wait-log '^3D sketch manipulator: plane shown'
+wait-idle
+
+# 6. Finish; reopened, the stored frame is the same and the plane the
+# sketch's XY.
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle
+mark
+dblclick-logged '^Timeline 3DSketch1 at '
+wait-log '^Editing 3D sketch F1 [(]3DSketch1[)]'
+wait-log '^3D sketch frame in the design: origin [(]0[.]000000, 0[.]000000, 0[.]000000[)], x axis [(]1[.]000000, 0[.]000000, 0[.]000000[)], normal [(]0[.]000000, 0[.]000000, 1[.]000000[)]$'
+wait-idle
+mark
+command sketch.line
+wait-log '^3D sketch tool Line: started; on the XY plane, anchor'
+wait-idle
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle

@@ -140,9 +140,11 @@ pub struct BindInput {
     pub geometry: GeomRef,
 }
 
-/// A length: a value, or bound to what the part's ray meets.
+/// A length: a value, or bound to what the part's ray meets. To a face
+/// (mitcad#1630), `{"mode": "to_face", "face", "offset"}`, is read as a
+/// binding to `face` in mode `to_face` with the offset as its `add`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, try_from = "LengthJson")]
 pub enum LengthInput {
     Value(ValueInput),
     Bound {
@@ -152,6 +154,50 @@ pub enum LengthInput {
         #[serde(default)]
         add: Option<ValueInput>,
     },
+}
+
+/// A length as the commands take it (`LengthInput`).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum LengthJson {
+    Value(ValueInput),
+    Bound {
+        bind: Box<BindInput>,
+        #[serde(default)]
+        mode: BoundMode,
+        #[serde(default)]
+        add: Option<ValueInput>,
+    },
+    ToFace {
+        mode: BoundMode,
+        face: Box<BindInput>,
+        #[serde(default)]
+        offset: Option<ValueInput>,
+    },
+}
+
+impl TryFrom<LengthJson> for LengthInput {
+    type Error = String;
+
+    fn try_from(json: LengthJson) -> Result<Self, String> {
+        match json {
+            LengthJson::Value(value) => Ok(Self::Value(value)),
+            LengthJson::Bound { bind, mode, add } => Ok(Self::Bound { bind, mode, add }),
+            LengthJson::ToFace {
+                mode: BoundMode::ToFace,
+                face,
+                offset,
+            } => Ok(Self::Bound {
+                bind: face,
+                mode: BoundMode::ToFace,
+                add: offset,
+            }),
+            LengthJson::ToFace { mode, .. } => Err(format!(
+                "length: `face` and `offset` go with the mode to_face; the mode {} binds with `bind`",
+                mode.as_str()
+            )),
+        }
+    }
 }
 
 /// Which ends a mitre cuts.
@@ -728,7 +774,9 @@ fn measured_bound_length<K: Kernel>(
     .map_err(refuse)?;
     let target_owner = match &to.geometry {
         GeomRef::Face { body, .. } => Some(doc.body_component(*body).unwrap_or(ComponentUid::ROOT)),
-        GeomRef::Mount { feature, .. } => doc.feature(*feature).map(|entry| entry.component),
+        GeomRef::Mount { feature, .. } | GeomRef::Datum(feature) => {
+            doc.feature(*feature).map(|entry| entry.component)
+        }
         _ => None,
     };
     if target_owner.is_some_and(|owner| owner != component) {
@@ -1562,8 +1610,11 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             };
             let mut corner = None;
             match &mut length {
-                // A member by two points keeps the bound mode it was given.
-                LengthPlan::Bound { to, mode, .. } if place == "end" => {
+                // A member by two points keeps the bound mode it was given,
+                // and a length to a picked face its face (mitcad#1630).
+                LengthPlan::Bound { to, mode, .. }
+                    if place == "end" && *mode != BoundMode::ToFace =>
+                {
                     if let Some(other) = self.target(&to.occurrence.0)
                         && let Some((end_b, away, _)) =
                             self.closing_corner(&other, start, along, target.as_ref())
@@ -3749,8 +3800,10 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
                         edit_bound(state, *bound, |b| {
                             b.to = to;
                             b.mode = mode;
-                            if let Some(add) = add {
-                                b.add = Some(add);
+                            // To a face, the offset left out is 0
+                            // (mitcad#1630).
+                            if mode == BoundMode::ToFace || add.is_some() {
+                                b.add = add;
                             }
                         })?;
                     } else {
@@ -4136,6 +4189,31 @@ impl<K: Kernel> EditCrateOps<K> for Document<K> {
     }
 
     fn part_ray(&self, info: &PartInfo) -> Result<RayPlan, ModelError> {
+        // A grounded part (no joint, mitcad#1630: an upright on a plane
+        // bound to a face later): its ray as build_place gives it, from the
+        // host's origin shifted to where the part starts, along its axis.
+        if info.record.joint.is_none()
+            && let Some(path) = self.placed_in_host(info.component)
+        {
+            let t = self.path_transform(&path);
+            return Ok(RayPlan {
+                from: JointOrigin {
+                    occurrence: OccurrencePath::default(),
+                    geometry: GeomRef::Origin(mitcad_model::datum::OriginDatum::Xy),
+                    frame_override: None,
+                },
+                shift: t.translation,
+                shift_by_joint: false,
+                slide_extra: 0.0,
+                direction: if dot(z_axis(&t), crate::geometry::Z) > 1.0 - 1e-9 {
+                    RayDirection::default()
+                } else {
+                    RayDirection::Vector(z_axis(&t))
+                },
+                start: t.translation,
+                along: z_axis(&t),
+            });
+        }
         let joint = info
             .record
             .joint

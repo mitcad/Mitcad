@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: MIT
+# The sketch's x and y axes as the sketch Rectangular Pattern's Direction
+# (mitcad#1655, GitHub mitcad/Mitcad#248) on sketch-pattern-dir2.json's
+# Sketch1 (two framing points at (-40, -30) and (40, 30), a circle of
+# radius 3 about (-20, -15), and no line):
+#   1. The circle selected, Rectangular Pattern with Quantity 3 and
+#      Quantity 2 of 1: the two copies run along the sketch's x axis,
+#      Direction empty.
+#   2. Direction's row clicked and the sketch's y axis clicked at (0, 10):
+#      Direction holds the y axis, its field says so, and the copies run
+#      along y, at (-20, -5) and (-20, 5).
+#   3. Direction's row clicked again and the x axis clicked at (10, 0): the
+#      copies run along x again, at (-10, -15) and (0, -15).
+#   4. The y axis once more, and OK adds the pattern along y.
+# The wrapper replaces ENTER_SKETCH with the frontend's ordinary timeline
+# activation. The clicks stay within x -30..30 mm, y -25..25 mm: the free
+# part of the view after the fit also in session 0's 1024x768 window on
+# Windows. Run by tools/ui-sketch-pattern-axis-test.sh (Linux) and
+# tools/ui-windows-sketch-pattern-axis-test.ps1 (Windows).
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+
+# 1. The circle selected by its rim, one row of three along x.
+mark
+sketch-click -17 -15
+expect-selection 1 0
+mark
+command sketch.rectangular_pattern
+wait-log '^Command Rectangular Pattern started'
+expect-log '^Rectangular Pattern Objects: 1 sketch curve'
+wait-log '^Preview Rectangular Pattern copies: '
+wait-idle
+mark
+type-in '^Panel Rectangular Pattern input quantity2 at ' '1'
+wait-log '^Preview Rectangular Pattern copies: p[0-9]+ \([^)]*\), p[0-9]+ \([^)]*\)$'
+expect-log '^Preview Rectangular Pattern copies: .*\(-10\.000, -15\.000\)'
+expect-log '^Preview Rectangular Pattern copies: .*\(0\.000, -15\.000\)'
+wait-idle
+
+# 2. The y axis as Direction: the copies run along y.
+mark
+click-logged '^Panel Rectangular Pattern input direction at '
+wait-idle
+sketch-click 0 10
+wait-log '^Sketch axis picked for the command: y_axis \(y axis\)$'
+wait-log '^Rectangular Pattern Direction: 1 sketch curve \[sketch curve y_axis of F1\]$'
+wait-log '^Rectangular Pattern Direction listed: Sketch y axis$'
+wait-log '^Preview Rectangular Pattern copies: .*\(-20\.000, 5\.000\)'
+expect-log '^Preview Rectangular Pattern copies: p[0-9]+ \(-20\.000, -?5\.000\), p[0-9]+ \(-20\.000, -?5\.000\)$'
+wait-log '^Sketch handle at \(-20\.000, -15\.000\), arrows distance1 from \(-20\.000, -5\.000\) along \(0\.000, 1\.000\)'
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/sketch-pattern-axis-y.png'
+
+# 3. The x axis in its place: the copies run along x.
+mark
+click-logged '^Panel Rectangular Pattern input direction at '
+wait-idle
+sketch-click 10 0
+wait-log '^Sketch axis picked for the command: x_axis \(x axis\)$'
+wait-log '^Rectangular Pattern Direction: 1 sketch curve \[sketch curve x_axis of F1\]$'
+wait-log '^Rectangular Pattern Direction listed: Sketch x axis$'
+wait-log '^Preview Rectangular Pattern copies: p[0-9]+ \([^)]*\), p[0-9]+ \([^)]*\)$'
+expect-log '^Preview Rectangular Pattern copies: .*\(-10\.000, -15\.000\)'
+expect-log '^Preview Rectangular Pattern copies: .*\(0\.000, -15\.000\)'
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/sketch-pattern-axis-x.png'
+
+# 4. The y axis again, and OK.
+mark
+click-logged '^Panel Rectangular Pattern input direction at '
+wait-idle
+sketch-click 0 10
+wait-log '^Rectangular Pattern Direction listed: Sketch y axis$'
+wait-log '^Preview Rectangular Pattern copies: .*\(-20\.000, 5\.000\)'
+expect-log '^Preview Rectangular Pattern copies: p[0-9]+ \(-20\.000, -?5\.000\), p[0-9]+ \(-20\.000, -?5\.000\)$'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Rectangular pattern of 1 object\(s\), 3 x 1$'
+wait-idle
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'Recompute failed|TestDriver: FAIL'

@@ -26,6 +26,7 @@
 #include <QAction>
 #include <QAbstractScrollArea>
 #include <QApplication>
+#include <QClipboard>
 #include <QColor>
 #include <QComboBox>
 #include <QContextMenuEvent>
@@ -334,6 +335,7 @@ const StepSpec kSpecs[] = {
     {"expect-shown-body-meshes", 3, 3, kIdle},
     {"expect-body-edges-unmeshed", 1, 1, kIdle},
     {"expect-view-own-shapes", 0, 0, kIdle},
+    {"expect-view-origin", 1, 1, kIdle},
     {"expect-view-edges", 2, 3, kIdle},
     {"expect-sketch-highlights-on-curves", 1, 1, kIdle},
     {"expect-native-dialog-gone", 1, 2, kPlain},
@@ -476,6 +478,10 @@ const StepSpec kSpecs[] = {
     // window offers its tests where input cannot reach, such as a link on
     // the component browser's page (mitcad#1579).
     {"invoke-widget", 2, 3, kInputOfTarget},
+    // The clipboard's text, and a saved file holding the same text
+    // (mitcad#1641: the BUILD lists' Copy as Text and Save as Text…).
+    {"expect-clipboard", 1, 2, kPlain},
+    {"expect-clipboard-file", 1, 2, kPlain},
 };
 
 // The colour that covers most of a visible widget's area as its window
@@ -783,6 +789,43 @@ QWidget* namedWidget(QWidget* scope, const QString& name, bool forInput = false)
   }
   if (visible != nullptr || forInput) return visible;
   return matches.size() == 1 ? matches.first() : nullptr;
+}
+
+// A command panel's row or note button by its logged place ("Panel <name>
+// input <key> at x,y", "Panel <name> action <key>.<index> at x,y"),
+// scrolled into the panel's view first (mitcad#1643: Send to Slicer's rows
+// below the fold were logged where the scrolled panel no longer shows
+// them): its middle now, in `top`'s coordinates; false when the line
+// names no such widget or it is in view, and the logged place stands.
+bool revealedPanelPlace(QWidget* main, QWidget* top, const QString& logged, QPoint& at) {
+  static const QRegularExpression line(QStringLiteral("^Panel .* (input|action) (\\S+?)(?:[.](\\d+))? at "));
+  const QRegularExpressionMatch match = line.match(logged);
+  if (!match.hasMatch() || main == nullptr || top == nullptr) {
+    return false;
+  }
+  QWidget* row = namedWidget(main, QStringLiteral("input_") + match.captured(2));
+  if (row == nullptr || !row->isVisible()) {
+    return false;
+  }
+  QWidget* target = row;
+  if (match.captured(1) == QStringLiteral("action")) {
+    target = namedWidget(row, QStringLiteral("note_action_") + match.captured(3));
+    if (target == nullptr || !target->isVisible()) {
+      return false;
+    }
+  }
+  // In view already: the logged place stands (it may be a part of the
+  // row, its field rather than its label).
+  if (target->visibleRegion().contains(target->rect().center())) {
+    return false;
+  }
+  for (QWidget* parent = target->parentWidget(); parent; parent = parent->parentWidget()) {
+    if (auto* scroll = qobject_cast<QScrollArea*>(parent)) {
+      scroll->ensureWidgetVisible(target);
+    }
+  }
+  at = top->mapFromGlobal(target->mapToGlobal(target->rect().center()));
+  return true;
 }
 
 } // namespace
@@ -1666,10 +1709,20 @@ void TestDriver::sendWheel(const QPoint& windowPos, int notches, Qt::KeyboardMod
   if (target == nullptr) {
     target = window;
   }
-  const QPoint local = target->mapFromGlobal(global);
-  QWheelEvent event(QPointF(local), QPointF(global), QPoint(), QPoint(0, 120 * notches), Qt::NoButton,
-                    modifiers, Qt::NoScrollPhase, false);
-  QCoreApplication::sendEvent(target, &event);
+  // A wheel the widget under the pointer leaves goes on to its parents, as
+  // the user's does: Qt passes it on only for the system's own events, not
+  // for one sent, so the driver does it here. (The 3D Sketch Palette's
+  // buttons leave it to the card's scroll area, which scrolls; sent to the
+  // button alone it scrolled nothing, mitcad#1652.)
+  for (QWidget* w = target; w != nullptr; w = w->parentWidget()) {
+    QWheelEvent event(QPointF(w->mapFromGlobal(global)), QPointF(global), QPoint(), QPoint(0, 120 * notches),
+                      Qt::NoButton, modifiers, Qt::NoScrollPhase, false);
+    event.ignore();
+    QCoreApplication::sendEvent(w, &event);
+    if (event.isAccepted() || w->isWindow() || w->testAttribute(Qt::WA_NoMousePropagation)) {
+      break;
+    }
+  }
 }
 
 bool TestDriver::saveScreenshot(const QString& path, bool viewOnly, QWidget* crop) {
@@ -2421,6 +2474,59 @@ void TestDriver::run(const Step& step) {
       qInfo().noquote() << QStringLiteral("TestDriver: view's own shapes: %1").arg(counts);
       return true;
     }, 6, QStringLiteral("the view shows no profile, sketch entity or datum plane, or shares a body's shape"));
+  } else if (name == QLatin1String("expect-view-origin")) {
+    // expect-view-origin shown|hidden: the design's origin as the view
+    // draws it (mitcad#1642): shown, its three planes (their squares
+    // meshed), three axes and point displayed with something in their
+    // presentations, and the planes' colour in the view's own frame;
+    // hidden, none of them and next to none of the colour. The frame is
+    // read outside the orientation cube, whose axes are coloured too.
+    const bool shown = a.at(0) == QLatin1String("shown");
+    if (!shown && a.at(0) != QLatin1String("hidden")) {
+      fail(line, QStringLiteral("expect-view-origin shown|hidden"));
+      return;
+    }
+    whenReady(
+        [this, shown] {
+          auto* window = qobject_cast<MainWindow*>(m_main.data());
+          if (!window || window->modelBusy()) return false;
+          OcctViewer& view = window->viewer();
+          const OcctViewer::OriginDrawing drawing = view.originDrawing();
+          view.settleCamera();
+          const QImage frame = view.grabFramebuffer();
+          if (frame.isNull()) {
+            m_waitDetail = QStringLiteral("no frame");
+            return false;
+          }
+          const qreal ratio = view.devicePixelRatioF();
+          const QRect cube = view.overlayCubeArea();
+          const QRect cubePixels((QPointF(cube.topLeft()) * ratio).toPoint(), (QSizeF(cube.size()) * ratio).toSize());
+          // The planes' orange over the grey background: red well above blue.
+          long long tinted = 0;
+          long long counted = 0;
+          for (int y = 0; y < frame.height(); ++y) {
+            for (int x = 0; x < frame.width(); ++x) {
+              if (cubePixels.contains(x, y)) continue;
+              ++counted;
+              const QColor c = frame.pixelColor(x, y);
+              tinted += c.red() - c.blue() >= 12 ? 1 : 0;
+            }
+          }
+          const double share = counted > 0 ? 100.0 * static_cast<double>(tinted) / static_cast<double>(counted) : 0.0;
+          const auto names = [](const QStringList& list) {
+            return list.isEmpty() ? QStringLiteral("none") : list.join(QStringLiteral(", "));
+          };
+          m_waitDetail = QStringLiteral("planes %1; axes %2; point %3; %4 % of the frame in the planes' colour")
+                             .arg(names(drawing.planes), names(drawing.axes), names(drawing.points))
+                             .arg(share, 0, 'f', 2);
+          if (shown) {
+            return drawing.planes.size() == 3 && drawing.axes.size() == 3 && drawing.points.size() == 1 && share >= 1.0;
+          }
+          return drawing.empty() && share < 0.05;
+        },
+        6, shown ? QStringLiteral("the view does not draw the design's origin")
+                 : QStringLiteral("the view still draws the design's origin"),
+        [this] { qDebug().noquote() << QStringLiteral("TestDriver: view origin: %1").arg(m_waitDetail); });
   } else if (name == QLatin1String("expect-view-edges")) {
     // expect-view-edges <body> <segments a quarter turn> [highlighted
     // edges]: the body's lines are drawn from detached copies of its edges
@@ -2620,7 +2726,13 @@ void TestDriver::run(const Step& step) {
     QRegularExpression re;
     if (!regex(a.at(0), re)) return;
     const auto point = std::make_shared<QPoint>();
-    whenReady([this, re, point] { return loggedPoint(re, 0, *point); }, 6,
+    whenReady([this, re, point] {
+                QString logged;
+                if (findLastLine(re, 0, &logged) >= 0 && revealedPanelPlace(m_main, topWindow(), logged, *point)) {
+                  return true;
+                }
+                return loggedPoint(re, 0, *point);
+              }, 6,
               QStringLiteral("no hover position logged"), [this, point] {
       sendMouse(QEvent::MouseMove, *point, Qt::NoButton, Qt::NoButton, Qt::NoModifier);
     }, mainWindow);
@@ -4619,6 +4731,12 @@ void TestDriver::run(const Step& step) {
             static const QRegularExpression places(QStringLiteral("^Pick places:"));
             from = std::max(findLastLine(places, 0), 0);
           }
+          // A panel's row or note button scrolled into view first.
+          QString logged;
+          if (!pick && findLastLine(re, from, &logged) >= 0 &&
+              revealedPanelPlace(m_main, topWindow(), logged, *at)) {
+            return true;
+          }
           return loggedPoint(re, from, *at);
         },
         6, QStringLiteral("no place logged for '%1'").arg(a.at(0)),
@@ -5882,6 +6000,51 @@ void TestDriver::run(const Step& step) {
           return names.size() == count;
         },
         limit, QStringLiteral("not %1 files '%2' in %3").arg(count).arg(glob, dir));
+  } else if (name == QLatin1String("expect-clipboard")) {
+    // The clipboard's whole text matches (mitcad#1641); line ends are as
+    // the application put them (\r\n in a regular expression).
+    QRegularExpression re;
+    double limit = 6;
+    if (!regex(a.at(0), re) || !seconds(1, 6, limit)) {
+      return;
+    }
+    whenReady(
+        [this, re] {
+          const QString text = QApplication::clipboard()->text();
+          QString shown = text.left(400);
+          shown.replace(QLatin1Char('\r'), QStringLiteral("\\r")).replace(QLatin1Char('\n'), QStringLiteral("\\n"));
+          m_waitDetail = QStringLiteral("the clipboard has %1 character(s): %2").arg(text.size()).arg(shown);
+          return re.match(text).hasMatch();
+        },
+        limit, QStringLiteral("the clipboard does not match '%1'").arg(a.at(0)));
+  } else if (name == QLatin1String("expect-clipboard-file")) {
+    // The file holds exactly the clipboard's text in UTF-8 (mitcad#1641: Save
+    // as Text writes what Copy as Text copies).
+    double limit = 6;
+    if (!seconds(1, 6, limit)) {
+      return;
+    }
+    const QString path = a.at(0);
+    whenReady(
+        [this, path] {
+          QFile file(path);
+          if (!file.open(QIODevice::ReadOnly)) {
+            m_waitDetail = QStringLiteral("cannot read it: %1").arg(file.errorString());
+            return false;
+          }
+          const QString saved = QString::fromUtf8(file.readAll());
+          const QString copied = QApplication::clipboard()->text();
+          qsizetype at = 0;
+          while (at < saved.size() && at < copied.size() && saved.at(at) == copied.at(at)) {
+            ++at;
+          }
+          m_waitDetail = QStringLiteral("%1 character(s) saved, %2 on the clipboard, the first difference at %3")
+                             .arg(saved.size())
+                             .arg(copied.size())
+                             .arg(at);
+          return !copied.isEmpty() && saved == copied;
+        },
+        limit, QStringLiteral("'%1' does not hold the clipboard's text").arg(path));
   } else if (name == QLatin1String("screenshot") || name == QLatin1String("screenshot-view") ||
              name == QLatin1String("screenshot-widget")) {
     // screenshot-widget <name> <png>: the main window's screenshot cut to

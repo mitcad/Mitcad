@@ -1,0 +1,60 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Linked reference geometry of a 3D sketch through its JSON commands on the geometry kernel (mitcad#1543, W12): a 40 x 30 x 20 box (Box1, F1, F1.b0); in 3DSketch1 (F2) a point at the origin, one at the middle of the box's top front edge E{F1:side0|F1:top} and one on its upright edge E{F1:side0|F1:side1} (its reference curve c4) 15 above the origin: fully constrained. The box 30 high: the middle stays the middle, the point on the edge keeps its 15. Replace Reference moves the middle to the back edge's, undone; Detach removes the point's relation and the record it was the last user of, undone; the box suppressed, the sketch fails on a lost source and keeps its definition."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 40, "width": 30, "height": 20, "operation": "new_body"}},
+  {"cmd": "sketch3d.create"},
+  {"cmd": "sketch3d.add_point", "sketch": "F2", "at": [0, 0, 0], "source": "origin"},
+  {"cmd": "sketch3d.add_point", "sketch": "F2", "at": [19, 1, 19],
+    "source": {"body": "F1.b0", "edge": "E{F1:side0|F1:top}", "at": "middle"}},
+  {"cmd": "sketch3d.add_point", "sketch": "F2", "at": [40, 0, 14]},
+  {"cmd": "sketch3d.attach", "sketch": "F2", "point": "p3",
+    "source": {"body": "F1.b0", "edge": "E{F1:side0|F1:side1}"}},
+  {"cmd": "sketch3d.add_dimension", "sketch": "F2",
+    "dimension": {"type": "offset", "a": "p1", "b": "p3", "axis": "z"}, "value": 15},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "status": {"dof": 0},
+    "points": [{"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [20, 0, 20]},
+               {"id": "p3", "at": [40, 0, 15]}],
+    "references": [
+      {"id": "k1", "kind": "point", "status": "ok"},
+      {"id": "k2", "kind": "point", "body": "F1.b0", "mode": "include", "status": "ok"},
+      {"id": "c4", "kind": "curve", "body": "F1.b0", "users": ["k3"], "status": "ok"}]}}},
+
+  {"comment": "The box 30 high."},
+  {"cmd": "edit_feature", "uid": "F1", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 40, "width": 30, "height": 30, "operation": "new_body"}},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "status": {"dof": 0},
+    "points": [{"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [20, 0, 30]},
+               {"id": "p3", "at": [40, 0, 15]}]}}},
+
+  {"comment": "Replace Reference: the middle of the top back edge; undone."},
+  {"cmd": "sketch3d.replace_reference", "sketch": "F2", "item": "k2",
+    "source": {"body": "F1.b0", "edge": "E{F1:side2|F1:top}", "at": "middle"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "points": [{"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [20, 30, 30]},
+               {"id": "p3", "at": [40, 0, 15]}]}}},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Replace Reference in 3DSketch1"}}},
+  {"cmd": "undo"},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "points": [{"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [20, 0, 30]},
+               {"id": "p3", "at": [40, 0, 15]}]}}},
+
+  {"comment": "Detach p3: its Point on Curve relation and the reference curve c4 go; undone."},
+  {"cmd": "sketch3d.detach", "sketch": "F2", "points": ["p3"]},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "references": [{"id": "k1"}, {"id": "k2"}]}}},
+  {"cmd": "undo"},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "status": {"dof": 0},
+    "references": [{"id": "k1"}, {"id": "k2"}, {"id": "c4"}]}}},
+
+  {"comment": "The box suppressed: a reference failure, the definition kept."},
+  {"cmd": "suppress_feature", "uid": "F1"},
+  {"expect": {"feature": "3DSketch1", "status": "error"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "failure": {"kind": "reference"},
+    "references": [{"id": "k1"}, {"id": "k2", "status": "failed"}, {"id": "c4"}]}}}
+]

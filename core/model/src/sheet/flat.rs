@@ -102,11 +102,19 @@ pub struct FlatPattern<S> {
 }
 
 /// Why there is no usable Flat Pattern: `unavailable`, `invalid` or
-/// `blocked`, with the reasons.
+/// `blocked`, with the reasons. A sheet that is not valid says why in the
+/// user's terms (`diagnostics`, shown in the Browser's Flat Pattern row:
+/// the feature by its name, mitcad#1636); its stored diagnostics with the
+/// features' ids are the `causes`, for agents. Every reason is in words
+/// (mitcad#1639): the body is "this body", walls and features are named as
+/// the timeline names them; the same reasons with the ids are the
+/// `details`, for agents (empty when they say the same).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlatFailure {
     pub status: &'static str,
     pub diagnostics: Vec<String>,
+    pub causes: Vec<SheetDiagnostic>,
+    pub details: Vec<String>,
 }
 
 impl FlatFailure {
@@ -114,12 +122,64 @@ impl FlatFailure {
         Self {
             status,
             diagnostics: vec![message.into()],
+            causes: Vec::new(),
+            details: Vec::new(),
         }
+    }
+
+    /// A failure a person reads as `shown`, which agents read as `detail`
+    /// with the ids (mitcad#1639).
+    pub(crate) fn told(status: &'static str, shown: String, detail: String) -> Self {
+        let details = if detail == shown {
+            Vec::new()
+        } else {
+            vec![detail]
+        };
+        Self {
+            status,
+            diagnostics: vec![shown],
+            causes: Vec::new(),
+            details,
+        }
+    }
+
+    /// A failure of the development, whose `message` may name walls by
+    /// their ids (`panel F6 slot 0`) or carry other ids and points: a
+    /// person reads the walls named by their features (`name_walls`) and
+    /// the rest in words (the model's cleaner, `FeatureError::from_text`);
+    /// agents read it as it was.
+    fn named(status: &'static str, message: &str, name: &dyn Fn(FeatureUid) -> String) -> Self {
+        use crate::notice::FeatureError;
+        let shown = FeatureError::from_text(&name_walls(message, name)).message;
+        let detail = FeatureError::from_text(message).agent_text().to_owned();
+        Self::told(status, shown, detail)
+    }
+
+    /// The reasons as agents read them (mitcad#1639): with the ids of the
+    /// body, its walls and the features that caused them.
+    pub fn agent_reasons(&self) -> String {
+        let mut reasons = if self.details.is_empty() {
+            self.diagnostics.join("; ")
+        } else {
+            self.details.join("; ")
+        };
+        for cause in &self.causes {
+            use std::fmt::Write as _;
+            let _ = write!(reasons, " [{}: {}]", cause.feature, cause.message);
+        }
+        reasons
     }
 }
 
 /// The cache key of an evaluation: everything the result depends on.
-pub(crate) fn fingerprint<S>(result: &Recomputed<S>, body: BodyUid, def: &FlatPatternDef) -> u128 {
+/// `name` gives a feature's name, which the reason of a sheet that is not
+/// valid says (a renamed feature changes it).
+pub(crate) fn fingerprint<S>(
+    result: &Recomputed<S>,
+    body: BodyUid,
+    def: &FlatPatternDef,
+    name: &dyn Fn(FeatureUid) -> String,
+) -> u128 {
     // Showing the pattern changes nothing it is made of.
     let def = &FlatPatternDef {
         shown: false,
@@ -137,6 +197,24 @@ pub(crate) fn fingerprint<S>(result: &Recomputed<S>, body: BodyUid, def: &FlatPa
         "shape": result.bodies.get(&body).map(|b| format!("{:032x}", b.version)),
         "owner": result.owners.get(&body),
         "rules": rules.map(|r| format!("{:032x}", r.version)),
+        "reason": state
+            .filter(|s| s.value.status() != "valid")
+            .map(|s| refusal(&s.value, name)),
+        // The names a failed development's reasons give its walls and
+        // overlays (mitcad#1639).
+        "names": state.map(|s| {
+            let features: std::collections::BTreeSet<FeatureUid> = s
+                .value
+                .charts
+                .iter()
+                .map(|p| match p.domain {
+                    SheetDomainRef::Panel(id) => id.feature,
+                    SheetDomainRef::Bend(id) => id.feature,
+                })
+                .chain(s.value.overlays.iter().map(|o| o.feature))
+                .collect();
+            features.into_iter().map(name).collect::<Vec<_>>()
+        }),
     });
     serde_json::to_writer(&mut fp, &key).expect("flat key serializes");
     fp.finish()
@@ -146,21 +224,29 @@ pub(crate) fn fingerprint<S>(result: &Recomputed<S>, body: BodyUid, def: &FlatPa
 fn current<S>(
     result: &Recomputed<S>,
     body: BodyUid,
+    name: &dyn Fn(FeatureUid) -> String,
 ) -> Result<(SheetState, f64, String), FlatFailure> {
-    let unavailable = |m: String| FlatFailure::new("unavailable", m);
-    let shape = result
-        .bodies
-        .get(&body)
-        .ok_or_else(|| unavailable(format!("body {body} does not exist at the timeline marker")))?;
-    let state = result
-        .sheets
-        .get(&body)
-        .ok_or_else(|| unavailable(format!("body {body} is not a sheet-metal body")))?;
+    // In words for a person, the body's id for agents (mitcad#1639).
+    let unavailable =
+        |shown: &str, detail: String| FlatFailure::told("unavailable", shown.to_owned(), detail);
+    let shape = result.bodies.get(&body).ok_or_else(|| {
+        unavailable(
+            "this body does not exist at the timeline marker",
+            format!("body {body} does not exist at the timeline marker"),
+        )
+    })?;
+    let state = result.sheets.get(&body).ok_or_else(|| {
+        unavailable(
+            "this body is not a sheet-metal body",
+            format!("body {body} is not a sheet-metal body"),
+        )
+    })?;
     if state.value.shape_generation != format!("{:032x}", shape.version)
         || result.owners.get(&body) != Some(&state.value.owner)
     {
-        return Err(unavailable(
-            "sheet state does not match current geometry".into(),
+        return Err(FlatFailure::new(
+            "unavailable",
+            "sheet state does not match current geometry",
         ));
     }
     let status = state.value.status();
@@ -171,13 +257,16 @@ fn current<S>(
             } else {
                 "invalid"
             },
-            diagnostics: state
+            // The one text a sheet feature's refusal says too (mitcad#1636).
+            diagnostics: vec![refusal(&state.value, name)],
+            causes: state
                 .value
                 .invalidated
                 .iter()
                 .chain(&state.value.blockers)
-                .map(|d| format!("{}: {}", d.feature, d.message))
+                .cloned()
                 .collect(),
+            details: Vec::new(),
         });
     }
     let rules = result
@@ -203,6 +292,34 @@ fn current<S>(
     ))
 }
 
+/// Why a sheet with an overlay has no Flat Pattern (`overlay_refusal`), the
+/// feature that made the overlay by its name; its id for agents
+/// (mitcad#1639). One whole message per kind of overlay.
+fn overlay_refusal(
+    state: &SheetState,
+    name: &dyn Fn(FeatureUid) -> String,
+) -> Result<(), FlatFailure> {
+    let Some(overlay) = state.overlays.first() else {
+        return Ok(());
+    };
+    let detail = state
+        .overlay_refusal("the Flat Pattern")
+        .err()
+        .unwrap_or_default();
+    let feature = name(overlay.feature);
+    let shown = match overlay.kind {
+        SheetOverlayKind::Straight { .. } => format!(
+            "the Flat Pattern needs the sheet's developed form, which {feature} does not have \
+             (a straight cut through a bend or an inclined panel)"
+        ),
+        SheetOverlayKind::Change { .. } => format!(
+            "the Flat Pattern needs the sheet's developed form, which {feature} does not have \
+             (a fillet or chamfer the material domains do not hold)"
+        ),
+    };
+    Err(FlatFailure::told("invalid", shown, detail))
+}
+
 fn line(map: Isometry2, u: f64, interval: [f64; 2]) -> FlatLine {
     FlatLine {
         start: map.point([u, interval[0]]),
@@ -210,16 +327,19 @@ fn line(map: Isometry2, u: f64, interval: [f64; 2]) -> FlatLine {
     }
 }
 
-/// Evaluates the Flat Pattern of `body` with `def` at the marker.
+/// Evaluates the Flat Pattern of `body` with `def` at the marker. `name`
+/// gives a feature's name, for the reason of a sheet that is not valid and
+/// the walls a failed development names (mitcad#1639).
 pub(crate) fn evaluate<K: Kernel>(
     kernel: &K,
     result: &Recomputed<K::Shape>,
     body: BodyUid,
     def: &FlatPatternDef,
+    name: &dyn Fn(FeatureUid) -> String,
 ) -> Result<FlatPattern<K::Shape>, FlatFailure> {
-    let (state, thickness, sheet_version) = current(result, body)?;
-    let invalid = |m: String| FlatFailure::new("invalid", m);
-    state.overlay_refusal("the Flat Pattern").map_err(invalid)?;
+    let (state, thickness, sheet_version) = current(result, body, name)?;
+    let invalid = |m: String| FlatFailure::named("invalid", &m, name);
+    overlay_refusal(&state, name)?;
     let fixed = SheetDomainRef::Panel(def.stationary);
     let fixed_embedding = state
         .charts
@@ -557,7 +677,18 @@ fn segment_distance(a: [f64; 2], b: [f64; 2], p: [f64; 2]) -> f64 {
     g::dist(g::add(a, g::scale(d, t)), p)
 }
 
-/// The JSON of a failure; it has no usable export payload.
+/// The JSON of a failure; it has no usable export payload. The `causes`
+/// (the sheet's stored diagnostics, with the features' ids) are for
+/// agents; the `diagnostics` say why in words (mitcad#1636), the `details`
+/// the same with the ids where they differ (mitcad#1639).
 pub(crate) fn failure_json(body: BodyUid, failure: &FlatFailure) -> Value {
-    json!({"body": body, "status": failure.status, "diagnostics": failure.diagnostics})
+    let mut value =
+        json!({"body": body, "status": failure.status, "diagnostics": failure.diagnostics});
+    if !failure.causes.is_empty() {
+        value["causes"] = json!(failure.causes);
+    }
+    if !failure.details.is_empty() {
+        value["details"] = json!(failure.details);
+    }
+    value
 }

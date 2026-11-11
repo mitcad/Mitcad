@@ -20,7 +20,7 @@ the probe cannot use the document's tools or replace its conversation.
 | Part | Language | Responsibility |
 |---|---|---|
 | `core/model` (`mitcad-model`) | Rust | Document, timeline, features, parameters and expressions, units, sketches, topological naming, cached recompute, undo, design file, design comparison. No OCCT. Its `testing` feature gives other crates' tests the mock kernel (`testing`, the crate `mitcad-model-testkit`) and the shared fixtures (`test_support`). |
-| `core/solver` (`mitcad-solver`) | Rust | 2D constraint solver and the joint solver of assemblies behind a narrow API ([README](../core/solver/README.md)). |
+| `core/solver` (`mitcad-solver`) | Rust | 2D constraint solver, the spatial point/line solver of 3D sketches and the joint solver of assemblies behind a narrow API ([README](../core/solver/README.md)). |
 | `core/vec3` (`mitcad-vec3`) | Rust | The `[f64; 3]` helpers (`add`, `sub`, `dot`, `cross`, `norm`, the unit-vector variants) that the model, the solver and the readers share, and the same for `[f64; 2]` in its `vec2` module; no dependencies, no vector type. |
 | `core/f3d` (`mitcad-f3d`) | Rust | The `.f3d` reader's facade: re-exports the crates below under their old paths (`mitcad_f3d::design::ir`, `mitcad_f3d::asm`, ...), reads a document's body blobs, and has the test references, `mitcad-f3d-inspect` and the corpus tests. |
 | `core/dump` (`mitcad-dump`) | Rust | The design dump IR of [SCHEMA.md](../core/import/SCHEMA.md) as Rust types, with the items' file states; written by the `.f3d` and `.ipt` readers, replayed by the import ([README](../core/dump/README.md)). |
@@ -495,6 +495,21 @@ design in a project.
     schedule, layers and direction (`Document::print_colors`), so they
     agree; USDZ writes the first band as the mesh's material and each
     other band as a subset. Pauses change no colour.
+  - *At planes and faces* (mitcad#1643). An event's place is a height or
+    a reference (`at`: a construction or origin plane, a planar face) by
+    the model's usual references, so it follows edits; its height is
+    worked out each time it is needed, never stored: along the print
+    direction from the lowest point of the body it is measured from (the
+    face's own, the one named, else the plate's first) to the plane. The
+    export measures in the 3MF's own placements (the turn onto the bed
+    applied, each object from its own lowest point), the query and the
+    print colours in the design's placement of the body; a plane not
+    level in that orientation, gone, or of another component gives no
+    height and the event is left out with a warning in words, never
+    moved. Objects of one plate that stood at other levels in the design
+    are said once per plate, as the conflicts are. The app's Send to
+    Slicer edits the schedule in its Filament changes section and draws
+    the bands and rings over the view from `filament_change_preview`.
 - **Appearances** (mitcad#46, `core/model-base/src/appearance.rs`): physically
   based parameter sets (base colour, metalness, roughness, specular,
   transmission, IOR, coat, emission, opacity, and a texture for the base
@@ -1577,7 +1592,9 @@ the `Shape` type.
   part (its bodies one base feature) and an occurrence per instance, so
   repeated parts share one B-rep in memory, in the design file and in
   the display meshes. Files without an assembly come as bodies, as
-  `Kernel::read_file` reads them.
+  `Kernel::read_file` reads them. Into a design with content, the import
+  is wrapped in a component named after the file (mitcad#1629,
+  `Document::import_file_wrapped`, `import_file`'s `wrap`).
 - Export: 3MF and STL are written by the model from
   `Kernel::triangle_mesh` (one closed, outward-facing mesh per body,
   placed by its occurrences). STEP, IGES, OBJ and BRep go through
@@ -1974,6 +1991,327 @@ entities and constraints, shared by the UI and the imports.
 
 The solver works on its own ids; the sketch model maps entity ids to them.
 
+3D sketches (mitcad#1501, first stage mitcad#1520) get a solver system of
+their own, separate from the planar one: `mitcad_solver::SpatialSystem`
+(`core/solver/src/spatial.rs`) with three coordinates per point in the
+sketch's local frame, lines that refer to their end point ids (shared
+identity) and explicit coincidence, fix, target attachment, axis
+alignment with a sense, signed axis offsets and true lengths, all as
+millimetre residuals on the planar solver's iteration, drag, sparse
+factorization and rank analysis. It accepts a solve at an absolute
+1e-6 mm, refuses collapsed lines (`SPATIAL_MIN_SEGMENT`) and aligned
+lines pointing against their sense, tells conflicts from singular rows
+and non-convergence, and restores every point when a solve or drag
+fails. The frame and source vertices are the caller's (a vertex becomes
+a local attachment target); the spatial sketch feature, its commands and
+the Qt editor are later stages, so nothing in the model uses it yet
+([solver README](../core/solver/README.md#spatial-points-and-lines-3d-sketches)).
+mitcad#1542 adds arcs (a free unit normal or a plane-bound frame axis),
+circles, control-point and fit-point splines (the planar spline basis,
+generalized to three coordinates), constant reference curves (source
+edges) and their relations: point on curve with a bounded parameter,
+midpoints, tangency with a validated sense, equal, radius, diameter, arc
+length, normal alignment and sketch-plane membership. A converted
+sketch's planar relations are compiled by the planar row compilation
+(`prepare::compile_mapped`, extracted from `prepare`) onto the spatial
+x and y columns through a shadow planar system.
+
+The 3D sketch feature (`spatial_sketch`, mitcad#1521) is the solver's
+user in the model. Its definition, the adapter to `SpatialSystem` and the
+evaluated output are in `core/sketch/src/spatial.rs`
+(`SpatialSketchDef`), its edits in `core/sketch/src/spatial_edit.rs`
+(`SpatialEdit`); the model evaluates it in
+`core/model/src/features/spatial_sketch.rs` and edits it in
+`core/model/src/document/spatial_sketches.rs`. Planar sketches, their
+regions and commands are unchanged.
+
+- **Definition:** a support (an origin plane, a construction plane or a
+  planar face of the sketch's component, found as a planar sketch finds
+  its plane), points `p<n>` with three local coordinates (the last solved
+  positions, the next solve's start: never a relation), curves `c<n>` by
+  the points that define them (`SpatialCurveKind`: lines, arcs with a
+  stored unit normal that is free or bound to a frame axis, circles,
+  control-point and fit-point splines whose hidden control points are the
+  solver's, plane-bound ellipses and elliptical arcs kept from a
+  converted planar sketch, and reference curves whose constant geometry
+  is supplied when the sketch is built, `SpatialInputs`), texts
+  `t<n>` kept from a converted sketch, relations `k<n>` (coincident, fix,
+  attach, align with an axis and a sense, point on curve, midpoint,
+  tangency with the sense it was made with, equal, normal alignment, On
+  Sketch Plane with one representative per elevation group, and in-plane
+  planar constraints and fixed entities of a converted sketch, mapped by
+  the planar sketch's own `solve::planar_constraint`) and dimensions
+  `k<n>` (true length, signed axis offset, radius, diameter, arc length,
+  spline length (driven only), in-plane planar dimensions; driving with a
+  parameter, or driven and measured only, without a parameter, so no
+  measured value drives its own sketch). Linked reference records
+  (mitcad#1543) follow their sources: an attachment (Attach, to a source
+  point) and a reference curve (one per source and occurrence, reused by
+  every point put on it with a Point on Curve or Midpoint relation), each
+  with a `SpatialSource` (the origin, a vertex, an edge, an edge's start,
+  end or middle, another sketch's point or curve, planar or 3D, an
+  Intersection Curve's curve, or a point of such a curve; with an
+  `OccurrenceLink` for another component's geometry, as a planar
+  projection's) and a mode: included in true 3D, or projected along the
+  sketch's normal onto its plane (`projected`, through `project.rs` as a
+  planar sketch's Project). A point on a face of a body (mitcad#1549) is
+  an On Face relation with a `SpatialSource::Face` (body, face name, link),
+  the face's record: before each solve the face is found by its name (in
+  another component through the link), the kernel's `face_geometry` gives
+  its surface, and a plane, cylinder, cone, sphere or torus becomes a
+  `SpatialSurface` in the local frame, solved in closed form (one row, the
+  signed distance); any other surface is solved through the kernel's
+  `face_point_normal` (closest-point projection): the point lies on the
+  plane touching the face at its projection, and `solve_on_faces` solves
+  again from the projection of the solved point until it lies on the face
+  (16 rounds, 1e-6 mm; a drag between solves uses the last touching plane,
+  the evaluation that takes it puts the point back on the face). No new
+  kernel methods; the mock kernel's `projected_faces` stands in for a
+  free-form face. A plane-bound ellipse (mitcad#1550) is a curve of the
+  solver (`SpatialSystem::add_ellipse`): its centre, its major point in
+  the plane through the centre square to a frame axis, a minor radius
+  column solved like a circle's radius, an elliptical arc's ends held on
+  it (`OnEllipse` rows), `PointOn` and the `EllipseRadius` dimensions;
+  in-plane relations take a full ellipse. In-plane relations have a plane
+  (mitcad#1550): the shadow keeps one planar stand-in of a point, line or
+  curve per frame plane, on that plane's two coordinate columns
+  (`spatial/plane.rs`), so a rectangle or polygon drawn on the YZ or ZX
+  plane keeps the planar tools' relations there; its points are held in
+  the plane by a `plane_bound` relation (offset rows along the axis). The
+  plane-bound drawing tools of the app (`sketch/Sketch3dShapes.cpp`) send
+  `sketch3d.add_circle` with `plane`, `add_ellipse`, `add_rectangle`,
+  `add_polygon` and `add_text`; texts are laid out by the planar layout in
+  their plane at query time (`SpatialSketchDef::text_outlines`).
+- **Evaluation:** the support's frame made orthonormal (`O`, `R`), every
+  record's source found in one place (`source_geometry`: a vertex or edge
+  by its topological name, renamed by a sketch change found again when
+  that is unambiguous, never replaced by a nearby point, a name of several
+  edges refused; another sketch's entity from its output; another
+  component's geometry in its component, moved by the link's placements)
+  and moved into the frame (`R^T (V - O)`; an attachment's target the
+  source point or the start, end or middle of the source curve,
+  `local_source_point`; a reference curve by `local_reference_curve`),
+  then one solve. A lost source fails the sketch as a reference failure:
+  no silent detach, no last geometry kept. The checks before the solve
+  refuse sources that do not come before the sketch, and name a later
+  source that uses the sketch as a link cycle. A 3D sketch's points and
+  curves are themselves sources: of later 3D sketches and of planar
+  sketches' Project (`sketch_entity_geometry`, read as the 3D sketch's
+  output).
+  Reads are recorded as for any feature, so a moved support or source
+  evaluates the sketch again and the frame is applied once. A failure
+  (support, reference, value, conflict, no convergence, invalid geometry:
+  `SpatialFailure`) fails the feature and keeps its definition; the
+  output (`Output::spatial`, `Document::spatial_sketch`) then has the
+  frame and the failure but no geometry. A solved output maps each curve
+  once to a `Curve3` in the component: a line, an arc as a conic
+  (`major = minor = radius`, `x_axis` toward its start, `normal` its
+  normal, from 0 to its sweep), a circle as a closed conic, a spline as a
+  B-spline (a fit-point spline by its solved control net), a plane-bound
+  ellipse as a conic. A solved 3D sketch's output also has a planar
+  `SketchOutput` of its sketch plane (mitcad#1550,
+  `core/sketch/src/spatial_planar.rs`, `planar_view`): its points, curves
+  and texts within 1e-6 mm of the plane as a planar sketch with the same
+  ids, whose closed loops bound profile regions under the keys a planar
+  sketch's same curves have (with the supporting face's edges, texts and
+  derived offsets); profile features take it through
+  `CheckContext::profile_sketch`, and `Document::profiles` lists it.
+- **Edits:** `Document::edit_spatial_sketch` runs a `SpatialEdit` on a copy
+  of the whole state (definition, parameters, ids), evaluates the copy up
+  to and with the sketch, and takes it as one undo step only when the
+  sketch solves, storing the solved positions; anything else changes
+  nothing and returns the failure with its relations and entities
+  (`SpatialEditError`). A route segment with its new end point,
+  attachments, axis and dimensions is one such edit, and so is an arc
+  (Three-Point, Centre or Tangent, with its new centre and end, radius and
+  arc length) or a spline with its new points; the solved normals, radii
+  and tangency senses are stored with the positions. Drags pull points
+  with temporary soft goals (`preview_spatial_drag` changes nothing,
+  `drag_spatial_sketch` is one undo step). Before a solve or a drag the
+  fit-point splines' hidden control points are fitted to their fit points
+  with the fit points held (temporary Fix rows): made by natural-end
+  interpolation at each build, they would otherwise pull free fit points
+  along when a tangency takes an end (mitcad#1522).
+- **API and files** (mitcad#1522, `core/model-api/src/sketch3d.rs`): the
+  `sketch3d.*` command family (its own `CommandFamily` with the prefix
+  `sketch3d.`) and the `sketch3d` query, classified as the model's own so
+  MCP permits them; each command is one `edit_spatial_sketch` and returns
+  the ids it made. Points are `[x, y, z]` or point ids; the planar
+  `sketch.*` commands, the `sketch` query and the clipboard refuse a 3D
+  sketch by name instead of reading its points as planar ones. The design
+  file stores the definition under the feature type `spatial_sketch`
+  (`FeatureDef` serialization, no new file version); a reader without the
+  type refuses the design with `unknown variant`. Linked references
+  (mitcad#1543) add `sketch3d.attach`, `sketch3d.include` and
+  `sketch3d.replace_reference`, extend `sketch3d.detach` to Point on Curve
+  relations with reference curves, take another component's source with
+  the `occurrence` that shows it (made into the record's link), and list
+  the records in the query's `references`. A face source
+  (`{"body", "face"}`, mitcad#1549) makes `sketch3d.attach` (and the
+  sources of `add_point`, `add_line` and `add_arc`) add an `on_face`
+  relation, listed with `kind` `face`; Replace Reference keeps it a face.
+- **Paths** (mitcad#1523, `core/model/src/features/spatial_path.rs`): a
+  Pipe or Sweep runs along curves of a 3D sketch through the typed path
+  `SpatialPath` (`{"spatial_sketch", "curves", "reversed", "chain"}`), a
+  third form of the sweep family's `CurvePath` beside the planar sketch
+  curves and `PathRef`. It is not baked into fixed curves: every recompute
+  reads the sketch's output (a recorded read) and the definition's joints.
+  The order comes from topology, not positions (`route`): curves join at
+  shared points and at points made coincident (union of Coincident
+  relations, and of a converted sketch's in-plane point coincidences, whose
+  ends are then checked to meet); a node where three or more picked curves
+  meet is a branch, a loop is a closed path (mitcad#1550: from the first
+  listed curve round to it again; a curve without ends is one by itself),
+  and ends that only lie close never join. The path runs through its first
+  listed curve along that curve's own direction (against it when
+  `reversed`), and `pieces` takes each curve's `Curve3` from the output
+  once, turned round by `curves::reversed` where the path runs against it,
+  so the planar `chain`'s geometric joining is not used. The check before
+  evaluation covers only the selection (ids, kinds, a 3D sketch of the
+  component before the feature), so a sketch edit that breaks a chain is
+  taken and fails the consumer; a failed sketch fails it with no last
+  geometry. `chains` lists what chain selection finds (the `sketch3d`
+  query's `chains`), and `path::spatial_rewrite` /
+  `rewrite_spatial_paths` turn a planar path into the typed one with the
+  same ids and direction for the in-place conversion (mitcad#1544), for
+  every path a feature holds (`path::for_each_path`). Every curve input
+  takes it (mitcad#1550): a loft's centre line and rails are `CurvePath`s;
+  `PathRef::Spatial` is the same typed form for path patterns and the
+  construction features along a path, resolved through
+  `Resolver::spatial_path` and measured as an Intersection Curve is
+  (`CurveChain`); axis, line and point references (`GeomRef::SketchCurves`,
+  `SketchPoint`) naming a 3D sketch resolve through
+  `Resolver::spatial_entity`; Intersection Curve, boundary surfaces and
+  surface lofts take a 3D sketch's curves as a set
+  (`SketchCurves::check_any` and `curves`, `spatial_path::curve_set`).
+  Inputs that grow from their sketch's plane (ribs, webs, thin walls,
+  surface sweeps of curves) take a 3D sketch's curves in its sketch plane
+  in the planar form (`SketchCurves::check_in_plane` and `in_plane`): the
+  planar output of its sketch plane, which also bounds its profiles,
+  has them under their ids, and `curves_on` refuses a curve it lacks,
+  naming the sketch (mitcad#1550). Tools of sketch curves keep planar
+  sketches, and a path's planar form naming a 3D sketch is refused
+  (`not_spatial`).
+- **Editing context** (mitcad#1524, app/COMMANDS.md "3D sketches"): the
+  shared Qt UI only. Create Sketch asks for the kind (2D or 3D) before the
+  plane and sends `sketch3d.create`; Edit Sketch of a `spatial_sketch`
+  enters sketch mode with `sketch::Sketch3dController` in place of the
+  planar `SketchController`, which stays inactive. The controller reads
+  the `sketch3d` query (`Sketch3dModel`) after each change; the view draws
+  the points and curves through its sketch display
+  (`spatialSketchEntities`: local coordinates mapped by the frame, the
+  occurrence's placement applied once), so picks and highlights carry the
+  stable point and curve ids; reference curves come with their geometry
+  in the query (`geometry.kind` line, conic, bspline or helix). The
+  overlay adds the frame, control polygons, tangent handles, `In plane`
+  badges (one per shape: the points joined by curves and in-plane
+  relations, mitcad#1592) and the hover, every badge kept inside the
+  view's uncovered area; the 3D Sketch Palette the status. Leaving a
+  3D sketch keeps the camera (`OcctViewer::keepCamera`), also for one
+  converted from 2D; leaving a 2D sketch restores it. The 2D tools
+  and profile features are disabled with a reason; Finish Sketch, undo and
+  a rolled-back Timeline are sketch mode's for either kind. The timeline
+  gives a 3D sketch's `dof`, and it has a light bulb of its own
+  (`set_feature_visible`).
+- **Drawing tools** (mitcad#1525, app/COMMANDS.md "3D sketch drawing
+  tools"): the SKETCH tab's Point, Line, arcs and splines start the
+  controller's own tools in a 3D sketch. What is placed, snapped and typed
+  is the editor's state only (`Sketch3dDraw.hpp`: plain geometry, unit
+  tested; the temporary plane, the anchor and a pending point are never
+  stored). A curve commits as its `sketch3d.add_*` command with what the
+  command takes (point ids, sources, offsets, axis, length, radius, arc
+  length, Keep Plane's normal axis), and what it does not (an attachment
+  of a spline point or an arc's centre, a relation with this sketch's own
+  curve, an offset typed for an arc's or a spline's point) follows as
+  further commands merged into one undo step (`merge_undo`); a refused
+  follow-up undoes the step's commands, so nothing of it stays. No model
+  command was added for the tools.
+- **Editing** (mitcad#1526, app/COMMANDS.md "3D sketch editing"): the
+  relations and dimensions a selection takes, their list, Fix, Detach,
+  Attach, Replace Reference and Delete send the existing `sketch3d.*`
+  commands (`Sketch3dEdit.hpp`, plain and unit tested). A drag of a
+  point, a curve or a fit-point spline's tangent handle previews
+  `sketch3d.drag` with `preview` on every move and commits it once on
+  release; the drag plane is the editor's only. The one model addition is
+  the tangent handle: `sketch3d.drag`'s `tangents` are soft goals on the
+  hidden control point next to an end (the solver's `drag_with`), and an
+  open fit-point spline stores the end tangents of its free and tangent
+  ends (`tangents`), which the next solve starts from, since the
+  interpolation that seeds its hidden control points has natural ends.
+- **Conversion in place** (mitcad#1544, commands.md "Turning a planar
+  sketch into a 3D sketch"): `core/sketch/src/spatial_convert.rs` maps a
+  planar `SketchDef` to a `SpatialSketchDef` without the document (ids
+  kept; the planar sketch's own frame kept as the 3D sketch's `frame` in
+  its support; Coincident of two points a 3D coincidence, fixed entities
+  in-plane fixes, every other constraint and dimension an in-plane one
+  through #1542's adapter; one On Sketch Plane row per elevation group that
+  nothing else holds, so DOF and redundancy are the planar sketch's;
+  linked projections as projected attachments and reference curves).
+  `Document::convert_sketch_to_spatial` (`document/sketch_conversion.rs`)
+  puts it in the feature's place in a copied state, rewrites later paths
+  with `rewrite_spatial_paths`, checks every later feature against the 3D
+  sketch (naming each one in the way), matches projected line ends to
+  their sources' ends from a probe evaluation, solves it, and takes it as
+  one undo step only when no evaluated feature fails that did not. An
+  in-plane dimension's value slot is its planar one's
+  (`dimensions[k5].angle`), so its parameter keeps its unit. The app
+  switches editors (`switchSketchEditor`) within the same sketch edit, and
+  back on Undo (`followSketchKind`). What 3D sketches have no own form for
+  (mitcad#1550) is kept in the definition's `planar` records
+  (`PlanarRecords`): patterns and offsets bind in the plane as in-plane
+  solver rows (`SpatialSketchDef::in_plane_bindings`, the planar
+  `pattern.bindings`, `offset::tangent_corners` and `offset::independent`
+  through `solve::planar_binding`), derived offsets' curves are planar only
+  and made again in the planar view, the placement and a plane of another
+  component make the frame, text parameters fill the texts, inactive items
+  are skipped by the build, and linked projections that no reference
+  record can stand for keep their planar records, followed
+  (`project::follow_links` on a planar shell) before each solve with their
+  entities held by in-plane fixes. Back to 2D,
+  `spatial_planar::planar_from_spatial` maps a 3D sketch that all lies in
+  its plane to a planar `SketchDef` (in-plane items and records back, 3D
+  relations as planar equivalents, attachments and reference curves as
+  linked projections whose curves a probe evaluation finds) and
+  `Document::convert_sketch_to_planar` rewrites later paths
+  (`path::for_each_path`) and checks the features after it as one undo
+  step.
+- **Fillet** (mitcad#1548, app/COMMANDS.md "3D sketch Fillet"): the model
+  edit `SpatialEdit::fillets` (`sketch3d.fillet`) rounds corners of lines
+  with relations of the existing kinds only, no new solver row: the lines
+  are trimmed to new tangent points keeping their ids, the arc gets two
+  Tangent relations and a radius dimension, and the corner point stays
+  where the lines' extensions meet through two construction lines to it,
+  the first Tangent to the first line (collinear) and both Equal. That
+  holds the corner with no redundant row: a Tangent of the second line to
+  its construction line as well would tie the lines' common plane twice,
+  which the arc's tangencies already fix. A line's Length, Equal, Point On
+  Curve and Midpoint move to a construction line from its other end to
+  the corner, so they keep measuring to it. The edit report's `rounded`
+  lets `edit_spatial_sketch` add each arc, in the same undo step, to a
+  Pipe's or Sweep's path that lists both of its lines
+  (`path::take_fillet_arcs`). The Qt tool (`Sketch3dFilletTool.cpp`, the
+  plain geometry in `Sketch3dFillet.hpp`) sends one command per corner,
+  with a typed radius as typed or a dragged one along the bisector in
+  millimetres.
+- **Path selection** (mitcad#1527, app/COMMANDS.md "Pipe and Sweep along
+  3D sketches"): the Pipe and Sweep panels keep their inputs; a pick of a
+  3D sketch's curves (`SketchCurve` items of the sketch, as the view draws
+  them) is written as the typed `SpatialPath` by `cmd::pathOf` with the
+  context, and read back by `pathItems`; a Loft's rails and centre line are
+  written so too, so that the model refuses them in its own words. A whole
+  3D sketch (its Browser row or timeline entry) stands for its one open
+  route, from the query's `chains`. The panel lists a pick's route from the
+  `sketch3d` query's `route` (`spatial_path::route` on the definition, the
+  joints deciding as in the recompute), so the app does not order curves
+  itself; `commands/SpatialPaths.hpp` (plain, unit tested) holds the JSON
+  forms. The direction is the model's: the first listed curve and
+  `reversed`, which an edit keeps (Pipe's Reverse shows it). The timeline's
+  `sketches` of a feature include the 3D sketches it uses (the Browser lists
+  a Pipe under its route; its edit shows the route), while a used 3D sketch
+  is not hidden (`used_sketches` stays planar). The planar sketch-curve
+  forms naming a 3D sketch outside Pipe, Sweep and Loft are refused by
+  `path::not_spatial`.
+
 ## Application
 
 Formula assistance lives in the Rust expression layer: its existing tokenizer
@@ -2028,7 +2366,12 @@ not recompute.
   (mitcad#256, mitcad#258). The same query with `out_of_plane` also gives
   the other edges and vertices, as what they project to along the plane's
   normal and with where they are, so that the Dimension tool picks them
-  where the view shows them and projects them the same way (mitcad#866). A component's sketch is edited where one of
+  where the view shows them and projects them the same way (mitcad#866).
+  The application reads them again only when the model's
+  `plane_geometry_key` changes (the sketch's frame and the bodies before
+  it), not after each edit of the sketch itself (mitcad#1646), and the
+  items out of the plane off the UI thread, as a model job of their own
+  that gives way to the user's next action (mitcad#1656). A component's sketch is edited where one of
   its occurrences shows it (mitcad#505): the `sketch` query's frame is in
   the component's coordinates, and sketch mode places it in the design by
   that occurrence once (`SketchHost::sketchPlacement`): the plane link's

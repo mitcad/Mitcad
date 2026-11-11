@@ -1,0 +1,8 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design of the 3D sketch plane rotation UI test (mitcad#1661; tools/ui-sketch3d-rotation-test.sh, tools/ui-windows-sketch3d-rotation-test.ps1, tools/ui-scripts/sketch3d-rotation.mitcad-ui): 3DSketch1 (F1) on the XY plane with one line from the origin along X, 40 long (p1 to p2), where the route drawn with the rotated plane starts."},
+  {"cmd": "sketch3d.create", "support": "xy"},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": [0, 0, 0], "end": [40, 0, 0], "start_source": "origin"},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {"curves": [{"type": "line", "start": "p1", "end": "p2"}]}}},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}}
+]

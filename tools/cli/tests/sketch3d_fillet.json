@@ -1,0 +1,63 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. A 3D sketch's Fillet (mitcad#1548) on the geometry kernel: the three-segment route A-B-C-D from the origin, 40 along +X, 30 along +Y and 20 along +Z (fully constrained), piped by Pipe1 along its three lines listed (sharp corners), then rounded at B and C with radius 10 in one command: the lines keep their ids and end at the tangent points, the corners stay where the lines' extensions meet, nothing free or redundant, and Pipe1 takes the arcs into its listed curves. An 8 mm section along 30 + 10 + 10 of lines and two quarter turns of radius 10 (10 pi): pi 4^2 (50 + 10 pi) = 4092.410827. Pipe2 by chain selection from AB runs the same. The radius to 5 through its dimension: 35 + 20 + 15 + 5 pi, 4308.152124; undone, and the fillet undone: the corners back, Pipe1 along its three lines again."},
+  {"cmd": "sketch3d.create"},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": [0, 0, 0], "end": [38, 1, 0], "axis": "x", "length": 40, "start_source": "origin"},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": "p2", "end": [41, 28, 0], "axis": "y", "length": 30},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": "p4", "end": [40, 31, 18], "axis": "z", "length": 20},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 0, "fully_constrained": true},
+    "points": [
+      {"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [40, 0, 0]},
+      {"id": "p4", "at": [40, 30, 0]}, {"id": "p6", "at": [40, 30, 20]}]}}},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"spatial_sketch": "F1", "curves": ["c3", "c5", "c7"]},
+    "size": 8, "operation": "new_body"}},
+
+  {"comment": "Both corners by their points, radius 10: at B the tangent points p8 and p9 and the centre p10, the arc c11, construction lines A-B (c12) and B-C (c13) that took AB's and BC's lengths (k3, k5), and the corner's construction lines c14 and c15; at C p16, p17, p18, the arc c19 Equal to c11, C-D (c20) with CD's length, c21 and c22. k12 is the radius."},
+  {"cmd": "sketch3d.fillet", "sketch": "F1", "points": ["p2", "p4"], "radius": 10},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Fillet in 3DSketch1"}}},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 0, "fully_constrained": true, "redundant": []},
+    "points": [
+      {"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [40, 0, 0]},
+      {"id": "p4", "at": [40, 30, 0]}, {"id": "p6", "at": [40, 30, 20]},
+      {"id": "p8", "at": [30, 0, 0]}, {"id": "p9", "at": [40, 10, 0]}, {"id": "p10", "at": [30, 10, 0]},
+      {"id": "p16", "at": [40, 20, 0]}, {"id": "p17", "at": [40, 30, 10]}, {"id": "p18", "at": [40, 20, 10]}],
+    "chains": [{"curves": ["c3", "c11", "c5", "c19", "c7"], "closed": false}]}}},
+  {"expect": {"query": {"query": "feature", "uid": "F2"}, "result": {
+    "def": {"path": {"spatial_sketch": "F1", "curves": ["c3", "c5", "c7", "c11", "c19"]}}}}},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F2.b0", "volume": 4092.410827, "tolerance": 1e-3}},
+
+  {"comment": "Pipe2 (F3) by chain selection from AB: the same route through both arcs."},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"spatial_sketch": "F1", "curves": ["c3"], "chain": true},
+    "size": 8, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe2", "status": "ok", "body": "F3.b0", "volume": 4092.410827, "tolerance": 1e-3}},
+
+  {"comment": "The radius to 5 through its dimension: the tangent points move toward the corners, which stay; both pipes follow."},
+  {"cmd": "sketch3d.set_dimension", "sketch": "F1", "dimension": "k12", "value": 5},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Edit Dimension in 3DSketch1"}}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 0},
+    "points": [
+      {"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [40, 0, 0]},
+      {"id": "p4", "at": [40, 30, 0]}, {"id": "p6", "at": [40, 30, 20]},
+      {"id": "p8", "at": [35, 0, 0]}, {"id": "p9", "at": [40, 5, 0]}, {"id": "p10", "at": [35, 5, 0]},
+      {"id": "p16", "at": [40, 25, 0]}, {"id": "p17", "at": [40, 30, 5]}, {"id": "p18", "at": [40, 25, 5]}]}}},
+  {"expect": {"feature": "Pipe1", "status": "ok", "volume": 4308.152124, "tolerance": 1e-3}},
+  {"expect": {"feature": "Pipe2", "status": "ok", "volume": 4308.152124, "tolerance": 1e-3}},
+
+  {"comment": "Undone: the radius, Pipe2, then the fillet: the lines end at the corners again and Pipe1 lists its three lines."},
+  {"cmd": "undo"},
+  {"expect": {"feature": "Pipe1", "status": "ok", "volume": 4092.410827, "tolerance": 1e-3}},
+  {"cmd": "undo"},
+  {"cmd": "undo"},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 0, "fully_constrained": true},
+    "points": [
+      {"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [40, 0, 0]},
+      {"id": "p4", "at": [40, 30, 0]}, {"id": "p6", "at": [40, 30, 20]}],
+    "chains": [{"curves": ["c3", "c5", "c7"], "closed": false}]}}},
+  {"expect": {"query": {"query": "feature", "uid": "F2"}, "result": {
+    "def": {"path": {"spatial_sketch": "F1", "curves": ["c3", "c5", "c7"]}}}}},
+  {"expect": {"feature": "Pipe1", "status": "ok"}}
+]

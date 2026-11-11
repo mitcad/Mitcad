@@ -136,6 +136,21 @@ pub mod ffi {
         ports: Vec<SheetTrimPort>,
         diagnostics: Vec<String>,
     }
+    /// The boundary of one face on a bend's cylinder in the bend chart
+    /// (mitcad#1628).
+    struct SheetFootprintFace {
+        edges: Vec<SheetCurve>,
+    }
+    /// A bend chart's cylinder and the surface radius to read.
+    struct SheetFootprintCylinder {
+        centre: [f64; 3],
+        axis: [f64; 3],
+        radial_start: [f64; 3],
+        angular_direction: [f64; 3],
+        neutral_radius: f64,
+        angle_extent: f64,
+        radius: f64,
+    }
     unsafe extern "C++" {
         include!("bridge/sheet.hpp");
         include!("bridge/trycatch.hpp");
@@ -160,6 +175,11 @@ pub mod ffi {
             operation: u8,
             tolerance: f64,
         ) -> Result<SheetTrimOutput>;
+        fn sheet_cylinder_footprint(
+            shape: &Shape,
+            cylinder: &SheetFootprintCylinder,
+            tolerance: f64,
+        ) -> Result<Vec<SheetFootprintFace>>;
     }
 }
 
@@ -586,4 +606,28 @@ pub fn trim(spec: &SheetTrimSpec<'_>) -> Result<SheetTrimResult, KernelError> {
         ports,
         diagnostics: output.diagnostics,
     })
+}
+
+/// The faces of `shape` on a bend chart's cylinder of `radius`, each as its
+/// boundary in the chart (mitcad#1628).
+pub fn cylinder_footprint(
+    shape: &SharedPtr<Shape>,
+    chart: &CylinderEmbedding,
+    radius: f64,
+    tolerance: f64,
+) -> Result<Vec<Vec<BoundedCurve2>>, KernelError> {
+    let cylinder = ffi::SheetFootprintCylinder {
+        centre: chart.centre,
+        axis: chart.axis,
+        radial_start: chart.radial_start,
+        angular_direction: chart.angular_direction,
+        neutral_radius: chart.neutral_radius,
+        angle_extent: chart.angle_extent,
+        radius,
+    };
+    ffi::sheet_cylinder_footprint(occt(shape)?, &cylinder, tolerance)
+        .map_err(failed)?
+        .into_iter()
+        .map(|face| face.edges.into_iter().map(read_curve).collect())
+        .collect()
 }

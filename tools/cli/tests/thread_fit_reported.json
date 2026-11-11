@@ -1,0 +1,15 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Auto Fix of a thread on a hole too small for it (mitcad#1632), on a reported design (opened with --open, never committed; tools/cli/thread-fit-reported-test.cmake): Thread2 (F26, M76x2 6H, modelled, minor diameter 73.8349 mm) on the bore of the revolve Gland body (F3), whose radius is the sketch dimension d37 = 72/2 (a distance from the axis); the outer wall is the dimension d39 = 3 mm from the bore's line. Chamfer3 (F32) chamfers the step between the bore and the thread's crest at the hole's mouth, 1.3 mm."},
+  {"expect": {"parameter": "d37", "value": 36}},
+  {"expect": {"feature": "Thread2", "error_contains": "the hole's diameter is 1.835 mm smaller than the thread's minor diameter"}},
+  {"comment": "As saved, the fit is refused: with the bore at the thread's minor diameter the step Chamfer3 chamfers is gone, and Chamfer3 would fail. Nothing changes."},
+  {"cmd": "auto_fix", "features": ["F26"]},
+  {"expect": {"parameter": "d37", "value": 36}},
+  {"expect": {"feature": "Chamfer3", "status": "ok"}},
+  {"comment": "Without Chamfer3 the fit is taken: d37 becomes 73.835/2 (the minor diameter to a micrometre), the wall stays 3 mm and moves out with the bore, Gland body builds and Thread2 no longer warns of the hole."},
+  {"cmd": "suppress_feature", "uid": "F32"},
+  {"cmd": "auto_fix", "features": ["F26"]},
+  {"expect": {"parameter": "d37", "value": 36.9175}},
+  {"expect": {"parameter": "d39", "value": 3}},
+  {"expect": {"feature": "Gland body", "status": "ok"}}
+]

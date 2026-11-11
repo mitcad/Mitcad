@@ -264,7 +264,8 @@ Open CASCADE Technology ${OpenCASCADE_VERSION}: GNU LGPL-2.1 with the Open CASCA
   (third_party/vcpkg-ports/opencascade).
 ${MITCAD_HEIF_THIRD_PARTY_NOTES}FreeType: used under the FreeType Licence (FTL), not the GPL, which the package
   offers as an alternative.
-Droid Sans (the font of sketch texts, embedded): Apache-2.0 (DroidSans-Apache-2.0.txt).
+Droid Sans (the font of sketch texts and of the text of title block SVG images, embedded):
+  Apache-2.0 (DroidSans-Apache-2.0.txt).
 The ISO 3098 type B style technical lettering font of Zefram Cochrane and its contributors
   (https://github.com/hikikomori82), the annotations' lettering, a file of its own in
   Resources/fonts loaded at run time, not linked in: offered under GPL-3.0, GPL-2.0 or

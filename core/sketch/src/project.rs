@@ -1193,50 +1193,115 @@ pub struct ProjectionFollow {
 impl ProjectionFollow {
     /// The evaluation's warning about it; None when its entities all
     /// followed (source curves nothing follows are no warning: a
-    /// projection may hold only some of its source's curves).
+    /// projection may hold only some of its source's curves). The
+    /// source's name is shown as its kind ("the projection of an edge",
+    /// mitcad#1650), and the entities that do not follow as their kinds
+    /// ("with a curve", "with curves and a point", mitcad#1651), each
+    /// sentence whole for its translation.
     pub fn warning(&self, projection: &Projection) -> Option<String> {
+        let topo = &projection.source;
         if self.lost {
             return Some(format!(
-                "the projection of {} does not follow it: it is gone, and its entities keep \
-                 their last geometry",
-                projection.source
+                "the projection of {topo} does not follow it: it is gone, and its entities keep \
+                 their last geometry"
             ));
         }
         if self.kept {
             return Some(format!(
-                "the projection of {} does not follow it: its curves no longer match the \
-                 source's, and they keep their last geometry",
-                projection.source
+                "the projection of {topo} does not follow it: its curves no longer match the \
+                 source's, and they keep their last geometry"
             ));
         }
         if self.unfollowed.is_empty() {
             return None;
         }
-        let names: Vec<String> = self
+        // Its curves and its loose points, each after the word of its kind
+        // and each count in a sentence of its own (mitcad#1651): a person
+        // reads "with a curve", "with curves and a point", each translated
+        // whole; the ids are the agents' (`warnings`, and the warning's
+        // entities).
+        let (points, curves): (Vec<Ref>, Vec<Ref>) = self
             .unfollowed
             .iter()
-            .map(|id| entity_name(projection, *id))
-            .collect();
-        let one = names.len() == 1;
-        Some(format!(
-            "the projection of {} does not follow it with {}: nothing like {} is in it now, \
-             so {} {} last geometry",
-            projection.source,
-            names.join(", "),
-            if one { "it" } else { "them" },
-            if one { "it keeps" } else { "they keep" },
-            if one { "its" } else { "their" },
-        ))
+            .map(|id| entity_ref(projection, *id))
+            .partition(|r| r.is_point());
+        let listed = |refs: &[Ref]| {
+            refs.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let (curve_ids, point_ids) = (listed(&curves), listed(&points));
+        Some(match (curves.len(), points.len()) {
+            (1, 0) => {
+                let curve = curve_ids;
+                format!(
+                    "the projection of {topo} does not follow it with curve {curve}: nothing like \
+                     it is in it now, so it keeps its last geometry"
+                )
+            }
+            (_, 0) => {
+                let curves = curve_ids;
+                format!(
+                    "the projection of {topo} does not follow it with curves {curves}: nothing \
+                     like them is in it now, so they keep their last geometry"
+                )
+            }
+            (0, 1) => {
+                let point = point_ids;
+                format!(
+                    "the projection of {topo} does not follow it with point {point}: nothing like \
+                     it is in it now, so it keeps its last geometry"
+                )
+            }
+            (0, _) => {
+                let points = point_ids;
+                format!(
+                    "the projection of {topo} does not follow it with points {points}: nothing \
+                     like them is in it now, so they keep their last geometry"
+                )
+            }
+            (1, 1) => {
+                let (curve, point) = (curve_ids, point_ids);
+                format!(
+                    "the projection of {topo} does not follow it with curve {curve} and point \
+                     {point}: nothing like them is in it now, so they keep their last geometry"
+                )
+            }
+            (_, 1) => {
+                let (curves, point) = (curve_ids, point_ids);
+                format!(
+                    "the projection of {topo} does not follow it with curves {curves} and point \
+                     {point}: nothing like them is in it now, so they keep their last geometry"
+                )
+            }
+            (1, _) => {
+                let (curve, points) = (curve_ids, point_ids);
+                format!(
+                    "the projection of {topo} does not follow it with curve {curve} and points \
+                     {points}: nothing like them is in it now, so they keep their last geometry"
+                )
+            }
+            _ => {
+                let (curves, points) = (curve_ids, point_ids);
+                format!(
+                    "the projection of {topo} does not follow it with curves {curves} and points \
+                     {points}: nothing like them is in it now, so they keep their last geometry"
+                )
+            }
+        })
     }
 }
 
-/// `p7` or `c9`, as the projection lists it.
-fn entity_name(projection: &Projection, id: EntityUid) -> String {
+/// The entity `id` of the projection as it lists it (`p7`, `c9`); a curve
+/// when it does not list it.
+fn entity_ref(projection: &Projection, id: EntityUid) -> Ref {
     projection
         .entities
         .iter()
+        .copied()
         .find(|r| r.uid() == id)
-        .map_or_else(|| format!("c{}", id.0), ToString::to_string)
+        .unwrap_or(Ref::Curve(id))
 }
 
 /// What [`follow_links`] did.
@@ -2465,5 +2530,77 @@ mod tests {
             (lo - 25.0 * 70f64.to_radians().cos()).abs() < 1e-12,
             "{out:?}"
         );
+    }
+
+    #[test]
+    fn the_follow_warning_says_each_kind_and_count_in_words() {
+        // mitcad#1651: the entities that do not follow are named after the
+        // word of their kind; a person reads the kinds, an agent the ids.
+        let projection = Projection {
+            source: "F1:top".parse::<crate::ProjectionSource>().unwrap(),
+            body: None,
+            entities: vec![
+                Ref::Curve(EntityUid(1)),
+                Ref::Point(EntityUid(2)),
+                Ref::Curve(EntityUid(3)),
+                Ref::Point(EntityUid(4)),
+            ],
+            link: None,
+            by_geometry: true,
+            section: false,
+            chain: Vec::new(),
+            after: None,
+            outline: false,
+        };
+        let warning = |ids: &[u32]| {
+            ProjectionFollow {
+                unfollowed: ids.iter().map(|id| EntityUid(*id)).collect(),
+                ..ProjectionFollow::default()
+            }
+            .warning(&projection)
+            .unwrap()
+        };
+        let one = ": nothing like it is in it now, so it keeps its last geometry";
+        let many = ": nothing like them is in it now, so they keep their last geometry";
+        for (ids, agents, shown, tail) in [
+            (&[1][..], "with curve c1", "with a curve", one),
+            (&[1, 3][..], "with curves c1, c3", "with curves", many),
+            (&[2][..], "with point p2", "with a point", one),
+            (&[2, 4][..], "with points p2, p4", "with points", many),
+            (
+                &[1, 2][..],
+                "with curve c1 and point p2",
+                "with a curve and a point",
+                many,
+            ),
+            (
+                &[3, 2, 1][..],
+                "with curves c3, c1 and point p2",
+                "with curves and a point",
+                many,
+            ),
+            (
+                &[2, 1, 4][..],
+                "with curve c1 and points p2, p4",
+                "with a curve and points",
+                many,
+            ),
+            (
+                &[1, 2, 3, 4][..],
+                "with curves c1, c3 and points p2, p4",
+                "with curves and points",
+                many,
+            ),
+        ] {
+            let text = warning(ids);
+            assert_eq!(
+                text,
+                format!("the projection of F1:top does not follow it {agents}{tail}"),
+            );
+            assert_eq!(
+                mitcad_model_base::notice::user_message(&text),
+                format!("the projection of a face does not follow it {shown}{tail}"),
+            );
+        }
     }
 }

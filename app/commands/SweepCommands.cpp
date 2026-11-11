@@ -4,6 +4,7 @@
 // Helix (mitcad#27; commands.md, "helix").
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <initializer_list>
 #include <optional>
 
@@ -15,6 +16,7 @@
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
 #include "PlaceInputs.hpp"
+#include "SpatialPaths.hpp"
 
 namespace mitcad::cmd {
 namespace {
@@ -23,13 +25,75 @@ std::function<bool(const CommandState&)> choiceIs(const QString& id, const QStri
   return [id, value](const CommandState& state) { return state.choice(id) == value; };
 }
 
-// A path input: sketch curves or edges, with Chain Selection.
-QVector<InputDef> pathInputs(const QString& id, const QString& name,
-                             std::function<bool(const CommandState&)> shown = {}) {
+// ---------------------------------------------------------------------------
+// Paths along 3D sketches (mitcad#1527; app/COMMANDS.md, "Pipe and Sweep
+// along 3D sketches"): a 3D sketch's curves picked in the view, or the
+// sketch whole from the Browser or the timeline, its one open route.
+
+// Whether the path of input `id` runs against its first curve: Pipe's
+// Reverse (`<id>_reverse`), or the direction an edited path keeps
+// (`<id>_direction`) while its first curve stays first.
+bool pathReversed(const CommandState& state, const QString& id) {
+  return state.checked(id + QStringLiteral("_reverse")) || keptPathReversed(state, id);
+}
+
+// The panel's listing of a 3D sketch's curves as a path: the route the
+// model finds (the `sketch3d` query's `route`); empty for other picks,
+// which show their count. `chain` names the input's Chain Selection check,
+// none when the input has none (a loft's centre line).
+QString routeListing(const Selection& items, const CommandState& state, const CommandContext& context,
+                     const QString& id, const QString& chain = QStringLiteral("chain")) {
+  return spatialRouteListing(items, !chain.isEmpty() && state.checked(chain), pathReversed(state, id), context, id);
+}
+
+// The listings of the path inputs again, after Chain Selection or Reverse
+// changed how their picks run (a pick lists them by itself).
+void relistRoutes(CommandState& state, const CommandContext& context, const QStringList& ids) {
+  for (const QString& id : ids) {
+    const QString text = routeListing(state.items(id), state, context, id);
+    if (text != state.itemsText(id)) {
+      state.setItemsText(id, text);
+      if (!text.isEmpty()) {
+        qDebug().noquote() << QStringLiteral("Path %1 listed again: %2").arg(id, text);
+      }
+    }
+  }
+}
+
+// Whether a path input takes an item, and why a click is not taken
+// (CommandSupport: a 3D sketch's curves and whole route, mitcad#1550).
+bool pathTakes(const SelectionItem& item, const CommandContext& context) { return spatialPathTakes(item, context); }
+
+QString pathRefusal(const SelectionItem& item, const CommandContext& context) {
+  return spatialPathRefusal(item, context);
+}
+
+// A path input (mitcad#1527: also a 3D sketch's curves or, from the
+// Browser or the timeline, the sketch whole), with Chain Selection: the
+// check `chain` names, none for an input that does not chain (a loft's
+// centre line, mitcad#1550).
+QVector<InputDef> pathInputs(const QString& id, const QString& name, const CommandContext& context,
+                             std::function<bool(const CommandState&)> shown = {},
+                             const QString& chain = QStringLiteral("chain")) {
   QVector<InputDef> inputs = {
-      selectionInput(id, name, kPathKinds, 1, 0)
-          .withTooltip(QObject::tr("Sketch curves or edges, joined end to end, or an intersection curve"))
-          .withAccepts(isPathItem),
+      selectionInput(id, name, kPathKinds | SelectKind::Sketch, 1, 0)
+          .withTooltip(QObject::tr("Sketch curves or edges, joined end to end, an intersection curve, or a 3D "
+                                   "sketch's route"))
+          .withAccepts([&context](const SelectionItem& item) { return pathTakes(item, context); })
+          .withRefusedHint(
+              [&context](const SelectionItem& item, const CommandState&) { return pathRefusal(item, context); })
+          .withOnPick(
+              [id](const SelectionItem& item, CommandState& state, const CommandContext& model) {
+                takeWholeRoute(item, state, model, id);
+              },
+              false) // a click on a picked curve still takes it out
+          .withItemsText([id, chain](const Selection& items, const CommandState& state, const CommandContext& model) {
+            return routeListing(items, state, model, id, chain);
+          })
+          .withOnChange([id](CommandState& state, const CommandContext& model) {
+            // Pipe's Reverse is offered for a 3D sketch's path.
+            state.setChecked(id + QStringLiteral("_spatial"), !spatialOwner(state.items(id), model).isEmpty());
+          }),
   };
   if (shown) {
     inputs.first().withVisible(shown);
@@ -115,20 +179,40 @@ bool takeSweepPath(const QJsonObject& report, CommandState& state) {
 
 bool pathEditable(const QJsonValue& path) {
   const QJsonObject o = path.toObject();
+  // A 3D sketch's typed path has `curves` too (mitcad#1527).
   return o.contains(QStringLiteral("curves")) || o.contains(QStringLiteral("curve")) ||
          o.contains(QStringLiteral("edges")) || o.contains(QStringLiteral("feature"));
 }
 
-bool loadPath(const QJsonValue& path, CommandState& state, const QString& id,
-              const CommandContext& context) {
+// A path into input `id`. A 3D sketch's (mitcad#1527) keeps its direction:
+// Pipe's Reverse (`reverse`: its `<id>_reverse` check) shows it, other
+// inputs keep it while their first curve stays first.
+bool loadPath(const QJsonValue& path, CommandState& state, const QString& id, const CommandContext& context,
+              bool reverse = false) {
   bool chain = false;
-  const auto items = pathItems(path, context, &chain);
+  bool reversed = false;
+  const auto items = pathItems(path, context, &chain, &reversed);
   if (!items) {
     return false;
   }
   state.setItems(id, *items);
   state.setChecked(QStringLiteral("chain"), chain);
+  if (const auto parts = spatialPathParts(path)) {
+    state.setChecked(id + QStringLiteral("_spatial"), true);
+    if (reverse) {
+      state.setChecked(id + QStringLiteral("_reverse"), reversed);
+    } else {
+      state.setObject(id + QStringLiteral("_direction"), keptDirection(*parts));
+    }
+  }
   return true;
+}
+
+// The model's path of input `id`: a 3D sketch's curves as its typed path,
+// running as pathReversed says (mitcad#1527).
+QJsonValue pathOfInput(const CommandState& state, const QString& id, bool chain, Built& result,
+                       const CommandContext& context) {
+  return pathOf(state.items(id), chain, result, id, context, pathReversed(state, id));
 }
 
 } // namespace
@@ -157,14 +241,13 @@ CommandDef sweepCommand(const CommandContext& context) {
                   QStringLiteral("single")),
       selectionInput(QStringLiteral("profiles"), QObject::tr("Profiles"), SelectKind::Profile, 1, 0),
   };
-  def.inputs += pathInputs(QStringLiteral("path"), QObject::tr("Path"));
-  def.inputs += pathInputs(QStringLiteral("rail"), QObject::tr("Guide Rail"), rail);
+  def.inputs += pathInputs(QStringLiteral("path"), QObject::tr("Path"), context);
+  def.inputs += pathInputs(QStringLiteral("rail"), QObject::tr("Guide Rail"), context, rail);
   // A second rail (mitcad#464): the profile moves with the first rail and
   // turns and sizes with the line across to the second.
-  def.inputs += selectionInput(QStringLiteral("rail2"), QObject::tr("Second Rail"), kPathKinds, 0, 0)
-                    .withTooltip(QObject::tr("Optional: a second rail the profile turns and sizes with"))
-                    .withAccepts(isPathItem)
-                    .withVisible(rail);
+  InputDef rail2 = pathInputs(QStringLiteral("rail2"), QObject::tr("Second Rail"), context, rail).first();
+  rail2.min = 0;
+  def.inputs += rail2.withTooltip(QObject::tr("Optional: a second rail the profile turns and sizes with"));
   // Guide surfaces (mitcad#157): faces the path lies on.
   def.inputs += selectionInput(QStringLiteral("surfaces"), QObject::tr("Guide Surface"), SelectKind::Face, 1, 0)
                     .withoutMeshes()
@@ -172,7 +255,11 @@ CommandDef sweepCommand(const CommandContext& context) {
                     .withVisible(surface);
   def.inputs += {
       checkInput(QStringLiteral("chain"), QObject::tr("Chain Selection"), true)
-          .withTooltip(QObject::tr("Also take the curves joined to the selected ones")),
+          .withTooltip(QObject::tr("Also take the curves joined to the selected ones"))
+          .withOnChange([](CommandState& state, const CommandContext& model) {
+            relistRoutes(state, model,
+                         {QStringLiteral("path"), QStringLiteral("rail"), QStringLiteral("rail2")});
+          }),
       valueInput(QStringLiteral("fraction"), QObject::tr("Distance 1"), ValueKind::Unitless, QStringLiteral("1"))
           .withTooltip(QObject::tr("The part of the path beyond the profile, 0 to 1")),
       valueInput(QStringLiteral("fraction2"), QObject::tr("Distance 2"), ValueKind::Unitless, QStringLiteral("1"))
@@ -213,14 +300,14 @@ CommandDef sweepCommand(const CommandContext& context) {
   def.enabled = [&context] { return hasProfiles(context); };
   def.previewReported = takeSweepPath;
 
-  def.build = [](const CommandState& state, const CommandContext&) {
+  def.build = [](const CommandState& state, const CommandContext& context) {
     Built result;
     const Selection& profiles = state.items(QStringLiteral("profiles"));
     if (oneSketch(profiles, result, QStringLiteral("profiles")).isEmpty()) {
       return result;
     }
     const bool chain = state.checked(QStringLiteral("chain"));
-    const QJsonValue path = pathOf(state.items(QStringLiteral("path")), chain, result, QStringLiteral("path"));
+    const QJsonValue path = pathOfInput(state, QStringLiteral("path"), chain, result, context);
     if (!result.error.isEmpty()) {
       return result;
     }
@@ -229,7 +316,7 @@ CommandDef sweepCommand(const CommandContext& context) {
                   {QStringLiteral("path"), path},
                   {QStringLiteral("extent"), pathExtent(state, true)}};
     if (state.choice(QStringLiteral("type")) == QStringLiteral("rail")) {
-      const QJsonValue rail = pathOf(state.items(QStringLiteral("rail")), chain, result, QStringLiteral("rail"));
+      const QJsonValue rail = pathOfInput(state, QStringLiteral("rail"), chain, result, context);
       if (!result.error.isEmpty()) {
         return result;
       }
@@ -239,8 +326,7 @@ CommandDef sweepCommand(const CommandContext& context) {
         result.def.insert(QStringLiteral("rail_point"), QStringLiteral("plane"));
       }
       if (!state.items(QStringLiteral("rail2")).isEmpty()) {
-        const QJsonValue rail2 =
-            pathOf(state.items(QStringLiteral("rail2")), chain, result, QStringLiteral("rail2"));
+        const QJsonValue rail2 = pathOfInput(state, QStringLiteral("rail2"), chain, result, context);
         if (!result.error.isEmpty()) {
           return result;
         }
@@ -481,20 +567,23 @@ CommandDef loftCommand(const CommandContext& context) {
                    {QStringLiteral("rails"), QStringLiteral("Rails")},
                    {QStringLiteral("centerline"), QStringLiteral("Centerline")}},
                   QStringLiteral("none")),
+      // A 3D sketch's curves too, or its route whole from the Browser
+      // (mitcad#1550).
       listInput(kRails, QObject::tr("Rails"),
-                {selectionInput(QStringLiteral("path"), QObject::tr("Rail"), kPathKinds, 1, 0)
-                     .withTooltip(QObject::tr("Sketch curves or edges joined end to end, meeting every "
-                                              "section"))
-                     .withAccepts(isPathItem)},
+                {selectionInput(QStringLiteral("path"), QObject::tr("Rail"), kPathKinds | SelectKind::Sketch, 1, 0)
+                     .withTooltip(QObject::tr("Sketch or 3D sketch curves or edges joined end to end, meeting "
+                                              "every section"))
+                     .withAccepts([&context](const SelectionItem& item) { return pathTakes(item, context); })
+                     .withRefusedHint([&context](const SelectionItem& item, const CommandState&) {
+                       return pathRefusal(item, context);
+                     })},
                 QObject::tr("Add Rail"), QObject::tr("Rail %1"))
           .withVisible(guide("rails")),
       checkInput(QStringLiteral("chain"), QObject::tr("Chain Selection"), true)
           .withTooltip(QObject::tr("Also take the curves joined to the selected ones"))
           .withVisible(guide("rails")),
-      selectionInput(QStringLiteral("centerline"), QObject::tr("Centerline"), kPathKinds, 1, 0)
-          .withTooltip(QObject::tr("Sketch curves or edges joined end to end"))
-          .withAccepts(isPathItem)
-          .withVisible(guide("centerline")),
+      pathInputs(QStringLiteral("centerline"), QObject::tr("Centerline"), context, guide("centerline"), QString())
+          .first(),
       checkInput(QStringLiteral("closed"), QObject::tr("Closed"), false)
           .withTooltip(QObject::tr("From the last section back to the first")),
       checkInput(QStringLiteral("ruled"), QObject::tr("Ruled"), false)
@@ -503,7 +592,7 @@ CommandDef loftCommand(const CommandContext& context) {
   def.inputs += operationInputs();
   def.enabled = [&context] { return hasProfiles(context) || hasBodies(context); };
 
-  def.build = [](const CommandState& state, const CommandContext&) {
+  def.build = [](const CommandState& state, const CommandContext& context) {
     Built result;
     QJsonArray sections;
     for (const SelectionItem& item : state.items(QStringLiteral("sections"))) {
@@ -543,15 +632,18 @@ CommandDef loftCommand(const CommandContext& context) {
       QJsonArray rails;
       for (int i = 0; i < state.rows(kRails); ++i) {
         const QString key = CommandState::rowKey(kRails, i, QStringLiteral("path"));
-        rails.append(pathOf(state.row(kRails, i).items(QStringLiteral("path")), chain, result, key));
+        // A 3D sketch's curves in their typed form (mitcad#1550), running
+        // as an edited rail ran.
+        rails.append(pathOf(state.row(kRails, i).items(QStringLiteral("path")), chain, result, key, context,
+                            keptPathReversed(state, key)));
         if (!result.error.isEmpty()) {
           return result;
         }
       }
       result.def.insert(kRails, rails);
     } else if (guide == QStringLiteral("centerline")) {
-      const QJsonValue line = pathOf(state.items(QStringLiteral("centerline")), false, result,
-                                     QStringLiteral("centerline"));
+      const QString id = QStringLiteral("centerline");
+      const QJsonValue line = pathOf(state.items(id), false, result, id, context, pathReversed(state, id));
       if (!result.error.isEmpty()) {
         return result;
       }
@@ -609,17 +701,22 @@ CommandDef loftCommand(const CommandContext& context) {
       bool chain = false;
       for (int i = 0; i < rails.size(); ++i) {
         bool chained = false;
+        const QString key = CommandState::rowKey(kRails, i, QStringLiteral("path"));
         if (const auto path = pathItems(rails[i], context, &chained)) {
-          state.setItems(CommandState::rowKey(kRails, i, QStringLiteral("path")), *path);
+          state.setItems(key, *path);
         }
+        // A 3D sketch's rail keeps its direction (mitcad#1550).
+        keepPathDirection(rails[i], state, key);
         chain = chain || chained;
       }
       state.setChecked(QStringLiteral("chain"), chain);
     } else if (feature.contains(QStringLiteral("centerline"))) {
       state.setChoice(QStringLiteral("guide"), QStringLiteral("centerline"));
-      if (const auto path = pathItems(feature.value(QStringLiteral("centerline")), context)) {
+      const QJsonValue line = feature.value(QStringLiteral("centerline"));
+      if (const auto path = pathItems(line, context)) {
         state.setItems(QStringLiteral("centerline"), *path);
       }
+      keepPathDirection(line, state, QStringLiteral("centerline"));
     }
     state.setChecked(QStringLiteral("closed"), feature.value(QStringLiteral("closed")).toBool());
     state.setChecked(QStringLiteral("ruled"), feature.value(QStringLiteral("ruled")).toBool());
@@ -693,8 +790,12 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
       selectionInput(QStringLiteral("curves"), QObject::tr("Curves"), SelectKind::SketchCurve | SelectKind::Feature,
                      1, 0)
           .withTooltip(QObject::tr("Open sketch curves of one sketch, or a flat intersection curve"))
-          .withAccepts([](const SelectionItem& item) {
-            return item.kind != SelectKind::Feature || isFeatureCurve(item);
+          // A 3D sketch's curves in its sketch plane too (mitcad#1550).
+          .withAccepts([&context](const SelectionItem& item) {
+            return (item.kind != SelectKind::Feature || isFeatureCurve(item)) && planeCurveTakes(item, context);
+          })
+          .withRefusedHint([&context](const SelectionItem& item, const CommandState&) {
+            return planeCurveRefusal(item, context);
           }),
       checkInput(QStringLiteral("chain"), QObject::tr("Chain Selection"), false),
       choiceInput(QStringLiteral("location"), QObject::tr("Thickness Side"),
@@ -713,7 +814,7 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
       selectionInput(QStringLiteral("objects"), QObject::tr("Objects"), SelectKind::Body, 0, 0)
           .withTooltip(QObject::tr("The bodies it joins and stops at; none: all")),
   };
-  def.enabled = [&context] { return hasSketches(context); };
+  def.enabled = [&context] { return hasSketches(context, true); };
   const QString type = def.featureType;
 
   def.build = [type](const CommandState& state, const CommandContext&) {
@@ -958,9 +1059,20 @@ CommandDef pipeCommand(const CommandContext& context) {
   def.section = QStringLiteral("primitives");
   def.keywords = {QStringLiteral("tube"), QStringLiteral("wire")};
   def.featureType = QStringLiteral("pipe");
-  def.inputs = pathInputs(QStringLiteral("path"), QObject::tr("Path"));
+  def.inputs = pathInputs(QStringLiteral("path"), QObject::tr("Path"), context);
   def.inputs += {
-      checkInput(QStringLiteral("chain"), QObject::tr("Chain Selection"), true),
+      checkInput(QStringLiteral("chain"), QObject::tr("Chain Selection"), true)
+          .withOnChange([](CommandState& state, const CommandContext& model) {
+            relistRoutes(state, model, {QStringLiteral("path")});
+          }),
+      // A 3D sketch's route the other way (mitcad#1527): the section at its
+      // other end. Other paths start where their pick order says.
+      flipInput(QStringLiteral("path_reverse"), QObject::tr("Reverse"))
+          .withTooltip(QObject::tr("Run the 3D sketch's route the other way, from its other end"))
+          .withVisible([](const CommandState& s) { return s.checked(QStringLiteral("path_spatial")); })
+          .withOnChange([](CommandState& state, const CommandContext& model) {
+            relistRoutes(state, model, {QStringLiteral("path")});
+          }),
       // Shown directly (mitcad#795); the section is at the path's start,
       // so there is no part before it.
       valueInput(QStringLiteral("fraction"), QObject::tr("Distance 1"), ValueKind::Unitless, QStringLiteral("1"))
@@ -984,13 +1096,14 @@ CommandDef pipeCommand(const CommandContext& context) {
           .withVisible(pipeCornersShown),
   };
   def.inputs += operationInputs();
-  def.enabled = [&context] { return hasSketches(context) || hasBodies(context); };
+  // A 3D sketch's route alone is a path (mitcad#1527).
+  def.enabled = [&context] { return hasSketches(context, true) || hasBodies(context); };
   def.previewReported = takePipePath;
 
-  def.build = [](const CommandState& state, const CommandContext&) {
+  def.build = [](const CommandState& state, const CommandContext& context) {
     Built result;
     const QJsonValue path =
-        pathOf(state.items(QStringLiteral("path")), state.checked(QStringLiteral("chain")), result, QStringLiteral("path"));
+        pathOfInput(state, QStringLiteral("path"), state.checked(QStringLiteral("chain")), result, context);
     if (!result.error.isEmpty()) {
       return result;
     }
@@ -1011,7 +1124,7 @@ CommandDef pipeCommand(const CommandContext& context) {
   };
 
   def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
-    loadPath(feature.value(QStringLiteral("path")), state, QStringLiteral("path"), context);
+    loadPath(feature.value(QStringLiteral("path")), state, QStringLiteral("path"), context, true);
     state.setChoice(QStringLiteral("section"), feature.value(QStringLiteral("section")).toString(QStringLiteral("circular")));
     if (feature.contains(QStringLiteral("corners"))) {
       state.setChoice(QStringLiteral("corners"), feature.value(QStringLiteral("corners")).toString(QStringLiteral("mitered")));
@@ -1322,15 +1435,23 @@ CommandDef intersectionCurveCommand(const CommandContext& context) {
   def.section = QStringLiteral("primitives");
   def.keywords = {QStringLiteral("3d curve"), QStringLiteral("curve"), QStringLiteral("path")};
   def.featureType = QStringLiteral("intersection_curve");
+  // Curves of a 3D sketch too, swept along its support plane's normal
+  // (mitcad#1550); its reference curves are none.
   def.inputs = {
       selectionInput(QStringLiteral("first"), QObject::tr("First Curves"), SelectKind::SketchCurve, 1, 0)
-          .withTooltip(QObject::tr("Curves of one sketch, swept along its normal")),
+          .withTooltip(QObject::tr("Curves of one sketch or 3D sketch, swept along its normal"))
+          .withAccepts([&context](const SelectionItem& item) { return pathTakes(item, context); })
+          .withRefusedHint(
+              [&context](const SelectionItem& item, const CommandState&) { return pathRefusal(item, context); }),
       selectionInput(QStringLiteral("second"), QObject::tr("Second Curves"), SelectKind::SketchCurve, 1, 0)
-          .withTooltip(QObject::tr("Curves of another sketch, on a plane at an angle to the first")),
+          .withTooltip(QObject::tr("Curves of another sketch, on a plane at an angle to the first"))
+          .withAccepts([&context](const SelectionItem& item) { return pathTakes(item, context); })
+          .withRefusedHint(
+              [&context](const SelectionItem& item, const CommandState&) { return pathRefusal(item, context); }),
       checkInput(QStringLiteral("chain"), QObject::tr("Chain Selection"), true)
           .withTooltip(QObject::tr("Also take the curves joined to the selected ones")),
   };
-  def.enabled = [&context] { return hasSketches(context); };
+  def.enabled = [&context] { return hasSketches(context, true); };
 
   def.build = [](const CommandState& state, const CommandContext&) {
     Built result;

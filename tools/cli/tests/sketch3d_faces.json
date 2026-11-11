@@ -1,0 +1,54 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. A 3D sketch's point on a curved face of another body (mitcad#1549) on the geometry kernel: Cylinder1 (F1, F1.b0) of diameter 40 about the vertical line through (60, 0), 50 high. In 3DSketch1 (F2) a line from the origin (k1) to a point on the cylinder's side F1:side0 (On Face, k2), 0 off the origin along Y and 10 along Z (k3, k4): its end is at (40, 0, 10), fully constrained. Pipe1 (F3) of 8 mm along it: 16 pi sqrt(1700). The cylinder 50 across: the end follows to (35, 0, 10) and the pipe with it, 16 pi sqrt(1325); the attachment is undone and redone; the cylinder suppressed, the sketch fails on its lost face and keeps its definition."},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": {"type": "origin", "plane": "xy"},
+    "center": [60, 0], "diameter": 40, "height": 50, "operation": "new_body"}},
+  {"cmd": "sketch3d.create"},
+  {"cmd": "sketch3d.add_line", "sketch": "F2", "start": [0, 0, 0], "end": [35, 1, 9], "start_source": "origin"},
+  {"cmd": "sketch3d.attach", "sketch": "F2", "point": "p2",
+    "source": {"body": "F1.b0", "face": "F1:side0"}},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Attach in 3DSketch1"}}},
+  {"cmd": "sketch3d.add_dimension", "sketch": "F2",
+    "dimension": {"type": "offset", "a": "p1", "b": "p2", "axis": "y"}, "value": 0},
+  {"cmd": "sketch3d.add_dimension", "sketch": "F2",
+    "dimension": {"type": "offset", "a": "p1", "b": "p2", "axis": "z"}, "value": 10},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "status": {"dof": 0},
+    "points": [{"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [40, 0, 10]}],
+    "constraints": [{"id": "k1", "type": "attach"},
+                    {"id": "k2", "type": "on_face", "point": "p2",
+                     "source": {"body": "F1.b0", "face": "F1:side0"}}],
+    "references": [
+      {"id": "k1", "kind": "point", "status": "ok"},
+      {"id": "k2", "kind": "face", "body": "F1.b0", "users": ["p2"], "status": "ok"}]}}},
+
+  {"comment": "Pipe1 (F3) along the line."},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"spatial_sketch": "F2", "curves": ["c3"]},
+    "size": 8, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F3.b0", "volume": 2072.498935, "tolerance": 1e-3}},
+
+  {"comment": "The cylinder 50 across: the end follows its side, and the pipe the end."},
+  {"cmd": "edit_feature", "uid": "F1", "def": {"type": "cylinder", "plane": {"type": "origin", "plane": "xy"},
+    "center": [60, 0], "diameter": 50, "height": 50, "operation": "new_body"}},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "status": {"dof": 0},
+    "points": [{"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [35, 0, 10]}]}}},
+  {"expect": {"feature": "Pipe1", "status": "ok", "volume": 1829.691180, "tolerance": 1e-3}},
+
+  {"comment": "Undo and redo of the cylinder's edit."},
+  {"cmd": "undo"},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "points": [{"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [40, 0, 10]}]}}},
+  {"cmd": "redo"},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "points": [{"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [35, 0, 10]}]}}},
+
+  {"comment": "The cylinder suppressed: a reference failure on the lost face, the definition kept, nothing detached."},
+  {"cmd": "suppress_feature", "uid": "F1"},
+  {"expect": {"feature": "3DSketch1", "status": "error"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "failure": {"kind": "reference"},
+    "constraints": [{"id": "k1"}, {"id": "k2", "type": "on_face"}],
+    "references": [{"id": "k1"}, {"id": "k2", "kind": "face", "status": "failed"}]}}}
+]

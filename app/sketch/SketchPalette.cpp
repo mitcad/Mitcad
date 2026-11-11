@@ -218,6 +218,21 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   m_hideAbove = check(tr("Hide Above Sketch"), QStringLiteral("paletteHideAbove"),
                       tr("Cut the bodies at the sketch plane and hide what is in front of it, "
                          "as Section Analysis does"));
+  // Turns the sketch into a 3D sketch in place (mitcad#1544): checking it
+  // converts at once, one undo step; Undo is the way back.
+  m_spatial = check(tr("3D Sketch"), QStringLiteral("palette3dSketch"), QString());
+  connect(m_spatial, &QCheckBox::clicked, this, [this](bool on) {
+    {
+      // It shows the sketch's kind: checked only once the conversion is
+      // made (the 3D Sketch Palette then takes the palette's place).
+      const QSignalBlocker block(m_spatial);
+      m_spatial->setChecked(false);
+    }
+    if (on) {
+      qDebug().noquote() << QStringLiteral("Palette: 3D Sketch checked for %1").arg(m_c.uid());
+      emit convertTo3dRequested();
+    }
+  });
   QAbstractButton* lookAt = nullptr;
   if (chromeStyle() == ChromeStyle::Floating) {
     lookAt = new CapsuleButton(tr("Look At"));
@@ -360,6 +375,7 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
     m_tool->setText(name.isEmpty() ? QString()
                                  : tr("<b>%1</b><br>Esc ends the tool; Enter accepts typed values.")
                                        .arg(name.toHtmlEscaped()));
+    refreshSpatial();
   });
   refresh();
 }
@@ -665,8 +681,28 @@ void SketchPalette::refresh() {
     const QSignalBlocker block(m_dimensionText);
     m_dimensionText->setCurrentIndex(static_cast<int>(m_c.dimensionTextMode()));
   }
+  refreshSpatial();
   // Undo may have taken the tool's entities back.
   refreshAuto();
+}
+
+void SketchPalette::refreshSpatial() {
+  // Not while a tool has pending input: it is finished or Escaped first
+  // (mitcad#1544).
+  const bool pending = m_c.tool() != nullptr || m_c.valueEditorOpen();
+  const QString tip = pending ? tr("Finish or Escape the active tool first, then turn the sketch into a 3D sketch")
+                              : tr("Turns this sketch into a 3D sketch in place, keeping all its geometry");
+  {
+    const QSignalBlocker block(m_spatial);
+    m_spatial->setChecked(false);
+  }
+  if (m_spatial->isEnabled() == pending || m_spatial->toolTip() != tip) {
+    m_spatial->setEnabled(!pending);
+    m_spatial->setToolTip(tip);
+    qDebug().noquote() << QStringLiteral("Palette 3D Sketch %1")
+                              .arg(pending ? QStringLiteral("disabled: a tool has pending input")
+                                           : QStringLiteral("enabled"));
+  }
 }
 
 void SketchPalette::refreshAuto() {
@@ -750,7 +786,7 @@ bool SketchPalette::eventFilter(QObject* watched, QEvent* event) {
 
 void SketchPalette::logLayout() const {
   for (const QCheckBox* box :
-       {m_construction, m_signed, m_grid, m_dimensions, m_constraints, m_profiles, m_hideAbove}) {
+       {m_construction, m_signed, m_grid, m_dimensions, m_constraints, m_profiles, m_hideAbove, m_spatial}) {
     // The box's indicator: a click there toggles it whatever the width of
     // the label, which a click on the widget's middle may miss.
     QStyleOptionButton option;
@@ -775,8 +811,8 @@ void SketchPalette::logLayout() const {
   // palette's against its own: a row laid out below its hint overlaps the
   // next one (mitcad#470).
   for (const QWidget* row : std::initializer_list<const QWidget*>{
-           m_construction, m_signed, m_grid, m_dimensions, m_constraints, m_profiles, m_hideAbove, m_dimensionText,
-           m_finish}) {
+           m_construction, m_signed, m_grid, m_dimensions, m_constraints, m_profiles, m_hideAbove, m_spatial,
+           m_dimensionText, m_finish}) {
     if (row == nullptr) {
       continue;
     }

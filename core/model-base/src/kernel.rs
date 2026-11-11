@@ -1929,6 +1929,43 @@ pub trait Kernel: Send {
     ) -> Result<Vec<Curve3>, KernelError> {
         Err(KernelError::Unsupported("intersection curves"))
     }
+
+    // Sheet footprints: where an ordinary cut across a bend left the bend's
+    // surfaces (mitcad#1628; `sheet::rederive`).
+
+    /// The boundaries of the faces of `shape` that lie on the cylinder of
+    /// `radius` about the axis of the bend chart `chart` (within
+    /// `tolerance` mm), in the chart's coordinates: `u` the angle from
+    /// `radial_start` towards `angular_direction` times `neutral_radius`,
+    /// `v` along `axis` from `centre`. One list per face, each edge the
+    /// face's own parameter curve of it mapped into the chart (an affine
+    /// map of the cylinder's parameters, so no curve is sampled or
+    /// approximated), in no particular order or direction.
+    fn sheet_cylinder_footprint(
+        &self,
+        _shape: &Self::Shape,
+        _chart: &crate::sheet_charts::CylinderEmbedding,
+        _radius: f64,
+        _tolerance: f64,
+    ) -> Result<Vec<Vec<crate::sheet_charts::BoundedCurve2>>, KernelError> {
+        Err(KernelError::Unsupported("sheet cylinder footprints"))
+    }
+
+    // Body edges in a sketch's plane: every named edge at once (mitcad#1656;
+    // `document/plane_geometry.rs`).
+
+    /// Every named edge of the shape with its curve in model space, in the
+    /// kernel's edge order: for each edge, its name and what
+    /// [`Kernel::curves_of`] gives for that name, read without resolving the
+    /// name back. An edge whose name gives no single curve there is left
+    /// out. Unsupported where the caller lists [`Kernel::edges`] and asks
+    /// [`Kernel::curves_of`] each name instead.
+    fn named_edge_curves(
+        &self,
+        _shape: &Self::Shape,
+    ) -> Result<Vec<(TopoName, Curve3)>, KernelError> {
+        Err(KernelError::Unsupported("named edge curves"))
+    }
 }
 
 /// [`Kernel::shape_unpacker`]: `unpack` makes a shape of

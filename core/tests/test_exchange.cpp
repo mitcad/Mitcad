@@ -199,7 +199,10 @@ void test_brep_round_trips(const fs::path& dir) {
     const std::string exported = run(*document, R"({"cmd": "export", "path": )" + json_path(file) +
                                                     R"(, "bodies": ["F2.b0"]})");
     CHECK(contains(exported, R"("bodies":["F2.b0"])"));
-    const std::string imported = run(*document, R"({"cmd": "import_file", "path": )" + json_path(file) + "}");
+    // Into the block's component, as the bodies' names and the fillet below
+    // expect (not wrapped in a component of its own, mitcad#1629).
+    const std::string imported =
+        run(*document, R"({"cmd": "import_file", "path": )" + json_path(file) + R"(, "wrap": false})");
     const std::string uid = "F" + std::to_string(feature++) + ".b0";
     CHECK(contains(imported, "\"uid\":\"" + uid + "\""));
     CHECK(contains(imported, R"("kind":"solid")"));
@@ -319,7 +322,7 @@ void test_base_features_from_shapes(const fs::path& dir) {
   // The colour goes to STEP and comes back.
   const fs::path step = dir / "cube.step";
   run(*document, R"({"cmd": "export", "path": )" + json_path(step) + R"(, "bodies": ["Cube"]})");
-  run(*document, R"({"cmd": "import_file", "path": )" + json_path(step) + "}");
+  run(*document, R"({"cmd": "import_file", "path": )" + json_path(step) + R"(, "wrap": false})");
   const std::string feature(document->query(R"({"query": "feature", "uid": "F5"})"));
   CHECK(contains(feature, R"("color":[1.0,0.5,0.0],"name":"Cube")"));
   CHECK(contains(std::string(document->query(R"({"query": "bodies"})")),
@@ -428,7 +431,13 @@ void test_step_assembly_import(const fs::path& dir) {
   const fs::path single = dir / "plate.step";
   run(*document, R"({"cmd": "export", "path": )" + json_path(single) + R"(, "coordinates": "component",
                      "bodies": ["F1.b0"]})");
-  CHECK(!contains(run(*flat, R"({"cmd": "import_file", "path": )" + json_path(single) + "}"), "structure"));
+  // Into the flat design, which has content: wrapped in a component named
+  // after the file (mitcad#1629).
+  const std::string wrapped = run(*flat, R"({"cmd": "import_file", "path": )" + json_path(single) + "}");
+  CHECK(!contains(wrapped, "structure"));
+  CHECK(contains(wrapped, R"("component":{"name":"plate",)"));
+  CHECK(contains(std::string(flat->query(R"({"query": "file_structure", "path": )" + json_path(step) + "}")),
+                 R"("wrap":true)"));
   CHECK(contains(std::string(flat->query(R"({"query": "file_structure", "path": )" + json_path(step) + "}")),
                  R"("assembly":true)"));
   CHECK(contains(std::string(flat->query(R"({"query": "file_structure", "path": )" + json_path(single) + "}")),

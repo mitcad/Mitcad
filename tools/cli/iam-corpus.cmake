@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Assembly files kept outside the repository (never committed): every .iam
-# under the folders of MITCAD_IPT_CORPUS (a path list, like PATH) is
+# under the folders of MITCAD_IAM_CORPUS, or MITCAD_IPT_CORPUS when that is
+# unset (a path list, like PATH; its own variable so that the assemblies
+# need not join ipt.corpus's parts) is
 # imported with mitcad-cli import-iam (mitcad#60, stage 4), each part with
 # its parameters and features, the corpus folders searched for referenced
 # files by name. Every occurrence that is not suppressed must be placed,
@@ -26,7 +28,10 @@ foreach(var CLI WORK)
   endif()
 endforeach()
 
-set(corpus "$ENV{MITCAD_IPT_CORPUS}")
+set(corpus "$ENV{MITCAD_IAM_CORPUS}")
+if(corpus STREQUAL "")
+  set(corpus "$ENV{MITCAD_IPT_CORPUS}")
+endif()
 if(NOT CMAKE_HOST_WIN32)
   string(REPLACE ":" ";" corpus "${corpus}")
 endif()
@@ -100,7 +105,7 @@ endforeach()
 list(REMOVE_DUPLICATES files)
 list(SORT files)
 if(NOT files)
-  message("iam corpus: skipped (set MITCAD_IPT_CORPUS to folders of .iam files)")
+  message("iam corpus: skipped (set MITCAD_IAM_CORPUS or MITCAD_IPT_CORPUS to folders of .iam files)")
   return()
 endif()
 

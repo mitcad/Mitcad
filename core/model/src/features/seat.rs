@@ -427,6 +427,21 @@ impl<R: Resolver> Resolver for OneBody<'_, R> {
         self.inner.feature_curve(feature)
     }
 
+    fn spatial_path(
+        &mut self,
+        path: &super::spatial_path::SpatialPath,
+    ) -> Result<Vec<crate::sweeps::PathCurve>, String> {
+        self.inner.spatial_path(path)
+    }
+
+    fn spatial_entity(
+        &mut self,
+        sketch: crate::ids::FeatureUid,
+        entity: crate::sketch::Ref,
+    ) -> Option<Result<crate::kernel::Curve3, String>> {
+        self.inner.spatial_entity(sketch, entity)
+    }
+
     fn mount(&mut self, feature: crate::ids::FeatureUid, name: &str) -> Result<Transform, String> {
         self.inner.mount(feature, name)
     }

@@ -199,7 +199,9 @@ public:
       } else if (item.kind == SelectKind::Edge || item.kind == SelectKind::Vertex) {
         // In the sketch plane or out of it (mitcad#866): what it projects
         // to, projected when the dimension is added.
-        const auto& bodies = m_c.bodyGeometry(true).items();
+        // Now, not off the UI thread (mitcad#1656): the tool takes it as
+        // it starts.
+        const auto& bodies = m_c.bodyGeometry(true, true).items();
         const QString ownOccurrence = m_c.host().sketchOccurrence(m_c.uid());
         const auto body = std::find_if(bodies.begin(), bodies.end(), [&item, &ownOccurrence](const BodyItem& candidate) {
           // Own-component geometry has no occurrence link in this query;

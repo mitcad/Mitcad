@@ -1,0 +1,20 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. sketch3d_route.json saved and opened again (mitcad#1522, W8): the 3D sketch keeps its ids, relations, dimensions and positions and solves fully constrained; CD's length edited to 40 moves D, E and F with the tangencies kept."},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "type": "spatial_sketch",
+    "status": {"dof": 0, "fully_constrained": true},
+    "points": [
+      {"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [60, 0, 0]},
+      {"id": "p4", "at": [60, 12, 0]}, {"id": "p5", "at": [72, 12, 0]},
+      {"id": "p7", "at": [72, 42, 0]}, {"id": "p9", "at": [72, 42, 12]},
+      {"id": "p10", "at": [72, 54, 12]}, {"id": "p12", "at": [72, 54, 32]}]}}},
+  {"cmd": "sketch3d.set_dimension", "sketch": "F1", "dimension": "k7", "value": 40},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 0},
+    "points": [
+      {"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [60, 0, 0]},
+      {"id": "p4", "at": [60, 12, 0]}, {"id": "p5", "at": [72, 12, 0]},
+      {"id": "p7", "at": [72, 52, 0]}, {"id": "p9", "at": [72, 52, 12]},
+      {"id": "p10", "at": [72, 64, 12]}, {"id": "p12", "at": [72, 64, 32]}]}}}
+]

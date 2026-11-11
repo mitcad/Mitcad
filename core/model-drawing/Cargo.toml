@@ -20,3 +20,15 @@ mitcad-dxf = { path = "../dxf" }
 # reader).
 mitcad-dwg = { path = "../dwg", default-features = false }
 serde_json.workspace = true
+# A title block's PNG images decoded and compressed again for PDF
+# (mitcad#1625), pure Rust (as the model's).
+miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"] }
+# A title block's SVG images as vector paths in PDF and as geometry in DXF
+# and DWG (mitcad#1627): the file simplified into paths (CSS, `use`,
+# transforms, shapes and gradients resolved). Its text as the outlines of
+# its glyphs (mitcad#1637): `text` (font shaping, with older copies of the
+# sketch's harfrust and skrifa that this usvg asks for) and `system-fonts`
+# (the fonts the system has, found through fontconfig's files on Linux;
+# beside them the bundled Droid Sans, `svg_image::fonts`). Without its
+# other default features: no compressed SVG, no memory-mapped fonts.
+usvg = { version = "0.49.0", default-features = false, features = ["text", "system-fonts"] }

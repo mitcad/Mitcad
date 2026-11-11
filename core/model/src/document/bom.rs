@@ -3,7 +3,8 @@
 //!
 //! The component/library list remains available separately: a BOM represents
 //! a component part once, and lists unstructured bodies once. Explicit
-//! feature-created, linked and library components retain their part identity.
+//! feature-created, linked and library components, and components with a
+//! part number of their own, retain their part identity.
 
 use super::{Document, PartsListRow};
 use crate::ids::{BodyUid, ComponentUid, OccurrenceUid};
@@ -207,7 +208,10 @@ impl<K: Kernel> Document<K> {
 
     /// A report only: no saved state, occurrence, undo item or body changes.
     /// An unstructured multi-body component is replaced by its bodies, not
-    /// counted again. Explicit component parts keep their catalogue identity.
+    /// counted again. Explicit component parts keep their catalogue identity:
+    /// made by a feature, linked, from a library, or with a part number of
+    /// their own (mitcad#1663: a bearing of nine bodies brought in from the
+    /// web is one part, not nine).
     pub fn bom_rows(&self, group_identical: bool) -> Vec<BomRow> {
         let mut rows = Vec::new();
         let instances = self.instances();
@@ -245,10 +249,13 @@ impl<K: Kernel> Document<K> {
                 }
                 continue;
             }
-            let atomic = self
-                .assembly()
-                .component(part.component)
-                .is_some_and(|c| c.created_by.is_some() || c.link.is_some() || c.library.is_some());
+            // A part number (Identity › Part number, or a library or BUILD
+            // part's) names one thing to buy or make, whatever its bodies.
+            let numbered = !part.part_number.trim().is_empty();
+            let atomic = numbered
+                || self.assembly().component(part.component).is_some_and(|c| {
+                    c.created_by.is_some() || c.link.is_some() || c.library.is_some()
+                });
             let separate = part.component.is_root() || (bodies.len() > 1 && !atomic);
             let sets = if separate {
                 bodies.iter().map(|body| vec![*body]).collect::<Vec<_>>()

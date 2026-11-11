@@ -213,5 +213,17 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   if(selection_ui_platform STREQUAL "linux")
     set_property(TEST "${web_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+    # The same view on a display scaled by 1.65 (mitcad#1654): the page
+    # fills it and a click at the button's place on the screen clicks it,
+    # with CEF painting at 1 (the scale known late, as on Wayland) and at
+    # 1.65; the screen read with xwd, the clicks X input.
+    selection_ui_command_prefix(410)
+    add_test(NAME "app.ui-linux-component-web-scale"
+      COMMAND ${selection_ui_prefix} "${Python3_EXECUTABLE}"
+              "${CMAKE_SOURCE_DIR}/tools/ui-component-web-scale-test.py"
+              "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-linux-component-web-scale"
+              "${selection_ui_web_browser}" "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties("app.ui-linux-component-web-scale" PROPERTIES TIMEOUT 420 ${selection_ui_alone}
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;LIBGL_ALWAYS_SOFTWARE=1")
   endif()
 endif()

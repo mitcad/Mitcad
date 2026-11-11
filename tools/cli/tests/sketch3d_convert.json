@@ -1,0 +1,39 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. A planar sketch turned into a 3D sketch in place (mitcad#1544) on the geometry kernel. Sketch1 (F1): a fully constrained 40 x 30 rectangle (c1-c4, p5-p8, k1-k4, k5 and k6 driven by d1 and d2, the first corner fixed), converted: the same feature with its ids, its constraints and dimensions in plane, the fixed corner an in-plane fix (k7) and the corners on the sketch plane (k8); nothing free, nothing redundant."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "sketch3d.convert", "sketch": "F1"},
+  {"expect": {"feature": "Sketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "uid": "F1", "name": "Sketch1", "type": "spatial_sketch",
+    "status": {"dof": 0, "fully_constrained": true, "redundant": []},
+    "dimensions": [{"id": "k5", "in_plane": true, "value": "d1", "measured": 40},
+                   {"id": "k6", "in_plane": true, "value": "d2", "measured": 30}]}}},
+
+  {"comment": "d1 still drives it, in plane: the width is 50."},
+  {"cmd": "set_parameter", "name": "d1", "value": 50},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 0},
+    "dimensions": [{"id": "k5", "measured": 50}, {"id": "k6", "measured": 30}]}}},
+
+  {"comment": "Undo takes the width back, a second Undo the conversion; Redo makes it again."},
+  {"cmd": "undo"},
+  {"cmd": "undo"},
+  {"expect": {"query": {"query": "timeline"}, "result": {"features": [{"uid": "F1", "type": "sketch"}]}}},
+  {"cmd": "redo"},
+  {"expect": {"query": {"query": "timeline"}, "result": {"features": [{"uid": "F1", "type": "spatial_sketch"}]}}},
+
+  {"comment": "Sketch2 (F2): two lines joined at p3, from (0, 0) to (40, 0) and on to (40, 30); Pipe1 (F3) along them, chained from the second line (from (40, 30) to the origin). Converted, the Pipe's path is the 3D sketch's typed path with the same curves, chained and reversed, and the Pipe keeps working."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_line", "sketch": "F2", "start": [0, 0], "end": [40, 0]},
+  {"cmd": "sketch.add_line", "sketch": "F2", "start": "p3", "end": [40, 30]},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"sketch": "F2", "curves": ["c4"], "chain": true},
+    "size": 4, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F3.b0"}},
+  {"cmd": "sketch3d.convert", "sketch": "F2"},
+  {"expect": {"feature": "Sketch2", "status": "ok"}},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F3.b0"}},
+  {"expect": {"query": {"query": "feature", "uid": "F3"}, "result": {
+    "def": {"path": {"spatial_sketch": "F2", "curves": ["c4"], "reversed": true, "chain": true}}}}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {"status": {"dof": 6}}}}
+]

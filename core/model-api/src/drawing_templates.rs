@@ -36,8 +36,10 @@ use mitcad_model::internal::fingerprint::Fingerprint;
 use mitcad_model::kernel::Kernel;
 use mitcad_model::{Document, SUMMARY_SET};
 use mitcad_model_drawing::compose::TitleInfo;
-use mitcad_model_drawing::def::Drawing;
-use mitcad_model_drawing::template::{self, Filled, Revision, SheetTemplate, next_revision_letter};
+use mitcad_model_drawing::def::{Drawing, DrawingSheet};
+use mitcad_model_drawing::template::{
+    self, BlockLayout, Filled, Revision, SheetTemplate, next_revision_letter,
+};
 use mitcad_model_drawing::{Projection, Units, scale_text, today};
 
 /// `add_drawing_revision` and `edit_drawing_revision`: what is given
@@ -76,6 +78,18 @@ pub(super) struct SaveTemplateCommand {
     /// The project's folder, when the design is in one.
     #[serde(default)]
     project: Option<String>,
+}
+
+/// `edit_drawing_title_block` (mitcad#1625): a sheet's title block as the
+/// title block editor leaves it, its lines, fields and images, stored in
+/// the sheet's copy of its template.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TitleBlockCommand {
+    drawing: String,
+    #[serde(default)]
+    sheet: usize,
+    title_block: BlockLayout,
 }
 
 /// The `drawing_templates` query.
@@ -143,6 +157,28 @@ pub(super) fn title_fields(info: &TitleInfo) -> Vec<Value> {
     }
 }
 
+/// The template whose title block the title block editor edits on a
+/// sheet (mitcad#1625): the sheet's own copy; for the simple title block,
+/// which has no layout, a copy of the ISO template (`custom`, "Custom"),
+/// whose frame and block the edit starts from.
+pub(super) fn editable_template(sheet: &DrawingSheet) -> SheetTemplate {
+    match &sheet.template {
+        Some(t) => t.clone(),
+        None => {
+            let mut t = template::built_in()
+                .into_iter()
+                .find(|t| t.id == "iso")
+                .expect("the built-in ISO template");
+            t.id = "custom".to_owned();
+            t.name = "Custom".to_owned();
+            t.library = None;
+            t.size = None;
+            t.projection = None;
+            t.for_sheet()
+        }
+    }
+}
+
 /// A slug of a name for a template's id: its letters and digits in lower
 /// case, other runs as `-`.
 fn slug(name: &str) -> String {
@@ -201,6 +237,11 @@ pub(super) trait DrawingTemplatesOps<K: Kernel> {
     /// project's, each with its data and its `choice`; and what could not
     /// be read.
     fn drawing_templates_json(&self, query: &TemplatesQuery) -> Value;
+
+    /// Stores a sheet's title block as edited on the sheet (mitcad#1625):
+    /// in its template's copy, or in a copy of the ISO template's frame
+    /// for a sheet of the simple title block.
+    fn edit_drawing_title_block(&mut self, c: TitleBlockCommand) -> Result<Value, ApiError>;
 }
 
 impl<K: Kernel> DrawingTemplatesOps<K> for Document<K> {
@@ -398,6 +439,24 @@ impl<K: Kernel> DrawingTemplatesOps<K> for Document<K> {
             })
             .collect();
         json!({"templates": list, "problems": problems})
+    }
+
+    fn edit_drawing_title_block(&mut self, c: TitleBlockCommand) -> Result<Value, ApiError> {
+        let old = self.find_drawing(&c.drawing)?.clone();
+        let mut changed = old.clone();
+        let sheet = changed
+            .sheets
+            .get_mut(c.sheet)
+            .ok_or_else(|| ApiError(format!("{} has no sheet {}", old.name, c.sheet)))?;
+        let mut t = editable_template(sheet);
+        t.title_block = c.title_block;
+        t.check().map_err(ApiError)?;
+        let (width, height) = sheet.dimensions();
+        t.fits(width, height).map_err(ApiError)?;
+        let label = format!("Edit title block of {} of {}", sheet.name, old.name);
+        sheet.template = Some(t);
+        self.set_drawing(old.uid, label, changed)?;
+        Ok(json!({"drawing": old.uid, "sheet": c.sheet}))
     }
 }
 

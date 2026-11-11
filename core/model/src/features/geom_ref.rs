@@ -129,18 +129,23 @@ pub enum PathRef {
         body: BodyUid,
         edges: Vec<EdgeName>,
     },
+    /// `reversed`: against the curve's own direction (mitcad#1550, a 3D
+    /// sketch turned back into 2D keeps its paths' direction with it).
     SketchCurve {
         sketch: FeatureUid,
         curve: EntityUid,
+        reversed: bool,
     },
     Line {
         start: Vec3,
         end: Vec3,
     },
-    /// Two or more curves of a sketch, joined end to end.
+    /// Two or more curves of a sketch, joined end to end; `reversed`: the
+    /// other way from the chain of the curves (mitcad#1550).
     SketchCurves {
         sketch: FeatureUid,
         curves: Vec<EntityUid>,
+        reversed: bool,
     },
     /// A fixed helix (mitcad#385).
     Helix(HelixPath),
@@ -151,6 +156,11 @@ pub enum PathRef {
     /// The curve of an Intersection Curve (mitcad#1405): `{"feature": "F5"}`,
     /// its pieces in order along it.
     FeatureCurve(FeatureUid),
+    /// Curves of a 3D sketch (mitcad#1550): `{"spatial_sketch": "F3",
+    /// "curves": [...]}` with `chain` and `reversed`, as a Pipe takes them
+    /// ([`SpatialPath`](super::spatial_path::SpatialPath)), measured along
+    /// their exact pieces as an Intersection Curve's are.
+    Spatial(super::spatial_path::SpatialPath),
 }
 
 /// A curve of a fixed path (mitcad#548), as [`crate::kernel::Curve3`]
@@ -664,12 +674,14 @@ impl GeomRef {
         }
     }
 
-    /// An error about the reference (mitcad#1612): the person reads its
-    /// words and `said` ("the face is not a plane"), agents its name ("face
-    /// F2:top is not a plane"), its place painted.
-    pub fn error(&self, said: &str) -> String {
-        let error = crate::notice::FeatureError::new(format!("{}{said}", self.words()))
-            .with_detail(format!("{self}{said}"));
+    /// An error about the reference (mitcad#1612): the person reads `said`
+    /// of its words ("the face is not a plane"), agents `said` of its name
+    /// ("face F2:top is not a plane"), its place painted. `said` writes the
+    /// whole message (`format!("{what} is not a plane")`), so that it is one
+    /// template whose value, the words, is translated in turn (mitcad#1626).
+    pub fn error(&self, said: impl Fn(&dyn fmt::Display) -> String) -> String {
+        let words = self.words();
+        let error = crate::notice::FeatureError::new(said(&words)).with_detail(said(self));
         match self.place() {
             Some(place) => error.at(place),
             None => error,
@@ -757,6 +769,19 @@ impl GeomRef {
                 return check_sketch_curves(ctx, *sketch, curves, want);
             }
             Self::SketchPoint { sketch, point } => {
+                // A 3D sketch's point (mitcad#1550).
+                if let Ok(entry) = ctx.feature(*sketch)
+                    && let super::FeatureDef::SpatialSketch(def) = &entry.def
+                {
+                    return match def.point(*point) {
+                        Some(_) => Ok(()),
+                        None => Err(format!(
+                            "{} has no point {}",
+                            entry.name,
+                            point_name(*point)
+                        )),
+                    };
+                }
                 let (entry, def) = ctx.sketch(*sketch)?;
                 return match def.entity(*point) {
                     Some(entity) if entity.is_point() => Ok(()),
@@ -831,6 +856,11 @@ fn check_sketch_curves(
     curves: &[EntityUid],
     want: Want,
 ) -> Result<(), String> {
+    if let Ok(entry) = ctx.feature(sketch)
+        && let super::FeatureDef::SpatialSketch(def) = &entry.def
+    {
+        return check_spatial_axis(&entry.name, sketch, def, curves, want);
+    }
     let (entry, def) = ctx.sketch(sketch)?;
     let line = matches!(want, Want::Line | Want::Axis);
     if line && curves.len() != 1 {
@@ -881,6 +911,53 @@ fn check_sketch_curves(
     Ok(())
 }
 
+/// [`check_sketch_curves`] for a 3D sketch (mitcad#1550): a line, or for an
+/// axis also an arc or a circle (the line through its centre along its
+/// normal). A tool's curves bound profiles in a sketch's plane: a planar
+/// sketch's.
+fn check_spatial_axis(
+    name: &str,
+    sketch: FeatureUid,
+    def: &super::spatial_sketch::SpatialSketchDef,
+    curves: &[EntityUid],
+    want: Want,
+) -> Result<(), String> {
+    if !matches!(want, Want::Line | Want::Axis) {
+        // The name for a person, the uid for agents (mitcad#1644).
+        return Err(crate::notice::said(
+            format!(
+                "{name} is a 3D sketch: sketch curves as a tool bound profiles in a sketch's \
+                 plane, which only a planar sketch has"
+            ),
+            format!(
+                "{name} ({sketch}) is a 3D sketch: sketch curves as a tool bound profiles in a \
+                 sketch's plane, which only a planar sketch has"
+            ),
+        ));
+    }
+    let [curve] = curves else {
+        return Err(format!(
+            "an axis is one line of a sketch, not {}",
+            GeomRef::SketchCurves {
+                sketch,
+                curves: curves.to_vec()
+            }
+        ));
+    };
+    let found = def
+        .curve(*curve)
+        .filter(|c| !c.is_reference())
+        .ok_or_else(|| format!("{name} has no curve {}", curve.curve_name()))?;
+    let round = want == Want::Axis && found.is_round();
+    if found.as_line().is_none() && !round {
+        return Err(format!(
+            "curve {} of {name} is not a line",
+            curve.curve_name()
+        ));
+    }
+    Ok(())
+}
+
 impl PathRef {
     pub fn add_to(&self, references: &mut References) {
         match self {
@@ -895,6 +972,8 @@ impl PathRef {
             Self::FeatureCurve(feature) => {
                 references.features.insert(*feature);
             }
+            // 3D sketches (mitcad#1550).
+            Self::Spatial(path) => path.add_references(references),
             Self::Line { .. } | Self::Helix(_) | Self::Fixed(_) => {}
         }
     }
@@ -908,7 +987,8 @@ impl PathRef {
                 ctx.body(*body)?;
                 ctx.edges(edges).map_err(|e| format!("path: {e}"))
             }
-            Self::SketchCurve { sketch, curve } => {
+            Self::SketchCurve { sketch, curve, .. } => {
+                super::path::not_spatial(ctx, *sketch)?;
                 let (entry, def) = ctx.sketch(*sketch)?;
                 if def.entity(*curve).is_some_and(|e| !e.is_point()) {
                     Ok(())
@@ -920,7 +1000,8 @@ impl PathRef {
                     ))
                 }
             }
-            Self::SketchCurves { sketch, curves } => {
+            Self::SketchCurves { sketch, curves, .. } => {
+                super::path::not_spatial(ctx, *sketch)?;
                 let (entry, def) = ctx.sketch(*sketch)?;
                 if curves.len() < 2 {
                     return Err("a path of several curves needs at least two".to_owned());
@@ -975,6 +1056,8 @@ impl PathRef {
                     ))
                 }
             }
+            // 3D sketches (mitcad#1550).
+            Self::Spatial(path) => path.check(ctx),
         }
     }
 }
@@ -1016,6 +1099,31 @@ pub trait Resolver {
             "the curve of {} is not available here",
             self.name(feature)
         ))
+    }
+
+    /// The pieces of a path along a 3D sketch's curves (mitcad#1550), in
+    /// order along it, in the feature's coordinates (the sketch is in the
+    /// feature's component).
+    fn spatial_path(
+        &mut self,
+        path: &super::spatial_path::SpatialPath,
+    ) -> Result<Vec<crate::sweeps::PathCurve>, String> {
+        Err(format!(
+            "the curves of {} are not available here",
+            self.name(path.sketch)
+        ))
+    }
+
+    /// A point or a curve of a 3D sketch (mitcad#1550) in the feature's
+    /// coordinates, as [`crate::kernel::Curve3`] (a point as
+    /// [`crate::kernel::Curve3::Point`]); None when `sketch` is not a 3D
+    /// sketch, an error when it has no such entity or did not solve.
+    fn spatial_entity(
+        &mut self,
+        _sketch: FeatureUid,
+        _entity: crate::sketch::Ref,
+    ) -> Option<Result<crate::kernel::Curve3, String>> {
+        None
     }
 }
 
@@ -1113,12 +1221,12 @@ pub(crate) fn resolve_plane(
                 y_axis,
             });
         }
-        _ => return Err(reference.error(" is not a plane")),
+        _ => return Err(reference.error(|what| format!("{what} is not a plane"))),
     };
     match (datum, reference) {
         (Datum::Plane(plane), _) => Ok(plane),
         (other, GeomRef::Datum(uid)) => Err(not_a(r, *uid, &other, "a plane")),
-        _ => Err(reference.error(" is not a plane")),
+        _ => Err(reference.error(|what| format!("{what} is not a plane"))),
     }
 }
 
@@ -1189,12 +1297,12 @@ pub(crate) fn resolve_axis(
             let [origin, _, _, direction] = crate::joints::frame_parts(&r.mount(*feature, name)?);
             return Ok(DatumAxis { origin, direction });
         }
-        _ => return Err(reference.error(" is not an axis")),
+        _ => return Err(reference.error(|what| format!("{what} is not an axis"))),
     };
     match (datum, reference) {
         (Datum::Axis(axis), _) => Ok(axis),
         (other, GeomRef::Datum(uid)) => Err(not_a(r, *uid, &other, "an axis")),
-        _ => Err(reference.error(" is not an axis")),
+        _ => Err(reference.error(|what| format!("{what} is not an axis"))),
     }
 }
 
@@ -1205,6 +1313,23 @@ fn sketch_line(
     sketch: FeatureUid,
     curve: EntityUid,
 ) -> Result<DatumAxis, String> {
+    // A 3D sketch's line, or the axis of its arc or circle along its
+    // normal (mitcad#1550).
+    if let Some(found) = r.spatial_entity(sketch, crate::sketch::Ref::Curve(curve)) {
+        return match found? {
+            crate::kernel::Curve3::Line { start, end } => DatumAxis::through(start, end)
+                .ok_or_else(|| format!("{} has no line {}", r.name(sketch), curve.curve_name())),
+            crate::kernel::Curve3::Conic { center, normal, .. } => Ok(DatumAxis {
+                origin: center,
+                direction: unit(normal).ok_or("the circle has no normal")?,
+            }),
+            _ => Err(format!(
+                "curve {} of {} is not a line",
+                curve.curve_name(),
+                r.name(sketch)
+            )),
+        };
+    }
     let output = r.sketch(sketch)?;
     let frame = output.frame;
     let ends = match output.solved.curves.get(&curve) {
@@ -1271,6 +1396,17 @@ pub(crate) fn resolve_point(r: &mut impl Resolver, reference: &GeomRef) -> Resul
             };
         }
         GeomRef::SketchPoint { sketch, point } => {
+            // A 3D sketch's point (mitcad#1550).
+            if let Some(found) = r.spatial_entity(*sketch, crate::sketch::Ref::Point(*point)) {
+                return match found? {
+                    crate::kernel::Curve3::Point(p) => Ok(p),
+                    _ => Err(format!(
+                        "{} has no point {}",
+                        r.name(*sketch),
+                        point_name(*point)
+                    )),
+                };
+            }
             let output = r.sketch(*sketch)?;
             return output
                 .solved
@@ -1281,12 +1417,12 @@ pub(crate) fn resolve_point(r: &mut impl Resolver, reference: &GeomRef) -> Resul
         }
         GeomRef::FixedPoint(point) => return Ok(*point),
         GeomRef::Mount { feature, name } => return Ok(r.mount(*feature, name)?.translation),
-        _ => return Err(reference.error(" is not a point")),
+        _ => return Err(reference.error(|what| format!("{what} is not a point"))),
     };
     match (datum, reference) {
         (Datum::Point(point), _) => Ok(point.point),
         (other, GeomRef::Datum(uid)) => Err(not_a(r, *uid, &other, "a point")),
-        _ => Err(reference.error(" is not a point")),
+        _ => Err(reference.error(|what| format!("{what} is not a point"))),
     }
 }
 
@@ -1295,7 +1431,7 @@ pub(crate) fn resolve_surface(
     reference: &GeomRef,
 ) -> Result<SurfaceGeometry, String> {
     let GeomRef::Face { body, face } = reference else {
-        return Err(reference.error(" is not a face"));
+        return Err(reference.error(|what| format!("{what} is not a face")));
     };
     surface_of(r, *body, face)
 }
@@ -1305,7 +1441,7 @@ pub(crate) fn resolve_curve(
     reference: &GeomRef,
 ) -> Result<CurveGeometry, String> {
     let GeomRef::Edge { body, edge } = reference else {
-        return Err(reference.error(" is not an edge"));
+        return Err(reference.error(|what| format!("{what} is not an edge")));
     };
     curve_of(r, *body, edge)
 }
@@ -1317,7 +1453,8 @@ pub(crate) fn resolve_face_point(
 ) -> Result<SurfacePoint, String> {
     let GeomRef::Face { body, face } = reference else {
         // A plane stands for a planar face: its whole plane.
-        let plane = resolve_plane(r, reference).map_err(|_| reference.error(" is not a face"))?;
+        let plane = resolve_plane(r, reference)
+            .map_err(|_| reference.error(|what| format!("{what} is not a face")))?;
         let n = plane.normal();
         return Ok(SurfacePoint {
             point: sub(near, scale(n, dot(sub(near, plane.origin), n))),
@@ -1362,12 +1499,22 @@ pub(crate) fn resolve_path(
                 .path_point(&shape, &found, at)
                 .map_err(|e| format!("path: {e}"))
         }
-        PathRef::SketchCurves { sketch, curves } => {
-            Ok(chain_point(&sketch_chain(r, *sketch, curves)?, at))
-        }
+        PathRef::SketchCurves {
+            sketch,
+            curves,
+            reversed,
+        } => Ok(chain_point(
+            &sketch_chain(r, *sketch, curves, *reversed)?,
+            at,
+        )),
         // Along an Intersection Curve (mitcad#1405), measured along it.
         PathRef::FeatureCurve(feature) => {
             let curve = r.feature_curve(*feature)?;
+            Ok(super::intersection_curve::CurveChain::new(&curve)?.path_point(at))
+        }
+        // Along a 3D sketch's curves (mitcad#1550), measured the same way.
+        PathRef::Spatial(spatial) => {
+            let curve = r.spatial_path(spatial)?;
             Ok(super::intersection_curve::CurveChain::new(&curve)?.path_point(at))
         }
         _ => Ok(path_curve(r, path)?.path_point(at)),
@@ -1375,13 +1522,15 @@ pub(crate) fn resolve_path(
 }
 
 /// The lines and arcs of a sketch joined end to end, in order along the
-/// path (`path.rs`: it runs from the free end of the first listed curve).
+/// path (`path.rs`: it runs from the free end of the first listed curve),
+/// the other way when `reversed` (mitcad#1550).
 fn sketch_chain(
     r: &mut impl Resolver,
     sketch: FeatureUid,
     curves: &[EntityUid],
+    reversed: bool,
 ) -> Result<Vec<PathCurve>, String> {
-    use super::path::{chain, curve3};
+    use super::path::{chain, curve3, reversed_path};
     use crate::kernel::Curve3;
     use crate::sweeps::PathCurve as Piece;
     let output = r.sketch(sketch)?;
@@ -1397,7 +1546,13 @@ fn sketch_chain(
             curve: curve3(&output.frame, curve),
         });
     }
-    chain(pieces)?
+    let chained = chain(pieces)?;
+    let chained = if reversed {
+        reversed_path(chained)
+    } else {
+        chained
+    };
+    chained
         .into_iter()
         .map(|piece| match piece.curve {
             Curve3::Line { start, end } => PathCurve::line(start, end),
@@ -1475,8 +1630,9 @@ impl PathChain {
         r: &mut impl Resolver,
         sketch: FeatureUid,
         curves: &[EntityUid],
+        reversed: bool,
     ) -> Result<Self, String> {
-        let pieces = sketch_chain(r, sketch, curves)?;
+        let pieces = sketch_chain(r, sketch, curves, reversed)?;
         let normal = r.sketch(sketch)?.frame.normal();
         Ok(Self { pieces, normal })
     }
@@ -1538,10 +1694,14 @@ impl PathChain {
 
 /// The curve of a sketch-curve or line path.
 pub(crate) fn path_curve(r: &mut impl Resolver, path: &PathRef) -> Result<PathCurve, String> {
-    let (sketch, curve) = match path {
+    let (sketch, curve, reversed) = match path {
         PathRef::Line { start, end } => return PathCurve::line(*start, *end),
         PathRef::Helix(helix) => return PathCurve::helix(helix),
-        PathRef::SketchCurve { sketch, curve } => (*sketch, *curve),
+        PathRef::SketchCurve {
+            sketch,
+            curve,
+            reversed,
+        } => (*sketch, *curve, *reversed),
         PathRef::Edges { .. } => {
             return Err("a path of edges has no analytic curve".to_owned());
         }
@@ -1553,6 +1713,9 @@ pub(crate) fn path_curve(r: &mut impl Resolver, path: &PathRef) -> Result<PathCu
         }
         PathRef::FeatureCurve(_) => {
             return Err("an intersection curve has no analytic curve".to_owned());
+        }
+        PathRef::Spatial(_) => {
+            return Err("a path of a 3D sketch has no analytic curve".to_owned());
         }
     };
     let output = r.sketch(sketch)?;
@@ -1574,16 +1737,16 @@ pub(crate) fn path_curve(r: &mut impl Resolver, path: &PathRef) -> Result<PathCu
         radius,
         sweep,
     };
-    match geometry {
+    let found = match geometry {
         SegmentGeometry::Line { start, end } => {
             PathCurve::line(frame.point(start), frame.point(end))
         }
+        // A whole turn from where the circle starts: `arc` takes the
+        // sweep, not the end angle.
         SegmentGeometry::Circle {
             center,
             radius,
             start,
-            // A whole turn from where the circle starts: `arc` takes the
-            // sweep, not the end angle.
         } => Ok(arc(center, radius, start, std::f64::consts::TAU)),
         SegmentGeometry::Arc {
             center,
@@ -1598,7 +1761,9 @@ pub(crate) fn path_curve(r: &mut impl Resolver, path: &PathRef) -> Result<PathCu
             "curve {} is not a line, an arc or a circle",
             curve.curve_name()
         )),
-    }
+    }?;
+    // Against the curve's own direction (mitcad#1550).
+    Ok(if reversed { found.reversed() } else { found })
 }
 
 /// A sketch-curve or line path in model space, by arc length.
@@ -1667,6 +1832,40 @@ impl PathCurve {
             direction,
             length: norm(delta),
         })
+    }
+
+    /// The same line or arc from its end back to its start (mitcad#1550: a
+    /// sketch curve's path `reversed`). A sketch curve is no helix: a
+    /// helix stays as it is.
+    fn reversed(self) -> Self {
+        match self {
+            Self::Line {
+                start,
+                direction,
+                length,
+            } => Self::Line {
+                start: add(start, scale(direction, length)),
+                direction: scale(direction, -1.0),
+                length,
+            },
+            Self::Arc {
+                center,
+                x,
+                y,
+                radius,
+                sweep,
+            } => {
+                let (sin, cos) = sweep.sin_cos();
+                Self::Arc {
+                    center,
+                    x: add(scale(x, cos), scale(y, sin)),
+                    y: sub(scale(x, sin), scale(y, cos)),
+                    radius,
+                    sweep,
+                }
+            }
+            helix @ Self::Helix { .. } => helix,
+        }
     }
 
     pub fn length(&self) -> f64 {
@@ -1884,6 +2083,38 @@ impl<K: Kernel> Resolver for EvalContext<'_, K> {
         feature: FeatureUid,
     ) -> Result<Arc<Vec<crate::sweeps::PathCurve>>, String> {
         EvalContext::feature_curve(self, feature)
+    }
+
+    fn spatial_path(
+        &mut self,
+        path: &super::spatial_path::SpatialPath,
+    ) -> Result<Vec<crate::sweeps::PathCurve>, String> {
+        path.resolve(self)
+    }
+
+    fn spatial_entity(
+        &mut self,
+        sketch: FeatureUid,
+        entity: crate::sketch::Ref,
+    ) -> Option<Result<crate::kernel::Curve3, String>> {
+        if !matches!(
+            self.env.feature(sketch).map(|f| &f.def),
+            Some(super::FeatureDef::SpatialSketch(_))
+        ) {
+            return None;
+        }
+        let name = self.feature_name(sketch);
+        let found = super::spatial_sketch::sketch_entity_geometry(
+            self,
+            crate::sketch::SketchEntityRef { sketch, entity },
+        )
+        .and_then(|found| found.ok_or_else(|| format!("{name} has no {entity}")));
+        // A 3D sketch of another component by its link, as a planar
+        // sketch's frame is placed.
+        Some(found.and_then(|curve| match self.datum_placement(sketch)? {
+            Some(transform) => Ok(crate::sketch::project::transform_curve(&transform, &curve)),
+            None => Ok(curve),
+        }))
     }
 }
 
@@ -2207,20 +2438,34 @@ impl PathRef {
                     edges.iter().map(|e| Value::from(e.to_string())).collect(),
                 );
             }
-            Self::SketchCurve { sketch, curve } => {
+            Self::SketchCurve {
+                sketch,
+                curve,
+                reversed,
+            } => {
                 map.insert("sketch".to_owned(), sketch.to_string().into());
                 map.insert("curve".to_owned(), curve.curve_name().into());
+                if *reversed {
+                    map.insert("reversed".to_owned(), true.into());
+                }
             }
             Self::Line { start, end } => {
                 map.insert("start".to_owned(), vec3(start));
                 map.insert("end".to_owned(), vec3(end));
             }
-            Self::SketchCurves { sketch, curves } => {
+            Self::SketchCurves {
+                sketch,
+                curves,
+                reversed,
+            } => {
                 map.insert("sketch".to_owned(), sketch.to_string().into());
                 map.insert(
                     "curves".to_owned(),
                     curves.iter().map(|c| Value::from(c.curve_name())).collect(),
                 );
+                if *reversed {
+                    map.insert("reversed".to_owned(), true.into());
+                }
             }
             Self::Helix(helix) => {
                 map.insert(
@@ -2237,6 +2482,8 @@ impl PathRef {
             Self::FeatureCurve(feature) => {
                 map.insert("feature".to_owned(), feature.to_string().into());
             }
+            // 3D sketches (mitcad#1550).
+            Self::Spatial(path) => return path.serialize(serializer),
         }
         map.serialize(serializer)
     }
@@ -2485,6 +2732,12 @@ impl GeomRef {
 impl PathRef {
     /// Reads the JSON form, or F4's `sketch_curve` and `line`.
     pub fn from_value(value: Value) -> Result<Self, String> {
+        // Curves of a 3D sketch (mitcad#1550).
+        if value.get("spatial_sketch").is_some() {
+            return serde_json::from_value(value)
+                .map(Self::Spatial)
+                .map_err(|e| format!("a path of a 3D sketch: {e}"));
+        }
         let Value::Object(map) = value else {
             return Err(format!(
                 "invalid path {value}: expected {{\"body\": ..., \"edges\": [...]}}, \
@@ -2505,6 +2758,7 @@ impl PathRef {
             None if f.has("sketch") && f.has("curves") => Self::SketchCurves {
                 sketch: f.need("sketch", "a sketch path")?,
                 curves: f.curves("curves")?.unwrap_or_default(),
+                reversed: f.take::<bool>("reversed")?.unwrap_or(false),
             },
             None if f.has("sketch") => Self::sketch_curve(&mut f)?,
             None if f.has("helix") => Self::Helix(f.need("helix", "a helix path")?),
@@ -2524,6 +2778,7 @@ impl PathRef {
         Ok(Self::SketchCurve {
             sketch: f.need("sketch", "a sketch path")?,
             curve: f.curve("curve")?.ok_or("a sketch path needs \"curve\"")?,
+            reversed: f.take::<bool>("reversed")?.unwrap_or(false),
         })
     }
 
@@ -2829,5 +3084,38 @@ mod tests {
         let near = quarter.path_point(PathParameter::Near([20.0, 20.0, 0.0]));
         let half = std::f64::consts::FRAC_1_SQRT_2 * 10.0;
         assert!(norm(sub(near.point, [half, half, 0.0])) < 1e-9);
+    }
+
+    /// An error about a reference is one whole message for the person, its
+    /// words the value ("the edge is not a plane": the template "%1 is not
+    /// a plane"), and the same template with its name for agents
+    /// (mitcad#1626).
+    #[test]
+    fn an_error_about_a_reference_is_one_whole_message() {
+        let edge = read(json!({"body": "F2.b0", "edge": "E{F2:a|F2:b}"}));
+        let face = read(json!({"body": "F2.b0", "face": "F2:end(r{c1})"}));
+        for (reference, error, message) in [
+            (
+                &edge,
+                edge.error(|what| format!("{what} is not a plane")),
+                "the edge is not a plane",
+            ),
+            (
+                &face,
+                face.error(|what| format!("{what} is not an edge")),
+                "the face is not an edge",
+            ),
+            (
+                &face,
+                face.error(|what| format!("{what} is no planar face or frame")),
+                "the face is no planar face or frame",
+            ),
+        ] {
+            let error = crate::notice::FeatureError::from_text(&error);
+            assert_eq!(error.message, message);
+            let said = message.strip_prefix(&reference.words()).unwrap();
+            assert_eq!(error.agent_text(), format!("{reference}{said}"));
+            assert_eq!(error.places.len(), 1, "{error:?}");
+        }
     }
 }

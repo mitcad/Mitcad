@@ -14,6 +14,7 @@
 #include <QJsonObject>
 #include <QPair>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 #include <gp_Dir.hxx>
@@ -52,9 +53,21 @@ std::optional<Selection> itemsOf(const QJsonArray& refs, const CommandContext& c
 // A path (sweeps, pipes, rails): sketch curves of one sketch or edges of
 // one body; `chain` adds the curves joined to them.
 QJsonValue pathOf(const Selection& items, bool chain, Built& error, const QString& input);
-// The items of a path, and whether it chains; none for a fixed line.
+// The same for the paths of Pipe, Sweep and Loft (mitcad#1527): curves of
+// a 3D sketch as the typed path, {"spatial_sketch", "curves"} with `chain`
+// and `reversed` (running against the first curve) when set, which only
+// those features take; anything else as above.
+QJsonValue pathOf(const Selection& items, bool chain, Built& error, const QString& input,
+                  const CommandContext& context, bool reversed = false);
+// The items of a path, and whether it chains; none for a fixed line. A 3D
+// sketch's typed path gives its curves, and in `reversed` whether it runs
+// against the first one.
 std::optional<Selection> pathItems(const QJsonValue& path, const CommandContext& context,
-                                   bool* chain = nullptr);
+                                   bool* chain = nullptr, bool* reversed = nullptr);
+// Whether a feature is a 3D sketch (mitcad#1524), by the `feature` query.
+bool isSpatialSketch(const QString& uid, const CommandContext& context);
+// The `sketch3d` query's answer for a 3D sketch; empty for anything else.
+QJsonObject spatialSketchOf(const QString& uid, const CommandContext& context);
 // Whether a value is a reference itemOf can show.
 bool isShowable(const QJsonValue& ref, const CommandContext& context);
 
@@ -187,7 +200,9 @@ void loadCount(CommandState& state, const QString& key, const QJsonValue& slot,
 void newestProfile(CommandState& state, const CommandContext& context);
 bool hasProfiles(const CommandContext& context);
 bool hasBodies(const CommandContext& context);
-bool hasSketches(const CommandContext& context);
+// Planar sketches; with `spatial` 3D sketches too (a Pipe's route,
+// mitcad#1527).
+bool hasSketches(const CommandContext& context, bool spatial = false);
 
 // --- Components and occurrence paths (uids from the root, "O1/O4")
 
@@ -267,5 +282,50 @@ QVector<InputDef> directionInputs();
 bool addTool(QJsonObject& def, const CommandState& state, Built& error);
 void loadTool(const QJsonObject& feature, CommandState& state, const CommandContext& context);
 bool toolEditable(const QJsonObject& feature, const CommandContext& context);
+
+// --- Paths along 3D sketches in every path input (mitcad#1527, mitcad#1550:
+// Pipe, Sweep, Loft, Pattern on Path, the construction features along a
+// path). A 3D sketch's curves are picked as a planar sketch's are; a whole
+// 3D sketch from its Browser row or timeline entry stands for its route.
+
+// The 3D sketch whose curves the items are; empty for anything else.
+QString spatialOwner(const Selection& items, const CommandContext& context);
+// A whole sketch as a pick (its Browser row, its timeline entry), not an
+// Intersection Curve's curve.
+bool wholeSketchPick(const SelectionItem& item);
+// Whether a path input takes an item: a 3D sketch's curve only when it can
+// be a path piece, a whole 3D sketch only when it is one route, a feature
+// only when it is an Intersection Curve's curve; anything else as it is.
+bool spatialPathTakes(const SelectionItem& item, const CommandContext& context);
+// Why a click on a 3D sketch's curve or a whole sketch is not taken; empty
+// when it is.
+QString spatialPathRefusal(const SelectionItem& item, const CommandContext& context);
+// The listing of a 3D sketch's picked curves as the route the model finds
+// (the `sketch3d` query's `route`, routeText) with `chain` and `reversed`;
+// empty for other picks. `id` names the input in the log.
+QString spatialRouteListing(const Selection& items, bool chain, bool reversed, const CommandContext& context,
+                            const QString& id);
+// The names of the items (a 3D sketch's curves, in their order).
+QStringList itemNames(const Selection& items);
+// A whole 3D sketch picked into input `id` (an input's onPick): its one
+// route's curves in order, along its own direction.
+void takeWholeRoute(const SelectionItem& item, CommandState& state, const CommandContext& context,
+                    const QString& id);
+// The direction an edited typed path keeps (`<id>_direction`, keptDirection),
+// and whether the picks of input `id` run against their first curve by it.
+void keepPathDirection(const QJsonValue& path, CommandState& state, const QString& id);
+bool keptPathReversed(const CommandState& state, const QString& id);
+
+// --- Curves that grow walls and surfaces from their sketch's plane
+// (mitcad#1550): Rib and Web, Thin Extrude's curves and the curves of
+// Surface Extrude, Surface Revolve and Surface Sweep take a 3D sketch's
+// curves in its sketch plane (the `sketch3d` query's `plane_curves`), as
+// a 2D sketch's.
+
+// Whether such an input takes an item: anything but a 3D sketch's curve
+// out of its sketch plane or a reference curve of it.
+bool planeCurveTakes(const SelectionItem& item, const CommandContext& context);
+// Why a click on a 3D sketch's curve is not taken; empty when it is.
+QString planeCurveRefusal(const SelectionItem& item, const CommandContext& context);
 
 } // namespace mitcad::cmd

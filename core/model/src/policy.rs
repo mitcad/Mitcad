@@ -293,6 +293,15 @@ fn links(def: &FeatureDef) -> Vec<(LinkKind, &OccurrenceLink)> {
             .iter()
             .filter_map(|p| p.link.as_ref())
             .collect(),
+        // A 3D sketch's linked reference records (mitcad#1543), its points'
+        // faces too (mitcad#1549).
+        FeatureDef::SpatialSketch(s) => s
+            .attachments()
+            .map(|(_, _, source)| source)
+            .chain(s.reference_curves().map(|(_, source)| source))
+            .chain(s.face_records().map(|(_, _, source)| source))
+            .filter_map(|source| source.link())
+            .collect(),
         FeatureDef::Combine(c) => c.links().map(|(_, link)| link).collect(),
         FeatureDef::Sweep(s) => s.body_links.values().collect(),
         FeatureDef::SplitBody(s) => s.tool_links.values().collect(),

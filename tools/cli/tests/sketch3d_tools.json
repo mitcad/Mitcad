@@ -1,0 +1,53 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. The commands the 3D sketch's drawing tools send (mitcad#1525), as they send them, on the geometry kernel: a 40 x 30 x 20 box (Box1, F1, F1.b0); in 3DSketch1 (F2) a Line chain from the Origin snap: AB typed as Offsets (Delta X 40, Delta Y and Delta Z an explicit 0, each driving), BC by Axis and Length along +Y, 30, CD with only Delta Z typed, 20 (D stays free in X and Y: two degrees of freedom, no hidden plane relation), DE ending on the Midpoint snap of the box's top front edge (a linked point). A Point snapped onto AB, its Point on Curve relation merged into the same undo step, undone and redone as one. The box 30 high: E stays the edge's middle, the typed values hold. A 3-Point Arc from E with Keep Plane."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 40, "width": 30, "height": 20, "operation": "new_body"}},
+  {"cmd": "sketch3d.create"},
+  {"cmd": "sketch3d.add_line", "sketch": "F2", "start": [0, 0, 0], "end": [37, 2, 1],
+    "offsets": ["40 mm", "0 mm", "0 mm"], "start_source": "origin"},
+  {"cmd": "sketch3d.add_line", "sketch": "F2", "start": "p2", "end": [41, 27, 0],
+    "axis": "y", "sense": "positive", "length": "30 mm"},
+  {"cmd": "sketch3d.add_line", "sketch": "F2", "start": "p4", "end": [41, 31, 18],
+    "offsets": [null, null, "20 mm"]},
+  {"cmd": "sketch3d.add_line", "sketch": "F2", "start": "p6", "end": [19, 1, 19],
+    "end_source": {"body": "F1.b0", "edge": "E{F1:side0|F1:top}", "at": "middle"}},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "status": {"dof": 2, "fully_constrained": false},
+    "points": [{"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [40, 0, 0]},
+               {"id": "p4", "at": [40, 30, 0]}, {"id": "p6", "at": [41, 31, 20]},
+               {"id": "p8", "at": [20, 0, 20]}]}}},
+
+  {"comment": "The Point tool's On Curve snap on AB: the point and its relation, one undo step."},
+  {"cmd": "sketch3d.add_point", "sketch": "F2", "at": [12, 0.5, 0]},
+  {"cmd": "sketch3d.add_constraint", "sketch": "F2",
+    "constraint": {"type": "point_on", "point": "p10", "curve": "c3"}},
+  {"cmd": "merge_undo", "depth": 6, "label": "Add Point in 3DSketch1"},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Add Point in 3DSketch1", "undo_depth": 7}}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "points": [{"id": "p1"}, {"id": "p2"}, {"id": "p4"}, {"id": "p6"}, {"id": "p8"},
+               {"id": "p10", "at": [12, 0, 0]}]}}},
+  {"cmd": "undo"},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "points": [{"id": "p1"}, {"id": "p2"}, {"id": "p4"}, {"id": "p6"}, {"id": "p8"}]}}},
+  {"cmd": "redo"},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "points": [{"id": "p1"}, {"id": "p2"}, {"id": "p4"}, {"id": "p6"}, {"id": "p8"},
+               {"id": "p10", "at": [12, 0, 0]}]}}},
+
+  {"comment": "The box 30 high: E is the edge's middle again, the typed values hold; D's X and Y and the point's place along AB are the three freedoms."},
+  {"cmd": "edit_feature", "uid": "F1", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 40, "width": 30, "height": 30, "operation": "new_body"}},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {
+    "status": {"dof": 3},
+    "points": [{"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [40, 0, 0]},
+               {"id": "p4", "at": [40, 30, 0]}, {"id": "p6", "at": [41, 31, 20]},
+               {"id": "p8", "at": [20, 0, 30]}, {"id": "p10", "at": [12, 0, 0]}]}}},
+
+  {"comment": "A 3-Point Arc from E on the XY plane through E, Keep Plane: its normal along +Z."},
+  {"cmd": "sketch3d.add_arc", "sketch": "F2", "mode": "three_point", "start": "p8", "end": [20, 20, 30],
+    "through": [30, 10, 30], "normal_axis": "z", "normal_sense": "positive"},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Add Arc in 3DSketch1"}}}
+]

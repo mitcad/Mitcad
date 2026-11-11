@@ -1006,9 +1006,11 @@ CommandDef MainWindow::print3dCommand() {
   };
   // What is sent changed: asked no more (mitcad#857), the bed planned
   // again (mitcad#1109).
-  const auto sentChanged = [askNoMore, planBed](CommandState& state, const CommandContext& context) {
+  const auto sentChanged = [this, askNoMore, planBed, threeMf](CommandState& state, const CommandContext& context) {
     askNoMore(state, context);
     planBed(state, {});
+    // The view's print colours follow the bodies and the format (mitcad#1643).
+    filamentChangesChanged(printedBodies(state), threeMf(state));
   };
   // Bed Face (mitcad#1109): the face the piece lies on, filled when the
   // bodies are chosen (the body's print bed face, else the automatic
@@ -1565,13 +1567,26 @@ CommandDef MainWindow::print3dCommand() {
       def.inputs.insert(at++, row);
     }
   }
+  // Filament changes (mitcad#1643) under Purge volumes.
+  {
+    qsizetype at = 0;
+    while (at < def.inputs.size() && def.inputs.at(at).id != QStringLiteral("purge")) {
+      ++at;
+    }
+    at = std::min(at + 1, static_cast<qsizetype>(def.inputs.size()));
+    for (const InputDef& row : filamentChangeInputs(threeMf)) {
+      def.inputs.insert(at++, row);
+    }
+  }
   // The Printer and Process boxes show the design's, also after the
   // profile editor, an import or Update changed them.
   // So does the print bed (mitcad#1109): a print bed face set, cleared or
   // undone meanwhile. The material rows read the bodies' materials again
   // (mitcad#1141: Materials beside the panel, an undo).
-  def.modelChanged = [panel, chosenKey, planBed](CommandState& state, const CommandContext&) {
+  def.modelChanged = [this, panel, chosenKey, planBed, threeMf](CommandState& state, const CommandContext&) {
     panel->materialsStale = true;
+    // The filament changes' rows and the view's colours (mitcad#1643).
+    filamentChangesChanged(printedBodies(state), threeMf(state));
     for (const QString& kind : {QStringLiteral("printer"), QStringLiteral("process")}) {
       const QString key = chosenKey(kind);
       if (state.choice(kind) != key) {
@@ -1587,9 +1602,16 @@ CommandDef MainWindow::print3dCommand() {
   // picked is drawn as the Bed face's pick instead. Otherwise the faces
   // the pieces lie on (mitcad#1109), in the same green beside the bodies'
   // picks.
-  def.marks = [panel, faceItem, askedFace](const CommandState& state) {
+  def.marks = [this, panel, faceItem, askedFace, threeMf](const CommandState& state) {
     std::vector<std::pair<SelectionItem, QColor>> marks;
     if (panel->bedFaces.asking.isEmpty()) {
+      // The faces of the filament changes (mitcad#1643): where their rows'
+      // events are.
+      if (threeMf(state)) {
+        for (const auto& mark : filamentChangeMarks()) {
+          marks.push_back(mark);
+        }
+      }
       for (const BedInUse& used : std::as_const(panel->bedInUse)) {
         // The automatic orientation's face by its own name: the body's
         // stored face is not the one in use.
@@ -1639,7 +1661,10 @@ CommandDef MainWindow::print3dCommand() {
   };
   // A question left open goes with the panel: the next panel starts
   // without it (its rows hidden, nothing needed); so does the bed planned.
-  def.ended = [panel](bool) {
+  def.ended = [this, panel](bool) {
+    // The bodies look as before; Filament Change goes with the panel
+    // (mitcad#1643).
+    endFilamentChanges();
     panel->bedFaces = PrintBedChoices();
     // A plan still running drops its answer (mitcad#1121).
     ++panel->planNumber;
@@ -1687,7 +1712,8 @@ CommandDef MainWindow::print3dCommand() {
     }
   };
   // The choices of the last send (the settings), and the slicers there are.
-  def.init = [this, panel, chosenKey, askChanges, planBed](CommandState& state, const CommandContext& context) {
+  def.init = [this, panel, chosenKey, askChanges, planBed, threeMf](CommandState& state,
+                                                                    const CommandContext& context) {
     // The last import's line is the last panel's (mitcad#655): gone now;
     // so are the print bed faces chosen (mitcad#857).
     panel->imported->summary = PrintImportSummary();
@@ -1744,6 +1770,10 @@ CommandDef MainWindow::print3dCommand() {
     // The bed face the bodies lie on (mitcad#1109), from the format chosen
     // above: planned in the background once the panel shows (mitcad#1121).
     planBed(state, {});
+    // The filament changes' rows and the view's colours (mitcad#1643); a
+    // change Filament Change Here… asked for, once the panel shows.
+    filamentChangesChanged(printedBodies(state), threeMf(state));
+    TestSync::singleShot(0, this, [this] { addPendingFilamentChange(); });
   };
   def.build = [](const CommandState& state, const CommandContext&) {
     if (state.choice(QStringLiteral("refinement")) == QStringLiteral("custom")) {

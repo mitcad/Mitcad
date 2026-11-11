@@ -91,11 +91,11 @@ pub(super) trait DispatchOps<K: Kernel> {
     /// The families of commands besides the document's own (`Command`,
     /// which takes every other name, so that its error lists its commands
     /// for an unknown one). A new family is one row here.
-    fn command_families() -> [CommandFamily<K>; 28];
+    fn command_families() -> [CommandFamily<K>; 29];
 }
 
 impl<K: Kernel> DispatchOps<K> for Document<K> {
-    fn command_families() -> [CommandFamily<K>; 28] {
+    fn command_families() -> [CommandFamily<K>; 29] {
         [
             // Gears: the motion link of a mesh (mitcad#472, `gears.rs`),
             // run as the `add_motion_link` worked out from the gears. It has
@@ -327,6 +327,19 @@ impl<K: Kernel> DispatchOps<K> for Document<K> {
                     super::auto_fix::run_auto_fix_command(doc, parse(value, "command")?)
                 },
             },
+            // 3D sketches (mitcad#1522, `sketch3d.rs`): their own namespace,
+            // so that an unknown `sketch3d.` command's error lists theirs.
+            CommandFamily {
+                names: super::sketch3d::Sketch3dCommand::NAMES,
+                prefix: Some("sketch3d."),
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    let command = super::sketch3d::parse_sketch3d_command(value)?;
+                    // Its notes in plain words too, as a planar sketch's
+                    // (mitcad#1612).
+                    doc.run_sketch3d_command(command)
+                        .map(super::sketch::with_shown_texts)
+                },
+            },
             // Filament changes at print heights (mitcad#1596,
             // `filament_changes.rs`).
             CommandFamily {
@@ -443,6 +456,10 @@ mod tests {
         // Unknown names: the sketch's own error, else the document's.
         assert_eq!(family_of("sketch.no_such_command"), Some(1));
         assert_eq!(family_of("no_such_command"), None);
+        // 3D sketches' own (mitcad#1522): not the planar sketch's.
+        assert_eq!(family_of("sketch3d.no_such_command"), Some(27));
+        assert_eq!(family_of("sketch3d.add_line"), Some(27));
+        assert_eq!(family_of("sketch.add_line"), Some(1));
     }
 
     /// Every family's command, sent through `Document::command`, is read by
@@ -484,6 +501,17 @@ mod tests {
             error.starts_with(
                 "invalid sketch command: unknown variant `sketch.fly`, expected one of \
                  `sketch.create`, "
+            ),
+            "{error}"
+        );
+        let error = doc
+            .command(r#"{"cmd": "sketch3d.fly"}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.starts_with(
+                "invalid 3D sketch command: unknown variant `sketch3d.fly`, expected one of \
+                 `sketch3d.create`, "
             ),
             "{error}"
         );

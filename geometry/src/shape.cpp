@@ -276,6 +276,7 @@ void Shape::keep_measures_of(const Shape& other) const {
   };
   take(other.m_measured, m_measured);
   take(other.m_bounds, m_bounds);
+  take(other.m_enclosingBounds, m_enclosingBounds);
   take(other.m_boundaryIndex, m_boundaryIndex);
   take(other.m_contactFaces, m_contactFaces);
   take(other.m_faceMeasures, m_faceMeasures);

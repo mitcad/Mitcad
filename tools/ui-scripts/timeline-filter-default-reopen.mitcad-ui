@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MIT
+# The timeline filter's saved choice at the next start (mitcad#1662), after
+# timeline-filter-default.mitcad-ui chose All Components in the same
+# settings, on timeline-filter-default.json:
+#   1. The window starts at All Components; activating Base hides nothing.
+#   2. Active Component from the filter's menu: Base's and Pin's features,
+#      the choice saved with its subcomponents.
+# Run by tools/ui-timeline-filter-default-test.sh (Linux) and
+# tools/ui-windows-timeline-filter-default-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+
+# 1. The saved All Components.
+expect-ever '^Timeline filter: all components$'
+expect-never '^Timeline filter: Active Component'
+expect-setting timeline/filter all
+mark
+click-logged '^Browser radio Root/Base:1 at '
+wait-log '^Activated Base$'
+wait-idle
+expect-no-log '^Timeline filter: '
+expect-widget-property timelineFilterButton checked false
+expect-widget-property timelineFilterButton toolTip 'Timeline Filter: all components'
+
+# 2. Back to Active Component: saved with its subcomponents.
+mark
+click-logged '^Timeline button filter at '
+wait-log '^Context menu: All Components [|] Active Component [|] '
+popup 'Active Component'
+wait-log '^Timeline filter saved: active, subcomponents$'
+wait-log '^Timeline filter: Active Component [(]Base[)] with Subcomponents: 3 of 4 features$'
+wait-idle
+expect-setting timeline/filter active
+expect-widget-property timelineFilterButton checked true
+expect-never 'TestDriver: FAIL'

@@ -301,8 +301,9 @@ fn map_axis2<P, Q, E>(
 #[serde(deny_unknown_fields)]
 pub struct PathPatternDef<P = ParamId> {
     pub objects: PatternObjects,
-    /// A sketch line, arc or circle, or a fixed line (paths of edges are
-    /// not supported yet).
+    /// A sketch line, arc or circle, lines and arcs of a sketch joined end
+    /// to end, an Intersection Curve, curves of a 3D sketch (mitcad#1550),
+    /// or a fixed line (paths of edges are not supported yet).
     pub path: PathRef,
     pub quantity: P,
     /// Along the path (arc length); negative goes backwards.
@@ -1976,9 +1977,15 @@ impl PathPatternDef {
         }
         let sign = if self.flip { -1.0 } else { 1.0 };
         let step = sign * step(self.distance_type, distance, q);
-        let all: Vec<Transform> = if let PathRef::SketchCurves { sketch, curves } = &self.path {
-            // Along a chain of lines and arcs (mitcad#464).
-            let chain = PathChain::of_sketch(ctx, *sketch, curves)?;
+        let all: Vec<Transform> = if let PathRef::SketchCurves {
+            sketch,
+            curves,
+            reversed,
+        } = &self.path
+        {
+            // Along a chain of lines and arcs (mitcad#464), the other way
+            // when reversed (mitcad#1550).
+            let chain = PathChain::of_sketch(ctx, *sketch, curves, *reversed)?;
             let s0 = match self.start_point {
                 Some(p) => chain.nearest(p),
                 None => self.start * chain.length(),
@@ -1987,10 +1994,14 @@ impl PathPatternDef {
                 .into_iter()
                 .map(|i| chain_transform(&chain, s0, s0 + i * step, self.along_path))
                 .collect()
-        } else if let PathRef::FeatureCurve(feature) = &self.path {
-            // Along an Intersection Curve (mitcad#1405): moved along it, and
-            // along the path turned as its tangent turns.
-            let curve = ctx.feature_curve(*feature)?;
+        } else if let Some(curve) = match &self.path {
+            // Along an Intersection Curve (mitcad#1405) or a 3D sketch's
+            // curves (mitcad#1550): moved along it, and along the path
+            // turned as its tangent turns.
+            PathRef::FeatureCurve(feature) => Some(ctx.feature_curve(*feature)?),
+            PathRef::Spatial(path) => Some(std::sync::Arc::new(path.resolve(ctx)?)),
+            _ => None,
+        } {
             let chain = super::intersection_curve::CurveChain::new(&curve)?;
             let s0 = match self.start_point {
                 Some(p) => chain.nearest(p),

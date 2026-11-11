@@ -52,6 +52,17 @@
 // -24.00, beyond 12.00 mm, snapped to 12.00 mm x2 of annotation 1" (or
 // "free" with Shift or Alt, "not snapped") and "Drawing dimension moved: …".
 //
+// Edit Title Block (a sheet tab's menu and the sheet's menu, mitcad#1625)
+// turns the title block editor on (TitleBlockEditor.hpp): the drawing tools
+// wait, the panel shows its tools (Select, Line, Field, Image…), its Grid,
+// the block's Width and Height, the selected field's Label, Text and Text
+// Height, Delete, and Done (edit_drawing_title_block: the sheet's copy of
+// its template) or Cancel. Logs "Title block editor: on, sheet 1: 9 lines,
+// 10 fields, 0 images", "Title block tool: line", "Title block image
+// chosen: logo.png (png)", "Title block field 11: label STOCK, text
+// {material}, height 3.5", "Title block editor: done (…)" and "Title block
+// editor: cancelled".
+//
 // A cut sheet (mitcad#853) opens here too: its parts are the sheet's views
 // (dragged to move them, turned from their menu or their panel's Rotation),
 // the bar shows Add Parts… and Export… (DXF, SVG, the parts' names on the
@@ -79,6 +90,7 @@
 
 #include "DrawingTemplates.hpp"
 #include "DrawingTools.hpp"
+#include "TitleBlockEditor.hpp"
 
 class QAction;
 class QComboBox;
@@ -148,6 +160,10 @@ public:
   // of each.
   void addParts();
   bool isCutSheet() const { return m_cutSheet; }
+  // Edit Title Block (mitcad#1625): the title block editor on a sheet (it
+  // is shown first); false when the sheet has no block to edit.
+  bool editTitleBlock(int sheet);
+  bool editingTitleBlock() const { return m_blockEditor.has_value(); }
   // Export… of the bar and the ribbon's (mitcad#1008): the drawing as
   // "pdf", "svg", "dxf" or "dwg" (a cut sheet's: "dxf" or "svg"), its file
   // asked for.
@@ -364,6 +380,13 @@ private:
   // Save as Template… of a sheet tab's menu: the sheet's template under a
   // name, to the user's or the project's library.
   void saveTemplate(int sheet);
+  // The title block editor's panel (mitcad#1625).
+  void fillTitleBlockPanel();
+  // Done (`keep`: edit_drawing_title_block, the editor staying on when the
+  // model refuses it) or Cancel; false when the model refused.
+  bool finishTitleBlock(bool keep);
+  // Image… of the editor: a PNG, JPEG or SVG file for its next two clicks.
+  void chooseTitleBlockImage();
   // The sheet's template and title block fields, the drawing's revisions
   // and the model's annotations its views bring in (mitcad#1406), logged
   // when they change (the UI tests read them).
@@ -459,6 +482,9 @@ private:
   bool m_cutSheet = false;
   bool m_cutLabels = false;
   QString m_cutWarnings;
+  // The title block editor while it is on (mitcad#1625), and its sheet.
+  std::optional<TitleBlockEditor> m_blockEditor;
+  int m_blockSheet = 0;
   QWidget* m_toolRow = nullptr;
   QWidget* m_cutRow = nullptr;
   QToolButton* m_addParts = nullptr;

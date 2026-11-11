@@ -92,15 +92,15 @@ impl SketchEdit<'_> {
             })?;
             let Some(report) = follow.iter().find(|r| r.projection == k) else {
                 return Err(format!(
-                    "the projection of {} follows its source: nothing to project again",
-                    projection.source
+                    "the projection of {topo} follows its source: nothing to project again",
+                    topo = projection.source
                 ));
             };
             if report.lost || report.current.is_empty() {
                 return Err(format!(
-                    "the projection of {} cannot be projected again: its source is gone \
+                    "the projection of {topo} cannot be projected again: its source is gone \
                      (Clean Up Stale Projections unlinks it)",
-                    projection.source
+                    topo = projection.source
                 ));
             }
             out.push(self.project_one_again(k, report)?);

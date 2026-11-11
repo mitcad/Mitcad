@@ -16,3 +16,7 @@ installed, so that text outlines are the same on every machine.
   fonts.
 - The build embeds the files in the geometry library
   (`geometry/cmake/embed.cmake`); italic is synthesized by slanting.
+- The drawing exports embed them too (`core/model-drawing/src/svg_image.rs`,
+  `include_bytes!`, mitcad#1637): the font of a title block SVG image's
+  text whose fonts the computer does not have, of its generic families
+  and of text that names none.

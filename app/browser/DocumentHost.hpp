@@ -134,6 +134,12 @@ public:
   virtual void saveNamedView(const QString& name, bool replace) = 0;
   // Save As DXF: a sketch's curves to a DXF file the user chooses (U6).
   virtual void exportSketch(const QString& sketch) = 0;
+  // Convert to 3D Sketch (mitcad#1544): opens the planar sketch and turns
+  // it into a 3D sketch in place.
+  virtual void convertSketchTo3d(const QString& /*sketch*/) {}
+  // Convert to 2D Sketch (mitcad#1550): opens the 3D sketch and turns it
+  // back into a planar sketch in place.
+  virtual void convertSketchTo2d(const QString& /*sketch*/) {}
   // Opens an analysis kept in the document in its command's panel
   // (mitcad#41: Section Analysis with its plane, offset and flip).
   virtual void editAnalysis(const QString& name) = 0;

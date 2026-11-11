@@ -504,46 +504,7 @@ impl Built {
     }
 
     fn binding(&self, kind: &BindingKind) -> Result<S, String> {
-        let (p, c) = (|u| self.point(u), |u| self.curve(u));
-        Ok(match *kind {
-            BindingKind::Translated { a, b, by } => S::Translated {
-                a: p(a)?,
-                b: p(b)?,
-                by,
-            },
-            BindingKind::Rotated {
-                center,
-                a,
-                b,
-                angle,
-            } => S::Rotated {
-                center: p(center)?,
-                a: p(a)?,
-                b: p(b)?,
-                angle,
-            },
-            BindingKind::TurnedDirection {
-                a_center,
-                a,
-                b_center,
-                b,
-                angle,
-            } => S::TurnedDirection {
-                a_center: p(a_center)?,
-                a: p(a)?,
-                b_center: p(b_center)?,
-                b: p(b)?,
-                angle,
-            },
-            BindingKind::EqualSize(a, b) => S::EqualSize(c(a)?, c(b)?),
-            BindingKind::TangentAt { a, b, at } => S::TangentAt {
-                a: c(a)?,
-                b: c(b)?,
-                at: p(at)?,
-            },
-            BindingKind::Midpoint { point, curve } => S::Midpoint(p(point)?, c(curve)?),
-            BindingKind::HorizontalPoints { a, b } => S::HorizontalPoints(p(a)?, p(b)?),
-        })
+        planar_binding(self, kind)
     }
 
     fn add(&mut self, c: S, item: SolverItem) -> Result<(), String> {
@@ -570,208 +531,11 @@ impl Built {
     }
 
     fn constraint(&self, kind: &ConstraintKind) -> Result<Vec<S>, String> {
-        use ConstraintKind as K;
-        let (p, c) = (|u| self.point(u), |u| self.curve(u));
-        Ok(match kind {
-            K::Coincident { point, entity } => vec![match entity {
-                Ref::Point(q) => S::Coincident(p(*point)?, p(*q)?),
-                Ref::Curve(e) => S::PointOnCurve(p(*point)?, c(*e)?),
-            }],
-            K::Horizontal { line } => vec![S::Horizontal(c(*line)?)],
-            K::Vertical { line } => vec![S::Vertical(c(*line)?)],
-            K::HorizontalPoints { a, b } => vec![S::HorizontalPoints(p(*a)?, p(*b)?)],
-            K::VerticalPoints { a, b } => vec![S::VerticalPoints(p(*a)?, p(*b)?)],
-            K::Parallel { a, b } => vec![S::Parallel(c(*a)?, c(*b)?)],
-            K::Perpendicular { a, b } => vec![S::Perpendicular(c(*a)?, c(*b)?)],
-            K::Collinear { a, b } => vec![S::Collinear(c(*a)?, c(*b)?)],
-            K::Tangent { a, b, at: None } => vec![S::Tangent(c(*a)?, c(*b)?)],
-            K::Smooth { a, b, at: None } => vec![S::Smooth(c(*a)?, c(*b)?)],
-            // At a chosen end (mitcad#783).
-            K::Tangent { a, b, at: Some(q) } => vec![S::TangentAt {
-                a: c(*a)?,
-                b: c(*b)?,
-                at: p(*q)?,
-            }],
-            K::Smooth { a, b, at: Some(q) } => vec![S::SmoothAt {
-                a: c(*a)?,
-                b: c(*b)?,
-                at: p(*q)?,
-            }],
-            K::Equal { a, b } => vec![S::Equal(c(*a)?, c(*b)?)],
-            K::Concentric { a, b } => vec![S::Concentric(c(*a)?, c(*b)?)],
-            K::Midpoint { point, curve } => vec![S::Midpoint(p(*point)?, c(*curve)?)],
-            K::Symmetric { a, b, axis, radii } => vec![match (a, b) {
-                (Ref::Point(a), Ref::Point(b)) => S::SymmetricPoints {
-                    a: p(*a)?,
-                    b: p(*b)?,
-                    axis: c(*axis)?,
-                },
-                (Ref::Curve(a), Ref::Curve(b)) if *radii => S::SymmetricEntities {
-                    a: c(*a)?,
-                    b: c(*b)?,
-                    axis: c(*axis)?,
-                },
-                // The positions only (mitcad#865).
-                (Ref::Curve(a), Ref::Curve(b)) => S::SymmetricCentres {
-                    a: c(*a)?,
-                    b: c(*b)?,
-                    axis: c(*axis)?,
-                },
-                _ => return Err("symmetric entities must be two points or two curves".to_owned()),
-            }],
-            K::EqualSpacing {
-                anchors,
-                mode,
-                direction,
-            } => vec![S::EqualSpacing {
-                anchors: anchors
-                    .iter()
-                    .map(|r| self.anchor(*r))
-                    .collect::<Result<Vec<_>, _>>()?,
-                mode: self.spacing_mode(*mode, *direction)?,
-            }],
-        })
-    }
-
-    /// What an equal spacing measures from.
-    fn anchor(&self, r: Ref) -> Result<SolverAnchor, String> {
-        self.anchors
-            .get(&r)
-            .copied()
-            .ok_or_else(|| format!("{r} is not a point, line, circle or arc to space"))
-    }
-
-    fn spacing_mode(
-        &self,
-        mode: SpacingMode,
-        direction: Option<EntityUid>,
-    ) -> Result<SolverSpacing, String> {
-        Ok(match mode {
-            SpacingMode::Horizontal => SolverSpacing::Horizontal,
-            SpacingMode::Vertical => SolverSpacing::Vertical,
-            SpacingMode::Along => SolverSpacing::Along(
-                self.curve(direction.ok_or("an along spacing needs a direction line")?)?,
-            ),
-            SpacingMode::PointToPoint => SolverSpacing::PointToPoint,
-        })
+        planar_constraint(self, kind)
     }
 
     fn dimension(&self, kind: &DimensionKind, value: f64) -> Result<S, String> {
-        use DimensionKind as D;
-        let (p, c) = (|u| self.point(u), |u| self.curve(u));
-        Ok(match kind {
-            D::Distance { a, b } => S::Distance {
-                a: p(*a)?,
-                b: p(*b)?,
-                value,
-            },
-            D::HorizontalDistance { a, b, signed } => S::HorizontalDistance {
-                a: p(*a)?,
-                b: p(*b)?,
-                value,
-                signed: *signed,
-            },
-            D::VerticalDistance { a, b, signed } => S::VerticalDistance {
-                a: p(*a)?,
-                b: p(*b)?,
-                value,
-                signed: *signed,
-            },
-            D::PointLineDistance { point, line } => S::PointLineDistance {
-                point: p(*point)?,
-                line: c(*line)?,
-                value,
-            },
-            D::LineDistance { a, b } => S::LineDistance {
-                a: c(*a)?,
-                b: c(*b)?,
-                value,
-            },
-            D::TangentDistance { circle, line } => S::TangentDistance {
-                circle: c(*circle)?,
-                line: c(*line)?,
-                value,
-            },
-            D::ConcentricDistance { a, b } => S::RadiusGap {
-                a: c(*a)?,
-                b: c(*b)?,
-                value,
-            },
-            D::Length { line } => S::Length {
-                line: c(*line)?,
-                value,
-            },
-            D::Angle { a, b, .. } => S::Angle {
-                a: c(*a)?,
-                b: c(*b)?,
-                value,
-                // Reversing both rays keeps the angle.
-                supplement: kind.angle_side().map(|[ra, rb]| ra != rb),
-            },
-            D::Radius { curve } => S::Radius {
-                entity: c(*curve)?,
-                value,
-            },
-            D::Diameter { curve } => S::Diameter {
-                entity: c(*curve)?,
-                value,
-            },
-            D::ArcLength { arc } => S::ArcLength {
-                arc: c(*arc)?,
-                value,
-            },
-            D::MajorRadius { ellipse } => S::MajorRadius {
-                ellipse: c(*ellipse)?,
-                value,
-            },
-            D::MinorRadius { ellipse } => S::MinorRadius {
-                ellipse: c(*ellipse)?,
-                value,
-            },
-            D::LinearDiameter { axis, entity } => match entity {
-                Ref::Point(point) => S::PointLineDistance {
-                    point: p(*point)?,
-                    line: c(*axis)?,
-                    value: value / 2.0,
-                },
-                Ref::Curve(line) => S::LineDistance {
-                    a: c(*axis)?,
-                    b: c(*line)?,
-                    value: value / 2.0,
-                },
-            },
-            // The first interval; the equal spacing passes it on.
-            D::Spacing { constraint } => {
-                let Some((anchors, mode, direction)) = self.spacings.get(constraint) else {
-                    return Err(format!("{constraint} is not an equal spacing"));
-                };
-                let [a, b, ..] = anchors.as_slice() else {
-                    return Err(format!("{constraint} has fewer than two anchors"));
-                };
-                S::Spacing {
-                    a: self.anchor(*a)?,
-                    b: self.anchor(*b)?,
-                    mode: self.spacing_mode(*mode, *direction)?,
-                    value,
-                }
-            }
-            D::TangentCircleDistance { a, b, side } => S::TangentCircleDistance {
-                a: c(*a)?,
-                b: c(*b)?,
-                value,
-                inside: side.inside(),
-            },
-            D::TangentPointDistance {
-                circle,
-                point,
-                side,
-            } => S::TangentPointDistance {
-                circle: c(*circle)?,
-                point: p(*point)?,
-                value,
-                inside: side.inside(),
-            },
-        })
+        planar_dimension(self, kind, value)
     }
 
     fn items(&self, ids: &[ConstraintId]) -> Vec<SolverItem> {
@@ -1016,6 +780,316 @@ impl Built {
             .map(|d| self.items(&d.involved))
             .collect();
     }
+}
+
+/// The solver ids that planar constraints and dimensions are mapped onto:
+/// the planar sketch's own system, or the in-plane relations of a 3D sketch
+/// converted from a planar one (mitcad#1521, `crate::spatial`), whose
+/// points and curves stand in for the spatial ones.
+pub(crate) trait PlanarIds {
+    fn point_id(&self, uid: EntityUid) -> Result<PointId, String>;
+    fn curve_id(&self, uid: EntityUid) -> Result<EntityId, String>;
+    /// What an equal spacing measures from.
+    fn anchor_of(&self, r: Ref) -> Result<SolverAnchor, String>;
+    /// An equal spacing's anchors, mode and direction, by its id.
+    fn spacing_of(&self, constraint: ConstraintUid) -> Option<SpacingDef<'_>>;
+}
+
+/// An equal spacing's anchors, mode and direction.
+pub(crate) type SpacingDef<'a> = (&'a [Ref], SpacingMode, Option<EntityUid>);
+
+impl PlanarIds for Built {
+    fn point_id(&self, uid: EntityUid) -> Result<PointId, String> {
+        self.point(uid)
+    }
+
+    fn curve_id(&self, uid: EntityUid) -> Result<EntityId, String> {
+        self.curve(uid)
+    }
+
+    fn anchor_of(&self, r: Ref) -> Result<SolverAnchor, String> {
+        self.anchors
+            .get(&r)
+            .copied()
+            .ok_or_else(|| format!("{r} is not a point, line, circle or arc to space"))
+    }
+
+    fn spacing_of(&self, constraint: ConstraintUid) -> Option<SpacingDef<'_>> {
+        let (anchors, mode, direction) = self.spacings.get(&constraint)?;
+        Some((anchors.as_slice(), *mode, *direction))
+    }
+}
+
+/// The solver constraint of a pattern's or an offset's binding (a 3D
+/// sketch's in-plane patterns and offsets too, mitcad#1550).
+pub(crate) fn planar_binding(ids: &dyn PlanarIds, kind: &BindingKind) -> Result<S, String> {
+    let p = |u| ids.point_id(u);
+    let c = |u| ids.curve_id(u);
+    Ok(match *kind {
+        BindingKind::Translated { a, b, by } => S::Translated {
+            a: p(a)?,
+            b: p(b)?,
+            by,
+        },
+        BindingKind::Rotated {
+            center,
+            a,
+            b,
+            angle,
+        } => S::Rotated {
+            center: p(center)?,
+            a: p(a)?,
+            b: p(b)?,
+            angle,
+        },
+        BindingKind::TurnedDirection {
+            a_center,
+            a,
+            b_center,
+            b,
+            angle,
+        } => S::TurnedDirection {
+            a_center: p(a_center)?,
+            a: p(a)?,
+            b_center: p(b_center)?,
+            b: p(b)?,
+            angle,
+        },
+        BindingKind::EqualSize(a, b) => S::EqualSize(c(a)?, c(b)?),
+        BindingKind::TangentAt { a, b, at } => S::TangentAt {
+            a: c(a)?,
+            b: c(b)?,
+            at: p(at)?,
+        },
+        BindingKind::Midpoint { point, curve } => S::Midpoint(p(point)?, c(curve)?),
+        BindingKind::HorizontalPoints { a, b } => S::HorizontalPoints(p(a)?, p(b)?),
+    })
+}
+
+/// The binding's points and curves, as references.
+pub(crate) fn binding_refs(kind: &BindingKind) -> Vec<Ref> {
+    use Ref::{Curve, Point};
+    match *kind {
+        BindingKind::Translated { a, b, .. } => vec![Point(a), Point(b)],
+        BindingKind::Rotated { center, a, b, .. } => vec![Point(center), Point(a), Point(b)],
+        BindingKind::TurnedDirection {
+            a_center,
+            a,
+            b_center,
+            b,
+            ..
+        } => vec![Point(a_center), Point(a), Point(b_center), Point(b)],
+        BindingKind::EqualSize(a, b) => vec![Curve(a), Curve(b)],
+        BindingKind::TangentAt { a, b, at } => vec![Curve(a), Curve(b), Point(at)],
+        BindingKind::Midpoint { point, curve } => vec![Point(point), Curve(curve)],
+        BindingKind::HorizontalPoints { a, b } => vec![Point(a), Point(b)],
+    }
+}
+
+/// The solver constraints of a planar constraint.
+pub(crate) fn planar_constraint(
+    ids: &dyn PlanarIds,
+    kind: &ConstraintKind,
+) -> Result<Vec<S>, String> {
+    use ConstraintKind as K;
+    let (p, c) = (|u| ids.point_id(u), |u| ids.curve_id(u));
+    Ok(match kind {
+        K::Coincident { point, entity } => vec![match entity {
+            Ref::Point(q) => S::Coincident(p(*point)?, p(*q)?),
+            Ref::Curve(e) => S::PointOnCurve(p(*point)?, c(*e)?),
+        }],
+        K::Horizontal { line } => vec![S::Horizontal(c(*line)?)],
+        K::Vertical { line } => vec![S::Vertical(c(*line)?)],
+        K::HorizontalPoints { a, b } => vec![S::HorizontalPoints(p(*a)?, p(*b)?)],
+        K::VerticalPoints { a, b } => vec![S::VerticalPoints(p(*a)?, p(*b)?)],
+        K::Parallel { a, b } => vec![S::Parallel(c(*a)?, c(*b)?)],
+        K::Perpendicular { a, b } => vec![S::Perpendicular(c(*a)?, c(*b)?)],
+        K::Collinear { a, b } => vec![S::Collinear(c(*a)?, c(*b)?)],
+        K::Tangent { a, b, at: None } => vec![S::Tangent(c(*a)?, c(*b)?)],
+        K::Smooth { a, b, at: None } => vec![S::Smooth(c(*a)?, c(*b)?)],
+        // At a chosen end (mitcad#783).
+        K::Tangent { a, b, at: Some(q) } => vec![S::TangentAt {
+            a: c(*a)?,
+            b: c(*b)?,
+            at: p(*q)?,
+        }],
+        K::Smooth { a, b, at: Some(q) } => vec![S::SmoothAt {
+            a: c(*a)?,
+            b: c(*b)?,
+            at: p(*q)?,
+        }],
+        K::Equal { a, b } => vec![S::Equal(c(*a)?, c(*b)?)],
+        K::Concentric { a, b } => vec![S::Concentric(c(*a)?, c(*b)?)],
+        K::Midpoint { point, curve } => vec![S::Midpoint(p(*point)?, c(*curve)?)],
+        K::Symmetric { a, b, axis, radii } => vec![match (a, b) {
+            (Ref::Point(a), Ref::Point(b)) => S::SymmetricPoints {
+                a: p(*a)?,
+                b: p(*b)?,
+                axis: c(*axis)?,
+            },
+            (Ref::Curve(a), Ref::Curve(b)) if *radii => S::SymmetricEntities {
+                a: c(*a)?,
+                b: c(*b)?,
+                axis: c(*axis)?,
+            },
+            // The positions only (mitcad#865).
+            (Ref::Curve(a), Ref::Curve(b)) => S::SymmetricCentres {
+                a: c(*a)?,
+                b: c(*b)?,
+                axis: c(*axis)?,
+            },
+            _ => return Err("symmetric entities must be two points or two curves".to_owned()),
+        }],
+        K::EqualSpacing {
+            anchors,
+            mode,
+            direction,
+        } => vec![S::EqualSpacing {
+            anchors: anchors
+                .iter()
+                .map(|r| ids.anchor_of(*r))
+                .collect::<Result<Vec<_>, _>>()?,
+            mode: spacing_mode(ids, *mode, *direction)?,
+        }],
+    })
+}
+
+fn spacing_mode(
+    ids: &dyn PlanarIds,
+    mode: SpacingMode,
+    direction: Option<EntityUid>,
+) -> Result<SolverSpacing, String> {
+    Ok(match mode {
+        SpacingMode::Horizontal => SolverSpacing::Horizontal,
+        SpacingMode::Vertical => SolverSpacing::Vertical,
+        SpacingMode::Along => SolverSpacing::Along(
+            ids.curve_id(direction.ok_or("an along spacing needs a direction line")?)?,
+        ),
+        SpacingMode::PointToPoint => SolverSpacing::PointToPoint,
+    })
+}
+
+/// The solver constraint of a driving planar dimension at `value`.
+pub(crate) fn planar_dimension(
+    ids: &dyn PlanarIds,
+    kind: &DimensionKind,
+    value: f64,
+) -> Result<S, String> {
+    use DimensionKind as D;
+    let (p, c) = (|u| ids.point_id(u), |u| ids.curve_id(u));
+    Ok(match kind {
+        D::Distance { a, b } => S::Distance {
+            a: p(*a)?,
+            b: p(*b)?,
+            value,
+        },
+        D::HorizontalDistance { a, b, signed } => S::HorizontalDistance {
+            a: p(*a)?,
+            b: p(*b)?,
+            value,
+            signed: *signed,
+        },
+        D::VerticalDistance { a, b, signed } => S::VerticalDistance {
+            a: p(*a)?,
+            b: p(*b)?,
+            value,
+            signed: *signed,
+        },
+        D::PointLineDistance { point, line } => S::PointLineDistance {
+            point: p(*point)?,
+            line: c(*line)?,
+            value,
+        },
+        D::LineDistance { a, b } => S::LineDistance {
+            a: c(*a)?,
+            b: c(*b)?,
+            value,
+        },
+        D::TangentDistance { circle, line } => S::TangentDistance {
+            circle: c(*circle)?,
+            line: c(*line)?,
+            value,
+        },
+        D::ConcentricDistance { a, b } => S::RadiusGap {
+            a: c(*a)?,
+            b: c(*b)?,
+            value,
+        },
+        D::Length { line } => S::Length {
+            line: c(*line)?,
+            value,
+        },
+        D::Angle { a, b, .. } => S::Angle {
+            a: c(*a)?,
+            b: c(*b)?,
+            value,
+            // Reversing both rays keeps the angle.
+            supplement: kind.angle_side().map(|[ra, rb]| ra != rb),
+        },
+        D::Radius { curve } => S::Radius {
+            entity: c(*curve)?,
+            value,
+        },
+        D::Diameter { curve } => S::Diameter {
+            entity: c(*curve)?,
+            value,
+        },
+        D::ArcLength { arc } => S::ArcLength {
+            arc: c(*arc)?,
+            value,
+        },
+        D::MajorRadius { ellipse } => S::MajorRadius {
+            ellipse: c(*ellipse)?,
+            value,
+        },
+        D::MinorRadius { ellipse } => S::MinorRadius {
+            ellipse: c(*ellipse)?,
+            value,
+        },
+        D::LinearDiameter { axis, entity } => match entity {
+            Ref::Point(point) => S::PointLineDistance {
+                point: p(*point)?,
+                line: c(*axis)?,
+                value: value / 2.0,
+            },
+            Ref::Curve(line) => S::LineDistance {
+                a: c(*axis)?,
+                b: c(*line)?,
+                value: value / 2.0,
+            },
+        },
+        // The first interval; the equal spacing passes it on.
+        D::Spacing { constraint } => {
+            let Some((anchors, mode, direction)) = ids.spacing_of(*constraint) else {
+                return Err(format!("{constraint} is not an equal spacing"));
+            };
+            let [a, b, ..] = anchors else {
+                return Err(format!("{constraint} has fewer than two anchors"));
+            };
+            S::Spacing {
+                a: ids.anchor_of(*a)?,
+                b: ids.anchor_of(*b)?,
+                mode: spacing_mode(ids, mode, direction)?,
+                value,
+            }
+        }
+        D::TangentCircleDistance { a, b, side } => S::TangentCircleDistance {
+            a: c(*a)?,
+            b: c(*b)?,
+            value,
+            inside: side.inside(),
+        },
+        D::TangentPointDistance {
+            circle,
+            point,
+            side,
+        } => S::TangentPointDistance {
+            circle: c(*circle)?,
+            point: p(*point)?,
+            value,
+            inside: side.inside(),
+        },
+    })
 }
 
 /// The value a dimension measures in solved geometry.

@@ -1,0 +1,741 @@
+# SPDX-License-Identifier: MIT
+# 3D sketches in the shared Qt UI on macOS (mitcad#1524-#1527, #1544,
+# #1548-#1550): the main steps of tools/ui-sketch3d-test.sh (Linux) and
+# tools/ui-windows-sketch3d-test.ps1 (Windows) on sketch3d.json's design:
+# Box1 (F1.b0) 40 x 30 x 20 at (20, 20); 3DSketch1 (F2) on its top face with
+# the line AB (c3, p1 to p2), a tangent arc (c6), a fit-point spline that
+# leaves the face (c9), a reference curve of an upright edge (c10) and a
+# closed triangle (p11, p12, p14; c13, c15, c16); Sketch1 (F3), planar.
+#   - Create Sketch: 2D by default, 3D on the card; an empty 2D sketch on
+#     YZ; an empty new 3D sketch on XZ taken back by Finish.
+#   - Edit 3DSketch1: its frame on the face, p2 and the reference curve
+#     described in the 3D Sketch Palette, Esc stays in the sketch, Delete of
+#     a triangle line; Finish as one undo step, undone. The light bulb.
+#   - The drawing tools in a new 3D sketch on XZ: Line by typed offsets and
+#     by Axis and Length, Esc layers, Undo; a Fit Point Spline; a Tangent
+#     Arc with Radius and Arc Length typed; a Center Point Arc's normal
+#     picked from AB; a Point; a Line whose end snaps On Face; Finish.
+#   - Editing 3DSketch1: AB's length typed, driven, removed; B dragged along
+#     X; a Length added from the palette (a dimension), Fix and Unfix; Delete
+#     with Dependents; Replace Reference's pick ended by Esc; Finish.
+#   - Sketch1 to a 3D sketch from the Browser's menu and back to 2D by the
+#     3D Sketch Palette's box, each one undo step; Convert to 2D Sketch
+#     offered on the 3D sketch's row; fully constrained.
+#   - Fillet of the triangle's corner p12 with Radius 3 typed.
+#   - Plane-bound tools in a new 3D sketch on XY: 2-Point Rectangle from the
+#     origin (Width 30, Height 20), undone and redone; Center Diameter
+#     Circle on the YZ plane (Radius 8).
+#   - Rib from 3DSketch1's curves: the spline out of the sketch plane
+#     refused, saying why, the line AB taken; Esc.
+#   - Ellipse (10, 5), Circumscribed Polygon (Radius 20) and Text in a
+#     dragged frame ("MitCad") in another 3D sketch on XY.
+#   - The layout of mitcad#1592: the relation and dimension buttons whole
+#     across the card, the selected point's description in its sight, the
+#     On Face badge inside the view, one In plane badge for the converted
+#     rectangle, the 3D Sketch box disabled while Text runs and enabled as
+#     it ends, and the Home view kept by Finish of the converted sketch.
+# The tools start by their commands, as in sketch3d-202.mitcad-ui (a key
+# goes to the field that has the keyboard). Places in the view are
+# percentages of it, near where the Linux test clicks free places; the
+# ellipse's and the polygon's sizes go toward the pointer, moved off the
+# origin first (to the left, as on Linux); the Text frame is dragged up and
+# left of the middle, as on Linux. No drag cancelled by Esc and no tangent handle
+# (they need the pointer held while a key goes, or a step only when the
+# handle shows); the fillet's radius is typed, as on Windows.
+# Run by tools/ui-macos-sketch3d-test.sh.
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+expect-ever '^Browser Root/Sketches/3DSketch1 at '
+expect-ever '^Browser sketch DOF: .*3DSketch1 [0-9]+'
+expect-ever '^Sketches shown: .*F2'
+
+# Create Sketch: the kind before the plane, 2D by default.
+mark
+command sketch.create
+wait-log '^Create Sketch kind: 2D$'
+wait-log '^View banner: Create Sketch: pick a plane'
+wait-log '^Create Sketch kind 3D at '
+wait-idle
+mark
+click-logged '^Create Sketch kind 3D at '
+wait-log '^Create Sketch kind: 3D$'
+wait-log '^View banner: Create 3D Sketch: pick a plane'
+mark
+click-logged '^Create Sketch kind 2D at '
+wait-log '^Create Sketch kind: 2D$'
+mark
+key Escape
+wait-log 'Create Sketch cancelled'
+mark
+command sketch.create
+wait-log '^Create Sketch kind: 2D$'
+wait-log '^Datum yz at '
+wait-idle
+click-logged '^Datum yz at '
+wait-log '^Sketch started on yz'
+wait-idle
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+
+# Create Sketch with 3D: an empty new 3D sketch, taken back by Finish.
+mark
+command sketch.create
+wait-log '^Create Sketch kind 3D at '
+wait-idle
+click-logged '^Create Sketch kind 3D at '
+wait-log '^Create Sketch kind: 3D$'
+wait-log '^Datum xz at '
+wait-idle
+mark
+click-logged '^Datum xz at '
+wait-log '^3D sketch started on xz'
+wait-log '[(]3DSketch2[)]: 0 points, 0 curves'
+wait-log '^View banner: 3D Sketch 3DSketch2'
+wait-log '^3D sketch frame at '
+wait-idle
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+wait-log '^Browser sketch DOF: '
+wait-idle
+expect-no-log '^Browser sketch DOF: .*3DSketch2'
+
+# Edit Sketch of 3DSketch1 from the Timeline.
+mark
+dblclick-logged '^Timeline 3DSketch1 at '
+wait-log '^Editing 3D sketch F2 [(]3DSketch1[)]'
+wait-log '^3D sketch F2 [(]3DSketch1[)]: '
+wait-log '^3D sketch frame in the design: origin [(]-?[0-9.]+, -?[0-9.]+, 20[.]000000[)]'
+wait-log '^View banner: 3D Sketch 3DSketch1'
+wait-log 'sketch[.]slot: a 2D sketch tool does not apply to a 3D sketch'
+wait-log '^3D sketch entity F2/p2 at '
+wait-log '^3D sketch entity F2/c10 at '
+# Every relation and dimension button whole across the card (mitcad#1592).
+wait-log '^3D sketch edit controls across the card: all whole$'
+wait-idle
+mark
+click-logged '^3D sketch entity F2/p2 at '
+wait-log 'Selected: 1 sketch point \[sketch point p2 of F2\]'
+wait-log 'selected Point p2 at 40[.]00, 0[.]00, 0[.]00 mm'
+wait-log '^3D Sketch Palette: 3DSketch1.*, 20[.]00 mm in the component'
+wait-log '^3D sketch hover: Point p2'
+# The point's description in the card's sight (mitcad#1592).
+wait-log '^3D sketch selection description at '
+mark
+click-logged '^3D sketch entity F2/c10 at '
+wait-log 'Reference curve c10: edge E[{]F1:side0[|]F1:side1[}] of F1[.]b0; included in 3D'
+mark
+key Escape
+wait-log 'Selected: nothing'
+key Escape
+wait-idle
+expect-no-log '^Sketch finished'
+mark
+click-logged '^3D sketch entity F2/c16 at '
+wait-log '\[sketch curve c16 of F2\]'
+key Delete
+wait-log '^3D sketch F2: deleted'
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+mark
+command edit.undo
+wait-log 'Undo: Edit 3DSketch1'
+expect-never 'Recompute failed'
+
+# The light bulb.
+mark
+click-logged '^Browser eye Root/Sketches/3DSketch1 at '
+wait-log 'Visibility Root/Sketches/3DSketch1: hidden'
+wait-log '^Sketches shown: '
+wait-idle
+expect-no-log '^Sketches shown: .*F2'
+mark
+click-logged '^Browser eye Root/Sketches/3DSketch1 at '
+wait-log 'Visibility Root/Sketches/3DSketch1: shown'
+
+# The drawing tools: a Line chain from the origin by typed values.
+mark
+command sketch.create
+wait-log '^Create Sketch kind 3D at '
+wait-idle
+click-logged '^Create Sketch kind 3D at '
+wait-log '^Create Sketch kind: 3D$'
+wait-log '^Datum xz at '
+wait-idle
+mark
+click-logged '^Datum xz at '
+wait-log '^3D sketch started on xz'
+wait-log '^3D sketch frame at '
+capture S '^3D sketch (F[0-9]+) [(]3DSketch[0-9]+[)]: '
+wait-idle
+mark
+command sketch.line
+wait-log '^3D sketch tool Line: started; on the XY plane'
+wait-idle
+mark
+click-logged '^3D sketch frame at '
+wait-log '^3D sketch snap: Origin'
+wait-log '^3D sketch Line: pending point 1 at [(]0[.]000, 0[.]000, 0[.]000[)] [(]Origin[)]'
+wait-log '^3D sketch field dx at '
+wait-idle
+expect-no-log '^3D sketch command: '
+mark
+click-logged '^3D sketch field dx at '
+type 40
+wait-log '^3D sketch field dx: 40'
+key Tab
+wait-log '^3D sketch field focus: dy'
+key Tab
+wait-log '^3D sketch field focus: dz'
+type 0
+wait-log '^3D sketch field dz: 0'
+mark
+key Return
+# Delta Y untouched is no dimension: one degree of freedom left.
+wait-log '^3D sketch command: .*"offsets":\["40[^\]]*,null,'
+wait-log '^3D sketch Line: made c3 from p1 to p2'
+wait-log '2 points, 1 curves, dof 1'
+wait-idle
+mark
+click-logged '^3D sketch control Axis and Length at '
+wait-log '^3D sketch input: Axis and Length'
+wait-log '^3D sketch control Length axis Z at '
+wait-idle
+click-logged '^3D sketch control Length axis Z at '
+wait-log '^3D sketch input axis: [+]Z'
+wait-log '^3D sketch field length at '
+wait-idle
+click-logged '^3D sketch field length at '
+type 25
+wait-log '^3D sketch field length: 25'
+mark
+key Return
+wait-log '"axis":"z"'
+wait-log '^3D sketch Line: made c5 from p2 to p4'
+wait-log '3 points, 2 curves, dof 1'
+
+# Esc layers and Undo.
+mark
+key Escape
+wait-log '^3D sketch Esc: field length back to its measurement'
+key Escape
+wait-log '^3D sketch Esc: Line pending points dropped'
+wait-log '^3D sketch Line: chain ended'
+key Escape
+wait-log '^3D sketch tool Line: stopped'
+expect-no-log '^Sketch finished'
+mark
+command edit.undo
+wait-log 'Undo: Add Line in 3DSketch'
+wait-log '2 points, 1 curves'
+
+# A Fit Point Spline and a Tangent Arc.
+mark
+command sketch.spline
+wait-log '^3D sketch tool Fit Point Spline: started'
+wait-idle
+click 42 62
+wait-log '^3D sketch Fit Point Spline: pending point 1'
+click 50 55
+wait-log '^3D sketch Fit Point Spline: pending point 2'
+click 58 60
+wait-log '^3D sketch Fit Point Spline: pending point 3'
+mark
+key Return
+wait-log '^3D sketch Fit Point Spline: made c'
+key Escape
+wait-log '^3D sketch tool Fit Point Spline: stopped'
+mark
+command sketch.arc_tangent
+wait-log '^3D sketch tool Tangent Arc: started'
+wait-log '^3D sketch entity ${S}/p2 at '
+wait-idle
+click-logged '^3D sketch entity ${S}/p2 at '
+wait-log '^3D sketch Tangent Arc: continues c3 at p2'
+wait-log '^3D sketch field radius at '
+wait-idle
+click-logged '^3D sketch field radius at '
+type 10
+wait-log '^3D sketch field radius: 10'
+key Tab
+wait-log '^3D sketch field focus: arc_length'
+type 15
+wait-log '^3D sketch field arc_length: 15'
+mark
+key Return
+wait-log '"mode":"tangent"'
+wait-log '^3D sketch Tangent Arc: made c'
+mark
+key Escape
+wait-log '^3D sketch Esc: field arc_length back to its measurement'
+key Escape
+wait-log '^3D sketch Esc: Tangent Arc pending points dropped'
+key Escape
+wait-log '^3D sketch tool Tangent Arc: stopped'
+
+# Center Point Arc: its normal picked from the line AB.
+mark
+command sketch.arc_center
+wait-log '^3D sketch tool Center Point Arc: started'
+wait-log '^3D sketch control Pick Normal at '
+wait-idle
+click-logged '^3D sketch control Pick Normal at '
+wait-log '^3D sketch Center Point Arc: picking the normal'
+wait-idle
+click-logged '^3D sketch entity ${S}/c3 at '
+wait-log '^3D sketch Center Point Arc: normal from line c3 [(]1[.]000, 0[.]0'
+wait-idle
+expect-no-log '^3D sketch command: '
+key Escape
+wait-log '^3D sketch tool Center Point Arc: stopped'
+
+# A Point clicked in the view, below the spline's points.
+mark
+command sketch.point
+wait-log '^3D sketch tool Point: started'
+wait-idle
+click 50 68
+wait-log '^3D sketch Point: made p[0-9]+'
+mark
+# Esc until the tool ends (an Esc without a tool keeps the sketch open).
+key Escape
+key Escape
+wait-log '^3D sketch tool Point: stopped'
+expect-no-log '^Sketch finished'
+
+# A line end snapped onto a face of the box: On Face.
+mark
+command sketch.line
+wait-log '^3D sketch tool Line: started'
+wait-log '^Pick face F1[.]b0/F1:side[0-9]+ at '
+capture FACE '^Pick face F1[.]b0/(F1:side[0-9]+) at '
+wait-idle
+mark
+click-logged '^3D sketch frame at '
+wait-log '^3D sketch Line: pending point 1 at [(]0[.]000, 0[.]000, 0[.]000[)] [(]Point: p1[)]'
+wait-idle
+mark
+click-pick 'face F1[.]b0/${FACE} at '
+wait-log '^3D sketch snap: On Face: face ${FACE} of F1[.]b0'
+# Its badge whole inside the view (mitcad#1592).
+wait-log '^3D sketch snap badge On Face: face ${FACE} of F1[.]b0 at .*, inside the view '
+wait-log '"end_source":[{]"body":"F1[.]b0","face":"${FACE}"[}]'
+wait-log '^3D sketch Line: made c'
+mark
+key Escape
+wait-log '^3D sketch Line: chain ended'
+key Escape
+wait-log '^3D sketch tool Line: stopped'
+wait-log ' On Face p'
+wait-log 'face ${FACE} of F1[.]b0; body F1[.]b0; its point slides on the face'
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+
+# 3D sketch editing: 3DSketch1's dimensions, relations, drags and references.
+mark
+dblclick-logged '^Timeline 3DSketch1 at '
+wait-log '^Editing 3D sketch F2 [(]3DSketch1[)]'
+wait-log '^3D sketch item k3 Length c3: 40[.]00 mm'
+wait-log '^3D sketch item k3 field at '
+wait-log '^3D sketch edit control coincident at '
+wait-idle
+mark
+click-logged '^3D sketch edit control drag axis X at '
+wait-log '^3D sketch drag on: along X'
+wait-idle
+mark
+click-logged '^3D sketch item k3 field at '
+key ctrl+a
+type 50
+key Return
+wait-log '^3D sketch edit value k3 = 50: done'
+wait-log '^3D sketch item k3 Length c3: 50[.]00 mm'
+wait-log '^3D sketch entity F2/p2 at '
+wait-log '^3D sketch item k3 remove at '
+wait-idle
+mark
+click-logged '^3D sketch item k3 driven at '
+wait-log '^3D sketch edit driven k3: done'
+wait-log '^3D sketch item k3 Length c3: 50[.]00 mm; driven'
+wait-log '^3D sketch item k3 remove at '
+wait-idle
+mark
+click-logged '^3D sketch item k3 remove at '
+wait-log '^3D sketch edit remove k3: done'
+wait-idle
+expect-no-log '^3D sketch item k3 (?!remove)'
+
+# B dragged along X (chosen above): one undo step.
+mark
+drag-from '^3D sketch entity F2/p2 at ' 60 0
+wait-log '^3D sketch drag: started p2 along X'
+wait-log '^3D sketch drag preview: '
+wait-log '^3D sketch drag: p2 taken; p2 at '
+expect-no-log '^3D sketch drag: p2 taken; p2 at [(]50[.]000'
+mark
+command edit.undo
+wait-log 'Undo: Drag in 3DSketch1'
+wait-idle
+
+# A Length from the palette, Fix and Unfix by the SKETCH tab's key.
+mark
+click-logged '^3D sketch entity F2/c3 at '
+wait-log '\[sketch curve c3 of F2\]'
+wait-idle
+click-logged '^3D sketch edit control length at '
+wait-log '^3D sketch edit length: done, made k'
+mark
+click-logged '^3D sketch entity F2/p1 at '
+wait-log '\[sketch point p1 of F2\]'
+key shift+f
+wait-log '^3D sketch edit fix: done'
+key shift+f
+wait-log '^3D sketch edit unfix: done'
+
+# Delete with Dependents, a Replace Reference pick ended by Esc.
+mark
+click-logged '^3D sketch entity F2/p2 at '
+wait-log '\[sketch point p2 of F2\]'
+key Delete
+wait-log '^3D sketch delete: p2 is used by c3'
+wait-log '^3D sketch edit control delete dependents at '
+expect-no-log '^3D sketch F2: deleted'
+wait-idle
+click-logged '^3D sketch edit control delete dependents at '
+wait-log '^3D sketch F2: deleted \['
+mark
+command edit.undo
+wait-log 'Undo: Delete in 3DSketch1'
+wait-log '^3D sketch reference c10 replace at '
+wait-idle
+mark
+click-logged '^3D sketch reference c10 replace at '
+wait-log '^3D sketch replace c10: pick a source'
+key Escape
+wait-log '^3D sketch source pick: ended'
+expect-no-log '^3D sketch edit replace'
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+mark
+command edit.undo
+wait-log 'Undo: Edit 3DSketch1'
+
+# Sketch1 turned into a 3D sketch in place, and back to 2D.
+mark
+context-menu-logged '^Browser Root/Sketches/Sketch1 at ' 'Convert to 3D Sketch'
+wait-log '^Context menu: .*Convert to 3D Sketch'
+wait-log '^Editing sketch F3 [(]Sketch1[)]'
+wait-log '^Converted Sketch1 [(]F3[)] to a 3D sketch: dof 0, in plane k1, k2, k3, k4, k5, k6'
+wait-log '^View banner: 3D Sketch Sketch1'
+wait-log '^3D Sketch Palette 3D Sketch at .*checked yes enabled yes: Uncheck to turn it back into a 2D sketch[.]'
+wait-log '^3D sketch badge In plane k'
+# One badge for the rectangle's six kept relations and its corner's in-plane Fix (mitcad#1592).
+wait-log '^3D sketch badge In plane k[0-9]+(,k[0-9]+){6} at '
+wait-idle
+mark
+command edit.undo
+wait-log 'Undo: Convert Sketch1 to 3D Sketch'
+wait-log '^Sketch editor follows the history: Sketch1 is a 2D sketch'
+wait-log '^Palette palette3dSketch at '
+wait-idle
+mark
+click-logged '^Palette palette3dSketch at '
+wait-log '^Palette: 3D Sketch checked for F3$'
+wait-log '^Converted Sketch1 [(]F3[)] to a 3D sketch: dof 0'
+wait-log '^3D Sketch Palette 3D Sketch at '
+wait-idle
+mark
+click-logged '^3D Sketch Palette 3D Sketch at '
+wait-log '^Converted Sketch1 [(]F3[)] to a 2D sketch: dof 0'
+wait-log '^Palette palette3dSketch at '
+wait-idle
+mark
+command edit.undo
+wait-log 'Undo: Convert Sketch1 to 2D Sketch'
+wait-log '^Sketch editor follows the history: Sketch1 is a 3D sketch'
+# Seen from the Home view, the 3D sketch keeps that view after Finish, not
+# the top view the 2D editor turned to (mitcad#1592).
+wait-idle
+click-logged '^View home at '
+wait-idle
+capture-view-orientation view3d
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+wait-log '^Sketch left with the 3D sketch.s view: '
+expect-view-orientation ${view3d} unchanged
+wait-log '^Browser sketch DOF: (.*, )?Sketch1 0(,|$)'
+wait-idle
+mark
+context-menu-logged '^Browser Root/Sketches/Sketch1 at ' cancel
+wait-log '^Context menu: .*Convert to 2D Sketch'
+wait-idle
+
+# Fillet: a corner of the triangle with a typed radius.
+mark
+dblclick-logged '^Timeline 3DSketch1 at '
+wait-log '^Editing 3D sketch F2 [(]3DSketch1[)]'
+wait-log '^3D sketch entity F2/p12 at '
+wait-idle
+mark
+command sketch.fillet
+wait-log '^3D sketch tool Fillet: started'
+wait-log '^3D sketch field radius at '
+wait-idle
+mark
+click-logged '^3D sketch field radius at '
+type 3
+wait-log '^3D sketch field radius: 3'
+mark
+click-logged '^3D sketch entity F2/p12 at '
+wait-log '^3D sketch Fillet: corner p12 of c13 and c15 picked'
+wait-log '"cmd":"sketch3d[.]fillet"'
+wait-log ' at p12, radius '
+mark
+key Escape
+key Escape
+wait-log '^3D sketch tool Fillet: stopped'
+expect-no-log '^Sketch finished'
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'Recompute failed'
+mark
+command edit.undo
+wait-log 'Undo: Edit 3DSketch1'
+
+# Plane-bound tools: a rectangle on XY from the origin, a circle on YZ.
+mark
+command sketch.create
+wait-log '^Create Sketch kind 3D at '
+wait-idle
+click-logged '^Create Sketch kind 3D at '
+wait-log '^Create Sketch kind: 3D$'
+wait-log '^Datum xy at '
+wait-idle
+mark
+click-logged '^Datum xy at '
+wait-log '^3D sketch started on xy'
+wait-log '^3D sketch frame at '
+wait-idle
+mark
+command sketch.rectangle
+wait-log '^3D sketch tool 2-Point Rectangle: started; on the XY plane'
+wait-idle
+mark
+click-logged '^3D sketch frame at '
+wait-log '^3D sketch 2-Point Rectangle: pending point 1 at [(]0[.]000, 0[.]000, 0[.]000[)] [(]Origin[)]'
+wait-log '^3D sketch field width at '
+wait-idle
+expect-no-log '^3D sketch command: '
+click-logged '^3D sketch field width at '
+type 30
+wait-log '^3D sketch field width: 30'
+key Tab
+wait-log '^3D sketch field focus: height'
+type 20
+wait-log '^3D sketch field height: 20'
+mark
+key Return
+wait-log '"cmd":"sketch3d[.]add_rectangle"'
+wait-log '"plane":"xy"'
+wait-log '"width":"30'
+wait-log '"cmd":"sketch3d[.]attach"'
+wait-log '^3D sketch 2-Point Rectangle: made c'
+wait-log '4 points, 4 curves, dof 0'
+# The rectangle took the typed values: Esc ends the tool, or first takes
+# back a value the field still holds; a second Esc is harmless.
+mark
+key Escape
+key Escape
+wait-log '^3D sketch tool 2-Point Rectangle: stopped'
+expect-no-log '^Sketch finished'
+mark
+command edit.undo
+wait-log 'Undo: Add Rectangle in 3DSketch'
+command edit.redo
+wait-log 'Redo: Add Rectangle in 3DSketch'
+wait-idle
+mark
+command sketch.circle
+wait-log '^3D sketch tool Center Diameter Circle: started'
+wait-log '^3D sketch control Plane YZ at '
+wait-idle
+click-logged '^3D sketch control Plane YZ at '
+wait-log '^3D sketch placement: on the YZ plane'
+wait-idle
+mark
+click-logged '^3D sketch frame at '
+wait-log '^3D sketch Center Diameter Circle: pending point 1 at [(]0[.]000, 0[.]000, 0[.]000[)]'
+wait-log '^3D sketch field radius at '
+wait-idle
+click-logged '^3D sketch field radius at '
+type 8
+wait-log '^3D sketch field radius: 8'
+mark
+key Return
+wait-log '"cmd":"sketch3d[.]add_circle"'
+wait-log '"plane":"yz"'
+wait-log '^3D sketch Center Diameter Circle: made c'
+wait-log '4 points, 5 curves, dof 0'
+# The circle took the typed radius: Esc ends the tool, or first takes back
+# a value the field still holds; a second Esc is harmless.
+mark
+key Escape
+key Escape
+wait-log '^3D sketch tool Center Diameter Circle: stopped'
+expect-no-log '^Sketch finished'
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'Recompute failed'
+
+# Rib from 3DSketch1's curves: in its sketch plane taken, out of it refused.
+mark
+command solid.rib
+wait-log '^Sketch entity F2/c9 at '
+wait-log '^Sketch entity F2/c3 at '
+wait-idle
+mark
+click-logged '^Sketch entity F2/c9 at '
+wait-log 'not taken: This curve of 3DSketch1 does not lie in its sketch plane'
+wait-idle
+expect-no-log 'Rib Curves: 1 sketch curve'
+mark
+click-logged '^Sketch entity F2/c3 at '
+wait-log 'Rib Curves: 1 sketch curve \[sketch curve c3 of F2\]'
+wait-idle
+mark
+key Escape
+wait-log 'Command Rib cancelled'
+
+# Plane-bound tools: an ellipse, a polygon and a text in a dragged frame on XY.
+mark
+command sketch.create
+wait-log '^Create Sketch kind 3D at '
+wait-idle
+click-logged '^Create Sketch kind 3D at '
+wait-log '^Create Sketch kind: 3D$'
+wait-log '^Datum xy at '
+wait-idle
+mark
+click-logged '^Datum xy at '
+wait-log '^3D sketch started on xy'
+wait-log '^3D sketch frame at '
+wait-idle
+
+mark
+command sketch.ellipse
+wait-log '^3D sketch tool Ellipse: started; on the XY plane'
+wait-idle
+mark
+click-logged '^3D sketch frame at '
+wait-log '^3D sketch Ellipse: pending point 1 at [(]0[.]000, 0[.]000, 0[.]000[)]'
+wait-log '^3D sketch field major at '
+wait-idle
+click-logged '^3D sketch field major at '
+# The size goes toward the pointer: off the origin, to the left.
+view-pointer move 30 52 none
+wait-idle
+type 10
+wait-log '^3D sketch field major: 10'
+mark
+key Return
+wait-log '^3D sketch Ellipse: pending point 2 at '
+wait-log '^3D sketch field minor at '
+wait-idle
+expect-no-log '^3D sketch command: '
+click-logged '^3D sketch field minor at '
+view-pointer move 34 62 none
+wait-idle
+type 5
+wait-log '^3D sketch field minor: 5'
+mark
+key Return
+wait-log '"cmd":"sketch3d[.]add_ellipse"'
+wait-log '"plane":"xy"'
+wait-log '"major_value":"10'
+wait-log '"minor_value":"5'
+wait-log '^3D sketch Ellipse: made c'
+wait-log ' points, 1 curves, dof '
+mark
+key Escape
+key Escape
+wait-log '^3D sketch tool Ellipse: stopped'
+expect-no-log '^Sketch finished'
+
+mark
+command sketch.polygon
+wait-log '^3D sketch tool Circumscribed Polygon: started; on the XY plane'
+wait-idle
+mark
+click-logged '^3D sketch frame at '
+wait-log '^3D sketch Circumscribed Polygon: pending point 1 at [(]0[.]000, 0[.]000, 0[.]000[)]'
+wait-log '^3D sketch field radius at '
+wait-idle
+click-logged '^3D sketch field radius at '
+view-pointer move 36 56 none
+wait-idle
+type 20
+wait-log '^3D sketch field radius: 20'
+mark
+key Return
+wait-log '"cmd":"sketch3d[.]add_polygon"'
+wait-log '"sides":6'
+wait-log '"radius":"20'
+wait-log '^3D sketch Circumscribed Polygon: made c'
+wait-log ' points, 9 curves, dof '
+mark
+key Escape
+key Escape
+wait-log '^3D sketch tool Circumscribed Polygon: stopped'
+expect-no-log '^Sketch finished'
+
+mark
+command sketch.text
+wait-log '^3D sketch tool Text: started; on the XY plane'
+# The 3D Sketch box disabled as the tool starts (mitcad#1592).
+wait-log '^3D Sketch Palette 3D Sketch box: enabled no: Finish or Escape the active tool first[.]$'
+wait-idle
+mark
+view-pointer move 34 36 none
+view-pointer press 34 36 left
+view-pointer move 36 37 left
+view-pointer move 38 38 left
+view-pointer move 40 39 left
+view-pointer move 42 40 left
+view-pointer move 44 41 left
+wait-log '^3D sketch Text: frame preview from [(]'
+view-pointer release 44 41 left
+wait-log '^3D sketch Text: frame to [(]'
+wait-log '^3D sketch Text: pending point 1 at '
+expect-ever '^3D sketch field text at '
+wait-idle
+expect-no-log '^3D sketch command: '
+click-logged '^3D sketch field text at '
+type MitCad
+wait-log '^3D sketch field text: MitCad'
+mark
+key Return
+wait-log '"cmd":"sketch3d[.]add_text"'
+wait-log '"frame":\['
+wait-log '"text":"MitCad"'
+wait-log '^3D sketch Text: made t'
+wait-log ' points, 13 curves, dof '
+mark
+key Escape
+key Escape
+wait-log '^3D sketch tool Text: stopped'
+# And enabled again as it ends (mitcad#1592).
+wait-log '^3D Sketch Palette 3D Sketch box: enabled yes: '
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'Recompute failed'
+expect-never 'TestDriver: FAIL'

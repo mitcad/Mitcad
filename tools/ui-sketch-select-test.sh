@@ -213,6 +213,7 @@ ui_step "sketch dimension (D)"               ui_key d
 ui_expect_new "Sketch tool Sketch Dimension" "the tool started"
 ui_step "pointer on the hidden edge"         xdotool mousemove $(place "$OCC" occluded)
 ui_expect_new "Sketch body geometry out of the plane:" "the edges below the sketch read"
+ui_expect_new "Computing body geometry done in" "read off the UI thread, as a job of its own (mitcad#1656)"
 ui_step "click the hidden edge"              click_at $(place "$OCC" occluded)
 ui_sync
 since_mark "Sketch Dimension picked the body edge $OCC " && ui_fail "the tool took an edge behind faces"

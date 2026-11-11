@@ -19,10 +19,14 @@ use crate::ids::FeatureUid;
 use crate::kernel::Kernel;
 
 /// Whether a feature has a light bulb of its own: sketches and
-/// construction planes, axes, points and joint origins, and intersection
-/// curves (mitcad#1405).
+/// construction planes, axes, points and joint origins, intersection
+/// curves (mitcad#1405) and 3D sketches (mitcad#1524).
 fn has_visibility(def: &FeatureDef) -> bool {
-    crate::joints::placed_geometry(def) || matches!(def, FeatureDef::IntersectionCurve(_))
+    crate::joints::placed_geometry(def)
+        || matches!(
+            def,
+            FeatureDef::IntersectionCurve(_) | FeatureDef::SpatialSketch(_)
+        )
 }
 
 impl DocState {
@@ -47,16 +51,20 @@ impl DocState {
         used
     }
 
-    /// The sketches each feature uses, as [`DocState::used_sketches`]
-    /// counts them, in timeline order; features that use none are left
-    /// out. The browser lists a feature under each of its sketches
-    /// (mitcad#177).
+    /// The sketches each feature uses, planar ones as
+    /// [`DocState::used_sketches`] counts them and 3D sketches too (the
+    /// route of a Pipe or a Sweep, mitcad#1527), in timeline order;
+    /// features that use none are left out. The browser lists a feature
+    /// under each of its sketches (mitcad#177), and editing the feature
+    /// shows them for its time. A 3D sketch is not hidden when a feature
+    /// uses it ([`DocState::used_sketches`] counts planar ones only): its
+    /// route stays in view under the pipe it makes.
     pub fn sketches_used_by(&self) -> BTreeMap<FeatureUid, Vec<FeatureUid>> {
         let order: HashMap<FeatureUid, usize> = self
             .features
             .iter()
             .enumerate()
-            .filter(|(_, f)| matches!(f.def, FeatureDef::Sketch(_)))
+            .filter(|(_, f)| matches!(f.def, FeatureDef::Sketch(_) | FeatureDef::SpatialSketch(_)))
             .map(|(index, f)| (f.uid, index))
             .collect();
         let mut used = BTreeMap::new();

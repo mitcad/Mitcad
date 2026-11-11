@@ -1093,6 +1093,7 @@ Measure (and the other INSPECT commands that take the selection)
 Appearance...
 Material   >  the design's materials | the library materials assigned last | More... (the bodies' material; for a component alone its default material)
 Property Sets... (a body's, or a component's, with its occurrence and definition)
+Set as / Clear Print Bed Face (a planar face), Filament Change Here… (a plane, a planar face of a solid)
 Delete     >  Member, Spacing Set, Body, Component, Feature
 Hide       >  Body, Component
 Transparent (checkable: the bodies and components, mitcad#1093)
@@ -1182,6 +1183,19 @@ Clear Selection, Undo, Fit, Command Search
   `tools/ui-move-copy-menu-test.sh`, `tools/ui-windows-move-copy-menu-test.ps1`
   (ctest `app.ui-windows-move-copy-menu`), `app/tests/context_menu.cpp`
   (`app.unit`).
+- **Filament Change Here…** (mitcad#1643, `files/MainWindowFilamentChanges.cpp`)
+  for one construction or origin plane, or one planar face of a body that
+  is not a surface body: Send to Slicer opens (with the face's body, or
+  for a plane with the bodies it would start with) and, once its panel
+  shows, a change at the plane or face to the first filament other than
+  the plate's is added to the design's schedule, one undo step (`Set
+  Filament Changes`), as a pick in its Change At row adds one ([Send to
+  Slicer](#export-and-3d-print), Filament changes). A face of a body on a
+  print plate (the body, or an occurrence on its path, an item of the
+  plate) opens the plate's panel instead, **Plates…** on that plate, and
+  the change goes into the plate's own schedule. Logged `Filament Change
+  Here: Plane1` (`… A face of Body1 on plate plate1`), then `Filament
+  changes: added a change at Plane1`.
 - **Save as Mesh…** (mitcad#734, `files/MainWindowSaveAsMesh.cpp`,
   `files/SaveAsMesh.hpp`) when every item is on a body or is a component;
   also in the browser's menus of body and component rows, last before
@@ -3251,15 +3265,28 @@ show the Lines split button and Midpoint Line without code of their own.
 Body edges and vertices in the sketch plane (mitcad#256,
 `sketch/BodyGeometry.hpp`): `controller.bodyGeometry()` reads the model's
 `plane_geometry` query (commands.md, "Body geometry in a sketch's plane")
-once per tool session and again after the document changed (its
-revision), logging `Sketch plane geometry: 4 edge(s), 4 vertex(es)`.
+once per tool session and again after the bodies it reads changed,
+logging `Sketch plane geometry: 4 edge(s), 4 vertex(es)`. Whether they
+changed is the model's `plane_geometry_key` (mitcad#1646), asked once per
+document revision: an edit of the sketch itself, a dimension added, keeps
+the key and what was read with it (the revision itself when the key cannot
+be read).
 `bodyGeometry(true)`, the Dimension tool's (mitcad#866), adds every other
 edge and vertex of the visible bodies before the sketch, as the curve or
 point it projects to along the plane's normal (an edge along the normal as
 its point, type `point`), with `inPlane` false, its `height` and its
 `path` (where it is, above or below the plane): the same query with
-`out_of_plane`, asked once while the document stays as it is (not per tool
-session, as the model then lists every edge of the bodies) and logged
+`out_of_plane`, asked once while the key stays (not per tool session, as
+the model then lists every edge of the bodies: in an assembly of hundreds
+of bodies over 100 000 items and seconds, which every added dimension
+paid before mitcad#1646). It is read off the UI thread (mitcad#1656,
+`SketchHost::queryInBackground`, `DocumentSession::queryAsync`: a job of
+its own, `Computing body geometry`, without a progress dialog, read into
+items on the worker, `Timing body geometry load`, that gives way to what
+the user does meanwhile and is asked again on the tool's next look): the
+tool answers at once with the items in the plane, and once the others are
+there it looks again where the pointer is. A selection the tool takes as
+it starts is read at once (`bodyGeometry(true, true)`). The read is logged
 `Sketch body geometry out of the plane: 12 item(s)`; the counts above stay
 those in the plane. The Point tool snaps to the items in the plane only.
 The
@@ -3792,7 +3819,10 @@ y_axis (y axis)`. A drag that starts on an axis is the view's (a window).
 line in the mirror's own undo step, or takes the one there is. The
 overlay draws the picked axis as selected across the view
 (`SketchHost::sketchAxisPicks`), as the view cannot. Other inputs never
-get the axes. `tools/ui-sketch-axes-test.sh` and
+get the axes, but Rectangular Pattern's Direction (mitcad#1655, below);
+both are `lineOrAxisInput` in `SketchCommands.cpp`, whose field names a
+picked axis (`Sketch x axis`, `Sketch y axis`; `InputDef::itemsText`,
+logged `Mirror Mirror Line listed: Sketch y axis`). `tools/ui-sketch-axes-test.sh` and
 `tools/ui-windows-sketch-axes-test.ps1` mirror a circle about the y
 axis.
 
@@ -3859,7 +3889,8 @@ mitcad/Mitcad#212):
   them, drawn by the overlay at the objects' middle where the preview
   shows them (`sketch::middleOf`: the center of the box round their
   points, a circle's whole round included). A drag of an arrow sets X or
-  Y Distance by how far the pointer goes along it, of the square both;
+  Y Distance by how far the pointer goes along it (only that one, since
+  mitcad#1640), of the square both;
   the place snaps as a drawing tool's point does, away from the moved
   objects: onto a point or curve the handle's place goes there, on the
   grid the distances go in its steps; Shift or Alt drags without
@@ -3881,6 +3912,93 @@ mitcad/Mitcad#212):
 rectangle Point to Point from its corner to a circle's center, drag the
 handle of a selected line onto a point and check X and Y Distance, and
 rotate a horizontal line 90 degrees without a pivot about its middle.
+
+Move/Copy holds what it moved where it was dropped on a point or a curve
+(mitcad#1645, GitHub mitcad/Mitcad#245), with Create Copy on or off, in
+the move's undo step: `build` adds the model's `hold` to `sketch.move`
+(commands.md), constraints the model adds after the move, naming the
+copy's point with `copy` on.
+
+- **Point to Point:** when the Origin Point is a point of the objects (a
+  circle's center, a corner) and the Target Point's pick snapped onto a
+  point or a curve, the Origin Point is held there as a drawing tool's
+  point would be (`SketchController::pickHold`: a `coincident` with the
+  point or on the curve, a `midpoint`, a quadrant's holds, both curves of
+  a crossing, the origin's point, an axis's line where the sketch has
+  one). The pick's snap is kept by its pick id while the panel is open
+  (`SketchController::snapPickEvent`); a target on the moved objects
+  themselves holds nothing.
+- **The handle:** when a point of the objects sits at the handle's place
+  as its drag starts (a circle's center, a lone point; not a line's
+  middle) and the drag leaves the place on a point or a curve, that point
+  is held there (`SketchController::handleHold`), while X and Y Distance
+  are still the drop's: a value typed since takes it back, as do a drop
+  off geometry, with Shift or Alt, or an arrow that stops short of the
+  snap. Logged `Sketch handle holds p9 where it was dropped: point p5`.
+- A hold the sketch refuses (it conflicts, or the others imply it) is left
+  out by the model with a warning, `not held where it was dropped: …`,
+  the panel's message; the move stays.
+
+`tools/ui-sketch-snap-hold-test.sh` and `app.ui-windows-sketch-snap-hold`
+(the shared script `tools/ui-scripts/sketch-snap-hold.mitcad-ui`) copy a
+circle Point to Point onto a point and drag another's handle onto a
+point; the saved design keeps their centers on the points when the
+points move (see "Placements held where the snap marker showed").
+
+The sketch **Rectangular Pattern**'s second direction (mitcad#1640,
+GitHub mitcad/Mitcad#243) is never picked: it runs across Direction, a
+quarter turn counter-clockwise from it (`sketch.rectangular_pattern`
+copies along `direction` and its perpendicular). Quantity 2, Spacing 2
+and Direction Type 2 say so in their tooltips (`Across Direction, at
+right angles to it in the sketch`; Edit Pattern's Quantity 2 and Spacing
+2 too), and Quantity 2 starts at 2, so the preview shows a grid at once
+(3 x 2 from the defaults). Its handle (`CommandDef::sketchHandle`,
+`patternHandle` in `SketchCommands.cpp`) is two arrows without a square
+(`SketchHandle::axes`, `starts`, `square`): one along Direction at the
+originals' first copy (their middle plus Spacing along it), which drags
+Spacing, and one across it at the first copy of the second direction,
+which drags Spacing 2; each against its direction while its Flip is on.
+A drag sets only the value of the arrow dragged (an expression in the
+other field stays as typed; Move/Copy's arrows alike) and steps by the
+grid only (`snapsToGeometry` off: not onto the copies it moves); Shift
+or Alt drags freely. An arrow whose Quantity is 1 is drawn faint and
+dashed (`faint`) and takes no press: it shows where those copies would
+go. Logged: `Sketch handle at (-20.000, -15.000), arrows distance1 from
+(-10.000, -15.000) along (1.000, 0.000), distance2 from (-20.000,
+-5.000) along (0.000, 1.000)` (` faint` after a faint arrow), `Sketch
+handle drag started on its distance2 arrow` (Move/Copy's: `dx arrow`,
+`dy arrow`, `square`), `Sketch handle dropped: distance1 10.000,
+distance2 20.000`, and once a preview is shown the copies' points
+(`pointPositions`): `Preview Rectangular Pattern copies: p5 (-10.000,
+-15.000), …`. `tools/ui-sketch-pattern-dir2-test.sh` and
+`app.ui-windows-sketch-pattern-dir2` (the shared script
+`tools/ui-scripts/sketch-pattern-dir2.mitcad-ui`) open it on a circle,
+find the 3 x 2 preview and both arrows, drag the second arrow 10 mm
+(Spacing 2 20 mm, Spacing kept), and see the arrow faint at Quantity 2
+of 1.
+
+The sketch **Rectangular Pattern**'s Direction (mitcad#1655, GitHub
+mitcad/Mitcad#248) takes a line of the sketch or the sketch's x or y
+axis, as Mirror's Mirror Line does (`sketchAxes`, the same pick ids and
+log lines), so a sketch of circles or points alone has a direction to
+pick; empty, it is the x axis. Its tooltip says so (`A line, or the
+sketch's x or y axis; the x axis when none is picked`), and a picked
+axis shows its name in the field (`Rectangular Pattern Direction listed:
+Sketch y axis`). `patternDirection` takes the direction from
+`SketchModel::lineDirection`: a line's from its start to its end, (1, 0)
+or (0, 1) for an axis's pick (`x_axis`, `y_axis`) or the line the model
+made for it. `build` sends that vector as `direction`, so no axis line is
+made. An axis selected before the command goes to Direction (only the
+inputs with `sketchAxes` take one). No other sketch input takes a line as
+a direction: Circular Pattern takes a center point, and Equal Spacing
+measures along the axes with Measure's Horizontal and Vertical (its
+Direction is only for Along a Line).
+`tools/ui-sketch-pattern-axis-test.sh` and
+`app.ui-windows-sketch-pattern-axis` (the shared script
+`tools/ui-scripts/sketch-pattern-axis.mitcad-ui`, the fixture
+`sketch-pattern-dir2.json`) pick the y axis as Direction for a circle
+(copies along y), then the x axis (copies along x), then the y axis
+again and OK; `test_app`'s `sketch_axes.cpp` checks `lineDirection`.
 
 **Sketch Fillet** (mitcad#867) has one selection, Curves or Corners
 (`corners`: lines and circular arcs of the sketch, and points where
@@ -4290,7 +4408,12 @@ geometry"):
   step `Cut in Sketch1` (`SketchOp::setLabel`, which makes `commit` run
   `merge_undo` also for a single step, to name it). The notice says how
   many items and constraints and dimensions went (`%n` plurals) and how
-  many were left out.
+  many were left out. A 3D sketch's copy (mitcad#1661, its `kind` `3d`)
+  is a 3D sketch's to paste ([3D sketches](#3d-sketches)): Paste in a 2D
+  sketch refuses it with `3D sketch geometry cannot be pasted into a 2D
+  sketch: paste it into a 3D sketch.` (logged `Paste: the clipboard holds
+  3D sketch geometry of 3DSketch1`); a 2D sketch's copy pastes into a 3D
+  sketch onto its active placement plane.
 - Paste is a tool (`PasteTool`, cursor icon `paste`): the fragment's
   curves and texts are drawn at the pointer by its base point (the first
   selected item's first point, marked by a dot), snapping as the drawing
@@ -4306,16 +4429,67 @@ geometry"):
   paste itself dropped, dimensions that took their values) are a
   notice. The fragment is plain JSON, so a design open in another MitCad
   window takes it too.
+- Where the click dropped the base point on a point or a curve (the snap
+  marker shows it), the pasted base point (the first pasted point at the
+  place: a circle's or an arc's center, a line's start, a point) is held
+  there in the same undo step (mitcad#1645, GitHub mitcad/Mitcad#245;
+  `PasteTool::holdBase`), as a drawing tool holds a new point
+  (`SketchOp::constrain`: a `coincident` with the point, a point on the
+  curve, a `midpoint`, the quadrant's holds, a crossing, the origin, an
+  axis). Not where typed X and Y or a held direction put it elsewhere,
+  and not for a text's anchor, which is no point. A refused hold is
+  logged and shown as the drawing tools' are; the paste stays.
 - Logs: `Copied c2, t5 from Sketch1: 3 constraint(s) and dimension(s)
   kept, 1 left out, base point at (10, 10)` (`Cut …`, then `Deleted c2,
   t5`), `Paste: geometry of Sketch1 from the clipboard, base point at
   (10, 10), held in y` (`from the application (the clipboard is
   empty)`; `held in x and y`, none when nothing is held), `Sketch tool
   Paste`, `Pasted p2, p3, c4 into Sketch2 at (30, 10): 3 constraint(s)
-  and dimension(s) kept, 1 left out`, `Paste cancelled`, `Paste: the
+  and dimension(s) kept, 1 left out`, `Paste of p2 dropped on point p7`
+  (mitcad#1645), `Paste cancelled`, `Paste: the
   clipboard holds no sketch geometry`, `Undo: Cut in Sketch1`. Tests:
   `tools/ui-sketch-clipboard-test.sh` and
-  `tools/ui-windows-sketch-clipboard-test.ps1` (`app.ui-windows-sketch-clipboard`).
+  `tools/ui-windows-sketch-clipboard-test.ps1` (`app.ui-windows-sketch-clipboard`);
+  the hold of a paste dropped on a point: `tools/ui-sketch-snap-hold-test.sh`
+  and `app.ui-windows-sketch-snap-hold` (see "Placements held where the
+  snap marker showed").
+
+### Placements held where the snap marker showed
+
+Wherever the snap marker shows that the pointer is on something the
+sketch can constrain to, placing there adds that constraint in the
+placement's undo step (mitcad#1645, GitHub mitcad/Mitcad#245): a
+coincident with a point, a point on a curve, a midpoint, a quadrant's
+holds, both curves at a crossing, the origin, an axis (`SketchOp::constrain`;
+for a command that runs later, the same without making anything:
+`snapHold` in `sketch/SketchCommandPicks.cpp`). The placements checked:
+
+| Placement | Held | Since |
+|---|---|---|
+| Line, Midpoint Line, Rectangle (all modes), Circle (center; its clicks on points keep it through them), Polygon, Slot, Ellipse, Spline, Point | each snapped point | mitcad#353, #1024 and earlier |
+| 3-Point Arc and Tangent Arc's start and end, Center Point Arc's center and start | each snapped point | mitcad#353 |
+| 3-Point Arc's middle click on an existing point | the arc through that point (`coincident` of the point on the arc), as Circle's clicks | mitcad#1645 |
+| Center Point Arc's end on a point or a curve, where the end landed there | the end there | mitcad#1645 |
+| Text's frame dragged from and to a point or a curve | the frame's corners there (a text without a frame has no point at its place) | mitcad#1645 |
+| A single point dragged | the point where it was dropped | mitcad#1538 |
+| Paste | the pasted base point | mitcad#1645 |
+| Move/Copy Point to Point (Create Copy on or off) | the Origin Point, or its copy, where the Target Point snapped | mitcad#1645 |
+| Move/Copy's handle (Create Copy on or off) | the objects' point at the handle's place | mitcad#1645 |
+
+Shift or Alt, which drag a point or the handle without snapping, still
+place without a hold; a placement off geometry or on the grid holds
+nothing. Logged for UI tests: `Paste of p10 dropped on point p3`, `Sketch
+handle holds p9 where it was dropped: point p5`, `Arc c12 held through
+point p5`, `Arc c14 end p16 dropped on point p6`, `Text frame corner p20
+dropped on point p3`. `tools/ui-sketch-snap-hold-test.sh` and
+`tools/ui-windows-sketch-snap-hold-test.ps1` (`app.ui-windows-sketch-snap-hold`,
+the shared script `tools/ui-scripts/sketch-snap-hold.mitcad-ui`) cover
+each placement that changed: in Sketch1 a circle pasted with its center
+on a point, a circle copied Point to Point onto a point and another
+moved by its handle onto a point, the saved design checked with the
+points moved (`tools/ui-scripts/sketch-snap-hold-check.json`: the
+centers follow); in Sketch2 a framed text from one point to another, a
+3-Point Arc through a point and a Center Point Arc ending on a point.
 
 ### Conflicting constraints
 
@@ -4424,6 +4598,996 @@ view's generic submenus and the selection card never offer it
   mode) and
   `tools/ui-windows-sketch-redefine-plane-test.ps1` (ctest
   `app.ui-windows-sketch-redefine-plane`).
+
+### 3D sketches
+
+A 3D sketch (`spatial_sketch`, mitcad#1524; the model's `sketch3d.*`
+commands and `sketch3d` query, commands.md "3D sketches") is created and
+edited through the shared Qt UI only (`MainWindowSketch3d.cpp`,
+`sketch/Sketch3dController.cpp`, `sketch/Sketch3dPalette.cpp`,
+`sketch/Sketch3dModel.cpp`); no platform has a branch of its own. The
+drawing tools, dimensions, relations, drags and the 2D-to-3D conversion
+extend this context through the same commands.
+
+- **Create Sketch's kind.** While Create Sketch waits for a plane
+  (`Mode::PickPlane`), the command card's idle page shows the row
+  **Sketch type** with the checkable buttons **2D** (the default, checked
+  at every start of `sketch.create`, and by the Browser's Create Sketch)
+  and **3D** (`MainWindow::setSketchKind`); the view's banner says
+  `Create 3D Sketch: pick …` when 3D is chosen. **Create 3D Sketch**
+  (`sketch.create_3d`, an action in no tab, found by the command search)
+  starts Create Sketch with 3D chosen, also on a selected plane. The pick
+  rules are Create Sketch's (`sketchSupportRefusal`, the design policy,
+  the activation question); a 3D sketch takes no plane of another
+  component (`sketch3d.create` has no occurrence link): such a pick is
+  refused naming the component to activate. `createSpatialSketch` sends
+  `sketch3d.create` with the pick as its `support` and takes it back with
+  the reason when its support is not found, as a planar sketch is
+  (mitcad#99). Logs: `Create Sketch kind: 3D`, `Create Sketch kind 3D at
+  x,y` (the button), `3D sketch started on xy, origin (0, 0, 0)`.
+- **The editing context.** Sketch mode (`Mode::Sketch`) with the planar
+  `SketchController` inactive and `Sketch3dController` active
+  (`enterSketch3d`; Edit Sketch, the Timeline's and the Browser's
+  double-click and `editFeature` recognize the kind). The camera stays as
+  it is (no Look At; orbit, pan and zoom as always); the grid lies on the
+  sketch's XY plane. The view draws the sketch's points and curves in the
+  component's coordinates through the view's own sketch display
+  (`spatialSketchEntities`, `MainWindow::sketchDisplay`, the occurrence's
+  placement applied once), so a click selects their stable ids
+  (`SketchPoint`/`SketchCurve` items of the sketch, the only picks while
+  it is edited) and the selection highlights them; reference curves
+  (`reference`, their geometry from the query) are drawn as projected
+  geometry is, fully determined points and curves darker. The overlay
+  (`Sketch3dOverlay`) draws the frame (X red, Y green, Z blue, 48 px),
+  the control polygons of control-point splines, the end tangent handles
+  of open fit-point splines at a Free or tangent end, a square around
+  each point On Sketch Plane keeps, the `In plane` badges of the
+  relations and dimensions kept in the sketch plane, and the hovered
+  point's or curve's description beside the pointer (a reference curve
+  with its source, component and mode). The banner says `3D Sketch
+  <name>: Finish Sketch returns to the model.`
+- **Badges** (mitcad#1592): one `In plane` badge per shape (the points
+  joined by its curves and by the in-plane relations: a polygon, a text's
+  frame, a converted rectangle), above the shape's points, else below,
+  left or right of them, clear of the shape and of the badges placed
+  before it. Every badge, a tool's snap badge (On Face), a drag's and a
+  source pick's and the hover's description, keeps inside the part of the
+  view no panel floats over (the whole view when that is too small),
+  turned to the place's left or top side where it would be cut. Logs:
+  `3D sketch badge In plane k1,k2,k3 at x,y; box x0,y0 to x1,y1; shape
+  x0,y0 to x1,y1; view x0,y0 to x1,y1` (with the places), `3D sketch snap
+  badge On Face: face … of … at x0,y0 to x1,y1, inside the view x0,y0 to
+  x1,y1` (`cut by` when it is not).
+- **Leaving** a 3D sketch (Finish Sketch, Undo past its start) keeps the
+  view the user had in it, also when it was a 2D sketch when it was
+  opened; a 2D sketch puts back the view it was opened from, also after
+  conversions there and back (`switchSketchEditor` keeps the saved view;
+  the 2D editor's top view no longer replaces it) (mitcad#1592). Logged `Sketch left with the 3D sketch's view: the view
+  looks along (x, y, z)` (`the view before it` for a 2D sketch).
+- **The 3D Sketch Palette** (the command card's page in place of the
+  Sketch Palette): `3D Sketch` and the name, the status (`Fully
+  constrained`, `N degree(s) of freedom`, `Not solved: <why>`), the
+  determined points and curves, redundant relations, the items of a
+  failure, in-plane items, On Sketch Plane points, the linked references
+  and the failed ones (counted in words, `Redundant: N relation(s) or
+  dimension(s) the others hold already`, `Involved: N item(s), marked in
+  the list`: the ids are the agents', in the query and the log,
+  mitcad#1644), the warnings without their ids, the profiles its closed loops in the
+  sketch plane bound (`Profiles: N region(s) in the sketch plane`, or `No
+  profiles: no closed loop lies in the sketch plane.`, mitcad#1550),
+  the selection and the hover described, and Finish Sketch. Live MCP's
+  `ui_state` gives `sketch` with `kind` `3d`, its `dof` and the palette's
+  `status`, `details` and `items` (each relation, dimension and linked
+  reference with its `id`, `kind`, the `text` the palette shows and the
+  agents' `detail` with the ids, mitcad#1652).
+- **Words, not ids** (mitcad#1652, as the rule of mitcad#1327). Every
+  text of the palette names a point, curve, relation, dimension or linked
+  reference by its kind and running number in the sketch's order, as the
+  Timeline numbers features: `Point 3`, `Line 2`, `Reference curve 1`,
+  `Coincident 2`, `Length 1`; a source by what it is and the name of the
+  feature or sketch it is of: `an edge of Extrude2`, `the middle of an
+  edge of Box1`, `a vertex of a body` (no name known), `a point of
+  Sketch1`, `Intersection Curve1`, `the origin`, `… in Bracket` (another
+  component's; `in another component` with no name). No ids (`p2`, `c8`,
+  `k5`), topological names (`E{…}`, `F2:side(…)`) or coordinates: the
+  selection reads `Point 2; determined; linked to the origin`, a reference
+  curve `Reference curve 1 (an edge of Extrude2); included in 3D`. The
+  same goes for the list rows, their tooltips, the notices (Delete's
+  dependents, Detach, Replace Reference's prompt, a drag) and the
+  relations' refusals. The ids and coordinates are the agents': the
+  `sketch3d` query, `ui_state`'s `detail`, and the log lines, which give
+  the agents' text first and the shown words after `| shown:`.
+- **Hovering a row** of the Relations and dimensions or Linked
+  references list (its words) paints in the view what the row names, its
+  points and curves, and the source it uses (a reference curve's edge, an
+  attachment's vertex, another sketch's point or curve, an Intersection
+  Curve; another component's where its occurrence puts it; the origin is
+  no place), as a notice's places are painted (mitcad#1327,
+  `MainWindowNoticeHover.cpp`), until the pointer leaves the row; an edit
+  that moves the source paints it where it went, one that takes the row
+  away clears it. Logged `3D sketch palette hover: c10: sketch_curve c10
+  of F2, edge E{…} of F1.b0` (`none` when it ends) and `Notice hover
+  highlighted: 3D Sketch Palette: … (2 drawn)`; each row's words at
+  `3D sketch item k3 text at x,y`, `3D sketch reference c10 text at x,y`
+  (objects `sketch3dRow <id>`).
+- **What is disabled.** Every SKETCH tab command but Finish Sketch,
+  Delete and the drawing tools that draw in space (Point, Line, 3-Point,
+  Center Point and Tangent Arc, Fit Point and Control Point Spline:
+  [3D sketch drawing tools](#3d-sketch-drawing-tools), mitcad#1525),
+  Coincident, Tangent, Equal, Fix, Midpoint and Sketch Dimension, which
+  act on the selection ([3D sketch editing](#3d-sketch-editing),
+  mitcad#1526), and Copy, Cut and Paste (below, mitcad#1661)
+  (`MainWindow::sketch3dRefusal`: `a 2D sketch tool does not
+  apply to a 3D sketch`). Extrude and Revolve take the
+  profiles its closed loops in the sketch plane bound, as from a 2D sketch
+  (mitcad#1550). They are disabled with that reason; one triggered anyway (an agent's
+  `ui_command`) shows it. Delete removes the selected points and curves
+  (`sketch3d.remove`, one undo step; a point a curve still uses is refused
+  with the model's reason). An agent's commands in the edited 3D sketch
+  are its `sketch3d.*` commands (with its `sketch`), `edit_feature` of it,
+  undo and redo.
+- **Copy, Cut and Paste** (mitcad#1661, `sketch/Sketch3dClipboard.cpp`;
+  the SKETCH tab's `sketch.copy`, `sketch.cut` and `sketch.paste` with
+  their keys, `MainWindow::runSketch3dClipboard`). Copy puts the selected
+  points and curves on the clipboard as a 2D sketch's copy goes there
+  (`sketch/SketchClipboard.hpp`, the type
+  `application/x-mitcad-sketch-fragment+json`, kept in the application
+  where the clipboard cannot be written): the model's `sketch_fragment`
+  answer of a 3D sketch (`kind` `3d`), with the points' z, the relations
+  and dimensions among the copied geometry (those that also name geometry
+  not copied are left out and counted), and the linked references they use
+  (attachments, points on faces, reference curves). Cut is the copy and
+  then `sketch3d.remove` of the same items, one undo step `Cut in
+  3DSketch1` (a point a curve not cut still uses is refused with the
+  model's reason, as Delete is; the copy stays). Paste runs
+  `sketch3d.paste` at once as one undo step `Paste in 3DSketch2`: a 3D
+  sketch's copy goes where it was (its local coordinates and z kept, also
+  in a sketch of another plane); a 2D sketch's copy lies on the active
+  placement plane (XY, YZ or ZX, as the drawing tools last had it) with its
+  base point at the anchor, its arcs, circles, ellipses and texts bound to
+  that plane, its constraints and dimensions in-plane ones of it. A
+  reference whose source the sketch cannot use (a feature after it in the
+  timeline, another component's geometry from a sketch of another
+  component, a copy of another design that does not evaluate here) is left
+  out with what used it. The pasted points and curves are selected; the
+  status line says what was copied (`Copied 2 item(s) with 4 relation(s)
+  and dimension(s).`, `; 1 left out for naming geometry that was not
+  copied`) and what a paste left out, in words (`Pasted: 1 link(s) to
+  geometry outside the copy left out: this sketch cannot use their
+  sources.`; mitcad#1327). A 2D sketch refuses a 3D sketch's copy: `3D
+  sketch geometry cannot be pasted into a 2D sketch: paste it into a 3D
+  sketch.` Logs: `3D sketch copied c3 from 3DSketch1: 4 relation(s) and
+  dimension(s) kept, 0 left out, 1 linked reference(s), base point at
+  (0.000, 0.000, 0.000)` (`cut`), `3D sketch Paste: 3D sketch geometry of
+  3DSketch1 from the clipboard, base point at (…), where it was` (`2D
+  … on the XY plane at (…)`), `3D sketch Pasted p1, p2, c3 into
+  3DSketch2: 4 relation(s) and dimension(s) kept, 0 left out, 0 linked
+  reference(s) left out`, `3D sketch Paste refused by the model; nothing
+  kept`.
+- **History.** Finish Sketch, undo and redo, the empty new sketch taken
+  back and a rolled-back Timeline put back as one `Edit <name>` step are
+  sketch mode's, for either kind (`editingSketchUid`, `finishSketch`).
+  Esc clears the selection and never leaves the sketch. Nothing of the
+  editing context (the camera, the hover) is stored.
+- **Browser and Timeline.** A 3D sketch is a sketch of the Browser's
+  Sketches folder (`DocumentSnapshot::Feature::isAnySketch`) with its
+  light bulb (`set_feature_visible`) and its degrees of freedom (the
+  timeline's `dof`, the lock icon at 0), its Edit Sketch, and an icon of
+  its own (`sketch-3d`, mitcad#1544); Redefine Sketch Plane, Convert to 3D
+  Sketch and Project Again are a planar sketch's only.
+- Logs: `Editing 3D sketch F3 (3DSketch1)`, `3D sketch frame in the
+  design: origin (…), x axis (…), normal (…)`, `3D sketch F3
+  (3DSketch1): 5 points, 3 curves, dof 2, determined 4 points 2 curves,
+  redundant none, in plane none, on sketch plane 0, references 1 (failed
+  none), failure none`, `3D sketch: <n> 2D sketch commands disabled;
+  sketch.rectangle: a 2D sketch tool …`, `3D sketch entity F3/p2 at x,y`
+  (logged again after each change of the sketch),
+  `3D sketch frame at x,y; X x,y; Y x,y; Z x,y`, `3D sketch badge In
+  plane k5 at x,y`, `3D sketch tangent handle c9/p7 at x,y`, `3D sketch
+  hover: Point p2 at … | shown: Point 2; …`, `3D Sketch Palette: 3DSketch1
+  | 2 degree(s) of freedom | selected Point p2 at … | shown: Point 2; …`,
+  `3D sketch item k3 Length c3: 40.00 mm | shown: Length 1 on Line 1:
+  40.00 mm`, `3D sketch reference c10: edge E{…} of F1.b0; … | shown:
+  Reference curve 1 (an edge of Box1); …`, `3D sketch F3: deleted [...]`.
+- Tests: `app/tests/sketch3d_model.cpp` (the query read and worded; no id,
+  topological name or coordinate in any shown description, mitcad#1652),
+  `app/tests/sketch3d_edit.cpp` (the list rows in words), the UI test
+  `tools/ui-sketch3d-palette-words-test.sh` with
+  `tools/ui-scripts/sketch3d-palette-words.mitcad-ui` (also
+  `tools/ui-windows-sketch3d-palette-words-test.ps1`, ctest
+  `app.ui-windows-sketch3d-palette-words`: the rows in words, hovering the
+  reference curve's row paints it and its edge, leaving clears them),
+  `core/model-tests/api/src/sketch3d_tests.rs` (the reference geometry,
+  the timeline's light bulb and degrees of freedom), and the UI tests
+  `tools/ui-sketch3d-test.sh`, `tools/ui-windows-sketch3d-test.ps1`
+  (ctest `app.ui-windows-sketch3d`) and `tools/ui-macos-sketch3d-test.sh`
+  with `tools/ui-scripts/sketch3d.mitcad-ui` (ctest `app.ui-macos-sketch3d`,
+  the main steps of the Linux test in the test driver's script, the
+  drawing, editing, conversion, fillet, plane-bound and Rib steps too):
+  Create Sketch 2D by default and 3D
+  by the row, an empty new 3D sketch removed, an API-populated sketch
+  (lines, an arc, a fit-point spline, a reference to a body edge, a
+  coplanar closed loop with no profile) opened from the Timeline, its
+  points and curves selected and described, the light bulb, a 2D tool
+  disabled, Delete undone, Esc, Finish, and an edit of a rolled-back
+  Timeline put back as one step.
+- Pictures (a one-off visual check, not a test): `tools/ui-sketch3d-look.sh
+  <dir>` saves the 3D Sketch Palette in the Floating and the Docked layout,
+  each drawing tool with its preview (Point, Line, 3-Point Arc, Fit Point
+  Spline, 2-Point Rectangle, Center Diameter Circle, Ellipse, Circumscribed
+  Polygon, Text with its frame being dragged), a dimension being edited in
+  the palette's list, a line's end attached On Face, Rib taking a 3D
+  sketch's curve in its sketch plane, a 2D sketch on a face turned into a 3D
+  sketch by the 3D Sketch box and back, and a Pipe along the GitHub
+  mitcad/Mitcad#202 route; it fails naming the step whose log line did not
+  come.
+
+### 3D sketch drawing tools
+
+In a 3D sketch (mitcad#1525) the SKETCH tab's **Point** (`sketch.point`),
+**Line** (`sketch.line`, L), **3-Point Arc** (`sketch.arc`), **Center
+Point Arc** (`sketch.arc_center`), **Tangent Arc** (`sketch.arc_tangent`),
+**Fit Point Spline** (`sketch.spline`) and **Control Point Spline**
+(`sketch.spline_control`) start the 3D sketch's own tools
+(`Sketch3dController::startTool`, `MainWindow::trigger`; the code is
+`sketch/Sketch3dTools.cpp`, `sketch/Sketch3dSnaps.cpp` and the plain
+geometry `sketch/Sketch3dDraw.cpp`). The circle, ellipse, rectangle,
+polygon and text tools draw plane-bound shapes (mitcad#1550, below). The
+other 2D tools stay disabled.
+While a tool is active the view's left button is the tool's
+(`OcctViewer::setSketchInput`, the tool's icon on the precision cursor);
+orbit, pan and zoom are the view's and keep what is pending.
+
+- **Placement.** The temporary manipulator: the active plane (**XY**,
+  **YZ**, **ZX**) through the anchor, drawn as a square with the three
+  axes through the anchor; the anchor is the sketch's origin when the
+  sketch opens and then the last committed end (the last pending point of
+  the tool while one is pending). **Place** chooses **On Plane** (where
+  the pointer's ray meets the plane, `OcctViewer::pointerRay`), **X**,
+  **Y**, **Z** (the axis' point nearest to the ray) or **Normal** (the
+  in-plane place the pointer has when Normal is chosen is held; the point
+  moves along the plane's normal). A plane seen within about 3° of
+  edge-on, or an axis seen end-on, gives no place: the last valid one is
+  kept and the hint says so (`kEdgeOnSine`). Nothing of the placement is
+  stored; reopening starts at the origin on XY. A drop line from the next
+  point to the plane through the anchor shows its depth.
+- **Free rotation of the plane** (mitcad#1661). The manipulator's frame
+  (`Placement::frame`, `Frame3`) is the sketch's own until it is turned:
+  three rings through the anchor (`handleRing`, radius 1.2 times the
+  plane's half side, by the sketch's axes so a ring keeps its size while
+  it turns) are the rotation handles about the frame's X, Y and Z. A press
+  within 7 px of a ring and a drag past a click turns the frame about that
+  axis by the angle between the pressed place and the pointer in the
+  ring's plane (`handleTurn`), in whole degrees (`wholeDegrees`),
+  previewed live; the release takes it, Esc takes it back, a click on a
+  ring is the tool's as anywhere. The palette's **Rotate** fields
+  `rotate_x`, `rotate_y`, `rotate_z` take an angle (a number in degrees,
+  an expression or a parameter, evaluated as an angle): Enter turns the
+  frame about its own axis by it (`turnedFrame`: counter-clockwise seen
+  from the axis' tip; made square again, components within 1e-12 of 0 or
+  ±1 exact, so quarter turns give the sketch's axes again) and empties
+  the field; a dragged handle's angle shows in its field. **Reset**
+  (`Reset Plane`) gives the sketch's frame, XY, On Plane at the anchor.
+  The plane, the axes, Normal, the guide snaps, a Center Point Arc's
+  default normal and the drop line are the rotated frame's
+  (`placementAxis`, `placementNormal`, `placementPlaneAxes`); the placement
+  texts say "on the rotated XY plane", "along the rotated X". The typed
+  Delta X, Y and Z, Axis and Length and Keep Axis are along the rotated
+  axes (`typedEnd`, `snapConflict` in the frame's coordinates,
+  `inFrame`): a line sends the frame (`sketch3d.add_line`'s `frame`) and
+  is stored with an `align_along` relation and `offset_along` dimensions,
+  a point's typed offsets become `offset_along` dimensions
+  (`PlacedPoint::offsetFrame`). Keep Plane takes any of the sketch's axes.
+  The plane-bound tools draw on the rotated plane too (`ShapePlane`,
+  `planeValue`: the shape commands' `plane` is the rotated frame
+  `{"x", "normal"}`, core/model-api/src/commands.md "Shapes and lines on a
+  rotated plane of 3D sketches"); their hint says "on the rotated XY
+  plane". The rotation is never stored as the sketch's frame: what is
+  drawn keeps the directions it needs; reopening the sketch starts
+  unrotated. Every drawing tool offers it but Fillet. **Show** **Plane** and **Handles** (`Show Plane`, `Show
+  Handles`) draw the plane's square and the rings or not; the placement is
+  the same. Logged: "3D sketch rotation handle X at x,y" (where each ring
+  is farthest from the others on the screen, not under a card; "out of
+  sight" when nowhere), "3D sketch rotation handle hover: X", "3D sketch
+  rotation handle X: dragged", "3D sketch rotation handle X: 30°", "3D
+  sketch plane rotated 30° about X: on the rotated XY plane; frame x (…),
+  y (…), z (…)" (with "by its handle" for a drag), "3D sketch plane reset:
+  on the XY plane at (…)", "3D sketch manipulator: plane hidden", "3D
+  sketch field rotate_x at x,y", "3D sketch control Reset Plane at x,y".
+  UI tests: `tools/ui-sketch3d-rotation-test.sh` and
+  `app.ui-windows-sketch3d-rotation`, the shared steps
+  `tools/ui-scripts/sketch3d-rotation.mitcad-ui`.
+- **Keys** (mitcad#1661). While a drawing tool other than Fillet is active
+  and no field has the keyboard, **Tab** cycles the plane XY → YZ → ZX
+  (`sketch.next_plane`, Next Placement Plane), **Shift+Tab** cycles it
+  back (`sketch.previous_plane`, Previous Placement Plane; Shift+Backtab
+  too) and **Up Arrow** switches between On Plane and Normal
+  (`sketch.placement_normal`, Placement Along Normal; from Axis it goes to
+  Normal), as the Plane and Place buttons do. They are commands of their
+  own in no tab (`MainWindow::registerSketch3dKeys`, mode Sketch, enabled
+  only then; tooltips `Next points on the next placement plane: XY, YZ,
+  ZX`, `Next points on the previous placement plane: ZX, YZ, XY`, `On
+  Plane or Normal: the next point moves along the plane's normal`) whose
+  keys live in a shortcut context of their own, **3D Sketch Tool**
+  (`Sketch3dToolShortcutContext`, `CommandDef::shortcutContexts`), so
+  Keyboard Shortcuts lists them there, they can be changed there, and Up
+  is no conflict with Turn View Up (`view.turn_up`, Up in the 3D view, a
+  sketch and a command panel), which keeps Up everywhere else. That
+  context is an overlay (`CommandRegistry::setShortcutOverlay`, set by
+  `MainWindow::updateActions` while a drawing tool other than Fillet is
+  active; logged `Shortcut overlay: 3D Sketch Tool`, `none` when it ends):
+  meanwhile its keys are its commands' alone, the other commands' actions
+  drop the same keys. Tab and Shift+Tab are no other command's key. A
+  field with the keyboard keeps its keys: the
+  palette's fields take Tab and Shift+Tab to step through the shown
+  fields, another field gets the key as if there were no command
+  (`MainWindow::runSketch3dKey`). Alt stays the menu bar's (mitcad#1620).
+  The hint line names the keys as Keyboard Shortcuts has them (`Tab or
+  Shift+Tab changes the plane, Up switches between On Plane and Normal.`),
+  and so do the Plane and Place buttons' tooltips (`Place points on the YZ
+  plane through the anchor (Tab: the next plane, Shift+Tab: the previous
+  plane)`, `On the active plane (Up: On Plane or Normal)`). Logs: `3D
+  placement plane: YZ (Tab)`, `3D placement plane: XY (Shift+Tab)`, `3D
+  placement: Normal (Up)`, `3D placement: On Plane (Up)` (the key as set,
+  then the placement's own `3D sketch placement: …`), `3D placement key Up
+  left to the field <name>`, and the tooltips' keys once per change, `3D
+  sketch control keys: planes Tab: the next plane, Shift+Tab: the previous
+  plane; normal Up: On Plane or Normal` (`none` without keys).
+- **Snaps** (`chooseSnap`, 10 px): discrete points before points on
+  curves before guidance before a face; among discrete points the nearest, at equal
+  distance (half a pixel) a point of the sketch, then the origin, a linked
+  point, a center, a midpoint; among points on curves this sketch's first.
+  Candidates: the sketch's points (`Point`, an arc's center `Center`: the
+  point is shared), the origin (`Origin`: an origin attachment), the
+  middles of its lines and arcs and places on its curves (`Midpoint`, `On
+  Curve`: a Midpoint or Point on Curve relation); under the pointer as the
+  view picks them (the pick filter takes sketch points and curves, body
+  vertices and edges and Intersection Curves while a tool is active, so
+  hidden geometry and the ambiguity rules are the view's; body points are
+  taken where they are in sight): body vertices and edge ends (`Linked
+  Point`, the ends as the `edges` query names them), edge middles
+  (`Midpoint`), places on edges (`On Edge`), other sketches' points and
+  their curves' middles and places, Intersection Curves' ends, middles and
+  places, also of other components (the source with `occurrence` and
+  `context`). Linked geometry keeps its own elevation. Guidance: the
+  active plane's two axes through the anchor (`Along X`); it stores
+  nothing. Lowest of all, the face in front under the pointer (`On Face`,
+  mitcad#1549; the pick filter takes body faces too): the point is where
+  the pointer's ray meets the face, and the commit adds an On Face
+  relation (the point slides on the face), so a vertex, an edge, another
+  sketch's point or curve and an axis's guidance win over it within reach.
+  While the pointer is off the view (typing in the palette) it snaps to
+  nothing. The badge beside the next point names the kind and the source
+  in words, as the 3D Sketch Palette names items (mitcad#1652,
+  mitcad#1653): the sketch's own by kind and number (`Point: Point 3`, `On
+  Curve: Line 2`), a source by what it is and the feature, sketch or
+  component it is of (`On Face: a face of Box1`, `Linked Point: the start
+  of an edge of Box1 in Post`, `Midpoint: a curve of Sketch1`); no ids,
+  topological names or coordinates. While a snap on a source outside the
+  sketch is taken (also Attach's and Replace Reference's pick), the view
+  paints that source as a notice's places are painted (`3D sketch snap
+  places: edge E{…} of F1.b0`, `Notice hover highlighted: 3D sketch snap:
+  …`; `none` when it ends). The log keeps the ids: `3D sketch snap: On
+  Face: face F1:side0 of F1.b0 at (…)`, then `3D sketch snap shown: On
+  Face: a face of Box1`. With
+  `MITCAD_LOG_PICKS` the faces' and the body vertices' pick places are
+  logged as a tool starts (`Pick face F1.b0/F1:side0 at x,y`, `Pick vertex
+  F2.b0/V{…} at x,y`, and for another component's `Pick occurrence vertex
+  F2.b0/V{…} in O1 at x,y`; mitcad#1550).
+- **Typed values** (the palette's fields; an untouched field shows the
+  live measurement grayed as its placeholder, a typed one drives, an
+  emptied one measures again; values are evaluated by the `evaluate`
+  query, with units and parameters): **Offsets** `Delta X`, `Delta Y`,
+  `Delta Z` from the segment's start (a line's `offsets`, a field not
+  typed `null`, a typed 0 kept), or for a Line **Axis and Length** (axis
+  X, Y or Z, sense + or -, `Length`: the line's `axis`, `sense` and
+  `length`); switching the mode drops the other mode's typed values.
+  **Keep Axis** (Line, with an axis placement) stores the axis
+  alignment in the sense the line runs. **Keep Plane** (arcs) stores the
+  arc's normal along the active plane's normal (`normal_axis`,
+  `normal_sense`). **Radius** and **Arc Length** of Center Point and
+  Tangent Arcs drive. Offsets typed for a point, an arc's or a spline's
+  point become offset dimensions from the point before it (from the
+  anchor's point for the first). Tab moves between the fields; Enter in
+  a field checks it and commits once; with no field, Enter commits a
+  valid pending segment, arc or point, or ends a spline.
+- **What a click refuses** (shown in red under the fields and as the
+  error when clicked): a typed value that does not evaluate, a length,
+  radius or arc length not above zero, a segment of no length, Keep Axis
+  against a typed offset, a snap that fixes the place (the origin, a
+  linked point, a midpoint, a determined point of the sketch) and the
+  typed values contradict (`The snap to … contradicts the typed Delta X
+  40.00: move off the snap or clear the field.`), a point On Sketch Plane
+  keeps that typed values would lift (with **Release from Plane**, which
+  runs `sketch3d.release_from_plane`), three points on one line, an end
+  on the tangent's line, Keep Plane for an arc out of the active plane, a
+  spline point on the one before.
+- **Committing.** A Line's first point, an arc's points before its last
+  and a spline's points are pending (drawn, not stored): abandoning them
+  leaves no orphan. Each curve commits as its command
+  (`sketch3d.add_line`, `add_arc` with `three_point`, `center` or
+  `tangent`, `add_spline`, `add_point`) and its follow-ups
+  (`sketch3d.attach` for a spline point's or an arc center's linked
+  source, `sketch3d.add_constraint` for a relation with the sketch's own
+  curve, `sketch3d.add_dimension` for typed offsets), merged into one
+  undo step (`merge_undo`, `Add Line in 3DSketch1`); a refused follow-up
+  undoes the step. A Line continues from its committed end (shared id); a
+  double-click ends the chain. A Tangent Arc starts by a click on the end
+  of a line, arc or spline (the free end's curve first) and continues
+  from each arc it makes. A Fit Point Spline closes by a click on its
+  first point (three points at least); Enter or a double-click ends a
+  spline. Right-click is the view's context menu, as before.
+- **Esc** steps back one layer: a field's typed value (back to its
+  measurement, the keyboard to the view), then the pending points and
+  the chain (the tool waits for a first point), then the tool, then the
+  selection; the sketch stays open. Undo first drops what is pending;
+  a chain or anchor whose point went is dropped when the sketch is read
+  again. Finish Sketch ends the tool without committing what is pending.
+- **A Center Point Arc's normal.** The palette's **Normal** row (Center
+  Point Arc only) says where it comes from, in words (`from Line 1`, `from
+  a face of Box1`, `from an edge of Box1`; mitcad#1653): the active
+  plane's normal by default (**Plane** goes back to it), or with **Pick** the next click
+  takes the direction of a line of the sketch (from its start to its
+  end), a straight edge, another sketch's line or a datum axis, or the
+  normal of a planar face (out of the material), as the view picks them
+  (the pick filter is sketch curves, edges, axes and planar faces
+  meanwhile; `pickNormal` in `Sketch3dSnaps.cpp`). The direction is
+  taken once as the arc's `normal`: it does not follow its source, and
+  **Keep Plane** binds it only when it lies along a frame axis
+  (`normal_axis`; otherwise the click is refused with the reason). The
+  pick places no point and commits nothing; Esc while picking ends the
+  pick before the other layers. Logs: `3D sketch Center Point Arc:
+  picking the normal`, `3D sketch Center Point Arc: normal from line c3
+  (1.000, 0.000, 0.000)` (`face F1:top of F1.b0`, `edge E{…} of …`,
+  `axis z`), `3D sketch Center Point Arc: normal from the active plane`,
+  the palette's `3D sketch control Pick Normal at x,y` and `3D sketch
+  control Normal from Plane at x,y`.
+- **Fillet** rounds corners of lines in a 3D sketch with its own tool
+  (mitcad#1548, [3D sketch Fillet](#3d-sketch-fillet)).
+- Logs: `3D sketch tool Line: started; on the XY plane, anchor (…)`,
+  `3D sketch tool Line: stopped`, `3D sketch snap: Linked Point: vertex
+  V{…} of F1.b0 at (x, y, z)`, `3D sketch Line: pending point 1 at (…)
+  (Origin)`, `3D sketch field dx: 40`, `3D sketch problem: …`, `3D
+  sketch command: {…}` (each command sent), `3D sketch Line: made c3 from
+  p1 to p2`, `3D sketch Tangent Arc: continues c3 at p2`, `3D sketch
+  anchor at p2 (…)`, `3D sketch placement: along Z`, `3D sketch input:
+  Axis and Length; …`, `3D sketch input axis: +Z`, `3D sketch Esc: field
+  dx back to its measurement`, `3D sketch Esc: Line pending points
+  dropped`, `3D sketch Line: chain ended; …`; the palette's places `3D
+  sketch control Plane YZ at x,y`, `3D sketch control Axis and Length at
+  x,y`, `3D sketch control Keep Axis at x,y`, `3D sketch field dx at x,y`.
+  Live MCP's `ui_state` gives the tool's name as `sketch.tool`.
+- Tests: `app/tests/sketch3d_draw.cpp` (placement, edge-on and end-on,
+  snap priority, typed values and conflicts, arcs, the commands and
+  follow-ups), `core/model-tests/api/src/sketch3d_tests.rs`
+  (`the_drawing_tools_commands_make_one_step_each`), CLI
+  `sketch3d_tools`, and the UI tests `tools/ui-sketch3d-test.sh` (a Line
+  chain from the origin by Offsets and Axis and Length, the Esc layers,
+  Undo, a Fit Point Spline, a Tangent Arc with Radius and Arc Length, a
+  Center Point Arc's normal picked from the line AB; the test's own keys
+  F8 and F9 for Center Point and Tangent Arc) and
+  `tools/ui-windows-sketch3d-test.ps1` (the Line by Offsets, the Esc
+  layers and the picked normal; F8). The keys and the clipboard
+  (mitcad#1661): `tools/ui-sketch3d-keys-clipboard-test.sh` and
+  `tools/ui-windows-sketch3d-keys-clipboard-test.ps1` (ctest
+  `app.ui-windows-sketch3d-keys-clipboard`) with
+  `tools/ui-scripts/sketch3d-keys-clipboard.mitcad-ui`: the tooltips'
+  keys, Tab, Shift+Tab and Up Arrow with the view's keyboard, Tab in the
+  fields moving between them, a route typed up to z 15, copied from one 3D
+  sketch and pasted into another with its z, relations and dimensions, one
+  undo step; `core/model-tests/api/src/sketch3d_clipboard_tests.rs`.
+- **Plane-bound tools** (mitcad#1550, `sketch/Sketch3dShapes.cpp`, the
+  geometry and commands in `sketch/Sketch3dDraw.cpp`): **Center Diameter
+  Circle** (`sketch.circle`, C), **2-Point Circle** (`sketch.circle_2pt`),
+  **3-Point Circle** (`sketch.circle_3pt`), **Ellipse** (`sketch.ellipse`),
+  **2-Point Rectangle** (`sketch.rectangle`, R), **Center Rectangle**
+  (`sketch.rectangle_center`), **3-Point Rectangle**
+  (`sketch.rectangle_3pt`), **Circumscribed Polygon** (`sketch.polygon`),
+  **Inscribed Polygon** (`sketch.polygon_inscribed`), **Edge Polygon**
+  (`sketch.polygon_edge`) and **Text** (`sketch.text`). The first point is
+  placed as any tool's (plane, axis or Normal placement, snaps, Offsets
+  from the anchor); the shape lies on the active plane (XY, YZ or ZX)
+  through it, and its later clicks are moved into that plane (a snap that
+  fixes a place keeps it: the model holds it in the plane or refuses). The
+  fields after the first click are the planar tools' sizes: **Radius**
+  (Center Diameter Circle, polygons), **Diameter** (2-Point Circle),
+  **Major Radius**, then **Minor Radius** (Ellipse), **Width** and
+  **Height** (Tab; a 3-Point Rectangle's one per step), **Sides** (3 to
+  256, 6 at first, kept for the next polygon), **Length** of an Edge
+  Polygon's edge, and a Text's **Text** and **Text Height** (5 mm at
+  first). A typed size puts the next point and goes as the shape's
+  driving dimension (`radius`, `diameter`, `major_value`, `minor_value`,
+  `width`, `height`); a clicked one adds none (a drawn circle has
+  `dimension: false`). The commit is one command
+  (`sketch3d.add_circle` with `plane` and `through` for existing points a
+  2- or 3-Point Circle passes through, `sketch3d.add_ellipse`,
+  `sketch3d.add_rectangle`, `sketch3d.add_polygon` with a circumscribed
+  polygon's vertex as a place, `sketch3d.add_text` with `frame` for a
+  dragged frame; commands.md "Plane-bound shapes of 3D sketches"), the
+  snaps' attachments and Point on Curve relations of the points it made
+  (`corners`, `center`) follow and `merge_undo` makes them one step
+  (`Add Rectangle in 3DSketch1`). A Text's click places its anchor (a
+  drag from the press to the release draws its frame) and Enter commits
+  it with the text typed; a click with the text typed commits at once.
+  While the frame is dragged, past a click's few pixels, the preview
+  draws it from the press to the pointer in the plane through the press,
+  as the planar Text tool does (a construction rectangle, the press
+  marked), and keeps it so after the release.
+  The preview draws the shape in its plane; the problems (a shape of no
+  size, three points on one line, a point on the major axis, a
+  rectangle of no area) refuse a click. Esc takes back the field's value,
+  then the clicks, then ends the tool. Logs `3D sketch tool 2-Point
+  Rectangle: started; on the XY plane`, `3D sketch 2-Point Rectangle:
+  pending point 1 at (…)`, `3D sketch 2-Point Rectangle: made c5, c6, c7,
+  c8 on the XY plane through (…)`, `3D sketch Text: frame preview from
+  (…)` (once, when a drag starts), `3D sketch Text: frame to (…)`; the
+  palette's fields `3D sketch field width at x,y`. The view draws a 3D
+  sketch's ellipse in its plane with its solved minor radius and a text's
+  outline (the query's `texts[].outline`, `framework/ModelShapes.cpp`).
+  Tests: `app/tests/sketch3d_draw.cpp` (`shapeTests`: planes, circles,
+  ellipses, rectangles' corners and the clicks' corners, polygons, the
+  commands), CLI `sketch3d_shapes`, and the UI tests' "Plane-bound tools"
+  steps (a rectangle by Width and Height from the origin, a circle on
+  YZ by its Radius; in a second 3D sketch an Ellipse by its Major and
+  Minor Radius, a Circumscribed Polygon by its Radius with 6 sides, and
+  a Text in a dragged frame, its preview logged).
+
+### 3D sketch editing
+
+With no drawing tool active (mitcad#1526), a 3D sketch is edited in its
+3D Sketch Palette and in the view (`sketch/Sketch3dEditing.cpp`; the
+commands an edit sends and their words are the plain
+`sketch/Sketch3dEdit.cpp`). Every change is one undo step, a refused one
+changes nothing and shows the model's reason; Finish Sketch, undo, redo
+and reopening work as for the drawing tools.
+
+- **Relations** (the palette's buttons on the selection, each disabled
+  with the reason as its tooltip when the selection takes none):
+  **Coincident** (two points; a point and a curve make Point on Curve),
+  **Point on Curve**, **Midpoint** (a point and a line, an arc or a
+  reference curve), **Tangent** (two curves at their shared end, or at the
+  selected point), **Equal** (two lines, or two arcs or circles),
+  **Fix** and **Unfix** (the points, and the points of the selected
+  curves, that are not yet so: Unfix removes the Fix only, a linked point
+  stays linked), **Align X**, **Align Y**, **Align Z** (lines in the sense
+  they run, arcs' and circles' free normals; several in one step), **On
+  Sketch Plane**, **Release from Plane**, **Release Plane** (a converted
+  sketch's plane-bound arcs and circles), **Detach** (the selected points'
+  attachments and relations with reference curves; a reference curve
+  selected detaches the points on it; a record nothing uses goes), and
+  **Attach** (one point: the next click on a vertex, an edge, an edge's
+  end or middle, a face (mitcad#1549), another sketch's point or curve, an
+  Intersection Curve or the origin, as the drawing tools' snaps offer
+  them, attaches it or puts it on the curve or the face; Esc or **End
+  Pick** ends it). A face's record in the Linked references list reads
+  `On Face 1 (a face of Box1); its point slides on the face; used by
+  Point 3` (logged with its ids: `k4: face F1:side0 of F1.b0; body F1.b0;
+  its point slides on the face; used by p3`); its **Replace** takes another face, its **Detach** frees
+  the point; a lost face turns the record red with the failure's
+  message, nothing detached. The SKETCH tab's
+  **Coincident**, **Tangent**, **Equal**, **Fix** (Unfix when every
+  selected point is fixed) and **Midpoint**, with their keys, act on the
+  selection the same way (`MainWindow::runSketch3dEdit`); the other 2D
+  constraints stay disabled.
+- **3D relations** (mitcad#1661): **Parallel** and **Perpendicular** (two
+  lines, or a line and an arc or circle whose normal is the direction, or
+  two normals; no intersection implied), **Angle** (the same two: held at
+  the angle they have now by a driving angle dimension, listed in degrees
+  and edited as any dimension), **Symmetric** (two points: the button
+  starts a plane pick; the next click on a planar face, a construction
+  plane or another sketch takes its plane, or the palette's **XY**,
+  **YZ**, **ZX** buttons shown meanwhile take a plane of the sketch's frame
+  through its origin; Esc or **End Pick** ends it), **Concentric** (two
+  arcs or circles: one center and parallel planes), **Same Center** (one
+  center only), **Curvature** (G2: a spline and a line, an arc or a
+  spline at the end they share, or at the selected point) and **On Plane**
+  (the selected points, and the points of the selected curves, kept on a
+  plane picked as Symmetric's). Each is one step (`Edit Relations in
+  3DSketch1`) and listed in words (`Parallel 1 on Line 1, Line 2`,
+  `Symmetric 1 on Point 9, Point 10`).
+- **Dimensions**: **Length** (a line's true length; its direction stays
+  free), **Delta X**, **Delta Y**, **Delta Z** (two points, or a line's
+  ends: the signed offset from the first to the second), **Radius**,
+  **Diameter** (an arc or a circle), **Arc Length** (an arc), **Spline
+  Length** (a spline; driving, mitcad#1661), **Angle** (two directions as
+  Parallel takes them; in degrees) and **Tangent Magnitude** (a spline and
+  its start or end point: the length of its end tangent C'(t), whose
+  handle is drawn a third of it long; the end must be free or held by a
+  tangency or curvature continuity); each starts driving at what it
+  measures, and **Driven** makes it measure. A driven dimension's
+  reference parameter (`d4`) may be used in the expression of another
+  dimension of the same sketch (`d4 / 2`): the sketch is solved in stages,
+  and a dimension that would move what it uses is refused as a circular
+  dependency. The SKETCH tab's **Sketch Dimension** (D) gives a line its
+  Length, an arc its Radius, a circle its Diameter and a spline its
+  Spline Length; two points are refused naming Delta X, Y and Z.
+- **Relations and dimensions** list every relation and dimension with
+  its kind and number, what it is on, its measurement, `driven`, `In
+  plane` and `redundant`, and the failed ones' involvement, in words
+  (`Length 1 on Line 1: 40.00 mm`, `Offset 1, Delta Z from Point 1 to
+  Point 6: 20.00 mm; driven`; mitcad#1652). A dimension's field shows
+  its driving expression (its parameter in the tooltip) or, driven, its
+  measurement grayed: Enter sets a number, an expression or a parameter's
+  name (`sketch3d.set_dimension`; a driven one becomes driving), Esc takes
+  the typed text back. **Driven** switches it (`sketch3d.set_driven`),
+  **Remove** removes the item (`sketch3d.remove`). Converted in-plane
+  items edit the same way.
+- **Linked references** list every record (an attachment, a reference
+  curve, a point On Face) with its source in words, mode, status and
+  users (`Reference curve 1 (an edge of Box1); included in 3D; used by
+  Point on Curve 1`; the record's id, body and occurrence are the log's
+  and `ui_state`'s, mitcad#1652), with **Replace** (`Replace Reference`: the next click on a source
+  of the record's kind; a refused one, ineligible or not solving, changes
+  nothing and the pick goes on) and **Detach**. When a source is lost
+  upstream (a deleted edge, a moved occurrence, another sketch that fails)
+  the list's title says the sketch keeps its definition and nothing was
+  detached, and the failed record is red: Replace, Detach or putting the
+  source back recovers it.
+- **Delete** of selected points that curves still use deletes nothing
+  yet: the notice names what would go (`Deleting Point 2 also deletes
+  Line 1, Arc 1, which use it`) and **Delete with Dependents** takes it all
+  (`dependents`); Esc drops it. A point's own relations and dimensions go
+  with it at once.
+- **Dragging.** A press on a fit-point spline's tangent handle, a point
+  or a curve of the sketch (8 px, 6 px for curves; not a reference curve),
+  moved more than 4 px, drags it on **Drag on** XY, YZ or ZX through the
+  place grabbed, or along X, Y or Z: a point toward the pointer, a curve
+  by moving its points by one offset, a handle by its tip (the end plus a
+  third of C'(t); its direction and length set the tangent, a tangency's
+  end keeps its direction). Each move previews `sketch3d.drag` with
+  `preview` (nothing changes) and the overlay draws the curves where they
+  would go; when the relations stop the place short of the pointer, a
+  dashed line joins them and the notice says how far. Release takes it as
+  one undo step (`Drag in 3DSketch1`); Esc (or a refused preview)
+  changes nothing and leaves no history. A press without a drag is the
+  view's click (it selects). The drag plane is the editing context's: not
+  stored, XY at every opening.
+- Logs: `3D sketch edit coincident: done, made k7`, `3D sketch edit
+  tangent refused: …`, `3D sketch command: {…}`, `3D sketch item k3
+  Length c3: 50.00 mm`, `3D sketch reference c12: …`, `3D sketch edit
+  control coincident at x,y`, `3D sketch item k3 field at x,y`, `3D sketch
+  item k3 driven at x,y`, `3D sketch item k3 remove at x,y`, `3D sketch
+  reference c12 replace at x,y`, `3D sketch delete: p2 is used by c3 c5`,
+  `3D sketch attach p4: pick a source`, `3D sketch symmetric: pick a
+  plane` (`on_plane`), `3D sketch edit symmetric about {"frame":"x"}:
+  done, made k9`, `3D sketch edit control plane YZ at x,y`, `3D sketch
+  source: Linked Point:
+  vertex …`, `3D sketch drag on: on the YZ plane`, `3D sketch drag:
+  started p4 on the XY plane`, `3D sketch drag preview: at the pointer`
+  (`short of the pointer`, `refused: …`), `3D sketch drag: p4 taken; p4 at
+  (…)`, `3D sketch drag: handle c9 taken; tip (…), tangent (…)`, `3D sketch
+  drag: cancelled, nothing changed`.
+- **The palette's layout** (mitcad#1592): the relation and dimension
+  buttons in two columns as wide as the card (three were wider than
+  either layout's card and cut the third at its edge); the selection's
+  description right under them, above the lists, scrolled into the
+  card's sight when the selection changes. Logs `3D sketch edit controls
+  across the card: all whole` (`cut <keys>`) and `3D sketch selection
+  description at x,y` (`out of sight`) with the places.
+- Tests: `app/tests/sketch3d_edit.cpp` (the commands and refusals for a
+  selection, Fix toggling, dependents, drag goals, tangent handles at a
+  free or tangent end, B-spline samples, the list's words),
+  `core/model-tests/api/src/sketch3d_tests.rs`, CLI `sketch3d_edit`, and
+  the UI tests `tools/ui-sketch3d-test.sh` and
+  `tools/ui-windows-sketch3d-test.ps1` ("3D sketch editing" steps); the
+  3D relations: `core/sketch/src/spatial_relations_tests.rs`,
+  `core/model-tests/api/src/sketch3d_relations_tests.rs` and the UI tests
+  `tools/ui-sketch3d-relations-test.sh` and
+  `tools/ui-windows-sketch3d-relations-test.ps1` (Parallel, Perpendicular,
+  Angle and Symmetric applied from the palette, listed in words).
+
+### Turning a 2D sketch into a 3D sketch
+
+An open 2D sketch becomes a 3D sketch in place (mitcad#1544; the model's
+`sketch3d.convert`, commands.md "Turning a planar sketch into a 3D
+sketch"), so that its lines can go on to geometry on other planes and in
+other components. Undo takes it back, and a 3D sketch in its plane turns
+back into 2D ([below](#turning-a-3d-sketch-back-into-2d)).
+
+- **The Sketch Palette's `3D Sketch` box** (`palette3dSketch`, in its
+  Settings, `SketchPalette::convertTo3dRequested`): checking it converts at
+  once (`MainWindow::convertOpenSketchTo3d`). It stays unchecked in a 2D
+  sketch and is disabled while a tool is active or a value is being typed
+  (its tooltip: `Finish or Escape the active tool first, then turn the
+  sketch into a 3D sketch`). The 3D Sketch Palette shows the box
+  (`sketch3dKind`) checked; unchecking it turns the sketch back into 2D
+  (mitcad#1550, below).
+- **Convert to 3D Sketch** in the Browser's menu of a planar sketch's row
+  and in the timeline's menu of a planar sketch
+  (`DocumentHost::convertSketchTo3d`): the sketch is opened as Edit Sketch
+  opens it (the timeline rolled back to it when it is not the last), then
+  converted.
+- **The conversion** runs `sketch3d.convert` as one undo step inside the
+  sketch's edit; the 3D editor then takes the sketch
+  (`switchSketchEditor`: `enterSketch3d` with the edit's undo depth, its
+  rolled-back marker and its occurrence kept, so Finish Sketch still groups
+  the edit into one `Edit <name>` step and puts the timeline back). The
+  editor shows the spatial tool set, the manipulator at the origin with XY
+  active, the `In plane` badges of the kept relations and dimensions and
+  the points On Sketch Plane keeps; Release from Plane frees a point's
+  elevation ([3D sketch editing](#3d-sketch-editing)). A later Extrude keeps
+  the profile it uses, and patterns, offsets, the placement, text
+  parameters, inactive items and projections of faces, sections and chains
+  are kept in the plane (mitcad#1550). A refusal (a driven dimension's
+  reference used elsewhere, a feature that would fail) is shown as the
+  model words it, naming the features in the way, and the 2D sketch stays
+  open as it was.
+- **Undo and Redo** in sketch mode follow the sketch's kind
+  (`followSketchKind`): an undone conversion opens the 2D editor again, a
+  redone one the 3D editor, within the same sketch edit.
+- **Agents**: in a 2D sketch being edited, `sketch3d.convert` of that
+  sketch converts it as the box does (`mcpSketchStep`) and answers with the
+  `sketch3d` query; the agent then edits it with `sketch3d.*` commands.
+- **Browser and Timeline**: a 3D sketch has its own icon (`sketch-3d`,
+  `sketch-3d-locked` when fully constrained), so a converted sketch's row
+  changes its icon; its uid and name stay.
+- Logs: `Palette: 3D Sketch checked for F3`, `Palette 3D Sketch enabled`
+  (`disabled: a tool has pending input`), `Converted Sketch1 (F3) to a 3D
+  sketch: dof 0, in plane k1, k2, …, on sketch plane p5, …, attachments
+  none, rewritten none`, `Convert to 3D Sketch refused: <why>`, `Sketch
+  editor follows the history: Sketch1 is a 2D sketch`, `3D Sketch Palette
+  3D Sketch at x,y checked yes enabled no: <why>`.
+- Tests: `app/tests/document_snapshot.cpp` (the kind and icon of a
+  converted sketch's row), `core/model-tests/api/src/sketch3d_tests.rs`,
+  CLI `sketch3d_convert`, and the UI tests `tools/ui-sketch3d-test.sh`
+  (Convert to 3D Sketch from the Browser, Undo, the palette's box, Finish)
+  and `tools/ui-windows-sketch3d-test.ps1` (the palette's box, Undo).
+- **The scenario of GitHub mitcad/Mitcad#202 end to end** (mitcad#1550),
+  one UI test per platform: `tools/ui-sketch3d-202-test.sh` (Linux),
+  `tools/ui-windows-sketch3d-202-test.ps1` (Windows) and
+  `tools/ui-macos-sketch3d-202-test.sh` with
+  `tools/ui-scripts/sketch3d-202.mitcad-ui` (macOS), on a design that
+  mitcad-cli makes: Box1 in the root and a taller box in the component
+  Post. Through the UI: Create Sketch (2D) on Box1's top face, a 2-Point
+  Rectangle, the Sketch Palette's 3D Sketch box (converted in place, the
+  frame still on the face), the Home view; a Line from a rectangle corner
+  off the face by typed offsets (10, 0, 15), a Tangent Arc continuing it
+  whose end is clicked on a top corner of Post's box (the Linked Point
+  snap, the end attached through the occurrence O1); Finish; Pipe with
+  Chain Selection off along the line and the arc (a branch at the corner
+  otherwise), listed from the corner to the vertex, smooth, an 8 mm pipe
+  of the route's length; saved. The checks: the sketch is still a 3D
+  sketch, the pipe's path is its two curves, the pipe's start face lies at
+  the corner and its end face at Post's vertex (the `measure` query).
+
+### Turning a 3D sketch back into 2D
+
+A 3D sketch whose geometry all lies in its sketch plane becomes a 2D
+sketch in place (mitcad#1550; the model's `sketch3d.convert_to_2d`,
+commands.md "Turning a 3D sketch back into 2D").
+
+- **The 3D Sketch Palette's `3D Sketch` box** (`sketch3dKind`,
+  `Sketch3dPalette::convertTo2dRequested`): checked; enabled when the
+  sketch all lies in its plane (the `sketch3d` query's `flat`) and no tool
+  is active, its tooltip `Uncheck to turn it back into a 2D sketch.`;
+  otherwise disabled with why (`Not all in its sketch plane: p3 is 7 mm off
+  the sketch plane`, `Finish or Escape the active tool first.`, `It must
+  solve before it can turn back into 2D.`). Unchecking it converts at once
+  (`MainWindow::convertOpenSketchTo2d`).
+- **Convert to 2D Sketch** in the Browser's menu of a 3D sketch's row and
+  in the timeline's menu of a 3D sketch (`DocumentHost::convertSketchTo2d`):
+  the sketch is opened as Edit Sketch opens it, then converted.
+- **The conversion** runs `sketch3d.convert_to_2d` as one undo step inside
+  the sketch's edit; the 2D editor then takes the sketch
+  (`switchSketchEditor`), with its ids, relations and dimensions. Undo and
+  Redo follow the sketch's kind (`followSketchKind`). A refusal (what lies
+  out of the plane, a point on a curved face, a later feature in the way)
+  is shown as the model words it and the 3D sketch stays open as it was.
+- **Agents**: in a 3D sketch being edited, `sketch3d.convert_to_2d` of that
+  sketch converts it as the box does (`mcpSketch3dStep`) and answers with
+  the `sketch` query.
+- Logs: `Converted Sketch1 (F3) to a 2D sketch: dof 0, dropped k7, k8,
+  projected none, rewritten none`, `Convert to 2D Sketch refused: <why>`,
+  `Convert to 2D Sketch: <note>`, `3D Sketch Palette 3D Sketch at x,y checked
+  yes enabled yes: Uncheck to turn it back into a 2D sketch.`. The box is
+  disabled while a drawing tool runs (`Finish or Escape the active tool
+  first.`) and follows a tool's start and end at once (mitcad#1592), logged
+  when its state changes: `3D Sketch Palette 3D Sketch box: enabled
+  yes|no: <why>`.
+- Tests: `app/tests/sketch3d_model.cpp` (the palette's profile line),
+  `core/model-tests/api/src/sketch3d_tests.rs`, CLI `sketch3d_to_2d`, and
+  the UI tests `tools/ui-sketch3d-test.sh` (the box unchecked, Undo,
+  Convert to 2D Sketch in the Browser's menu) and
+  `tools/ui-windows-sketch3d-test.ps1` (the box unchecked, Undo).
+
+### 3D sketch Fillet
+
+In a 3D sketch the SKETCH tab's **Sketch Fillet** (`sketch.fillet`,
+mitcad#1548) starts the 3D sketch's own Fillet tool, which rounds the
+corner between two lines with a tangent arc: the bend of a tube route
+(`sketch/Sketch3dFilletTool.cpp`; the corners, the arc and the dragged
+radius are the plain `sketch/Sketch3dFillet.cpp`). Each corner is one
+`sketch3d.fillet` and one undo step (`Fillet in 3DSketch1`), which trims
+both lines with their ids, keeps the corner point where they meet, adds
+the arc with its two tangencies and a radius dimension (core
+commands.md, "Fillet of 3D sketches").
+
+- **Picking a corner.** A press on a point where exactly two ordinary
+  lines end, not in line, picks that corner (10 px on the screen; the
+  view's pick filter is the sketch's own points and curves meanwhile). A
+  click on a line picks it as the first of two (drawn dotted); a press on
+  a second line that meets it picks their corner (two construction lines
+  are rounded this way). Two lines that share no end, or are in line, are
+  refused with the reason, naming the lines as the 3D Sketch Palette names
+  them (`Line 1 and Line 3 do not share an end: pick two lines that meet.`;
+  mitcad#1653). The corner under the pointer is marked with its badge
+  (`Corner Point 2`); the hint names the first line picked the same way.
+  The log keeps the ids (`3D sketch Fillet: corner p12 of c13 and c15
+  picked`).
+- **The radius.** With **Radius** typed in the palette (a value, an
+  expression or a parameter's name, evaluated as the drawing tools' fields
+  are) the pick rounds the corner at once. Without it the radius follows
+  the pointer: the arc whose middle is where the pointer's ray passes the
+  corner's bisector (inside the corner, kept below the largest radius that
+  fits both lines); a click takes it, and so does the release of a drag
+  that started on the corner. The Radius field shows the dragged radius
+  grayed; typing it then and pressing Enter takes the typed one. A typed
+  radius goes as typed (a parameter stays bound); a dragged one in
+  millimeters, to the hundredth of the document's unit.
+- **Live preview.** The arc of the radius at the picked corner (or at the
+  corner under the pointer with a radius typed), the corner's pieces of
+  the lines that go (dotted) and a radius; the badge gives the radius. A
+  radius that does not fit is said in red under the field and as the error
+  of the click (`A radius of 35.000 mm does not fit Line 2: …`, the line in
+  words; mitcad#1653), and nothing is sent.
+- **Several corners in one run.** After a corner the tool waits for the
+  next one, the typed radius kept; each corner is its own undo step with
+  its own radius dimension, edited later in the palette's list like any
+  dimension (`sketch3d.set_dimension`), which moves the tangent points and
+  keeps the corner.
+- **Picks after the fillet.** The construction lines to the kept corner
+  lie over the trimmed lines; where both are under the pointer, a click in
+  the view (a Pipe's path, a selection) takes the line drawn solid, and
+  the construction line only where it is alone (it ranks after an
+  ordinary curve at the same depth).
+- **Esc** steps back one layer: the field's typed value, then the picked
+  corner or first line, then the tool; Undo first drops what is picked;
+  Finish Sketch ends the tool without rounding the picked corner. The
+  palette shows the Radius field only (no plane, placement or
+  Construction: an arc of construction lines is a construction arc).
+- Logs: `3D sketch tool Fillet: started; …`, `3D sketch Fillet: hover
+  corner p2 of c3 and c5` (`line c3`), `3D sketch Fillet: corner p2 of c3
+  and c5 picked`, `3D sketch Fillet: drag or type the radius at p2`, `3D
+  sketch Fillet: first line c3; pick the second`, `3D sketch command:
+  {"cmd":"sketch3d.fillet",…}`, `3D sketch Fillet: made c11 at p2, radius
+  10.000`, `3D sketch Fillet: refused: …`, `3D sketch Esc: Fillet pending
+  corner dropped`, `3D sketch field radius at x,y`.
+- Tests: `app/tests/sketch3d_fillet.cpp` (corners and their lines, the arc
+  at a right and a slanted obtuse corner, a radius that does not fit, the
+  dragged radius, the commands), `core/model/src/spatial_fillet_tests.rs`,
+  `core/model-tests/api/src/sketch3d_tests.rs`
+  (`corners_are_filleted_and_their_radius_edited`), CLI `sketch3d_fillet`,
+  and the UI tests `tools/ui-sketch3d-test.sh` (the triangle's corner p12
+  picked and its radius dragged, p14 with Radius 2 typed, Esc, Undo; the
+  test's key F7) and `tools/ui-windows-sketch3d-test.ps1` (p12 with Radius 3
+  typed; F7).
+
+### Pipe and Sweep along 3D sketches
+
+A 3D sketch's route is a path of Pipe and Sweep in the shared Qt UI
+(mitcad#1527; the model's typed path, commands.md "Pipe and Sweep along 3D
+sketch curves"). The panels keep their inputs and options (Pipe's Section,
+Hollow, Distance 1 and Corners; Sweep's profiles from a 2D sketch, guide
+rail and surface, orientation, Flip); `SweepCommands.cpp` and
+`commands/SpatialPaths.cpp`.
+
+- **Picks.** The Path inputs of Pipe and Sweep (and Sweep's Guide Rail and
+  Second Rail) take a 3D sketch's curves where the view draws them
+  (`SketchCurve` items of the sketch, as for a 2D sketch). Picks of one 3D
+  sketch go to the model as `{"spatial_sketch", "curves"}` in pick order,
+  with `chain` from **Chain Selection** (on by default: one pick of any
+  curve takes the curves joined to it end to end, construction curves left
+  out) and `reversed` (`cmd::pathOf` with the context). A whole 3D sketch,
+  its Browser row or its timeline entry, takes its one route, open or
+  closed (mitcad#1550), its curves in order from the `sketch3d` query's
+  `chains`; a sketch with no route, several chains or a branch is not
+  taken, and the status bar says why (`3DSketch2's curves branch:
+  pick the curves of one route.`, `3DSketch2 has 2 separate chains: pick a
+  curve of the one to follow.`). A circle, an ellipse and a closed spline
+  are closed paths by themselves, and one chained pick of a curve of a
+  closed loop takes the loop (mitcad#1550); a reference curve is not taken
+  (`This curve of 3DSketch1 is a reference curve, ...`). A line, an arc or a
+  spline under the pointer is taken without a query of the model, so the
+  hover stays cheap.
+- **The route's listing.** The Path row shows the route as the model will
+  run along it, from the `sketch3d` query's `route` of the picks
+  (`c3, c11, c5 (p1 to p8)`; a longer one `c3 ... c7, 5 curves (p1 to
+  p6)`; a closed one `c3, c5, c6 (closed, from p1)`, a closed curve
+  `c11 (closed)`), again when Chain Selection or Reverse changes; picks
+  that are no path show `Not one path`, and the preview's message gives
+  the model's reason (where it branches, the curve that does not join, a
+  closed curve with others). Nearby ends and crossings never join.
+- **Direction.** The path runs through its first listed curve along that
+  curve's own direction. Pipe's **Reverse** (`path_reverse`, shown only
+  for a 3D sketch's path, `path_spatial`) writes `reversed`; Sweep keeps
+  its own **Flip**. An edited path keeps its `reversed`: Pipe shows it in
+  Reverse, Sweep's inputs keep it while their first curve stays first
+  (`<id>_direction`).
+- **Editing a Pipe or a Sweep** whose path is a 3D sketch's: the panel
+  opens with the curves as stored (a chained pick stays one curve with
+  Chain Selection on), its listing and its direction; the 3D sketch is
+  shown for the edit (the timeline's `sketches` include it). After an edit
+  of the 3D sketch (a dimension, a drag, a moved source or support) the
+  consumers recompute from the sketch's new solve; a route that no longer
+  makes one path fails the consumer with the reason, and the sketch stays
+  editable.
+- **Every path input** (mitcad#1550). Pipe is enabled by a 3D sketch
+  alone. The same picks, refusal hints and listing (`cmd::spatialPathTakes`,
+  `spatialPathRefusal`, `spatialRouteListing`, `takeWholeRoute` in
+  `CommandSupport.cpp`) serve a Loft's **Centerline** (no Chain Selection:
+  the picks as they are) and **Rails** (a whole 3D sketch from the Browser
+  is its route; Chain Selection as for 2D curves), **Pattern on Path**'s
+  Path (a planar sketch's lines, arcs and circles, a 3D sketch's curves)
+  and the construction features' Path (Plane Along Path, Plane Normal to
+  Path at Point, Point Along Path): each writes the typed form, and an
+  edited one keeps its direction (`<id>_direction`, `cmd::keepPathDirection`).
+  A 3D sketch's line is an axis or a line for the construction features
+  and the axis inputs (the planar form `{"sketch", "curve"}`), its point a
+  point. **Intersection Curve**'s First and Second Curves take a 3D
+  sketch's curves (reference curves refused with why); it is enabled by a
+  3D sketch too. Profile inputs take a 3D sketch's regions of closed loops
+  in its sketch plane, shown and picked as a 2D sketch's.
+- **Walls and surfaces from a 3D sketch's curves** (mitcad#1550). Rib and
+  Web (Curves), Extrude's Thin Extrude (Profiles: its sketch curves) and
+  Surface Extrude, Surface Revolve and Surface Sweep (Profiles) take a 3D
+  sketch's curves that lie in its sketch plane, as a 2D sketch's, in the
+  planar form `{"sketch", "curves"}`; they are enabled by a 3D sketch
+  alone. A click on one out of the plane (the `sketch3d` query's
+  `plane_curves` does not list it) or on a reference curve is not taken,
+  saying why (`cmd::planeCurveTakes`, `planeCurveRefusal` in
+  `CommandSupport.cpp`; log `Rib Curves: sketch curve c9 of F2 not taken:
+  This curve of 3DSketch1 does not lie in its sketch plane: ...`). Surface Sweep's
+  Path takes a 3D sketch's curves as the typed path, as Sweep's does, and
+  an edited one keeps its direction. Tests: the Rib step of
+  `tools/ui-sketch3d-test.sh`, `tools/ui-windows-sketch3d-test.ps1`
+  (before its pipes) and `tools/ui-scripts/sketch3d.mitcad-ui` (macOS),
+  CLI `sketch3d_plane_curves`.
+- Logs: `Pipe Path listed: c3 ... c7, 5 curves (p1 to p6)` (the session's
+  listing), `Path path listed again: c7 ... c3, 5 curves (p6 to p1)` (after
+  Chain Selection or Reverse), `Path path of F2 is not one path: <reason>`,
+  `Path path: 3DSketch1 taken whole: c3, c11, c5, c19, c7`, `Pipe Path:
+  <item> not taken: <reason>`, `Pipe: Reverse = on`.
+- Tests: `app/tests/spatial_paths.cpp` (the typed path written and read,
+  the kept direction, path pieces, a whole-sketch pick's route, the
+  listing), `core/model-tests/api/src/sketch3d_tests.rs`
+  (`routes_are_ordered_and_refused_as_paths`), CLI `sketch3d_workflow` and
+  `sketch3d_workflow_reopen`, the UI tests `tools/ui-sketch3d-pipe-test.sh`
+  (the route's corners filleted with a typed radius, a Pipe by one chained
+  pick of the route, BC edited and the pipe
+  following, Undo and Redo, Pipe1 reversed and saved as the typed path, a
+  Sweep along the sketch picked from the Browser, Plane Along Path along
+  the sketch from the Browser, a closed triangle taken whole from its row
+  and piped, a closed spline listed as closed, the refused picks, the
+  design opened again) and `tools/ui-windows-sketch3d-test.ps1` (a Pipe by
+  one pick of the route's arc, edited; a Pipe round the closed triangle by
+  one pick; the test's key F9); CLI `sketch3d_consumers` (mitcad#1550).
+
+### 3D sketch workflows and their evidence (W1-W18)
+
+The 3D sketch workflows of the first version (mitcad#1501) and the
+focused tests that show them; the series' tests run in the scoped checks,
+none was run again only to collect this list.
+
+| Scenario | What it shows | Tests |
+|---|---|---|
+| W1 | A route A-B-C-D from the origin, 40, 30, 20 along +X, +Y, +Z: four shared points, three lines, no freedom | `core/sketch/src/spatial_tests.rs`, `core/model/src/spatial_sketch_tests.rs`, `sketch3d_tests.rs` `the_route_from_returned_ids_and_its_dimensions`, CLI `sketch3d_route`, `sketch3d_fillet` |
+| W2 | BC to 50: C and D move, curve ids and the Pipe/Sweep selection stay | `spatial_sketch_tests.rs`, `spatial_path_tests.rs`, CLI `sketch3d_edit`, `sketch3d_workflow`, UI `ui-sketch3d-test.sh` (AB typed 50), `ui-sketch3d-pipe-test.sh` (BC 50 under a pipe), `ui-windows-sketch3d-test.ps1` |
+| W3 | A length removed leaves one shared freedom | `spatial_tests.rs`, `spatial_sketch_tests.rs`, CLI `sketch3d_edit`, both 3D sketch UI tests |
+| W4 | An end attached to a vertex follows it; a conflict, a lost source | `spatial_sketch_tests.rs`, `core/model/src/spatial_links_tests.rs` |
+| W5 | Zero-length, duplicate and conflicting input refused, nothing changed | `spatial_tests.rs`, `spatial_sketch_tests.rs`, `sketch3d_tests.rs` `refused_actions_leave_no_trace` |
+| W6 | Placement on temporary planes and axes, edge-on planes, no jumps | `app/tests/sketch3d_draw.cpp`, `ui-sketch3d-test.sh` (drawing tools) |
+| W7 | Esc layers and Undo while drawing lines, arcs, splines and fillets | `ui-sketch3d-test.sh`, `ui-windows-sketch3d-test.ps1` |
+| W8 | Saved and opened again with ids, expressions, directions and consumers | `sketch3d_tests.rs` `the_bent_route_is_edited_saved_and_read_again`, `spatial_path_tests.rs`, CLI `sketch3d_route_reopen`, `sketch3d_workflow_reopen`, UI `ui-sketch3d-pipe-test.sh` (opened again) |
+| W9 | A loop in the sketch plane bounds a region an Extrude takes, a non-planar one none (mitcad#1550); branching or disconnected picks are no route | `spatial_sketch_tests.rs`, `spatial_planar_tests.rs`, CLI `sketch3d_to_2d`, `spatial_path_tests.rs`, `sketch3d_tests.rs` `chains_are_listed_and_a_pipe_takes_one`, `routes_are_ordered_and_refused_as_paths`, UI `ui-sketch3d-pipe-test.sh` (refusals) |
+| W10 | A moved and turned support: local dimensions keep their meaning, geometry follows once | `spatial_sketch_tests.rs`, `spatial_path_tests.rs` |
+| W11 | The bent route of tangent arcs, edited, piped and swept | `core/solver/tests/spatial_curves.rs`, `spatial_sketch_tests.rs`, `spatial_path_tests.rs`, CLI `sketch3d_route`, `sketch3d_pipe`, `sketch3d_workflow`, UI `ui-sketch3d-pipe-test.sh` |
+| W12 | An edge's midpoint and a point on an edge follow a resized box; a lost edge | `spatial_links_tests.rs`, CLI `sketch3d_links` |
+| W13 | A 3D line and spline on a planar sketch's arc follow its radius; a later sketch projects the spline | `spatial_links_tests.rs` |
+| W14 | Another component's vertex and edge followed once; link cycles refused | `spatial_links_tests.rs` |
+| W15 | A rectangle on a face turned into a 3D sketch fully constrained, then a line to another component | `core/sketch/src/spatial_convert_tests.rs`, `core/model/src/sketch_conversion_tests.rs`, `sketch3d_tests.rs` `a_planar_sketch_is_converted_in_place`, CLI `sketch3d_convert`, both 3D sketch UI tests, the GitHub mitcad/Mitcad#202 UI tests `ui-sketch3d-202-test.sh`, `ui-windows-sketch3d-202-test.ps1`, `ui-macos-sketch3d-202-test.sh` (a rectangle on a face, 3D Sketch checked, a line and a tangent arc to another component's vertex, a Pipe along them) |
+| W16 | An extruded sketch converts keeping its profile (mitcad#1550); a Pipe's path rewritten; projections kept; back to 2D in place | `sketch_conversion_tests.rs`, CLI `sketch3d_convert`, `sketch3d_to_2d` |
+| W17 | Splines: a tangent end, a spline joined to an arc, drags and tangent handles, a Pipe along line and spline, a closed spline refused | `spatial_sketch_tests.rs`, `spatial_path_tests.rs`, `sketch3d_tests.rs`, CLI `sketch3d_edit`, `sketch3d_pipe`, `ui-sketch3d-test.sh` (tangent handle), `ui-sketch3d-pipe-test.sh` (closed spline refused) |
+| W18 | Points on faces (mitcad#1549): a line end on a planar, cylindrical, spherical and free-form face; DOF, redundancy and conflict; a parameter change followed; a lost face; a converted sketch's corner on its face; a route end on another body's cylinder piped and following it; the On Face snap, its badge and its relation | `core/solver/tests/spatial_surfaces.rs`, `core/model/src/spatial_faces_tests.rs`, CLI `sketch3d_faces`, `app/tests/sketch3d_draw.cpp`, both 3D sketch UI tests |
 
 ## Browser, timeline and parameters
 
@@ -5055,12 +6219,33 @@ computing`. Tests: `tools/ui-parameters-edit-test.sh`, the unit test
   steps into one `Move Timeline Marker` (none when it ends where it
   began). Dragging a feature checks `can_reorder`. Groups are the model's
   (`group_features`); folding is the window's (`TimelineWidget`
-  `m_collapsed`), not saved. So is the filter (mitcad#98,
+  `m_collapsed`), not saved. The filter (mitcad#98,
   `TimelineWidget::setFilter`, the filter button and the browser's Show
-  in Timeline Only): hidden features take no room (`Item::filtered`), the
-  marker and drops land on `shownBoundary` places, and the playback
-  buttons step between them; it logs `Timeline filter: <label>: n of m
-  features`. Test: `tools/ui-component-sketch-test.sh`. Colors of the marker, buttons and strike
+  in Timeline Only) starts at **Active Component with Include
+  Subcomponents on** (mitcad#1662): with the root active every feature
+  shows (the root with its subcomponents filters nothing), with a
+  component activated its features and its subcomponents' do, updated as
+  the activation changes the snapshot. A choice of All Components or
+  Active Component, and Include Subcomponents with it, is saved in the
+  settings (`timeline/filter`: `all` or `active`;
+  `timeline/subcomponents`), so a new window and the next start take it;
+  it logs `Timeline filter saved: active, subcomponents` (or `all`, `no
+  subcomponents`). One named component (from the menu or Show in Timeline
+  Only) is the window's only and is not saved, nor is Find in Timeline
+  clearing the filter. The filter button (`timelineFilterButton`) is
+  highlighted while the timeline hides any feature, not merely while a
+  filter is set, and its tooltip names the filter with the count
+  (`Timeline Filter: Active Component (Base) with Subcomponents: 3 of 4
+  features`); Show All in Timeline is offered then too. Hidden features
+  take no room (`Item::filtered`), the marker and drops land on
+  `shownBoundary` places, and the playback buttons step between them; it
+  logs `Timeline filter: <label>: n of m features` (also at the start;
+  `Timeline filter: all components` for All Components). Tests:
+  `tools/ui-component-sketch-test.sh`, `tools/ui-timeline-filter-default-test.sh`
+  and `tools/ui-windows-timeline-filter-default-test.ps1` (the shared
+  `tools/ui-scripts/timeline-filter-default.mitcad-ui` and
+  `timeline-filter-default-reopen.mitcad-ui`: the default, an activation,
+  All Components saved and taken by the next start). Colors of the marker, buttons and strike
   line come from the palette and are repainted on a palette or style
   change (`TimelineWidget::changeEvent`). Test: `tools/ui-theme-test.sh`
   (the scheme switched with `MITCAD_TEST_COLOR_SCHEME`).
@@ -6912,14 +8097,22 @@ The SURFACE group of the SOLID tab (mitcad#455,
   profiles go into `profiles`, the curves into `curves` (with Chain
   Selection's `chain`). Surface Loft's Sections are ordered: a sketch curve
   is a `curves` section of that curve with `chain` set, a profile a
-  `profile` section; not both kinds.
+  `profile` section; not both kinds. A 3D sketch's curve is a section
+  anywhere in space and its profile (a closed loop in its sketch plane) a
+  profile section; a curve that cannot be a path piece (a reference curve)
+  is refused with the reason (`spatialPathTakes`). Its Rails (Add Rail,
+  none at first) guide a loft of profiles: sketch or 3D sketch curves
+  (any plane, the typed path form, an edited rail keeping its direction)
+  or edges, with one Chain Selection for them all; rails with curve
+  sections are refused before the model is asked. A 3D sketch alone
+  enables Surface Loft (mitcad#1550).
 - Editing: the solid Extrude, Revolve, Sweep and Loft refuse a definition
   with `surface` set (`canEdit`), so the surface commands, registered
   after them, edit those; each surface command takes only what its panel
   shows (Surface Extrude: distances from the profile plane without taper;
   Surface Revolve: angles or a full turn about a shown axis; Surface Sweep:
   a plain path without the solid Sweep's options; Surface Loft: sections of
-  one chained curve or profiles). Other surface definitions (from imports
+  one chained curve or profiles, and rails chained alike). Other surface definitions (from imports
   or scripts) open in no panel.
 - **Patch** takes profiles of one sketch and edges of one body (a loop,
   named edges) with one Continuity; **Stitch** bodies and a Tolerance;
@@ -6998,7 +8191,7 @@ places one and closes it.
 
 | Command | Panel | Model |
 |---|---|---|
-| `build.profile` Profile | grows as the placement needs it (mitcad#394). At first: Part, a tile with the chosen part's picture, name, supplier and part number (`withChoiceTile`, mitcad#427); a click on it, or Enter or Space, opens the component picker with the role's parts, filtered to the system chosen last (mitcad#418); Search and System are hidden inputs (for live MCP); Place On (none needed for the first part); Length (the part's stock length, else 500 mm; also a box at the cursor, `withCursorBox`, and a handle at the free end while the length is a number); for a ground placement Direction, three icon buttons X, Y, Z (`withChoiceIcons`, default Z: standing; `at.direction`). Once a part is placed, Length's mode as four icon buttons (mitcad#427, `withChoiceIcons`: Auto: to the face it meets, Auto: to its center, Auto: through it, Typed length; their labels the tooltips) and, by the pick: an **end pick** adds Direction (mitcad#417: Auto, the click's zone of the end face, `Auto: by the click (+X)`; Straight; the four turns square to the part it meets, `end.turns`, named by the host axis they run along, `+X`, else `Side 1`..`Side 4`), on a corner Offset (the new part's end from the outer side, positive towards the turn, default 0) and Miter (Auto, `Auto (none)`: the panel's turns are square, and a square corner lies on the end face, mitcad#427; `Auto (<cut>)` when the click's preview says another; None; Shared, not offered at a corner offset other than 0; Cut the new part; Cut the existing part) with Miter Angle; a **side pick** adds Offset and From (End A, End B, Middle, Middle of Gap, mitcad#1401), which the click fills; either adds Rotate (0, 90, 180, 270 deg) and Flip, and a side pick of a profile Tilt below Rotate (mitcad#444: 0 deg, the lean along the part it stands on, positive towards its end B, up to 80 deg; an arc handle at the foot, a ring about the slot's cross axis, drags it, the angle in the box at the cursor while it is dragged; the foot is cut to lie on the side, an auto length ends flush on the face it meets; Offset and From then refer to the foot's long point; sent as `tilt` when not 0). Placement, last, once the design has a part to go on: four icon buttons (mitcad#427, no More; Automatic: where the click is, the default; On a profile's side; On a profile's end; On a plane (as the first part): a ground placement again; their labels the tooltips). The result names where the part goes (`Adds to: Root`, the `build_host` query). **Place** (Enter) places it, also without a pick in a ground placement (at the origin), and the panel stays for the next one; **Shift + click** (mitcad#451, [Selection inputs](#selection-inputs)) on a place Place On takes picks it and places the part at once with the panel's values, then the next one follows as after Place (a plain click still only previews; one that cannot be placed makes nothing and the panel says why); the view's hint says `Shift+click places at once`; **Close** (Esc) keeps what was placed | `build_host`, `build_preview` while the inputs change, `build_place` on Place |
+| `build.profile` Profile | grows as the placement needs it (mitcad#394). At first: Part, a tile with the chosen part's picture, name, supplier and part number (`withChoiceTile`, mitcad#427); a click on it, or Enter or Space, opens the component picker with the role's parts, filtered to the system chosen last (mitcad#418); Search and System are hidden inputs (for live MCP); Place On (none needed for the first part); Length (the part's stock length, else 500 mm; also a box at the cursor, `withCursorBox`, and a handle at the free end while the length is a number); for a ground placement Direction, three icon buttons X, Y, Z (`withChoiceIcons`, default Z: standing; `at.direction`). Length's mode as five icon buttons (mitcad#427, `withChoiceIcons`: Auto: to the face it meets, Auto: to its center, Auto: through it, Typed length, Auto: to a face you pick, plus an offset (mitcad#1630); their labels the tooltips; in a ground placement only the last two are offered, `withChoiceOffered`); to a face adds To Face (a face, a plane or a profile's end, picked anywhere, beside the part too; shown empty, it takes the next click, and it stays for the next part placed) and Face Offset (default 0, signed along the part) and, by the pick: an **end pick** adds Direction (mitcad#417: Auto, the click's zone of the end face, `Auto: by the click (+X)`; Straight; the four turns square to the part it meets, `end.turns`, named by the host axis they run along, `+X`, else `Side 1`..`Side 4`), on a corner Offset (the new part's end from the outer side, positive towards the turn, default 0) and Miter (Auto, `Auto (none)`: the panel's turns are square, and a square corner lies on the end face, mitcad#427; `Auto (<cut>)` when the click's preview says another; None; Shared, not offered at a corner offset other than 0; Cut the new part; Cut the existing part) with Miter Angle; a **side pick** adds Offset and From (End A, End B, Middle, Middle of Gap, mitcad#1401), which the click fills; either adds Rotate (0, 90, 180, 270 deg) and Flip, and a side pick of a profile Tilt below Rotate (mitcad#444: 0 deg, the lean along the part it stands on, positive towards its end B, up to 80 deg; an arc handle at the foot, a ring about the slot's cross axis, drags it, the angle in the box at the cursor while it is dragged; the foot is cut to lie on the side, an auto length ends flush on the face it meets; Offset and From then refer to the foot's long point; sent as `tilt` when not 0). Placement, last, once the design has a part to go on: four icon buttons (mitcad#427, no More; Automatic: where the click is, the default; On a profile's side; On a profile's end; On a plane (as the first part): a ground placement again; their labels the tooltips). The result names where the part goes (`Adds to: Root`, the `build_host` query). **Place** (Enter) places it, also without a pick in a ground placement (at the origin), and the panel stays for the next one; **Shift + click** (mitcad#451, [Selection inputs](#selection-inputs)) on a place Place On takes picks it and places the part at once with the panel's values, then the next one follows as after Place (a plain click still only previews; one that cannot be placed makes nothing and the panel says why); the view's hint says `Shift+click places at once`; **Close** (Esc) keeps what was placed | `build_host`, `build_preview` while the inputs change, `build_place` on Place |
 | `build.timber` Timber | [Timber](#timber), TIMBER group (mitcad#478, mitcad#520): Part (the picker of timber only, `timber`), Mode (three icon buttons: On a member, Spacing, Two points), then Mode's inputs; On a member with Profile's Length (Auto: face, center, through, Tab; typed, the box at the cursor, the handle); Place (Enter) repeats, Close keeps what was placed | `build_preview`, `build_place` with `to`, `lie`, `length`, `spacing` |
 | `build.wall` Wall | [Timber](#timber), TIMBER group (mitcad#479, mitcad#520): Part, Start, End, Length (Auto or Typed, on another wall) and Length, Direction, From and Offset (on another wall), Height, Spacing, Top Plates, Corner, Openings (a tile that opens the Openings window, mitcad#519), Fasteners with Fastener, Size and Count; the members previewed as boxes; Place (Enter) repeats | `build_preview` with `frame`, `build_frame` (`kind: wall`) |
 | `build.floor_roof` Floor / Roof | [Timber](#timber), TIMBER group (mitcad#479, mitcad#520): Part, Kind (two icon buttons: Floor or ceiling, Roof), then only that kind's inputs: a floor's Start, End, Length, Width, Direction, Spacing, Openings (the Openings window), Blocking; a roof's Walls, Roof, Pitch from Walls, Pitch, Overhang; Fasteners with Fastener, Size and Count; Place (Enter) repeats | `build_preview` with `frame`, `build_frame` (`kind: floor`, `roof`) |
@@ -7009,10 +8202,10 @@ places one and closes it.
 | `build.swap_fastener` Swap Fastener | [Timber](#timber), Swap Fastener (mitcad#497): Fasteners (the fasteners selected; the view's context menu, BUILD, for fasteners only), Fastener (the compatible ones, a tile that opens the component picker), Size (a wood fastener's: Auto or a row) | `build_swap_fasteners`, one undo step |
 | `build.spacing` Spacing Set | Member (a member of a spacing set, mitcad#478; its set's values fill the panel), Spacing (Center distance, Gap), Distance, Last Board (gap: cut, spread), Count (0: from the distance), Size (the rows of the set's source); enabled while the design has a set | `build_edit` of the set's lead with `spacing` (and `config`): the members laid out again in one undo step |
 | `build.frame` Timber Frame | Member (a member of a timber frame, mitcad#479; its frame's values fill the panel), by its kind the inputs Wall or Floor / Roof shows for it (mitcad#520): a wall's Length, Height, Spacing, Top Plates, Corner, Openings (the Openings window, mitcad#519); a floor's Length, Width, Spacing, Openings, Blocking; a roof's Spacing, Pitch, Overhang; Size (the members' row); the members previewed as boxes | `build_preview` with `frame` and `component`, `build_edit` with `frame` (one undo step) |
-| `build.length` Length | Part, Length (Detached: this length, Bound: to the face, to the center, through), Value, Bound To (none: the face it is bound to now); the bound target highlighted | `build_edit` with `length` (a value detaches, a `bind` binds) |
+| `build.length` Length | Part, Length (Detached: this length, Bound: to the face, to the center, through, Bound: to a face, plus an offset, mitcad#1630), Value, Bound To (none: the face it is bound to now; to a face also a plane), Face Offset (to a face: the part's offset, read from `build_parts`' `bound.add`); the bound target highlighted, a length to a face's offset shown | `build_edit` with `length` (a value detaches, a `bind` binds, to a face `{"mode": "to_face", "face", "offset"}`) |
 | `build.ends` Ends | Part (the end nearer the click; an end face by its name), End, Angle, About (x, -x, y, -y), Also the Part It Meets (a shared miter: the end that meets this one in an `L` or `inline` junction); End Machining (As it is, A bore: Diameter, Depth, Thread; None takes the part's end machining away) | `build_edit` with `ends` and `machining`, the part's whole list (`[{end, hole: {diameter, depth, thread}}]`): `build_parts`' list with this end's entries replaced by the bore, or left out for None; one undo step for both parts |
 | `build.flip` Flip, `build.rotate` Rotate 90° | Parts (any number); Rotate repeats (Enter turns them again) | `build_edit` with `flip` / `rotate`, one undo step |
-| `build.cut_list` Cut List, `build.parts_list` Bill of Materials | an action: `BuildListsDialog` (`build/BuildLists.cpp`) with the tabs Cut List (Kerf; the cut parts grouped as the model groups them: quantity, part, length, end A and B, machining, own features, supplier, part number, mass each; the stock: pieces in cutting order, stock pieces, offcut; the other parts) and Bill of Materials (`parts_list`: quantity, part, supplier, part number, supplier part numbers (the row's suppliers' articles, `supplier_parts_text`, mitcad#949), library, version, license); **Copy as CSV** (Alt+C) copies the shown tab's tables, **Save as PDF...** (Alt+P) writes them with `QPdfWriter` (Qt Gui; A4 landscape) under the list's title and the design's name with the date. A design with timber (the cut list's `timber`, mitcad#478) adds columns after these: the cut parts' material, grade, finish, nominal and actual section (thickness first, `48x148`), running meters and volume (m³), and a row of the timber's totals; the stock's size and each stock piece's length; the bill of materials's material and grade. A design with profiled boards (the cut list's `profiled`, mitcad#477) adds three more: the profile, the cover width and the area covered (m²), its total in the totals row. A design with timber frames (a cut row's `frame`, mitcad#522) lists each frame's members apart, by frame, with a last column Frame. A design without timber lists exactly as before. The Bill of Materials tab's Property columns field (Alt+L, mitcad#496) takes property keys separated by commas (`Mark, Pset_WallCommon/FireRating, Mass`): a column each after the others with each part's value (its component's own, its library's or computed), in the CSV and the PDF too; the keys stay for the session | `build_cut_list` (`kerf`), `parts_list` (`properties`) |
+| `build.cut_list` Cut List, `build.parts_list` Bill of Materials | an action: `BuildListsDialog` (`build/BuildLists.cpp`) with the tabs Cut List (Kerf; the cut parts grouped as the model groups them: quantity, part, length, end A and B, machining, own features, supplier, part number, mass each; the stock: pieces in cutting order, stock pieces, offcut; the other parts) and Bill of Materials (`parts_list`: quantity, part, supplier, part number, supplier part numbers (the row's suppliers' articles, `supplier_parts_text`, mitcad#949), library, version, license); **Copy as CSV** (Alt+C) copies the shown tab's tables (rows ending in CRLF on every platform, mitcad#1641), **Copy as Text** (Alt+T) and **Save as Text…** copy and save them as an aligned plain-text table (`textTableOf`, `build/ListTables.cpp`: each table's heading when there are several, a header row, columns padded with spaces to their widest cell, numbers right-aligned, a blank line between tables, CRLF line ends, UTF-8; mitcad#1641), **Save as PDF...** (Alt+P) writes them with `QPdfWriter` (Qt Gui; A4 landscape) under the list's title and the design's name with the date. A design with timber (the cut list's `timber`, mitcad#478) adds columns after these: the cut parts' material, grade, finish, nominal and actual section (thickness first, `48x148`), running meters and volume (m³), and a row of the timber's totals; the stock's size and each stock piece's length; the bill of materials's material and grade. A design with profiled boards (the cut list's `profiled`, mitcad#477) adds three more: the profile, the cover width and the area covered (m²), its total in the totals row. A design with timber frames (a cut row's `frame`, mitcad#522) lists each frame's members apart, by frame, with a last column Frame. A design without timber lists exactly as before. The Bill of Materials tab's Property columns field (Alt+L, mitcad#496) takes property keys separated by commas (`Mark, Pset_WallCommon/FireRating, Mass`): a column each after the others with each part's value (its component's own, its library's or computed), in the CSV and the PDF too; the keys stay for the session | `build_cut_list` (`kerf`), `parts_list` (`properties`) |
 
 - **The picker** (`build/BuildCatalog`): the parts of the role from
   `library_build_candidates` (`library_search` with the `role` when the
@@ -7188,6 +8381,16 @@ places one and closes it.
   the main window has the keyboard (`InputDef::tabCycle`); typing a length
   or dragging its handle switches to Typed length (`onChange`), and
   switching to it starts from the auto length shown.
+- **Length to a face** (mitcad#1630; commands.md, *Length to a face*):
+  no ray; the length ends where the part's axis meets the plane of the
+  face in To Face, wherever it is (another upright's top beside this
+  one), plus Face Offset: `{"mode": "to_face", "face": {occurrence,
+  geometry}, "offset"}`, in a ground placement too. A root plane above
+  the BUILD host goes as the fixed plane it is in the host. The panel's
+  length reads `bound, to the face of <part>` (`to a plane`, `to a
+  face`; `, offset <value>` when not 0), the face is highlighted, the
+  length has no handle, and the model refuses with the reason a plane
+  along the part or behind its start.
 - **The preview:** the new part's shape is `analysis_shape` `{"shape":
   "build_preview", ...}` (`build_place`'s fields); without one, the
   section along `frame`'s z for `length` (`build::boxAlong`). The target
@@ -7244,10 +8447,13 @@ end a 45 deg about x, shared, machining D6.8 mm x 15 mm M8 at end a`, `Flip <nam
 stock: <part>, 6000.0 mm stock x 1, pieces 500.0, ..., offcut <mm>`, `Cut
 list: <n> row(s), <n> stock, <n> other part(s), kerf 3 mm`, `Build components
 list: <n> row(s)`, `Build list CSV: <line>`, `Build list copied as CSV:
-<n> line(s)`, `Build list PDF written: <path> (<bytes> bytes; Cut list of
+<n> line(s)`, `Build list text: <line>`, `Build list copied as text: <n> line(s)`,
+`Build list saved as CSV|text: <path>`, `Build list PDF written: <path> (<bytes> bytes; Cut list of
 <design>, <date>)`, `Ribbon tab BUILD at x,y`, `Panel Profile input part at x,y` (the Part tile), `Panel Profile tile part: Profile 30 test (Test supplier P30-T)` (what it shows), `Profile: Part button` (clicked), `BUILD picker: <part> not chosen, <command> does not run` (a pinned picker's tile after its command ended), and the picker's own ([Component picker](#component-picker)). Tests:
 `tools/ui-build-test.sh`, `tools/ui-windows-build-test.ps1` (ctest
-`app.ui-windows-build`).
+`app.ui-windows-build`); the lists as text (mitcad#1641): `tools/ui-build-lists-text-test.sh`,
+`tools/ui-windows-build-lists-text-test.ps1` (ctest `app.ui-windows-build-lists-text`) with the
+shared `tools/ui-scripts/build-lists-text.mitcad-ui`, and `app.unit` (`app/tests/list_tables.cpp`).
 
 ### Timber
 
@@ -9044,7 +10250,7 @@ same ways without questions (mm, the XY plane, linked).
 | `.iam` | a new document with the assembly's components and occurrences, each part imported once (`import_ipt`, which imports an assembly with `import_iam`; same worker; commands.md, ".iam import"); no Stop; the report lists the occurrences, how each file was found, missing files and the checks against the file. **Import Assembly** (`askIamImport`, object name `importAssembly`, mitcad#507), asked by File › Open and Import (not `--open` or MCP, which take the choice made last): **Parts with their design history** (`iamPartsHistory`, on by default, remembered as `import/iamPartsHistory`; `files/IamImport`) sends `history` true, so each part's design is replayed into its component (parameters, sketches, features), else its stored bodies come in as one base feature; **Import** (default) or Cancel (the import does not start). The worker's trace `import: [t] part <n> of <m>: <file>` (and `…: <file>: replayed in <s> s`, `bodies`) shows in the progress dialog as `Part 3 of 7: <file>`, with `, timeline item <k>: <name>` while the part's items are replayed, the bar counting parts. The report says how the parts came in (`Parts with their design history: 6 replayed, 1 as their stored bodies.`) and, per part, `imported, replayed, 12 items (10 parametric, …), 9 verified, 3 parameters` or `imported, stored bodies: <reason>` (a replay that failed or hung, a part without a design history) |
 | `.rvt`, `.rte`, `.rfa`, `.rft` | a new document with a project's building elements, one component per level (`import_rvt`, same worker, mitcad#274; commands.md, ".rvt import"); a family file: its metadata only; no Stop; the report lists the bodies per level, what was left out and why, and the components are logged (`Imported <file>: components <name> (<n> bodies), …`) |
 | `.sc`, `.solidcraft` | a new document with the design's history (`import_solidcraft`, same worker, mitcad#450; a `.sc` file of another program, by its format key, is refused before the worker starts with "Not a SolidCraft design: …", mitcad#1622; commands.md, ".solidcraft import"); no Stop; the report lists every feature and joint with how it came in (parametric, partial, unmapped, failed) and the kinds without a MitCad counterpart, and is logged (`Import report: <file>: <counts>`) |
-| STEP, IGES, BRep | a base feature (`import_file`, one undo step `Import part.step`). A STEP file with an assembly (the `file_structure` query, mitcad#1274) first asks **Import STEP Assembly** (`askStepStructure`, object name `importStepStructure`; `MainWindow::askImportStructure`), from File › Import, a drop and File › Open (not `--open` or MCP, which take the default): **Components (keep the assembly)** (default; `structure` `components`: a component per distinct part, an occurrence per instance; commands.md, "STEP assemblies as components") or **One base feature** (`structure` `base`); Cancel imports nothing. The log line then ends `, <n> component(s), <m> occurrence(s)`. Its check box **Find repeated parts** (object name `importRepeatedParts`, Alt+R, off by default and not remembered; mitcad#1277) sends `repeated_parts` true: in the import's undo step the copies among the one base feature's bodies, or among each part's with Components, become occurrences of one component each (commands.md, *Find Repeated Parts*); the log line then adds `, repeated parts: <n> component(s), <m> copies`. A STEP file without an assembly asks nothing; its bodies' copies are found afterwards with the browser's Find Repeated Parts |
+| STEP, IGES, BRep | a base feature (`import_file`, one undo step `Import part.step`). A STEP file with an assembly (the `file_structure` query, mitcad#1274) first asks **Import STEP Assembly** (`askStepStructure`, object name `importStepStructure`; `MainWindow::askImportStructure`), from File › Import, a drop and File › Open (not `--open` or MCP, which take the default): **Components (keep the assembly)** (default; `structure` `components`: a component per distinct part, an occurrence per instance; commands.md, "STEP assemblies as components") or **One base feature** (`structure` `base`); Cancel imports nothing. The log line then ends `, <n> component(s), <m> occurrence(s)`. Its check box **Find repeated parts** (object name `importRepeatedParts`, Alt+R, off by default and not remembered; mitcad#1277) sends `repeated_parts` true: in the import's undo step the copies among the one base feature's bodies, or among each part's with Components, become occurrences of one component each (commands.md, *Find Repeated Parts*); the log line then adds `, repeated parts: <n> component(s), <m> copies`. A STEP file without an assembly asks nothing; its bodies' copies are found afterwards with the browser's Find Repeated Parts. **Into a component of its own** (mitcad#1629): File › Import and a drop into a design with content (the `file_structure` query's `wrap`) then ask **Where to Import** (`askImportPlace`, object name `importPlace`): **New Component** (default; `wrap` true: a component named after the file without its extension, `bracket` for `bracket.step`, a suffix when the name is taken, placed once in the active component at the identity, holding the base feature or the assembly's top occurrences) or **Into the Active Component** (Alt+A; `wrap` false, the file's bodies or components straight into the active component, as before); Cancel imports nothing. The log line then ends `, into component <name>`, and the Browser shows the component's row (`Root/bracket:1`). File › Open, `--open` and a new design take the file as the design itself (`wrap` false) |
 | STL, OBJ | mesh bodies, after asking the unit (Insert Mesh) |
 | DXF | a new sketch on a plane (`sketch.create` + `sketch.import_dxf`, one undo step `Insert drawing.dxf`), or into the edited sketch; the dialog uses the `dxf_info` query (origin placement, layers) |
 | SVG | as DXF (`importDrawing`; Insert SVG, `insert.svg` and in sketch mode `sketch.insert_svg`, mitcad#473): a new sketch on a plane (`sketch.create` + `sketch.import_svg`, one undo step `Insert logo.svg`) or into the edited sketch; the dialog (`askSvgInsert`) shows the `svg_info` query's size and contents and asks the scale, where the lower left corner goes and whether strokes become bands; in a new sketch the `filled` regions the result lists are selected as profiles, so Extrude takes them (`tools/ui-svg-test.sh`) |
@@ -9561,7 +10767,66 @@ the Make tab's 3D Print group; `files/MainWindowPrint.cpp`,
   `Purge volumes refused: …`, and the places `Purge volumes cell
   <row>.<column> at x,y` (from 0), `Purge volumes reset at x,y`, `Purge
   volumes close at x,y` (`tools/ui-purge-volumes-test.sh`,
-  `tools/ui-windows-purge-volumes-test.ps1`). A material's
+  `tools/ui-windows-purge-volumes-test.ps1`).
+  **Filament changes** (mitcad#1643, `files/MainWindowFilamentChanges.cpp`,
+  `print/FilamentChangeDialog.*`, `view/FilamentChangeOverlay.cpp`), under
+  Purge volumes, with 3MF: the design's schedule of filament changes and
+  pauses ([commands.md](../core/model-api/src/commands.md#filament-changes-at-print-heights),
+  the `filament_changes` query). Its first row, **Filament changes**,
+  counts the events (`None`, `1 event`, `3 events`) with the buttons
+  **Add change** and **Add pause** (`Panel Send to Slicer action
+  filament_changes.0` and `.1`); then a row per event, up to 12
+  (`change_1` …), labelled where it is: a height in the design's length
+  unit (`12 mm`), or a plane or face by its name in the browser and the
+  timeline with the height it gives (`Plane1 (15 mm)`, `A face of Body2
+  (10 mm)`, never a topological name, mitcad#1327); its text what happens
+  there (`Change to PLA (Blue)`, `Pause: Insert the nuts`); the warning in
+  words of an event left out (a plane not level in the print orientation,
+  gone, of another component; the model's `warning`) as the row's notice;
+  and **Edit** and **Remove** at the right (actions `.0` and `.1`). The
+  faces events are at are drawn in an input's color while the panel is
+  open (the command's marks), so that a row's face is seen in place.
+  The pointer over a row paints its plane or face (`InputNote::places` and
+  `hover`: the face as its warning's place, `hoverNoticePlaces`, and the
+  plane or face highlighted; `NoteRow::hovered` through
+  `CommandPresenter::Actions::noteHovered`), logged `Panel Send to Slicer
+  note change_2 hovered: 0 places, 1 items` and `… note change_2 left`.
+  **Plates…** has the same section for the plate chosen: its own schedule,
+  or the design's that it prints with until it has one (`1 event, the
+  design's`); an edit there gives the plate its own, from the design's
+  events and the edit (`set_filament_changes` with `plate`), logged `Send
+  to Slicer filament changes: Plate 1 (its own): …`.
+  **Change At** (`change_at`, a plane or a planar face, not required,
+  empty: *Pick a plane or face*): a plane or flat face picked in the view
+  adds a change at it, to the first filament other than the one the plate
+  starts with (the query's `start` and `choices`), or with Filament Change
+  open moves its event there. Add change, Add pause and Edit open
+  **Filament Change** (`print/FilamentChangeDialog`), a small window beside
+  the panel that is not modal: **At** (a height typed: a bare number in
+  the design's unit, or with a unit, `12 mm`, `0.5 in`; a pick shows the
+  plane's or face's name, and typing takes it away), **Change to** (the
+  design's materials in the appearances they offer, each with its color,
+  then **Pause**; a new change starts with the first filament other than
+  the plate's), **Message** (a pause's, one line); OK sets the whole
+  schedule, one undo step (`set_filament_changes`, `Set Filament
+  Changes`), and closes it; a refusal stays in the window in words. A new
+  event starts 10 mm above the highest event at a height. The schedule is
+  the design's own (an export of bodies and every plate without one of its
+  own). While the panel is open the view draws the bodies sent in their
+  print colors by height and a thin ring at each change
+  (`OcctViewer::setFilamentChangeOverlay`, from the
+  `filament_change_preview` query), read again when the model, the bodies
+  or the format change; the panel's end clears them, and closes Filament
+  Change. Logged `Send to Slicer filament changes: 12 mm: Change to PLA Two
+  (Blue) | Plane1 (15 mm): …` (`none`) as the rows change, `Filament change
+  dialog: new, at 10 mm, change to PLA Two (Blue)`, `Filament change
+  dialog at: Plane1`, `Filament changes: added a change at Plane1`,
+  `Filament changes: removed Plane1 (15 mm)`, `Filament changes refused:
+  …`, and `Filament change overlay: 512 triangle(s) in #0000FF, #FF0000; 8
+  ring segment(s)` (`none`). Tests: `tools/ui-filament-changes-test.sh`
+  and `tools/ui-windows-filament-changes-test.ps1`
+  (`app.ui-windows-filament-changes`) on the shared
+  `tools/ui-scripts/filament-changes.mitcad-ui`. A material's
   own purge values are two fields of the material editor's Filament tab
   (Purge into this filament, Purge out of this filament, under Purge
   volumes: keys of the key table), their placeholders the color's values
@@ -10508,6 +11773,28 @@ address and folder in the tooltip. `pickInProjects(parent, options)`:
 - **Project** (`Mode::Project`): a project, also one without versions:
   Open Project ("Open a Project"), mitcad#176.
 
+**New Folder** (Place, mitcad#1649; `projects/PickerNewFolder` for its
+plain logic): left of New Project..., in every Place picker (Save to
+Project and its second question, Save As, Save Component as Design,
+Version History's Save Copy As; `MainWindow::offerNewFolder` gives the
+picker `makeFolder`). It makes a folder inside the selected project or
+folder (the project's top when a project is selected): a row at the top
+of it, selected, its name typed in place as the Projects panel's New
+Folder has it, the free name proposed and selected (*New Folder*, *New
+Folder 2*, ..., past the names in the list and on disk, case ignored).
+Enter makes the folder with the panel's `create_folder` (`projectWrite`:
+a version of its own, by the project's author, pushed as the panel's is
+for a Cloud project); the row is then the folder's, among the others by
+name, and selected, so that Save puts the design there. Esc, or the
+focus elsewhere, takes the row away. A name no folder can have, or the
+core's refusal (`exists`, `invalid_path`, `locked`), shows in words in a
+row below the name, and the editor stays with what was typed. A folder
+made stays when the picker is then canceled (it is a version already),
+and the Projects panel is read again and shows it. The button is
+disabled, its tooltip saying why, while the projects are read, while a
+name is typed, while nothing that can hold a folder is selected, and for
+a folder on disk that cannot be written (a read-only project).
+
 The secondary button (`otherText`: Another Folder..., Another File...)
 returns `other`: the caller asks with its file or folder dialog, whose
 title differs from the picker's. Missing and unreadable projects are never
@@ -10519,7 +11806,15 @@ with Another Folder..., Insert Component), `tools/ui-version-test.sh` (an
 untitled design saved into a new project, Save Copy As, Save As of an
 opened version, Open Project's Another Folder...),
 `tools/ui-projects-test.sh` (Save in the selected folder, Open Project),
-`tools/ui-locks-test.sh` (Save As of a read-only window).
+`tools/ui-locks-test.sh` (Save As of a read-only window),
+`tools/ui-picker-new-folder-test.sh` and the Windows
+`app.ui-windows-picker-new-folder` (the shared driver script
+`tools/ui-scripts/picker-new-folder.mitcad-ui`: Save to Project, New
+Folder in the selected project, a name typed and Enter, Save into the new
+folder, the same name again refused; a folder made in a picker then
+canceled stays and the panel shows it), `app.unit`
+(`tests/picker_new_folder.cpp`: the name proposed, the name typed, why the
+button waits).
 
 Insert Component's "Insert from a Project" stays the picker's Design mode
 (its tree, its tests and its Another File...); a design to open is chosen
@@ -11421,8 +12716,10 @@ the window as the other questions do.
   component's `sketch_supports` gives a reason; the sketch goes as
   before), an edit of an existing construction feature, a window
   selection, or while an agent's request picks (MCP `ui_select`,
-  `ui_command`). Other features on another component's faces (Extrude,
-  Fillet, …) are not asked about.
+  `ui_command`). Other features on another component's faces are not
+  asked about: a feature that changes the picked body (Fillet, Chamfer,
+  Shell, …) activates the body's component without a question (below),
+  and Extrude, Revolve and the rest go on as before.
 - **Activate** runs `activate_component` as one undo step of its own, as
   the browser's radio button does, and the command goes on with the same
   pick: Create Sketch makes the sketch in that component (a plane of its
@@ -11462,6 +12759,90 @@ root's child occurrence's face asks, Keep in Root and Activate Box:1);
 `tools/ui-activate-component-look.sh <dir>` saves a picture of the
 question and checks that it is clear of the picked face (a one-off visual
 check).
+
+**A feature that changes the picked body** (mitcad#1634,
+`browser/ActivateOnPick.*`, `MainWindow::activateForPick`,
+`CommandHost::activationOffer`). Such a feature goes only into the body's
+own component (the model refuses another component's body: `body … belongs
+to …; a feature works on the bodies of its own component`), so there is
+nothing to ask: its first pick of another component's body activates that
+component and the command goes on with the same pick. One table,
+`activatingCommands()`, names the commands and the inputs that hold the
+picked bodies; their other inputs (a new surface, a plane, tools, sketch
+points) may take another component's geometry linked and activate
+nothing:
+
+| Command | Inputs |
+|---|---|
+| Fillet, Chamfer (`solid.fillet`, `solid.chamfer`) | Edges, Body (an Edge Set's) |
+| Shell, Draft, Offset Face, Delete Face, Move Face, Thread | Faces (Shell: Faces/Body) |
+| Replace Face | Source Faces (not Target Faces) |
+| Split Face | Faces to Split |
+| Split Body | Bodies to Split |
+| Press Pull | Faces, Edges or Profiles (a face or an edge) |
+| Hole | Place On (a face) |
+| Dogbone | Corners |
+| Combine | Target Body (not Tool Bodies) |
+
+- **On the pick.** A face, edge, vertex or body picked into one of those
+  inputs of a new feature (not an edit), of a body of a component other
+  than the active one, while no pick of those inputs so far belongs to a
+  body of another component than that one (none of the active
+  component's, none of a third one's): the component is activated
+  (`activate_component`) without a question, run as a Construct command's
+  activation is (`CommandSession::runActivation`): its own undo step,
+  outside the panel's undo range, kept on Cancel, the cached previews
+  dropped and the preview computed in the new component. OK adds the
+  feature as the next undo step, so Undo takes back the feature, then the
+  activation. The component of a picked occurrence of a component placed
+  several times is its definition, which the feature goes into. The panel
+  shows a notice, information rather than an error, before the preview's
+  own messages until it closes: *Fillet goes into Lid (now active).*
+  (`activatedNotice`; components by their names only, mitcad#1327). The
+  same holds for the selection made before such a command: its body picks
+  all of one other component activate that component as the panel opens
+  (`MainWindow::activateForPreselection`, its own undo step).
+- **Picks of several components.** A pick of another component's body
+  after picks of the active component's (or of a third component's)
+  activates nothing: the refusal stays, in words (the command's own where
+  it takes the picks of one body only, as Fillet's *Select edges and
+  faces of one body.*, else the model's failed preview), and the panel
+  offers a button under its message, **Activate Lid** (the component of the
+  last pick that is not the active one's; `activationForPicks`). The
+  button activates that component as above and keeps only the picks of
+  its bodies (and those of no body: a datum, a sketch point); the others
+  are dropped (`CommandSession::keepPicks`), and the notice says how many:
+  *Fillet goes into Lid (now active).* and *1 pick of another component
+  dropped.* The button also shows when every body pick is of one other
+  component (an agent's picks, below), dropping nothing.
+- **Not here.** Create Sketch and the Construct commands keep the
+  question above (Keep is a real choice there). Preferences › General ›
+  *Ask to activate the component of a picked face* does not apply to these
+  features. An agent's request (MCP `ui_command` with its inputs,
+  `ui_select`) never activates by itself: it gets the model's refusal,
+  and `ui_state`'s `command` gives the component to activate as
+  `activate` (`{"component", "name", "drops"}`, `CommandSession::scriptState`),
+  its `panel` the button's text as `message_action`.
+
+The button is the panel's message action (`CommandPresenter::setMessageAction`,
+`CommandPanel`'s `commandMessageAction` under the message; a frontend
+without it shows none). Logs: `Activated <component> for <command>
+(picked <entity>)` (by the button: `…, <n> pick(s) dropped`), `Activate
+<component> for <command> refused: <error>`, `Panel <command> notice:
+<text>` (lines joined by a space), `Panel <command> offers: Activate
+<component> (drops <n>)`, `Panel <command> offers no activation`, `Panel
+<command> message action: <text>`, `Panel <command> message action
+hidden`, `Panel <command> message action clicked: <text>`, `Panel
+<command> activate <component> clicked`, and with the panel's places
+`Panel <command> message action <text> at x,y`. Tests: the table and the
+decisions in `tests/activate_on_pick.cpp` (test_app: Fillet, Chamfer and
+Shell in the table, Create Sketch, Construct and Extrude not);
+`tools/ui-activate-on-pick-test.sh` and
+`tools/ui-windows-activate-on-pick-test.ps1` (the shared
+`tools/ui-scripts/activate-on-pick.mitcad-ui`: Fillet on another
+component's edge activates it, Undo twice takes back the fillet and the
+activation, Cancel keeps the activation, an edge of each component offers
+Activate, which keeps the second component's edge).
 
 ### Construction geometry of other components
 
@@ -11629,6 +13010,30 @@ hides them (OCCT's own default put the hover of a face, edge or vertex in
 the topmost layer, which clears the depth), and a polygon offset brings a
 face's highlight just in front of the face. Test:
 `tools/ui-hover-test.sh`.
+
+A whole large design selected stays quick to select and to clear
+(mitcad#1631). The view draws a selected body from its own presentation
+of it: shadows of the body's faces and edges in the selection's look, as
+the Browser's hover draws a body, with no presentation or pick structures
+of their own; the body under them takes the clicks (a body hidden or
+replaced by a command's preview is drawn as before, as a new object; one
+selected with its feature in the timeline gets its dashed copy through
+what hides it beside the shadows, as before). A
+component selected outside a command likewise, from its bodies. The
+selected faces or edges of one body are one object, not one each; a pick
+on it still names the face or edge hit. What is left after about 30 ms is
+drawn in later turns of the event loop, a slice at a time, so that Esc, a
+click or another window is handled meanwhile and drops the rest (log
+`View highlights dropped: 180 of 256 left undrawn`; one that took several
+slices logs `View highlights drawn: 3072 in 256 object(s) and 0 shadow(s),
+9 slices, 260 ms`). The window's picks, the Browser's rows and the timeline
+keep each item once by sets (`qHash(SelectionItem)`), and the `Selected:`
+log line names the first 100 items. `MITCAD_TEST_HIGHLIGHT_STEP_MS` draws
+one highlight a slice, that far apart, for UI tests. Test:
+`tools/ui-large-selection-test.sh` (the timings of a window over every
+edge of 256 bodies and of Esc printed, none asserted; a large design of
+the private test files too, `MITCAD_UI_LARGE_DESIGN` or GitHub #133's
+under `MITCAD_MITCAD_REPORTED`).
 
 A sketch's points stand out from the selection (mitcad#946,
 `sketch/PointMarkers.hpp`). Every point's marker, end, center, fit and
@@ -12011,6 +13416,32 @@ SVG at several sizes (`themeIcon`).
   origin axes and saves `at`, one of several positions keeps them as
   Placement Earlier Positions until By Pick is chosen. Flip is on the
   Placement line.
+- **Thread: a face that does not fit the thread** (mitcad#1632,
+  `HoleCommands.cpp`, *Fitting the face to the thread* in
+  `core/model-api/src/commands.md`): when the preview's `thread_fits`
+  names a picked face (a hole smaller than the thread's minor diameter, a
+  shaft larger than its major diameter), the panel's message says so in
+  words: the model's warning, "M76x2 (Ø76 mm, minor Ø73.835 mm) on a face
+  (Ø72 mm): the hole's diameter is 1.835 mm smaller than the thread's
+  minor diameter" (ending "; the hole has to be changed by hand (<why>)"
+  when nothing the fit can change sets it), and a note row (`fit_note`)
+  offers **Fit the Hole to the Thread** (**Fit the Shaft to the
+  Thread**). The note row follows each preview's report
+  (`CommandDef::previewReported` returns true when it changed, so the
+  panel shows its inputs again). Its click chooses the hidden choice `fit_faces`
+  (`fit`, through `DocumentHost::chooseInCommand`): the preview and OK
+  send `add_feature` with `"fit_faces": true` and `shared`
+  (`CommandDef::addOptions`), so the preview shows what moves with the
+  face and OK adds the thread and the fit as one undo step (`Add
+  Thread1`); the panel's note (`CommandDef::note`) then says what was
+  changed (the model's words, "The hole fitted to the thread: Sketch2's
+  dimension 72/2 is now 73.835/2.", or "Not fitted: <why>.") and the
+  button is **Keep the Hole** (back to `keep`). When
+  the fit would change a named parameter other places use, **Shared
+  Parameter** shows (Own Value, the default, or Change the Parameter).
+  An edited thread has no button: Auto Fix in the timeline fits it. The
+  model's warning stays in the panel's message until the fit.
+  Test: `tools/ui-thread-fit-test.sh` (`app.ui-thread-fit`).
 - **Hole: Clearance holes** (mitcad#903): Hole Tap Type has a third
   option, Clearance (`clearance`, after Simple and Tapped), which shows
   Screw Size (`clearance_size`, the model's `hole_sizes` sizes M1.6 to
@@ -13438,7 +14869,7 @@ next screenshot.
 | `Native cards: none (the Start page is shown)`, `Native cards: all (the Start page left)` | the AppKit frontend: the Start page shown or left hides or shows every card over the canvas (mitcad#1258) |
 | `Panel <command> input <id> at x,y [(hidden)]`, `Panel <command> OK at x,y` | a panel opened; again whenever its places move (mitcad#528: the panel, a row's field or a widget it is in moved or was resized, a tile's picture read, the dock laid out again: 50 ms after it settles, a timer the sync waits for, only when a place differs from those logged last), so the last line logged is where the input is; the component picker's places likewise when its window moves or is resized; the in-process test driver's `click-logged` (macOS) waits for these timers (`TestSync::settling`, up to 5 s) before it reads a place |
 | `Panel <command> view y 160 to 668, scrolled 0 of 297, bar at 1015,414` | with a panel's places: the part of the window its page shows, how far it is scrolled, and its scroll bar while it scrolls (a long panel in a low window); the places are logged again when it scrolls (`Ui-PanelReveal` in `tools/ui-windows-lib.ps1`) |
-| `Datum xy at x,y`, `Sketch entity F1/c4 at x,y` | an input that takes them became active; the datum places are tried again with each input (a placement input puts the planes behind the model and the axes, mitcad#656), and an origin plane covered along its diagonals by an axis gets a place off them |
+| `Datum xy at x,y`, `Sketch entity F1/c4 at x,y` | an input that takes them became active; the datum places are tried again with each input (a placement input puts the planes behind the model and the axes, mitcad#656), an origin plane covered along its diagonals by an axis gets a place off them, and no place lies under a card over the view (logged again when the cards move: Create Sketch's kind row on the command card, mitcad#1524) |
 | `Datum F4 at x,y`, `Datum F4 in O1 at x,y` | with `MITCAD_LOG_PICKS`: where a click picks a shown construction feature, a component's where its occurrence places it (mitcad#432) |
 | `View highlight places: face F2.b0/F2:side(c1) in O1 at 60.0,0.0,10.0; plane F4 in O1 at …` (`none`) | with `MITCAD_LOG_PICKS`: the highlighted faces, edges, vertices and datums changed: each with its occurrence and the middle of its bounding box in the design (mitcad#432: a loaded face of a placed component drawn where the view shows it) |
 | `Command <name> started`, `Editing F2 with <name>`, `Editing analysis Section1 with <name>`, `Command <name> cancelled` | |
@@ -13511,6 +14942,7 @@ next screenshot.
 | `Palette Look At at x,y` | the Sketch Palette's Look At button, where a UI test clicks it, when the palette is laid out and the button shows (mitcad#1060; `tools/ui-sketch-view-test.sh`, `tools/ui-windows-sketch-view-test.ps1`) |
 | `Dragged p5 to (x, y)`, `Dragged c7 to (x, y)`, `Drag of p5 did not move it` | a drag ended: where the point is, or the curve's point nearest the cursor |
 | `Drag snap of p7: point p1` (`free`, `on c3`, …, `off (Shift or Alt)`), `Drag of p7 dropped on point p1: held there` (`nothing added`) | a single point's drag (mitcad#1538): where it snaps when that changes, and whether the drop held it there |
+| `Paste of p10 dropped on point p3`, `Sketch handle holds p9 where it was dropped: point p5`, `Arc c12 held through point p5`, `Arc c14 end p16 dropped on point p6`, `Text frame corner p20 dropped on point p3` | a placement held where the snap marker showed (mitcad#1645, "Placements held where the snap marker showed"); a refused hold is logged `Constraint coincident on … not added: …` |
 | `Double-click on t26: sketch.edit_text`, `Edited text t26: "MIT", Droid Sans, center`, `Edited pattern k8: 4 in all`, `Edited offset k13: 3 mm` | the edit panels of texts, patterns and offsets |
 | `Edited text t1: "MIT", Liberation Sans (LiberationSans-Regular.ttf), left`, `Edit Text font file <path>`, `Preferences font folder add at x,y` (Add…, answered in Qt's own folder dialog **Font Folder**), `Preferences: font folders <folders>` (`none`) | a text in a font file, the file chosen with File..., Preferences › Fonts (mitcad#473, `tools/ui-text-fonts-test.sh`) |
 | `Equal spacing k4 horizontal: p1, c2, c5 (spacing k6 = 12.00)` (`… along c9`; without the spacing when it is free), `Equal spacing k4 removed`, `Equal spacing preview: p1, c5, c2` (the panel's objects in its order), `Sketch Dimension on 3 objects: Equal Spacing Dimension`, `Double-click on k4: sketch.edit_equal_spacing`, `Equal spacing of 3 object(s), horizontal, spacing 12 mm`, `Edited equal spacing k4 of 4 object(s), vertical` | equal spacings (mitcad#221): each chain in the order the model keeps, when it changes (also during a preview), the panels |
@@ -13668,7 +15100,7 @@ next screenshot.
 | `Edit lock idle: part.mitcad after 10 min without activity (no unsaved changes \| unsaved changes)`, `Edit lock idle: saving part.mitcad`, `Edit lock idle: part.mitcad kept, marked idle (autosave off \| waits)`, `Edit lock idle: part.mitcad kept, marked idle (sync: <class>)`, `Edit lock: part.mitcad active again`, `Edit lock refreshed: part.mitcad (idle \| active)`, `Edit lock released: part.mitcad`, `Edit lock request withdrawn: <path>`, `Edit lock release failed (<class>): <message>`, `Edit lock stays: part.mitcad (<class>)`, `Edit lock: the sync of part.mitcad needs a choice before the release: asked`, `Edit lock: Resolve Sync` (`Release Without Sending`, `Keep Lock`), `Edit lock lost: part.mitcad to Alex (<reason> \| removed)`, `Edit lock lost: the unsaved changes of part.mitcad stay`, `Edit locks off: part.mitcad`, `Edit locks off: released <paths>`, `Edit lock: the project stops syncing`, `Edit lock: part.mitcad saved as copy.mitcad`, `Save as New Version: <path> (read-only)` | holding, idle time, releasing, losing a lock |
 | `Edit lock poll failed (<class>): <message>`, `Edit locks: the remote answers again`, `Edit lock: a stale request removed: part.mitcad by Sam` (a request its MitCad no longer refreshed, removed by this poll), `Edit lock: a newer version on the remote: checking part.mitcad`, `Updated to Alex's version saved at 14:05.`, `Edit lock: bringing part.mitcad up to date (sync)`, `Edit lock: the remote has newer versions: checking part.mitcad`, `Edit lock: also open: <entries>`, `Edit locks: live updates connected: the remote is read every 120 s`, `Edit locks probe: the remote accepts MitCad's lock references` (`<message> (<reason>)`), `Project Settings: edit locks accepted by the remote`, `Project Settings: edit locks: <message>`, `Edit lock details: <lines joined by " \| ">`, `Project indicator menu chose Release Edit Lock` (`Edit Lock Details`), `Sync: files someone else holds the edit lock of: part.mitcad (Alex): asked`, `Sync: Send Anyway`, `Sync: not sent (locked files)` | polls, a read-only window following the editor's versions, the lock just taken brought up to date, live updates, the remote's probe, the details, Sync's question |
 | `Save to Project cancelled`, `Save to Project: <path> into a new project`, `Save to Project: <path> saved in <root>`, `Save to Project: <folder> is no project with versions`, `Recorded <path> in the project <root>` (the design was in the new project's folder already), `Preferences: cloud: git 2.47.0 at <path>…`, `Preferences: versions by git's user, else Name <email>` (or `nobody`), `Preferences: git …, remote checks every 10 min, each version sent on, live updates on, default broker none` | Save to Project; Preferences' Cloud page |
-| `Project picker <title>: a place, reading the projects` (`a design`, `a project`), `Project picker project <key>: local, <root>` (`cloud`, `no versions`; one per project offered; the key is its name, or its folder when another listed project has the same name), `Project picker <title>: 2 projects: Shop (local) \| acme/gripper (cloud)` (once read), `Project picker row <key> at x,y` (rows in sight: `<key>`, `<key>/<folder>/`, `<key>/<design path>`), `Project picker name at x,y`, `Project picker button Another Folder at x,y` (each button), `Project picker selected <key>`, `Project picker target <key>/parts/bolt.mitcad: free` (`exists`, `invalid`; when it changes), `Project picker <title>: chose <path>` (`another folder`, `another file`, `new project`, `cancelled`), `Project picker button New Project at x,y` | the project picker (mitcad#174; places in the main window's coordinates) |
+| `Project picker <title>: a place, reading the projects` (`a design`, `a project`), `Project picker project <key>: local, <root>` (`cloud`, `no versions`; one per project offered; the key is its name, or its folder when another listed project has the same name), `Project picker <title>: 2 projects: Shop (local) \| acme/gripper (cloud)` (once read), `Project picker row <key> at x,y` (rows in sight: `<key>`, `<key>/<folder>/`, `<key>/<design path>`), `Project picker name at x,y`, `Project picker button Another Folder at x,y` (each button), `Project picker selected <key>`, `Project picker target <key>/parts/bolt.mitcad: free` (`exists`, `invalid`; when it changes), `Project picker <title>: chose <path>` (`another folder`, `another file`, `new project`, `cancelled`), `Project picker button New Project at x,y`, `Project picker button New Folder at x,y`, `Project picker New Folder: enabled` (`disabled: <why>`; when it changes), `Project picker: naming a new folder in <key>: New Folder` (the editor open, the name proposed or typed; again after a refusal), `Project picker: New Folder Shop/parts` (made), `Project picker: New Folder refused (exists): parts is there already` (the core's class and message; `(name)` for a name no folder can have), `Project picker: New Folder cancelled` (`not made`: failed or canceled and told) | the project picker (mitcad#174; places in the main window's coordinates) |
 | `Project browser <title>: reading the projects`, `Project browser <title>: 2 projects: Shop (local) \| Team (cloud)` (once read, by name), `Project browser starts at Shop/parts/ (remembered)` (`(current project)`, `(first project)`), `Project browser shows Shop/parts/: sub/ \| gear.mitcad v2, changed, editing elsewhere` (`empty`; each place shown: its sub-folders, then its designs with the words of `Projects tree:`), `Project browser search "hex" in all projects: 1 found: Team/bolts/hex-bolt.mitcad` (`in <project key>`, `0 found`; as typed), `Project browser search scope: all projects` (`this project`), `Project browser read-only: on` (`off`), `Project browser selected <key>`, the places (debug, when they moved): `Project browser folder <key> at x,y` (the folders' tree, rows in sight: `Shop`, `Shop/parts/`), `Project browser item <key> at x,y` (the contents' rows in sight: `Shop/parts/sub/`, `Shop/parts/gear.mitcad`, a search's results too), `Project browser path <place key> at x,y` (the path bar), `Project browser search at x,y`, `Project browser scope at x,y`, `Project browser button <Another File\|Read-only\|Open\|Cancel> at x,y`; `Project browser <title>: chose <path>` (` (read-only)`; `another file`, `cancelled`) | File › Open from Project's project browser (mitcad#530; keys: a project's folder name, its whole path when two have the same; places in the main window's coordinates) |
 | `Updates: MitCad 0.0.0 for linux-x64, the AppImage <path>` (`installed in <folder>`, `announce only: <why>`), `Automatic update checks are off`, `Update checks are turned off by the administrator`, `Update check: the last was at <time>`, `Update check: manifest at <url>` (`releases at <url>`), `Update check: TLS OpenSSL 3.6.5 29 Sep 2026 (openssl backend)` (the TLS library of the first request; `Update check: TLS unavailable (Qt's TLS backends: <list>; Qt built with <version>)`), `Update request redirected to https://<host>`, `Update manifest: MitCad 0.1.0 of 2026-10-06 (available), 214 bytes for linux-x64` (`(current, expired on <date>)` for a newer release whose manifest expired, mitcad#938), `Update check: MitCad 0.0.1 is up to date`, `Update check: the manifest of MitCad 0.1.0 expired on <date>`, `Update check: MitCad 0.1.0 has no download for linux-x64 yet` (an automatic check of a release without this platform's download shows nothing, mitcad#1390), `Update notice (offer): <text> [Release Notes, Install, Skip This Version, Later]` (`[Release Notes, Later]` for a release without this platform's download, asked) (`(progress)`, `(message)`, `(error)`), `Update notice closed`, `Update: skipping MitCad 0.1.0`, `Update download: <url> (<n> bytes) to <path>`, `Update verified: <path>`, `Update rejected: <reason> (deleted <path>)`, `Update staged: 0.0.0 -> 0.1.0, <program> when MitCad has quit`, `Update: replaced <AppImage>`, `Update: started <program> (process <pid>)`, `Update installed: 0.0.0 -> 0.1.0` (`Update not installed: …`), `Update failed: <reason>`, `Preferences: update checks on, channel stable` | automatic updates ([docs/updates.md](../docs/updates.md); `tools/ui-update-test.sh`) |
 | `Live: <project>: off (no broker)` (`not allowed in Preferences`, `no versions`), `Live trust question: <project> through <address> [Connect, Not Now]`, `Live trust: <address> connect` (`not now`), `Live: <project>: <address> not trusted (Not Now): not connected`, `Keychain: read <host:port>: found, user <user>` (`not found`, `unavailable (<why>)`), `Keychain: saved <host:port>` (`save … failed (<why>)`), `Keychain: removed <host:port>`, `Live: <project> subscribes through <address>, prefix <prefix>, as <user>` (`anonymous`; `(<connection>, <state>)`), `Live: <project>: cannot connect to <address>: <why>`, `Live: connection c1 (<address>) connected` (`connecting`, `offline, again in <ms> ms`, `failed (auth_failed: <why>)`, `closed`), `Live: <project> subscribed`, `Live: <project> unsubscribed from c1[, which closed]`, `Live: <project>: the remote is checked (version abc1234)` (`connected again`), `Remote check: announced by live updates`, `Remote check: no timer while live updates are connected` (`the timer again (every 10 min)`), `Live: <project> published version abc1234` (`open <path>`, `closed <path>`, `lock <path>`), `Live event: <project>: open <file id> by <name> (editing) in session <id>` (`open … closed by session <id>[ (cleared: offline)]`, `version abc1234 on main by <name>`, `lock <file id> held by <name> (active)`, `lock … released`, `request <kind> <file id> from <name>`, `session <id> online` / `offline` / `left`, `dropped <reason> (<n> so far)`; ` (retained)`; ids are their first 8 characters), `Live notice: Live updates need you to sign in to <host> [Sign In, Not Now]`, `Live notice Sign In at x,y` (`Not Now`), `Live notice: Sign In` (`not now`), `Live sign-in dialog: <address>, user <user>, keychain on` (`off`), `Live sign-in refused: <why>`, `Live sign-in: <address> as <user>[, remembered]` (`cancelled`), `Live: signed out of <host:port>`, `Live: <address> forgotten: <project> disconnected`, `Live test dialog: <address>, prefix <prefix>[, as <user>]`, `Live test: <address>: ok; steps connect ok, sign_in ok, subscribe ok, publish ok, receive ok` (`failed (<class>: <why>)`), `Live: closed[, every connection left cleanly]`, `Preferences: known brokers: <address> (trusted, user <user>), …` (`none`), `Preferences: sign out of <host:port>`, `Preferences: forget <address>` | live updates (mitcad#89, `tools/ui-live-test.sh`); places in the main window's coordinates |
@@ -13753,7 +15185,11 @@ sync works: [docs/development.md](../docs/development.md)).
 - `ui_command "Name"` runs a command through the search.
 - `ui_view_click x% y%`, `ui_view_drag`.
 - `ui_click_logged "Panel Extrude input operation"`,
-  `ui_double_click_logged`, `ui_drag_logged`.
+  `ui_double_click_logged`, `ui_drag_logged`. The driver's `click-logged` and
+  `hover-logged` (`tools/ui-scripts/*.mitcad-ui`) scroll a panel row or
+  note button that the panel has scrolled out of view into it first
+  (`Panel <name> input <key> at`, `Panel <name> action <key>.<n> at`;
+  mitcad#1643) and use its place then.
 - `ui_menu_choose "Entry"` (in the context menu just opened).
 - `ui_create_sketch xy` (Create Sketch and the plane);
   `ui_sketch_click x y`, `ui_sketch_drag x1 y1 x2 y2`, `ui_sketch_at x y`
@@ -14416,8 +15852,11 @@ drawing commands; it computes no geometry of its own.
   project (`drawings::availableTemplates`, `DrawingTemplates`), a
   template chosen bringing its sheet size and its projection method
   (`TemplateChoice::projection`), the first one too (ISO: A3, first
-  angle, mitcad#722, mitcad#725); Size, A4 first in the list; Orientation;
-  Projection; logged `Create Drawing dialog opened` and `Create Drawing
+  angle, mitcad#722, mitcad#725); Size, A4 first in the list, Custom last
+  with Sheet Width and Sheet Height rows (mitcad#1625, `SheetSizeRows`:
+  the model's `size` as `{"width", "height"}` in mm, the Orientation off
+  while it is chosen, a template of a size of its own bringing it);
+  Orientation; Projection; logged `Create Drawing dialog opened` and `Create Drawing
   dialog: template iso, A3, first_angle`). It opens with the template,
   size, orientation and projection chosen last (mitcad#1218,
   `drawings::NewDrawingChoice`, `drawings::startingChoice`): a user
@@ -14505,13 +15944,15 @@ drawing commands; it computes no geometry of its own.
   It cannot open while a command or a sketch is open
   (`changeBlockedReason`). Its bar is one row above the sheet: the drawing's name
   (`Component › Drawing1` in a component), the sheets as tabs (a tab's
-  menu: Rename…, Delete Sheet, **Save as Template…**: a name and the User
-  or Project library, `save_drawing_template`, for a sheet with a
-  template; logged `Drawing template saved: user:company-a3 <path>`) and
+  menu: Rename…, Delete Sheet, **Edit Title Block** (below), **Save as
+  Template…**: a name and the User or Project library,
+  `save_drawing_template`, for a sheet with a template; logged `Drawing
+  template saved: user:company-a3 <path>`) and
   **+** (`add_drawing_sheet`), **Sheet…** (a dialog: Template, which
   brings its size and projection method as in Create Drawing (the
   sections and details drawn on projected views follow a changed
-  method, mitcad#729), Size,
+  method, mitcad#729), Size (with Custom, Sheet Width and Sheet Height
+  as in Create Drawing, mitcad#1625),
   Orientation, Projection, Units (The Design's, mm, cm, m, in, ft, um,
   mil: the sheet's `units`, mitcad#725), Title, Drawing Number, Drawn By,
   Date; `edit_drawing_sheet`, with `template` only when another one is
@@ -14691,8 +16132,8 @@ drawing commands; it computes no geometry of its own.
   mitcad#729), its panel's Hidden Edges, Tangent Edges, Shaded, Center Marks (a
   section's Hatching) and Delete View; an annotation's Edit Text… (a note
   or a text), Tolerance… (a dimension or a frame: its panel's button) and
-  Delete; several items' Delete; the sheet's Sheet…, Add Revision…, Add
-  Sheet. A double-click on a note or a text opens its text in the note
+  Delete; several items' Delete; the sheet's Sheet…, Edit Title Block, Add
+  Revision…, Add Sheet. A double-click on a note or a text opens its text in the note
   dialog (`editNoteText`; logged `Drawing annotation 4 double-clicked`). A selected detail's circle is
   drawn blue on its parent; a drag that starts inside it moves the circle
   (`edit_drawing_view` with `center`; logged `Drawing detail 4 circle
@@ -15156,6 +16597,61 @@ drawing commands; it computes no geometry of its own.
   and the log when they change (`Cut sheet warnings: …`, `none`). Tested
   by `tools/ui-drawings-test.sh` (Kind Cut Sheet, two bodies added, DXF
   written).
+
+### The title block editor (mitcad#1625)
+
+**Edit Title Block** (a sheet tab's menu and the sheet's menu,
+`DrawingWorkspace::editTitleBlock`) edits the sheet's title block on the
+sheet (`drawings/TitleBlockEditor`, plain Qt Core, painted by
+`DrawingSheetView`). It starts from the `drawing` query's
+`title_block_layout`, `title_box` and `frame` (the sheet's template's
+block; for the simple title block the ISO template's, which the sheet then
+keeps as a template of its own, `custom`). While it is on, the drawing
+tools wait (a tool asked for says "The title block is being edited: Done
+or Cancel first."), the model's title block is hidden under the editor's,
+and the left button's clicks and drags, Delete and Esc are the editor's.
+Its panel, **Title Block**: the tools **Select** (a click selects a line,
+an image or the smallest field under it, a drag moves it by whole grid
+steps inside the block), **Line** (two clicks, its ends), **Field** (two
+clicks, its cell's corners; Select then, the new field selected) and
+**Image…** (a PNG, JPEG or SVG file of 4 MB at most, then two clicks for
+its box; the image is drawn whole in it, its proportions kept);
+**Grid** (0.5 to 10 mm, 1 mm at first: every click and move snaps to it,
+inside the block); the block's **Width** and **Height** (it stays in the
+frame's lower right corner); for a selected field its **Label**, **Text**
+(names in braces filled in from the design, `{material}`) and **Text
+Height (mm)** (empty: 3.5); **Delete** for what is selected; **Done**
+(`edit_drawing_title_block` with the block, one undo step `Edit title
+block of Sheet1 of Drawing1`; a refusal keeps the editor on with its
+reason in the status bar) and **Cancel**. Esc drops a tool's first
+click, then ends the tool, then the selection; it never leaves the
+editor. Another sheet shown or the drawing closed cancels it. The grid's
+points, the block, its lines, its fields as dashed cells with their
+labels and texts as typed, its images, the selected item in the
+selection's blue and a tool's line or box to the pointer are painted
+over the sheet. **Save as Template…** then saves the sheet's template
+with its block, images and size to the User or Project library.
+
+Images on the sheet: the `drawing` query's `image` items (`format` png,
+jpeg or svg, `at`, `size`, the file as base64) are painted under the
+lines, a PNG or JPEG from its pixels (kept per image), an SVG by
+`QSvgRenderer`.
+
+Logs: `Title block editor: on, sheet 1: 9 lines, 10 fields, 0 images`,
+`Title block tool: line`, `Title block first point 0,30`, `Title block
+line added: 0,30 50,30`, `Title block field added: 0,30 50x6`, `Title
+block field 2 selected`, `Title block field 11: label STOCK, text
+{material}, height 3.5`, `Title block image chosen: logo.png (png)`,
+`Title block image added: png 2,2 30x10`, `Title block image 1 moved:
+0,2`, `Title block line 1 deleted`, `Title block grid: 5 mm`, `Title
+block size: 200 x 40`, `Title block Esc: tool select`, `Title block
+editor: done (2 lines, 11 fields, 1 image)`, `Title block editor:
+cancelled`; the panel's controls as `Drawing panel titleBlockTool_line
+at x,y` (`titleBlockTool_select`, `_field`, `_image`, `titleBlockGrid`,
+`titleBlockWidth`, `titleBlockHeight`, `titleBlockFieldLabel`,
+`titleBlockFieldText`, `titleBlockFieldHeight`, `titleBlockDelete`,
+`titleBlockDone`, `titleBlockCancel`). Tests: `app/tests/title_block_editor.cpp`
+(`test_app`), `tools/ui-drawing-title-block-test.sh`.
 
 ## Print bed face
 
@@ -16620,7 +18116,10 @@ component-local bounding-box dimensions, face count and effective material;
 the absolute comparison tolerance is 1e-6. Unsupported geometry stays separate.
 An unstructured multi-body component contributes body rows instead of an
 extra component row. Feature-created, linked and library parts retain their
-component identity, including multi-body parts and purchased-item rows.
+component identity, including multi-body parts and purchased-item rows. So
+does a component with a part number of its own (Identity › Part number, as
+Insert › Component from Web sets it; mitcad#1663): one row, its quantity by
+its placements, whatever its body count.
 Requested **Material** or **Computed/Material** property columns use the row's
 actual physical materials, including inherited placement context. Qualified
 custom/library material fields and other property columns remain unchanged. Quantities include all placement paths, including inherited materials;
@@ -16631,6 +18130,15 @@ first source, and the cut list's own grouping remains unchanged.
 writes UTF-8 CSV from `shownTables()`, with the same quoting and rows as
 **Copy as CSV** (`listCopyCsv`). **Save as PDF…** (`listSavePdf`) continues
 to export those same displayed tables. The Export folder is remembered.
+CSV rows end in CRLF on every platform, in the file and on the clipboard
+(RFC 4180; mitcad#1641). **Copy as Text** (`listCopyText`) and **Save as
+Text…** (`listSaveText`, **Save List as Text**, a `.txt` file) give the same
+tables as an aligned plain-text table for an email (`textTableOf`): each
+table's heading when the tab has several, a header row, columns padded
+with spaces to their widest cell and two spaces apart, numbers
+right-aligned (a column of numbers with its name), no spaces at a line's
+end, a blank line between tables, CRLF line ends, UTF-8 without a byte
+order mark.
 
 The drawing Bill of Materials tool and its selected table's panel also offer
 **Group identical parts** (`drawingTableGroupIdentical` in the panel).
@@ -16727,6 +18235,20 @@ Fix <n> Features` for a selection), the bodies unchanged.
   body has no edge E{…}, pick it again`. A later feature that named the
   faces the fix renamed is updated in the same step (`…; also updated:
   Shell1`). A refused command logs `Auto Fix refused: <why>`.
+- **A thread whose face does not fit it** (mitcad#1632): the same Auto
+  Fix sets the value or dimension that sets the face's diameter to the
+  thread's (*Fitting the face to the thread* in
+  `core/model-api/src/commands.md`), in the same undo step `Auto Fix
+  Thread2`, and the summary says what changed ("Thread2: the hole fitted
+  to the thread: Sketch2's dimension 72/2 is now 73.835/2"). It is
+  offered only when something it can change sets the diameter (else the
+  warning says the hole has to be changed by hand). When the fit would
+  change a named parameter other places use (the timeline query's
+  `auto_fix_choices`, `DocumentSnapshot::Feature::autoFixChoices`),
+  Auto Fix first asks in a dialog ("The fit changes the parameter bore,
+  which other places use too.") with **Own Value** (the default) and
+  **Change the Parameter**, sent as `shared`; Cancel changes nothing
+  (`Auto Fix cancelled`).
 - **MCP and scripts**: the same `auto_fix` command, class model.
 
 Tests: `tools/ui-timeline-auto-fix-test.sh` and
@@ -16757,6 +18279,27 @@ layout's docks and its navigation bar too, and the AppKit frontend's cards
 AppKit frontend's workspace selector shows the retained ribbon's tabs, the
 Start tab among them, and the page is the shared Qt page over the embedded
 view.
+
+**The backdrop** (mitcad#1439, `files/StartBackdrop.*`): the surface behind
+the page's content is a rounded rectangle, antialiased, with the floating
+cards' corner radius (`GlassCard::kRadius`, as `GlassCard::cornerRadius`
+gives a card that is no capsule), inset from the view's edges as far as
+the floating cards keep (`FloatingLayout::kMargin`), on every platform and
+in both layouts: at its top below the workspace tabs where they float over
+the view (Windows, Linux), below the header above the view on macOS, at
+its bottom the cards' gap above the Floating message band while that
+shows. The content keeps a padding inside it. Around it the page paints
+the view's own background (its gradient, `OcctViewer::backgroundColors`,
+again when the view's background turns light or dark), opaque: what shows
+outside the rounded corners is what shows around the floating cards, never
+the design behind the page or what the GL view drew last. Test: app.unit's
+`tests/start_backdrop.cpp` (the rectangle and its margins; painted into
+images, light and dark, 1x and 2x: the backdrop's color in its middle and
+along its sides, the view's background, not the backdrop's color, at its
+corners). A one-off look, not a ctest: `tools/ui-start-backdrop-look.sh`
+and `tools/ui-windows-start-backdrop-look.ps1`
+(`tools/ui-scripts/start-backdrop-look.mitcad-ui`: a block behind the
+page, Floating and Docked, light and dark).
 
 - **Welcome**: "Welcome to MitCad" and **What's New in X.Y**, which opens
   this version's release page (`…/releases/tag/v<version>`) in the
@@ -17000,12 +18543,27 @@ menu in `ViewController::createMenus`, the model's `set_view_show`
   Origin folder and its rows, the Sketches and Construction folders and
   their rows, joint origins) with their light bulbs as they are. Showing
   the kind again shows what the light bulbs show.
+- **Origins and the Origin folder's eye (mitcad#1642, GitHub
+  mitcad/Mitcad#240):** the design's origin is drawn only while both are
+  on, so either alone drew nothing and each looked broken: Origins was
+  checked in a new design (its light bulb off) and its first use hid
+  what was not seen, and the eye did nothing while Origins was off. Now
+  either one shows the origin: **Origins** is checked only while the
+  origin is drawn (`MainWindow::originsShown`: `display.show.origins` and
+  the light bulb), and turned on it also turns the light bulb on
+  (`set_view_show` and `set_origin_visible`, one undo step `Show All
+  Origins`); turned off it hides every origin and keeps the light bulb.
+  The Origin folder's eye (`BrowserController::toggleVisibility`) shows an
+  origin that is not drawn, with Origins turned on too when it is off
+  (one undo step `Show Origin`), and hides one that is drawn by its light
+  bulb.
 - **Every mode:** as the light bulbs (`runVisibilityCommands`): while a
   command's panel or a sketch is open, outside the command's undo range;
   in a read-only document too (`readOnlyModelCommand`).
 - **Check marks** follow the `document` query's `display.show`
-  (`DocumentSnapshot::showOrigins`, `showConstruction`, `showSketches`) on
-  every refresh, also after an undo or a refused change.
+  (`DocumentSnapshot::showOrigins` with the Origin folder's light bulb,
+  `showConstruction`, `showSketches`) on every refresh, also after an undo
+  or a refused change.
 - **Logs:** `View show construction: hidden` (`… shown`), `View Show menu:
   Origins on | Construction off | Sketches on` (the submenu's entries and
   check marks when they change), `Construction shown: Plane1 in O1, Plane2`
@@ -17018,7 +18576,17 @@ menu in `ViewController::createMenus`, the model's `set_view_show`
   off and on in two components (the planes drawn and grayed, the sketches
   and the origin kept, the saved design's `display.hidden` and no light
   bulb set), Sketches and Origins (Floating); `core.model.api`
-  (`view_show_tests.rs`).
+  (`view_show_tests.rs`). The origin both ways: `tools/ui-origin-show-test.sh`
+  and `tools/ui-windows-origin-show-test.ps1` (`app.ui-windows-origin-show`)
+  run `tools/ui-scripts/origin-show.mitcad-ui` on a new design: the eye and
+  Origins each show the origin and hide it again, also from the other's off
+  state and from both off (one undo step each), read from the view itself:
+  the log line `View origin drawn: planes xy, xz, yz; axes x, y, z; point
+  origin` (`none`; `OcctViewer::originDrawing`: the origin datums displayed
+  with something in their presentations, a plane's square meshed; when it
+  changes) and the driver check `expect-view-origin shown|hidden`, which
+  also counts the planes' orange in the view's own frame outside the
+  orientation cube (at least 1 % shown, under 0.05 % hidden).
 
 ## Linked designs (mitcad#1416)
 
@@ -17621,8 +19189,9 @@ formats MitCad imports come into the open design as components.
   `6494K13_NO THREADS_Bearing.step` is the component
   `6494K13_NO THREADS_Bearing` with Part Number `6494K13`. The parts list
   (`parts_list`, the Bill of Materials) shows a component's own stored
-  `Part number` when it is no library or BUILD part. Both can be edited
-  after. The design's window comes to the front and **Move/Copy**
+  `Part number` when it is no library or BUILD part, and lists a component
+  with a part number as one part whatever its body count (a bearing of
+  nine bodies is one row, mitcad#1663). Both can be edited after. The design's window comes to the front and **Move/Copy**
   starts with the new occurrence selected, so that it can be placed. While
   a command is open the import is refused (`Finish or cancel the open
   command first.`).
@@ -17704,6 +19273,13 @@ formats MitCad imports come into the open design as components.
   tests), `MITCAD_WEB_PROFILE_DIR`, `MITCAD_WEB_DOWNLOADS_DIR`; the
   manifest's address and keys are the updates' (`MITCAD_UPDATE_URL`,
   `MITCAD_UPDATE_TEST_KEY` in a test build, docs/updates.md).
+  `MITCAD_TEST_WEB_FILE` (tests only, mitcad#1663) names a local file and
+  adds the command `test.component_web_file` **Insert Web File (Test)**
+  (no tab): it brings that file in through the same import as a download
+  (`importWebDownload`), without the web browser component; a file the
+  format filter refuses or that does not import is logged (`Component from
+  Web: the test file <file> is refused: <note>`, `... was not imported:
+  <reason>`).
 - **Tests:** `app.ui-<platform>-component-web`
   (`tools/ui-component-web-test.py`, macOS through
   `tools/ui-macos-component-web-test.sh`; where the build made the
@@ -17732,7 +19308,14 @@ formats MitCad imports come into the open design as components.
   verified, and refused when tampered, of another key or invalid; a
   manifest with them read by a MitCad that does not know them.
   `core.model.assembly`
-  (`a_components_own_part_number_is_its_parts_list_part_number`).
+  (`a_components_own_part_number_is_its_parts_list_part_number`,
+  `a_multi_body_component_with_a_part_number_is_one_bom_row`).
+  `app.ui-<platform>-bom-grouping` (`tools/ui-bom-grouping-test.py`, its
+  third run; macOS through `tools/ui-macos-bom-grouping-test.sh`): a STEP
+  file of three bodies, `6494K13_NO THREADS_Bearing.step`, made by
+  `mitcad-cli`, comes in through Insert Web File (Test) with Part Number
+  `6494K13` and is one Bill of Materials row (`Build BOM row: 1 x
+  6494K13_NO THREADS_Bearing`).
 
 ## See-through previews without a triangle pattern (mitcad#1575)
 

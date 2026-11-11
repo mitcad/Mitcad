@@ -88,6 +88,10 @@
 #      side; a click near the middle of one half snaps to the middle of
 #      that free stretch (its marker, marked as taken; From Middle of Gap,
 #      Offset 0) and places the profile there.
+#  13. Length to a face (mitcad#1630): an upright on a block 100 high
+#      beside the first one, its Length to a face, To Face the first
+#      one's top: level with it, bound; Face Offset 10 ends it 10 above;
+#      the saved design keeps the bound length to the face.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-build-test.sh
@@ -1556,6 +1560,90 @@ ui_mark
 ui_step "Place (Enter)"                    ui_key Return
 ui_expect_new "Placed " "the profile placed in the middle of the free stretch" 30
 ui_step "Close (Escape)"                   ui_key Escape
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+ui_stop_app
+
+echo "--- 13. Length to a face: an upright on a base ends level with the first one's top"
+# mitcad#1630: the first upright, 500 long, on XY; the second on a block's
+# top 100 higher, beside it, its length to the first one's top face
+# (Length: Auto: to a face you pick, then To Face): 400 long, bound; Face
+# Offset 10 ends it 10 above; placed, the design keeps a bound length to
+# that face with the offset.
+design "$WORK/split.mitcad" << 'EOF'
+[{"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+  "corner": [150, -50], "length": 100, "width": 100, "height": 100, "operation": "new_body"}}]
+EOF
+ui_start_app --open "$WORK/split.mitcad" --no-native-dialogs
+ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_show_origin
+ui_step "fit the view (F6)"                ui_key F6
+ui_mark
+ui_step "Profile (command search)"         ui_command "Profile"
+ui_expect_new "Command Profile started" "Profile started"
+expect_row length_mode=to_face shown "Length to a face offered on the ground"
+ui_step "a typed length of 500"            ui_type_in "Panel Profile input length" "500"
+ui_step "on the XY plane"                  ui_click_logged "Datum xy"
+ui_expect_new "Inspect Profile: place " "the preview"
+ui_mark
+ui_step "Place (Enter)"                    ui_key Return
+ui_expect_new "Placed " "the first upright placed" 30
+B14=$(placed_body)
+[ -n "$B14" ] || ui_fail "no body of the first upright"
+# The second on the block's top, a ground placement.
+ui_step "Placement: on a plane"            ui_click_logged "Panel Profile input place=plane"
+refresh_picks "Profile"
+BASE14=$(faces_of "F1.b0" ":top" | head -1)
+[ -n "$BASE14" ] || ui_fail "no top face of the block to pick"
+ui_mark
+ui_step "the block's top"                  pick_face "F1.b0" "$BASE14"
+expect_inspect "Inspect Profile: place geometry" "the second upright on the block's top"
+ui_mark
+ui_step "Length: to a face"                ui_click_logged "Panel Profile input length_mode=to_face"
+expect_row length_face shown "To Face with its mode"
+expect_row length_offset shown "Face Offset with its mode"
+# To Face, shown empty, takes the next click: the panel waits for it
+# (no preview until it is picked) and the message band asks for it.
+ui_expect_new "Profile: Length = Auto: to a face you pick, plus an offset" "the mode chosen"
+ui_expect_new "hint Profile: select to face" "the panel asks for the face"
+ui_step "fit the view (F6)"                ui_key F6
+ui_step "To Face's picks"                  ui_click_logged "Panel Profile input length_face"
+TOP14=$(faces_of "$B14" ":end_b" | head -1)
+[ -n "$TOP14" ] || ui_fail "no top face of the first upright ($B14) to pick"
+ui_mark
+ui_step "the first upright's top"          pick_face "$B14" "$TOP14"
+ui_expect_new "BUILD length to a face: " "the face taken by To Face"
+expect_inspect "length 400.00 mm (bound, to the face of " "level with the first upright's top: 400 mm, bound"
+ui_mark
+ui_step "Face Offset 10"                   ui_type_in "Panel Profile input length_offset" "10"
+expect_inspect "length 410.00 mm (bound, to the face of " ", offset 10" "10 mm above the face"
+ui_mark
+ui_step "Place (Enter)"                    ui_key Return
+ui_expect_new "Placed " "the second upright placed" 30
+grep "^Placed " "$UI_LOG" | tail -1 | grep -q "length bound, to the face of .*, offset 10" ||
+  ui_fail "the second upright is not placed bound to the face: $(grep "^Placed " "$UI_LOG" | tail -1)"
+echo "ok   placed with its length to the face"
+ui_step "Close (Escape)"                   ui_key Escape
+ui_mark
+ui_step "save as (Ctrl+Shift+S)"           ui_key ctrl+shift+s
+ui_type_path "Save As" "$WORK/split-saved.mitcad"
+ui_focus_main
+ui_expect_new "Saved $WORK/split-saved.mitcad" "saved"
+python3 -I - "$WORK/split-saved.mitcad" << 'EOF' || ui_fail "the saved design has no bound length to a face"
+import json, sys
+found = []
+def walk(node):
+    if isinstance(node, dict):
+        if node.get("type") == "bound_length" and node.get("mode") == "to_face":
+            found.append(node)
+        for value in node.values():
+            walk(value)
+    elif isinstance(node, list):
+        for value in node:
+            walk(value)
+walk(json.load(open(sys.argv[1])))
+sys.exit(0 if found else 1)
+EOF
+echo "ok   the saved design keeps the bound length to the face"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_stop_app
 ui_finish "the BUILD tab"

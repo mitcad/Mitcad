@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Reorient Design on the test files' assemblies (mitcad#537), kept outside
 # the repository (never committed) and found by content id (the first 8
-# hex digits of their SHA-256) under the folders of MITCAD_IPT_CORPUS (a
+# hex digits of their SHA-256) under the folders of MITCAD_IAM_CORPUS, or
+# MITCAD_IPT_CORPUS when that is unset (a
 # path list, like PATH; an INDEX.tsv or index.tsv there names the files by
 # id, else the .iam files are hashed):
 #
@@ -23,7 +24,10 @@ foreach(var CLI WORK)
   endif()
 endforeach()
 
-set(corpus "$ENV{MITCAD_IPT_CORPUS}")
+set(corpus "$ENV{MITCAD_IAM_CORPUS}")
+if(corpus STREQUAL "")
+  set(corpus "$ENV{MITCAD_IPT_CORPUS}")
+endif()
 if(NOT CMAKE_HOST_WIN32)
   string(REPLACE ":" ";" corpus "${corpus}")
 endif()
@@ -65,7 +69,7 @@ endfunction()
 find_assembly(c71542a1 bench)
 find_assembly(1dc60c2a drawer)
 if(NOT bench AND NOT drawer)
-  message("reorient corpus: skipped (set MITCAD_IPT_CORPUS to the test files' folders)")
+  message("reorient corpus: skipped (set MITCAD_IAM_CORPUS or MITCAD_IPT_CORPUS to the test files' folders)")
   return()
 endif()
 
@@ -129,7 +133,7 @@ if(bench)
     endforeach()
   endforeach()
 else()
-  message("skip   c71542a1: not under MITCAD_IPT_CORPUS")
+  message("skip   c71542a1: not under MITCAD_IAM_CORPUS or MITCAD_IPT_CORPUS")
 endif()
 
 if(drawer)
@@ -141,7 +145,7 @@ if(drawer)
     turn("${WORK}/drawer-x270.mitcad" "1dc60c2a history x270 then ${t}" "${step}")
   endforeach()
 else()
-  message("skip   1dc60c2a: not under MITCAD_IPT_CORPUS")
+  message("skip   1dc60c2a: not under MITCAD_IAM_CORPUS or MITCAD_IPT_CORPUS")
 endif()
 
 if(failures GREATER 0)

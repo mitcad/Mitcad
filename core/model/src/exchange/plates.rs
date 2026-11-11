@@ -577,6 +577,8 @@ impl<K: Kernel> Document<K> {
                     ..mitcad_3mf::Model::default()
                 };
                 let mut settings = Vec::new();
+                // Each part's placements in the design (mitcad#1643).
+                let mut design = Vec::new();
                 // Each plate's objects (indices into the model's).
                 let mut on_plates: Vec<Vec<usize>> = Vec::new();
                 for (i, (plate, content)) in plates.iter().zip(&contents).enumerate() {
@@ -631,6 +633,7 @@ impl<K: Kernel> Document<K> {
                         }
                         model.parts.extend(built.model.parts);
                         settings.extend(built.settings);
+                        design.extend(built.design);
                         written.bodies = built.exported.bodies.clone();
                         written.pieces = content.pieces.len();
                         written.on_bed = Some(on_bed);
@@ -669,6 +672,7 @@ impl<K: Kernel> Document<K> {
                     model,
                     settings,
                     exported,
+                    design,
                 };
                 // Each plate's filament changes (mitcad#1596).
                 let ids: Vec<Option<&str>> = plates.iter().map(|p| Some(p.id.as_str())).collect();

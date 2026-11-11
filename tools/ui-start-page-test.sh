@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/files/StartPage.cpp app/files/RecentDesigns.cpp app/MainWindowStart.cpp app/main.cpp
+# check-all sources: app/files/StartPage.cpp app/files/StartBackdrop.cpp app/files/RecentDesigns.cpp app/MainWindowStart.cpp app/main.cpp
 # check-all sources: app/framework/Ribbon.cpp app/files/MainWindowFiles.cpp app/framework/TestDriver.cpp tools/cli
 # check-all sources: tools/ui-scripts/start-page.json tools/ui-scripts/start-page-fixture.mitcad-ui
 # check-all sources: tools/ui-scripts/start-page.mitcad-ui tools/ui-scripts/start-page-off.mitcad-ui

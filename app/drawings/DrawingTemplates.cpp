@@ -4,8 +4,52 @@
 #include <QCoreApplication>
 #include <QJsonArray>
 #include <QSettings>
+#include <QStringList>
 
 namespace mitcad::drawings {
+
+QString sheetSizeText(const QJsonValue& size) {
+  if (size.isString()) {
+    return size.toString();
+  }
+  const QJsonObject custom = size.toObject();
+  const double width = custom.value(QStringLiteral("width")).toDouble();
+  const double height = custom.value(QStringLiteral("height")).toDouble();
+  if (width > 0.0 && height > 0.0) {
+    return QStringLiteral("%1x%2").arg(QString::number(width, 'g', 10), QString::number(height, 'g', 10));
+  }
+  return QString();
+}
+
+bool customSheetSize(const QString& text, double* width, double* height) {
+  const QStringList parts = text.split(QLatin1Char('x'));
+  if (parts.size() != 2) {
+    return false;
+  }
+  bool okWidth = false;
+  bool okHeight = false;
+  const double w = parts.at(0).toDouble(&okWidth);
+  const double h = parts.at(1).toDouble(&okHeight);
+  if (!okWidth || !okHeight || !(w > 0.0) || !(h > 0.0)) {
+    return false;
+  }
+  if (width != nullptr) {
+    *width = w;
+  }
+  if (height != nullptr) {
+    *height = h;
+  }
+  return true;
+}
+
+QJsonValue sheetSizeValue(const QString& text) {
+  double width = 0.0;
+  double height = 0.0;
+  if (customSheetSize(text, &width, &height)) {
+    return QJsonObject{{QStringLiteral("width"), width}, {QStringLiteral("height"), height}};
+  }
+  return text;
+}
 
 QList<TemplateChoice> templateChoices(const QJsonObject& answer) {
   QList<TemplateChoice> out;
@@ -19,7 +63,7 @@ QList<TemplateChoice> templateChoices(const QJsonObject& answer) {
     }
     TemplateChoice item;
     item.choice = choice;
-    item.size = data.value(QStringLiteral("size")).toString();
+    item.size = sheetSizeText(data.value(QStringLiteral("size")));
     item.projection = data.value(QStringLiteral("projection")).toString();
     if (library == QStringLiteral("user")) {
       item.label = QCoreApplication::translate("DrawingTemplates", "%1 (User)").arg(name);

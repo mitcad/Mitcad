@@ -37,7 +37,7 @@ use mitcad_vec3::Vec3 as V3;
 /// loop, and a face to a chart's surface (mm).
 const RECOGNITION: f64 = 1.0e-6;
 
-const NOT_DERIVED: &str = "ordinary modeling replaced this body and the sheet-domain adapter \
+pub(super) const NOT_DERIVED: &str = "ordinary modeling replaced this body and the sheet-domain adapter \
                            could not re-derive its material";
 
 /// Re-derives the sheet of every valid sheet body the feature replaced
@@ -66,11 +66,25 @@ pub(crate) fn adapt<K: Kernel>(ctx: &mut EvalContext<'_, K>, output: &mut Featur
             continue;
         };
         let warnings = ctx.warnings.len();
-        let result = rederive(ctx, body, &shape);
+        let result = adapted(ctx, body, &shape);
         ctx.warnings.truncate(warnings);
         match result {
-            Ok(state) => {
-                output.sheets.insert(body, SheetChange::Set(state));
+            Ok(derived) => {
+                output.sheets.insert(body, SheetChange::Set(derived.state));
+                // A cut across a bend is the sheet's material: through the
+                // thickness, normal to it (mitcad#1628).
+                if let Some(rebuilt) = derived.shape {
+                    for change in &mut output.changes {
+                        if let BodyChange::Set(b, s) = change
+                            && *b == body
+                        {
+                            *s = rebuilt.clone();
+                        }
+                    }
+                }
+                if let Some(warning) = derived.warning {
+                    ctx.warn(warning);
+                }
             }
             // Without the kernel's face queries the body stays an
             // ordinary solid, as before.
@@ -177,6 +191,38 @@ fn rederive<K: Kernel>(
     let (state, rules) = read(ctx, body)?;
     let before = ctx.body(body)?;
     derive(ctx, state, &rules, &before, shape)
+}
+
+#[path = "rederive_bends.rs"]
+mod bends;
+
+/// A sheet re-derived for an ordinary feature: its state, the body's shape
+/// where it is not the feature's result (a cut across a bend, made normal
+/// to the material), and the warning that says so.
+pub(super) struct Derived<S> {
+    state: SheetState,
+    shape: Option<S>,
+    warning: Option<String>,
+}
+
+/// The sheet of `body` re-derived from the feature's result `shape`: a cut
+/// across bends as Sheet Cut makes it (mitcad#1628), otherwise a change of
+/// planar charts.
+fn adapted<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    body: BodyUid,
+    shape: &K::Shape,
+) -> Result<Derived<K::Shape>, Failure> {
+    let (state, rules) = read(ctx, body)?;
+    let before = ctx.body(body)?;
+    if let Some(derived) = bends::across_bends(ctx, state.clone(), &rules, &before, shape)? {
+        return Ok(derived);
+    }
+    Ok(Derived {
+        state: derive(ctx, state, &rules, &before, shape)?,
+        shape: None,
+        warning: None,
+    })
 }
 
 /// The sheet of `body` re-derived from `shape`, as [`adapt`] would, for a
@@ -403,6 +449,15 @@ fn derive<K: Kernel>(
         )
         .into());
     }
+    finished(state, rules)
+}
+
+/// The re-derived `state` with its panels projected again from its charts,
+/// ready to pair with a new shape.
+fn finished(
+    mut state: SheetState,
+    rules: &crate::features::sheet::SheetRulesDef<f64>,
+) -> Result<SheetState, Failure> {
     state.panels = Vec::new();
     for patch in &state.charts {
         let SheetDomainRef::Panel(id) = patch.domain else {

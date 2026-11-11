@@ -30,7 +30,7 @@ use super::dispatch::named_enum;
 use super::drawing_annotations::{
     AddAnnotationCommand, EditAnnotationCommand, KeepModelItemsCommand, ModelItemsCommand,
 };
-use super::drawing_templates::{RevisionCommand, SaveTemplateCommand};
+use super::drawing_templates::{RevisionCommand, SaveTemplateCommand, TitleBlockCommand};
 use super::prelude::*;
 use mitcad_model::Document;
 use mitcad_model::assembly::{Assembly, inverse};
@@ -342,6 +342,9 @@ named_enum! {
         "keep_drawing_model_items" => KeepModelItems(Box<KeepModelItemsCommand>),
         // Line styles in views (mitcad#1546, `drawing_lines.rs`).
         "edit_drawing_line" => EditLine(Box<super::drawing_lines::EditLineCommand>),
+        // A sheet's title block edited on the sheet (mitcad#1625,
+        // `drawing_templates.rs`).
+        "edit_drawing_title_block" => EditTitleBlock(Box<TitleBlockCommand>),
     }
 }
 
@@ -1272,6 +1275,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             DrawingCommand::ModelItems(c) => self.drawing_model_items(*c),
             DrawingCommand::KeepModelItems(c) => self.keep_drawing_model_items(*c),
             DrawingCommand::EditLine(c) => self.edit_drawing_line(*c),
+            DrawingCommand::EditTitleBlock(c) => self.edit_drawing_title_block(*c),
         }
     }
 
@@ -1959,7 +1963,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                 let (width, height) = sheet.dimensions();
                 let mut value = json!({
                     "name": sheet.name,
-                    "size": sheet.size.name(),
+                    "size": sheet.size.key(),
                     "orientation": sheet.orientation,
                     "projection": sheet.projection,
                     "width": width,
@@ -2009,6 +2013,15 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                     value["annotations"] = json!(drawn.annotations);
                     value["model_items"] = json!(drawn.model_items);
                     value["title_fields"] = json!(drawn.title_fields);
+                    // What the title block editor edits (mitcad#1625): the
+                    // template's frame, the block's box on the sheet and its
+                    // layout (the ISO template's for the simple block).
+                    let editable = super::drawing_templates::editable_template(sheet);
+                    let (frame_min, frame_max) = editable.frame(width, height);
+                    let (box_min, box_max) = editable.title_box(width, height);
+                    value["frame"] = json!([frame_min, frame_max]);
+                    value["title_box"] = json!([box_min, box_max]);
+                    value["title_block_layout"] = json!(editable.title_block);
                     if query.geometry {
                         value["groups"] = groups_json(&drawn.composed.sheet);
                         value["pens"] = pens_json();
@@ -2954,6 +2967,15 @@ pub(super) fn groups_json(sheet: &Sheet) -> Value {
                     } => json!({"polyline": points, "closed": closed, "pen": pen_name(*pen)}),
                     Item::Fill { points } => json!({ "fill": points }),
                     Item::Shade { points, grey } => json!({"shade": points, "grey": grey}),
+                    // A title block's image (mitcad#1625): the file as
+                    // base64, stretched over its box.
+                    Item::Image {
+                        at,
+                        size,
+                        kind,
+                        data,
+                    } => json!({"image": data.base64(), "format": kind.name(), "at": at,
+                                "size": size}),
                     Item::Text {
                         at,
                         height,

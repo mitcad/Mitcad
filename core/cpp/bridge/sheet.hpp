@@ -20,6 +20,8 @@ struct SheetMember;
 struct SheetTrimDomain;
 struct SheetRegion;
 struct SheetTrimOutput;
+struct SheetFootprintCylinder;
+struct SheetFootprintFace;
 
 class SheetShapeResult {
 public:
@@ -40,5 +42,10 @@ std::unique_ptr<SheetShapeResult> sheet_shape(rust::Slice<const SheetPatchInput>
 
 SheetTrimOutput sheet_trim(rust::Slice<const SheetTrimDomain> domains, rust::Slice<const SheetRegion> tools,
                           rust::Slice<const SheetPort> seams, std::uint8_t operation, double tolerance);
+
+// The faces of a shape on a bend chart's cylinder, each as its boundary in
+// the chart (mitcad#1628).
+rust::Vec<SheetFootprintFace> sheet_cylinder_footprint(const geometry::Shape& shape,
+                                                      const SheetFootprintCylinder& cylinder, double tolerance);
 
 } // namespace mitcad::bridge

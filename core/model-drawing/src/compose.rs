@@ -415,13 +415,10 @@ impl SheetSetup {
         }
     }
 
-    /// Width and height, mm.
+    /// Width and height, mm (a size of the user's as it is given,
+    /// mitcad#1625).
     pub fn dimensions(&self) -> (f64, f64) {
-        let (long, short) = self.size.landscape();
-        match self.orientation {
-            Orientation::Landscape => (long, short),
-            Orientation::Portrait => (short, long),
-        }
+        self.size.oriented(self.orientation)
     }
 }
 
@@ -1871,7 +1868,7 @@ fn title_block(
     cell("DATE", &title.date, x0, third[0], y0, row2, DIMENSION_TEXT);
     let sheet = match &title.page {
         Some(page) => format!("{} {page}", setup.size.name()),
-        None => setup.size.name().to_owned(),
+        None => setup.size.name(),
     };
     cell(
         "SHEET",

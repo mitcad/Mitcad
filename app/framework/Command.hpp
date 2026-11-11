@@ -163,12 +163,30 @@ struct Manipulator {
 // arrow changes the value input `x` or `y` by how far the pointer goes
 // along it, the square both; the place snaps as the drawing tools' points
 // do, away from the entities in `moves`. Sketch coordinates, millimetres.
+//
+// A sketch Rectangular Pattern's handle (mitcad#1640) has two arrows and no
+// square: each along its own direction (`axes`: Direction and the way at
+// right angles to it, either against it while its Flip is on), starting
+// where the next copy of the originals lies (`starts`), so that a drag
+// moves that copy and sets its Spacing by how far the pointer goes along
+// the arrow; it steps by the grid only (`snapsToGeometry` off), not onto
+// the copies it moves. An arrow whose Quantity is 1 is drawn faint and
+// takes no drag: it only shows where those copies would go.
 struct SketchHandle {
   std::array<double, 2> at{};
-  QString x;     // the value input along the sketch's x axis
-  QString y;     // and along its y axis
+  QString x;     // the value input along the first arrow (the sketch's x axis)
+  QString y;     // and along the second one (its y axis)
   std::array<double, 2> values{}; // their values now
   QStringList moves; // the entities the values move
+  // The arrows' directions, unit vectors at right angles to each other:
+  // the sketch's x and y axes unless a command gives others.
+  std::array<std::array<double, 2>, 2> axes{{{1.0, 0.0}, {0.0, 1.0}}};
+  // Where each arrow starts; none: both at `at`.
+  std::optional<std::array<std::array<double, 2>, 2>> starts;
+  bool square = true;              // the square between the arrows, which drags both
+  std::array<bool, 2> faint{};     // an arrow shown faint, as a hint only
+  bool snapsToGeometry = true;     // a drag snaps onto points and curves, else to the grid only
+  QString dragHint;                // the hint while it is dragged; empty: Move/Copy's
 };
 
 // A labelled, non-interactive point from a successful feature preview,
@@ -205,6 +223,14 @@ struct InputNote {
   // plain grey text. Empty: none.
   QString notice{};
   NoticeLevel noticeLevel = NoticeLevel::Information;
+  // What the row is about in the view (mitcad#1643: Send to Slicer's
+  // filament change at a plane or a face), painted while the pointer is
+  // over the row: `places` as a notice's places (mitcad#1327,
+  // DocumentHost::hoverNoticePlaces), `hover` highlighted as the items
+  // they are (a construction plane, a face). Empty: nothing; a frontend
+  // that cannot tell the pointer over a row paints nothing.
+  QJsonArray places{};
+  Selection hover{};
 
   bool isEmpty() const { return text.isEmpty() && actions.isEmpty() && notice.isEmpty(); }
 };
@@ -1075,6 +1101,11 @@ struct CommandDef {
   // Further keys of the same command (Delete's Backspace on macOS), active
   // while the shortcut is the default; not listed in the shortcut dialog.
   QList<QKeySequence> alternates;
+  // The shortcut contexts its keys live in (ShortcutContext bits) when not
+  // the ones its mode gives (CommandRegistry::shortcutContexts); 0: its
+  // mode's. A 3D sketch drawing tool's placement keys (mitcad#1661) are
+  // Sketch3dToolShortcutContext's.
+  unsigned shortcutContexts = 0;
   QString tab = QStringLiteral("SOLID");
   QString group = QStringLiteral("CREATE");
   bool pinned = false;  // also a button next to the group's menu
@@ -1245,6 +1276,11 @@ struct CommandDef {
   // (mitcad#475: a new cut's hidden targets start unchecked). It must not
   // query the model: the preview may still be applied.
   std::function<bool(QJsonObject& report, CommandState&)> previewReported;
+  // Options of a new feature's add_feature command beside its definition,
+  // in its preview and on OK (mitcad#1632: Thread's fit_faces and shared,
+  // which fit the faces to the thread in the same undo step); not for an
+  // edit.
+  std::function<void(QJsonObject& command, const CommandState&)> addOptions;
   // A provisional presentation while a handle is dragged (mitcad#636,
   // framework/DragProxy.hpp): what dragging value input `key` to `value`
   // does to the tool of the exact preview computed from the inputs

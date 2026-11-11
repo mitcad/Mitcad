@@ -281,6 +281,12 @@ Ui-ExpectNew 'New document' 'an empty document'
 Ui-Mark
 Ui-Step 'import (F11)'                   { Ui-Key 'F11' }
 Ui-Step 'type the path'                  { Type-Into-Dialog '^Import$' $step }
+# The keys go to the test's main window, whose design has content: Import
+# asks where the file goes, and Enter makes a component named after the
+# file (mitcad#1629), as tools/ui-import-test.sh answers it on Linux.
+Ui-ExpectNew 'Import place dialog opened: block.step' 'Import asks where the file goes'
+Ui-Step 'into a new component (Enter)'   { Ui-FocusDialog '^Where to Import$'; Ui-Key 'Return'; Ui-FocusMain }
+Ui-ExpectNew 'Import place: new component' 'a new component chosen'
 Ui-ExpectNew 'Imported block.step as' 'the STEP came in as a base feature'
 $imported = Ui-LastMatch 'New body \S+ \(F\d+\.b0\): volume ([0-9.]+) mm3'
 if ($null -eq $imported) { Ui-Fail 'no volume of the imported body' }

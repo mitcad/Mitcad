@@ -207,6 +207,11 @@ pub struct MockKernel {
     /// give another cylindrical face its radius here: a cut circle's side
     /// is otherwise as wide as the body's bounds.
     pub hole_radii: RefCell<BTreeMap<String, f64>>,
+    /// The cylinder of each round side a revolve made of a profile line
+    /// along its axis, by face name, which `face_cylinder` gives such a
+    /// side (mitcad#1632: the axis is the revolve's, the radius the line's
+    /// distance from it, internal where the profile lies farther out).
+    pub face_cylinders: RefCell<BTreeMap<String, Cylinder>>,
     /// What a modelled thread leaves of each face it threads, by the
     /// threaded shape's history and the face's name: the span (from, to)
     /// along the face's axis (from its low end) that `face_cylinder` gives
@@ -363,6 +368,12 @@ pub struct MockKernel {
     /// do not overlap the tool's by volume is not touched; the others as
     /// without this.
     pub intersects_by_bounds: Cell<bool>,
+    /// Points on faces of 3D sketches (mitcad#1549): faces whose
+    /// `face_point_normal` finds the nearest point of a sphere (centre,
+    /// radius) and the outward normal there, by face name, as a free-form
+    /// face of that shape would (`surfaces` gives such a face as `Other`).
+    /// Other faces have no normals.
+    pub projected_faces: RefCell<BTreeMap<String, ([f64; 3], f64)>>,
     /// A shape is its bounds for copies at the same place (mitcad#1588):
     /// `face_points` gives the centres of the bounds' six faces (as one
     /// face, the shape's first), `boundary_distances` each point's distance
@@ -2024,6 +2035,58 @@ impl Kernel for MockKernel {
         })
     }
 
+    /// The nearest point of a face set in `projected_faces` (a sphere's,
+    /// mitcad#1549) and the outward normal there; with `box_faces`, the
+    /// point of a box's face (its slab of the bounds) nearest to `near`,
+    /// with the face's outward normal (mitcad#1603: a face picked by a
+    /// point, as imports find one); other faces have none.
+    fn face_point_normal(
+        &self,
+        shape: &MockShape,
+        face: &FaceName,
+        near: [f64; 3],
+    ) -> Result<mitcad_model_base::datum::SurfacePoint, KernelError> {
+        let sphere = self
+            .projected_faces
+            .borrow()
+            .get(&face.to_string())
+            .copied();
+        if sphere.is_none() && self.box_faces.get() {
+            let side = box_side(plain_role(face));
+            let (Some((axis, high)), Some(bounds), true) =
+                (side, shape.bounds, shape.has_face(face))
+            else {
+                return Err(KernelError::Unsupported("face normals"));
+            };
+            let mut point: [f64; 3] =
+                std::array::from_fn(|i| near[i].max(bounds.min[i]).min(bounds.max[i]));
+            point[axis] = if high {
+                bounds.max[axis]
+            } else {
+                bounds.min[axis]
+            };
+            let mut normal = [0.0; 3];
+            normal[axis] = if high { 1.0 } else { -1.0 };
+            return Ok(mitcad_model_base::datum::SurfacePoint { point, normal });
+        }
+        if !shape.has_face(face) && self.aliased(shape, face).is_none() {
+            return Err(KernelError::failed(format!("the body has no face {face}")));
+        }
+        let Some((center, radius)) = sphere else {
+            return Err(KernelError::Unsupported("face normals"));
+        };
+        let away = [0, 1, 2].map(|k| near[k] - center[k]);
+        let length = (away[0] * away[0] + away[1] * away[1] + away[2] * away[2]).sqrt();
+        if length <= 1e-12 {
+            return Err(KernelError::failed("the point is the sphere's centre"));
+        }
+        let normal = away.map(|v| v / length);
+        Ok(mitcad_model_base::datum::SurfacePoint {
+            point: [0, 1, 2].map(|k| center[k] + radius * normal[k]),
+            normal,
+        })
+    }
+
     fn primitive(&self, spec: &PrimitiveSpec) -> Result<MockShape, KernelError> {
         self.call("primitive")?;
         let feature = spec.feature;
@@ -2056,6 +2119,12 @@ impl Kernel for MockKernel {
             .iter()
             .map(|role| FaceName::new(feature, role, None))
             .collect();
+        // A cylinder's round side has its radius (mitcad#1632).
+        if let PrimitiveShape::Cylinder { radius, .. } = spec.shape {
+            self.hole_radii
+                .borrow_mut()
+                .insert(FaceName::new(feature, "side0", None).to_string(), radius);
+        }
         let edges = faces
             .iter()
             .enumerate()
@@ -2144,8 +2213,42 @@ impl Kernel for MockKernel {
             if !full {
                 faces.extend([start.clone(), end.clone()]);
             }
+            // Where the middle of the profile lies from the axis: a line
+            // side nearer the axis than that is a hole's wall (mitcad#1632).
+            let (low, high) = region.bounds();
+            let middle = revolve_radius(
+                &spec.axis,
+                spec.frame
+                    .point([(low[0] + high[0]) / 2.0, (low[1] + high[1]) / 2.0]),
+            )
+            .0;
             for segment in region.loops.iter().flat_map(|l| &l.segments) {
                 let side = FaceName::side(spec.feature, segment.key.clone());
+                if let mitcad_model_base::profile::SegmentGeometry::Line { start, end } =
+                    &segment.geometry
+                {
+                    let (a, b) = (spec.frame.point(*start), spec.frame.point(*end));
+                    let ((ra, ta), (rb, tb)) =
+                        (revolve_radius(&spec.axis, a), revolve_radius(&spec.axis, b));
+                    if (ra - rb).abs() < 1e-9 && ra > 1e-9 && (ta - tb).abs() > 1e-9 {
+                        let bottom = ta.min(tb);
+                        let d = spec.axis.direction;
+                        self.face_cylinders.borrow_mut().insert(
+                            side.to_string(),
+                            Cylinder {
+                                axis: Axis {
+                                    origin: std::array::from_fn(|i| {
+                                        spec.axis.origin[i] + bottom * d[i]
+                                    }),
+                                    direction: d,
+                                },
+                                radius: ra,
+                                length: (ta - tb).abs(),
+                                internal: middle > ra,
+                            },
+                        );
+                    }
+                }
                 if !full {
                     edges.push((side.clone(), start.clone()));
                     edges.push((side.clone(), end.clone()));
@@ -2491,32 +2594,6 @@ impl Kernel for MockKernel {
         }
     }
 
-    /// With `box_faces`: the point of a box's face (its slab of the bounds)
-    /// nearest to `near`, with the face's outward normal (mitcad#1603: a
-    /// face picked by a point, as imports find one).
-    fn face_point_normal(
-        &self,
-        shape: &MockShape,
-        face: &FaceName,
-        near: [f64; 3],
-    ) -> Result<mitcad_model_base::datum::SurfacePoint, KernelError> {
-        let side = box_side(plain_role(face)).filter(|_| self.box_faces.get());
-        let (Some((axis, high)), Some(bounds), true) = (side, shape.bounds, shape.has_face(face))
-        else {
-            return Err(KernelError::Unsupported("face normals"));
-        };
-        let mut point: [f64; 3] =
-            std::array::from_fn(|i| near[i].max(bounds.min[i]).min(bounds.max[i]));
-        point[axis] = if high {
-            bounds.max[axis]
-        } else {
-            bounds.min[axis]
-        };
-        let mut normal = [0.0; 3];
-        normal[axis] = if high { 1.0 } else { -1.0 };
-        Ok(mitcad_model_base::datum::SurfacePoint { point, normal })
-    }
-
     /// With `box_faces` (mitcad#524): each face's slab of the bounds (a
     /// box's face), else the bounds.
     fn face_boxes(&self, shape: &MockShape) -> Result<Vec<[[f64; 3]; 2]>, KernelError> {
@@ -2678,6 +2755,10 @@ impl Kernel for MockKernel {
         if !shape.has_face(face) {
             return Err(KernelError::failed(format!("the body has no face {face}")));
         }
+        // A revolve's side along its axis (mitcad#1632).
+        if let Some(cylinder) = self.face_cylinders.borrow().get(&face.to_string()) {
+            return Ok(*cylinder);
+        }
         // A pattern's copy of a face (`F6:inst1(F4:side(c1))`) is what the
         // face is.
         let mut plain = face;
@@ -2687,7 +2768,10 @@ impl Kernel for MockKernel {
         }
         let internal = plain.role.ends_with(".wall");
         let closed = matches!(&plain.key, Some(RoleKey::Segment(s)) if s.ends.is_none());
-        if !internal && !(plain.role == "side" && closed) {
+        // (A cylinder primitive's side has its radius, mitcad#1632.)
+        let primitive_side =
+            plain.role == "side0" && self.hole_radii.borrow().contains_key(&plain.to_string());
+        if !internal && !(plain.role == "side" && closed) && !primitive_side {
             return Err(KernelError::failed(format!(
                 "face {face} is not cylindrical"
             )));
@@ -3499,6 +3583,7 @@ impl Kernel for MockKernel {
             middles: self.middles.clone(),
             vertices: self.vertices.clone(),
             hole_radii: self.hole_radii.clone(),
+            face_cylinders: self.face_cylinders.clone(),
             face_spans: self.face_spans.clone(),
             measures_selections: self.measures_selections.clone(),
             side_planes: self.side_planes.clone(),
@@ -3532,6 +3617,7 @@ impl Kernel for MockKernel {
             extrusion_directions: Arc::clone(&self.extrusion_directions),
             crossing: self.crossing.clone(),
             intersects_by_bounds: self.intersects_by_bounds.clone(),
+            projected_faces: self.projected_faces.clone(),
             copies_by_bounds: self.copies_by_bounds.clone(),
             ..MockKernel::default()
         })
@@ -6493,4 +6579,17 @@ fn describe_target(target: &Target<MockShape>) -> String {
         Target::Face { face, extend, .. } => format!("face {face} extend {extend}"),
         Target::Body { body, through } => format!("body {} through {through}", body.history),
     }
+}
+
+/// A point's distance from a revolve's axis and where along the axis it
+/// lies (mitcad#1632).
+fn revolve_radius(axis: &Axis, p: [f64; 3]) -> (f64, f64) {
+    let d = axis.direction;
+    let rel: [f64; 3] = std::array::from_fn(|i| p[i] - axis.origin[i]);
+    let t = rel[0] * d[0] + rel[1] * d[1] + rel[2] * d[2];
+    let off: [f64; 3] = std::array::from_fn(|i| rel[i] - t * d[i]);
+    (
+        (off[0] * off[0] + off[1] * off[1] + off[2] * off[2]).sqrt(),
+        t,
+    )
 }

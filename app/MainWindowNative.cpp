@@ -1057,7 +1057,7 @@ void MainWindow::refreshNativeWindow() {
   m_nativeWindow->setDocument(documentName(), m_filePath, isModified());
   m_nativeWindow->setSketchMode(m_sketch->isActive());
   m_nativeWindow->setHistoryFilter(m_controller->timeline()->filterLabel(),
-                                 !m_controller->timeline()->filter().isEmpty());
+                                 m_controller->timeline()->hidesFeatures());
   const bool canRename = canChangeModel();
   const bool canToggleVisibility = canChangeModel(true);
   if (m_nativeSnapshotKey != m_snapshot.key || m_nativeNodes.isEmpty() || m_nativeCanRename != canRename ||

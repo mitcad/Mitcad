@@ -1,0 +1,161 @@
+# SPDX-License-Identifier: MIT
+# The scenario of GitHub mitcad/Mitcad#202 end to end (mitcad#1550, item 7)
+# on sketch3d-202.json's design: Box1 (F1.b0) in the root, its top face at
+# z 20; the component Post (O1) with a box (F2.b0) whose top corners are at
+# z 50. Create Sketch (2D) on Box1's top face, a 2-Point Rectangle by two
+# clicks, the Sketch Palette's 3D Sketch box (Sketch1, F3, converted in
+# place, its frame still on the face), the Home view and Fit; a Line from a
+# corner A of the rectangle by typed offsets 10, 0, 15 (off the face's
+# plane), a Tangent Arc continuing it at B whose end is clicked on a top
+# corner V of Post's box (the Linked Point snap, attached through O1);
+# Finish; Pipe with Chain Selection off (A also joins the rectangle) along
+# the line and the arc, listed from A to V, smooth; OK; saved.
+# Run by tools/ui-macos-sketch3d-202-test.sh, which checks the pipe's
+# volume, the saved design and the pipe's ends from this run's log. The
+# Linux and Windows tests (tools/ui-sketch3d-202-test.sh,
+# tools/ui-windows-sketch3d-202-test.ps1) drive the same steps with keys.
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# A 2D sketch on Box1's top face, a rectangle on it.
+mark
+command sketch.create
+wait-log '^Create Sketch kind: 2D$'
+wait-log '^Pick face F1[.]b0/F1:top at '
+wait-idle
+click-pick 'face F1[.]b0/F1:top at '
+wait-log '^Sketch started on [{]"body":"F1[.]b0","face":"F1:top"[}]'
+wait-log '^Sketch view -?[0-9.]+,'
+wait-log '^Palette palette3dSketch at '
+wait-idle
+mark
+key r
+sketch-click 25 25
+sketch-click 45 40
+wait-log '^Added rectangle '
+key Escape
+wait-idle
+
+# 3D Sketch checked: Sketch1 becomes a 3D sketch in place, on the face.
+mark
+click-logged '^Palette palette3dSketch at '
+wait-log '^Palette: 3D Sketch checked for F3$'
+wait-log '^Converted Sketch1 [(]F3[)] to a 3D sketch: dof '
+wait-log '^View banner: 3D Sketch Sketch1'
+wait-log '^3D sketch frame in the design: origin [(]-?[0-9.]+, -?[0-9.]+, 20[.]000000[)], x axis [(]1[.]000000, 0[.]000000, 0[.]000000[)], normal [(]0[.]000000, 0[.]000000, 1[.]000000[)]$'
+wait-log '^3D sketch entity F3/p[0-9]+ at '
+capture A '^3D sketch entity F3/(p[0-9]+) at '
+
+# The Home view and Fit: the face seen from above at an angle.
+mark
+command view.home
+wait-log '^View home'
+command view.fit
+wait-idle
+wait-log '^3D sketch entity F3/${A} at '
+wait-idle
+
+# The line AB off the face by typed offsets.
+mark
+command sketch.line
+wait-log '^3D sketch tool Line: started'
+wait-log '^Pick vertex F2[.]b0/V[{]'
+mark
+click-logged '^3D sketch entity F3/${A} at '
+wait-log '^3D sketch Line: pending point 1 at [(]-?[0-9.]+, -?[0-9.]+, 0[.]000[)]'
+wait-log '^3D sketch field dx at '
+mark
+click-logged '^3D sketch field dx at '
+type 10
+wait-log '^3D sketch field dx: 10'
+key Tab
+wait-log '^3D sketch field focus: dy'
+type 0
+wait-log '^3D sketch field dy: 0'
+key Tab
+wait-log '^3D sketch field focus: dz'
+type 15
+wait-log '^3D sketch field dz: 15'
+mark
+key Return
+wait-log '"offsets":\["10'
+wait-log '^3D sketch Line: made c[0-9]+ from ${A} to p[0-9]+$'
+capture L '^3D sketch Line: made (c[0-9]+) from ${A} to p[0-9]+$'
+capture B '^3D sketch Line: made c[0-9]+ from ${A} to (p[0-9]+)$'
+wait-log '^3D sketch entity F3/${B} at '
+# Esc: the typed field, the chain, then the tool; the sketch stays open.
+mark
+key Escape
+wait-log '^3D sketch Esc: '
+key Escape
+wait-log '^3D sketch Line: chain ended'
+key Escape
+wait-log '^3D sketch tool Line: stopped'
+expect-no-log '^Sketch finished'
+
+# A tangent arc from B onto a top corner of Post's box.
+mark
+command sketch.arc_tangent
+wait-log '^3D sketch tool Tangent Arc: started'
+wait-log '^Pick vertex F2[.]b0/V[{][^ ]*F2:top[^ ]*[}] at '
+capture vname '^Pick vertex F2[.]b0/(V[{][^ ]*F2:top[^ ]*[}]) at '
+mark
+click-logged '^3D sketch entity F3/${B} at '
+wait-log '^3D sketch Tangent Arc: continues ${L} at ${B}$'
+mark
+click-pick 'vertex F2[.]b0/${vname:re} at '
+wait-log '^3D sketch snap: Linked Point: vertex ${vname:re} of F2[.]b0 in Post at [(]'
+wait-log '"cmd":"sketch3d[.]add_arc"'
+wait-log '"mode":"tangent"'
+wait-log '"vertex":"${vname:re}"'
+wait-log '"occurrence":"O1"'
+wait-log '^3D sketch Tangent Arc: made c[0-9]+ from ${B} to p[0-9]+$'
+capture R '^3D sketch Tangent Arc: made (c[0-9]+) from ${B} to p[0-9]+$'
+capture V '^3D sketch Tangent Arc: made c[0-9]+ from ${B} to (p[0-9]+)$'
+# Esc: the chain, then the tool (a third Esc, without a tool, keeps the
+# sketch open).
+mark
+key Escape
+wait-log '^3D sketch Esc: '
+key Escape
+key Escape
+wait-log '^3D sketch tool Tangent Arc: stopped'
+expect-no-log '^Sketch finished'
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'Recompute failed'
+
+# Pipe along AB and the arc, Chain Selection off.
+mark
+command solid.pipe
+wait-log '^Panel Pipe input chain at '
+wait-log '^Sketch entity F3/${L} at '
+wait-idle
+mark
+click-logged '^Panel Pipe input chain at '
+wait-log '^Pipe: Chain Selection = off$'
+wait-idle
+mark
+click-logged '^Sketch entity F3/${L} at '
+wait-log '^Pipe Path listed: ${L} [(]${A} to ${B}[)]$'
+wait-idle
+mark
+click-logged '^Sketch entity F3/${R} at '
+wait-log '^Pipe Path listed: ${L}, ${R} [(]${A} to ${V}[)]$'
+wait-log '^Preview Pipe: ok' 60
+# The corners are logged when they change: AB alone had none, and the
+# tangent arc adds none.
+expect-ever '^Pipe: the path has 0 sharp corners'
+expect-no-log '^Pipe: the path has [1-9]'
+mark
+key Return
+wait-log '^Added pipe' 60
+wait-log '^New body \S+ [(]F4[.]b0[)]: volume [0-9.]+ mm3' 60
+mark
+command file.save
+wait-log '^Saved ' 30
+expect-never 'Recompute failed'
+expect-never 'TestDriver: FAIL'

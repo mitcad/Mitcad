@@ -201,6 +201,44 @@ translates what it shows the user, as it shows it (mitcad#1284).
   linked component's refusal) are matched first and translated after. A
   log line written where only the English is at hand keeps it; one written
   from the shown text shows the language.
+- **Cleaned forms** (mitcad#1635). A message that names topology, a body's
+  uid or an internal id is shown without them (mitcad#1327, #1612;
+  `plain_message` and `FeatureError::from_text` in
+  `core/model-base/src/notice.rs`): `line c4 does not exist` is shown as
+  `a line does not exist`, `body F2.b0 (from Extrude1) belongs to …` as `a
+  body (from Extrude1) belongs to …`. So `mitcad-translations messages`
+  lists beside each template its cleaned form, made as that cleaner makes
+  it: a value after the word of a kind (`line c%1`, `body %1`, a list
+  `faces %1 and %2`) is taken out with the word kept and "a" or "an"
+  before a single one unless its noun phrase has a word like "the", "its"
+  or a possessive (mitcad#1638: `the driven dimension %1` is shown as `the
+  driven dimension`, `the result's face %1` as `the result's face`); without
+  one the article goes before the phrase's modifiers (`meets boundary curve
+  %1`: `meets a boundary curve`, `Bend edge %1`: `A bend edge`), or before
+  the word of the kind after a word a verb follows (`does not fit face %1`:
+  `does not fit a face`). An id elsewhere (`c%1`, `p%1`) becomes its kind
+  ("a curve", "points"); a value followed by ` mm` is a length and stays.
+  A value whose format argument names a kind of topology (`{face}`,
+  `{vertex}`, `{seed_edge}`) where no word of a kind is before it is listed
+  with that kind put in as the cleaner shows such a name (`plane {face}: …`
+  gives `plane a face: …`, mitcad#1638), so it is translated whole and
+  not as `plane %1` with English words in its value; a positional `{}` does
+  not say its kind, so such a message names its argument when it can hold
+  a topological name (mitcad#1650). A value that is a list of such names
+  is named so on purpose, `<kind>_names` (`{region_names}`,
+  `{split_face_names}`: `split into {region_names}` gives `split into
+  regions`); a plural alone (`{edges} edges`) is a count and stays a value,
+  as does a value followed by its own kind's word. One that may be a name of
+  any kind, a face, an edge or a vertex (a projection's source), is named
+  `{topo}` or `*_topo` and listed once with each kind (`the projection of
+  {topo} …` gives `the projection of a face …`, `… an edge …`, `… a
+  vertex …`). The values left are numbered again (`a body (from %1)
+  belongs to %2`). The cleaned forms are
+  translated as whole messages like any other template; some of them are
+  never shown (a value after such a word that is no name, a line number),
+  and their translations only keep the list complete. The cleaner's test
+  `cleaned_templates_are_listed` checks that the list has every cleaned
+  form the cleaner itself makes.
 - **New and changed messages.** A message added or changed in `core/` makes
   the ctest `repo.model-messages` fail until the list is written again:
   `cmake --build <build> --target update_translations` writes
@@ -215,7 +253,14 @@ translates what it shows the user, as it shows it (mitcad#1284).
   text (" and along their sides") stays a fragment with its leading space.
   A template whose value is an English word ending (`%1 occurrence%2`)
   cannot be translated well; such messages are worded in `core/` without
-  it as they are touched.
+  it as they are touched. The same holds for a value that is an English
+  word or phrase of no template of its own (`the curve is a %1, not a line`
+  with `spline`, `along the %1` with `x axis`, `a curve ends %1` with
+  `at`) and for a message joined of pieces (`format!("{}{said}", …)`),
+  which matches only a general template such as `%1 is not %2`: `core/`
+  writes one whole message per case, with only names, numbers and
+  messages of their own as values (`format!("{what} is not a plane")`,
+  one literal per curve kind; mitcad#1626).
 - **Tests.** `test_app`'s model message tests check the matching, the
   values and the English fallback, and that every template has its Finnish
   and its pseudo-language translation. The pseudo-language marks the
@@ -300,6 +345,12 @@ Finnish CAD and engineering usage.
 | body | kappale | solid body: solidi; surface body: pintakappale; mesh body: verkkokappale |
 | feature | piirre | |
 | sketch | luonnos | Create Sketch: Luo luonnos; Finish Sketch: Lopeta luonnos |
+| 3D sketch | 3D-luonnos | Create 3D Sketch: Luo 3D-luonnos; Convert to 3D Sketch: Muunna 3D-luonnokseksi; 3D Sketch Palette: 3D-luonnospaletti; route (a 3D sketch's path): reitti |
+| relation (3D sketch) | suhde | a 3D sketch's constraint; Relations: Suhteet; In plane: Tasossa; in-plane relation, Fix, dimension: tasosuhde, tasokiinnitys, tasomitta; Align X: Suuntaa X; Keep Axis, Keep Plane: Pidä akselilla, Pidä tasossa |
+| On Sketch Plane | Luonnostasolla | the relation; Release from Plane: Vapauta tasosta; Release Plane: Vapauta taso |
+| attach, detach (3D sketch) | linkittää, irrottaa | Attach: Linkitä; Detach: Irrota; linked reference: linkitetty viittaus; source: lähde; Replace Reference: Korvaa viittaus; reference curve: viitekäyrä; On Face (a point on a face): Tahkolla |
+| handle (3D sketch) | kahva | tangent handle: tangenttikahva; anchor: ankkuri; Pick Normal: Poimi normaali; seen edge-on: näkyy syrjittäin |
+| wall (grown from sketch curves) | seinämä | thin walls, ribs, webs; sketch plane: luonnostaso; Thin Extrude: Ohut pursotus |
 | profile | profiili | |
 | curve | käyrä | |
 | line | viiva | |

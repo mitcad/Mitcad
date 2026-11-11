@@ -309,7 +309,8 @@ impl Turn {
             PathRef::Edges { .. }
             | PathRef::SketchCurve { .. }
             | PathRef::SketchCurves { .. }
-            | PathRef::FeatureCurve(_) => path.clone(),
+            | PathRef::FeatureCurve(_)
+            | PathRef::Spatial(_) => path.clone(),
         }
     }
 }

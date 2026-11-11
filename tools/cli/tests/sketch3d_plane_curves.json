@@ -1,0 +1,47 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Ribs, webs, thin walls and surfaces of a 3D sketch's curves in its sketch plane (mitcad#1550), on the geometry kernel. 3DSketch1 (F1) on XY: A at the origin, AB 40 along +X (c3, its length k3), BC 30 along +Y (c5, to p4), both in the sketch plane, and CD from C up to (40, 30, 20) (c7), out of it."},
+  {"cmd": "sketch3d.create"},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": [0, 0, 0], "end": [38, 1, 0], "axis": "x", "length": 40, "start_source": "origin"},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": "p2", "end": [41, 28, 0], "axis": "y", "length": 30},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": "p4", "end": [40, 30, 20]},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {"plane_curves": ["c3", "c5"]}}},
+
+  {"comment": "Box1 (F2): a block under the sketch plane for the web to join (a web joins a body): 65 x 10 x 10 from (-5, -5, -10)."},
+  {"cmd": "add_feature", "def": {"type": "box",
+    "plane": {"type": "fixed", "origin": [-5, -5, -10], "normal": [0, 0, 1], "x_axis": [1, 0, 0]},
+    "length": 65, "width": 10, "height": 10, "operation": "new_body"}},
+  {"expect": {"feature": "Box1", "status": "ok", "body": "F2.b0", "volume": 6500, "tolerance": 1e-6,
+    "min": [-5, -5, -10], "max": [60, 5, 0]}},
+
+  {"comment": "Web1 (F3): a wall 2 thick and 10 deep along AB, the sketch normal up, joined to the block it stands on: 6500 + 40 * 2 * 10."},
+  {"cmd": "add_feature", "def": {"type": "web", "curves": {"sketch": "F1", "curves": ["c3"]}, "thickness": 2,
+    "extent": {"type": "depth", "depth": 10}}},
+  {"expect": {"feature": "Web1", "status": "ok", "body": "F2.b0", "volume": 7300, "tolerance": 1e-6,
+    "min": [-5, -5, -10], "max": [60, 5, 10]}},
+
+  {"comment": "Extrude1 (F4): thin walls along AB and BC, 2 thick on side 1 (round the outside of the corner B, mitred), 10 high: (2 * 40 + 2 * 30 + 2 * 2) * 10, as from a 2D sketch's L."},
+  {"cmd": "add_feature", "def": {"type": "extrude", "extent": {"type": "distance", "distance": 10},
+    "thin": {"location": "side1", "thickness": 2, "curves": {"sketch": "F1", "curves": ["c3", "c5"]}},
+    "operation": "new_body"}},
+  {"expect": {"feature": "Extrude1", "status": "ok", "body": "F4.b0", "volume": 1440, "tolerance": 1e-6,
+    "min": [0, -2, 0], "max": [42, 30, 10]}},
+
+  {"comment": "Extrude2 (F5): a surface extrusion of AB and BC, 10 up: one sheet, a face per curve."},
+  {"cmd": "add_feature", "def": {"type": "extrude", "curves": {"sketch": "F1", "curves": ["c3", "c5"]},
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body", "surface": true}},
+  {"expect": {"feature": "Extrude2", "status": "ok", "body": "F5.b0", "faces": 2, "has_face": "F5:side(c3)"}},
+
+  {"comment": "Rib1 (F6) along CD, out of the sketch plane: it fails, naming the sketch."},
+  {"cmd": "add_feature", "def": {"type": "rib", "curves": {"sketch": "F1", "curves": ["c7"]}, "thickness": 2,
+    "extent": {"type": "depth", "depth": 10}}},
+  {"expect": {"feature": "Rib1", "status": "error", "error_contains": "3DSketch1's c7 does not lie in its sketch plane"}},
+
+  {"comment": "AB to 50 (k3): the web and the walls follow, 6500 + 50 * 2 * 10 and (2 * 50 + 2 * 30 + 2 * 2) * 10."},
+  {"cmd": "sketch3d.set_dimension", "sketch": "F1", "dimension": "k3", "value": 50},
+  {"expect": {"feature": "Web1", "status": "ok", "body": "F2.b0", "volume": 7500, "tolerance": 1e-6}},
+  {"expect": {"feature": "Extrude1", "status": "ok", "body": "F4.b0", "volume": 1640, "tolerance": 1e-6,
+    "max": [52, 30, 10]}},
+  {"expect": {"feature": "Extrude2", "status": "ok", "body": "F5.b0", "faces": 2}},
+  {"expect": {"feature": "Rib1", "status": "error", "error_contains": "does not lie in its sketch plane"}}
+]

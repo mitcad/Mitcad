@@ -302,8 +302,13 @@ ui_start_app() {
   # The windows of other instances (ui_instance) are not this one's.
   before=" $(xdotool search --onlyvisible --name ' - MitCad [^ ]+$' 2> /dev/null | tr '\n' ' ')"
   if [ "${UI_GDB:-0}" = 1 ] && command -v gdb > /dev/null; then
-    gdb -q -batch -ex "set debuginfod enabled off" -ex run -ex bt --args "$UI_APP" "${options[@]}" "$@" \
-      > "$UI_LOG" 2>&1 &
+    # gdb's status is the app's (mitcad#1665): the backtrace only while the
+    # app is stopped (on a signal), since a bt after a normal exit fails and
+    # a batch gdb then exits non-zero although the test passed; a crash
+    # still gives its backtrace and a non-zero status.
+    gdb -q -batch -return-child-result -ex "set debuginfod enabled off" -ex run \
+      -ex "python (gdb.execute('bt') if gdb.selected_inferior().pid else None)" \
+      --args "$UI_APP" "${options[@]}" "$@" > "$UI_LOG" 2>&1 &
   else
     "$UI_APP" "${options[@]}" "$@" > "$UI_LOG" 2>&1 &
   fi
@@ -634,6 +639,37 @@ ui_panel_reveal() {
   ui_fail "the panel did not scroll '$1' into its view"
 }
 
+# ui_sketch3d_reveal "3D sketch item k5 field": a row or control of the 3D
+# Sketch Palette that the card's scrolling put out of sight ("… out of
+# sight") is wheeled into it, over a place of the palette in sight: down
+# first, up when the card goes no further. The palette logs its places
+# again after each scroll that moved them.
+ui_sketch3d_reveal() {
+  local i j last anchor count button=5 moved
+  local places='^3D sketch (item|reference|edit control) .* at [0-9]+,[0-9]+$'
+  ui_sync >&2
+  for i in $(seq 1 80); do
+    last=$(grep -F -e "$1 at " -e "$1 out of sight" "$UI_LOG" | tail -1)
+    [[ $last == *" out of sight" ]] || return 0
+    anchor=$(grep -E "$places" "$UI_LOG" | tail -1)
+    [[ $anchor =~ \ at\ ([0-9]+),([0-9]+)$ ]] || return 0
+    count=$(wc -l < "$UI_LOG")
+    xdotool mousemove $((X + BASH_REMATCH[1] * UI_SCALE)) $((Y + BASH_REMATCH[2] * UI_SCALE)) sleep 0.08 \
+      click "$button"
+    moved=0
+    for j in $(seq 1 20); do
+      tail -n +$((count + 1)) "$UI_LOG" | grep -qE '^3D sketch (item|reference|edit control) ' && { moved=1; break; }
+      sleep 0.1
+    done
+    ui_sync >&2
+    if [ "$moved" = 0 ]; then
+      [ "$button" = 5 ] || ui_fail "the 3D Sketch Palette did not scroll '$1' into sight"
+      button=4
+    fi
+  done
+  ui_fail "the 3D Sketch Palette did not scroll '$1' into sight"
+}
+
 # ui_logged_at "text": screen position of the last "<text> at x,y" line. A
 # row of the browser that is not in sight is scrolled into sight first
 # (ui_browser_reveal), and so is an input, a note action or a mark of a
@@ -646,6 +682,7 @@ ui_logged_at() {
     "Browser "*) ui_browser_reveal "$1" ;;
     "Panel "*" input "*|"Panel "*" action "*|"Panel "*" mark "*|"Panel "*" result "*|"Measure "*)
       ui_panel_reveal "$1" ;;
+    "3D sketch item "*|"3D sketch reference "*|"3D sketch edit control "*) ui_sketch3d_reveal "$1" ;;
   esac
   # (A single ellipsis and three dots match each other, mitcad#645.)
   last=$(sed "s/…/.../g" "$UI_LOG" | grep -F -e "${1//…/...} at " -e "${1//…/...} out of sight" | tail -1)

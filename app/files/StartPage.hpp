@@ -9,7 +9,10 @@
 // the Docked layout and in the AppKit frontend, whose ribbon shows the
 // retained ribbon's tabs; its content starts below the rows that float over
 // the view's top (OcctViewer::overlayInsets). While it shows, the window
-// hides the cards over the view (MainWindowStart.cpp).
+// hides the cards over the view (MainWindowStart.cpp). Its backdrop is a
+// rounded surface inset from the view's edges as the floating cards are,
+// with the view's own background around it (StartBackdrop.hpp,
+// mitcad#1439).
 //
 // From the top: "Welcome to MitCad" with What's New in X.Y (the version's
 // release page in the browser: nothing is fetched at start-up); the quick
@@ -157,8 +160,9 @@ protected:
   void dropEvent(QDropEvent* event) override;
 
 private:
-  // Its place: the whole view, its content below the floating rows and the
-  // workspace tabs, its footer above the message band.
+  // Its place: the whole view, its rounded backdrop and its content below
+  // the floating rows and the workspace tabs, its footer above the message
+  // band.
   void place();
   // place() once the event loop is back (the tabs or the band moved).
   void placeSoon();
@@ -244,6 +248,11 @@ private:
   // The tabs and the band whose shows, hides, moves and resizes place it
   // again (eventFilter).
   QList<QPointer<QWidget>> m_bars;
+  // The rounded backdrop's room at the top (below the rows over the view)
+  // and at the bottom (the band over it), as place() found them
+  // (StartBackdrop.hpp, mitcad#1439).
+  int m_backdropTop = 0;
+  int m_backdropBelow = 0;
 };
 
 } // namespace mitcad

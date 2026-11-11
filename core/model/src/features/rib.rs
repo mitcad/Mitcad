@@ -8,6 +8,11 @@
 //! Instead of sketch curves either takes the curve of an Intersection Curve
 //! (mitcad#1417), `{"feature": "F5"}`, when it lies in one plane: that
 //! plane is its sketch plane ([`intersection_curve::curve_plane`]).
+//!
+//! The sketch curves may be a 3D sketch's (mitcad#1550), in the same form:
+//! its curves in its sketch plane, as its profiles are; one out of the
+//! plane fails the rib or web, naming the sketch
+//! ([`SketchCurves::in_plane`]).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -89,7 +94,8 @@ impl RibCurves {
 
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
         match self {
-            Self::Sketch(curves) => curves.check(ctx),
+            // A 3D sketch's in its sketch plane too (mitcad#1550).
+            Self::Sketch(curves) => curves.check_in_plane(ctx),
             Self::Feature { feature } => {
                 let entry = ctx.feature(*feature)?;
                 if matches!(entry.def, super::FeatureDef::IntersectionCurve(_)) {
@@ -114,7 +120,7 @@ impl RibCurves {
         ctx: &mut EvalContext<'_, K>,
     ) -> Result<(SketchFrame, Vec<PathCurve>), String> {
         let feature = match self {
-            Self::Sketch(curves) => return curves.curves(ctx),
+            Self::Sketch(curves) => return curves.in_plane(ctx),
             Self::Feature { feature } => *feature,
         };
         let curve = ctx.feature_curve(feature)?;

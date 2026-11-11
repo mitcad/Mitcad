@@ -8,6 +8,7 @@ use super::extrude::{Operation, apply_operation, check_participants, participant
 use super::geom_ref::PathRef;
 use super::mapping::map_params;
 use super::path::{self, CurvePath, SketchCurves};
+use super::spatial_path::SpatialPath;
 use super::sweep::{PathExtent, ProfileAt, SweepPlace};
 use super::{CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References, ToolUse};
 use crate::ids::BodyUid;
@@ -585,6 +586,7 @@ impl PipeDef {
     fn place<K: Kernel>(&self, ctx: &EvalContext<'_, K>, _piece: &PathCurve) -> String {
         match &self.path {
             CurvePath::Sketch(SketchCurves { sketch, .. })
+            | CurvePath::Spatial(SpatialPath { sketch, .. })
             | CurvePath::Path(
                 PathRef::SketchCurve { sketch, .. } | PathRef::SketchCurves { sketch, .. },
             ) => format!("a curve of {}", ctx.feature_name(*sketch)),

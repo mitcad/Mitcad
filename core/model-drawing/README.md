@@ -15,9 +15,11 @@ them out.
 | `convention` | Drawing conventions on the projected lines (mitcad#1112): fillets and chamfers smaller than the pen as sharp corners, tangent and short edges that would blot left out, threads drawn by ISO 6410 |
 | `annotate` | Annotations on views laid out from their picks |
 | `tables` | Hole tables and parts lists drawn from their rows |
-| `template` | Sheet templates drawn; the built-in ones (`templates/*.json`) and the user's and projects' libraries |
+| `template` | Sheet templates drawn, with their title blocks' images (mitcad#1625); the built-in ones (`templates/*.json`) and the user's and projects' libraries |
 | `sheet` | The sheet's groups, pens (the one table of ISO 128 line widths, also for the application's sheet) and texts that the writers write |
 | `pdf`, `svg`, `dxf`, `dwg` | The writers |
+| `pdf_image` | A title block's images (mitcad#1625) as PDF images: a PNG decoded with its transparency as a soft mask, a JPEG as it is; the exports' warnings for what a format leaves out of the images |
+| `svg_image` | A title block's SVG images (mitcad#1627) read with usvg into paths of lines and cubic Béziers with solid colours, opacities, strokes and clip paths, their text as its glyphs' outlines (mitcad#1637: the system's fonts and the bundled Droid Sans, `svg_image::fonts`), fitted in their box as the view draws them: the PDF writer's vector paths, the DXF and DWG writers' lines (flattened within 0.01 mm) |
 | `cut_sheet` | Cut sheets (mitcad#853): a part's outline as the body's silhouette from its projection, parts placed, turned and checked for overlaps, the DXF and SVG of their outlines |
 | `bspline` | B-splines in a plane evaluated, cut, turned round and split into Bézier pieces, so cut sheets write the projection's curves as they are |
 | `lib.rs` | The projection cache in the document's side cache (`DrawingCache`) |

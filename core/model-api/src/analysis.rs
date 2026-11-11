@@ -2213,10 +2213,10 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
                 Ok(ClipInput {
                     shape: shape.clone(),
                     plane,
-                    detached: false,
                 })
             })
             .collect();
+        let mut detached_flags = vec![false; items.len()];
         if detach {
             let bodies: Vec<(&K::Shape, DatumPlane)> = items
                 .iter()
@@ -2224,7 +2224,7 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
                 .collect();
             let detached = self.kernel().detach_all(&bodies);
             let mut detached = detached.into_iter();
-            for item in &mut items {
+            for (item, flag) in items.iter_mut().zip(&mut detached_flags) {
                 if item.is_err() {
                     continue;
                 }
@@ -2232,7 +2232,7 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
                     Some(Ok(Some(copy))) => {
                         if let Ok(input) = item {
                             input.shape = copy;
-                            input.detached = true;
+                            *flag = true;
                         }
                     }
                     Some(Ok(None)) => {}
@@ -2241,7 +2241,10 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
                 }
             }
         }
-        Ok(PreparedClips { items })
+        Ok(PreparedClips {
+            items,
+            detached: detached_flags,
+        })
     }
 }
 
@@ -2250,13 +2253,18 @@ impl<K: Kernel> AnalysisLocal<K> for Document<K> {
 struct ClipInput<K: Kernel> {
     shape: K::Shape,
     plane: DatumPlane,
-    detached: bool,
 }
 
 /// `analysis_clips` prepared from the document ([`Document::prepare_clips`],
 /// mitcad#438): worked out without it, on any thread.
 pub struct PreparedClips<K: Kernel> {
     items: Vec<Result<ClipInput<K>, ApiError>>,
+    /// Whether each item's shape is a detached copy. Kept beside the items,
+    /// not in [`ClipInput`] (mitcad#1659): there the bool's spare values
+    /// tagged the `Err` items, and rustc 1.99 (LLVM 23) compiled the
+    /// bridge's `detached` of an `Err` item to return that tag byte (2) as
+    /// the bool, which C++ took for true. A bool of its own holds 0 or 1.
+    detached: Vec<bool>,
 }
 
 impl<K: Kernel> PreparedClips<K> {
@@ -2274,7 +2282,7 @@ impl<K: Kernel> PreparedClips<K> {
     /// for a body with an error.
     pub fn input(&self, index: usize) -> Option<(&K::Shape, bool)> {
         match self.items.get(index) {
-            Some(Ok(input)) => Some((&input.shape, input.detached)),
+            Some(Ok(input)) => Some((&input.shape, self.detached[index])),
             _ => None,
         }
     }

@@ -1309,6 +1309,16 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-timeline-auto-fix"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-timeline-auto-fix PROPERTIES TIMEOUT 180)
+    # The Thread panel fits a hole too small for the thread (mitcad#1632):
+    # its note's button, the thread and the fit one undo step; the Linux
+    # test's shared input script.
+    add_test(NAME app.ui-windows-thread-fit
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-thread-fit-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-thread-fit"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-thread-fit PROPERTIES TIMEOUT 240)
     # A Center to Center Slot's typed length and width become its
     # dimensions, so that only its place is free (mitcad#1225); the Linux
     # test's shared input script and mitcad-cli's check.
@@ -1959,6 +1969,28 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-remove-project"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-remove-project PROPERTIES TIMEOUT 300)
+    # 3D sketches (mitcad#1524): Create Sketch's 2D or 3D choice, an empty
+    # new 3D sketch taken back, an API-made 3D sketch on a box's face
+    # edited: its frame, a point picked by its id and described, the 2D
+    # tools disabled, Esc. The Linux test is tools/ui-sketch3d-test.sh.
+    add_test(NAME app.ui-windows-sketch3d
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch3d-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch3d"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch3d PROPERTIES TIMEOUT 300)
+    # The scenario of GitHub mitcad/Mitcad#202 end to end (mitcad#1550): a
+    # rectangle sketched on a face, 3D Sketch checked, a line and a tangent
+    # arc onto a vertex of another component, a Pipe along them. The Linux
+    # test is tools/ui-sketch3d-202-test.sh.
+    add_test(NAME app.ui-windows-sketch3d-202
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch3d-202-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch3d-202"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch3d-202 PROPERTIES TIMEOUT 300)
     # Sketch Move/Copy (mitcad#1563, GitHub mitcad/Mitcad#212): Point to
     # Point from a rectangle's corner to a circle's center, Translate's
     # handle dragged onto a point, and Rotate without a pivot about a
@@ -2124,6 +2156,149 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-esc-leaves"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-sketch-esc-leaves PROPERTIES TIMEOUT 300)
+    # A feature that changes the picked body activates its component
+    # (mitcad#1634): Fillet on another component's edge activates it (Undo:
+    # the fillet, then the activation; Cancel keeps it), and an edge of each
+    # component offers Activate in the panel. The Linux test's shared input
+    # script (tools/ui-activate-on-pick-test.sh).
+    add_test(NAME app.ui-windows-activate-on-pick
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-activate-on-pick-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-activate-on-pick"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-activate-on-pick PROPERTIES TIMEOUT 300)
+    # The sketch Rectangular Pattern's second direction (mitcad#1640): a
+    # 3 x 2 grid by default, an arrow for each direction whose drag sets
+    # its spacing, a faint one at Quantity 2 of 1. The Linux test's shared
+    # input script (tools/ui-sketch-pattern-dir2-test.sh).
+    add_test(NAME app.ui-windows-sketch-pattern-dir2
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-pattern-dir2-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-pattern-dir2"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-pattern-dir2 PROPERTIES TIMEOUT 300)
+    # The BUILD lists' Copy as Text and Save as Text..., CSV with CRLF rows
+    # (mitcad#1641). The Linux test's shared input script
+    # (tools/ui-build-lists-text-test.sh).
+    add_test(NAME app.ui-windows-build-lists-text
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-build-lists-text-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-build-lists-text"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-build-lists-text PROPERTIES TIMEOUT 300)
+    # The design's origin shown and hidden with the Origin folder's eye and
+    # with View > Show > Origins, read from the view (mitcad#1642). The
+    # Linux test's shared input script (tools/ui-origin-show-test.sh).
+    add_test(NAME app.ui-windows-origin-show
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-origin-show-test.ps1"
+              -App "$<TARGET_FILE:mitcad>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-origin-show"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-origin-show PROPERTIES TIMEOUT 300)
+    # The project picker's New Folder (mitcad#1649): a folder made in the
+    # selected project and named in place, the same name refused, the
+    # design saved into the new folder; a folder made in a cancelled
+    # picker stays. The Linux test's shared input script
+    # (tools/ui-picker-new-folder-test.sh).
+    add_test(NAME app.ui-windows-picker-new-folder
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-picker-new-folder-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-picker-new-folder"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-picker-new-folder PROPERTIES TIMEOUT 300)
+    # Placements held where the snap marker showed (mitcad#1645): a paste,
+    # Move/Copy's handle and a Point to Point copy dropped on points, a
+    # text's frame and arcs ending on points. The Linux test's shared input
+    # script (tools/ui-sketch-snap-hold-test.sh). Its Copy writes the system
+    # clipboard (app.ui-windows-sketch-clipboard).
+    add_test(NAME app.ui-windows-sketch-snap-hold
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-snap-hold-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-snap-hold"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-snap-hold PROPERTIES TIMEOUT 360 RESOURCE_LOCK system_clipboard)
+    # The sketch's x and y axes as the sketch Rectangular Pattern's
+    # Direction (mitcad#1655): in a sketch of a circle and no line, the y
+    # axis picked runs the copies along y, the x axis along x. The Linux
+    # test's shared input script (tools/ui-sketch-pattern-axis-test.sh).
+    add_test(NAME app.ui-windows-sketch-pattern-axis
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-pattern-axis-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-pattern-axis"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-pattern-axis PROPERTIES TIMEOUT 300)
+    # The 3D Sketch Palette's rows in words (mitcad#1652): no ids,
+    # topological names or coordinates; the pointer over the reference
+    # curve's row paints it and the edge it follows. The Linux test's shared
+    # input script (tools/ui-sketch3d-palette-words-test.sh).
+    add_test(NAME app.ui-windows-sketch3d-palette-words
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch3d-palette-words-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch3d-palette-words"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch3d-palette-words PROPERTIES TIMEOUT 300)
+    # The free rotation of a 3D sketch's placement plane (mitcad#1661): a
+    # route drawn with the rotated plane (Rotate typed, a handle dragged),
+    # Reset, Show Plane and Show Handles. The Linux test's shared input
+    # script (tools/ui-sketch3d-rotation-test.sh).
+    add_test(NAME app.ui-windows-sketch3d-rotation
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch3d-rotation-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch3d-rotation"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch3d-rotation PROPERTIES TIMEOUT 300)
+    # 3D relations from the 3D Sketch Palette (mitcad#1661): Parallel,
+    # Perpendicular and Angle of lines in space, Symmetric of two points
+    # about the sketch's YZ plane. The Linux test's shared input script
+    # (tools/ui-sketch3d-relations-test.sh).
+    add_test(NAME app.ui-windows-sketch3d-relations
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch3d-relations-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch3d-relations"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch3d-relations PROPERTIES TIMEOUT 300)
+    # The timeline filter's default, Active Component with its
+    # subcomponents, and the choice saved for the next start (mitcad#1662).
+    # The Linux test's shared input scripts
+    # (tools/ui-timeline-filter-default-test.sh).
+    add_test(NAME app.ui-windows-timeline-filter-default
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-timeline-filter-default-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-timeline-filter-default"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-timeline-filter-default PROPERTIES TIMEOUT 360)
+    # Send to Slicer's Filament changes (mitcad#1643): a change at a typed
+    # height, the view's print colours, Undo, a change at a picked plane,
+    # Filament Change Here…. The Linux test's shared input script
+    # (tools/ui-filament-changes-test.sh).
+    add_test(NAME app.ui-windows-filament-changes
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-filament-changes-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-filament-changes"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-filament-changes PROPERTIES TIMEOUT 300)
+    # The 3D sketch manipulator's keys (Tab, Shift+Tab, Up Arrow) and Copy
+    # and Paste between 3D sketches (mitcad#1661). The Linux test's shared
+    # input script (tools/ui-sketch3d-keys-clipboard-test.sh).
+    add_test(NAME app.ui-windows-sketch3d-keys-clipboard
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch3d-keys-clipboard-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch3d-keys-clipboard"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch3d-keys-clipboard PROPERTIES TIMEOUT 300)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

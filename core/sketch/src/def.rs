@@ -219,7 +219,7 @@ impl FrameDef {
             .then_some(frame)
     }
 
-    fn check(&self) -> Result<(), String> {
+    pub(crate) fn check(&self) -> Result<(), String> {
         let finite = self
             .origin
             .iter()

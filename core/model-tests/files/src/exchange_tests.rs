@@ -1671,6 +1671,178 @@ fn import_file_keeps_a_step_assembly_as_components() {
     assert!(error.contains("unknown variant"), "{error}");
 }
 
+/// The occurrences that place a component, as (parent, transform).
+fn placements(
+    doc: &Document<MockKernel>,
+    component: mitcad_model::ids::ComponentUid,
+) -> Vec<(mitcad_model::ids::ComponentUid, Transform)> {
+    doc.assembly()
+        .occurrences
+        .iter()
+        .filter(|o| o.component == component)
+        .map(|o| (o.parent, o.transform))
+        .collect()
+}
+
+fn component_named(
+    doc: &Document<MockKernel>,
+    name: &str,
+) -> Option<mitcad_model::ids::ComponentUid> {
+    doc.assembly()
+        .components
+        .iter()
+        .find(|c| c.name == name)
+        .map(|c| c.uid)
+}
+
+#[test]
+fn import_file_wraps_a_file_in_a_component_named_after_it() {
+    use mitcad_model::ids::ComponentUid;
+    let mut doc = Document::new(MockKernel::default());
+    let single = "/models/bracket.step";
+    doc.kernel()
+        .files
+        .borrow_mut()
+        .insert(single.to_owned(), vec![body(Some("Bracket"), "bracket", 6)]);
+    // An assembly placing one part twice.
+    let instance = |x: f64| ImportInstance {
+        part: 0,
+        name: None,
+        transform: Transform::translation([x, 0.0, 0.0]),
+    };
+    let assembly = "/models/pins.step";
+    doc.kernel().assemblies.borrow_mut().insert(
+        assembly.to_owned(),
+        ImportAssembly {
+            parts: vec![ImportPart {
+                name: Some("Pin".to_owned()),
+                bodies: vec![body(Some("Pin"), "pin", 3)],
+                instances: Vec::new(),
+            }],
+            roots: vec![instance(0.0), instance(50.0)],
+        },
+    );
+
+    // An empty design takes the file as it is: no component around it.
+    let result = command(&mut doc, json!({"cmd": "import_file", "path": single})).unwrap();
+    assert!(result.get("component").is_none(), "{result}");
+    assert!(doc.assembly().is_empty());
+    let base = doc.feature(FeatureUid(1)).unwrap();
+    assert_eq!(base.component, ComponentUid::ROOT);
+    doc.undo();
+    assert!(!doc.has_content());
+
+    // A design with a body.
+    doc.add_base_feature(BaseInput::new(vec![body(Some("Block"), "box", 6)]))
+        .unwrap();
+    assert!(doc.import_wraps_by_default(single));
+    assert!(doc.import_wraps_by_default("/models/bracket.IGS"));
+    assert!(doc.import_wraps_by_default("/models/bracket.brp"));
+    assert!(!doc.import_wraps_by_default("/models/scan.stl"));
+
+    // A single-part file: its base feature in a new component named after
+    // the file, placed once in the root at the identity.
+    let result = command(&mut doc, json!({"cmd": "import_file", "path": single})).unwrap();
+    assert_eq!(result["component"]["name"], "bracket", "{result}");
+    let bracket = component_named(&doc, "bracket").expect("the component bracket");
+    assert_eq!(result["component"]["uid"], bracket.to_string());
+    assert_eq!(
+        placements(&doc, bracket),
+        [(ComponentUid::ROOT, Transform::IDENTITY)]
+    );
+    let feature: FeatureUid = result["uid"].as_str().unwrap().parse().unwrap();
+    assert_eq!(doc.feature(feature).unwrap().component, bracket);
+    assert_eq!(doc.component_bodies(bracket).len(), 1);
+    assert_eq!(doc.undo_label(), Some("Import bracket.step"));
+    // One undo step takes the component with it.
+    doc.undo();
+    assert!(doc.assembly().is_empty());
+    assert_eq!(doc.bodies().len(), 1);
+
+    // An assembly: its top instances are placed in the new component.
+    let result = command(&mut doc, json!({"cmd": "import_file", "path": assembly})).unwrap();
+    assert_eq!(result["structure"], "components");
+    assert_eq!(result["component"]["name"], "pins", "{result}");
+    let pins = component_named(&doc, "pins").expect("the component pins");
+    assert_eq!(
+        placements(&doc, pins),
+        [(ComponentUid::ROOT, Transform::IDENTITY)]
+    );
+    let pin = component_named(&doc, "Pin").expect("the part's component");
+    let mut xs: Vec<f64> = placements(&doc, pin)
+        .into_iter()
+        .map(|(parent, transform)| {
+            assert_eq!(parent, pins);
+            transform.translation[0]
+        })
+        .collect();
+    xs.sort_by(f64::total_cmp);
+    assert_eq!(xs, [0.0, 50.0]);
+    assert_eq!(doc.undo_label(), Some("Import pins.step"));
+    // The pins where the file places them, in the design.
+    assert_eq!(
+        doc.instances()
+            .iter()
+            .filter(|i| i.component == pin)
+            .count(),
+        2
+    );
+    // The same file again: the name gets a suffix.
+    let result = command(&mut doc, json!({"cmd": "import_file", "path": assembly})).unwrap();
+    assert_eq!(result["component"]["name"], "pins (1)", "{result}");
+    doc.undo();
+    doc.undo();
+    assert!(doc.assembly().is_empty());
+
+    // wrap false: into the active component, as before.
+    let result = command(
+        &mut doc,
+        json!({"cmd": "import_file", "path": single, "wrap": false}),
+    )
+    .unwrap();
+    assert!(result.get("component").is_none(), "{result}");
+    assert!(doc.assembly().is_empty());
+    let feature: FeatureUid = result["uid"].as_str().unwrap().parse().unwrap();
+    assert_eq!(doc.feature(feature).unwrap().component, ComponentUid::ROOT);
+    doc.undo();
+    let result = command(
+        &mut doc,
+        json!({"cmd": "import_file", "path": assembly, "wrap": false}),
+    )
+    .unwrap();
+    assert!(result.get("component").is_none(), "{result}");
+    assert!(component_named(&doc, "pins").is_none());
+    let pin = component_named(&doc, "Pin").expect("the part's component");
+    assert!(
+        placements(&doc, pin)
+            .iter()
+            .all(|(parent, _)| *parent == ComponentUid::ROOT)
+    );
+    doc.undo();
+
+    // wrap true into an empty design, and for a mesh file.
+    doc.undo();
+    assert!(!doc.has_content());
+    doc.kernel()
+        .files
+        .borrow_mut()
+        .insert("scan.stl".to_owned(), vec![body(Some("scan"), "mesh", 1)]);
+    let result = command(
+        &mut doc,
+        json!({"cmd": "import_file", "path": "scan.stl", "wrap": true}),
+    )
+    .unwrap();
+    assert_eq!(result["component"]["name"], "scan", "{result}");
+    // A failed read makes no component.
+    let error = command(
+        &mut doc,
+        json!({"cmd": "import_file", "path": "missing.step", "wrap": true}),
+    )
+    .unwrap_err();
+    assert!(error.contains("cannot read missing.step"), "{error}");
+    assert_eq!(doc.assembly().components.len(), 1);
+}
+
 #[test]
 fn file_structure_query_finds_step_assemblies() {
     let dir = mitcad_model::testing::unique_temp_dir("file-structure");

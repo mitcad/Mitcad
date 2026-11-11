@@ -219,6 +219,122 @@ impl<T: Scalar> V2<T> {
     }
 }
 
+/// A 3D vector of scalars (the spatial system's points, mitcad#1542).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct V3<T> {
+    pub x: T,
+    pub y: T,
+    pub z: T,
+}
+
+impl<T: Scalar> V3<T> {
+    pub fn new(x: T, y: T, z: T) -> Self {
+        V3 { x, y, z }
+    }
+    /// A constant vector.
+    pub fn cst(v: [f64; 3]) -> Self {
+        V3::new(T::cst(v[0]), T::cst(v[1]), T::cst(v[2]))
+    }
+    pub fn add(self, o: Self) -> Self {
+        V3::new(self.x + o.x, self.y + o.y, self.z + o.z)
+    }
+    pub fn sub(self, o: Self) -> Self {
+        V3::new(self.x - o.x, self.y - o.y, self.z - o.z)
+    }
+    pub fn mul(self, k: T) -> Self {
+        V3::new(self.x * k, self.y * k, self.z * k)
+    }
+    pub fn mulf(self, k: f64) -> Self {
+        V3::new(self.x.mulf(k), self.y.mulf(k), self.z.mulf(k))
+    }
+    pub fn dot(self, o: Self) -> T {
+        self.x * o.x + self.y * o.y + self.z * o.z
+    }
+    pub fn cross(self, o: Self) -> Self {
+        V3::new(
+            self.y * o.z - self.z * o.y,
+            self.z * o.x - self.x * o.z,
+            self.x * o.y - self.y * o.x,
+        )
+    }
+    pub fn norm(self) -> T {
+        self.dot(self).sqrt()
+    }
+    /// Unit vector; a zero vector stays zero instead of becoming NaN.
+    pub fn unit(self) -> Self {
+        let n = self.norm();
+        if n.val() > 0.0 {
+            V3::new(self.x / n, self.y / n, self.z / n)
+        } else {
+            self
+        }
+    }
+    pub fn get(self, axis: usize) -> T {
+        match axis {
+            0 => self.x,
+            1 => self.y,
+            _ => self.z,
+        }
+    }
+    pub fn val(self) -> [f64; 3] {
+        [self.x.val(), self.y.val(), self.z.val()]
+    }
+}
+
+/// The points a spline combines ([`crate::spline::SplineBasis::eval`]):
+/// [`V2`] in the planar sketch, [`V3`] in the spatial system. The basis is
+/// the same for any number of coordinates.
+pub(crate) trait Coords<T: Scalar>: Copy {
+    fn zero() -> Self;
+    fn plus(self, o: Self) -> Self;
+    fn minus(self, o: Self) -> Self;
+    fn times(self, k: T) -> Self;
+    fn timesf(self, k: f64) -> Self;
+    fn over(self, k: T) -> Self;
+}
+
+impl<T: Scalar> Coords<T> for V2<T> {
+    fn zero() -> Self {
+        V2::new(T::cst(0.0), T::cst(0.0))
+    }
+    fn plus(self, o: Self) -> Self {
+        V2::new(self.x + o.x, self.y + o.y)
+    }
+    fn minus(self, o: Self) -> Self {
+        V2::new(self.x - o.x, self.y - o.y)
+    }
+    fn times(self, k: T) -> Self {
+        V2::new(self.x * k, self.y * k)
+    }
+    fn timesf(self, k: f64) -> Self {
+        V2::new(self.x.mulf(k), self.y.mulf(k))
+    }
+    fn over(self, k: T) -> Self {
+        V2::new(self.x / k, self.y / k)
+    }
+}
+
+impl<T: Scalar> Coords<T> for V3<T> {
+    fn zero() -> Self {
+        V3::cst([0.0; 3])
+    }
+    fn plus(self, o: Self) -> Self {
+        self.add(o)
+    }
+    fn minus(self, o: Self) -> Self {
+        self.sub(o)
+    }
+    fn times(self, k: T) -> Self {
+        self.mul(k)
+    }
+    fn timesf(self, k: f64) -> Self {
+        self.mulf(k)
+    }
+    fn over(self, k: T) -> Self {
+        V3::new(self.x / k, self.y / k, self.z / k)
+    }
+}
+
 /// Wraps an angle to (-pi, pi].
 pub(crate) fn wrap_angle(a: f64) -> f64 {
     let tau = std::f64::consts::TAU;

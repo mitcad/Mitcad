@@ -1758,7 +1758,7 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
     QVector<const DocumentSnapshot::Feature*> features;
     for (const DocumentSnapshot::Feature& feature : snapshot.features) {
       if (feature.component == component && feature.isActive() &&
-          (sketches ? feature.isSketch() : feature.isConstruction())) {
+          (sketches ? feature.isAnySketch() : feature.isConstruction())) {
         features.append(&feature);
       }
     }
@@ -1792,7 +1792,10 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
       QString icon = featureIcon(feature->type);
       QString tip = failed ? QStringLiteral("%1: %2").arg(feature->name, feature->error) : QString();
       if (sketches && !failed && feature->dof >= 0) {
-        icon = feature->dof == 0 ? QStringLiteral("sketch-locked") : icon;
+        // A 3D sketch's own lock (mitcad#1544).
+        const QString locked =
+            feature->isSpatialSketch() ? QStringLiteral("sketch-3d-locked") : QStringLiteral("sketch-locked");
+        icon = feature->dof == 0 ? locked : icon;
         tip = feature->dof == 0 ? tr("%1: fully constrained").arg(feature->name)
                                 : tr("%1: %n degree(s) of freedom", nullptr, feature->dof).arg(feature->name);
       }
@@ -2009,9 +2012,23 @@ void BrowserPanel::addSheetRows(QTreeWidgetItem* bodyRow, const DocumentSnapshot
     item.hasEye = true;
     item.visible = pattern.value(QStringLiteral("shown")).toBool();
     const bool valid = pattern.value(QStringLiteral("status")).toString() == QStringLiteral("valid");
+    // The reasons are the model's messages, in words (mitcad#1636,
+    // mitcad#1639), translated as they are shown.
     QStringList reasons;
     for (const QJsonValue& reason : pattern.value(QStringLiteral("diagnostics")).toArray()) {
-      reasons << reason.toString();
+      reasons << mitcad::modelMessage(reason.toString());
+    }
+    const QString why = reasons.join(QStringLiteral("; "));
+    // One whole message per status (docs/translations.md), never the
+    // model's English status word as a value.
+    const QString status = pattern.value(QStringLiteral("status")).toString();
+    QString notValid;
+    if (status == QStringLiteral("blocked")) {
+      notValid = tr("Flat Pattern of %1 is blocked: %2").arg(body.name, why);
+    } else if (status == QStringLiteral("unavailable")) {
+      notValid = tr("Flat Pattern of %1 is unavailable: %2").arg(body.name, why);
+    } else {
+      notValid = tr("Flat Pattern of %1 is invalid: %2").arg(body.name, why);
     }
     QTreeWidgetItem* flatRow = addRow(
         bodyRow, item, QStringLiteral("flat-pattern"),
@@ -2019,8 +2036,7 @@ void BrowserPanel::addSheetRows(QTreeWidgetItem* bodyRow, const DocumentSnapshot
                     .arg(body.name)
                     .arg(pattern.value(QStringLiteral("area")).toDouble(), 0, 'f', 2)
                     .arg(pattern.value(QStringLiteral("bends")).toInt())
-              : tr("Flat Pattern of %1 is %2: %3")
-                    .arg(body.name, pattern.value(QStringLiteral("status")).toString(), reasons.join(QStringLiteral("; "))));
+              : notValid);
     if (!valid) {
       setNameRole(flatRow, ColorRole::ErrorText);
     } else if (!shown) {
@@ -2158,7 +2174,7 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
   // in timeline order, also suppressed or after the marker.
   SketchUses uses;
   for (const DocumentSnapshot::Feature& feature : snapshot.features) {
-    if (feature.isSketch() || feature.isConstruction() || feature.isJoint()) {
+    if (feature.isAnySketch() || feature.isConstruction() || feature.isJoint()) {
       continue;
     }
     for (const QString& sketch : feature.sketches) {
@@ -2671,14 +2687,19 @@ int BrowserPanel::contentHeight() const {
 
 void BrowserPanel::showSelection(const Selection& items, const QStringList& features, bool scroll,
                                  bool keepPicked) {
-  QSet<QString> keys;
-  for (const SelectionItem& item : items) {
-    keys.insert(itemKey(item));
+  // Each item's key and its last place in the selection (the rank below:
+  // looked up, not searched for each selected row, mitcad#1631).
+  QHash<QString, int> keys;
+  for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+    keys.insert(itemKey(items.at(i)), i);
   }
   const QSet<QString> picked(features.cbegin(), features.cend());
   // The selection Collapse All left (rows folded away): shown again by a
   // refresh, it must not scroll to its rows, which would open their parents.
-  const QSet<QString> selection = keys + QSet<QString>(features.cbegin(), features.cend());
+  QSet<QString> selection = picked;
+  for (auto known = keys.cbegin(); known != keys.cend(); ++known) {
+    selection.insert(known.key());
+  }
   const bool keepFolded = !m_foldedSelection.isEmpty() && selection == m_foldedSelection;
   if (!keepFolded) {
     m_foldedSelection.clear();
@@ -2703,7 +2724,11 @@ void BrowserPanel::showSelection(const Selection& items, const QStringList& feat
     const QString key = feature ? node.uid : item.isValid() ? itemKey(item) : QString();
     const bool on = (feature ? picked.contains(node.uid) : item.isValid() && keys.contains(key)) ||
                     (keepPicked && (*it)->isSelected());
-    (*it)->setSelected(on);
+    // Only the rows that change: each call is a change of the tree's
+    // selection model.
+    if ((*it)->isSelected() != on) {
+      (*it)->setSelected(on);
+    }
     if (!on) {
       continue;
     }
@@ -2722,12 +2747,7 @@ void BrowserPanel::showSelection(const Selection& items, const QStringList& feat
     if (feature) {
       rank = static_cast<int>(features.lastIndexOf(node.uid));
     } else {
-      for (int i = static_cast<int>(items.size()) - 1; i >= 0; --i) {
-        if (itemKey(items.at(i)) == key) {
-          rank = i;
-          break;
-        }
-      }
+      rank = keys.value(key, 0);
     }
     rank += before.contains(key) ? 0 : 1 << 20;
     int& bestRank = feature ? newestFeatureRank : newestRank;
@@ -2883,16 +2903,21 @@ void BrowserPanel::selectionChanged() {
   logSelection();
   Selection items;
   QStringList features;
+  // Each once, by sets: every row of a large design selected (mitcad#1631).
+  QSet<SelectionItem> taken;
+  QSet<QString> takenFeatures;
   for (QTreeWidgetItem* row : m_tree->selectedItems()) {
     const BrowserNode node = nodeOf(row);
     if (node.type == BrowserNode::Type::Feature) {
-      if (!features.contains(node.uid)) {
+      if (!takenFeatures.contains(node.uid)) {
+        takenFeatures.insert(node.uid);
         features.append(node.uid);
       }
       continue;
     }
     const SelectionItem item = node.item();
-    if (item.isValid() && !items.contains(item)) {
+    if (item.isValid() && !taken.contains(item)) {
+      taken.insert(item);
       items.append(item);
     }
   }

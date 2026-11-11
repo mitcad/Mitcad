@@ -1,0 +1,13 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The Thread panel's fit of a hole to its thread (mitcad#1632, tools/ui-thread-fit-test.sh): a rod of 20 (Sketch1 F1, its diameter d1) 9 high (Extrude1 F2, d2) with a hole of 5 through it (Sketch2 F3, its diameter d3, cut by Extrude2 F4)."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_circle","sketch":"F1","center":[0,0],"diameter":20},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1}"}],
+    "extent":{"type":"distance","distance":9},"operation":"new_body"}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_circle","sketch":"F3","center":[0,0],"diameter":5},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F3","region":"r{c1}"}],
+    "extent":{"type":"through_all"},"operation":"cut","participants":["F2.b0"]}},
+  {"expect":{"feature":"Extrude2","status":"ok","body":"F2.b0","has_face":"F4:side(c1)"}}
+]

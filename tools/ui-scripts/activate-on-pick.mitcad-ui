@@ -1,0 +1,130 @@
+# SPDX-License-Identifier: MIT
+# A feature that changes the picked body activates its component
+# (mitcad#1634, app/COMMANDS.md "Activating the picked component"), on
+# activate-on-pick.json (Base:1 with Body1 F2.b0, Lid:1 with Body1 F4.b0),
+# with Base activated by its radio button:
+#   1. Fillet on an edge of Lid's block: Lid is activated without a
+#      question, its own undo step outside the panel's; the panel says
+#      "Fillet goes into Lid (now active)."; the preview shows, OK adds the
+#      fillet (in Lid: the model refuses a feature on another component's
+#      body). Undo takes back the fillet, then the activation.
+#   2. Fillet on an edge of Lid's block, then Esc: the activation stays
+#      (its undo step is the last one), Lid stays active.
+#   3. Base active again: an edge of Base's block, then one of Lid's: no
+#      activation, Fillet's refusal (its edges of one body), and the button
+#      Activate Lid beside it. The button activates Lid and keeps only Lid's
+#      edge (one
+#      pick dropped, the notice says so); the preview shows and OK adds the
+#      fillet.
+# Run by tools/ui-activate-on-pick-test.sh (Linux) and
+# tools/ui-windows-activate-on-pick-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+mark
+click-logged '^Browser radio Root/Base:1 at '
+wait-log '^Activated Base$'
+wait-idle
+
+# 1. Fillet on Lid's edge: Lid activated, OK adds the fillet in Lid.
+capture-undo-depth start
+mark
+command solid.fillet
+expect-log '^Command Fillet started'
+wait-log '^Pick places:' 20
+click-pick 'edge F4[.]b0/E'
+wait-log '^Activated Lid for Fillet [(]picked edge E[{].* of F4[.]b0'
+wait-log '^Panel Fillet notice: Fillet goes into Lid [(]now active[)][.]$'
+wait-log '^Fillet Edges: 1 edge'
+wait-log '^Preview Fillet: ok' 30
+wait-idle
+expect-no-log '^Activate component asked|^Panel Fillet error: |^Panel Fillet offers: '
+expect-undo-depth ${start} 1
+mark
+button '^OK$'
+wait-log '^Added fillet on 1 edge' 30
+wait-idle
+expect-undo-depth ${start} 2
+mark
+command edit.undo
+expect-log '^Undo: Add Fillet'
+wait-idle
+mark
+command edit.undo
+expect-log '^Undo: Activate Lid$'
+wait-idle
+expect-undo-depth ${start} 0
+
+# 2. Cancel after the activation: Lid stays active.
+capture-undo-depth before_cancel
+mark
+command solid.fillet
+expect-log '^Command Fillet started'
+wait-log '^Pick places:' 20
+click-pick 'edge F4[.]b0/E'
+wait-log '^Activated Lid for Fillet [(]picked edge '
+wait-log '^Preview Fillet: ok' 30
+wait-idle
+mark
+key Escape
+expect-log '^Command Fillet cancelled'
+wait-idle
+expect-no-log '^Activated Base'
+expect-undo-depth ${before_cancel} 1
+# The last undo step is the activation, so Lid was still active.
+mark
+command edit.undo
+expect-log '^Undo: Activate Lid$'
+wait-idle
+expect-undo-depth ${before_cancel} 0
+
+# 3. Base active: an edge of each component gives the refusal and the
+#    Activate button, which keeps Lid's edge.
+capture-undo-depth before_two
+mark
+command solid.fillet
+expect-log '^Command Fillet started'
+wait-log '^Pick places:' 20
+click-pick 'edge F2[.]b0/E'
+wait-log '^Fillet Edges: 1 edge'
+wait-log '^Preview Fillet: ok' 30
+wait-idle
+mark
+click-pick 'edge F4[.]b0/E'
+wait-log '^Fillet Edges: 2 edges'
+wait-log '^Panel Fillet offers: Activate Lid [(]drops 1[)]$'
+wait-log '^Panel Fillet message action: Activate Lid$'
+# The refusal: Fillet's own (its edges of one body: not built), or the
+# model's for a command without that check (a failed preview).
+wait-log '^Preview Fillet: (not built|failed): ' 30
+wait-log '^Panel Fillet error: ' 10
+wait-idle
+expect-no-log '^Activated Lid for'
+expect-undo-depth ${before_two} 0
+mark
+button '^Activate Lid$' commandMessageAction
+wait-log '^Panel Fillet message action clicked: Activate Lid$'
+wait-log '^Activated Lid for Fillet [(]picked edge .*[)], 1 pick[(]s[)] dropped$'
+wait-log '^Panel Fillet notice: Fillet goes into Lid [(]now active[)][.] 1 pick of another component dropped[.]$'
+wait-log '^Fillet Edges: 1 edge [[]edge E[{].* of F4[.]b0'
+wait-log '^Panel Fillet offers no activation$'
+wait-log '^Panel Fillet message action hidden$'
+wait-log '^Preview Fillet: ok' 30
+wait-idle
+expect-undo-depth ${before_two} 1
+mark
+button '^OK$'
+wait-log '^Added fillet on 1 edge' 30
+wait-idle
+expect-undo-depth ${before_two} 2
+mark
+command edit.undo
+expect-log '^Undo: Add Fillet'
+wait-idle
+mark
+command edit.undo
+expect-log '^Undo: Activate Lid$'
+wait-idle
+expect-undo-depth ${before_two} 0
+expect-never 'Recompute failed|TestDriver: FAIL'

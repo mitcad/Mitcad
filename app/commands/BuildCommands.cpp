@@ -889,20 +889,28 @@ const QString kHoverPick = QStringLiteral("hover_pick");
 // nothing is previewed there on top of what was just placed.
 const QString kPlacedOne = QStringLiteral("placed_one");
 const QString kTyped = QStringLiteral("typed");
+// To a face picked anywhere, plus an offset (mitcad#1630): the face in
+// kLengthFace, the offset in kLengthOffset.
+const QString kToFace = QStringLiteral("to_face");
+const QString kLengthFace = QStringLiteral("length_face");
+const QString kLengthOffset = QStringLiteral("length_offset");
 const Choices kLengthModes = {{QStringLiteral("face"), QStringLiteral("Auto: to the face")},
                               {QStringLiteral("centre"), QStringLiteral("Auto: to the center")},
                               {QStringLiteral("through"), QStringLiteral("Auto: through")},
-                              {kTyped, QStringLiteral("Typed length")}};
+                              {kTyped, QStringLiteral("Typed length")},
+                              {kToFace, QStringLiteral("Auto: to a face")}};
 // The length mode's icon buttons (mitcad#427), their labels the tooltips;
 // kLengthModes names the bound length in the inspection.
 const Choices kLengthButtons = {{QStringLiteral("face"), QStringLiteral("Auto: to the face it meets")},
                                 {QStringLiteral("centre"), QStringLiteral("Auto: to its center")},
                                 {QStringLiteral("through"), QStringLiteral("Auto: through it")},
-                                {kTyped, QStringLiteral("Typed length")}};
+                                {kTyped, QStringLiteral("Typed length")},
+                                {kToFace, QStringLiteral("Auto: to a face you pick, plus an offset")}};
 const QHash<QString, QString> kLengthIcons = {{QStringLiteral("face"), QStringLiteral("build-length-face")},
                                               {QStringLiteral("centre"), QStringLiteral("build-length-centre")},
                                               {QStringLiteral("through"), QStringLiteral("build-length-through")},
-                                              {kTyped, QStringLiteral("build-length-typed")}};
+                                              {kTyped, QStringLiteral("build-length-typed")},
+                                              {kToFace, QStringLiteral("build-length-to-face")}};
 const QStringList kAutoModes = {QStringLiteral("face"), QStringLiteral("centre"), QStringLiteral("through")};
 // Auto: the model's default (mitcad#427: none on a square corner, as the
 // panel's turns are; shared on a corner at another angle at offset 0),
@@ -1082,6 +1090,10 @@ struct Placement {
   QJsonObject target;     // what the auto length runs to, or empty
   QString lengthNote;     // how the length was chosen, for the panel
   Against how = Against::Ground;
+  bool toFace = false; // the length to a picked face (mitcad#1630)
+
+  // Whether the length is bound: an auto length's target, or a face.
+  bool bound() const { return toFace || !target.isEmpty(); }
 };
 
 QString angleValue(const QString& degrees) { return degrees + QStringLiteral(" deg"); }
@@ -1253,6 +1265,51 @@ bool bindAutoLength(QJsonObject& fields, const QString& mode, const CommandConte
   return true;
 }
 
+// The face, frame or plane a length to a face ends at (mitcad#1630), as
+// `length.face` takes it: {occurrence (from the BUILD host), geometry}.
+// An origin or construction plane above the host (the root's planes while
+// a new design's Component1 is the host) is the fixed plane it is there.
+// None, with the reason, when it cannot be given.
+std::optional<QJsonObject> faceTargetOf(const SelectionItem& item, const CommandContext& context, QString& problem) {
+  if (const std::optional<QString> path = build::pathFromHost(item, context)) {
+    QJsonObject face{{QStringLiteral("geometry"), item.reference()}};
+    if (!path->isEmpty()) {
+      face.insert(QStringLiteral("occurrence"), *path);
+    }
+    return face;
+  }
+  if (const std::optional<gp_Ax3> plane = build::planeOf(item, context)) {
+    gp_Dir normal = plane->Direction();
+    if (const std::optional<gp_Trsf> host = build::worldOf(build::buildHost(context).path, context)) {
+      normal.Transform(host->Inverted());
+    }
+    const QJsonObject fixed{{QStringLiteral("origin"), build::pointJson(build::inHost(plane->Location(), context))},
+                            {QStringLiteral("normal"), QJsonArray{normal.X(), normal.Y(), normal.Z()}}};
+    return QJsonObject{{QStringLiteral("geometry"), fixed}};
+  }
+  problem = QObject::tr("The face is not in %1, where the Build tab places components.")
+                .arg(build::buildHost(context).name);
+  return std::nullopt;
+}
+
+// How a length to a face reads in the panel (mitcad#1630): "bound, to the
+// face of Part3", "bound, to a plane", with its offset when it has one.
+QString toFaceNote(const SelectionItem& item, const QString& offset, const CommandContext& context) {
+  QString note;
+  if (item.kind == SelectKind::Plane) {
+    note = QObject::tr("bound, to a plane");
+  } else if (const std::optional<BuildPart> part = build::partOf(item, context)) {
+    note = QObject::tr("bound, to the face of %1").arg(part->shownName());
+  } else {
+    note = QObject::tr("bound, to a face");
+  }
+  const QString trimmed = offset.trimmed();
+  if (!trimmed.isEmpty() && trimmed != QStringLiteral("0") && trimmed != QStringLiteral("0 mm")) {
+    note += QObject::tr(", offset %1").arg(trimmed);
+  }
+  return note;
+}
+
 // The panel's fields; with an auto length the preview names its target
 // first (commands.md, `build_preview`'s `length.target`), and the length
 // binds to it.
@@ -1341,7 +1398,31 @@ Placement placement(const Shared& shared, const QString& role, const CommandStat
   fields.insert(kAt, *at);
   if (part.cutToLength()) {
     const QString mode = state.choice(QStringLiteral("length_mode"));
-    if (mode == kTyped || result.how == Against::Ground) {
+    if (mode == kToFace) {
+      // To a face picked anywhere, plus the offset (mitcad#1630); on the
+      // ground too.
+      const Selection& faces = state.items(kLengthFace);
+      if (faces.isEmpty()) {
+        result.problem = QObject::tr("Pick the face the length ends at.");
+        return result;
+      }
+      const std::optional<QJsonObject> face = faceTargetOf(faces.first(), context, result.problem);
+      if (!face) {
+        return result;
+      }
+      const QString offset = state.expression(kLengthOffset);
+      fields.insert(QStringLiteral("length"),
+                    QJsonObject{{QStringLiteral("mode"), kToFace},
+                                {QStringLiteral("face"), *face},
+                                {QStringLiteral("offset"), offset.isEmpty() ? QStringLiteral("0 mm") : offset}});
+      result.toFace = true;
+      // Highlighted as the auto length's target; a fixed plane is no item.
+      if (!face->value(QStringLiteral("geometry")).isObject() ||
+          face->value(QStringLiteral("geometry")).toObject().contains(QStringLiteral("body"))) {
+        result.target = *face;
+      }
+      result.lengthNote = toFaceNote(faces.first(), offset, context);
+    } else if (mode == kTyped || result.how == Against::Ground) {
       fields.insert(QStringLiteral("length"), state.expression(QStringLiteral("length")));
       result.lengthNote = QObject::tr("typed");
     } else {
@@ -1670,10 +1751,10 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
   }
   const build::Frame frame = build::frameOf(answer.value(QStringLiteral("frame")));
   double length = build::lengthOf(answer.value(QStringLiteral("length")));
-  if (!std::isfinite(length) && placed.target.isEmpty()) {
+  if (!std::isfinite(length) && !placed.bound()) {
     length = state.value(QStringLiteral("length"));
   }
-  shared->setPreview(frame, length, !placed.target.isEmpty());
+  shared->setPreview(frame, length, placed.bound());
   // The model's shape of the new part (a set's every member), else its
   // section along the axis.
   QJsonObject shapeRequest = fields;
@@ -1768,7 +1849,7 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
   }
   if (part.cutToLength()) {
     QString shown = std::isfinite(length) ? QObject::tr("Length %1 mm").arg(length, 0, 'f', 1) : QObject::tr("Length");
-    if (!placed.target.isEmpty()) {
+    if (!placed.target.isEmpty() && !placed.toFace) {
       shown += QObject::tr(", to %1 (Tab: face, center, through; typing a length detaches it)")
                    .arg(targetText(placed.target, context).toHtmlEscaped());
     } else if (!placed.lengthNote.isEmpty()) {
@@ -1859,7 +1940,7 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
   result.report = {{QStringLiteral("markers"), markers}};
   // The box at the cursor shows the auto length while it is bound; typing
   // there detaches it (the length input's onChange).
-  if (!placed.target.isEmpty() && std::isfinite(length)) {
+  if (placed.bound() && std::isfinite(length)) {
     result.report.insert(QStringLiteral("cursor"),
                          QJsonObject{{QStringLiteral("length"), cmd::lengthText(std::round(length * 10.0) / 10.0, context)}});
   }
@@ -2015,10 +2096,14 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
           .withShiftClickApplies()
           .withTooltip(QObject::tr("Where the component goes: a plane, a point, a face, or a profile's side or end")),
       // Icon buttons (mitcad#427), each one's tooltip naming it; Tab steps
-      // face, centre, through.
+      // face, centre, through. On the ground only a typed length or one to
+      // a face picked anywhere (mitcad#1630): nothing is in the way there.
       choiceInput(QStringLiteral("length_mode"), QObject::tr("Length"), kLengthButtons, QStringLiteral("face"))
           .withChoiceIcons(kLengthIcons)
-          .withVisible([cut, ground](const CommandState& state) { return cut(state) && !ground(state); })
+          .withVisible(cut)
+          .withChoiceOffered([ground](const CommandState& state, const QString& mode) {
+            return !ground(state) || mode == kTyped || mode == kToFace;
+          })
           .withTabCycle(kAutoModes)
           .withOnChange([shared](CommandState& state, const CommandContext& context) {
             // Typed from where the auto length is.
@@ -2053,6 +2138,23 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
             return cmd::arrow(frame.origin, frame.z);
           })
           .withTooltip(QObject::tr("The component's length: typed, in the box at the cursor, or dragged by its handle")),
+      // To a face (mitcad#1630): shown with its mode, the face then takes
+      // the next click; it stays for the next component placed.
+      selectionInput(kLengthFace, QObject::tr("To Face"), SelectKind::Face | SelectKind::Plane, 1, 1)
+          .withVisible([cut](const CommandState& state) {
+            return cut(state) && state.choice(QStringLiteral("length_mode")) == kToFace;
+          })
+          .withOnPick(
+              [](const SelectionItem& item, CommandState&, const CommandContext&) {
+                qInfo().noquote() << QStringLiteral("BUILD length to a face: %1").arg(item.describe());
+              },
+              false)
+          .withTooltip(QObject::tr("The face, plane or profile end the length ends at, beside the component too")),
+      valueInput(kLengthOffset, QObject::tr("Face Offset"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withVisible([cut](const CommandState& state) {
+            return cut(state) && state.choice(QStringLiteral("length_mode")) == kToFace;
+          })
+          .withTooltip(QObject::tr("How far past the face's plane the component ends; negative ends it short")),
       choiceInput(QStringLiteral("axis"), QObject::tr("Direction"), kAxes, QStringLiteral("z"))
           .withChoiceIcons(kAxisIcons)
           .withVisible(ground)
@@ -6663,7 +6765,8 @@ QString partsText(const QVector<BuildPart>& parts) {
 const Choices kLengthEdits = {{kTyped, QStringLiteral("Detached: this length")},
                               {QStringLiteral("face"), QStringLiteral("Bound: to the face")},
                               {QStringLiteral("centre"), QStringLiteral("Bound: to the center")},
-                              {QStringLiteral("through"), QStringLiteral("Bound: through")}};
+                              {QStringLiteral("through"), QStringLiteral("Bound: through")},
+                              {kToFace, QStringLiteral("Bound: to a face, plus an offset")}};
 
 CommandDef lengthCommand(DocumentHost& host, const CommandContext& context) {
   CommandDef def;
@@ -6687,15 +6790,32 @@ CommandDef lengthCommand(DocumentHost& host, const CommandContext& context) {
               }
               const QString mode = str(part->bound, "mode");
               state.setChoice(QStringLiteral("mode"), part->bound.isEmpty() ? kTyped : (mode.isEmpty() ? QStringLiteral("face") : mode));
+              // A length to a face keeps its offset (mitcad#1630).
+              const QJsonValue add = part->bound.value(QStringLiteral("add"));
+              if (mode == kToFace && add.isDouble()) {
+                state.setText(kLengthOffset, cmd::lengthText(add.toDouble(), model));
+                state.setValue(kLengthOffset, kNaN);
+              }
             }
           },
                       false),
       choiceInput(QStringLiteral("mode"), QObject::tr("Length"), kLengthEdits, kTyped),
       valueInput(QStringLiteral("length"), QObject::tr("Value"), ValueKind::Length, QStringLiteral("500 mm"))
           .withVisible(typed),
-      selectionInput(QStringLiteral("target"), QObject::tr("Bound To"), SelectKind::Face, 0, 1)
+      // To a face (mitcad#1630) also a plane anywhere; the auto modes a face.
+      selectionInput(QStringLiteral("target"), QObject::tr("Bound To"), SelectKind::Face | SelectKind::Plane, 0, 1)
           .withVisible(bound)
+          .withPickRule(
+              [](const CommandState& state) {
+                return state.choice(QStringLiteral("mode")) == kToFace
+                           ? SelectFilter(SelectKind::Face | SelectKind::Plane)
+                           : SelectFilter(SelectKind::Face);
+              },
+              [](const SelectionItem&, const CommandState&) { return true; })
           .withTooltip(QObject::tr("The face the length runs to; none: the one it is bound to now")),
+      valueInput(kLengthOffset, QObject::tr("Face Offset"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withVisible([](const CommandState& state) { return state.choice(QStringLiteral("mode")) == kToFace; })
+          .withTooltip(QObject::tr("How far past the face's plane the component ends; negative ends it short")),
   };
   def.enabled = [&context] { return build::hasBuildParts(context); };
   def.inspect = [](const CommandState& state, const CommandContext& model) {
@@ -6713,6 +6833,11 @@ CommandDef lengthCommand(DocumentHost& host, const CommandContext& context) {
     if (!part.bound.isEmpty()) {
       const QJsonObject to = part.bound.value(QStringLiteral("to")).toObject();
       lines << QObject::tr("Bound (%1) to %2").arg(str(part.bound, "mode"), targetText(to, model).toHtmlEscaped());
+      // A length to a face's offset past it (mitcad#1630).
+      const double add = part.bound.value(QStringLiteral("add")).toDouble();
+      if (str(part.bound, "mode") == kToFace && std::abs(add) > 1e-9) {
+        lines << QObject::tr("Offset %1 mm").arg(add, 0, 'f', 1);
+      }
       if (const std::optional<SelectionItem> target = build::itemOfTarget(to, model)) {
         result.highlights.append(*target);
       }
@@ -6739,7 +6864,16 @@ CommandDef lengthCommand(DocumentHost& host, const CommandContext& context) {
     } else {
       QJsonObject bind;
       const Selection& targets = state.items(QStringLiteral("target"));
-      if (!targets.isEmpty()) {
+      if (!targets.isEmpty() && mode == kToFace) {
+        // To a face (mitcad#1630): a plane above the host as a fixed one.
+        QString problem;
+        const std::optional<QJsonObject> face = faceTargetOf(targets.first(), model, problem);
+        if (!face) {
+          host.showStatus(problem, NoticeLevel::Error);
+          return false;
+        }
+        bind = *face;
+      } else if (!targets.isEmpty()) {
         const std::optional<QString> path = build::pathFromHost(targets.first(), model);
         if (!path) {
           host.showStatus(QObject::tr("%1 is not in %2, where the Build tab places components.").arg(targets.first().describe(), build::buildHost(model).name), NoticeLevel::Error);
@@ -6756,9 +6890,17 @@ CommandDef lengthCommand(DocumentHost& host, const CommandContext& context) {
         host.showStatus(QObject::tr("Pick the face %1's length runs to.").arg(part.shownName()), NoticeLevel::Error);
         return false;
       }
-      command.insert(QStringLiteral("length"), QJsonObject{{QStringLiteral("bind"), bind},
-                                                           {QStringLiteral("mode"), mode},
-                                                           {QStringLiteral("add"), 0}});
+      if (mode == kToFace) {
+        const QString offset = state.expression(kLengthOffset);
+        command.insert(QStringLiteral("length"),
+                       QJsonObject{{QStringLiteral("mode"), kToFace},
+                                   {QStringLiteral("face"), bind},
+                                   {QStringLiteral("offset"), offset.isEmpty() ? QStringLiteral("0 mm") : offset}});
+      } else {
+        command.insert(QStringLiteral("length"), QJsonObject{{QStringLiteral("bind"), bind},
+                                                             {QStringLiteral("mode"), mode},
+                                                             {QStringLiteral("add"), 0}});
+      }
     }
     QJsonObject result;
     if (!host.runModelCommand(command, &result)) {

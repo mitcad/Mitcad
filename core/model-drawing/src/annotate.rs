@@ -2327,6 +2327,10 @@ pub fn group_bounds(g: &Group) -> Bounds {
                     b.add(*p);
                 }
             }
+            Item::Image { at, size, .. } => {
+                b.add(*at);
+                b.add([at[0] + size[0], at[1] + size[1]]);
+            }
             Item::Text {
                 at,
                 height,

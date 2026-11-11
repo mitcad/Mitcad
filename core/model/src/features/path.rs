@@ -8,16 +8,23 @@
 //! |---|---|
 //! | `{"sketch": "F1", "curves": ["c1", "c2"]}` | the curves, in any order, joined end to end |
 //! | `{"sketch": "F1", "curves": ["c1"], "chain": true}` | also every curve joined to them end to end (chain selection; construction curves only when listed) |
+//! | `{"sketch": "F1", "curves": ["c1", "c2"], "reversed": true}` | the same curves, the other way (mitcad#1550) |
 //! | `{"sketch": "F1", "curve": "c1"}` | one curve ([`PathRef`]) |
 //! | `{"body": "F2.b0", "edges": ["E{…}", …]}` | connected edges of a body ([`PathRef`]) |
 //! | `{"start": [x, y, z], "end": [x, y, z]}` | a fixed line ([`PathRef`]) |
 //! | `{"feature": "F5"}` | the curve of an Intersection Curve (mitcad#1405, [`PathRef`]) |
+//! | `{"spatial_sketch": "F3", "curves": ["c3", "c6"], "reversed": false}` | curves of a 3D sketch (mitcad#1523, [`SpatialPath`]) |
 //!
 //! Evaluation gives the curves in model space in order along the path,
 //! each running along it ([`PathCurve`]). The path starts at the free end
 //! of the first listed curve when that curve ends the chain; otherwise it
 //! runs along the first listed curve's own direction (a closed chain from
-//! that curve's start). A path may not branch.
+//! that curve's start). `reversed` runs it the other way: a 3D sketch
+//! turned back into 2D keeps its paths' direction with it where the chain
+//! of their curves would run the other way (mitcad#1550). A path may not
+//! branch. A 3D sketch's path is ordered by the sketch's joints and runs
+//! along its first curve's own direction, or against it
+//! (`spatial_path.rs`).
 
 use std::collections::BTreeSet;
 
@@ -28,7 +35,8 @@ use mitcad_vec3::distance;
 
 // The curves' plain geometry, below the model (mitcad#777).
 use super::geom_ref::PathRef;
-use super::{CheckContext, EvalContext, FeatureDef, References, is_false};
+use super::spatial_path::SpatialPath;
+use super::{CheckContext, EvalContext, FeatureDef, References, SketchDef, SketchOutput, is_false};
 use crate::ids::{BodyUid, EntityUid, FeatureUid};
 use crate::kernel::{Curve3, Kernel};
 use crate::profile::SketchFrame;
@@ -52,22 +60,32 @@ pub struct SketchCurves {
     /// Adds the curves joined to them end to end.
     #[serde(default, skip_serializing_if = "is_false")]
     pub chain: bool,
+    /// Runs the other way from the chain of the curves (mitcad#1550): a
+    /// path only, not the curves as a set.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reversed: bool,
 }
 
-/// A path: curves of a sketch, or a [`PathRef`] (edges of a body, one
-/// sketch curve, a fixed line).
+/// A path: curves of a sketch, a [`PathRef`] (edges of a body, one
+/// sketch curve, a fixed line), or curves of a 3D sketch.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum CurvePath {
     Sketch(SketchCurves),
     Path(PathRef),
+    /// Curves of a 3D sketch (mitcad#1523).
+    Spatial(SpatialPath),
 }
 
 impl<'de> Deserialize<'de> for CurvePath {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de::Error;
         let value = Value::deserialize(deserializer)?;
-        if value.get("curves").is_some() || value.get("chain").is_some() {
+        if value.get("spatial_sketch").is_some() {
+            serde_json::from_value(value)
+                .map(Self::Spatial)
+                .map_err(D::Error::custom)
+        } else if value.get("curves").is_some() || value.get("chain").is_some() {
             serde_json::from_value(value)
                 .map(Self::Sketch)
                 .map_err(D::Error::custom)
@@ -97,6 +115,68 @@ pub(crate) mod curves_serde {
     }
 }
 
+/// Curves of a 3D sketch named in a planar sketch's form where that form
+/// means a path (mitcad#1527, mitcad#1550): a path takes a 3D sketch's
+/// curves in the typed form ([`SpatialPath`], `{"spatial_sketch": ...}`).
+/// The inputs that grow from curves in their sketch's plane (thin walls,
+/// ribs and webs, curves swept or extruded as a surface) take a 3D
+/// sketch's curves in this form ([`SketchCurves::check_in_plane`]). Ok for
+/// any other feature, which [`CheckContext::sketch`] then tells.
+pub(crate) fn not_spatial(ctx: &CheckContext<'_>, sketch: FeatureUid) -> Result<(), String> {
+    match ctx.feature(sketch) {
+        Ok(entry) if matches!(entry.def, FeatureDef::SpatialSketch(_)) => Err(format!(
+            "{} ({sketch}) is a 3D sketch: as a path its curves are \
+             {{\"spatial_sketch\": \"{sketch}\", \"curves\": [...]}}",
+            entry.name
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// The listed curves of the 3D sketch `def` (named `name`) that the
+/// planar output of its sketch plane (`solved`, mitcad#1550) does not
+/// have: those that do not lie in its sketch plane, refused naming the
+/// sketch and the curves.
+fn off_the_plane(
+    def: &super::spatial_sketch::SpatialSketchDef,
+    curves: &[EntityUid],
+    solved: &crate::sketch::solve::Solved,
+    name: &str,
+) -> Result<(), String> {
+    let off: Vec<String> = curves
+        .iter()
+        .filter(|id| def.curve(**id).is_some() && !solved.curves.contains_key(*id))
+        .map(|id| id.curve_name())
+        .collect();
+    // Whole messages for one curve and several (mitcad#1644): in words for
+    // a person, the curves' ids for agents.
+    match off.as_slice() {
+        [] => Ok(()),
+        [one] => Err(crate::notice::said(
+            format!(
+                "a curve of {name} does not lie in its sketch plane: walls and surfaces grow \
+                 from a 3D sketch's curves in its sketch plane"
+            ),
+            format!(
+                "{name}'s {one} does not lie in its sketch plane: walls and surfaces grow from \
+                 a 3D sketch's curves in its sketch plane"
+            ),
+        )),
+        _ => Err(crate::notice::said(
+            format!(
+                "{} curves of {name} do not lie in its sketch plane: walls and surfaces grow \
+                 from a 3D sketch's curves in its sketch plane",
+                off.len()
+            ),
+            format!(
+                "{name}'s curves {} do not lie in its sketch plane: walls and surfaces grow \
+                 from a 3D sketch's curves in its sketch plane",
+                off.join(", ")
+            ),
+        )),
+    }
+}
+
 impl SketchCurves {
     pub fn add_references(&self, references: &mut References) {
         references.features.insert(self.sketch);
@@ -106,6 +186,7 @@ impl SketchCurves {
         if self.curves.is_empty() {
             return Err("no curves selected".to_owned());
         }
+        not_spatial(ctx, self.sketch)?;
         let (entry, def) = ctx.sketch(self.sketch)?;
         for (i, curve) in self.curves.iter().enumerate() {
             if self.curves[..i].contains(curve) {
@@ -125,9 +206,60 @@ impl SketchCurves {
         Ok(())
     }
 
+    /// [`Self::check`] for the inputs that take curves of a 3D sketch in
+    /// this form too (mitcad#1550): curves that lie anywhere in space, as a
+    /// set rather than a path (a boundary surface's curves, a surface
+    /// loft's sections of curves, an Intersection Curve's chains). Chain
+    /// selection in a 3D sketch adds the curves joined to them at the
+    /// sketch's joints ([`super::spatial_path`]).
+    pub fn check_any(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
+        if let Ok(entry) = ctx.feature(self.sketch)
+            && let FeatureDef::SpatialSketch(def) = &entry.def
+        {
+            return super::spatial_path::check_curves(def, &self.curves, &entry.name);
+        }
+        self.check(ctx)
+    }
+
+    /// [`Self::check`] for the inputs that grow from curves in their
+    /// sketch's plane (a rib's or a web's curves, thin walls along curves,
+    /// the curves a surface extrusion, revolution or sweep sweeps): a
+    /// planar sketch's curves, or a 3D sketch's (mitcad#1550), as its
+    /// profiles are taken. A 3D sketch's must lie in its sketch plane when
+    /// the feature is evaluated ([`Self::curves_on`] refuses the others,
+    /// naming the sketch); its reference curves are refused here.
+    pub fn check_in_plane(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
+        if let Ok(entry) = ctx.feature(self.sketch)
+            && let FeatureDef::SpatialSketch(def) = &entry.def
+        {
+            return super::spatial_path::check_curves(def, &self.curves, &entry.name);
+        }
+        self.check(ctx)
+    }
+
     /// The sketch's frame and the curves in model space, the listed ones
-    /// first in their order, then those `chain` adds.
+    /// first in their order, then those `chain` adds. A 3D sketch's
+    /// ([`Self::check_any`]): its support frame and its curves where it
+    /// has them now.
     pub fn curves<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+    ) -> Result<(SketchFrame, Vec<PathCurve>), String> {
+        if matches!(
+            ctx.env.feature(self.sketch).map(|f| &f.def),
+            Some(FeatureDef::SpatialSketch(_))
+        ) {
+            return super::spatial_path::curve_set(ctx, self.sketch, &self.curves, self.chain);
+        }
+        self.in_plane(ctx)
+    }
+
+    /// The sketch's frame and the curves in its plane in model space, the
+    /// listed ones first in their order, then those `chain` adds: what
+    /// grows from curves in their sketch's plane takes
+    /// ([`Self::check_in_plane`]). A 3D sketch's are its curves in its
+    /// sketch plane, in the planar form its profiles have (mitcad#1550).
+    pub fn in_plane<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
     ) -> Result<(SketchFrame, Vec<PathCurve>), String> {
@@ -135,8 +267,9 @@ impl SketchCurves {
         Ok((frame, self.curves_on(ctx, &frame)?))
     }
 
-    /// [`Self::curves`] with the sketch placed by `frame` (its own frame
-    /// moved, as a pattern's copy moves it).
+    /// [`Self::in_plane`] with the sketch placed by `frame` (its own frame
+    /// moved, as a pattern's copy moves it). A 3D sketch's curves out of
+    /// its sketch plane are refused, naming the sketch (mitcad#1550).
     pub(crate) fn curves_on<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
@@ -144,7 +277,27 @@ impl SketchCurves {
     ) -> Result<Vec<PathCurve>, String> {
         let output = ctx.sketch(self.sketch)?;
         let name = ctx.feature_name(self.sketch);
-        let solved = &output.solved;
+        if let Some(FeatureDef::SpatialSketch(def)) = ctx.env.feature(self.sketch).map(|f| &f.def) {
+            off_the_plane(def, &self.curves, &output.solved, &name)?;
+        }
+        let construction = if self.chain {
+            construction_curves(ctx, self.sketch)
+        } else {
+            BTreeSet::new()
+        };
+        self.pieces_of(&output.solved, frame, &construction, &name)
+    }
+
+    /// The pieces of [`Self::curves_on`] from a solved sketch: the listed
+    /// curves first in their order, then those `chain` adds, `construction`
+    /// left out; `name` is the sketch's, for messages.
+    fn pieces_of(
+        &self,
+        solved: &crate::sketch::solve::Solved,
+        frame: &SketchFrame,
+        construction: &BTreeSet<EntityUid>,
+        name: &str,
+    ) -> Result<Vec<PathCurve>, String> {
         for id in &self.curves {
             if !solved.curves.contains_key(id) {
                 return Err(format!("{name} has no curve {}", id.curve_name()));
@@ -152,7 +305,6 @@ impl SketchCurves {
         }
         let mut ids = self.curves.clone();
         if self.chain {
-            let construction = construction_curves(ctx, self.sketch);
             let candidates: Vec<(EntityUid, &Curve2)> = solved
                 .curves
                 .iter()
@@ -206,16 +358,21 @@ fn construction_curves<K: Kernel>(
         .features
         .iter()
         .find(|f| f.uid == sketch)
-        .and_then(|f| match &f.def {
-            FeatureDef::Sketch(def) => Some(def),
-            _ => None,
-        })
-        .map(|def| {
-            def.entities
+        .map(|f| match &f.def {
+            FeatureDef::Sketch(def) => def
+                .entities
                 .iter()
                 .filter(|e| e.construction)
                 .map(|e| e.id)
-                .collect()
+                .collect(),
+            // A 3D sketch's (mitcad#1550).
+            FeatureDef::SpatialSketch(def) => def
+                .curves
+                .iter()
+                .filter(|c| c.construction)
+                .map(|c| c.id)
+                .collect(),
+            _ => BTreeSet::new(),
         })
         .unwrap_or_default()
 }
@@ -272,13 +429,38 @@ impl CurvePath {
         match self {
             Self::Sketch(curves) => curves.add_references(references),
             Self::Path(path) => path.add_to(references),
+            Self::Spatial(path) => path.add_references(references),
         }
     }
 
     pub fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
+        // A planar path's form naming a 3D sketch (mitcad#1523): the typed
+        // form is the one that takes its curves.
+        if let Self::Sketch(SketchCurves { sketch, .. })
+        | Self::Path(
+            PathRef::SketchCurve { sketch, .. } | PathRef::SketchCurves { sketch, .. },
+        ) = self
+            && let Ok(entry) = ctx.feature(*sketch)
+            && matches!(entry.def, FeatureDef::SpatialSketch(_))
+        {
+            return Err(format!(
+                "{} ({sketch}) is a 3D sketch: its curves are a path as {{\"spatial_sketch\": \
+                 \"{sketch}\", \"curves\": [...]}}",
+                entry.name
+            ));
+        }
         match self {
             Self::Sketch(curves) => curves.check(ctx),
             Self::Path(path) => path.check(ctx),
+            Self::Spatial(path) => path.check(ctx),
+        }
+    }
+
+    /// The 3D sketch this path runs along (mitcad#1523), if any.
+    pub fn spatial(&self) -> Option<&SpatialPath> {
+        match self {
+            Self::Spatial(path) | Self::Path(PathRef::Spatial(path)) => Some(path),
+            _ => None,
         }
     }
 
@@ -287,22 +469,35 @@ impl CurvePath {
         &self,
         ctx: &mut EvalContext<'_, K>,
     ) -> Result<Vec<PathCurve>, String> {
+        // A sketch's path that runs the other way from the chain of its
+        // curves (mitcad#1550).
+        let backwards = match self {
+            Self::Sketch(curves) => curves.reversed,
+            Self::Path(
+                PathRef::SketchCurve { reversed, .. } | PathRef::SketchCurves { reversed, .. },
+            ) => *reversed,
+            _ => false,
+        };
         let pieces = match self {
+            // In order along it already, by the sketch's joints.
+            Self::Spatial(path) => return path.resolve(ctx),
             Self::Sketch(curves) => curves.curves(ctx)?.1,
             Self::Path(PathRef::Edges { body, edges }) => edge_curves(ctx, *body, edges)?,
-            Self::Path(PathRef::SketchCurve { sketch, curve }) => {
+            Self::Path(PathRef::SketchCurve { sketch, curve, .. }) => {
                 let curves = SketchCurves {
                     sketch: *sketch,
                     curves: vec![*curve],
                     chain: false,
+                    reversed: false,
                 };
                 curves.curves(ctx)?.1
             }
-            Self::Path(PathRef::SketchCurves { sketch, curves }) => {
+            Self::Path(PathRef::SketchCurves { sketch, curves, .. }) => {
                 let curves = SketchCurves {
                     sketch: *sketch,
                     curves: curves.clone(),
                     chain: false,
+                    reversed: false,
                 };
                 curves.curves(ctx)?.1
             }
@@ -330,9 +525,228 @@ impl CurvePath {
             Self::Path(PathRef::FeatureCurve(feature)) => {
                 return Ok(ctx.feature_curve(*feature)?.as_ref().clone());
             }
+            Self::Path(PathRef::Spatial(path)) => return path.resolve(ctx),
         };
-        chain(pieces)
+        let path = chain(pieces)?;
+        Ok(if backwards { reversed_path(path) } else { path })
     }
+}
+
+/// What turning `sketch` into a 3D sketch in place (mitcad#1544) makes of
+/// a path along its curves (mitcad#1523): the typed path of the 3D sketch
+/// with the same curve ids and `chain`, running the way the planar path
+/// ran through its first listed curve (found from the planar sketch's
+/// `def` and last `output`). None when the path does not run along curves
+/// of `sketch`; an error when its curves do not make a path. A closed path
+/// stays closed (mitcad#1550): a circle or an ellipse runs along its own
+/// direction, counter-clockwise about the sketch's normal, as it did.
+///
+/// A 3D sketch joins curves at shared and coincident points only; a
+/// planar chain joined by position alone joins no more once converted.
+pub fn spatial_rewrite(
+    path: &CurvePath,
+    sketch: FeatureUid,
+    def: &SketchDef,
+    output: &SketchOutput,
+) -> Option<Result<SpatialPath, String>> {
+    let curves = match path {
+        CurvePath::Sketch(curves) if curves.sketch == sketch => curves.clone(),
+        CurvePath::Path(PathRef::SketchCurve {
+            sketch: s,
+            curve,
+            reversed,
+        }) if *s == sketch => SketchCurves {
+            sketch,
+            curves: vec![*curve],
+            chain: false,
+            reversed: *reversed,
+        },
+        CurvePath::Path(PathRef::SketchCurves {
+            sketch: s,
+            curves,
+            reversed,
+        }) if *s == sketch => SketchCurves {
+            sketch,
+            curves: curves.clone(),
+            chain: false,
+            reversed: *reversed,
+        },
+        _ => return None,
+    };
+    Some(rewritten(&curves, def, output))
+}
+
+/// [`spatial_rewrite`] of a planar path along curves of the sketch.
+fn rewritten(
+    curves: &SketchCurves,
+    def: &SketchDef,
+    output: &SketchOutput,
+) -> Result<SpatialPath, String> {
+    let solved = &output.solved;
+    let construction: BTreeSet<EntityUid> = def
+        .entities
+        .iter()
+        .filter(|e| e.construction)
+        .map(|e| e.id)
+        .collect();
+    let name = curves.sketch.to_string();
+    let pieces = curves.pieces_of(solved, &output.frame, &construction, &name)?;
+    let path = chain(pieces)?;
+    let first = curves.curves[0];
+    let along = path
+        .iter()
+        .find(|p| p.name == first.curve_name())
+        .ok_or_else(|| {
+            crate::notice::said(
+                "the first curve is not on the path",
+                format!("{} is not on the path", first.curve_name()),
+            )
+        })?;
+    let own = curve_ends(&curve3(&output.frame, &solved.curves[&first]));
+    let run = curve_ends(&along.curve);
+    let against = match (own, run) {
+        // A closed curve (a circle, an ellipse, a closed spline) runs its
+        // own way.
+        (None, _) => false,
+        (Some((own_start, own_end)), Some((start, _))) => {
+            distance(start, own_end) < distance(start, own_start)
+        }
+        (Some(_), None) => {
+            return Err(crate::notice::said(
+                "the first curve has no ends",
+                format!("{} has no ends", first.curve_name()),
+            ));
+        }
+    };
+    // A planar path that runs the other way (mitcad#1550) turns too.
+    Ok(SpatialPath {
+        sketch: curves.sketch,
+        curves: curves.curves.clone(),
+        reversed: against != curves.reversed,
+        chain: curves.chain,
+    })
+}
+
+/// A path a feature holds, as [`for_each_path`] hands it over.
+pub(crate) enum HeldPath<'a> {
+    Curves(&'a mut CurvePath),
+    Ref(&'a mut PathRef),
+}
+
+/// Every path a feature holds, with the input's name: a Pipe's path; a
+/// Sweep's path, guide rails and auxiliary curve; a loft's centre line,
+/// rails and auxiliary curve; a path pattern's path; a construction
+/// plane's or point's path (mitcad#1550).
+pub(crate) fn for_each_path(
+    feature: &mut FeatureDef,
+    f: &mut dyn FnMut(&str, HeldPath<'_>) -> Result<(), String>,
+) -> Result<(), String> {
+    use super::construction::{PlaneDefinition, PointDefinition};
+    use super::sweep::SweepFrame;
+    match feature {
+        FeatureDef::Pipe(pipe) => f("path", HeldPath::Curves(&mut pipe.path))?,
+        FeatureDef::Sweep(sweep) => {
+            f("path", HeldPath::Curves(&mut sweep.path))?;
+            if let Some(rail) = &mut sweep.guide_rail {
+                f("guide rail", HeldPath::Curves(rail))?;
+            }
+            if let Some(rail) = &mut sweep.guide_rail2 {
+                f("second guide rail", HeldPath::Curves(rail))?;
+            }
+            if let Some(SweepFrame::Auxiliary { curve, .. }) = &mut sweep.frame {
+                f("auxiliary curve", HeldPath::Curves(curve))?;
+            }
+        }
+        FeatureDef::Loft(loft) => {
+            if let Some(line) = &mut loft.centerline {
+                f("center line", HeldPath::Curves(line))?;
+            }
+            for (i, rail) in loft.rails.iter_mut().enumerate() {
+                f(&format!("rail {}", i + 1), HeldPath::Curves(rail))?;
+            }
+            if let Some(SweepFrame::Auxiliary { curve, .. }) = &mut loft.frame {
+                f("auxiliary curve", HeldPath::Curves(curve))?;
+            }
+        }
+        FeatureDef::PathPattern(pattern) => f("path", HeldPath::Ref(&mut pattern.path))?,
+        FeatureDef::ConstructionPlane(plane) => match &mut plane.definition {
+            PlaneDefinition::AlongPath { path, .. }
+            | PlaneDefinition::NormalAtPoint { path, .. } => f("path", HeldPath::Ref(path))?,
+            _ => {}
+        },
+        FeatureDef::ConstructionPoint(point) => {
+            if let PointDefinition::AlongPath { path, .. } = &mut point.definition {
+                f("path", HeldPath::Ref(path))?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// [`spatial_rewrite`] for the paths of a feature along curves of
+/// `sketch` (mitcad#1544, mitcad#1550: every path [`for_each_path`]
+/// finds). `Ok(true)` when it changed any; an error, naming the input, for
+/// a path that cannot be a 3D sketch's. Other features' uses of the sketch
+/// are not looked at: the curves that grow from the sketch's plane (a
+/// Sweep's curves to sweep, a rib's, thin walls) keep their planar form,
+/// which a 3D sketch's curves in its sketch plane have too (mitcad#1550).
+pub fn rewrite_spatial_paths(
+    feature: &mut FeatureDef,
+    sketch: FeatureUid,
+    def: &SketchDef,
+    output: &SketchOutput,
+) -> Result<bool, String> {
+    let mut changed = false;
+    for_each_path(feature, &mut |what: &str, held: HeldPath<'_>| {
+        let planar = match &held {
+            HeldPath::Curves(path) => (**path).clone(),
+            HeldPath::Ref(path) => CurvePath::Path((**path).clone()),
+        };
+        let Some(rewritten) = spatial_rewrite(&planar, sketch, def, output) else {
+            return Ok(());
+        };
+        let rewritten = rewritten.map_err(|e| format!("{what}: {e}"))?;
+        match held {
+            HeldPath::Curves(path) => *path = CurvePath::Spatial(rewritten),
+            HeldPath::Ref(path) => *path = PathRef::Spatial(rewritten),
+        }
+        changed = true;
+        Ok(())
+    })?;
+    Ok(changed)
+}
+
+/// The paths of a feature through fillets of the 3D sketch `sketch`
+/// (mitcad#1548): a path of a 3D sketch's curves ([`for_each_path`]) that
+/// lists both lines a fillet rounded (`rounded`: the lines and the arc)
+/// takes the arc too, so that it still runs through the corner; a chain
+/// selection finds it by itself. True when any changed.
+pub fn take_fillet_arcs(
+    feature: &mut FeatureDef,
+    sketch: FeatureUid,
+    rounded: &[([EntityUid; 2], EntityUid)],
+) -> bool {
+    let mut changed = false;
+    let _ = for_each_path(feature, &mut |_: &str, held: HeldPath<'_>| {
+        let path = match held {
+            HeldPath::Curves(CurvePath::Spatial(path))
+            | HeldPath::Curves(CurvePath::Path(PathRef::Spatial(path)))
+            | HeldPath::Ref(PathRef::Spatial(path)) => path,
+            _ => return Ok(()),
+        };
+        if path.sketch == sketch && !path.chain {
+            for ([a, b], arc) in rounded {
+                if path.curves.contains(a) && path.curves.contains(b) && !path.curves.contains(arc)
+                {
+                    path.curves.push(*arc);
+                    changed = true;
+                }
+            }
+        }
+        Ok(())
+    });
+    changed
 }
 
 /// The curves of a body's edges, in the order listed.
@@ -723,7 +1137,7 @@ fn counter_clockwise(
 }
 
 /// Points along the curve from its start to its end.
-fn samples(curve: &Curve3) -> Vec<[f64; 3]> {
+pub(crate) fn samples(curve: &Curve3) -> Vec<[f64; 3]> {
     const N: usize = 32;
     let along = |f: &dyn Fn(f64) -> [f64; 3], t0: f64, t1: f64| -> Vec<[f64; 3]> {
         (0..=N)

@@ -170,7 +170,7 @@ fn a_two_colour_box_s_change_is_edited_undone_redone_saved_and_reopened() {
     assert!(doc.filament_changes(None).is_empty());
     doc.redo();
     assert_eq!(doc.filament_changes(None).len(), 1);
-    assert_eq!(doc.filament_changes(None)[0].height, 10.0);
+    assert_eq!(doc.filament_changes(None)[0].height, Some(10.0));
 
     // Saved with the design and reopened intact.
     let saved = doc.to_json();
@@ -258,9 +258,9 @@ fn each_slicer_s_project_gets_the_change_as_its_reader_takes_it() {
         result["filament_changes"],
         json!([
             {"plate": 0, "height": 4.0, "print_z": 4.2, "layer": 21, "kind": "pause",
-             "material": null},
+             "material": null, "source": "height"},
             {"plate": 0, "height": 10.0, "print_z": 10.2, "layer": 51, "kind": "change",
-             "material": "pla_two"},
+             "material": "pla_two", "source": "height"},
         ])
     );
     let settings: Map<String, Value> =
@@ -858,4 +858,422 @@ fn render_and_usdz_show_the_same_two_height_regions_without_changing_the_design(
     );
     assert!(error.contains("USDZ"), "{error}");
     assert_eq!(doc.to_json(), design);
+}
+
+// Filament changes at planes and faces (mitcad#1643).
+
+/// The red 20 x 20 x 40 box (F2.b0, Body1) with a parameter `h` of 10 mm
+/// and Plane1 offset `h` above XY; the plane's uid.
+fn box_and_plane() -> (Document<MockKernel>, String) {
+    let mut doc = red_box();
+    command(
+        &mut doc,
+        json!({"cmd": "add_parameter", "name": "h", "expression": "10 mm"}),
+    );
+    let plane = command(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "construction_plane",
+               "definition": {"type": "offset", "plane": "xy", "distance": "h"}}}),
+    )["uid"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    (doc, plane)
+}
+
+fn set_h(doc: &mut Document<MockKernel>, expression: &str) {
+    command(
+        doc,
+        json!({"cmd": "set_parameter", "name": "h", "expression": expression}),
+    );
+}
+
+fn first_row(doc: &Document<MockKernel>) -> Value {
+    query(doc, json!({"query": "filament_changes"}))["changes"][0].clone()
+}
+
+#[test]
+fn a_change_at_a_construction_plane_follows_its_offset() {
+    let (mut doc, plane) = box_and_plane();
+    let at_plane = json!({"at": plane, "material": "pla_two", "appearance": "blue_pla"});
+    let answer = set(&mut doc, json!([at_plane]));
+    assert_eq!(answer["changes"], json!([at_plane]));
+    assert_eq!(doc.undo_label(), Some("Set Filament Changes"));
+    // Measured from the box (the first body), 10 mm up.
+    let row = first_row(&doc);
+    assert_eq!(row["source"], "plane", "{row}");
+    assert_eq!(row["place"], "Plane1");
+    assert_eq!(row["body"], "F2.b0");
+    assert_eq!(row["at"], json!(plane));
+    assert_eq!(row["height"], json!(10.0));
+    assert_eq!(row["boundary"], json!(10.0));
+    assert_eq!(row["print_z"], json!(10.2));
+    assert!(row.get("left_out").is_none(), "{row}");
+    assert_eq!(row["event"], at_plane);
+    // What Send to Slicer's rows offer: the filament the plate starts with
+    // and the design's materials in their appearances.
+    let listed = query(&doc, json!({"query": "filament_changes"}));
+    assert_eq!(listed["start"]["name"], "PLA Two (Red)", "{listed}");
+    let names: Vec<&str> = listed["choices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"PLA Two (Blue)"), "{names:?}");
+
+    // The plane's offset changed by its parameter: the change follows.
+    set_h(&mut doc, "15 mm");
+    let row = first_row(&doc);
+    assert_eq!(row["height"], json!(15.0), "{row}");
+    assert_eq!(row["print_z"], json!(15.2));
+
+    // The slicers' projects carry the computed height.
+    let (result, data) = export(&mut doc, "plane.3mf", json!({"dialect": "bambu_studio"}));
+    let xml = package_text(&data, BAMBU).unwrap();
+    assert!(
+        xml.contains("<layer top_z=\"15.2\" type=\"2\" extruder=\"2\" color=\"#0000FF\""),
+        "{xml}"
+    );
+    let event = &result["filament_changes"][0];
+    assert_eq!(event["source"], "plane", "{result}");
+    assert_eq!(event["height"], json!(15.0));
+    assert_eq!(event["at"], json!(plane));
+    assert_eq!(event["body"], "F2.b0");
+    let (_, data) = export(
+        &mut doc,
+        "plane-prusa.3mf",
+        json!({"dialect": "prusaslicer"}),
+    );
+    let xml = package_text(&data, PRUSA).unwrap();
+    assert!(xml.contains("<code print_z=\"15.2\" type=\"0\""), "{xml}");
+    // And move when the plane moves.
+    set_h(&mut doc, "22 mm");
+    let (_, data) = export(&mut doc, "moved.3mf", json!({"dialect": "prusaslicer"}));
+    let xml = package_text(&data, PRUSA).unwrap();
+    assert!(xml.contains("<code print_z=\"22.2\" type=\"0\""), "{xml}");
+    let (_, data) = export(
+        &mut doc,
+        "moved-bambu.3mf",
+        json!({"dialect": "orcaslicer"}),
+    );
+    let xml = package_text(&data, BAMBU).unwrap();
+    assert!(xml.contains("<layer top_z=\"22.2\" type=\"2\""), "{xml}");
+
+    // Saved with its reference and reopened intact.
+    let saved = doc.to_json();
+    let file: Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(file["filament_changes"], json!([{"changes": [at_plane]}]));
+    let mut reopened = Document::from_json(&saved, MockKernel::default()).unwrap();
+    assert_eq!(reopened.filament_changes(None), doc.filament_changes(None));
+    assert_eq!(reopened.to_json(), saved);
+    // Computed again, the plane gives its height again.
+    reopened.recompute();
+    let row = first_row(&reopened);
+    assert_eq!(row["height"], json!(22.0), "{row}");
+
+    // The two parameter changes undone, then the schedule's step: it goes.
+    doc.undo();
+    doc.undo();
+    assert_eq!(doc.undo_label(), Some("Set Filament Changes"));
+    doc.undo();
+    assert!(doc.filament_changes(None).is_empty());
+
+    // Refused: an axis, a feature that is no plane, a height beside it.
+    for (event, expected) in [
+        (json!({"at": "z", "material": "pla_two"}), "planar face"),
+        (
+            json!({"at": "F1", "material": "pla_two"}),
+            "Sketch1 is no plane at the timeline marker",
+        ),
+        (
+            json!({"at": plane, "height": 5, "material": "pla_two"}),
+            "not both",
+        ),
+    ] {
+        let error = refused(
+            &mut doc,
+            json!({"cmd": "set_filament_changes", "changes": [event]}),
+        );
+        assert!(error.contains(expected), "{expected}: {error}");
+    }
+}
+
+#[test]
+fn a_change_at_a_face_follows_the_face_when_the_body_grows() {
+    // The 40 mm box (F2.b0, Body1) and beside it a base (F4.b0, Body2)
+    // `base` high: a pause at the base's top.
+    let mut doc = Document::new(MockKernel::default());
+    add_block(&mut doc, "F1", 0.0, 40.0);
+    command(
+        &mut doc,
+        json!({"cmd": "add_parameter", "name": "base", "expression": "10 mm"}),
+    );
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [50, 0], "width": 20, "height": 20},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F3", "region": R}],
+              "extent": {"type": "distance", "distance": "base"}, "operation": "new_body"}},
+        ]),
+    );
+    print_setup(&mut doc);
+    colour(&mut doc, "F2.b0", "red_pla");
+    colour(&mut doc, "F4.b0", "red_pla");
+    let face = format!("F4:end({R})");
+    set(
+        &mut doc,
+        json!([{"at": {"body": "F4.b0", "face": face}, "kind": "pause",
+                "message": "Insert the nuts"}]),
+    );
+    let row = first_row(&doc);
+    assert_eq!(row["source"], "face", "{row}");
+    assert_eq!(row["place"], "a face of Body2");
+    assert_eq!(row["body"], "F4.b0");
+    assert_eq!(row["places"][0]["name"], json!(face));
+    assert_eq!(row["height"], json!(10.0));
+    // The base 15 mm high: the pause at its new top.
+    command(
+        &mut doc,
+        json!({"cmd": "set_parameter", "name": "base", "expression": "15 mm"}),
+    );
+    assert_eq!(first_row(&doc)["height"], json!(15.0));
+    let (result, data) = export(&mut doc, "face.3mf", json!({"dialect": "prusaslicer"}));
+    let xml = package_text(&data, PRUSA).unwrap();
+    assert!(
+        xml.contains("<code print_z=\"15.2\" type=\"1\" extruder=\"1\" color=\"\" extra=\"Insert the nuts\"/>"),
+        "{xml}"
+    );
+    assert_eq!(result["filament_changes"][0]["source"], "face", "{result}");
+    // The text names the body, never the face's topological name.
+    let saved = doc.to_json();
+    let reopened = Document::from_json(&saved, MockKernel::default()).unwrap();
+    assert_eq!(reopened.filament_changes(None), doc.filament_changes(None));
+}
+
+#[test]
+fn a_plane_not_level_in_the_print_orientation_is_left_out_with_its_warning() {
+    let (mut doc, plane) = box_and_plane();
+    set(
+        &mut doc,
+        json!([{"at": plane, "material": "pla_two", "appearance": "blue_pla"}, to_blue(5.0)]),
+    );
+    // On its side on the print bed: Plane1 stands upright there.
+    doc.kernel().surfaces.borrow_mut().insert(
+        "F2:side(c1[c4,c2])".to_owned(),
+        SurfaceGeometry::Plane {
+            origin: [10.0, 0.0, 20.0],
+            normal: [0.0, -1.0, 0.0],
+        },
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "set_print_bed_face", "uid": "F2.b0", "face": "F2:side(c1[c4,c2])"}),
+    );
+    let said = "the filament change at Plane1 is not level in the print orientation, so it is \
+                left out";
+    let listed = query(&doc, json!({"query": "filament_changes"}));
+    // The height event first, then the plane's.
+    let row = &listed["changes"][1];
+    assert_eq!(row["left_out"], true, "{listed}");
+    assert_eq!(row["height"], Value::Null);
+    assert_eq!(row["warning"], said);
+    assert!(listed["notes"].as_array().unwrap().contains(&json!(said)));
+    let (result, data) = export(
+        &mut doc,
+        "turned.3mf",
+        json!({"dialect": "prusaslicer", "on_bed": true}),
+    );
+    let all = warnings(&result);
+    assert!(all.contains(&format!("The design: {said}")), "{all:?}");
+    // Nothing moved: only the change at a height is written.
+    let xml = package_text(&data, PRUSA).unwrap();
+    assert_eq!(xml.matches("<code ").count(), 1, "{xml}");
+    assert_eq!(result["filament_changes"].as_array().unwrap().len(), 1);
+    assert_eq!(result["filament_changes"][0]["source"], "height");
+}
+
+#[test]
+fn two_bodies_on_different_levels_warn_once() {
+    // The box (F2.b0) on XY and a riser (F4.b0) in a component placed
+    // 10 mm up beside it, each on its print bed face (two objects on the
+    // bed); Plane2 (F5) 20 mm above XY.
+    let mut doc = Document::new(MockKernel::default());
+    add_block(&mut doc, "F1", 0.0, 40.0);
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "create_component", "name": "Riser", "transform": {"translation": [50, 0, 10]}},
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [0, 0], "width": 20, "height": 20},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F3", "region": R}],
+              "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+            {"cmd": "activate_component", "component": "C0"},
+        ]),
+    );
+    let plane = command(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "construction_plane",
+               "definition": {"type": "offset", "plane": "xy", "distance": 20}}}),
+    )["uid"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    print_setup(&mut doc);
+    colour(&mut doc, "F2.b0", "red_pla");
+    colour(&mut doc, "F4.b0", "red_pla");
+    for body in ["F2.b0", "F4.b0"] {
+        let face = format!("{}:start({R})", &body[..2]);
+        command(
+            &mut doc,
+            json!({"cmd": "set_print_bed_face", "uid": body, "face": face}),
+        );
+    }
+    set(
+        &mut doc,
+        json!([{"at": plane, "body": "F2.b0", "material": "pla_two", "appearance": "blue_pla"}]),
+    );
+    let (result, data) = export(
+        &mut doc,
+        "levels.3mf",
+        // Each placement picked: each body an object of its own on the bed.
+        json!({"dialect": "bambu_studio", "on_bed": true,
+               "occurrences": {"F2.b0": [], "F4.b0": ["O1"]}}),
+    );
+    let level: Vec<String> = warnings(&result)
+        .into_iter()
+        .filter(|w| w.contains("other objects of the plate stand at other levels"))
+        .collect();
+    assert_eq!(level.len(), 1, "{result}");
+    assert!(level[0].contains("measured from Body1"), "{level:?}");
+    // The change is written once for the plate, at the box's 20 mm.
+    let xml = package_text(&data, BAMBU).unwrap();
+    assert!(xml.contains("top_z=\"20.2\""), "{xml}");
+    assert_eq!(
+        mitcad_3mf::read(&data).unwrap().objects.len(),
+        2,
+        "two objects on the bed"
+    );
+    // Bodies at one level: no such warning.
+    let (result, _) = export(
+        &mut doc,
+        "level.3mf",
+        json!({"dialect": "bambu_studio", "on_bed": true, "bodies": ["F2.b0"]}),
+    );
+    assert!(
+        warnings(&result)
+            .iter()
+            .all(|w| !w.contains("other levels")),
+        "{result}"
+    );
+}
+
+#[test]
+fn the_preview_query_gives_the_colours_and_the_ring() {
+    let (mut doc, plane) = box_and_plane();
+    set(
+        &mut doc,
+        json!([{"at": plane, "material": "pla_two", "appearance": "blue_pla"}]),
+    );
+    let preview = query(&doc, json!({"query": "filament_change_preview"}));
+    let bands = preview["bands"].as_array().unwrap();
+    let colors: Vec<&str> = bands.iter().map(|b| b["color"].as_str().unwrap()).collect();
+    assert_eq!(colors, ["#0000FF", "#FF0000"], "{preview}");
+    for band in bands {
+        let flat = band["triangles"].as_array().unwrap();
+        assert!(!flat.is_empty() && flat.len() % 9 == 0);
+        let blue = band["color"] == "#0000FF";
+        for z in flat.iter().skip(2).step_by(3) {
+            let z = z.as_f64().unwrap();
+            assert!(
+                if blue {
+                    z >= 10.0 - 1e-4
+                } else {
+                    z <= 10.0 + 1e-4
+                },
+                "{z}"
+            );
+        }
+    }
+    // The ring round the box at 10 mm.
+    let rings = preview["rings"].as_array().unwrap();
+    assert!(
+        !rings.is_empty() && rings.len().is_multiple_of(6),
+        "{preview}"
+    );
+    for z in rings.iter().skip(2).step_by(3) {
+        assert!((z.as_f64().unwrap() - 10.0).abs() < 1e-4);
+    }
+    // Without changes: nothing to draw.
+    set(&mut doc, json!([]));
+    let preview = query(&doc, json!({"query": "filament_change_preview"}));
+    assert_eq!(preview["bands"], json!([]));
+    assert_eq!(preview["rings"], json!([]));
+}
+
+/// The one side face of Extrude1 (F2) on `curve` in the bodies.
+fn side_face(doc: &Document<MockKernel>, curve: &str) -> String {
+    let prefix = format!("F2:side({curve}[");
+    let found: Vec<String> = doc
+        .bodies()
+        .iter()
+        .flat_map(|b| b.shape.faces.iter().map(ToString::to_string))
+        .filter(|f| f.starts_with(&prefix))
+        .collect();
+    assert_eq!(found.len(), 1, "{prefix}: {found:?}");
+    found[0].clone()
+}
+
+#[test]
+fn auto_fix_writes_a_renamed_face_into_the_schedule() {
+    // A pause at the box's front face (y = 0), which a rounded corner of
+    // the sketch renames.
+    let mut doc = red_box();
+    let front = "F2:side(c1[c4,c2])";
+    let plane = SurfaceGeometry::Plane {
+        origin: [10.0, 0.0, 20.0],
+        normal: [0.0, -1.0, 0.0],
+    };
+    doc.kernel()
+        .surfaces
+        .borrow_mut()
+        .insert(front.to_owned(), plane.clone());
+    set(
+        &mut doc,
+        json!([{"at": {"body": "F2.b0", "face": front}, "kind": "pause"}]),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "sketch.fillet", "sketch": "F1", "a": "c1", "b": "c2", "radius": 3}),
+    );
+    let renamed = side_face(&doc, "c1");
+    assert_ne!(renamed, front);
+    doc.kernel()
+        .surfaces
+        .borrow_mut()
+        .insert(renamed.clone(), plane);
+    // Found again under its new name, which the query tells agents.
+    let row = first_row(&doc);
+    assert_eq!(row["found_as"], json!(renamed), "{row}");
+    assert_eq!(row["at"]["face"], front);
+    // Auto Fix of every feature writes it into the schedule, one step.
+    let report = command(&mut doc, json!({"cmd": "auto_fix"}));
+    assert_eq!(report["filament_faces"], 1, "{report}");
+    assert!(
+        report["message"]
+            .as_str()
+            .unwrap()
+            .contains("the face of a filament change found again"),
+        "{report}"
+    );
+    let row = first_row(&doc);
+    assert_eq!(row["at"]["face"], json!(renamed), "{row}");
+    assert!(row.get("found_as").is_none(), "{row}");
+    doc.undo();
+    assert_eq!(first_row(&doc)["at"]["face"], front);
+    // A face found as stored: nothing to write.
+    doc.redo();
+    let report = command(&mut doc, json!({"cmd": "auto_fix"}));
+    assert_eq!(report["filament_faces"], 0, "{report}");
 }

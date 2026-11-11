@@ -299,6 +299,8 @@ fn missing_faces_are_explained() {
         panic!("expected a failure");
     };
     assert_eq!(message, format!("the body has no face {gone}"));
+    // The person reads a whole message without the name (mitcad#1626).
+    assert_eq!(message.message, "the body has no such face");
 
     // A face the kernel lost after a feature.
     let mut b = block();
@@ -321,6 +323,9 @@ fn missing_faces_are_explained() {
         message.contains("no longer exists after DeleteFace1"),
         "{message}"
     );
+    // One template for the person: "a face" is no value of another
+    // (mitcad#1626).
+    assert_eq!(message.message, "a face no longer exists after DeleteFace1");
 
     // Replace face is not in the mock kernel: unsupported, with the mark.
     let replace = add!(
@@ -331,6 +336,34 @@ fn missing_faces_are_explained() {
     .unwrap();
     assert!(matches!(status(&b, replace),
         FeatureStatus::Failed(m) if m == "unsupported: the geometry kernel does not support replace face"));
+}
+
+/// A face of a feature that is suppressed: the person reads one whole
+/// message with the feature's name as its only value, agents the face's
+/// name too (mitcad#1626).
+#[test]
+fn a_face_of_a_suppressed_feature_is_one_whole_message() {
+    let mut b = block();
+    let (_, region, join) = b.join_boss();
+    let gone = FaceName::end(join, region);
+    let delete = add!(
+        b,
+        json!({"type": "delete_face", "body": b.body, "faces": [gone]}),
+    )
+    .unwrap();
+    b.doc.set_suppressed(join, true).unwrap();
+    let name = b.doc.feature(join).expect("the join").name.clone();
+    let FeatureStatus::Failed(message) = status(&b, delete) else {
+        panic!("expected a failure");
+    };
+    assert_eq!(
+        message.message,
+        format!("a face does not exist because {name} is suppressed")
+    );
+    assert_eq!(
+        message,
+        format!("face {gone} does not exist because {name} is suppressed")
+    );
 }
 
 #[test]

@@ -1593,13 +1593,17 @@ void SketchOverlay::paintCommandPicks(QPainter& painter) const {
     painter.drawEllipse(place, 3.5, 3.5);
   }
   if (const auto shape = m_c.handleShape()) {
-    // Each arrow from the square's center, with its head at the tip; the
-    // part dragged in the selection's color.
-    const auto arrow = [&painter, &shape](const QPointF& tip, bool dragged) {
-      const QColor color = dragged ? kSelectedColor : kSnapColor;
-      painter.setPen(QPen(color, 2.0, Qt::SolidLine, Qt::RoundCap));
-      painter.drawLine(shape->center, tip);
-      const QPointF back = shape->center - tip;
+    // Each arrow from its start (the square's center, or a pattern's first
+    // copy, mitcad#1640), with its head at the tip; the part dragged in the
+    // selection's color, a faint arrow (a hint only) thin and see-through.
+    const auto arrow = [&painter](const QPointF& from, const QPointF& tip, bool dragged, bool faint) {
+      QColor color = dragged ? kSelectedColor : kSnapColor;
+      if (faint) {
+        color.setAlpha(90);
+      }
+      painter.setPen(QPen(color, faint ? 1.0 : 2.0, faint ? Qt::DashLine : Qt::SolidLine, Qt::RoundCap));
+      painter.drawLine(from, tip);
+      const QPointF back = from - tip;
       const double length = std::hypot(back.x(), back.y());
       if (length <= 0.0) {
         return;
@@ -1607,16 +1611,21 @@ void SketchOverlay::paintCommandPicks(QPainter& painter) const {
       const QPointF unit = back / length;
       const QPointF across(-unit.y(), unit.x());
       constexpr double head = 9.0;
+      if (faint) {
+        painter.setPen(QPen(color, 1.0));
+      }
       painter.setBrush(color);
       painter.drawPolygon(QPolygonF{tip, tip + unit * head + across * (head * 0.45),
                                     tip + unit * head - across * (head * 0.45)});
     };
-    arrow(shape->xTip, shape->dragged == 'x' || shape->dragged == 'b');
-    arrow(shape->yTip, shape->dragged == 'y' || shape->dragged == 'b');
-    const QColor square = shape->dragged == 'b' ? kSelectedColor : kSnapColor;
-    painter.setPen(QPen(square, 1.5));
-    painter.setBrush(shape->dragged == 'b' ? QBrush(square) : QBrush(labelBox(220)));
-    painter.drawRect(QRectF(shape->center.x() - 5.0, shape->center.y() - 5.0, 10.0, 10.0));
+    arrow(shape->xFrom, shape->xTip, shape->dragged == 'x' || shape->dragged == 'b', shape->faint[0]);
+    arrow(shape->yFrom, shape->yTip, shape->dragged == 'y' || shape->dragged == 'b', shape->faint[1]);
+    if (shape->square) {
+      const QColor square = shape->dragged == 'b' ? kSelectedColor : kSnapColor;
+      painter.setPen(QPen(square, 1.5));
+      painter.setBrush(shape->dragged == 'b' ? QBrush(square) : QBrush(labelBox(220)));
+      painter.drawRect(QRectF(shape->center.x() - 5.0, shape->center.y() - 5.0, 10.0, 10.0));
+    }
   }
   painter.restore();
   if (m_c.commandSnapping()) {

@@ -160,6 +160,15 @@ public:
   using CommandTask = std::function<QJsonObject(const CommandRunner& command)>;
   bool commandTaskAsync(const QString& label, const QString& stage, CommandTask task, QObject* context,
                         Completion completion);
+  // A query that may take long (the sketch Dimension tool's body geometry
+  // out of the plane, mitcad#1656) as one job named `label`, off the UI
+  // thread and without a progress dialog or a wait: `read` gets its answer
+  // on the worker, to turn it into what the caller keeps there too. The job
+  // gives way as commandTaskAsync's does (yieldBackgroundJob): a cancelled
+  // result means it was not read. As commandAsync otherwise.
+  using QueryRead = std::function<void(const QJsonValue& answer)>;
+  bool queryAsync(const QString& label, const QJsonObject& request, QueryRead read, QObject* context,
+                  Completion completion);
   // Such a job gives way to what the UI thread must do at once while it
   // runs (a window beside Send to Slicer's panel that changes or reads the
   // design, mitcad#1121): cancelled and waited for, its end handled now

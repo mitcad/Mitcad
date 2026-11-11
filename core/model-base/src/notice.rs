@@ -678,6 +678,47 @@ pub fn about_place(place: NoticePlace, inner: &str) -> String {
     .text()
 }
 
+/// A failure's text (mitcad#1644): `message` in plain words for a
+/// person, `detail` the same with the ids, names and coordinates for
+/// agents; no places.
+pub fn said(message: impl Into<String>, detail: impl Into<String>) -> String {
+    FeatureError::new(message).with_detail(detail).text()
+}
+
+/// [`said`] about these places too (mitcad#1644).
+pub fn said_at(
+    message: impl Into<String>,
+    detail: impl Into<String>,
+    places: impl IntoIterator<Item = NoticePlace>,
+) -> String {
+    FeatureError::new(message)
+        .with_places(places)
+        .with_detail(detail)
+        .text()
+}
+
+/// The failure `inner` (a text, perhaps with its own tail) after a
+/// lead-in (mitcad#1644): a person reads `lead` (plain words, often empty
+/// where the places say which one) and inner's message, agents `named`
+/// (the lead-in with its ids, "k3: ") and inner's agent text; inner's
+/// places are kept.
+pub fn said_after(lead: &str, named: &str, inner: &str) -> String {
+    said_around(|message| format!("{lead}{message}"), named, inner)
+}
+
+/// [`said_after`] with the person's message made of inner's by `said`
+/// (mitcad#1644): one whole sentence with inner's message as its value
+/// (`format!("the source of an attachment: {message}")`), so that it is
+/// translated as one.
+pub fn said_around(said: impl FnOnce(&str) -> String, named: &str, inner: &str) -> String {
+    let error = FeatureError::from_text(inner);
+    let detail = format!("{named}{}", error.agent_text());
+    FeatureError::new(said(&error.message))
+        .with_places(error.places)
+        .with_detail(detail)
+        .text()
+}
+
 /// Places each once, in their order.
 fn unique(places: impl IntoIterator<Item = NoticePlace>) -> Vec<NoticePlace> {
     let mut out: Vec<NoticePlace> = Vec::new();
@@ -1025,8 +1066,9 @@ fn assert_user_text(message: &str) {
 /// A message without the topological names in it, and the places they
 /// name (mitcad#1327): each name, or a list of names of one kind ("A, B and
 /// C"), is taken out; after the word of its kind ("edge", "faces", ...) the
-/// word stays, with "a" or "an" before a single one unless a word like
-/// "the" or "its" is there ("the fillet of an edge"); elsewhere the kind
+/// word stays, with "a" or "an" before a single one unless its noun phrase
+/// has a word like "the" or "its" ("the fillet of an edge", "the driven
+/// dimension"; [`with_article`]); elsewhere the kind
 /// takes its place ("at a vertex", "edges"). Text without names is as it
 /// was. A reference a sketch change renamed (`edge E{…} found as E{…}
 /// after a change in Sketch1`, a region's `r{…} found as r{…} + r{…}`)
@@ -1038,6 +1080,171 @@ fn assert_user_text(message: &str) {
 /// a point", the point its place).
 pub fn plain_message(text: &str) -> (String, Vec<NoticePlace>) {
     cleaned(text, false)
+}
+
+/// The words of kinds after which [`cleaned`] keeps the word and takes the
+/// name out ("of edge E{…}": "of an edge"). The generator of the model
+/// message templates (`tools/translations/mitcad-translations.cpp`,
+/// mitcad#1635) makes each template's cleaned form with the same words.
+const KINDS: [&str; 32] = [
+    "face",
+    "faces",
+    "edge",
+    "edges",
+    "vertex",
+    "vertices",
+    "corner",
+    "corners",
+    "region",
+    "regions",
+    "profile",
+    "profiles",
+    "body",
+    "bodies",
+    "point",
+    "points",
+    "curve",
+    "curves",
+    "line",
+    "lines",
+    "arc",
+    "arcs",
+    "circle",
+    "circles",
+    "constraint",
+    "constraints",
+    "dimension",
+    "dimensions",
+    "feature",
+    "features",
+    "pattern",
+    "offset",
+];
+
+/// The words after which [`with_article`] puts no article: the noun phrase
+/// has one.
+const DETERMINERS: [&str; 13] = [
+    "the", "a", "an", "its", "their", "this", "that", "each", "every", "one", "another", "which",
+    "no",
+];
+
+/// The words that end a noun phrase, looking back from the word of its kind
+/// ([`with_article`], mitcad#1638): prepositions, conjunctions, auxiliaries
+/// and a few verbs a message puts before a kind ("does not fit face %1",
+/// "the thread cut body %1"). The generator of the model message templates
+/// (`tools/translations/mitcad-translations.cpp`, kPhraseEnds) has the same.
+const PHRASE_ENDS: [&str; 111] = [
+    "at", "on", "of", "in", "into", "onto", "to", "from", "for", "with", "without", "by", "behind",
+    "between", "through", "along", "across", "over", "under", "above", "below", "beyond", "near",
+    "after", "before", "than", "as", "about", "around", "against", "past", "via", "within",
+    "inside", "outside", "per", "and", "or", "but", "nor", "if", "when", "where", "while",
+    "because", "then", "is", "are", "was", "were", "be", "been", "being", "has", "have", "had",
+    "do", "does", "did", "not", "can", "cannot", "could", "must", "may", "might", "will", "would",
+    "shall", "should", "it", "they", "there", "here", "what", "who", "create", "delete", "add",
+    "remove", "make", "made", "move", "moved", "change", "cut", "fit", "own", "reach", "develop",
+    "use", "keep", "pick", "select", "join", "split", "need", "find", "found", "take", "took",
+    "give", "gave", "get", "got", "put", "meet", "cross", "follow", "show", "hide",
+];
+
+/// Those of [`PHRASE_ENDS`] after which a verb comes: "does not fit face"
+/// reads "does not fit a face", not "does not a fit face".
+const VERB_LEADS: [&str; 15] = [
+    "to", "do", "does", "did", "not", "can", "cannot", "could", "must", "may", "might", "will",
+    "would", "shall", "should",
+];
+
+/// A character of a word of a noun phrase: a letter, an apostrophe ("the
+/// result's") or a hyphen ("pre-existing").
+fn phrase_char(b: u8) -> bool {
+    b.is_ascii_alphabetic() || b == b'\'' || b == b'-'
+}
+
+/// `out`, which ends with the word of a kind at byte `start` (its name
+/// taken out, mitcad#1327), with "a" or "an" where it belongs (mitcad#1638):
+/// none for several ("faces"), nor where the noun phrase has a word like
+/// "the" or a possessive ("the driven dimension", "a new body", "the
+/// result's face"); otherwise before the phrase, its words looked back over
+/// up to three until a word that ends it ("meets a boundary curve", "at a
+/// bend edge"), or before the word of the kind when a verb comes first
+/// ("does not fit a face"). A capital at the start of a sentence. The
+/// generator of the model message templates (`withArticle`) does the same.
+fn with_article(mut out: String, start: usize) -> String {
+    const SPACES: [char; 6] = [' ', '\t', '\n', '\r', '\x0c', '\x0b'];
+    let lower = out[start..].to_lowercase();
+    if lower.is_empty() || lower.ends_with('s') {
+        return out;
+    }
+    let bytes = out.as_bytes();
+    // The phrase's words before the kind's, nearest first.
+    let mut starts: Vec<usize> = Vec::new();
+    let mut at = start;
+    let place = loop {
+        let mut gap = at;
+        while gap > 0 && b" \t\n\r".contains(&bytes[gap - 1]) {
+            gap -= 1;
+        }
+        if gap == at || gap == 0 || !phrase_char(bytes[gap - 1]) {
+            break starts.last().copied().unwrap_or(start);
+        }
+        let mut word_start = gap;
+        while word_start > 0 && phrase_char(bytes[word_start - 1]) {
+            word_start -= 1;
+        }
+        let previous = out[word_start..gap].to_ascii_lowercase();
+        if !previous.bytes().any(|b| b.is_ascii_alphabetic()) {
+            break starts.last().copied().unwrap_or(start);
+        }
+        if DETERMINERS.contains(&previous.as_str()) || previous.ends_with("'s") {
+            return out;
+        }
+        if PHRASE_ENDS.contains(&previous.as_str()) || previous.ends_with('s') {
+            break if VERB_LEADS.contains(&previous.as_str()) {
+                if starts.len() >= 2 {
+                    starts[starts.len() - 2]
+                } else {
+                    start
+                }
+            } else {
+                starts.last().copied().unwrap_or(start)
+            };
+        }
+        if starts.len() == 3 {
+            break start;
+        }
+        starts.push(word_start);
+        at = word_start;
+    };
+    let first_end = place
+        + bytes[place..]
+            .iter()
+            .take_while(|b| phrase_char(**b))
+            .count();
+    let first = &out[place..first_end];
+    let vowel = first
+        .bytes()
+        .next()
+        .is_some_and(|b| b"aeiou".contains(&b.to_ascii_lowercase()));
+    let sentence = out[..place]
+        .trim_end_matches(&SPACES[..])
+        .chars()
+        .last()
+        .is_none_or(|c| ".!?".contains(c));
+    let capital = first.starts_with(|c: char| c.is_ascii_uppercase()) && sentence;
+    let article = match (vowel, capital) {
+        (true, true) => "An ",
+        (true, false) => "an ",
+        (false, true) => "A ",
+        (false, false) => "a ",
+    };
+    let word = if place == start {
+        first.to_ascii_lowercase()
+    } else if capital && first[1..] == first[1..].to_ascii_lowercase() {
+        first[..1].to_ascii_lowercase() + &first[1..]
+    } else {
+        first.to_owned()
+    };
+    out.replace_range(place..first_end, &format!("{article}{word}"));
+    out
 }
 
 /// [`plain_message`]; with `ids`, internal ids too ([`id_at`]: "line c3
@@ -1095,44 +1302,6 @@ fn cleaned(text: &str, ids: bool) -> (String, Vec<NoticePlace>) {
     if !plain.is_empty() {
         pieces.push(Piece::Text(plain));
     }
-    const KINDS: [&str; 32] = [
-        "face",
-        "faces",
-        "edge",
-        "edges",
-        "vertex",
-        "vertices",
-        "corner",
-        "corners",
-        "region",
-        "regions",
-        "profile",
-        "profiles",
-        "body",
-        "bodies",
-        "point",
-        "points",
-        "curve",
-        "curves",
-        "line",
-        "lines",
-        "arc",
-        "arcs",
-        "circle",
-        "circles",
-        "constraint",
-        "constraints",
-        "dimension",
-        "dimensions",
-        "feature",
-        "features",
-        "pattern",
-        "offset",
-    ];
-    const DETERMINERS: [&str; 13] = [
-        "the", "a", "an", "its", "their", "this", "that", "each", "every", "one", "another",
-        "which", "no",
-    ];
     // The last word of `text` and the byte where it starts.
     fn last_word(text: &str) -> (&str, usize) {
         let start = text
@@ -1148,27 +1317,12 @@ fn cleaned(text: &str, ids: bool) -> (String, Vec<NoticePlace>) {
             Piece::Text(text) => out.push_str(&text),
             Piece::Names(kind, count) => {
                 let before = out.strip_suffix(' ').map_or(out.len(), str::len);
-                let (word, start) = {
-                    let (word, start) = last_word(&out[..before]);
-                    (word.to_owned(), start)
-                };
+                let (word, start) = last_word(&out[..before]);
                 let lower = word.to_lowercase();
                 if before < out.len() && KINDS.contains(&lower.as_str()) {
                     // "of edge E{…}": the word stays, without the name.
                     out.truncate(before);
-                    let singular = !lower.ends_with('s');
-                    let previous = last_word(out[..start].trim_end()).0.to_lowercase();
-                    if singular && !DETERMINERS.contains(&previous.as_str()) {
-                        let capital = word.starts_with(|c: char| c.is_uppercase());
-                        let vowel = lower.starts_with(|c: char| "aeiou".contains(c));
-                        let article = match (vowel, capital) {
-                            (true, true) => "An ",
-                            (true, false) => "an ",
-                            (false, true) => "A ",
-                            (false, false) => "a ",
-                        };
-                        out.replace_range(start..start + word.len(), &format!("{article}{lower}"));
-                    }
+                    out = with_article(out, start);
                 } else {
                     let (one, many) = kind.words();
                     let phrase = if count > 1 {
@@ -1588,7 +1742,8 @@ mod tests {
             ]
         );
         // Elsewhere the kind; a list of one kind is one; a piece's #k is
-        // part of the name; "the" keeps its word.
+        // part of the name; "the" keeps its word; after a semicolon the
+        // article is lower case (only a sentence start gets a capital).
         let (text, places) = plain_message(
             "the fault lies in the corner of the fillet at V{F1:import(1)|F1:import(2)|F1:import(5)}, \
              ending against faces F1:import(2), F1:import(3) and F7:fillet(E{a|b})#2; \
@@ -1597,7 +1752,7 @@ mod tests {
         assert_eq!(
             text,
             "the fault lies in the corner of the fillet at a vertex, ending against faces; \
-             A face is turned over; the edge stays"
+             a face is turned over; the edge stays"
         );
         assert_eq!(places.len(), 6);
         assert_eq!(places[3], NoticePlace::face("F7:fillet(E{a|b})#2"));
@@ -1867,6 +2022,248 @@ mod tests {
         assert_eq!(
             notices[0].message,
             "section 2: 2 vertices found again after a change in Sketch1"
+        );
+    }
+
+    /// The cleaned form of a model message template (`%1`, `%2`, ...) as
+    /// this cleaner shows its message (mitcad#1635): a value after the word
+    /// of a kind ("line c%1", "body %1", a list "faces %1 and %2") and an
+    /// id anywhere ("c%1") taken out as names, the other values kept, then
+    /// numbered again. None when nothing is taken out, and for a template
+    /// whose own text the cleaner changes (an id like `k0` in it) or that
+    /// has a cleaner of its own (a renamed reference).
+    fn cleaned_template(template: &str) -> Option<String> {
+        const JOINS: [&str; 6] = [", ", " and ", ", and ", " or ", ", or ", " + "];
+        if template.contains(FOUND_AS) || cleaned(template, true).0 != template {
+            return None;
+        }
+        let bytes = template.as_bytes();
+        let placeholder_at = |text: &[u8], i: usize| -> usize {
+            if text[i] != b'%' || !text.get(i + 1).is_some_and(|b| (b'1'..=b'9').contains(b)) {
+                return 0;
+            }
+            if text.get(i + 2).is_some_and(u8::is_ascii_digit) {
+                3
+            } else {
+                2
+            }
+        };
+        // Each value: where its name starts, its placeholder, its end and
+        // its id's letter.
+        let mut values: Vec<(usize, usize, usize, Option<u8>)> = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            let length = placeholder_at(bytes, i);
+            if length == 0 {
+                i += 1;
+                continue;
+            }
+            let id = i > 0
+                && b"cpkF".contains(&bytes[i - 1])
+                && word_starts(bytes, i - 1)
+                && word_ends(bytes, i + length);
+            values.push(if id {
+                (i - 1, i, i + length, Some(bytes[i - 1]))
+            } else {
+                (i, i, i + length, None)
+            });
+            i += length;
+        }
+        let mut taken = vec![false; values.len()];
+        let mut v = 0;
+        while v < values.len() {
+            let (name, _, mut end, prefix) = values[v];
+            let after_kind = name >= 2 && bytes[name - 1] == b' ' && {
+                let word_end = name - 1;
+                let word_start = template[..word_end]
+                    .bytes()
+                    .rposition(|b| !b.is_ascii_alphabetic())
+                    .map_or(0, |k| k + 1);
+                word_start < word_end
+                    && KINDS.contains(&template[word_start..word_end].to_lowercase().as_str())
+            };
+            // A length is no name.
+            let millimetres = prefix.is_none() && template[end..].starts_with(" mm");
+            if (!after_kind && prefix.is_none()) || millimetres {
+                v += 1;
+                continue;
+            }
+            taken[v] = true;
+            while let Some(&(other, _, other_end, other_prefix)) = values.get(v + 1) {
+                if other_prefix != prefix || other < end || !JOINS.contains(&&template[end..other])
+                {
+                    break;
+                }
+                end = other_end;
+                v += 1;
+                taken[v] = true;
+            }
+            v += 1;
+        }
+        if !taken.contains(&true) {
+            return None;
+        }
+        // The message with names in the values taken out.
+        let mut sample = String::new();
+        let mut at = 0;
+        for (value, &(_, placeholder, end, prefix)) in values.iter().enumerate() {
+            if taken[value] {
+                sample.push_str(&template[at..placeholder]);
+                sample.push_str(if prefix.is_some() { "7" } else { "E{s}" });
+                at = end;
+            }
+        }
+        sample.push_str(&template[at..]);
+        let (shown, _) = cleaned(&sample, true);
+        let mut numbered = String::new();
+        let mut count = 0;
+        let mut i = 0;
+        while i < shown.len() {
+            let length = placeholder_at(shown.as_bytes(), i);
+            if length == 0 {
+                let c = shown[i..].chars().next().expect("a character");
+                numbered.push(c);
+                i += c.len_utf8();
+                continue;
+            }
+            count += 1;
+            numbered.push('%');
+            numbered.push_str(&count.to_string());
+            i += length;
+            if shown.as_bytes().get(i).is_some_and(u8::is_ascii_digit) {
+                return None;
+            }
+        }
+        (numbered != template).then_some(numbered)
+    }
+
+    /// The model's messages are translated as they are shown (mitcad#1635):
+    /// the generated list of templates (`mitcad-translations messages`,
+    /// `app/framework/ModelMessageTemplates.cpp`) has the cleaned form of
+    /// each template whose values this cleaner takes out, so that "line c4
+    /// does not exist", shown "a line does not exist", has its translation.
+    #[test]
+    fn cleaned_templates_are_listed() {
+        let list = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../app/framework/ModelMessageTemplates.cpp");
+        let Ok(source) = std::fs::read_to_string(&list) else {
+            // The crate without the application's sources.
+            return;
+        };
+        let head = "    QT_TRANSLATE_NOOP(\"ModelMessage\", \"";
+        let listed: std::collections::BTreeSet<String> = source
+            .lines()
+            .filter_map(|line| {
+                let literal = line.strip_prefix(head)?.strip_suffix("\"),")?;
+                let mut text = String::new();
+                let mut chars = literal.chars();
+                while let Some(c) = chars.next() {
+                    if c != '\\' {
+                        text.push(c);
+                    } else if let Some(escaped) = chars.next() {
+                        text.push(if escaped == 'n' { '\n' } else { escaped });
+                    }
+                }
+                Some(text)
+            })
+            .collect();
+        assert!(listed.len() > 1000, "{}: no templates read", list.display());
+        // The ticket's two: a line that does not exist, a body of another
+        // component.
+        assert_eq!(
+            cleaned_template("line c%1 does not exist").as_deref(),
+            Some("a line does not exist")
+        );
+        assert_eq!(
+            cleaned_template(
+                "body %1 (from %2) belongs to %3, not to %4 where the transfer takes it from"
+            )
+            .as_deref(),
+            Some("a body (from %1) belongs to %2, not to %3 where the transfer takes it from")
+        );
+        assert_eq!(
+            cleaned_template("c%1 and c%2 are tangent at p%3: there is no corner to round")
+                .as_deref(),
+            Some("Curves are tangent at a point: there is no corner to round")
+        );
+        assert_eq!(cleaned_template("the radius %1 must be positive"), None);
+        // No second article in a noun phrase that has one (mitcad#1638).
+        assert_eq!(
+            cleaned_template("the mirror line c%1 is not a line").as_deref(),
+            Some("the mirror line is not a line")
+        );
+        assert_eq!(
+            cleaned_template("the driven dimension %1 measures nothing").as_deref(),
+            Some("the driven dimension measures nothing")
+        );
+        assert_eq!(
+            cleaned_template("its offset %1 mm from the placements"),
+            None
+        );
+        let missing: Vec<(&String, String)> = listed
+            .iter()
+            .filter_map(|template| {
+                let shown = cleaned_template(template)?;
+                (!listed.contains(&shown)).then_some((template, shown))
+            })
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{} cleaned templates are not in {} (write it again with the target \
+             update_translations, docs/translations.md): {:?}",
+            missing.len(),
+            list.display(),
+            &missing[..missing.len().min(10)]
+        );
+    }
+
+    /// The article of a name taken out after the word of its kind looks back
+    /// over the noun phrase (mitcad#1638): none where the phrase has one,
+    /// before its modifiers where it has none; a name elsewhere is its kind.
+    #[test]
+    fn the_article_looks_back_over_the_noun_phrase() {
+        // The ticket's three: a driven dimension, a mirror line, a new body.
+        assert_eq!(
+            cleaned("Extrude1 moved what the driven dimension k5 measures", true).0,
+            "Extrude1 moved what the driven dimension measures"
+        );
+        assert_eq!(
+            cleaned("the mirror line c4 is not a line", true).0,
+            "the mirror line is not a line"
+        );
+        assert_eq!(
+            plain_message("a new body F2.b0 has no participant bodies").0,
+            "a new body has no participant bodies"
+        );
+        // A possessive is the phrase's article.
+        assert_eq!(
+            plain_message("the result's face F3:end has no usable name").0,
+            "the result's face has no usable name"
+        );
+        // Without one, the article goes before the modifiers; after a word
+        // a verb follows ("not"), after the verb.
+        assert_eq!(
+            cleaned("the bend meets boundary curve c5 there", true).0,
+            "the bend meets a boundary curve there"
+        );
+        assert_eq!(
+            plain_message("Bend edge E{a|b} is not straight").0,
+            "A bend edge is not straight"
+        );
+        assert_eq!(
+            plain_message("Body1 does not fit face F2:top").0,
+            "Body1 does not fit a face"
+        );
+        assert_eq!(plain_message("Create Profile E{a|b}").0, "Create a profile");
+        // A name elsewhere: its kind (mitcad#1327), "at a vertex", "on an
+        // edge"; the generated list has such a template's form with the kind
+        // put in where the argument names it (mitcad#1638).
+        let (text, places) = plain_message("the hole at V{F1:a|F1:b|F1:c} is too small");
+        assert_eq!(text, "the hole at a vertex is too small");
+        assert_eq!(places, vec![NoticePlace::vertex("V{F1:a|F1:b|F1:c}")]);
+        assert_eq!(
+            plain_message("the seam is on E{a|b}").0,
+            "the seam is on an edge"
         );
     }
 }

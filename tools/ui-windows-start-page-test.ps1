@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/files/StartPage.cpp app/files/RecentDesigns.cpp app/MainWindowStart.cpp app/framework/TestDriver.cpp tools/cli
+# check-all sources: app/files/StartPage.cpp app/files/StartBackdrop.cpp app/files/RecentDesigns.cpp app/MainWindowStart.cpp app/framework/TestDriver.cpp tools/cli
 # check-all sources: app/files/StartBrowser.cpp app/projects/ProjectBrowserData.cpp app/projects/ProjectsTree.cpp core/vcs
 # The Start tab (mitcad#1258, GitHub mitcad/Mitcad#125) in the build VM, as
 # tools/ui-start-page-test.sh on Linux: the shared steps

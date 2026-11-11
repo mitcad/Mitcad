@@ -35,6 +35,7 @@
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSettings>
 #include <QStyle>
 #include <QTimer>
 #include <QToolButton>
@@ -1034,8 +1035,19 @@ TimelineWidget::TimelineWidget(const CommandContext& model, QWidget* parent)
          [this] { return m_strip->stepAfter(m_strip->marker()); });
   button("end", QStyle::SP_MediaSkipForward, "forward.end.fill", tr("Move to End"), [this] { return m_strip->count(); });
 
-  // The filter (mitcad#98): which components' features are shown.
+  // The filter (mitcad#98): which components' features are shown. A window
+  // starts at the saved choice of all or the active component, Active
+  // Component with its subcomponents by default (mitcad#1662).
+  {
+    const QSettings settings;
+    m_filter = settings.value(QStringLiteral("timeline/filter"), QStringLiteral("active")).toString() ==
+                       QLatin1String("all")
+                   ? QString()
+                   : kActiveFilter;
+    m_subcomponents = settings.value(QStringLiteral("timeline/subcomponents"), true).toBool();
+  }
   m_filterButton = new QToolButton(this);
+  m_filterButton->setObjectName(QStringLiteral("timelineFilterButton"));
   m_filterButton->setAutoRaise(true);
   m_filterButton->setCheckable(true);
   if (floating) {
@@ -1271,11 +1283,16 @@ void TimelineWidget::rebuild(const DocumentSnapshot& snapshot) {
   if (m_searching) {
     updateMatches(); // the features, their names and states may have changed
   }
-  const QString logged = shown.isEmpty() ? QStringLiteral("all components")
-                                         : QStringLiteral("%1: %2 of %3 features")
-                                               .arg(filterLabel())
-                                               .arg(snapshot.features.size() - hidden)
-                                               .arg(snapshot.features.size());
+  // The button is highlighted while features are hidden, not merely while
+  // a filter is set (mitcad#1662).
+  m_featureCount = static_cast<int>(snapshot.features.size());
+  m_hiddenCount = hidden;
+  updateFilterButton();
+  const QString logged = m_filter.isEmpty() ? QStringLiteral("all components")
+                                            : QStringLiteral("%1: %2 of %3 features")
+                                                  .arg(filterLabel())
+                                                  .arg(m_featureCount - m_hiddenCount)
+                                                  .arg(m_featureCount);
   if (logged != m_loggedFilter) {
     m_loggedFilter = logged;
     qDebug().noquote() << QStringLiteral("Timeline filter: %1").arg(logged);
@@ -1285,15 +1302,31 @@ void TimelineWidget::rebuild(const DocumentSnapshot& snapshot) {
 
 const QString TimelineWidget::kActiveFilter = QStringLiteral("active");
 
-void TimelineWidget::setFilter(const QString& filter, bool subcomponents) {
+void TimelineWidget::setFilter(const QString& filter, bool subcomponents, bool remember) {
   if (filter == m_filter && subcomponents == m_subcomponents) {
     return;
   }
   m_filter = filter;
   m_subcomponents = subcomponents;
+  // All or the active component is the user's choice for the next window;
+  // one named component is this window's only (mitcad#1662).
+  if (remember && (m_filter.isEmpty() || m_filter == kActiveFilter)) {
+    saveFilter();
+  }
   updateFilterButton();
   rebuild(DocumentSnapshot(m_snapshot));
   emit filterChanged();
+}
+
+void TimelineWidget::saveFilter() const {
+  const QString filter = m_filter.isEmpty() ? QStringLiteral("all") : QStringLiteral("active");
+  QSettings settings;
+  settings.setValue(QStringLiteral("timeline/filter"), filter);
+  settings.setValue(QStringLiteral("timeline/subcomponents"), m_subcomponents);
+  settings.sync(); // kept even when the application is ended without quitting
+  qDebug().noquote() << QStringLiteral("Timeline filter saved: %1, %2")
+                            .arg(filter, m_subcomponents ? QStringLiteral("subcomponents")
+                                                         : QStringLiteral("no subcomponents"));
 }
 
 QSet<QString> TimelineWidget::filteredFeatures() const {
@@ -1311,6 +1344,12 @@ QSet<QString> TimelineWidget::filteredComponents() const {
     return {};
   }
   const QString component = m_filter == kActiveFilter ? m_snapshot.activeComponent : m_filter;
+  // The root with every component in it shows every feature, also those of
+  // components placed nowhere (mitcad#1662: the default with the root
+  // active); so does no active component yet.
+  if (component.isEmpty() || (m_subcomponents && component == QStringLiteral("C0"))) {
+    return {};
+  }
   QSet<QString> components{component};
   if (!m_subcomponents) {
     return components;
@@ -1364,8 +1403,9 @@ QString TimelineWidget::filterLabel() const {
     return tr("All Components");
   }
   const QString component = m_filter == kActiveFilter ? m_snapshot.activeComponent : m_filter;
-  QString label = m_filter == kActiveFilter ? tr("Active Component (%1)").arg(m_snapshot.componentName(component))
-                                            : m_snapshot.componentName(component);
+  QString label = m_filter != kActiveFilter ? m_snapshot.componentName(component)
+                  : component.isEmpty()     ? tr("Active Component")
+                                            : tr("Active Component (%1)").arg(m_snapshot.componentName(component));
   if (m_subcomponents) {
     label = tr("%1 with Subcomponents").arg(label);
   }
@@ -1377,9 +1417,14 @@ void TimelineWidget::updateFilterButton() {
     return;
   }
   m_filterButton->setIcon(themeIcon(QStringLiteral("filter")));
-  m_filterButton->setChecked(!m_filter.isEmpty());
+  // Highlighted while it hides features (mitcad#1662); the tooltip names
+  // the filter and how many features it shows.
+  m_filterButton->setChecked(m_hiddenCount > 0);
   m_filterButton->setToolTip(m_filter.isEmpty() ? tr("Timeline Filter: all components")
-                                                : tr("Timeline Filter: %1").arg(filterLabel()));
+                                                : tr("Timeline Filter: %1: %2 of %3 features")
+                                                      .arg(filterLabel())
+                                                      .arg(m_featureCount - m_hiddenCount)
+                                                      .arg(m_featureCount));
 }
 
 void TimelineWidget::showFilterMenu() {
@@ -1475,7 +1520,7 @@ void TimelineWidget::selectFeature(const QString& uid) {
   // A feature the filter hides shows everything again (mitcad#98).
   if (const int at = m_strip->indexOf(uid); at >= 0 && m_strip->filtered(at)) {
     qDebug().noquote() << QStringLiteral("Timeline filter cleared to show %1").arg(m_strip->item(at)->feature.name);
-    setFilter(QString(), m_subcomponents);
+    setFilter(QString(), m_subcomponents, false); // not the user's choice for the next window
   }
   // A feature in a folded group opens it.
   int i = m_strip->indexOf(uid);

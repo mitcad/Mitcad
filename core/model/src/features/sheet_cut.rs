@@ -133,7 +133,7 @@ impl FeatureInfo for SheetCutDef {
         }
         // Several sketches may contribute; each must lie on the fixed panel.
         for profile in &self.profiles {
-            c.sketch(profile.sketch)?;
+            c.profile_sketch(profile.sketch)?;
         }
         for (i, bend) in self.open_bends.iter().enumerate() {
             if self.open_bends[..i].contains(bend) {

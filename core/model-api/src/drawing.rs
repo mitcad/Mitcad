@@ -991,6 +991,12 @@ impl<K: Kernel> DrawingLocal<K> for Document<K> {
         for c in &composed {
             warnings.extend(c.warnings.iter().cloned());
         }
+        // A title block's images the format holds only as outlines
+        // (mitcad#1625).
+        warnings.extend(mitcad_model_drawing::pdf_image::export_warnings(
+            composed.iter().map(|c| &c.sheet),
+            format.as_str(),
+        ));
 
         // The files: a PDF of every sheet, an SVG or DXF file per sheet
         // (the second and later named <name>-2.svg, …).

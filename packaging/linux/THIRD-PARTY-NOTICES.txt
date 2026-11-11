@@ -66,11 +66,11 @@ Other libraries from vcpkg (for example libpng, bzip2, Brotli)
   Their licence texts are in mitcad/licenses/vcpkg/<library>/copyright.
 
 Libraries of the build system (Ubuntu 24.04) that a Linux desktop may
-lack (for example xcb's utility libraries, xkbcommon, GLib, D-Bus,
-Kerberos)
+lack (for example xcb's utility libraries, xkbcommon, D-Bus, Kerberos)
   Linked dynamically; their licence texts are in <package>/copyright.
 
-Droid Sans (bundled font for sketch text)
+Droid Sans (bundled font for sketch text and for the text of SVG images in
+drawings' title blocks)
   Apache License 2.0; see mitcad/licenses/droid-sans/LICENSE.txt.
 
 the ISO 3098 type B style technical lettering font of Zefram Cochrane and its
@@ -130,7 +130,15 @@ Rust libraries compiled into mitcad and mitcad-cli
   read-fonts and font-types (MIT or Apache-2.0), unicode-bidi (MIT or
   Apache-2.0), wuff (MIT) with brotli-decompressor (BSD-3-Clause or MIT)
   and flate2 (MIT or Apache-2.0). SVG drawings: svgtypes and kurbo (MIT
-  or Apache-2.0) with roxmltree (MIT or Apache-2.0). QR codes: qrcode
+  or Apache-2.0) with roxmltree (MIT or Apache-2.0). SVG images of
+  drawings' title blocks in PDF, DXF and DWG files: usvg, simplecss and
+  data-url (MIT or Apache-2.0), tiny-skia-path (BSD-3-Clause, Copyright
+  (c) 2011 Google Inc., Copyright (c) 2020 Yevhenii Reizner), arrayref
+  (BSD-2-Clause, Copyright (c) 2015 David Roundy), strict-num,
+  float-cmp, imagesize and pico-args (MIT); their text as the outlines
+  of its glyphs: fontdb, fontconfig-parser, xmlwriter and an older
+  harfrust (MIT), older skrifa and read-fonts, unicode-script and
+  unicode-vo (MIT or Apache-2.0) and slotmap (Zlib). QR codes: qrcode
   (MIT or Apache-2.0). Fetching libraries over HTTPS without git: gix's
   HTTP transport (MIT or Apache-2.0) with reqwest, hyper, h2, tokio and
   their helpers (MIT or Apache-2.0), rustls-platform-verifier (MIT or

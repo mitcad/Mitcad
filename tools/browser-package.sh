@@ -17,8 +17,10 @@
 # 3. Otherwise a new package: the build configured with the component
 #    required and a version of the build's time (YYYY.MDD.HMM, a semantic
 #    version without leading zeros), the module, helper and CEF's runtime
-#    built, on macOS signed (MITCAD_SIGN_IDENTITY as tools/package-macos.sh,
-#    else ad hoc), and zipped (target browser-package).
+#    built, the module and the helpers stripped of their debug information
+#    and checked to name no folder of the build machine (mitcad#1658), on
+#    macOS signed (MITCAD_SIGN_IDENTITY as tools/package-macos.sh, else ad
+#    hoc), and zipped (target browser-package).
 #
 # Writes <build dir>/browser-package.txt, one line the release passes to
 # mitcad-release manifest as `--browser <line> <url>` for a new package:
@@ -72,16 +74,53 @@ echo "browser-package.sh: building the package $version"
 cmake -S "$repo" -B "$build" -DMITCAD_BROWSER_COMPONENT=ON -DMITCAD_BROWSER_VERSION="$version" > /dev/null
 cmake --build "$build" --target mitcad-webbrowser
 component="$build/browser-component"
+# The module's and the helpers' debug information goes (mitcad#1658): it
+# names the build machine's folders, and no release keeps symbols aside
+# (the AppImage's files are stripped as well, make-appimage.sh; the app on
+# macOS has no dSYM). The symbols the module is loaded by stay. Before the
+# signing, which stripping would break.
+if [ "$platform" = macos-arm64 ]; then
+  binaries=("$component/mitcad-webbrowser.so")
+  for helper in "$component"/*.app; do
+    binaries+=("$helper/Contents/MacOS/$(basename "$helper" .app)")
+  done
+  strip -S -x "${binaries[@]}"
+else
+  binaries=("$component/mitcad-webbrowser.so" "$component/mitcad-webbrowser-helper")
+  strip --strip-unneeded "${binaries[@]}"
+fi
+# None of them names a folder of this machine: the source tree, the build
+# or CEF's distribution (app/webbrowser/CMakeLists.txt maps the paths of
+# CEF's logging macros).
+folders=("$repo" "$(cd "$repo" && pwd -P)" "$(cd "$build" && pwd)" "$(cd "$build" && pwd -P)")
+cef_root=$(sed -n 's/^MITCAD_CEF_ROOT:PATH=//p' "$build/CMakeCache.txt")
+if [ -n "$cef_root" ] && [ -d "$cef_root" ]; then
+  folders+=("$cef_root" "$(cd "$cef_root" && pwd -P)")
+fi
+command -v strings > /dev/null 2>&1 || { echo "browser-package.sh: no strings (binutils, Xcode's tools)" >&2; exit 1; }
+patterns=()
+for folder in "${folders[@]}"; do
+  patterns+=(-e "$folder/")
+done
+for binary in "${binaries[@]}"; do
+  [ -f "$binary" ] || { echo "browser-package.sh: no $binary" >&2; exit 1; }
+  if found=$(strings -a "$binary" | grep -F "${patterns[@]}"); then
+    echo "browser-package.sh: $binary names the build machine's folders ($(wc -l <<< "$found" | tr -d ' ') strings), e.g.:" >&2
+    head -3 <<< "$found" >&2
+    exit 1
+  fi
+done
+echo "browser-package.sh: the module and the helpers stripped, no build folder named in them"
 if [ "$platform" = macos-arm64 ]; then
   identity=${MITCAD_SIGN_IDENTITY:--}
   options=()
   [ "$identity" = - ] || options=(--options runtime --timestamp)
   # The framework, the helper apps, then the module.
-  codesign --force --sign "$identity" "${options[@]}" "$component/Chromium Embedded Framework.framework"
+  codesign --force --sign "$identity" ${options[@]+"${options[@]}"} "$component/Chromium Embedded Framework.framework"
   for helper in "$component"/*.app; do
-    codesign --force --sign "$identity" "${options[@]}" "$helper"
+    codesign --force --sign "$identity" ${options[@]+"${options[@]}"} "$helper"
   done
-  codesign --force --sign "$identity" "${options[@]}" "$component/mitcad-webbrowser.so"
+  codesign --force --sign "$identity" ${options[@]+"${options[@]}"} "$component/mitcad-webbrowser.so"
 fi
 cmake --build "$build" --target browser-package
 file="$build/mitcad-browser-$version-$platform.zip"

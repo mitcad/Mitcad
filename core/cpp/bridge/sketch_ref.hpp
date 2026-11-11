@@ -25,6 +25,9 @@ rust::Vec<NamedBoundaryCurve> face_boundary(const geometry::Shape& shape, rust::
 // FreeCAD import: a face, edge or vertex by its index ('F', 'E', 'V').
 IndexedElement indexed_element(const geometry::Shape& shape, std::uint8_t kind, std::size_t index);
 
+// Every named edge with its curve, by index (mitcad#1656).
+rust::Vec<NamedBoundaryCurve> named_edge_curves(const geometry::Shape& shape);
+
 // Section curves of sketches (mitcad#389).
 rust::Vec<SectionPiece> section_curves(const geometry::Shape& shape, rust::Str name, std::array<double, 3> origin,
                                        std::array<double, 3> normal);

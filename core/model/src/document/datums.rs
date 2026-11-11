@@ -181,4 +181,36 @@ impl<K: Kernel> Resolver for DocResolver<'_, K> {
             .feature_curve(feature)
             .ok_or_else(|| format!("{} has no curve at the timeline marker", self.name(feature)))
     }
+
+    // A 3D sketch's curves and points (mitcad#1550).
+    fn spatial_path(
+        &mut self,
+        path: &crate::features::spatial_path::SpatialPath,
+    ) -> Result<Vec<PathCurve>, String> {
+        use crate::features::spatial_path::{pieces, route};
+        let name = self.name(path.sketch);
+        let (Some(def), Some(output)) = (
+            self.document.spatial_sketch_def(path.sketch),
+            self.document.spatial_sketch(path.sketch),
+        ) else {
+            return Err(format!("{name} has no result at the timeline marker"));
+        };
+        let legs = route(def, path, &name, &|p| output.point(p))?;
+        pieces(output, &legs, &name)
+    }
+
+    fn spatial_entity(
+        &mut self,
+        sketch: FeatureUid,
+        entity: crate::sketch::Ref,
+    ) -> Option<Result<crate::kernel::Curve3, String>> {
+        self.document.spatial_sketch_def(sketch)?;
+        let name = self.name(sketch);
+        Some(
+            self.document
+                .spatial_sketch(sketch)
+                .and_then(|output| output.entity_curve(entity))
+                .ok_or_else(|| format!("{name} has no {entity} at the timeline marker")),
+        )
+    }
 }

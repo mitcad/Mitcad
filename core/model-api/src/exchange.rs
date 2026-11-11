@@ -37,6 +37,12 @@ pub(super) struct ImportFileCommand {
     /// step (mitcad#1277).
     #[serde(default)]
     repeated_parts: bool,
+    /// Into a new component named after the file, placed in the active
+    /// component (true), or straight into the active component (false);
+    /// by default true for a STEP, IGES or BRep file imported into a
+    /// design that has content (mitcad#1629).
+    #[serde(default)]
+    wrap: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -522,12 +528,28 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             unit_mm: command.unit_mm.unwrap_or(1.0),
         };
         let depth = self.undo_depth();
-        let imported = self.import_file_structured(
-            &command.path,
-            &options,
-            command.name.as_deref(),
-            command.structure,
-        )?;
+        // A file into a design with content: in a component of its own
+        // named after the file (mitcad#1629).
+        let wrap = command
+            .wrap
+            .unwrap_or_else(|| self.import_wraps_by_default(&command.path));
+        let (imported, wrapper) = if wrap {
+            let (imported, wrapper) = self.import_file_wrapped(
+                &command.path,
+                &options,
+                command.name.as_deref(),
+                command.structure,
+            )?;
+            (imported, Some(wrapper))
+        } else {
+            let imported = self.import_file_structured(
+                &command.path,
+                &options,
+                command.name.as_deref(),
+                command.structure,
+            )?;
+            (imported, None)
+        };
         // The base features Find Repeated Parts runs on (mitcad#1277): the
         // one base feature, or each part's of the components.
         let bases: Vec<FeatureUid> = match &imported {
@@ -544,6 +566,13 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
                 warnings,
             } => components_json(components, warnings),
         };
+        if let Some(wrapper) = &wrapper {
+            out["component"] = json!({
+                "uid": wrapper.component.to_string(),
+                "name": wrapper.name,
+                "occurrence": wrapper.occurrence.to_string(),
+            });
+        }
         // Repeated parts (mitcad#1277): the copies among the imported
         // bodies made occurrences of one component, in the import's undo
         // step; a failure takes the import back.
@@ -778,9 +807,22 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
                         .layer_events
                         .iter()
                         .map(|e| {
-                            json!({"plate": e.plate, "height": e.height, "print_z": e.print_z,
-                                   "layer": e.layer, "kind": e.kind.as_str(),
-                                   "material": e.material})
+                            let mut event = json!({"plate": e.plate, "height": e.height,
+                                   "print_z": e.print_z, "layer": e.layer,
+                                   "kind": e.kind.as_str(), "material": e.material});
+                            // At a plane or face (mitcad#1643): the height
+                            // worked out, its source and the body measured
+                            // from.
+                            if let Some(at) = &e.at {
+                                let at = json!(at);
+                                let face = at.get("face").is_some();
+                                event["source"] = json!(if face { "face" } else { "plane" });
+                                event["at"] = at;
+                                event["body"] = json!(e.body);
+                            } else {
+                                event["source"] = json!("height");
+                            }
+                            event
                         })
                         .collect();
                 }

@@ -276,6 +276,32 @@ std::vector<HighlightDisplay> MainWindow::noticeHighlights() const {
       }
       continue;
     }
+    // The 3D Sketch Palette's row under the pointer (mitcad#1652): a point
+    // or curve of a sketch (the edited one, or another sketch a reference
+    // follows), or an Intersection Curve, where the view shows it, or where
+    // the place's occurrence puts it.
+    const QString occurrence = place.value(QStringLiteral("occurrence")).toString();
+    if (kind == QStringLiteral("sketch_point") || kind == QStringLiteral("sketch_curve")) {
+      const QString sketch = place.value(QStringLiteral("sketch")).toString();
+      const QString entity = place.value(QStringLiteral("name")).toString();
+      if (!sketch.isEmpty() && !entity.isEmpty()) {
+        const SelectionItem item{kind == QStringLiteral("sketch_point") ? SelectKind::SketchPoint
+                                                                         : SelectKind::SketchCurve,
+                                 sketch, entity, QString(),
+                                 occurrence.isEmpty() ? placingOccurrence(sketch) : occurrence};
+        add(item, itemShape(item));
+      }
+      continue;
+    }
+    if (kind == QStringLiteral("feature")) {
+      const QString feature = place.value(QStringLiteral("name")).toString();
+      if (!feature.isEmpty()) {
+        const SelectionItem item{SelectKind::Feature, feature, QString(), QString(),
+                                 occurrence.isEmpty() ? placingOccurrence(feature) : occurrence};
+        add(item, itemShape(item));
+      }
+      continue;
+    }
     const SelectKind selectKind = kind == QStringLiteral("face")   ? SelectKind::Face
                                   : kind == QStringLiteral("edge") ? SelectKind::Edge
                                   : kind == QStringLiteral("vertex") ? SelectKind::Vertex
@@ -285,6 +311,13 @@ std::vector<HighlightDisplay> MainWindow::noticeHighlights() const {
       continue;
     }
     const QString body = place.value(QStringLiteral("body")).toString();
+    // Another component's, where that occurrence puts it (mitcad#1652: a
+    // linked reference's source).
+    if (!occurrence.isEmpty() && !body.isEmpty()) {
+      const SelectionItem item{selectKind, body, name, QString(), occurrence};
+      add(item, itemShape(item));
+      continue;
+    }
     // A command preview's bodies first: a warning's made faces are there.
     bool found = false;
     for (const BodyDisplay& shown : m_noticeHoverBodies) {

@@ -22,7 +22,7 @@ const MAX_TRIED: usize = 24;
 use crate::ids::{EntityUid, FeatureUid};
 use crate::parameters::{ParamId, Parameters};
 use crate::values::ValueInput;
-use mitcad_model_base::internal::values::resolve_value;
+use mitcad_model_base::internal::values::{resolve_value, value_uses_parameter};
 
 /// What an edit created and removed, and the sketch's status after it.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -55,6 +55,95 @@ pub struct KeptParameter {
     pub name: String,
     pub dimension: ConstraintUid,
     pub parameter: String,
+}
+
+/// A driving dimension's new value, resolved into its parameter: what a
+/// planar sketch's and a 3D sketch's dimensions share (mitcad#1535).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct DimensionValue {
+    pub param: ParamId,
+    /// The parameter created for it, if any.
+    pub created: Option<String>,
+    /// Its own parameter kept as a user parameter, with the note that says
+    /// so.
+    pub kept: Option<(KeptParameter, String)>,
+}
+
+/// Resolves the value of dimension `id` of sketch `owner` into a parameter
+/// (`slot` and `comment` as [`resolve_value`] takes them; `old` is the
+/// dimension's parameter, the one it keeps for an expression). A value
+/// that uses the dimension's own parameter (`BuckleDiameter * 2` in the
+/// dimension of BuckleDiameter) keeps that parameter, with its name and
+/// value, as a user parameter, and the dimension takes the value as a
+/// parameter of its own (mitcad#1535): the bare name makes it use the user
+/// parameter. A parameter another dimension of the sketch uses as well
+/// (`shared`) stays as it is; this dimension only stops using it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_dimension_value(
+    params: &mut Parameters,
+    owner: FeatureUid,
+    id: ConstraintUid,
+    slot: &str,
+    comment: &str,
+    value: &ValueInput,
+    old: Option<ParamId>,
+    shared: impl Fn(ParamId) -> bool,
+) -> Result<DimensionValue, String> {
+    let mut old = old;
+    let used =
+        old.filter(|p| params.owner(*p) == Some(owner) && value_uses_parameter(params, value, *p));
+    let mut kept = None;
+    if let Some(p) = used {
+        if !shared(p) {
+            params.set_owner(p, None);
+            kept = Some(p);
+        }
+        old = None;
+    }
+    let (param, created) = resolve_value(params, slot, value, owner, comment, old.as_ref())
+        .map_err(|e| e.to_string())?;
+    let kept = kept.map(|p| {
+        let kept_name = params.name(p);
+        let shown = params
+            .get(p)
+            .map(|q| q.expression().to_owned())
+            .unwrap_or_default();
+        let now = params.name(param);
+        // In plain words for a person, the dimension's id for agents
+        // (mitcad#1612).
+        let note = if param == p {
+            crate::said(
+                format!("{kept_name} is now a user parameter ({shown}); the dimension uses it"),
+                format!("{kept_name} is now a user parameter ({shown}); dimension {id} uses it"),
+            )
+        } else {
+            let expression = params
+                .get(param)
+                .map(|q| q.expression().to_owned())
+                .unwrap_or_default();
+            crate::said(
+                format!(
+                    "{kept_name} is now a user parameter ({shown}); the dimension is {now} = \
+                     {expression}"
+                ),
+                format!(
+                    "{kept_name} is now a user parameter ({shown}); dimension {id} is {now} = \
+                     {expression}"
+                ),
+            )
+        };
+        let record = KeptParameter {
+            name: kept_name,
+            dimension: id,
+            parameter: now,
+        };
+        (record, note)
+    });
+    Ok(DimensionValue {
+        param,
+        created,
+        kept,
+    })
 }
 
 /// A point of a command: an existing point or a new one at a position.
@@ -906,7 +995,7 @@ pub fn settle_references(
 /// Makes a user parameter a sketch's reference (mitcad#250): owned by the
 /// sketch, read-only, its expression its value as a number until the sketch
 /// measures it; a parameter without a comment gets the reference's.
-fn adopt_reference(
+pub(crate) fn adopt_reference(
     params: &mut Parameters,
     id: ParamId,
     owner: FeatureUid,

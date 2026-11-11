@@ -1,0 +1,28 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design tools/ui-scripts/sketch-snap-hold.mitcad-ui saved (mitcad#1645): in Sketch1 the pasted circle's centre p10 is held on p3, the circle moved by the handle on p5 by its centre p9, and the Point to Point copy's centre on p4; the original circle stays. Each target point is then dragged and the centre held on it follows."},
+  {"expect": {"query": {"query": "sketch", "uid": "F1"}, "result": {
+    "entities": [
+      {"at": [-40, -30]}, {"at": [40, 30]}, {"at": [5, 10]}, {"at": [20, 10]}, {"at": [10, -15]},
+      {"id": "p7", "at": [-20, 0]}, {"id": "c6", "type": "circle"},
+      {"id": "p9", "at": [10, -15]}, {"id": "c8", "type": "circle"},
+      {"at": [5, 10]}, {"type": "circle"},
+      {"at": [20, 10]}, {"type": "circle"}
+    ],
+    "constraints": [
+      {"type": "coincident", "entity": "p3"},
+      {"type": "coincident", "point": "p9", "entity": "p5"},
+      {"type": "coincident", "entity": "p4"}
+    ]}, "tolerance": 0.000001}},
+  {"cmd": "sketch.drag", "sketch": "F1", "entity": "p3", "to": [5, 15]},
+  {"cmd": "sketch.drag", "sketch": "F1", "entity": "p4", "to": [20, 15]},
+  {"cmd": "sketch.drag", "sketch": "F1", "entity": "p5", "to": [10, -10]},
+  {"expect": {"query": {"query": "sketch", "uid": "F1"}, "result": {
+    "entities": [
+      {"at": [-40, -30]}, {"at": [40, 30]}, {"at": [5, 15]}, {"at": [20, 15]}, {"at": [10, -10]},
+      {"at": [-20, 0]}, {"type": "circle"},
+      {"at": [10, -10]}, {"type": "circle"},
+      {"at": [5, 15]}, {"type": "circle"},
+      {"at": [20, 15]}, {"type": "circle"}
+    ]}, "tolerance": 0.000001}}
+]

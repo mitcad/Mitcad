@@ -1,0 +1,10 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design of the 3D Sketch Palette's words UI test (mitcad#1652; tools/ui-sketch3d-palette-words-test.sh, tools/ui-windows-sketch3d-palette-words-test.ps1, tools/ui-scripts/sketch3d-palette-words.mitcad-ui): Box1 (F1, F1.b0) 40 x 30 x 20 at (20, 20); 3DSketch1 (F2) on its top face with one reference curve, the box's upright edge included in 3D, so that its Linked references row is near the card's top."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [20, 20], "length": 40, "width": 30, "height": 20, "operation": "new_body"}},
+  {"cmd": "sketch3d.create", "support": {"body": "F1.b0", "face": "F1:top"}},
+  {"cmd": "sketch3d.include", "sketch": "F2", "source": {"body": "F1.b0", "edge": "E{F1:side0|F1:side1}"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F2"}, "result": {"curves": [{"type": "reference"}]}}},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}}
+]

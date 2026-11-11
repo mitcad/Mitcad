@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 use super::edit::DRIVEN_SUFFIX;
-use super::edit::{KeptParameter, PointInput, SketchEdit};
+use super::edit::{PointInput, SketchEdit, resolve_dimension_value};
 use super::fillet::{Leg, fillet_at, is_corner};
 use super::geometry::{Curve2, P2, add, cross, dist, dot, norm, perp, scale, sub, unit};
 use super::intersect::intersections;
@@ -20,7 +20,6 @@ use super::{
 use crate::expr::ParamKind;
 use crate::ids::EntityUid;
 use crate::values::ValueInput;
-use mitcad_model_base::internal::values::{resolve_value, value_uses_parameter};
 
 /// Something of a sketch a command names: `p3`, `c4`, `t5` or `k6`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -390,7 +389,7 @@ impl SketchEdit<'_> {
                 EntityKind::Line { centerline, .. } => *centerline = on,
                 other => {
                     return Err(crate::said(
-                        format!("the curve is a {}, not a line", other.type_name()),
+                        not_a_line(other),
                         format!("c{} is a {}", id.0, other.type_name()),
                     ));
                 }
@@ -497,81 +496,25 @@ impl SketchEdit<'_> {
                     .map_err(|e| e.to_string())?;
             }
         }
-        let mut old = d.value.or(reference);
-        // A value that uses the dimension's own parameter (`BuckleDiameter
-        // * 2` in the dimension of BuckleDiameter) keeps that parameter,
-        // with its name and value, as a user parameter, and the dimension
-        // takes the value as a parameter of its own (mitcad#1535): the bare
-        // name makes it use the user parameter. A parameter another
-        // dimension of the sketch uses as well stays as it is; this
-        // dimension only stops using it.
-        let used = old.filter(|p| {
-            self.params.owner(*p) == Some(self.owner())
-                && value_uses_parameter(self.params, value, *p)
-        });
-        let mut kept = None;
-        if let Some(p) = used {
-            let shared = self
-                .def
-                .dimensions
-                .iter()
-                .enumerate()
-                .any(|(j, other)| j != i && other.value == Some(p));
-            if !shared {
-                self.params.set_owner(p, None);
-                kept = Some(p);
-            }
-            old = None;
-        }
-        let (param, created) = resolve_value(
-            self.params,
-            &slot,
-            value,
-            self.owner(),
-            &comment,
-            old.as_ref(),
-        )
-        .map_err(|e| e.to_string())?;
-        self.report.parameters.extend(created);
-        if let Some(p) = kept {
-            let kept_name = self.params.name(p);
-            let shown = self
-                .params
-                .get(p)
-                .map(|q| q.expression().to_owned())
-                .unwrap_or_default();
-            let now = self.params.name(param);
-            let note = if param == p {
-                crate::said(
-                    format!("{kept_name} is now a user parameter ({shown}); the dimension uses it"),
-                    format!(
-                        "{kept_name} is now a user parameter ({shown}); dimension {id} uses it"
-                    ),
-                )
-            } else {
-                let expression = self
-                    .params
-                    .get(param)
-                    .map(|q| q.expression().to_owned())
-                    .unwrap_or_default();
-                crate::said(
-                    format!(
-                        "{kept_name} is now a user parameter ({shown}); the dimension is {now} = \
-                         {expression}"
-                    ),
-                    format!(
-                        "{kept_name} is now a user parameter ({shown}); dimension {id} is {now} = \
-                         {expression}"
-                    ),
-                )
-            };
+        let old = d.value.or(reference);
+        // A value that uses the dimension's own parameter keeps that
+        // parameter as a user parameter (mitcad#1535; the rule is shared
+        // with 3D sketch dimensions: `resolve_dimension_value`).
+        let owner = self.owner();
+        let dimensions = &self.def.dimensions;
+        let resolved =
+            resolve_dimension_value(self.params, owner, id, &slot, &comment, value, old, |p| {
+                dimensions
+                    .iter()
+                    .enumerate()
+                    .any(|(j, other)| j != i && other.value == Some(p))
+            })?;
+        self.report.parameters.extend(resolved.created);
+        if let Some((kept, note)) = resolved.kept {
             self.report.notes.push(note);
-            self.report.kept.push(KeptParameter {
-                name: kept_name,
-                dimension: id,
-                parameter: now,
-            });
+            self.report.kept.push(kept);
         }
+        let param = resolved.param;
         self.def.dimensions[i].value = Some(param);
         self.def.dimensions[i].reference = None;
         Ok(())
@@ -992,12 +935,20 @@ impl SketchEdit<'_> {
             } else {
                 "their lines"
             };
-            self.report.notes.push(crate::said(
+            // Whole messages, each one template (mitcad#1626).
+            let said = if names.len() == 1 {
+                "the rotation turned a constraint off the sketch's axes: its line held parallel \
+                 or perpendicular to the first line instead"
+                    .to_owned()
+            } else {
                 format!(
-                    "the rotation turned {} off the sketch's axes: {held} held parallel or \
-                     perpendicular to the first line instead",
-                    counted(names.len(), "constraint", "constraints")
-                ),
+                    "the rotation turned {} constraints off the sketch's axes: their lines held \
+                     parallel or perpendicular to the first line instead",
+                    names.len()
+                )
+            };
+            self.report.notes.push(crate::said(
+                said,
                 format!(
                     "the rotation turned {} off the sketch's axes: {held} held parallel or \
                      perpendicular to {} instead",
@@ -1007,11 +958,18 @@ impl SketchEdit<'_> {
             ));
         }
         if !aligned.is_empty() {
-            self.report.notes.push(crate::said(
+            let said = if aligned.len() == 1 {
+                "the rotation turned a dimension off the sketch's axes: now an aligned distance"
+                    .to_owned()
+            } else {
                 format!(
-                    "the rotation turned {} off the sketch's axes: now an aligned distance",
-                    counted(aligned.len(), "dimension", "dimensions")
-                ),
+                    "the rotation turned {} dimensions off the sketch's axes: now an aligned \
+                     distance",
+                    aligned.len()
+                )
+            };
+            self.report.notes.push(crate::said(
+                said,
                 format!(
                     "the rotation turned {} off the sketch's axes: now an aligned distance",
                     aligned.join(", ")
@@ -1022,11 +980,16 @@ impl SketchEdit<'_> {
             let reason = "turned off the sketch's axes by a rotation";
             self.set_active(&off, false, Some(reason))?;
             let names: Vec<String> = off.iter().map(ToString::to_string).collect();
-            self.report.notes.push(crate::said(
+            let said = if names.len() == 1 {
+                "a constraint deactivated: turned off the sketch's axes by a rotation".to_owned()
+            } else {
                 format!(
-                    "{} deactivated: {reason}",
-                    counted(names.len(), "constraint", "constraints")
-                ),
+                    "{} constraints deactivated: turned off the sketch's axes by a rotation",
+                    names.len()
+                )
+            };
+            self.report.notes.push(crate::said(
+                said,
                 format!("{} deactivated: {reason}", names.join(", ")),
             ));
         }
@@ -1123,6 +1086,59 @@ impl SketchEdit<'_> {
             }
         }
         Ok(copies)
+    }
+
+    /// Holds moved or copied geometry where the user dropped it on a point
+    /// or a curve (mitcad#1645, Move/Copy's handle and Target Point): each
+    /// of `holds` is added as a constraint, with an entity of `copies`
+    /// (a copy's map, empty for a move) standing for its copy. Two curve
+    /// ends stay two points, held together. A hold the sketch refuses (it
+    /// conflicts with the others, or they imply it) is left out with a
+    /// warning, the sketch as it was without it: the move is kept.
+    /// Returns the constraints added.
+    pub fn hold_moved(
+        &mut self,
+        holds: &[ConstraintKind],
+        copies: &BTreeMap<EntityUid, EntityUid>,
+    ) -> Vec<ConstraintUid> {
+        let mut added = Vec::new();
+        for hold in holds {
+            let mut kind = hold.clone();
+            remap(&mut kind, copies);
+            let named = kind
+                .refs()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let what = format!("{} {named}", kind.type_name());
+            let leave_out = |reason: &str| {
+                crate::said(
+                    format!(
+                        "not held where it was dropped: {}",
+                        mitcad_model_base::notice::user_message(reason)
+                    ),
+                    format!("the hold {what} was left out: {reason}"),
+                )
+            };
+            let before = match self.solved() {
+                Ok(solved) => solved.status.redundant.len(),
+                Err(e) => {
+                    self.report.warnings.push(leave_out(&e));
+                    continue;
+                }
+            };
+            let saved = self.def.clone();
+            let id = self.add_constraint(kind);
+            if let Err(e) = self.require_needed(before) {
+                self.def = saved;
+                self.report.constraints.retain(|k| *k != id);
+                self.report.warnings.push(leave_out(&e));
+                continue;
+            }
+            added.push(id);
+        }
+        added
     }
 
     /// Mirrors entities about a line (Mirror): copies with
@@ -2004,7 +2020,7 @@ impl SketchEdit<'_> {
             match self.curve(l)?.kind {
                 EntityKind::Line { start, end, .. } => Ok((start, end)),
                 ref other => Err(crate::said(
-                    format!("the curve is a {}, not a line", other.type_name()),
+                    not_a_line(other),
                     format!("c{} is a {}, not a line", l.0, other.type_name()),
                 )),
             }
@@ -3313,10 +3329,7 @@ impl SketchEdit<'_> {
         match self.curve(id)?.kind {
             EntityKind::Arc { center, .. } | EntityKind::Circle { center, .. } => Ok(center),
             ref other => Err(crate::said(
-                format!(
-                    "the curve is a {}, not a circle or an arc",
-                    other.type_name()
-                ),
+                not_round(other),
                 format!("c{} is a {}", id.0, other.type_name()),
             )),
         }
@@ -3560,12 +3573,20 @@ impl SketchEdit<'_> {
             return "the curves are not one connected chain".to_owned();
         };
         if d <= GAP {
-            crate::said(
+            // Whole messages, each one template (mitcad#1626).
+            let said = if d <= 1e-9 * size {
+                "the curves are not one connected chain: a curve ends at another curve's end but \
+                 on a point of its own; a Coincident constraint joins them"
+                    .to_owned()
+            } else {
                 format!(
-                    "the curves are not one connected chain: a curve ends {} another curve's \
-                     end but on a point of its own; a Coincident constraint joins them",
-                    apart(d, size)
-                ),
+                    "the curves are not one connected chain: a curve ends {} mm from another \
+                     curve's end but on a point of its own; a Coincident constraint joins them",
+                    gap_text(d)
+                )
+            };
+            crate::said(
+                said,
                 format!(
                     "the curves are not one connected chain: c{} ends {} p{} of c{} but on a \
                      point of its own (p{}); a Coincident constraint joins them",
@@ -3675,6 +3696,39 @@ fn apart(d: f64, size: f64) -> String {
         "at".to_owned()
     } else {
         format!("{} mm from", gap_text(d))
+    }
+}
+
+/// Why a curve of `kind` is no line, a whole message for each kind
+/// (mitcad#1626: a kind's name put into one message stays English).
+fn not_a_line(kind: &EntityKind) -> &'static str {
+    match kind {
+        EntityKind::Point { .. } => "the curve is a point, not a line",
+        // Not asked: the callers take a line first.
+        EntityKind::Line { .. } => "the curve is a line",
+        EntityKind::Circle { .. } => "the curve is a circle, not a line",
+        EntityKind::Arc { .. } => "the curve is an arc, not a line",
+        EntityKind::Ellipse { .. } => "the curve is an ellipse, not a line",
+        EntityKind::EllipticalArc { .. } => "the curve is an elliptical arc, not a line",
+        EntityKind::Spline { .. } => "the curve is a spline, not a line",
+        EntityKind::FittedSpline { .. } => "the curve is a fitted spline, not a line",
+    }
+}
+
+/// Why a curve of `kind` is neither a circle nor an arc, a whole message
+/// for each kind (mitcad#1626).
+fn not_round(kind: &EntityKind) -> &'static str {
+    match kind {
+        EntityKind::Point { .. } => "the curve is a point, not a circle or an arc",
+        EntityKind::Line { .. } => "the curve is a line, not a circle or an arc",
+        // Not asked: the callers take circles and arcs first.
+        EntityKind::Circle { .. } | EntityKind::Arc { .. } => "the curve is a circle or an arc",
+        EntityKind::Ellipse { .. } => "the curve is an ellipse, not a circle or an arc",
+        EntityKind::EllipticalArc { .. } => {
+            "the curve is an elliptical arc, not a circle or an arc"
+        }
+        EntityKind::Spline { .. } => "the curve is a spline, not a circle or an arc",
+        EntityKind::FittedSpline { .. } => "the curve is a fitted spline, not a circle or an arc",
     }
 }
 
@@ -3930,23 +3984,6 @@ fn negate_expression(expression: &str) -> String {
         }
     }
     format!("-({text})")
-}
-
-/// "a constraint" or "3 constraints" (mitcad#1612: what a note counts,
-/// its ids in the agents' detail).
-fn counted(n: usize, one: &str, many: &str) -> String {
-    if n == 1 {
-        format!(
-            "{} {one}",
-            if one.starts_with(['a', 'e', 'i', 'o', 'u']) {
-                "an"
-            } else {
-                "a"
-            }
-        )
-    } else {
-        format!("{n} {many}")
-    }
 }
 
 /// The message a person reads of an error's text (its tail left out).

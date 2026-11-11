@@ -1,0 +1,18 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A feature that changes the picked body activates its component (mitcad#1634), tools/ui-activate-on-pick-test.sh: Base:1 (O1, C1) with a 30 x 20 x 10 block (sketch F1, Body1 F2.b0) at the origin, Lid:1 (O2, C2) placed 50 mm along X with the same block (sketch F3, Body1 F4.b0). The root is active when the design opens."},
+  {"cmd": "create_component", "name": "Base"},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 30, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "create_component", "name": "Lid", "transform": [[1, 0, 0, 50], [0, 1, 0, 0], [0, 0, 1, 0]]},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [0, 0], "width": 30, "height": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F3", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"}
+]

@@ -23,6 +23,17 @@ pub(crate) type FlatCache<S> =
     std::sync::Mutex<std::collections::BTreeMap<BodyUid, (u128, FlatOutcome<S>)>>;
 pub(crate) type FlatOutcome<S> = Arc<Result<FlatPattern<S>, FlatFailure>>;
 
+/// A refusal a person reads as `shown`, in words, and agents read as
+/// `detail`, with the body's and the features' ids (mitcad#1639, the rule
+/// of mitcad#1327).
+fn told(shown: String, detail: String) -> ModelError {
+    invalid(
+        crate::notice::FeatureError::new(shown)
+            .with_detail(detail)
+            .text(),
+    )
+}
+
 impl<K: Kernel> Document<K> {
     /// The Flat Pattern settings, by body.
     pub fn flat_pattern_defs(&self) -> &std::collections::BTreeMap<BodyUid, FlatPatternDef> {
@@ -41,9 +52,7 @@ impl<K: Kernel> Document<K> {
     ) -> Result<(), ModelError> {
         let old = self.state.flat_patterns.get(&body).cloned();
         let Some(state) = self.last_result().sheets.get(&body) else {
-            return Err(invalid(format!(
-                "body {body} is not a sheet-metal body at the timeline marker"
-            )));
+            return Err(self.not_a_sheet(body));
         };
         let panels: Vec<PanelId> = state
             .value
@@ -56,16 +65,20 @@ impl<K: Kernel> Document<K> {
             .collect();
         let stationary = match stationary.or(old.as_ref().map(|d| d.stationary)) {
             Some(panel) => panel,
-            None => *panels
-                .iter()
-                .min()
-                .ok_or_else(|| invalid(format!("sheet {body} has no panel")))?,
+            None => *panels.iter().min().ok_or_else(|| self.no_panel(body))?,
         };
         if !panels.contains(&stationary) {
-            return Err(invalid(format!(
+            let detail = format!(
                 "panel {} slot {} is not a panel of sheet {body}",
                 stationary.feature, stationary.slot
-            )));
+            );
+            return Err(told(
+                match self.flat_body_name(body) {
+                    Some(name) => format!("the chosen fixed panel is not a panel of {name}"),
+                    None => "the chosen fixed panel is not a panel of this sheet".to_owned(),
+                },
+                detail,
+            ));
         }
         let def = FlatPatternDef {
             stationary,
@@ -105,7 +118,14 @@ impl<K: Kernel> Document<K> {
 
     pub fn remove_flat_pattern(&mut self, body: BodyUid) -> Result<(), ModelError> {
         if !self.state.flat_patterns.contains_key(&body) {
-            return Err(invalid(format!("body {body} has no Flat Pattern")));
+            let detail = format!("body {body} has no Flat Pattern");
+            return Err(told(
+                match self.flat_body_name(body) {
+                    Some(name) => format!("{name} has no Flat Pattern"),
+                    None => "this body has no Flat Pattern".to_owned(),
+                },
+                detail,
+            ));
         }
         self.apply_with(|state| {
             state.flat_patterns.remove(&body);
@@ -118,24 +138,91 @@ impl<K: Kernel> Document<K> {
     /// depends on changed.
     pub fn flat_pattern(&self, body: BodyUid) -> FlatOutcome<K::Shape> {
         let Some(def) = self.state.flat_patterns.get(&body) else {
-            return Arc::new(Err(FlatFailure {
-                status: "unavailable",
-                diagnostics: vec![format!("body {body} has no Flat Pattern")],
-            }));
+            return Arc::new(Err(FlatFailure::told(
+                "unavailable",
+                "this body has no Flat Pattern".to_owned(),
+                format!("body {body} has no Flat Pattern"),
+            )));
         };
         let result = self.last_result();
-        let key = flat::fingerprint(result, body, def);
+        let name = |feature: FeatureUid| self.flat_feature_name(feature);
+        let key = flat::fingerprint(result, body, def, &name);
         if let Ok(cache) = self.flat_cache.lock()
             && let Some((cached, outcome)) = cache.get(&body)
             && *cached == key
         {
             return outcome.clone();
         }
-        let outcome = Arc::new(flat::evaluate(&self.kernel, result, body, def));
+        let outcome = Arc::new(flat::evaluate(&self.kernel, result, body, def, &name));
         if let Ok(mut cache) = self.flat_cache.lock() {
             cache.insert(body, (key, outcome.clone()));
         }
         outcome
+    }
+
+    /// A feature's name as the timeline shows it, for the reason of a
+    /// Flat Pattern whose sheet is not valid (mitcad#1636).
+    fn flat_feature_name(&self, feature: FeatureUid) -> String {
+        self.feature(feature)
+            .map_or_else(|| feature.to_string(), |f| f.name.clone())
+    }
+
+    /// A body as a Flat Pattern's message names it (mitcad#1639): its name
+    /// as the Browser shows it; none when it has no name at the marker
+    /// (the message then says "this sheet" or "this body", never its id).
+    fn flat_body_name(&self, body: BodyUid) -> Option<String> {
+        let name = self.body_name(body);
+        (name != body.to_string()).then_some(name)
+    }
+
+    /// The refusal of a body that is no sheet at the marker.
+    fn not_a_sheet(&self, body: BodyUid) -> ModelError {
+        let detail = format!("body {body} is not a sheet-metal body at the timeline marker");
+        told(
+            match self.flat_body_name(body) {
+                Some(name) => format!("{name} is not a sheet-metal body at the timeline marker"),
+                None => "this body is not a sheet-metal body at the timeline marker".to_owned(),
+            },
+            detail,
+        )
+    }
+
+    /// The refusal of a sheet without a panel.
+    fn no_panel(&self, body: BodyUid) -> ModelError {
+        let detail = format!("sheet {body} has no panel");
+        told(
+            match self.flat_body_name(body) {
+                Some(name) => format!("{name} has no panel"),
+                None => "this sheet has no panel".to_owned(),
+            },
+            detail,
+        )
+    }
+
+    /// Why a body's Flat Pattern cannot be exported, as a person reads it
+    /// (mitcad#1639): the body by its name, the reasons in words; one
+    /// whole message per status. Agents read the body's id and the
+    /// reasons with their ids in the detail.
+    fn flat_refusal(&self, body: BodyUid, failure: &FlatFailure) -> ModelError {
+        let reasons = failure.diagnostics.join("; ");
+        let shown = match (self.flat_body_name(body), failure.status) {
+            (Some(name), "blocked") => format!("the Flat Pattern of {name} is blocked: {reasons}"),
+            (Some(name), "unavailable") => {
+                format!("the Flat Pattern of {name} is unavailable: {reasons}")
+            }
+            (Some(name), _) => format!("the Flat Pattern of {name} is invalid: {reasons}"),
+            (None, "blocked") => format!("the Flat Pattern of this sheet is blocked: {reasons}"),
+            (None, "unavailable") => {
+                format!("the Flat Pattern of this sheet is unavailable: {reasons}")
+            }
+            (None, _) => format!("the Flat Pattern of this sheet is invalid: {reasons}"),
+        };
+        let detail = format!(
+            "the Flat Pattern of {body} is {}: {}",
+            failure.status,
+            failure.agent_reasons()
+        );
+        told(shown, detail)
     }
 
     /// The developed solid of a body's valid Flat Pattern, for display.
@@ -170,11 +257,11 @@ impl<K: Kernel> Document<K> {
         if let Some(def) = self.state.flat_patterns.get(&body) {
             return Ok(def.clone());
         }
-        let state = self.last_result().sheets.get(&body).ok_or_else(|| {
-            invalid(format!(
-                "body {body} is not a sheet-metal body at the timeline marker"
-            ))
-        })?;
+        let state = self
+            .last_result()
+            .sheets
+            .get(&body)
+            .ok_or_else(|| self.not_a_sheet(body))?;
         let stationary = state
             .value
             .charts
@@ -184,7 +271,7 @@ impl<K: Kernel> Document<K> {
                 SheetDomainRef::Bend(_) => None,
             })
             .min()
-            .ok_or_else(|| invalid(format!("sheet {body} has no panel")))?;
+            .ok_or_else(|| self.no_panel(body))?;
         Ok(FlatPatternDef {
             stationary,
             x_axis: flat::FlatXAxis::PanelX,
@@ -216,20 +303,37 @@ impl<K: Kernel> Document<K> {
         let outcome = if own {
             self.flat_pattern(body)
         } else {
-            Arc::new(flat::evaluate(&self.kernel, self.last_result(), body, &def))
+            Arc::new(flat::evaluate(
+                &self.kernel,
+                self.last_result(),
+                body,
+                &def,
+                &|feature| self.flat_feature_name(feature),
+            ))
         };
         let pattern = match &*outcome {
             Ok(pattern) => pattern,
-            Err(failure) => {
-                return Err(invalid(format!(
-                    "the Flat Pattern of {body} is {}: {}",
-                    failure.status,
-                    failure.diagnostics.join("; ")
-                )));
-            }
+            Err(failure) => return Err(self.flat_refusal(body, failure)),
         };
         let drawing = crate::sheet::flat_dxf::drawing(&pattern.regions, &pattern.bends, options)
-            .map_err(|e| invalid(format!("the Flat Pattern of {body}: {e}")))?;
+            .map_err(|e| {
+                // The walls it names by their features, the rest in words
+                // (mitcad#1639); the ids for agents.
+                let named = |feature: FeatureUid| self.flat_feature_name(feature);
+                let error =
+                    crate::notice::FeatureError::from_text(&crate::sheet::name_walls(&e, &named));
+                let detail = format!(
+                    "the Flat Pattern of {body}: {}",
+                    crate::notice::FeatureError::from_text(&e).agent_text()
+                );
+                told(
+                    match self.flat_body_name(body) {
+                        Some(name) => format!("the Flat Pattern of {name}: {}", error.message),
+                        None => format!("the Flat Pattern of this sheet: {}", error.message),
+                    },
+                    detail,
+                )
+            })?;
         mitcad_dxf::write_file(&drawing, path, write)
             .map_err(|e| invalid(format!("cannot write {path}: {e}")))?;
         Ok((def, drawing))
@@ -246,7 +350,7 @@ impl<K: Kernel> Document<K> {
         let outcome = self.flat_pattern(body);
         let pattern = match &*outcome {
             Ok(pattern) => pattern,
-            Err(failure) => return Err(failure.diagnostics.join("; ")),
+            Err(failure) => return Err(failure.agent_reasons()),
         };
         let state = &self
             .last_result()

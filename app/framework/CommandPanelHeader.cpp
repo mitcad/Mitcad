@@ -17,6 +17,7 @@
 #include <QObject>
 #include <QPoint>
 #include <QPointer>
+#include <QPushButton>
 #include <QToolButton>
 #include <QWidget>
 #include <QtLogging>
@@ -106,8 +107,8 @@ void CommandPanel::addSection(QWidget* section, std::function<QStringList()> pla
   }
   // Under the result and the message, above the buttons: the panel in the
   // order of the task, the picks, what they measure, what to do with it
-  // (mitcad#1010).
-  const int at = box->indexOf(m_message);
+  // (mitcad#1010); after the button beside the message (mitcad#1634).
+  const int at = box->indexOf(m_messageAction);
   box->insertWidget(at < 0 ? box->count() : at + 1, section);
   // Its moves move what it logs (mitcad#528), as the rows' do.
   section->installEventFilter(this);

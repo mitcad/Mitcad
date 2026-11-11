@@ -49,6 +49,13 @@ public:
     // (mitcad#1333) call it; a frontend that cannot tell leaves it
     // uncalled.
     std::function<void(bool)> messageHovered;
+    // The pointer came over a note row (true) or left it: the row's key
+    // (InputNote::places and hover painted meanwhile, mitcad#1643). The Qt
+    // panel's NoteRow calls it.
+    std::function<void(const QString&, bool)> noteHovered;
+    // The button beside the message was clicked (setMessageAction,
+    // mitcad#1634).
+    std::function<void()> messageAction;
   };
 
   virtual ~CommandPresenter() {
@@ -76,6 +83,12 @@ public:
   // in its highlight box with the level's icon and word, kept until the
   // next message replaces it; hints, progress and information plain.
   virtual void setMessage(const QString& message, NoticeLevel level) = 0;
+  // A button under the message that does what the panel offers beside it
+  // (mitcad#1634: Activate <component> beside the model's refusal of
+  // another component's body), with its text and tooltip; an empty text
+  // hides it. A click calls Actions::messageAction. A frontend without it
+  // shows none (an agent reads the offer from the script state).
+  virtual void setMessageAction(const QString& /*text*/, const QString& /*tooltip*/) {}
   virtual void setResult(const QString& text) = 0;
   // An inspection's answer as a whole: its rows of names and values where
   // it has them (Inspection::values and groups, mitcad#1010), else its

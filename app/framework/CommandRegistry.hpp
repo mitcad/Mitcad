@@ -58,6 +58,12 @@ public:
   // context's key (its action is disabled there).
   unsigned shortcutContext() const { return m_context; }
   void setShortcutContext(unsigned context);
+  // An overlay context active beside it (mitcad#1661:
+  // Sketch3dToolShortcutContext while a 3D sketch's drawing tool is
+  // active), 0 for none: the keys of its commands are theirs alone, the
+  // other commands' actions drop the same keys meanwhile (Turn View Up's
+  // Up). Logged "Shortcut overlay: 3D Sketch Tool" ("none") when it changes.
+  void setShortcutOverlay(unsigned contexts);
 
   // A command's key in one context: saved for that context, else saved for
   // every context, else its default.
@@ -104,6 +110,8 @@ private:
   QList<QKeySequence> effectiveKeys(const CommandDef& def, const QSettings& settings) const;
   void refreshShortcuts();
   void applyShortcut(const CommandDef& def, const QSettings& settings);
+  // The keys of the active overlay context's commands (m_overlayKeys).
+  void updateOverlayKeys(const QSettings& settings);
 
   std::vector<std::unique_ptr<CommandDef>> m_commands;
   QHash<QString, QAction*> m_actions;
@@ -111,6 +119,8 @@ private:
   QSet<QString> m_disabledShortcuts;
   QStringList m_shortcutWarnings;
   unsigned m_context = ModelShortcutContext;
+  unsigned m_overlay = 0;              // mitcad#1661
+  QList<QKeySequence> m_overlayKeys; // its commands' keys
 };
 
 } // namespace mitcad

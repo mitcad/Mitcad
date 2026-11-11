@@ -19,10 +19,12 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPolygonF>
+#include <QSvgRenderer>
 #include <QWheelEvent>
 #include <QtLogging>
 
 #include "../framework/Theme.hpp"
+#include "TitleBlockEditor.hpp"
 
 namespace mitcad::drawings {
 namespace {
@@ -183,6 +185,16 @@ DrawingSheetView::DrawingSheetView(QWidget* parent) : QWidget(parent) {
   setMouseTracking(true);
   setFocusPolicy(Qt::StrongFocus);
   setAutoFillBackground(false);
+}
+
+void DrawingSheetView::setTitleBlockEditor(TitleBlockEditor* editor) {
+  if (editor == m_blockEditor) {
+    return;
+  }
+  m_blockEditor = editor;
+  m_drag = Drag::None;
+  // The model's title block hidden under the editor's, or shown again.
+  sheetMoved();
 }
 
 void DrawingSheetView::setSheet(const QJsonObject& sheet) {
@@ -1039,6 +1051,10 @@ void DrawingSheetView::paintEvent(QPaintEvent* /*event*/) {
     painter.restore();
   }
   paintAnnotations(painter);
+  // The title block editor's block (mitcad#1625).
+  if (m_blockEditor != nullptr) {
+    paintBlockEditor(painter);
+  }
   // A selected detail's circle on its parent, which a drag moves.
   QPointF circleCenter;
   double circleRadius = 0.0;
@@ -1226,6 +1242,152 @@ void DrawingSheetView::paintAnnotations(QPainter& painter) const {
   painter.restore();
 }
 
+bool DrawingSheetView::paintImage(QPainter& painter, const QString& base64, const QString& format,
+                                  const QRectF& box) const {
+  // The box on the sheet (y up) as a rectangle in the widget (y down).
+  const QRectF target = QRectF(toWidget(QPointF(box.left(), box.top() + box.height())),
+                               toWidget(QPointF(box.left() + box.width(), box.top())))
+                            .normalized();
+  if (target.width() < 1.0 || target.height() < 1.0) {
+    return true;
+  }
+  const auto fitted = [&target](double aspect) {
+    if (!(aspect > 0.0)) {
+      return target;
+    }
+    double w = target.width();
+    double h = target.height();
+    if (w / h > aspect) {
+      w = h * aspect;
+    } else {
+      h = w / aspect;
+    }
+    return QRectF(target.center().x() - w / 2.0, target.center().y() - h / 2.0, w, h);
+  };
+  if (format == QStringLiteral("svg")) {
+    QSvgRenderer renderer(QByteArray::fromBase64(base64.toLatin1()));
+    if (!renderer.isValid()) {
+      return false;
+    }
+    const QSizeF size = renderer.viewBoxF().size();
+    renderer.render(&painter, fitted(size.height() > 0.0 ? size.width() / size.height() : 0.0));
+    return true;
+  }
+  auto cached = m_imageCache.constFind(base64);
+  if (cached == m_imageCache.constEnd()) {
+    // A few images at most: the cache is cleared rather than grown on.
+    if (m_imageCache.size() > 16) {
+      m_imageCache.clear();
+    }
+    cached = m_imageCache.insert(base64, QImage::fromData(QByteArray::fromBase64(base64.toLatin1())));
+  }
+  const QImage& image = cached.value();
+  if (image.isNull()) {
+    return false;
+  }
+  painter.save();
+  painter.setRenderHint(QPainter::SmoothPixmapTransform);
+  painter.drawImage(fitted(static_cast<double>(image.width()) / image.height()), image);
+  painter.restore();
+  return true;
+}
+
+void DrawingSheetView::paintBlockEditor(QPainter& painter) const {
+  const TitleBlockEditor& editor = *m_blockEditor;
+  const QPointF origin = editor.origin();
+  const auto at = [this, &origin](const QPointF& block) { return toWidget(origin + block); };
+  // A box of the block (y up) as a widget rectangle.
+  const auto rectOf = [&at](const QRectF& box) {
+    return QRectF(at(QPointF(box.left(), box.top() + box.height())), at(QPointF(box.left() + box.width(), box.top())))
+        .normalized();
+  };
+  painter.save();
+  const QRectF block = rectOf(QRectF(0.0, 0.0, editor.width(), editor.height()));
+  painter.fillRect(block, Qt::white);
+  // The grid, where its points are apart enough to see.
+  const double step = editor.grid() * m_zoom;
+  if (step >= 6.0) {
+    painter.setPen(QPen(QColor(0, 0, 0, 70), 1.0));
+    for (double x = 0.0; x <= editor.width() + 1e-9; x += editor.grid()) {
+      for (double y = 0.0; y <= editor.height() + 1e-9; y += editor.grid()) {
+        painter.drawPoint(at(QPointF(x, y)));
+      }
+    }
+  }
+  // The images, then the cells, the lines and the outline.
+  const auto selected = [&editor](TitleBlockEditor::Kind kind, int index) {
+    return editor.selectedKind() == kind && editor.selectedIndex() == index;
+  };
+  for (int i = 0; i < static_cast<int>(editor.images().size()); ++i) {
+    const BlockImage& image = editor.images().at(i);
+    const QRectF box(origin + image.box.topLeft(), image.box.size());
+    paintImage(painter, image.data, image.format, box);
+    QPen dashed(selected(TitleBlockEditor::Kind::Image, i) ? kSelected : kHovered, 1.0, Qt::DashLine);
+    dashed.setCosmetic(true);
+    painter.setPen(dashed);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(rectOf(image.box));
+  }
+  const auto face = [this](double capHeight) {
+    QFont font(QStringLiteral("Helvetica"));
+    font.setStyleHint(QFont::SansSerif);
+    font.setPixelSize(std::max(1, static_cast<int>(std::lround(capHeight / kCapHeight * m_zoom))));
+    return font;
+  };
+  for (int i = 0; i < static_cast<int>(editor.fields().size()); ++i) {
+    const BlockField& field = editor.fields().at(i);
+    const QRectF cell = rectOf(field.cell);
+    const bool on = selected(TitleBlockEditor::Kind::Field, i);
+    QPen pen(on ? kSelected : kHovered, on ? 2.0 : 1.0, on ? Qt::SolidLine : Qt::DashLine);
+    pen.setCosmetic(true);
+    painter.setPen(pen);
+    painter.setBrush(on ? QColor(kSelected.red(), kSelected.green(), kSelected.blue(), 30) : QColor(Qt::transparent));
+    painter.drawRect(cell);
+    painter.setPen(Qt::black);
+    // As the model writes them: the label small in the upper left corner,
+    // the text (its names in braces as typed) at the bottom.
+    if (!field.label.isEmpty() && 2.0 * m_zoom >= 3.0) {
+      painter.setFont(face(2.0));
+      painter.drawText(at(QPointF(field.cell.left() + 1.5, field.cell.top() + field.cell.height() - 3.5)), field.label);
+    }
+    const double letters = field.height > 0.0 ? field.height : 3.5;
+    if (!field.text.isEmpty() && letters * m_zoom >= 3.0) {
+      painter.setFont(face(letters));
+      painter.drawText(at(QPointF(field.cell.left() + 1.5, field.cell.top() + 2.0)), field.text);
+    }
+  }
+  for (int i = 0; i < static_cast<int>(editor.lines().size()); ++i) {
+    const QLineF& line = editor.lines().at(i);
+    const bool on = selected(TitleBlockEditor::Kind::Line, i);
+    QPen pen(on ? kSelected : Qt::black, on ? 3.0 : std::max(1.0, 0.18 * m_zoom));
+    pen.setCosmetic(true);
+    painter.setPen(pen);
+    painter.drawLine(at(line.p1()), at(line.p2()));
+  }
+  QPen outline(Qt::black, std::max(1.0, 0.5 * m_zoom));
+  outline.setCosmetic(true);
+  painter.setPen(outline);
+  painter.setBrush(Qt::NoBrush);
+  painter.drawRect(block);
+  // A tool's first click: its line or box to the pointer; the point a
+  // click would take.
+  QPen band(kSelected, 1.5, Qt::DashLine);
+  band.setCosmetic(true);
+  painter.setPen(band);
+  if (const std::optional<QPointF> first = editor.firstPoint()) {
+    if (editor.tool() == TitleBlockEditor::Tool::Line) {
+      painter.drawLine(at(*first), at(editor.pointer()));
+    } else {
+      painter.drawRect(QRectF(at(*first), at(editor.pointer())).normalized());
+    }
+  }
+  if (editor.tool() != TitleBlockEditor::Tool::Select && m_pointerIn) {
+    painter.setBrush(kSelected);
+    painter.drawEllipse(at(editor.pointer()), 3.0, 3.0);
+  }
+  painter.restore();
+}
+
 void DrawingSheetView::paintItems(QPainter& painter) const {
   // Lines in sheet millimetres: the painter scaled, y up.
   painter.save();
@@ -1248,7 +1410,35 @@ void DrawingSheetView::paintItems(QPainter& painter) const {
     QString text;
   };
   QVector<Label> labels;
+  // The title block editor's block is painted over the sheet instead of the
+  // model's (mitcad#1625).
+  const auto shown = [this](const QJsonValue& group) {
+    return m_blockEditor == nullptr ||
+           group.toObject().value(QStringLiteral("class")).toString() != QStringLiteral("title-block");
+  };
+  // A title block's images first, under its lines (mitcad#1625), in the
+  // widget's own coordinates: upright.
+  painter.save();
+  painter.resetTransform();
   for (const QJsonValue& groupValue : m_groups) {
+    if (!shown(groupValue)) {
+      continue;
+    }
+    for (const QJsonValue& itemValue : groupValue.toObject().value(QStringLiteral("items")).toArray()) {
+      const QJsonObject item = itemValue.toObject();
+      if (item.contains(QStringLiteral("image"))) {
+        const QPointF at = pointOf(item.value(QStringLiteral("at")));
+        const QPointF size = pointOf(item.value(QStringLiteral("size")));
+        paintImage(painter, item.value(QStringLiteral("image")).toString(),
+                   item.value(QStringLiteral("format")).toString(), QRectF(at, QSizeF(size.x(), size.y())));
+      }
+    }
+  }
+  painter.restore();
+  for (const QJsonValue& groupValue : m_groups) {
+    if (!shown(groupValue)) {
+      continue;
+    }
     for (const QJsonValue& itemValue : groupValue.toObject().value(QStringLiteral("items")).toArray()) {
       const QJsonObject item = itemValue.toObject();
       const QString pen = item.value(QStringLiteral("pen")).toString();
@@ -1365,6 +1555,16 @@ void DrawingSheetView::mousePressEvent(QMouseEvent* event) {
   if (event->button() != Qt::LeftButton) {
     return;
   }
+  // The title block editor's clicks and drags (mitcad#1625).
+  if (m_blockEditor != nullptr) {
+    const QString what = m_blockEditor->press(at, std::max(0.5, 5.0 / m_zoom));
+    if (!what.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Title block %1").arg(what);
+    }
+    emit titleBlockEdited();
+    update();
+    return;
+  }
   const int under = viewAt(at);
   switch (m_pick) {
   case SheetPick::None: {
@@ -1467,6 +1667,12 @@ void DrawingSheetView::mouseMoveEvent(QMouseEvent* event) {
   case Drag::None:
     break;
   }
+  // The title block editor follows the pointer (mitcad#1625).
+  if (m_blockEditor != nullptr) {
+    m_blockEditor->moveTo(at);
+    update();
+    return;
+  }
   const int under = viewAt(at);
   const int note = m_pick == SheetPick::None ? annotationAt(at) : 0;
   const bool hoverChanged = !wasIn || under != m_hovered || note != m_hoveredAnnotation;
@@ -1522,7 +1728,7 @@ void DrawingSheetView::leaveEvent(QEvent* event) {
 }
 
 void DrawingSheetView::mouseDoubleClickEvent(QMouseEvent* event) {
-  if (event->button() != Qt::LeftButton || m_pick != SheetPick::None) {
+  if (event->button() != Qt::LeftButton || m_pick != SheetPick::None || m_blockEditor != nullptr) {
     // As a press: a tool takes its clicks as they come.
     mousePressEvent(event);
     return;
@@ -1538,7 +1744,8 @@ void DrawingSheetView::mouseDoubleClickEvent(QMouseEvent* event) {
 
 void DrawingSheetView::contextMenuEvent(QContextMenuEvent* event) {
   event->accept();
-  if (m_pick != SheetPick::None) {
+  // The title block editor has no menu: its panel has its tools.
+  if (m_pick != SheetPick::None || m_blockEditor != nullptr) {
     return; // a tool's clicks; the right one is its Esc (mouseReleaseEvent)
   }
   // The right click that ended a tool opens no menu (mitcad#1404): where
@@ -1593,6 +1800,16 @@ void DrawingSheetView::mouseReleaseEvent(QMouseEvent* event) {
     return;
   }
   if (event->button() != Qt::LeftButton) {
+    return;
+  }
+  // A move of the title block editor ends (mitcad#1625).
+  if (m_blockEditor != nullptr) {
+    const QString what = m_blockEditor->release(at);
+    if (!what.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Title block %1").arg(what);
+      emit titleBlockEdited();
+    }
+    update();
     return;
   }
   // Several selected items dragged together; a click on one of them
@@ -1884,6 +2101,15 @@ void DrawingSheetView::keyPressEvent(QKeyEvent* event) {
   switch (event->key()) {
   case Qt::Key_Delete:
   case Qt::Key_Backspace:
+    if (m_blockEditor != nullptr) {
+      const QString gone = m_blockEditor->deleteSelected();
+      if (!gone.isEmpty()) {
+        qDebug().noquote() << QStringLiteral("Title block %1 deleted").arg(gone);
+        emit titleBlockEdited();
+        update();
+      }
+      return;
+    }
     if (selectionSize() > 1 && m_pick == SheetPick::None) {
       emit deleteSelectionRequested();
       return;

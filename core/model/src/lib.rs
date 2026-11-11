@@ -363,6 +363,36 @@ pub use document::{LinkState, LinksUpdated};
 // Preview images of the design without a GPU or a display, the MCP tool
 // model_render (mitcad#1486).
 pub mod preview;
+// 3D sketches: a refused edit with its failed solve (mitcad#1521).
+pub use document::SpatialEditError;
+// A planar sketch turned into a 3D sketch in place (mitcad#1544).
+pub use document::{PlanarConversion, SketchConversion, SketchConversionError};
+#[cfg(test)]
+mod spatial_sketch_tests;
+// 3D sketches' linked reference geometry (mitcad#1543).
+#[cfg(test)]
+mod spatial_links_tests;
+// Pipe and Sweep along curves of 3D sketches (mitcad#1523).
+#[cfg(test)]
+mod spatial_path_tests;
+// A planar sketch turned into a 3D sketch in place (mitcad#1544).
+#[cfg(test)]
+mod sketch_conversion_tests;
+// A 3D sketch's Fillet of corners between lines (mitcad#1548).
+#[cfg(test)]
+mod spatial_fillet_tests;
+// Closed paths of 3D sketches and every curve input (mitcad#1550).
+#[cfg(test)]
+mod spatial_consumers_tests;
+// Points of 3D sketches on faces of bodies (mitcad#1549).
+#[cfg(test)]
+mod spatial_faces_tests;
+// Ribs, webs, thin walls and surfaces of a 3D sketch's curves in its
+// sketch plane (mitcad#1550).
+#[cfg(test)]
+mod spatial_plane_curves_tests;
 // Filament changes and pauses at print heights, written into slicers' 3MF
 // projects and shown as print colours (mitcad#1596).
 pub mod print_changes;
+// A thread's face fitted to the thread (mitcad#1632).
+pub use document::{AutoFixFit, NoFit, SharedChoice};

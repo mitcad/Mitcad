@@ -471,7 +471,7 @@ void BrowserController::updateFailures() {
   // The sketches' degrees of freedom the browser shows (P9).
   QStringList dofs;
   for (const DocumentSnapshot::Feature& feature : std::as_const(m_snapshot.features)) {
-    if (feature.isSketch() && feature.dof >= 0) {
+    if (feature.isAnySketch() && feature.dof >= 0) {
       dofs << QStringLiteral("%1 %2").arg(feature.name).arg(feature.dof);
     }
   }
@@ -597,7 +597,10 @@ bool BrowserController::visibilityInEveryMode(const BrowserNode& node) {
 }
 
 void BrowserController::toggleVisibility(const BrowserNode& node) {
-  const bool show = !node.visible;
+  // The Origin folder's origin is drawn only while View › Show › Origins is
+  // on too (mitcad#1287): its eye shows an origin that is not drawn, also
+  // with its light bulb on, and hides one that is (mitcad#1642).
+  const bool show = node.type == BrowserNode::Type::Origin ? !(node.visible && m_snapshot.showOrigins) : !node.visible;
   const QString verb = show ? QStringLiteral("shown") : QStringLiteral("hidden");
   if (!visibilityInEveryMode(node) && !canChange(true)) {
     return;
@@ -608,7 +611,17 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
   QString label;
   switch (node.type) {
   case BrowserNode::Type::Origin:
-    commands.append(cmd("set_origin_visible", {{QStringLiteral("visible"), show}}));
+    // Shown: the light bulb and View › Show › Origins both on, one undo step
+    // (mitcad#1642); either alone drew nothing. Hidden: the light bulb off.
+    if (show != node.visible) {
+      commands.append(cmd("set_origin_visible", {{QStringLiteral("visible"), show}}));
+    }
+    if (show && !m_snapshot.showOrigins) {
+      commands.append(cmd("set_view_show", {{QStringLiteral("origins"), true}}));
+    }
+    if (commands.size() > 1) {
+      label = tr("Show Origin");
+    }
     break;
   case BrowserNode::Type::CenterOfMass: // mitcad#1094
     commands.append(cmd("set_center_of_mass_visible", {{QStringLiteral("visible"), show}}));
@@ -651,7 +664,7 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
     const bool sketches = node.type == BrowserNode::Type::Sketches;
     for (const DocumentSnapshot::Feature& feature : m_snapshot.features) {
       if (feature.component == node.component && feature.isActive() &&
-          (sketches ? feature.isSketch() : feature.isConstruction())) {
+          (sketches ? feature.isAnySketch() : feature.isConstruction())) {
         commands.append(cmd("set_feature_visible", {{QStringLiteral("uid"), feature.uid},
                                                     {QStringLiteral("visible"), show}}));
       }
@@ -1412,7 +1425,9 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     menu.add(QStringLiteral("filter"), tr("Show in Timeline Only"), [this, node] {
       m_timeline->setFilter(node.uid, m_timeline->filterSubcomponents());
     });
-    if (!m_timeline->filter().isEmpty()) {
+    // Offered while the filter hides features (mitcad#1662: Active
+    // Component, the default, may hide none).
+    if (m_timeline->hidesFeatures()) {
       menu.add(QString(), tr("Show All in Timeline"),
                [this] { m_timeline->setFilter(QString(), m_timeline->filterSubcomponents()); });
     }
@@ -1585,11 +1600,21 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
   }
   case BrowserNode::Type::Sketch:
     menu.add(QStringLiteral("sketch"), tr("Edit Sketch"), [this, node] { m_host.editFeature(node.uid); });
-    // Another plane or face, an offset and a rotation on it (mitcad#787).
-    menu.add(QStringLiteral("offset-plane"), tr("Redefine Sketch Plane"), [this, node] {
-      m_host.startCommand(QStringLiteral("sketch.redefine_plane"),
-                          {SelectionItem{SelectKind::Sketch, node.uid, QString(), QString()}}, nullptr);
-    });
+    // Another plane or face, an offset and a rotation on it (mitcad#787);
+    // a 3D sketch's support is not redefined (mitcad#1524).
+    if (node.featureType != QStringLiteral("spatial_sketch")) {
+      menu.add(QStringLiteral("offset-plane"), tr("Redefine Sketch Plane"), [this, node] {
+        m_host.startCommand(QStringLiteral("sketch.redefine_plane"),
+                            {SelectionItem{SelectKind::Sketch, node.uid, QString(), QString()}}, nullptr);
+      });
+      // Opened and turned into a 3D sketch in place (mitcad#1544).
+      menu.add(QStringLiteral("sketch"), tr("Convert to 3D Sketch"),
+               [this, node] { m_host.convertSketchTo3d(node.uid); });
+    } else {
+      // Opened and turned back into 2D in place (mitcad#1550).
+      menu.add(QStringLiteral("sketch"), tr("Convert to 2D Sketch"),
+               [this, node] { m_host.convertSketchTo2d(node.uid); });
+    }
     // Its linked projections that no longer follow (mitcad#1303).
     if (const DocumentSnapshot::Feature* sketch = m_snapshot.feature(node.uid);
         sketch != nullptr && sketch->projectAgain > 0) {
@@ -2125,9 +2150,11 @@ void BrowserController::pickRowsOfTree(const Selection& items, const QStringList
   // without its signal: sketches, datums, joints, the features under
   // sketches, and each body's creating feature (mitcad#1139).
   QStringList uids = features;
+  QSet<QString> listed(features.cbegin(), features.cend()); // by a set (mitcad#1631)
   for (const SelectionItem& item : items) {
     const QString uid = item.kind == SelectKind::Body ? item.creatingFeature() : item.owner;
-    if (item.kind != SelectKind::Component && m_snapshot.feature(uid) != nullptr && !uids.contains(uid)) {
+    if (item.kind != SelectKind::Component && !listed.contains(uid) && m_snapshot.feature(uid) != nullptr) {
+      listed.insert(uid);
       uids.append(uid);
     }
   }
@@ -2143,8 +2170,10 @@ void BrowserController::pickRowsOfTree(const Selection& items, const QStringList
   }
   // A feature row selects what the feature's cell in the timeline does.
   Selection all = items;
+  QSet<SelectionItem> taken(items.cbegin(), items.cend());
   for (const SelectionItem& item : featureItems(features)) {
-    if (!all.contains(item)) {
+    if (!taken.contains(item)) {
+      taken.insert(item);
       all.append(item);
     }
   }
@@ -2226,8 +2255,8 @@ void BrowserController::featureMenu(const QString& uid, const QPoint& at, const 
   Menu menu(m_window);
   const bool suppressed = feature->suppressed;
   const int index = feature->index;
-  menu.add(feature->isSketch() ? QStringLiteral("sketch") : QStringLiteral("edit"),
-           feature->isSketch() ? tr("Edit Sketch") : tr("Edit Feature"),
+  menu.add(feature->isAnySketch() ? QStringLiteral("sketch") : QStringLiteral("edit"),
+           feature->isAnySketch() ? tr("Edit Sketch") : tr("Edit Feature"),
            [this, uid] { m_host.editFeature(uid); });
   // Another plane or face, an offset and a rotation on it (mitcad#787).
   if (feature->isSketch()) {
@@ -2235,6 +2264,12 @@ void BrowserController::featureMenu(const QString& uid, const QPoint& at, const 
       m_host.startCommand(QStringLiteral("sketch.redefine_plane"),
                           {SelectionItem{SelectKind::Sketch, uid, QString(), QString()}}, nullptr);
     });
+    // Opened and turned into a 3D sketch in place (mitcad#1544).
+    menu.add(QStringLiteral("sketch"), tr("Convert to 3D Sketch"), [this, uid] { m_host.convertSketchTo3d(uid); });
+  }
+  // A 3D sketch opened and turned back into 2D in place (mitcad#1550).
+  if (feature->isSpatialSketch()) {
+    menu.add(QStringLiteral("sketch"), tr("Convert to 2D Sketch"), [this, uid] { m_host.convertSketchTo2d(uid); });
   }
   // Auto Fix (mitcad#1223): the timeline's selection when the feature is in
   // it, else the feature; offered only when one of them has a warning the
@@ -2421,9 +2456,42 @@ void BrowserController::autoFix(const QStringList& uids) {
   if (!canChange()) {
     return;
   }
+  QJsonObject command{{QStringLiteral("features"), QJsonArray::fromStringList(uids)}};
+  // A thread's fit that would change a named parameter other places use
+  // (mitcad#1632): change it everywhere, or give the dimension its own
+  // value; asked before, never done silently.
+  QJsonObject choice;
+  for (const QString& uid : uids) {
+    const DocumentSnapshot::Feature* feature = m_snapshot.feature(uid);
+    if (feature != nullptr && !feature->autoFixChoices.isEmpty()) {
+      choice = feature->autoFixChoices.first().toObject();
+      break;
+    }
+  }
+  if (!choice.isEmpty()) {
+    const QString parameter = choice.value(QStringLiteral("parameter")).toString();
+    const int others = choice.value(QStringLiteral("others")).toInt();
+    qDebug().noquote() << QStringLiteral("Auto Fix: the parameter %1 is used in %2 other places").arg(parameter).arg(others);
+    QMessageBox box(QMessageBox::Question, tr("Auto Fix"),
+                    tr("The fit changes the parameter %1, which other places use too.").arg(parameter),
+                    QMessageBox::Cancel, m_window);
+    box.setInformativeText(tr("Change the parameter everywhere, or give the dimension its own value."));
+    QPushButton* own = box.addButton(tr("Own Value"), QMessageBox::AcceptRole);
+    QPushButton* everywhere = box.addButton(tr("Change the Parameter"), QMessageBox::AcceptRole);
+    box.setDefaultButton(own);
+    prepareModal(&box);
+    execDialog(&box);
+    if (box.clickedButton() == own) {
+      command.insert(QStringLiteral("shared"), QStringLiteral("own"));
+    } else if (box.clickedButton() == everywhere) {
+      command.insert(QStringLiteral("shared"), QStringLiteral("parameter"));
+    } else {
+      qDebug().noquote() << QStringLiteral("Auto Fix cancelled");
+      return;
+    }
+  }
   QJsonObject result;
-  if (!m_host.runModelCommand(cmd("auto_fix", {{QStringLiteral("features"), QJsonArray::fromStringList(uids)}}),
-                              &result)) {
+  if (!m_host.runModelCommand(cmd("auto_fix", command), &result)) {
     qDebug().noquote() << QStringLiteral("Auto Fix refused: %1").arg(m_host.lastError());
     return;
   }

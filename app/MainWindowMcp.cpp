@@ -42,6 +42,7 @@
 #include "mcp/EndpointLimits.hpp"
 #include "mcp/LiveErrors.hpp"
 #include "mcp/ModalGuard.hpp"
+#include "sketch/Sketch3dController.hpp"
 #ifdef MITCAD_MACOS_NATIVE_UI
 #include "platform/NativeDialogs.hpp"
 #include "platform/NativeMacWindow.hpp"
@@ -231,7 +232,7 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
       : hints ? compactJson(QJsonObject{{QStringLiteral("timeline"), query({{QStringLiteral("query"), QStringLiteral("timeline")}})}})
               : QByteArray();
   const bool inSketch = m_mode == Mode::Sketch;
-  const QString sketchUid = inSketch ? m_sketch->uid() : QString();
+  const QString sketchUid = inSketch ? editingSketchUid() : QString();
   const int depth = undoDepth();
   QJsonArray results;
   QJsonArray times;
@@ -363,6 +364,22 @@ bool MainWindow::mcpSketchStep(const QJsonObject& request, QJsonObject* answer, 
       redo();
     }
     *answer = {{QStringLiteral("label"), label}};
+    return true;
+  }
+  if (m_sketch3d != nullptr && m_sketch3d->isActive()) {
+    return mcpSketch3dStep(request, answer, reason); // a 3D sketch's own commands (mitcad#1524)
+  }
+  // The open sketch turned into a 3D sketch (mitcad#1544), as its palette's
+  // 3D Sketch box does: the 3D editor takes it.
+  if (kind == QStringLiteral("sketch3d.convert") && request.value(QStringLiteral("sketch")).toString() == uid) {
+    const int depth = undoDepth();
+    convertOpenSketchTo3d();
+    if (undoDepth() == depth) {
+      reason = lastError().isEmpty() ? QStringLiteral("The conversion was refused.") : lastError();
+      return false;
+    }
+    m_mcpSketchEdited = true;
+    *answer = queryObject({{QStringLiteral("query"), QStringLiteral("sketch3d")}, {QStringLiteral("uid"), uid}});
     return true;
   }
   const bool own =

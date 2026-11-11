@@ -243,6 +243,92 @@ fn version(state: &SheetState) -> u128 {
 const ORDINARY_MODELLING: &str =
     "ordinary modeling replaced this body without a sheet-domain adapter";
 
+/// The reason an invalidation stored, without the adapter's wording
+/// (mitcad#1628): what about the feature's result the sheet cannot hold.
+pub(crate) fn user_reason(message: &str) -> String {
+    if message == ORDINARY_MODELLING {
+        return "the feature has no sheet-metal form".into();
+    }
+    message
+        .strip_prefix(rederive::NOT_DERIVED)
+        .and_then(|rest| rest.strip_prefix(": "))
+        .unwrap_or(message)
+        .to_string()
+}
+
+/// Why a sheet that is not valid cannot be used, in the user's terms
+/// (mitcad#1628, mitcad#1636, the rule of mitcad#1327): the feature that
+/// took its sheet meaning away (or blocks it) by its name, and the stored
+/// reason with walls named by their features; an invalid sheet points to
+/// Sheet Cut, which cuts across bends and keeps the sheet. `name` gives a
+/// feature's name as the timeline shows it. The one text both a sheet
+/// feature's refusal (`EvalContext::require_sheet`) and the Flat Pattern's
+/// reason (`flat::evaluate`, the Browser's Flat Pattern row) say; the ids
+/// stay in the stored diagnostics (`sheet_state`, the Flat Pattern's
+/// `causes`).
+pub(crate) fn refusal(state: &SheetState, name: &dyn Fn(FeatureUid) -> String) -> String {
+    let named = |message: &str| name_walls(message, name);
+    if let Some(d) = &state.invalidated {
+        let reason = user_reason(&d.message);
+        return named(&format!(
+            "this body is no longer sheet metal: {} changed it in a way its sheet metal \
+             cannot hold ({reason}); to cut across bends, use Sheet Cut instead",
+            name(d.feature)
+        ));
+    }
+    match state.blockers.first() {
+        Some(d) => named(&format!(
+            "this body's sheet metal is blocked: {} failed on it",
+            name(d.feature)
+        )),
+        None => "this body's sheet metal is valid".to_string(),
+    }
+}
+
+/// A message with the walls it names (`panel F6 slot 0`, `bend F4 slot 0`:
+/// two walls that meet, mitcad#1409) named by their features as the
+/// timeline shows them: `SheetFlange3`, a further wall `SheetFlange3 (wall
+/// 2)`, a bend `SheetFlange1 (bend)`. `name` gives a feature's name.
+pub(crate) fn name_walls(message: &str, name: &dyn Fn(FeatureUid) -> String) -> String {
+    let digits = |text: &str| text.bytes().take_while(u8::is_ascii_digit).count();
+    let mut named = String::new();
+    let mut rest = message;
+    loop {
+        let found = ["panel F", "bend F"]
+            .iter()
+            .filter_map(|key| rest.find(key).map(|at| (at, *key)))
+            .min();
+        let Some((at, key)) = found else {
+            named.push_str(rest);
+            return named;
+        };
+        named.push_str(&rest[..at]);
+        let after = &rest[at + key.len()..];
+        let feature_digits = digits(after);
+        let slot_text = after[feature_digits..].strip_prefix(" slot ");
+        let parsed = slot_text.and_then(|slot_text| {
+            let slot_digits = digits(slot_text);
+            let feature = after[..feature_digits].parse::<u64>().ok()?;
+            let slot = slot_text[..slot_digits].parse::<u64>().ok()?;
+            Some((feature, slot, &slot_text[slot_digits..]))
+        });
+        let Some((feature, slot, tail)) = parsed else {
+            named.push_str(&rest[at..at + key.len()]);
+            rest = after;
+            continue;
+        };
+        let feature_name = name(FeatureUid(feature));
+        let panel = key.starts_with("panel");
+        named.push_str(&match (panel, slot) {
+            (true, 0) => feature_name,
+            (true, k) => format!("{feature_name} (wall {})", k + 1),
+            (false, 0) => format!("{feature_name} (bend)"),
+            (false, k) => format!("{feature_name} (bend {})", k + 1),
+        });
+        rest = tail;
+    }
+}
+
 pub(crate) fn publish(
     states: &mut SheetStates,
     body: BodyUid,

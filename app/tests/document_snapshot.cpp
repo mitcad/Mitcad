@@ -94,11 +94,26 @@ void handMadeTests() {
   CHECK(snapshot.feature(QStringLiteral("F3")) == nullptr);
 }
 
+// A 2D sketch turned into a 3D sketch in place (mitcad#1544) keeps its uid
+// and name; its type, and with it its kind and icon, changes.
+void convertedSketchTests() {
+  DocumentSnapshot::Feature feature;
+  feature.uid = QStringLiteral("F1");
+  feature.name = QStringLiteral("Sketch1");
+  feature.type = QStringLiteral("sketch");
+  CHECK(feature.isSketch() && !feature.isSpatialSketch() && feature.isAnySketch());
+  CHECK(featureIcon(feature.type) == QStringLiteral("sketch"));
+  feature.type = QStringLiteral("spatial_sketch");
+  CHECK(!feature.isSketch() && feature.isSpatialSketch() && feature.isAnySketch());
+  CHECK(featureIcon(feature.type) == QStringLiteral("sketch-3d"));
+}
+
 } // namespace
 
 int documentSnapshotTests() {
   failures = 0;
   readTests();
   handMadeTests();
+  convertedSketchTests();
   return failures;
 }

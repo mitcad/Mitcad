@@ -80,6 +80,7 @@ search: type the start of a command's name and press Enter.
   - [Selection in sketch mode](#selection-in-sketch-mode)
   - [Copy, Cut and Paste](#copy-cut-and-paste)
   - [Redefine Sketch Plane](#redefine-sketch-plane)
+  - [3D sketches](#3d-sketches)
 - [Browser, timeline and parameters](#browser-timeline-and-parameters)
   - [Browser](#browser)
   - [Units](#units)
@@ -877,7 +878,10 @@ right side of the design, and Up and Down round to its top or bottom, as
 the arrows of the orientation cube do, but by a step. The step is 15° by
 default. Set it in **Arrow key step** on the Navigation page of Tools ›
 Preferences. The view turns about the same center as a mouse orbit, and
-the zoom does not change. The keys also turn the view in a sketch. While
+the zoom does not change. The keys also turn the view in a sketch, except
+Up while a drawing tool of a 3D sketch other than Sketch Fillet is
+active: there it switches
+between On Plane and Normal ([3D sketches](#3d-sketches)). While
 the keyboard is in a value or text field, the Browser, a list, a panel or
 a dialog, the arrow keys do what they always do there. To use other keys,
 change **Turn View Left**, **Turn View Right**, **Turn View Up** and
@@ -3342,6 +3346,26 @@ If you offset the copy again, and the first offset later changes so that
 some of its curves vanish or come back, MitCad makes the second offset
 again from the first one's new curves.
 
+**Rectangular Pattern** (Create › Patterns) copies the curves and points
+of Objects in rows and columns. The first direction is Direction: a line
+of the sketch that you pick, or the sketch's x or y axis (click the axis
+anywhere along the line drawn across the view; the field then names the
+axis). When you pick nothing, Direction is the x axis. A sketch that has
+only circles or points can thus copy them along y too. The second direction
+is not picked: it always runs across Direction, at right angles to it in
+the sketch (a quarter turn counterclockwise from Direction, so the y
+axis when Direction is the x axis). Quantity and Spacing set the copies
+along Direction, Quantity 2 and Spacing 2 those across it. Quantity 2
+starts at 2, so the preview shows a grid at once; set it to 1 for a
+single row. In the view, an arrow at the first copy along each direction
+shows its spacing: drag an arrow to change Spacing or Spacing 2. The
+arrows move in steps of the grid; hold Shift or Alt to drag freely.
+While Quantity 2 is 1, the second arrow is faint: it only shows where a
+second row would go. Flip and Flip 2 copy against a direction, and a
+Symmetric Direction Type puts the copies on both sides of the originals
+(an odd quantity). Edit Pattern changes the quantities and spacings
+later.
+
 **Mirror** (Create › Patterns) copies the curves and points of Objects
 to the other side of the Mirror Line. Each copy gets a Symmetry
 constraint, so it follows its original when you change the original.
@@ -3377,7 +3401,12 @@ points. Move Type has three choices:
   draw. To use a point of another sketch, project it first.
 
 A move keeps the constraints; Create Copy leaves the originals where
-they are.
+they are. When the Target Point snaps to a point or a curve, the Origin
+Point (or its copy) is held there with a constraint, as a point you draw
+there would be; the same when you drop the handle on a point or a curve
+and a point of the selection sits at the handle (a circle's center, a
+single point). If you type another distance afterwards, that hold is
+dropped.
 
 **Convert to Sketch Geometry** is in Modify and in the context menu of
 projected geometry. It makes the selected projected curves and points
@@ -3390,7 +3419,10 @@ converted curve stays joined to it.
 
 The cursor snaps to points, centers, the midpoints of lines and arcs,
 quadrants, intersections, curves and the origin. With the snap to grid
-option, it also snaps to the grid. A snap adds a constraint. When a
+option, it also snaps to the grid. A snap adds a constraint: wherever
+the snap marker shows, the point you place there is held there, also
+when you drag a point, paste, use Move/Copy, drag a text's frame, or
+end an arc on a point. When a
 line is nearly horizontal, vertical, perpendicular, parallel or tangent,
 it gets that constraint.
 
@@ -3601,15 +3633,16 @@ Constraints use the axes and the origin in these ways:
 - Symmetry mirrors about an axis.
 - Horizontal/Vertical and Midpoint take the origin as a point.
 
-The Mirror Line of Mirror also takes the x and y axes (refer to
-[Sketch curve tools](#sketch-curve-tools)).
+The Mirror Line of Mirror and the Direction of Rectangular Pattern also
+take the x and y axes (refer to [Sketch curve tools](#sketch-curve-tools)).
 
 You can also select an axis or the origin before you start a tool, as
 you select construction geometry: click it, and Ctrl+click to add other
 geometry. For example, select a point and the y axis, then push
 Coincident: the point goes onto the axis. Select a point and the x axis,
 then push D: the dimension is the point's distance from the axis. A
-selected axis also becomes the Mirror Line of Mirror. Selecting an axis
+selected axis also becomes the Mirror Line of Mirror or the Direction of
+Rectangular Pattern. Selecting an axis
 or the origin adds nothing to the sketch. Delete, Copy, Cut and
 Fix/Unfix ignore them, and you cannot drag them.
 
@@ -4070,7 +4103,11 @@ first. Click where the base point goes, or type X and Y in the boxes and
 press Enter. Esc cancels the paste. The coordinates are the sketch's
 own, so a sketch on another plane gets the same 2D coordinates. You can
 paste into a design that is open in another MitCad window too. Undo
-names the steps Cut and Paste.
+names the steps Cut and Paste. When you click with the base point on a
+point or a curve (the snap marker shows it), the base point is held
+there with a constraint, as a point you draw there would be: a circle
+pasted with its center on a point is coincident with that point and
+follows it.
 
 The constraints and dimensions come with the geometry when they
 reference only copied geometry or the sketch's origin and axes. The
@@ -4084,6 +4121,11 @@ when the design has all the parameters that the expression uses.
 Otherwise it gets the value. Projected geometry becomes ordinary sketch
 geometry. Construction lines, center lines, splines, arcs, ellipses,
 points and texts stay what they are.
+
+A 3D sketch's geometry is copied and pasted between 3D sketches, and a 2D
+sketch's copy can be pasted into a 3D sketch, but a 3D sketch's copy
+cannot be pasted into a 2D sketch (see *Copy, Cut and Paste in a 3D
+sketch* under [3D sketches](#3d-sketches)).
 
 In a text box, Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste the text as
 usual.
@@ -4128,6 +4170,409 @@ construction plane or a face of a later feature, the panel tells why it
 cannot be used. To use such a plane, move the sketch after it in the
 Timeline first.
 
+### 3D sketches
+
+A 3D sketch holds points, lines, arcs and splines in space: a route can
+leave the plane it starts on, for example for a bent tube. Its frame
+follows the plane or face it starts on, as a sketch does, but its points
+have a third coordinate along the plane's normal.
+
+**Create a 3D sketch.** While **Create Sketch** waits for a plane, the
+command card shows **Sketch type** with **2D** and **3D**. **2D** is the
+default. Click **3D**, then select an origin plane, a construction plane
+or a planar face of the active component. The banner over the view says
+**Create 3D Sketch** while you choose. **Create 3D Sketch** in the
+command search starts the same command with **3D** chosen, also on a
+plane that you selected first. A face of another component is not
+linked into a 3D sketch: activate that component first.
+
+**Edit a 3D sketch.** A 3D sketch opens as a sketch does: double-click
+it in the Browser or the Timeline, or select **Edit Sketch** in its
+context menu. Editing a sketch earlier in the Timeline rolls the
+Timeline back to it until you finish. While you edit a 3D sketch:
+
+- The banner over the view says **3D Sketch** and the sketch's name.
+- The view shows the sketch's frame at its origin: X red, Y green and Z
+  blue. The camera does not turn to the sketch plane. Orbit, pan and
+  zoom work as usual, so that you can see the route from every side.
+- The view shows the sketch's points and curves where they are in space.
+  A curve from outside the sketch, such as a body edge or a curve of
+  another sketch that its points follow, is drawn as reference geometry.
+  A control point spline shows its control polygon, dashed. A fit point
+  spline shows a tangent handle at an end that is free or held tangent.
+- Points and curves that are fully determined are drawn darker, as in a
+  2D sketch.
+- A sketch turned from a 2D sketch shows one **In plane** badge beside
+  each shape whose relations and dimensions it kept from it (above the
+  shape, clear of a text in it and of the other badges), and a square
+  around each point that stays on the sketch plane.
+- Click a point or a curve to select it. The **3D Sketch** palette
+  describes what you select, under its relation and dimension buttons
+  and scrolled into sight: a point's coordinates in the sketch, a
+  curve's points, whether it is determined, and the source of a
+  reference curve. The same description shows beside the pointer when
+  you hover over a point or a curve.
+- The **3D Sketch** palette shows the degrees of freedom, or **Fully
+  constrained**, how many points and curves are determined, the
+  redundant relations, the linked references and those that failed, and
+  why the sketch does not solve.
+- **Delete** removes the selected points and curves. A point that a
+  curve still uses is not removed: MitCad says which curve uses it.
+- **Point**, **Line**, the three arcs and the two splines of the SKETCH
+  tab draw in space (see *Draw in a 3D sketch* below), the circles, the
+  ellipse, the rectangles, the polygons and **Text** draw on a plane of
+  the sketch (see *Draw a shape on a plane* below), and **Sketch
+  Fillet** rounds corners of lines (see *Round the corners of a route*
+  below). **Copy**, **Cut** and **Paste** work between 3D sketches, and
+  bring a 2D sketch's geometry into a 3D sketch (see *Copy, Cut and Paste
+  in a 3D sketch* below). The other 2D sketch tools are disabled. Closed
+  loops in the sketch plane are profiles, as in a 2D sketch (see
+  *Profiles of a 3D sketch* below).
+- Esc clears the selection. It does not leave the sketch: **Finish
+  Sketch** does. Undo and Redo work as in a 2D sketch.
+
+**Draw in a 3D sketch.** Select **Point**, **Line** (L), **3-Point
+Arc**, **Center Point Arc**, **Tangent Arc**, **Fit Point Spline** or
+**Control Point Spline** on the SKETCH tab. A mouse click in the view
+cannot tell how far away a point is, so the tool places each point on a
+temporary plane or along an axis, which the view shows:
+
+- **Plane** chooses **XY**, **YZ** or **ZX** of the sketch. The plane goes
+  through the anchor: the sketch's origin at first, then the last point
+  that you placed. A dotted line drops from the next point to the plane,
+  so that you can see how high it is.
+- **Place** chooses **On Plane**, an axis **X**, **Y** or **Z** through
+  the anchor, or **Normal**: the point keeps its place in the plane and
+  moves along the plane's normal, up or down.
+- When you look along the plane or the axis, the pointer cannot place a
+  point well. The tool keeps the last place and tells you so. Choose
+  another plane, type the values or turn the view. You can orbit, pan
+  and zoom at any time; what you have started stays.
+- **Rotate the plane** to draw at any angle. Three rings around the
+  anchor, one for each of the plane's axes, are the rotation handles:
+  drag a ring and the plane, its axes and its normal turn about that
+  axis, in whole degrees; the palette's **Rotate** field of that axis
+  shows the angle while you drag. Or type an angle in **Rotate X**,
+  **Y** or **Z** and press Enter: the plane turns about its own axis by
+  that much (a positive angle turns counter-clockwise, seen from the
+  axis' tip). **XY**, **YZ** and **ZX**, the axes and **Normal** then
+  mean the rotated plane's. **Reset** brings back the sketch's own XY
+  plane at the anchor. The rotation only guides where you click: it is
+  not saved, it does not change the sketch's own axes, and the next time
+  you open the sketch the plane is the sketch's XY again. The typed
+  **Delta X**, **Y** and **Z**, **Axis and Length** and **Keep Axis** go
+  along the rotated plane's axes, and the shapes on a plane (circles,
+  ellipses, rectangles, polygons and text, below) lie on the rotated
+  plane: what you draw keeps those directions. **Keep Plane** keeps an
+  arc in a plane of the sketch's own axes.
+- **Show** **Plane** and **Handles** draw the plane and the rings, or
+  hide them when they are in the way; the plane works the same.
+- **Keys** change the plane and the place while you draw, without the
+  palette. While a drawing tool other than **Sketch Fillet** is active
+  and no field has the keyboard, **Tab** moves to the next plane, XY →
+  YZ → ZX, **Shift+Tab** to the previous one, and **Up Arrow** switches
+  between **On Plane** and **Normal** (from an axis it goes to
+  **Normal**). The hint line and the tooltips of the Plane and Place
+  buttons name the keys. When a field has the keyboard, Tab and Shift+Tab
+  move between the fields as usual. Without such a tool, Up turns the
+  view as it always does. The keys are **Next Placement Plane**, **Previous Placement Plane** and
+  **Placement Along Normal** under **3D Sketch Tool** in Tools › Keyboard
+  Shortcuts, where you can change them.
+
+A point snaps to what is under the pointer, and a badge names it:
+**Point** (a point of the sketch: the curves share it), **Origin**,
+**Linked Point** (a vertex or an edge end of a body, or a point of another
+sketch, also in another component), **Center** of an arc, **Midpoint** of
+an edge or a curve, **On Curve**, **On Edge** and **On Face** (a face of a
+body under the pointer, also in another component). A linked point keeps
+its own height and follows its source when the source changes. Points
+win over places on curves, those win over the axes of the plane, and a
+face comes last: aim at a face away from its edges to put the point on
+it.
+
+A point **On Face** lies on the face and can still slide on it: give it
+two more values (two offsets, a length and an axis) to fix where. Flat,
+cylindrical, conical, spherical and toroidal faces are followed exactly;
+other curved faces too, through the face itself. When the face moves (you
+change its feature or an earlier one), the point follows; if the face is
+lost, the sketch shows the reference in red and keeps its definition
+until you replace or detach it.
+
+Type values in the palette instead of clicking. A field that you leave
+empty shows the measured value in gray; a value that you type becomes a
+dimension that drives the geometry, also a typed 0:
+
+- **Offsets**: **Delta X**, **Delta Y** and **Delta Z** from the start of
+  the segment. The coordinates that you do not type stay free.
+- **Axis and Length** (Line): an axis, its sense (+ or -) and the length.
+- **Radius** and **Arc Length** (Center Point Arc and Tangent Arc).
+- **Normal** (Center Point Arc): the arc lies square to the active
+  plane's normal. Click **Pick**, then a line, a straight edge, an axis
+  or a planar face: the arc's normal takes the line's direction or the
+  face's normal. **Plane** goes back to the active plane. The picked
+  direction is taken once; it does not follow the line or the face later.
+- **Keep Axis** keeps a line along the axis that you place it on. **Keep
+  Plane** keeps an arc in the active plane. **Construction** makes
+  construction geometry.
+
+Tab moves from field to field while a field has the keyboard (otherwise
+it changes the plane, see **Keys** above). Enter commits the segment,
+arc, point or spline. When the values contradict a snap, or a value is wrong, the
+palette says why in red and nothing is made.
+
+A line or an arc is made when you place its last point; the points
+before it are only shown, so that Esc leaves nothing behind. Each line,
+arc, spline or point is one undo step, with its dimensions and
+relations. A line continues from its end: click the next end, or
+double-click to stop. **Tangent Arc** starts at the end of a line, an
+arc or a spline that you click. A spline is made when you press Enter or
+double-click; a click on the first point of a fit point spline closes
+it.
+
+Esc goes back one step at a time: first the value in a field, then the
+points that are not made yet, then the tool. Esc does not remove what
+was made: Undo does.
+
+**Round the corners of a route.** **Sketch Fillet** on the SKETCH tab
+rounds the corner where two lines meet with an arc, the bend of a tube:
+
+- Type the **Radius** in the palette, then click a corner: it is rounded
+  at once. Click the next corner to round it with the same radius.
+- Without a typed radius, click a corner, then move the pointer into the
+  corner: the arc follows it, and the **Radius** field shows its radius.
+  Click to take it. You can also press on the corner and drag.
+- To round a corner of construction lines, or one where more lines meet,
+  click the two lines one after the other.
+
+Both lines end where the arc touches them; they keep their names, their
+direction and their other relations. The arc is tangent to both lines
+and has a radius dimension: change it later in the palette's list, and
+the arc follows. The corner point stays where the two lines would meet,
+with its dimensions, so a typed length still measures to the corner.
+Each corner is one undo step. MitCad refuses a radius that is too large
+for one of the lines, and two lines that do not meet or that are in
+line, and says why. A pipe or a sweep along the route goes through the
+arcs. Esc first takes back the typed value, then the corner you
+clicked, then ends the tool.
+
+**Draw a shape on a plane.** In a 3D sketch the SKETCH tab's **Center
+Diameter Circle** (C), **2-Point Circle**, **3-Point Circle**,
+**Ellipse**, **2-Point Rectangle** (R), **Center Rectangle**, **3-Point
+Rectangle**, **Circumscribed Polygon**, **Inscribed Polygon**, **Edge
+Polygon** and **Text** draw as they do in a 2D sketch, on the plane you
+choose in the palette (**XY**, **YZ** or **ZX**, rotated as you rotated
+the plane):
+
+- The first click (or the first point typed as Delta X, Y and Z from the
+  anchor) places the shape's first point as any point of the sketch: it
+  snaps to the sketch's points, the origin, vertices and edges. The shape
+  lies in the chosen plane through that point; its other clicks stay in
+  it.
+- Type the sizes as in a 2D sketch: **Radius**, **Diameter**, **Major
+  Radius** and **Minor Radius**, **Width** and **Height** (Tab moves
+  between them), **Sides** of a polygon, the **Text** and its **Text
+  Height**. A typed size becomes a dimension you can change later in the
+  palette's list; a size you only click stays free.
+- The shape gets the relations a 2D sketch gives it, in its own plane: a
+  rectangle's sides stay along the plane's axes (or square to each other
+  for a 3-Point Rectangle), a polygon's corners stay on its construction
+  circle with equal sides, and its points stay in one plane (**Plane-Bound**
+  in the palette's list). A circle and an ellipse stay in their plane; an
+  ellipse's minor radius is solved like any size, so a point you put on
+  it or a dimension changes it.
+- A text starts where you click; drag to draw its frame instead. Type the
+  text and press Enter.
+- Each shape is one undo step. Esc first takes back a typed value, then
+  the points you clicked, then ends the tool.
+
+**Edit a 3D sketch.** With no drawing tool active, the **3D Sketch**
+palette edits what you select:
+
+- **Relations**: select points and curves, then click **Coincident**,
+  **Point on Curve**, **Midpoint**, **Tangent**, **Equal**, **Fix**,
+  **Unfix**, **Align X**, **Align Y**, **Align Z**, **On Sketch Plane**,
+  **Release from Plane**, **Release Plane** or **Detach**. A button that
+  does not fit the selection is disabled; its tooltip says what to
+  select. Coincident, Tangent, Equal, Fix, Midpoint and Sketch Dimension
+  of the SKETCH tab work on the selection too.
+- **3D relations**: **Parallel** and **Perpendicular** take two lines, or
+  a line and an arc or circle (its normal), anywhere in space: the lines
+  need not meet. **Angle** holds the same two at the angle they have now;
+  type another angle in its field. **Symmetric** mirrors two points
+  across a plane: click it, then click a planar face, a construction
+  plane or another sketch, or choose **XY**, **YZ** or **ZX** in the
+  palette for a plane of the sketch itself. **On Plane** keeps points on
+  such a plane. **Concentric** gives two arcs or circles one center and
+  parallel planes, **Same Center** only the center. **Curvature** makes a
+  spline continue a line, an arc or another spline smoothly at their
+  shared end, its curvature included.
+- **Dimensions**: **Length** of a line (its direction stays free),
+  **Delta X**, **Delta Y** and **Delta Z** between two points or along a
+  line, **Radius**, **Diameter**, **Arc Length**, **Spline Length**,
+  **Angle** between two lines (in degrees) and **Tangent Magnitude** at a
+  spline's start or end (select the spline and the end point; the end
+  must be free or tangent).
+- **Relations and dimensions** lists them all. Type a value, an
+  expression or a parameter's name in a dimension's field and press
+  Enter. **Driven** makes a dimension only measure; **Remove** removes
+  the relation or the dimension. A driven dimension's value is a
+  parameter too (its name, like `d4`, is in the Parameters list), which
+  the sketch's other dimensions may use: `d4 / 2` keeps a length half of
+  what `d4` measures. A dimension that would change what it uses is
+  refused.
+- **Linked references** lists what the sketch follows: a vertex, an edge,
+  a face, another sketch's point or curve, also in another component.
+  **Replace** then a click on another source of the same kind points the
+  reference there; **Detach** frees its points, which stay where they
+  are. To attach a point, select it, click **Attach** and click the
+  source: a vertex, an edge, a face, another sketch's point or curve, an
+  Intersection Curve or the origin. If a
+  source is lost (you deleted the edge), the reference turns red and the
+  sketch keeps its definition until you replace or detach it.
+- **Delete** of a point that curves still use asks first: the palette
+  names those curves and **Delete with Dependents** deletes them all.
+
+**Drag** a point, a curve or a spline's tangent handle to move it. Choose
+the plane (**XY**, **YZ**, **ZX**) or the axis (**X**, **Y**, **Z**) it
+moves on under **Drag on**. The relations and dimensions hold: when they
+stop it short of the pointer, a dashed line shows how far. Releasing the
+mouse button makes the change, one Undo step; Esc during the drag
+cancels it. A spline's tangent handle sets the direction and the length
+of the spline's end tangent.
+
+**Copy, Cut and Paste in a 3D sketch.** Select points and curves, then
+use **Copy** (Ctrl+C) or **Cut** (Ctrl+X) as in a 2D sketch (see [Copy,
+Cut and Paste](#copy-cut-and-paste)); Cut also deletes the selection, one
+undo step. Open the 3D sketch that gets the geometry and use **Paste**
+(Ctrl+V): the geometry is pasted at once, one undo step, and stays
+selected.
+
+- A 3D sketch's copy goes where it was: the same coordinates and height
+  in the sketch, also in a sketch on another plane.
+- A 2D sketch's copy lies on the plane that the drawing tools chose last,
+  **XY**, **YZ** or **ZX** of the sketch (a rotation of the plane does not
+  apply), with its base point at the anchor. Its arcs, circles, ellipses
+  and texts stay on that plane, and its constraints and dimensions hold
+  in it.
+- The relations and dimensions come with the geometry when they name only
+  copied geometry. The others are left out, and MitCad says how many.
+  Linked references (attached points, points on faces, reference curves)
+  stay linked to the same sources when the sketch can use them. A source
+  that it cannot use, such as a feature after the sketch in the Timeline,
+  is left out with what used it, and MitCad says how many.
+- A 3D sketch's copy cannot be pasted into a 2D sketch: MitCad says so
+  and pastes nothing.
+
+**Finish Sketch** ends the edit and leaves the view as you had it in the
+3D sketch, also for a sketch that was a 2D sketch when you opened it. A
+new 3D sketch that you leave empty is removed, as an empty 2D sketch is.
+The Browser lists 3D sketches in the Sketches folder, with their eye and
+their degrees of freedom.
+
+**Turn a 2D sketch into a 3D sketch.** Start a sketch on a face as usual,
+then check **3D Sketch** in the Sketch Palette: the sketch becomes a 3D
+sketch in place, and you can go on drawing to points, edges and sketches
+on other planes and in other components. **Convert to 3D Sketch** in the
+Browser's or the timeline's menu of a 2D sketch opens it and does the
+same. Finish or Escape the active tool first: the box is disabled while a
+tool has input pending.
+
+- The sketch keeps its name, its place in the timeline, its plane and its
+  axes, and every point, curve, text, constraint and dimension with its
+  value or expression. Its points stay in the sketch plane, so a fully
+  constrained sketch stays fully constrained.
+- Its constraints and dimensions keep their 2D meaning: they work on the
+  sketch seen along its normal, and the view marks each shape that has
+  them with one **In plane** badge beside it.
+  Relations and dimensions you add afterwards are 3D ones. To lift a point
+  out of the plane, select it and click **Release from Plane** (points
+  joined to it go with it); **Release Plane** frees an arc's or circle's
+  plane.
+- Circles, arcs, ellipses and texts stay in planes parallel to the sketch
+  plane. A center line becomes a construction line.
+- Linked projections keep following their sources. A Pipe or Sweep
+  that runs along the sketch's curves keeps its path.
+- A sketch on a face can put its points on that face with **Attach**:
+  released from the plane, such a point stays on the face and follows it.
+- An Extrude, a Revolve or a Sweep that uses the sketch's profiles keeps
+  them: the closed loops of a 3D sketch in its sketch plane are profiles,
+  as a 2D sketch's are. Patterns, offsets, the sketch's place on its
+  plane, texts that follow text parameters, inactive constraints and
+  dimensions, and projections of faces, sections and chains of edges all
+  come along and keep working in the sketch plane.
+
+**Turn a 3D sketch back into 2D.** While all of a 3D sketch lies in its
+sketch plane, uncheck **3D Sketch** in the 3D Sketch Palette, or choose
+**Convert to 2D Sketch** in the Browser's or the timeline's menu of the 3D
+sketch: it becomes a 2D sketch in place, with every point, curve,
+constraint and dimension. Pipes, sweeps, lofts, path patterns and
+construction planes and points along its curves keep running the same
+way along them. When something lies out of the plane, the box
+is disabled and its tooltip names it; release or move it back first. It
+is disabled too while a drawing tool runs: Escape the tool first.
+**Undo** takes either conversion back.
+
+**Profiles of a 3D sketch.** Closed loops that a 3D sketch draws in its
+sketch plane are profiles: **Extrude**, **Revolve** and the other profile
+features take them as they take a 2D sketch's, and the 3D Sketch Palette
+says how many there are. Loops out of the plane are no profiles.
+
+**Pipe and Sweep along a 3D sketch.** A route of lines, arcs and splines
+in a 3D sketch is a path for **Pipe** and **Sweep** (its Path and Guide
+Rail) in the same component:
+
+- With **Chain Selection** checked (the default), one click on any curve
+  of the route takes the whole route: every curve joined to it end to
+  end. Uncheck it and click the curves you want for a part of the route.
+  A click on the 3D sketch's row in the Browser, or on its entry in the
+  timeline, takes its route whole when the sketch has one route.
+- The Path row lists the route as the feature will run along it, the
+  curves in order and the points where it starts and ends, for example
+  `c3, c11, c5 (p1 to p8)`. The route runs through the first curve you
+  clicked, along the way that curve was drawn. **Reverse** (Pipe) runs it
+  from its other end; Sweep has **Flip**.
+- Curves join only where they share a point, or where their ends are made
+  coincident. Ends that only lie close to each other do not join, and
+  curves that cross do not meet there. When the clicked curves are not one
+  route, the Path row says **Not one path** and the panel says why: where
+  the route branches, which curve does not join the others, or that a
+  closed curve was clicked with others.
+- Closed routes are paths too: one click on a curve of a closed loop
+  takes the whole loop, listed for example `c3, c5, c6 (closed, from p1)`,
+  and a circle, an ellipse or a closed spline is a closed path by itself
+  (`c11 (closed)`). A reference curve (geometry from outside the sketch)
+  is not taken: the status bar says why when you click one. Construction
+  curves are left out of a route unless you click them.
+- Draw the bends of a tube with arcs or the 3D sketch's **Fillet**: tangent
+  joins give a smooth pipe. At a sharp corner, Pipe's **Corners** choose a
+  mitered or a rounded joint; no bend is added for you.
+- The profiles of a Sweep come from a 2D sketch, or from a 3D sketch's
+  closed loops in its sketch plane.
+- The other inputs that take a path take a 3D sketch's route the same
+  way, by clicks in the view or its row in the Browser: a Loft's
+  **Centerline** and **Rails**, **Pattern on Path**, **Plane Along Path**,
+  **Plane Normal to Path at Point** and **Point Along Path**. A line of a
+  3D sketch is an axis or a line wherever one is asked for (a construction
+  axis through it, a plane at an angle to it, the axis of a revolve or a
+  circular pattern), an arc or a circle gives the axis through its center,
+  and a point of a 3D sketch is a point. **Intersection Curve** takes a 3D
+  sketch's curves too, swept along the normal of its sketch plane. All of
+  them follow the 3D sketch's edits.
+- **Rib**, **Web**, **Thin Extrude** along curves and the curves of
+  **Surface Extrude**, **Surface Revolve** and **Surface Sweep** grow from
+  their sketch's plane. They take a 3D sketch's curves that lie in its
+  sketch plane, as they take a 2D sketch's, and follow the 3D sketch's
+  edits. A click on a curve that leaves the sketch plane is not taken,
+  and the status bar says why; if a curve leaves the plane after an edit,
+  the feature fails and names the sketch. Surface Sweep's **Path** takes
+  a 3D sketch's route as Sweep's does.
+- Edit the 3D sketch and the pipe or sweep follows: a new dimension value,
+  a moved point, a changed body that the route is attached to. When the
+  route no longer makes one path (you deleted a curve's joint, or added a
+  branch), the Pipe or Sweep fails with the reason and the sketch stays
+  editable. Editing the Pipe shows its route as you picked it; the 3D
+  sketch stays shown while a pipe uses it.
+
 ## Browser, timeline and parameters
 
 The Browser shows the structure of the design. The timeline shows its
@@ -4148,7 +4593,9 @@ The Browser is a tree. It shows these rows:
 The eye before the icon of a row shows and hides that row. You can undo
 a change of the eye. A sketch hides by itself when a feature first uses
 it. The sketch shows again when you delete the last feature that uses
-it. The eye has priority over this automatic behavior.
+it. The eye has priority over this automatic behavior. A 3D sketch
+stays shown when a Pipe or a Sweep uses it, so that you can see and edit
+the route.
 
 The eyes also work while a command's panel or a sketch is open: the eyes
 of bodies, components, sketches, construction geometry, a section
@@ -4193,7 +4640,8 @@ in linked components:
 - **Sketches**: the sketches.
 
 Use these entries in a large assembly, where it is slow to click the
-eyes of each component. The eyes do not change. The Browser shows the
+eyes of each component. The eyes do not change, except the eye of the
+Origin folder (see below). The Browser shows the
 rows of a hidden kind in gray. When you turn the kind on again, the view
 shows what the eyes show. The design saves the three entries. Each
 change is an Undo step. The entries also work while a command's panel or
@@ -4202,6 +4650,13 @@ the sketches that a command shows for its inputs. Create Sketch also
 shows the origin planes for the pick while Origins is off. You can find
 the entries in the command search and give them keys in Keyboard
 Shortcuts.
+
+The origin of the design shows only when **Origins** and the eye of the
+Origin folder are both on. So each of them turns the other on when it
+shows the origin: **Origins** turns on the eye of the Origin folder, and
+the eye turns on **Origins**, in one Undo step. **Origins** has a check
+mark only while the view shows the origin of the design. To hide the
+origin, turn either one off.
 
 When you edit a feature, the view shows the sketches that the feature
 uses, also hidden sketches. A hidden sketch is a little lighter. You can
@@ -4503,8 +4958,24 @@ these choices:
 
 - All Components
 - Active Component. The filter obeys the radio button in the Browser.
-- A component that you select from the list. Include Subcomponents adds
-  the components that are put in it.
+- A component that you select from the list.
+
+Include Subcomponents adds the components that are put in the chosen
+one.
+
+A new window starts at Active Component with Include Subcomponents on.
+While the root component is active, the timeline shows all features.
+When you activate a component, the timeline shows only the features of
+that component and of its subcomponents.
+
+MitCad saves your choice of All Components or Active Component, with
+Include Subcomponents. The next window and the next start use it. A
+filter on one component that you select from the list applies only to
+its window. MitCad does not save it.
+
+The filter button is highlighted while the timeline hides features. Its
+tooltip names the filter and tells how many features the timeline
+shows.
 
 **Show in Timeline Only** on the Browser row of a component does the
 same. The joints and rigid groups that put an occurrence of a shown
@@ -4515,8 +4986,7 @@ them. The marker still rolls back every later feature, shown or not.
 Its tooltip says how many hidden features it rolled back. The playback
 buttons step between the shown features only. A feature that you drag
 lands directly before or after a shown neighbor. Find in Timeline on a
-hidden feature shows all features again. The filter belongs to the
-window. MitCad does not save it.
+hidden feature shows all features again in that window.
 
 **The timeline search.** The search opens a field on the timeline.
 Open it in one of these ways:
@@ -6242,6 +6712,33 @@ The 3MF gives the table to Bambu Studio, OrcaSlicer, QIDI Studio and
 PrusaSlicer; UltiMaker Cura has no such table. Importing a slicer's
 project brings its table in as volumes set by hand.
 
+**Filament changes.** On a single extruder you can change to another
+filament, or pause (for magnets, nuts or inserts), at a height of the
+print. The **Filament changes** section of Send to Slicer, under Purge
+volumes, has a row for each change: where it is, what it changes to,
+and its **Edit** and **Remove** buttons. **Add change** and **Add
+pause** open the **Filament Change** window: type a height above the
+print bed in **At** (12, or 12 mm), choose the filament in **Change
+to**, or Pause with its **Message**, and press OK. A change can also sit
+at a construction plane or a flat face: click **Change At** and then the
+plane or face in the view, or right-click a plane or a flat face and
+choose **Filament Change Here…** (on a face of a body that is on a print
+plate, it opens **Plates…** on that plate instead, where the plate's own
+changes are). **Plates…** has the same section for the plate you choose:
+until you edit it there, a plate prints with the design's changes. Point
+at a row to see its plane or face in the view. Such a change follows the model: a
+change at the top face of a base stays there when the base gets
+thicker, and one at a construction plane moves with the plane. Its row
+shows the plane's or face's name and the height it gives. A plane or
+face that is not level on the print bed (after the bodies were turned
+onto another face, for example) gives no height: the row says so, and
+the change is left out of the file rather than moved. While the panel
+is open the view shows the bodies in the colors they will print in, with
+a thin ring at each change; closing it restores their normal look. Each
+edit is one Undo step, and the design keeps the changes. The 3MF carries
+them for PrusaSlicer, Bambu Studio, OrcaSlicer and QIDI Studio; for
+UltiMaker Cura the warning names each layer to add them there.
+
 **Show Build Volume** (the View menu) draws the bed of the design's
 printer, with its middle at the origin and its surface at Z = 0, and its
 printable height. Bodies that do not fit are marked with a dashed box.
@@ -6806,6 +7303,22 @@ Tools › Preferences. MitCad does not ask for the faces and planes of the
 active component, for the origin planes, or for a face that the design
 policy does not let you sketch on.
 
+**Fillet, Chamfer and other features on another component's body.** A
+feature that changes a body goes into that body's own component. When the
+first edge, face or body that you pick for Fillet, Chamfer, Shell, Draft,
+Offset Face, Replace Face, Split Face, Split Body, Delete Face, Move Face,
+Thread, Press Pull, Hole, Dogbone or Combine's target belongs to a
+component that is not active, MitCad activates that component without a
+question and the command continues with the same pick. The panel says so:
+"Fillet goes into Lid (now active)." The activation is one step of Undo of
+its own, before the feature: Undo takes back the feature first, then the
+activation. Cancel keeps the activation. If you pick the bodies of two
+components, the panel shows why the feature cannot be made and a button
+**Activate Lid** under it. The button activates that component and keeps
+only the picks on its bodies; the panel says how many other picks it
+dropped. The setting **Ask to activate the component of a picked face**
+does not apply to these features.
+
 Project in such a sketch, or in any sketch, also takes edges, faces
 and vertices of other components. These projections are linked when
 Projection Link is on. Construction planes, axes and points take the
@@ -7369,8 +7882,18 @@ the cursor. The **Length** buttons select one of these:
 - To its center
 - Through it
 - A typed length
+- To a face you pick, plus an offset
 
-**Tab** steps through the first three. When you type a length in the box
+**Tab** steps through the first three. The last one ends the profile at a
+face that is not in its way, for example the top of another upright
+beside it. Pick that face (or a plane, or a profile's end) in **To
+Face**. The profile ends where its axis meets the face's plane, plus the
+**Face Offset** (a negative offset ends it short). Uprights on bases of
+different heights can thus end level with the first one's top. The length
+stays bound: when the first upright gets longer or moves, the others
+follow. This mode is also there for the first profile on a plane or a
+face. MitCad refuses a face whose plane runs along the profile, or that
+is behind the profile's start. When you type a length in the box
 at the cursor or in the panel, the length becomes a plain number. When
 you drag its handle, the length also becomes a plain number. **Place**
 (Enter) places the profile, and the panel stays open for the next one.
@@ -7435,8 +7958,8 @@ another size, remove them, or add them again.
 ### Modify
 
 **Length** sets a component's length. The length can be bound to a face: to
-it, to the profile's center, or through it. Or it can be detached as a
-number.
+it, to the profile's center, or through it. It can also be bound to a face
+or a plane anywhere, plus an offset. Or it can be detached as a number.
 
 **Ends** sets an end's miter angle and the axis it turns about. *Also the
 Component It Meets* also cuts the end that meets it. *End Machining* sets a
@@ -7468,14 +7991,23 @@ part number and mass. The list also shows the stock lengths the parts
 come from, with the kerf (the saw cut's width), and the other components.
 **Copy as CSV** puts the tables on the clipboard for a spreadsheet.
 **Save as CSV…** writes the tables currently shown to a UTF-8 CSV file.
+**Copy as Text** puts them on the clipboard as plain text with the
+columns lined up, ready to paste into an email. **Save as Text…** writes
+the same text to a `.txt` file. Each column is as wide as its widest
+entry, and numbers are right-aligned. A blank line separates the tables.
 **Save as PDF…** writes them with the design's name and the date.
+The CSV and text lines end the way Windows and email programs expect
+(CR LF), on every system.
 
 **Bill of Materials** lists components with their quantities, suppliers and part
 numbers. A single-body component has one component row. Bodies in the root,
 and the bodies of an unstructured component with several bodies, have their
 own rows instead; they are not also counted as a component row. Feature-created,
 linked and library parts keep their component row, even when made of several
-bodies, and purchased items keep their own rows.
+bodies, and purchased items keep their own rows. A component with a part
+number of its own (its **Part number** property) is one part too, whatever
+its number of bodies: a bearing of nine bodies from Component from Web is one
+row, not nine. Remove the part number to list its bodies apart.
 
 Switch on **Group identical parts** to combine separate components and bodies
 with equal volume, local-frame bounding-box dimensions and face count, and the
@@ -7702,7 +8234,7 @@ follow when the sketch changes. The extents of the four features are:
 | Surface Extrude | A distance one way, both ways, or two distances |
 | Surface Revolve | A full turn or an angle about a sketch line, an axis or a straight edge |
 | Surface Sweep | Along a path of sketch curves or edges |
-| Surface Loft | Through sections in order. Each section is a sketch curve with the curves joined to it, or a profile |
+| Surface Loft | Through sections in order. Each section is a sketch curve with the curves joined to it, or a profile. A 3D sketch's curves can be sections in any plane. Rails guide a loft of profiles; a rail can be curves of a 3D sketch |
 
 **Offset Surface** copies the faces you select out along their normals
 by a distance. The faces can be faces of a solid or of a surface. The
@@ -8555,6 +9087,15 @@ either bend.
 can come from one or several sketches on a flat face. Sheet Cut also
 cuts across bends. It opens the bends for the cut.
 
+An ordinary cut (Extrude, Hole) through a sheet also keeps it a sheet,
+across bends too: the sheet still unfolds, refolds and has a Flat
+Pattern with the cut in it. In a bend, MitCad makes the cut through the
+thickness at right angles to the material, as Sheet Cut does. Where that
+differs from the cut's own walls, the feature shows a warning. A feature
+that adds material across a bend makes the body an ordinary solid; the
+sheet tools after it and the Flat Pattern row in the Browser say which
+feature did so.
+
 Three sheet features have no panel yet. You make them through the
 model's commands (scripts, `mitcad-cli run`, MCP) and by the
 `.solidcraft` import:
@@ -8837,6 +9378,16 @@ design is saved in the project the first time. A dialog lists your
 projects, Local and Cloud, with their folders. Select a project and a
 folder in it. Then type the design's name. If the folder already has
 that name, the dialog shows it and waits for another name.
+
+**New Folder** in the dialog makes a folder in the selected project or
+folder. The new folder shows in the list with its name selected, as New
+Folder in the Projects panel does. Type its name and press Enter. Esc
+takes the new folder away. If the name is taken or cannot be a folder's
+name, the dialog says so below the name and waits for another. The new
+folder is then selected, and Save puts the design in it. The folder is
+recorded as a version of its own, so it stays even if you cancel the
+dialog. The same button is in every dialog that saves a design in a
+project: Save As, Save Component as Design and Save Copy As.
 
 **New Project…** in the dialog makes a project first. By default, the
 new project is in the design's own folder, when that folder is no
@@ -9888,7 +10439,14 @@ Each format is imported in its own way:
 
 - STEP, IGES and BRep are imported as a base feature ([Base
   features](#base-features)). A STEP assembly can keep its structure
-  instead ([STEP assemblies](#step-assemblies)).
+  instead ([STEP assemblies](#step-assemblies)). When the design
+  already has content, MitCad asks **Where to Import** (for a STEP
+  assembly, after the assembly question). **New Component** (the default)
+  puts what the file brings into a new component named after the file,
+  *bracket* for *bracket.step*, so that you can move or hide the import
+  at once. **Into the Active Component** puts the bodies or components
+  straight into the active component. File › Open of a STEP file makes
+  a new design of the file, without such a component.
 - STL and OBJ are imported as mesh bodies. Insert Mesh asks for the
   unit, and whether to convert the mesh to a solid ([Convert
   Mesh](#convert-mesh)).
@@ -9996,7 +10554,7 @@ parts in one assembly, so sub-assemblies come back as their parts
 placed in the design.
 
 The whole import is one undo step. The components go into the active
-component.
+component, or into the new component named after the file ([Import](#import)).
 
 ### Components from the web
 
@@ -10043,7 +10601,8 @@ When you download a file, MitCad does these steps:
    only letters and digits and at least one digit. For example,
    `6494K13_NO THREADS_Bearing.step` becomes the component
    `6494K13_NO THREADS_Bearing` with the part number `6494K13`. The
-   Bill of Materials shows the part number.
+   Bill of Materials shows the part number, and lists the component as
+   one part even when the file holds several bodies.
 6. It starts **Move/Copy** with the new component selected. Drag the
    component to its place, then click OK.
 
@@ -11586,7 +12145,9 @@ bill of materials follow its sort.
 The tabs over the sheet are the drawing's sheets: click a tab to show
 its sheet. **+** adds a sheet. The context menu of a tab renames or
 deletes it. **Sheet…** sets the sheet's template, size (A4 to A0, ANSI
-A to E), landscape or portrait, the projection method, the units of its
+A to E, or **Custom**: a width and a height of your own in millimeters,
+10 to 10 000 each; such a sheet lies as you give it, so its orientation
+is off), landscape or portrait, the projection method, the units of its
 dimensions and tables (the design's, or millimeters, inches and others),
 and the title block's title, drawing number, author and date. Without a drawing number, the title block names the bodies.
 Without a date, it shows the date of the day.
@@ -11637,9 +12198,42 @@ property of the component, written in braces: `{Customer}`,
 `{Identity/Customer}`.
 
 **Save as Template…** in a sheet tab's menu saves the sheet's template
-under a name to your library or the project's. A template is a small
-JSON file in the folder `drawing-templates`, so it can be written by
-hand too.
+under a name to your library or the project's, with its size (a custom
+size too) and its title block's images. A template is a small JSON file
+in the folder `drawing-templates`, so it can be written by hand too.
+
+**Edit Title Block** in a sheet tab's menu or the sheet's context menu
+edits the sheet's title block on the sheet, for example to make your
+company's block with its logo:
+
+1. Choose Edit Title Block. The panel shows the block's tools; the
+   drawing's own tools wait until you are done.
+2. **Line**: click the two ends of a line. **Field**: click two
+   opposite corners of its cell, then type its **Label** (written small
+   in the corner) and its **Text**, where names in braces are filled in
+   from the design: `{material}`, `{mass}`, `{Customer}`; **Text Height
+   (mm)** sets its letters' height (3.5 when empty).
+3. **Image…**: choose a PNG, JPEG or SVG file (a logo, 4 MB at most),
+   then click two opposite corners of its box. The image is drawn whole
+   in the box, keeping its proportions.
+4. **Select**: click a line, field or image to select it, drag it to move
+   it, Delete deletes it. Every click and move snaps to the **Grid**
+   (1 mm at first) and stays inside the block; **Width** and **Height**
+   size the block, which stays in the frame's lower right corner.
+5. **Done** keeps the block in the sheet, one step to undo; **Cancel**
+   leaves it as it was.
+
+A sheet with the simple title block starts from the ISO template's
+block. Then save the sheet with Save as Template…, and choose the
+template in Create Drawing for your next drawings. The images are drawn
+in PDF and SVG files. An SVG logo goes into PDF, DXF and DWG files as
+its paths in their colors (in DXF and DWG as lines on a layer per
+color), its text as the outlines of its letters in the font the logo
+names. A font your computer does not have is replaced by the bundled
+Droid Sans, and the export says so; text in Droid Sans, or in a generic
+font such as sans-serif, looks the same on every computer. DXF and DWG
+files hold no PNG or JPEG images, so they get such an image's outline,
+and the export says so: use an SVG logo for DXF and DWG files.
 
 **Add Revision…** adds a row to the drawing's revision table: its letter
 (A, B, … in turn), a description, the date (today's when left empty)

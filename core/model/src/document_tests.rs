@@ -204,6 +204,8 @@ fn a_lost_edge_names_the_feature_that_removed_it() {
         head,
         format!("edge {corner1} no longer exists after Extrude2")
     );
+    // The person reads one whole message, the edge painted (mitcad#1626).
+    assert_eq!(message.message, "an edge no longer exists after Extrude2");
     // The face left suggests its other edges (mitcad#1187), none taken.
     let (kept, lost) = (side(b.extrude, 1, 0), side(b.extrude, 1, 1));
     let others = [
@@ -234,6 +236,32 @@ fn a_lost_edge_names_the_feature_that_removed_it() {
     );
     assert!(message.starts_with(&head), "{message}");
     assert!(message.ends_with(" and 3 more"), "{message}");
+    assert_eq!(message.message, "the body has no such edge");
+}
+
+/// An edge of a feature that failed: the person reads one whole message
+/// with the feature's name as its only value, agents the edge's name too
+/// (mitcad#1626).
+#[test]
+fn an_edge_of_a_failed_feature_is_one_whole_message() {
+    let mut b = block();
+    b.doc.kernel().fail.borrow_mut().insert("join");
+    let (_, _, join) = b.join_boss();
+    assert!(matches!(b.status(join), FeatureStatus::Failed(_)));
+    let name = b.doc.feature(join).expect("the join").name.clone();
+    let edge = corner(join, 1, 1);
+    let fillet = b.fillet(&[&edge], 2.0);
+    let FeatureStatus::Failed(message) = b.status(fillet) else {
+        panic!("the fillet did not fail");
+    };
+    assert_eq!(
+        message.message,
+        format!("an edge does not exist because {name} failed")
+    );
+    assert!(
+        message.starts_with(&format!("edge {edge} does not exist because {name} failed")),
+        "{message}"
+    );
 }
 
 #[test]

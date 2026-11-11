@@ -60,6 +60,44 @@ pub enum ImportedFile {
     },
 }
 
+/// The component an import made to hold what the file brought, placed once
+/// in the active component at the identity (mitcad#1629): the base feature
+/// of a part file, or the top instances of an assembly, are in it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportWrapper {
+    pub component: ComponentUid,
+    /// The file's name without its extension, made unique (`bracket (1)`).
+    pub name: String,
+    pub occurrence: OccurrenceUid,
+}
+
+/// Whether a file at `path` is of the formats an import wraps in a
+/// component by default (mitcad#1629): STEP, IGES and BRep, by the
+/// extension.
+fn wrapped_format(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| {
+            ["step", "stp", "iges", "igs", "brep", "brp"]
+                .iter()
+                .any(|known| e.eq_ignore_ascii_case(known))
+        })
+}
+
+/// The name of the component an import wraps the file in: the file's name
+/// without directories and its extension (`bracket` for
+/// `/models/bracket.step`).
+fn wrapper_name(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_stem()
+        .and_then(|n| n.to_str())
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .unwrap_or("Import")
+        .to_owned()
+}
+
 /// The entity of STEP files that places a part or an assembly in another.
 const ASSEMBLY_ENTITY: &[u8] = b"NEXT_ASSEMBLY_USAGE_OCCURRENCE";
 
@@ -173,6 +211,73 @@ impl<K: Kernel> Document<K> {
         name: Option<&str>,
         structure: ImportStructure,
     ) -> Result<ImportedFile, ModelError> {
+        self.import_file_in(path, options, name, structure, false)
+            .map(|(imported, _)| imported)
+    }
+
+    /// [`Document::import_file_structured`] wrapped in a new component
+    /// named after the file (mitcad#1629): the component is placed once in
+    /// the active component at the identity, and the base feature, or the
+    /// assembly's top instances, go into it. A name already used gets a
+    /// suffix (`bracket (1)`). One undo step with the import.
+    pub fn import_file_wrapped(
+        &mut self,
+        path: &str,
+        options: &ReadOptions,
+        name: Option<&str>,
+        structure: ImportStructure,
+    ) -> Result<(ImportedFile, ImportWrapper), ModelError> {
+        let (imported, wrapper) = self.import_file_in(path, options, name, structure, true)?;
+        let wrapper = wrapper.ok_or_else(|| invalid("the import made no component"))?;
+        Ok((imported, wrapper))
+    }
+
+    /// Whether `import_file` wraps the file at `path` in a new component
+    /// unless told otherwise (mitcad#1629): a STEP, IGES or BRep file
+    /// imported into a design that already has content (a feature or a
+    /// component). An empty design, such as one a file is opened as,
+    /// takes the file as it is.
+    pub fn import_wraps_by_default(&self, path: &str) -> bool {
+        wrapped_format(path) && self.has_content()
+    }
+
+    /// Whether the design has a feature (a sketch too) or a component.
+    pub fn has_content(&self) -> bool {
+        self.features().next().is_some() || !self.assembly().is_empty()
+    }
+
+    /// Makes the component an import wraps the file in (mitcad#1629),
+    /// placed in the active component at the identity.
+    pub(crate) fn add_import_wrapper(&mut self, path: &str) -> Result<ImportWrapper, ModelError> {
+        let parent = self.active_component();
+        let (component, occurrence) =
+            self.add_component(Some(&wrapper_name(path)), parent, Transform::IDENTITY)?;
+        Ok(ImportWrapper {
+            component,
+            name: self.assembly().name(component),
+            occurrence,
+        })
+    }
+
+    /// Undoes the steps after the first `depth` (a failed import).
+    pub(crate) fn undo_back_to(&mut self, depth: usize) {
+        while self.undo_depth() > depth {
+            if self.undo().is_none() {
+                break;
+            }
+        }
+    }
+
+    /// The import of [`Document::import_file_structured`], with `wrap` in
+    /// a new component ([`Document::import_file_wrapped`]).
+    fn import_file_in(
+        &mut self,
+        path: &str,
+        options: &ReadOptions,
+        name: Option<&str>,
+        structure: ImportStructure,
+        wrap: bool,
+    ) -> Result<(ImportedFile, Option<ImportWrapper>), ModelError> {
         check_unit(options)?;
         let keep = structure == ImportStructure::Components;
         let read = match self.kernel().read_file_structure(path, options, keep) {
@@ -186,20 +291,21 @@ impl<K: Kernel> Document<K> {
         };
         match read {
             FileRead::Bodies(bodies) => self
-                .import_read_bodies(path, bodies, name)
-                .map(ImportedFile::Base),
-            FileRead::Assembly(assembly) => self.import_assembly(path, assembly),
+                .import_read_bodies(path, bodies, name, wrap)
+                .map(|(imported, wrapper)| (ImportedFile::Base(imported), wrapper)),
+            FileRead::Assembly(assembly) => self.import_assembly(path, assembly, wrap),
         }
     }
 
     /// The parts of a file's assembly as components (see
-    /// [`Document::import_file_structured`]); nothing stays of a failed
-    /// import.
+    /// [`Document::import_file_structured`]), with `wrap` placed in a new
+    /// component named after the file; nothing stays of a failed import.
     fn import_assembly(
         &mut self,
         path: &str,
         assembly: ImportAssembly<K::Shape>,
-    ) -> Result<ImportedFile, ModelError> {
+        wrap: bool,
+    ) -> Result<(ImportedFile, Option<ImportWrapper>), ModelError> {
         let ImportAssembly { mut parts, roots } = assembly;
         let count = parts.len();
         let mut warnings = Vec::new();
@@ -246,7 +352,14 @@ impl<K: Kernel> Document<K> {
         let source = file_name(path);
         let label = format!("Import {source}");
         let depth = self.undo_depth();
-        let parent = self.active_component();
+        let wrapper = if wrap {
+            Some(self.add_import_wrapper(path)?)
+        } else {
+            None
+        };
+        let parent = wrapper
+            .as_ref()
+            .map_or_else(|| self.active_component(), |w| w.component);
         let mut placing = Placing {
             parts,
             filled,
@@ -257,18 +370,17 @@ impl<K: Kernel> Document<K> {
         };
         let result = self.place_parts(&mut placing, &placed, parent, &source, &label);
         if let Err(e) = result {
-            while self.undo_depth() > depth {
-                if self.undo().is_none() {
-                    break;
-                }
-            }
+            self.undo_back_to(depth);
             return Err(e);
         }
         self.merge_undo(depth, &label);
-        Ok(ImportedFile::Components {
-            components: placing.made,
-            warnings: placing.warnings,
-        })
+        Ok((
+            ImportedFile::Components {
+                components: placing.made,
+                warnings: placing.warnings,
+            },
+            wrapper,
+        ))
     }
 
     /// Places the root instances and what they place, then adds the

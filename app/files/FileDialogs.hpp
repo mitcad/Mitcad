@@ -107,6 +107,12 @@ std::optional<bool> askLinked(QWidget* parent, const QString& file);
 // `repeatedParts`.
 std::optional<QString> askStepStructure(QWidget* parent, const QString& file, bool* repeatedParts = nullptr);
 
+// Import of a STEP, IGES or BRep file into a design with content
+// (mitcad#1629): into a new component named after the file (true, the
+// default) or straight into the active component (false), as import_file's
+// `wrap`; nothing when cancelled.
+std::optional<bool> askImportPlace(QWidget* parent, const QString& file);
+
 // File > Open or Import of an .iam assembly (mitcad#507): Parts with
 // their design history (true, the default) or the parts' stored bodies
 // only (false); the choice is remembered (iamPartsHistory). Nothing when

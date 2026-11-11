@@ -25,6 +25,9 @@
 //!   what to do ("pick it again").
 //! - The whole Auto Fix is one undo step, `Auto Fix <feature>`, `Auto Fix
 //!   <group>` for a timeline group's features, or `Auto Fix <n> Features`.
+//! - A thread whose face does not fit it (mitcad#1632) has that face fitted
+//!   by a change of the value or dimension that sets its diameter
+//!   ([`super::thread_fit`]), checked the same way, after the references.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -32,6 +35,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use super::thread_fit::{AutoFixFit, NoFit, SharedChoice, misses_in, plan_fit};
 use super::{DocState, Document, ModelError};
 use crate::features::{FeatureDef, FeatureEntry};
 use crate::ids::FeatureUid;
@@ -288,16 +292,30 @@ fn problem(message: &str) -> Option<Problem> {
     }
 }
 
+/// The warnings of a thread's faces that do not fit it (mitcad#1632).
+fn fit_warnings<S>(result: &FeatureResult<S>) -> Vec<&str> {
+    match &result.output {
+        Some(output) if result.status.is_ok() => output
+            .thread_fits
+            .iter()
+            .map(|m| m.warning.as_str())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// The reference problems of a feature's result: its warnings about
-/// references, and its error when it is about one.
+/// references and about faces that do not fit a thread, and its error
+/// when it is about a reference.
 fn problems<S>(result: Option<&FeatureResult<S>>) -> Vec<String> {
     let Some(result) = result else {
         return Vec::new();
     };
+    let fits = fit_warnings(result);
     let mut found: Vec<String> = result
         .warnings()
         .iter()
-        .filter(|w| problem(w).is_some())
+        .filter(|w| problem(w).is_some() || fits.contains(&w.as_str()))
         .cloned()
         .collect();
     if let FeatureStatus::Failed(error) = &result.status
@@ -358,7 +376,7 @@ pub struct AutoFixLeft {
 }
 
 /// What an Auto Fix did.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct AutoFix {
     /// The reference problems of the features asked for, before.
     pub warnings: usize,
@@ -371,6 +389,14 @@ pub struct AutoFix {
     pub followed: Vec<FeatureUid>,
     /// The problems left, in timeline order.
     pub left: Vec<AutoFixLeft>,
+    /// The threads' faces fitted to them (mitcad#1632), in timeline order.
+    pub fitted: Vec<AutoFixFit>,
+    /// The named parameters a fit left for a choice (used elsewhere):
+    /// the thread, the parameter, how many other places use it.
+    pub choices: Vec<(FeatureUid, String, usize)>,
+    /// The filament changes at faces whose faces an edit renamed, written
+    /// with the names found (mitcad#1643; an Auto Fix of every feature).
+    pub filament_faces: usize,
     /// The undo step's name; None when nothing changed.
     pub label: Option<String>,
     /// The summary: `Auto Fix: 2 of 3 warnings fixed; Hole1: the body has
@@ -379,12 +405,22 @@ pub struct AutoFix {
     pub message: String,
 }
 
-fn summary(total: usize, fixed: usize, left: &[AutoFixLeft], followed: &[String]) -> String {
+fn summary(
+    total: usize,
+    fixed: usize,
+    left: &[AutoFixLeft],
+    followed: &[String],
+    fitted: &[AutoFixFit],
+) -> String {
     if total == 0 && left.is_empty() {
         return "Auto Fix: nothing to fix".to_owned();
     }
     let noun = if total == 1 { "warning" } else { "warnings" };
     let mut text = format!("Auto Fix: {fixed} of {total} {noun} fixed");
+    // What the fits changed (mitcad#1632), in words.
+    for fit in fitted {
+        let _ = write!(text, "; {}: {}", fit.thread_name, fit.summary());
+    }
     // In plain words (mitcad#1612): `left` keeps the agents' texts.
     for item in left {
         let _ = write!(
@@ -420,22 +456,67 @@ impl<K: Kernel> Document<K> {
         let Some(entry) = self.state.entry(uid) else {
             return 0;
         };
+        // A thread's faces whose diameter something Auto Fix can change
+        // sets (mitcad#1632), also those that ask for a choice.
+        let fits = if matches!(entry.def, FeatureDef::Thread(_)) {
+            self.thread_fits(uid)
+                .iter()
+                .filter(|m| {
+                    plan_fit(
+                        &self.state,
+                        uid,
+                        &entry.name,
+                        m,
+                        Some(SharedChoice::Parameter),
+                    )
+                    .is_ok()
+                })
+                .count()
+        } else {
+            0
+        };
         let repairs: Vec<Repair> = self
             .warnings(uid)
             .iter()
             .filter_map(|w| Repair::parse(w.as_str()))
             .collect();
         if repairs.is_empty() || self.state.editable(entry.component).is_err() {
-            return 0;
+            return fits;
         }
-        rewrite(&self.state, entry, &repairs)
+        fits + rewrite(&self.state, entry, &repairs)
             .map_or(0, |(_, applied)| applied.iter().filter(|a| **a).count())
+    }
+
+    /// The named parameters fitting thread `uid`'s faces would change that
+    /// other places use too (mitcad#1632): each with how many; Auto Fix
+    /// asks for a [`SharedChoice`] then.
+    pub fn auto_fix_choices(&self, uid: FeatureUid) -> Vec<(String, usize)> {
+        let mut out: Vec<(String, usize)> = Vec::new();
+        for miss in self.thread_fits(uid) {
+            if let Some(NoFit::Choice { parameter, others }) = self.fit_question(&miss)
+                && !out.iter().any(|(p, _)| *p == parameter)
+            {
+                out.push((parameter, others));
+            }
+        }
+        out
     }
 
     /// Auto Fix of the features (all when none are given; see the module
     /// docs): one undo step, or none when nothing could be fixed. A
     /// cancelled computation (P7) changes nothing.
     pub fn auto_fix(&mut self, features: &[FeatureUid]) -> Result<AutoFix, ModelError> {
+        self.auto_fix_with(features, None)
+    }
+
+    /// [`Document::auto_fix`] with what a thread's fit does with a named
+    /// parameter that other places use (mitcad#1632): without `choice`
+    /// such a fit is not taken and `choices` names the parameter.
+    pub fn auto_fix_with(
+        &mut self,
+        features: &[FeatureUid],
+        choice: Option<SharedChoice>,
+    ) -> Result<AutoFix, ModelError> {
         let mut asked: Vec<usize> = if features.is_empty() {
             (0..self.state.features.len()).collect()
         } else {
@@ -446,6 +527,13 @@ impl<K: Kernel> Document<K> {
         };
         asked.sort_unstable();
         asked.dedup();
+        // The filament changes at faces an edit renamed (mitcad#1643): the
+        // design's references too, with an Auto Fix of every feature.
+        let filament_faces = if features.is_empty() {
+            self.renamed_change_faces()
+        } else {
+            Vec::new()
+        };
         let asked_uids: Vec<FeatureUid> =
             asked.iter().map(|&p| self.state.features[p].uid).collect();
         let before: Vec<(FeatureUid, String)> = asked
@@ -574,20 +662,110 @@ impl<K: Kernel> Document<K> {
             changed.push(position);
         }
 
+        // The threads' faces that do not fit them (mitcad#1632), each on
+        // the state the fixes before it made.
+        let mut fitted: Vec<AutoFixFit> = Vec::new();
+        let mut fitted_positions: Vec<usize> = Vec::new();
+        // The features a fit gave a parameter of their own (mitcad#1632).
+        let mut owned: Vec<usize> = Vec::new();
+        let mut choices: Vec<(FeatureUid, String, usize)> = Vec::new();
+        for &position in &asked {
+            let entry = next.features[position].clone();
+            if !matches!(entry.def, FeatureDef::Thread(_)) {
+                continue;
+            }
+            let uid = entry.uid;
+            let mut tried: BTreeSet<String> = BTreeSet::new();
+            loop {
+                let misses = misses_in(computed.as_ref().unwrap_or(&self.result), uid);
+                let Some(miss) = misses
+                    .into_iter()
+                    .find(|m| !tried.contains(&m.face.to_string()))
+                else {
+                    break;
+                };
+                let face = miss.face.to_string();
+                tried.insert(face.clone());
+                let plan = match plan_fit(&next, uid, &entry.name, &miss, choice) {
+                    Ok(plan) => plan,
+                    Err(why) => {
+                        if let NoFit::Choice { parameter, others } = &why {
+                            choices.push((uid, parameter.clone(), *others));
+                        }
+                        refused.insert((uid, miss.warning.clone()), why.advice(miss.internal));
+                        continue;
+                    }
+                };
+                match self.try_fit(&next, &plan, uid, &face, &built)? {
+                    Ok((candidate, result)) => {
+                        next = candidate;
+                        computed = Some(result);
+                        if let Some(own) = &plan.own
+                            && let Some(p) = next.position(own.feature)
+                            && !owned.contains(&p)
+                        {
+                            owned.push(p);
+                        }
+                        fitted.push(plan.fit);
+                        if !fitted_positions.contains(&position) {
+                            fitted_positions.push(position);
+                        }
+                    }
+                    Err(why) => {
+                        refused.insert((uid, miss.warning.clone()), why);
+                    }
+                }
+            }
+        }
+
         let changed_uids: Vec<FeatureUid> = changed
             .iter()
             .map(|&p| self.state.features[p].uid)
             .collect();
-        let label = (!changed.is_empty()).then(|| self.auto_fix_label(&asked_uids, &changed_uids));
+        // The fitted threads name the step too (`Auto Fix Thread2`).
+        let mut named_uids = changed_uids.clone();
+        for &p in &fitted_positions {
+            let uid = self.state.features[p].uid;
+            if !named_uids.contains(&uid) {
+                named_uids.push(uid);
+            }
+        }
+        let label = if !named_uids.is_empty() {
+            Some(self.auto_fix_label(&asked_uids, &named_uids))
+        } else if !filament_faces.is_empty() {
+            Some("Auto Fix Filament Changes".to_owned())
+        } else {
+            None
+        };
         if let Some(label) = &label {
             let entries: Vec<(usize, Arc<FeatureEntry>)> = changed
                 .iter()
+                .chain(&owned)
                 .map(|&p| (p, next.features[p].clone()))
                 .collect();
             let label = label.clone();
+            // The fits' parameters, as the last fit left them (only fits
+            // change parameters).
+            let parameters = (!fitted.is_empty()).then(|| next.parameters.clone());
+            let faces = filament_faces.clone();
             self.apply(|state| {
                 for (p, entry) in entries {
                     state.features[p] = entry;
+                }
+                // The filament changes' faces by the names found.
+                for (s, e, found) in faces {
+                    if let Some(change) = state
+                        .filament_changes
+                        .get_mut(s)
+                        .and_then(|schedule| schedule.changes.get_mut(e))
+                        && let Some(crate::features::geom_ref::GeomRef::Face { face, .. }) =
+                            &mut change.at
+                    {
+                        *face = found;
+                    }
+                }
+                if let Some(parameters) = parameters {
+                    state.parameters = parameters;
                 }
                 Ok((label, ()))
             })?;
@@ -635,13 +813,29 @@ impl<K: Kernel> Document<K> {
             .filter(|(uid, text)| !now.get(uid).is_some_and(|texts| texts.contains(text)))
             .count();
         let followed_names: Vec<String> = followed.iter().map(|&u| name(u)).collect();
-        let message = summary(before.len(), fixed, &left, &followed_names);
+        let mut message = summary(before.len(), fixed, &left, &followed_names, &fitted);
+        // The filament changes' faces found again (mitcad#1643).
+        let alone = before.is_empty() && left.is_empty();
+        match (filament_faces.len(), alone) {
+            (0, _) => {}
+            (1, true) => message = "Auto Fix: the face of a filament change found again".to_owned(),
+            (1, false) => message.push_str("; the face of a filament change found again"),
+            (n, true) => {
+                message = format!("Auto Fix: the faces of {n} filament changes found again");
+            }
+            (n, false) => {
+                let _ = write!(message, "; the faces of {n} filament changes found again");
+            }
+        }
         Ok(AutoFix {
             warnings: before.len(),
             fixed,
             changed: changed_uids,
             followed,
             left,
+            fitted,
+            choices,
+            filament_faces: filament_faces.len(),
             label,
             message,
         })

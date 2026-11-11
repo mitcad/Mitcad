@@ -245,6 +245,18 @@ impl Ctx<'_> {
 }
 
 pub(crate) fn prepare(sys: &System) -> Prepared {
+    let (eqs, _) = compile(sys);
+    let (comps, free) = components(sys, &eqs);
+    Prepared { eqs, comps, free }
+}
+
+/// The equations of a system's entities and constraints in the rank
+/// analysis's order (implicit equations first, then the constraints in
+/// creation order), and the fitted spline ends a tangent controls (whose
+/// natural end equations are left out): the planar row compilation, shared
+/// by [`prepare`] and the spatial system's in-plane adapter
+/// ([`compile_mapped`]).
+pub(crate) fn compile(sys: &System) -> (Vec<Equation>, HashSet<(usize, usize)>) {
     let classes = sys.point_classes();
     // Points known to lie on each entity: its end points and the points of
     // point-on-curve constraints (by coincidence class).
@@ -325,9 +337,31 @@ pub(crate) fn prepare(sys: &System) -> Prepared {
     }
     let mut eqs = b.eqs;
     eqs.sort_by_key(|e| e.key);
+    (eqs, controlled)
+}
 
-    let (comps, free) = components(sys, &eqs);
-    Prepared { eqs, comps, free }
+/// The in-plane adapter of the spatial system (mitcad#1542): [`compile`]'s
+/// equations of the constraints `keep` selects, each unknown of `sys`
+/// replaced by `column(unknown)` (the spatial system's column of the same
+/// coordinate or scalar), and the fitted spline ends tangents control. The
+/// residuals are the planar ones; only their columns change.
+pub(crate) fn compile_mapped(
+    sys: &System,
+    keep: impl Fn(usize) -> bool,
+    column: impl Fn(usize) -> usize,
+) -> (Vec<Equation>, HashSet<(usize, usize)>) {
+    let (eqs, controlled) = compile(sys);
+    let eqs = eqs
+        .into_iter()
+        .filter(|e| e.constraint().is_some_and(&keep))
+        .map(|mut e| {
+            for g in &mut e.vars {
+                *g = column(*g);
+            }
+            e
+        })
+        .collect();
+    (eqs, controlled)
 }
 
 fn entity_equations(
@@ -1347,7 +1381,49 @@ fn constraint_equations(
 
 /// Splits the equations into components connected by shared unknowns.
 fn components(sys: &System, eqs: &[Equation]) -> (Vec<Component>, Vec<usize>) {
-    let n = sys.params.len();
+    let rows: Vec<&[usize]> = eqs.iter().map(|e| e.vars.as_slice()).collect();
+    let (mut comps, used) = connected_components(sys.params.len(), &rows, &sys.weights);
+    for comp in &mut comps {
+        comp.implicit = comp
+            .eqs
+            .iter()
+            .map_while(|&i| match eqs[i].owner {
+                Owner::Entity(e) => Some(e),
+                Owner::Constraint(_) => None,
+            })
+            .collect();
+    }
+    // Free unknowns: point coordinates and entity scalars without equations.
+    let mut free = Vec::new();
+    for p in sys.points.iter().flatten() {
+        for g in [p.x, p.y] {
+            if !used[g] {
+                free.push(g);
+            }
+        }
+    }
+    for r in sys.entities.iter().flatten() {
+        for g in r.data.scalars() {
+            if !used[g] {
+                free.push(g);
+            }
+        }
+    }
+    (comps, free)
+}
+
+/// Splits rows (each the global unknowns it uses, in its local order) of
+/// `n` unknowns into components connected by shared unknowns: each with
+/// its rows in the given order, its unknowns ascending, the Jacobian
+/// pattern, the Gram matrix plan and the inverse `weights`, without
+/// implicit rows. Rows without unknowns are in no component. Also returns
+/// which unknowns some row uses. Shared by the planar sketch and the
+/// spatial point/line system (`spatial.rs`).
+pub(crate) fn connected_components(
+    n: usize,
+    rows: &[&[usize]],
+    weights: &[f64],
+) -> (Vec<Component>, Vec<bool>) {
     let mut parent: Vec<usize> = (0..n).collect();
     fn find(parent: &mut [usize], mut i: usize) -> usize {
         while parent[i] != i {
@@ -1357,13 +1433,13 @@ fn components(sys: &System, eqs: &[Equation]) -> (Vec<Component>, Vec<usize>) {
         i
     }
     let mut used = vec![false; n];
-    for eq in eqs {
-        for &g in &eq.vars {
+    for vars in rows {
+        for &g in *vars {
             used[g] = true;
         }
-        if let Some(&first) = eq.vars.first() {
+        if let Some(&first) = vars.first() {
             let r0 = find(&mut parent, first);
-            for &g in &eq.vars[1..] {
+            for &g in vars.iter().skip(1) {
                 let r = find(&mut parent, g);
                 if r != r0 {
                     parent[r] = r0;
@@ -1373,8 +1449,8 @@ fn components(sys: &System, eqs: &[Equation]) -> (Vec<Component>, Vec<usize>) {
     }
     let mut comp_of_root = vec![usize::MAX; n];
     let mut comps_eqs: Vec<Vec<usize>> = Vec::new();
-    for (i, eq) in eqs.iter().enumerate() {
-        let Some(&first) = eq.vars.first() else {
+    for (i, vars) in rows.iter().enumerate() {
+        let Some(&first) = vars.first() else {
             continue;
         };
         let r = find(&mut parent, first);
@@ -1399,7 +1475,7 @@ fn components(sys: &System, eqs: &[Equation]) -> (Vec<Component>, Vec<usize>) {
         }
         let row_cols: Vec<Vec<usize>> = ce
             .iter()
-            .map(|&i| eqs[i].vars.iter().map(|&g| col[g]).collect())
+            .map(|&i| rows[i].iter().map(|&g| col[g]).collect())
             .collect();
         let mut jac = Rows {
             ptr: vec![0],
@@ -1411,14 +1487,7 @@ fn components(sys: &System, eqs: &[Equation]) -> (Vec<Component>, Vec<usize>) {
         }
         jac.val = vec![0.0; jac.col.len()];
         let plan = GramPlan::shared(&row_cols, cv.len(), None);
-        let dcol = cv.iter().map(|&g| 1.0 / sys.weights[g]).collect();
-        let implicit = ce
-            .iter()
-            .map_while(|&i| match eqs[i].owner {
-                Owner::Entity(e) => Some(e),
-                Owner::Constraint(_) => None,
-            })
-            .collect();
+        let dcol = cv.iter().map(|&g| 1.0 / weights[g]).collect();
         comps.push(Component {
             eqs: ce,
             vars: cv,
@@ -1426,24 +1495,86 @@ fn components(sys: &System, eqs: &[Equation]) -> (Vec<Component>, Vec<usize>) {
             dcol,
             plan,
             analysis_plans: AnalysisPlans::default(),
-            implicit,
+            implicit: Vec::new(),
         });
     }
-    // Free unknowns: point coordinates and entity scalars without equations.
-    let mut free = Vec::new();
-    for p in sys.points.iter().flatten() {
-        for g in [p.x, p.y] {
-            if !used[g] {
-                free.push(g);
-            }
+    (comps, used)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Constraint::*;
+
+    /// The extracted row compilation (mitcad#1542): with every constraint
+    /// kept and the identity mapping it gives exactly the constraint
+    /// equations `prepare` solves, and a mapping moves only their columns.
+    #[test]
+    fn mapped_compilation_is_the_planar_one() {
+        let mut s = System::new();
+        let p: Vec<_> = [[0.0, 0.0], [10.0, 0.5], [10.5, 6.0], [-0.5, 5.0]]
+            .iter()
+            .map(|q| s.add_point(q[0], q[1]))
+            .collect();
+        let l: Vec<_> = (0..4)
+            .map(|i| s.add_line(p[i], p[(i + 1) % 4]).unwrap())
+            .collect();
+        let c = s.add_point(6.0, 3.0);
+        let f = s.add_point(10.0, 3.2);
+        let arc = s.add_arc(c, f, p[2]).unwrap();
+        let q = s.add_point(-3.0, 2.5);
+        let spline = s
+            .add_fitted_spline(&[p[3], q, p[0]], [SplineEnd::Natural; 2])
+            .unwrap();
+        for k in [
+            Horizontal(l[0]),
+            Vertical(l[1]),
+            Length {
+                line: l[0],
+                value: 12.0,
+            },
+            FixPoint(p[0]),
+            Radius {
+                entity: arc,
+                value: 4.0,
+            },
+            TangentAt {
+                a: l[0],
+                b: spline,
+                at: p[0],
+            },
+        ] {
+            s.add_constraint(k).unwrap();
+        }
+        fn text(e: &Equation) -> String {
+            format!("{:?} {:?} {:?} {:?}", e.owner, e.key, e.kind, e.value)
+        }
+        let planar = prepare(&s);
+        let constraint_eqs: Vec<&Equation> = planar
+            .eqs
+            .iter()
+            .filter(|e| e.constraint().is_some())
+            .collect();
+        let (same, controlled) = compile_mapped(&s, |_| true, |g| g);
+        assert_eq!(same.len(), constraint_eqs.len());
+        for (a, b) in same.iter().zip(&constraint_eqs) {
+            assert_eq!(text(a), text(b));
+            assert_eq!(a.vars, b.vars);
+        }
+        // The tangent at the spline's natural end (its last fit point)
+        // controls that end.
+        assert!(controlled.contains(&(spline.index(), 1)));
+        // A mapping moves the columns only; `keep` selects constraints.
+        let (moved, _) = compile_mapped(&s, |c| c != 0, |g| 3 * g + 1);
+        let kept: Vec<&&Equation> = constraint_eqs
+            .iter()
+            .filter(|e| e.constraint() != Some(0))
+            .collect();
+        assert_eq!(moved.len(), kept.len());
+        for (a, b) in moved.iter().zip(kept) {
+            assert_eq!(text(a), text(b));
+            let want: Vec<usize> = b.vars.iter().map(|&g| 3 * g + 1).collect();
+            assert_eq!(a.vars, want);
         }
     }
-    for r in sys.entities.iter().flatten() {
-        for g in r.data.scalars() {
-            if !used[g] {
-                free.push(g);
-            }
-        }
-    }
-    (comps, free)
 }

@@ -7,6 +7,7 @@
 
 #include <cstdio>
 
+#include <QSet>
 #include <QString>
 
 namespace {
@@ -339,6 +340,27 @@ void intersectTests() {
   }
 }
 
+// Items in sets (mitcad#1631: a window's thousands of picks, the browser's
+// rows, kept once each by a set): equal items hash alike, where a click hit
+// is not part of an item, and items that differ in kind, name or occurrence
+// are apart.
+void itemSetTests() {
+  SelectionItem edge = item(SelectKind::Edge, QStringLiteral("F2.b0"), QStringLiteral("E{F2:top|F2:side(c1)}"));
+  SelectionItem hit = edge;
+  hit.at = std::array<double, 3>{1.0, 2.0, 3.0};
+  CHECK(edge == hit && qHash(edge) == qHash(hit));
+  SelectionItem placed = edge;
+  placed.occurrence = QStringLiteral("O1");
+  const SelectionItem face = item(SelectKind::Face, QStringLiteral("F2.b0"), QStringLiteral("E{F2:top|F2:side(c1)}"));
+  QSet<SelectionItem> items;
+  for (const SelectionItem& each : {edge, hit, placed, face, edge}) {
+    items.insert(each);
+  }
+  CHECK(items.size() == 3);
+  CHECK(items.contains(hit) && items.contains(placed) && items.contains(face));
+  CHECK(!items.contains(item(SelectKind::Edge, QStringLiteral("F2.b0"))));
+}
+
 } // namespace
 
 int selectionScopeTests() {
@@ -351,5 +373,6 @@ int selectionScopeTests() {
   edgeSightTests();
   projectTests();
   intersectTests();
+  itemSetTests();
   return failures;
 }

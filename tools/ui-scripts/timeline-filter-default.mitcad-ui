@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: MIT
+# The timeline filter's default and saved choice (mitcad#1662,
+# app/COMMANDS.md, the timeline paragraph), on timeline-filter-default.json
+# (Base:1 with Sketch1 and Extrude1, Pin:1 in Base with Sketch2, Lid:1
+# with Sketch3), in settings of the test's own where nothing is saved yet:
+#   1. The window starts at Active Component with its subcomponents; with
+#      the root active every feature is listed, the filter button is not
+#      highlighted and its tooltip names the filter.
+#   2. Base activated: its features and Pin's at once, the button
+#      highlighted; Lid activated: Lid's only.
+#   3. One named component (Base) from the filter's menu: shown, not saved.
+#   4. All Components from the menu: every feature, saved.
+# The next start (timeline-filter-default-reopen.mitcad-ui) begins at All
+# Components. Run by tools/ui-timeline-filter-default-test.sh (Linux) and
+# tools/ui-windows-timeline-filter-default-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+
+# 1. The default: Active Component with its subcomponents, the root active.
+expect-ever '^Timeline filter: Active Component [(]Root[)] with Subcomponents: 4 of 4 features$'
+expect-ever '^Timeline Sketch3 at '
+expect-never '^Timeline filter: all components$'
+expect-widget-property timelineFilterButton checked false
+expect-widget-property timelineFilterButton toolTip 'Timeline Filter: Active Component (Root) with Subcomponents: 4 of 4 features'
+
+# 2. Activating a component updates the timeline at once.
+mark
+click-logged '^Browser radio Root/Base:1 at '
+wait-log '^Activated Base$'
+wait-log '^Timeline filter: Active Component [(]Base[)] with Subcomponents: 3 of 4 features$'
+wait-log '^Timeline Sketch2 at '
+wait-idle
+expect-log '^Timeline Sketch1 at '
+expect-log '^Timeline Extrude1 at '
+expect-no-log '^Timeline Sketch3 at '
+expect-widget-property timelineFilterButton checked true
+expect-widget-property timelineFilterButton toolTip 'Timeline Filter: Active Component (Base) with Subcomponents: 3 of 4 features'
+mark
+click-logged '^Browser radio Root/Lid:1 at '
+wait-log '^Activated Lid$'
+wait-log '^Timeline filter: Active Component [(]Lid[)] with Subcomponents: 1 of 4 features$'
+wait-log '^Timeline Sketch3 at '
+wait-idle
+expect-no-log '^Timeline (Sketch1|Extrude1|Sketch2) at '
+expect-widget-property timelineFilterButton checked true
+
+# 3. One named component: this window's only, not saved.
+mark
+click-logged '^Timeline button filter at '
+wait-log '^Context menu: All Components [|] Active Component [|] '
+popup 'Base'
+wait-log '^Timeline filter: Base with Subcomponents: 3 of 4 features$'
+wait-idle
+expect-no-log '^Timeline filter saved'
+
+# 4. All Components: every feature, the choice saved.
+mark
+click-logged '^Timeline button filter at '
+wait-log '^Context menu: All Components [|] Active Component [|] '
+popup 'All Components'
+wait-log '^Timeline filter saved: all, subcomponents$'
+wait-log '^Timeline filter: all components$'
+wait-log '^Timeline Sketch1 at '
+wait-idle
+expect-setting timeline/filter all
+expect-setting timeline/subcomponents true
+expect-widget-property timelineFilterButton checked false
+expect-widget-property timelineFilterButton toolTip 'Timeline Filter: all components'
+expect-never 'TestDriver: FAIL'

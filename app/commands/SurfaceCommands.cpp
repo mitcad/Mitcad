@@ -47,13 +47,18 @@ CommandDef surfaceCommand(const char* id, const QString& name, const char* icon,
 // --- Profiles and curves of a surface sweep
 
 // The input of the profiles and sketch curves a surface sweep takes, and
-// Chain Selection for the curves.
-QVector<InputDef> sheetInputs() {
+// Chain Selection for the curves. A 3D sketch's profiles and curves in its
+// sketch plane too (mitcad#1550).
+QVector<InputDef> sheetInputs(const CommandContext& context) {
   return {
       selectionInput(QStringLiteral("profiles"), QObject::tr("Profiles"),
                      SelectKind::Profile | SelectKind::SketchCurve, 1, 0)
           .withTooltip(QObject::tr("Profiles (their boundaries) and sketch curves, open or closed, "
-                                   "of one sketch")),
+                                   "of one sketch"))
+          .withAccepts([&context](const SelectionItem& item) { return planeCurveTakes(item, context); })
+          .withRefusedHint([&context](const SelectionItem& item, const CommandState&) {
+            return planeCurveRefusal(item, context);
+          }),
       checkInput(QStringLiteral("chain"), QObject::tr("Chain Selection"), true)
           .withTooltip(QObject::tr("Also take the curves joined to the selected ones")),
   };
@@ -123,7 +128,7 @@ CommandDef surfaceExtrudeCommand(const CommandContext& context) {
                                               "without caps"));
   def.pinned = true;
   def.featureType = QStringLiteral("extrude");
-  def.inputs = sheetInputs();
+  def.inputs = sheetInputs(context);
   def.inputs += {
       choiceInput(QStringLiteral("direction"), QObject::tr("Direction"), kDirections, kOneSide),
       valueInput(QStringLiteral("distance"), QObject::tr("Distance"), ValueKind::Length, QStringLiteral("10 mm")),
@@ -132,7 +137,7 @@ CommandDef surfaceExtrudeCommand(const CommandContext& context) {
       flipInput(QStringLiteral("flip"), QObject::tr("Flip")).withVisible(choiceIs(QStringLiteral("direction"), kOneSide)),
   };
   def.init = newestProfile;
-  def.enabled = [&context] { return hasSketches(context); };
+  def.enabled = [&context] { return hasSketches(context, true); };
   def.build = [](const CommandState& state, const CommandContext&) {
     Built result;
     QJsonObject definition{{QStringLiteral("type"), QStringLiteral("extrude")}};
@@ -210,7 +215,7 @@ CommandDef surfaceRevolveCommand(const CommandContext& context) {
                                               "surfaces"));
   def.featureType = QStringLiteral("revolve");
   const auto partial = choiceIs(QStringLiteral("type"), QStringLiteral("angle"));
-  def.inputs = sheetInputs();
+  def.inputs = sheetInputs(context);
   def.inputs += {
       selectionInput(QStringLiteral("axis"), QObject::tr("Axis"),
                      SelectKind::SketchCurve | SelectKind::Axis | SelectKind::Edge, 1, 1)
@@ -227,7 +232,7 @@ CommandDef surfaceRevolveCommand(const CommandContext& context) {
             return partial(s) && s.choice(QStringLiteral("direction")) == kTwoSides;
           }),
   };
-  def.enabled = [&context] { return hasSketches(context); };
+  def.enabled = [&context] { return hasSketches(context, true); };
   def.build = [](const CommandState& state, const CommandContext&) {
     Built result;
     QJsonObject definition{{QStringLiteral("type"), QStringLiteral("revolve")}};
@@ -294,24 +299,31 @@ CommandDef surfaceSweepCommand(const CommandContext& context) {
                                   QObject::tr("Sweeps profiles' boundaries and sketch curves along a path into "
                                               "surfaces"));
   def.featureType = QStringLiteral("sweep");
-  def.inputs = sheetInputs();
+  def.inputs = sheetInputs(context);
   def.inputs += {
+      // A 3D sketch's curves too, as the typed path a Pipe's is
+      // (mitcad#1550).
       selectionInput(QStringLiteral("path"), QObject::tr("Path"), kPathKinds, 1, 0)
           .withTooltip(QObject::tr("Sketch curves or edges, joined end to end"))
-          .withAccepts(isPathItem),
+          .withAccepts([&context](const SelectionItem& item) { return spatialPathTakes(item, context); })
+          .withRefusedHint([&context](const SelectionItem& item, const CommandState&) {
+            return spatialPathRefusal(item, context);
+          }),
       choiceInput(QStringLiteral("orientation"), QObject::tr("Orientation"),
                   {{QStringLiteral("perpendicular"), QStringLiteral("Perpendicular")},
                    {QStringLiteral("parallel"), QStringLiteral("Parallel")}},
                   QStringLiteral("perpendicular")),
   };
-  def.enabled = [&context] { return hasSketches(context); };
-  def.build = [](const CommandState& state, const CommandContext&) {
+  def.enabled = [&context] { return hasSketches(context, true); };
+  def.build = [](const CommandState& state, const CommandContext& model) {
     Built result;
     QJsonObject definition{{QStringLiteral("type"), QStringLiteral("sweep")}};
     if (!addSheetInputs(definition, state, result)) {
       return result;
     }
-    const QJsonValue path = pathOf(state.items(QStringLiteral("path")), false, result, QStringLiteral("path"));
+    // An edited 3D sketch's path keeps its direction (mitcad#1550).
+    const QJsonValue path = pathOf(state.items(QStringLiteral("path")), false, result, QStringLiteral("path"), model,
+                                   keptPathReversed(state, QStringLiteral("path")));
     if (!result.error.isEmpty()) {
       return result;
     }
@@ -329,6 +341,7 @@ CommandDef surfaceSweepCommand(const CommandContext& context) {
     if (const auto path = pathItems(feature.value(QStringLiteral("path")), context)) {
       state.setItems(QStringLiteral("path"), *path);
     }
+    keepPathDirection(feature.value(QStringLiteral("path")), state, QStringLiteral("path"));
     state.setChoice(QStringLiteral("orientation"), feature.value(QStringLiteral("orientation")).toString() ==
                                                            QStringLiteral("parallel")
                                                        ? QStringLiteral("parallel")
@@ -355,22 +368,47 @@ CommandDef surfaceSweepCommand(const CommandContext& context) {
 
 // --- Surface Loft
 
+const QString kLoftRails = QStringLiteral("rails");
+
 CommandDef surfaceLoftCommand(const CommandContext& context) {
   CommandDef def = surfaceCommand("surface.loft", QObject::tr("Surface Loft"), "surface-loft",
                                   QObject::tr("A surface through sections in order: sketch curves or profiles"));
   def.featureType = QStringLiteral("loft");
   def.inputs = {
+      // A 3D sketch's curves anywhere in space and its profiles (closed
+      // loops in its sketch plane) too (mitcad#1550).
       selectionInput(QStringLiteral("sections"), QObject::tr("Sections"),
                      SelectKind::Profile | SelectKind::SketchCurve, 2, 0)
-          .withTooltip(QObject::tr("Sections in the order the surface goes through them"))
+          .withTooltip(QObject::tr("Sections in the order the surface goes through them: sketch or 3D sketch "
+                                   "curves, or profiles"))
+          .withAccepts([&context](const SelectionItem& item) { return spatialPathTakes(item, context); })
+          .withRefusedHint([&context](const SelectionItem& item, const CommandState&) {
+            return spatialPathRefusal(item, context);
+          })
           .withOrdered(),
+      // Rails guide a loft of profiles; a 3D sketch's curves in any plane
+      // too, typed as a Pipe's path (mitcad#1550).
+      listInput(kLoftRails, QObject::tr("Rails"),
+                {selectionInput(QStringLiteral("path"), QObject::tr("Rail"), kPathKinds | SelectKind::Sketch, 1, 0)
+                     .withTooltip(QObject::tr("Sketch or 3D sketch curves or edges joined end to end, meeting "
+                                              "every section"))
+                     .withAccepts([&context](const SelectionItem& item) { return spatialPathTakes(item, context); })
+                     .withRefusedHint([&context](const SelectionItem& item, const CommandState&) {
+                       return spatialPathRefusal(item, context);
+                     })},
+                QObject::tr("Add Rail"), QObject::tr("Rail %1"), 0),
+      checkInput(QStringLiteral("chain"), QObject::tr("Chain Selection"), true)
+          .withTooltip(QObject::tr("Also take the curves joined to the selected ones"))
+          .withVisible([](const CommandState& state) { return state.rows(kLoftRails) > 0; }),
       checkInput(QStringLiteral("closed"), QObject::tr("Closed"), false)
           .withTooltip(QObject::tr("From the last section back to the first")),
       checkInput(QStringLiteral("ruled"), QObject::tr("Ruled"), false)
           .withTooltip(QObject::tr("Straight between neighboring sections")),
   };
-  def.enabled = [&context] { return hasSketches(context); };
-  def.build = [](const CommandState& state, const CommandContext&) {
+  // A 3D sketch alone enables it (mitcad#1550).
+  def.enabled = [&context] { return hasSketches(context, true); };
+  def.build = [](const CommandState& state, const CommandContext& model) {
+    Built result;
     QJsonArray sections;
     bool curves = false;
     bool profiles = false;
@@ -381,6 +419,7 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
                                     {QStringLiteral("sketch"), item.owner},
                                     {QStringLiteral("region"), item.name}});
       } else {
+        // A planar or a 3D sketch's curve, its chain the section.
         curves = true;
         sections.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("curves")},
                                     {QStringLiteral("sketch"), item.owner},
@@ -392,17 +431,41 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
       return Built::failure(QObject::tr("Select sketch curves or profiles as sections, not both."),
                             QStringLiteral("sections"));
     }
+    QJsonArray rails;
+    const bool chain = state.checked(QStringLiteral("chain"));
+    for (int i = 0; i < state.rows(kLoftRails); ++i) {
+      const QString key = CommandState::rowKey(kLoftRails, i, QStringLiteral("path"));
+      const Selection picked = state.row(kLoftRails, i).items(QStringLiteral("path"));
+      if (picked.isEmpty()) {
+        continue;
+      }
+      // A 3D sketch's curves in their typed form, running as an edited
+      // rail ran.
+      rails.append(pathOf(picked, chain, result, key, model, keptPathReversed(state, key)));
+      if (!result.error.isEmpty()) {
+        return result;
+      }
+    }
+    if (curves && !rails.isEmpty()) {
+      return Built::failure(QObject::tr("Rails guide a loft of profiles: select profiles as sections, or "
+                                        "remove the rails."),
+                            kLoftRails);
+    }
     QJsonObject definition{{QStringLiteral("type"), QStringLiteral("loft")},
                            {QStringLiteral("sections"), sections},
                            {QStringLiteral("surface"), true},
                            {QStringLiteral("operation"), QStringLiteral("new_body")}};
+    if (!rails.isEmpty()) {
+      definition.insert(kLoftRails, rails);
+    }
     if (state.checked(QStringLiteral("closed"))) {
       definition.insert(QStringLiteral("closed"), true);
     }
     if (state.checked(QStringLiteral("ruled"))) {
       definition.insert(QStringLiteral("ruled"), true);
     }
-    return Built::of(definition);
+    result.def = definition;
+    return result;
   };
   def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
     Selection sections;
@@ -415,19 +478,45 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
       }
     }
     state.setItems(QStringLiteral("sections"), sections);
+    const QJsonArray rails = feature.value(kLoftRails).toArray();
+    state.setRows(kLoftRails, static_cast<int>(rails.size()));
+    bool chain = rails.isEmpty();
+    for (int i = 0; i < rails.size(); ++i) {
+      bool chained = false;
+      const QString key = CommandState::rowKey(kLoftRails, i, QStringLiteral("path"));
+      if (const auto path = pathItems(rails[i], context, &chained)) {
+        state.setItems(key, *path);
+      }
+      // A 3D sketch's rail keeps its direction (mitcad#1550).
+      keepPathDirection(rails[i], state, key);
+      chain = chain || chained;
+    }
+    state.setChecked(QStringLiteral("chain"), chain);
     state.setChecked(QStringLiteral("closed"), feature.value(QStringLiteral("closed")).toBool());
     state.setChecked(QStringLiteral("ruled"), feature.value(QStringLiteral("ruled")).toBool());
   };
-  // Sections of one curve each (chained) or profiles, without end
-  // conditions, rails or a centre line.
-  def.canEdit = [](const QJsonObject& feature) {
+  // Sections of one curve each (chained) or profiles, and rails of curves
+  // or edges chained alike (one Chain Selection holds them), without end
+  // conditions or a centre line.
+  def.canEdit = [&context](const QJsonObject& feature) {
     if (!feature.value(QStringLiteral("surface")).toBool()) {
       return false;
     }
-    for (const char* key : {"start_condition", "end_condition", "rails", "centerline"}) {
+    for (const char* key : {"start_condition", "end_condition", "centerline"}) {
       if (feature.contains(QString::fromLatin1(key))) {
         return false;
       }
+    }
+    std::optional<bool> chained;
+    for (const QJsonValue& rail : feature.value(kLoftRails).toArray()) {
+      const QJsonObject o = rail.toObject();
+      const bool chain = o.value(QStringLiteral("chain")).toBool();
+      const bool shown = o.contains(QStringLiteral("curves")) || o.contains(QStringLiteral("curve")) ||
+                         o.contains(QStringLiteral("edges")) || o.contains(QStringLiteral("feature"));
+      if (!shown || !pathItems(rail, context) || (chained && *chained != chain)) {
+        return false;
+      }
+      chained = chain;
     }
     for (const QJsonValue& value : feature.value(QStringLiteral("sections")).toArray()) {
       const QJsonObject section = value.toObject();

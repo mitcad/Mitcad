@@ -199,6 +199,11 @@ public:
   // and again.
   std::optional<std::array<double, 6>> bounds() const { return m_bounds.get(); }
   void set_bounds(const std::array<double, 6>& values) const { m_bounds.set(values); }
+  // The box that holds the shape once query.cpp's enclosing_box has made
+  // it (mitcad#1656: the sketch Dimension tool tests every body of an
+  // assembly against its plane with it, again for each tool).
+  std::optional<std::array<double, 6>> enclosing_bounds() const { return m_enclosingBounds.get(); }
+  void set_enclosing_bounds(const std::array<double, 6>& values) const { m_enclosingBounds.set(values); }
   // What the bridge's boundary distances keep of the shape between calls
   // (its faces' projections, costly to set up, and asked for again and
   // again by the .f3d import); null until the first call. The kept object
@@ -367,6 +372,7 @@ private:
   std::vector<std::string> m_vertexNames;
   LazyValue<std::array<double, 5>> m_measured;
   LazyValue<std::array<double, 6>> m_bounds;
+  LazyValue<std::array<double, 6>> m_enclosingBounds;
   LazyValue<std::shared_ptr<void>> m_boundaryIndex;
   LazyValue<std::shared_ptr<const void>> m_contactFaces;
   LazyValue<std::shared_ptr<const FaceMeasures>> m_faceMeasures;

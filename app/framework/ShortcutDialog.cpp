@@ -124,8 +124,8 @@ ShortcutDialog::ShortcutDialog(CommandRegistry& registry, QWidget* parent)
   // The rows of one context: the keys that work there (mitcad#720).
   m_contextFilter = new QComboBox;
   m_contextFilter->setObjectName(QStringLiteral("shortcutContextFilter"));
-  m_contextFilter->addItem(tr("All Contexts"), unsigned(AllShortcutContexts));
-  for (const unsigned context : shortcutContextList(AllShortcutContexts)) {
+  m_contextFilter->addItem(tr("All Contexts"), unsigned(EveryShortcutContext));
+  for (const unsigned context : shortcutContextList(EveryShortcutContext)) {
     m_contextFilter->addItem(shortcutContextName(context), context);
   }
   filters->addWidget(m_contextFilter);
@@ -146,7 +146,7 @@ ShortcutDialog::ShortcutDialog(CommandRegistry& registry, QWidget* parent)
   // The Context column as wide as the longest text it can show.
   const QFontMetrics metrics(m_tree->font());
   int contextWidth = metrics.horizontalAdvance(tr("Context"));
-  for (unsigned contexts = 1; contexts <= AllShortcutContexts; ++contexts) {
+  for (unsigned contexts = 1; contexts <= EveryShortcutContext; ++contexts) {
     contextWidth = std::max(contextWidth, metrics.horizontalAdvance(contextText(contexts)));
   }
   const int padding = 4 * metrics.averageCharWidth();
@@ -257,7 +257,7 @@ void ShortcutDialog::build() {
   // several contexts expands into a row per context, collapsed unless its
   // keys differ.
   const unsigned wanted = m_contextFilter->currentData().toUInt();
-  const bool single = wanted != AllShortcutContexts;
+  const bool single = wanted != EveryShortcutContext;
   m_tree->clear();
   m_items.clear();
   // With one context, every row would repeat its name (mitcad#730).
@@ -298,7 +298,7 @@ void ShortcutDialog::addReservedRows(unsigned wanted) {
   // The keys no command here can take (Ctrl+F for Search Timeline, Enter
   // for OK, …), muted, marked and read-only: under the command of the same
   // name when it is listed (Search Timeline), else after the commands.
-  const bool single = wanted != AllShortcutContexts;
+  const bool single = wanted != EveryShortcutContext;
   const QBrush muted = palette().brush(QPalette::Disabled, QPalette::Text);
   for (const ReservedShortcut& reserved : reservedShortcuts()) {
     if ((reserved.contexts & wanted) == 0) continue;

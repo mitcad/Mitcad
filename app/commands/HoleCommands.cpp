@@ -23,6 +23,7 @@
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 
+#include "../browser/DocumentHost.hpp"
 #include "../framework/Numbers.hpp"
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
@@ -850,6 +851,116 @@ void loadPressFit(const QJsonObject& fit, const QJsonObject& feature, CommandSta
   loadValue(state, kPressAngle, fit.value(QStringLiteral("angle")), feature, context);
 }
 
+// The Thread panel's fit of its faces to the thread (mitcad#1632): what
+// the previews said of the faces that do not fit (`thread_fits`, the fits
+// a preview with fit_faces made, `fitted`, and what it left, `fit_left`),
+// kept by previewReported; the hidden choice the note's button sets; the
+// choice of what a fit does with a named parameter other places use.
+const QString kFitReport = QStringLiteral("fit_report");
+const QString kFitFaces = QStringLiteral("fit_faces");
+const QString kFitShared = QStringLiteral("fit_shared");
+const QString kFitEditing = QStringLiteral("fit_editing");
+
+bool fitting(const CommandState& state) { return state.choice(kFitFaces) == QStringLiteral("fit"); }
+
+QJsonArray fitMisses(const CommandState& state) {
+  return state.object(kFitReport).value(QStringLiteral("thread_fits")).toArray();
+}
+
+// Whether the faces that do not fit are holes (else shafts).
+bool fitInternal(const CommandState& state) {
+  const QJsonArray misses = fitMisses(state);
+  return misses.isEmpty() || misses.first().toObject().value(QStringLiteral("internal")).toBool(true);
+}
+
+// The named parameter a fit would ask about, if any.
+QString fitChoice(const CommandState& state) {
+  for (const QJsonValue& miss : fitMisses(state)) {
+    const QString parameter =
+        miss.toObject().value(QStringLiteral("choice")).toObject().value(QStringLiteral("parameter")).toString();
+    if (!parameter.isEmpty()) {
+      return parameter;
+    }
+  }
+  return QString();
+}
+
+// Keeps what a preview's report says of the faces that do not fit. A
+// preview that fitted them has none: the faces seen before stay, for the
+// note and the shared parameter's choice. True when it changed, so that the
+// panel shows its note row again.
+bool keepFitReport(QJsonObject& report, CommandState& state) {
+  QJsonObject kept = state.object(kFitReport);
+  const QJsonArray misses = report.value(QStringLiteral("thread_fits")).toArray();
+  const QJsonArray fitted = report.value(QStringLiteral("fitted")).toArray();
+  if (!fitting(state) || !misses.isEmpty() || fitted.isEmpty()) {
+    kept.insert(QStringLiteral("thread_fits"), misses);
+  }
+  kept.insert(QStringLiteral("fitted"), fitted);
+  kept.insert(QStringLiteral("fit_left"), report.value(QStringLiteral("fit_left")).toArray());
+  // The note row follows the report: a changed report shows the inputs
+  // again (the preview, computed already, comes from the cache).
+  const bool changed = kept != state.object(kFitReport);
+  state.setObject(kFitReport, kept);
+  return changed;
+}
+
+// The note's button: Fit the Hole to the Thread while a face does not fit
+// and something Auto Fix can change sets it, Keep the Hole once fitted.
+// None while a thread is edited (Auto Fix in the timeline fits it then).
+InputNote fitNote(const CommandState& state) {
+  InputNote note;
+  if (state.checked(kFitEditing)) {
+    return note;
+  }
+  const bool hole = fitInternal(state);
+  if (fitting(state)) {
+    note.actions = {hole ? QObject::tr("Keep the Hole") : QObject::tr("Keep the Shaft")};
+    return note;
+  }
+  for (const QJsonValue& miss : fitMisses(state)) {
+    if (miss.toObject().value(QStringLiteral("fixable")).toBool()) {
+      note.actions = {hole ? QObject::tr("Fit the Hole to the Thread") : QObject::tr("Fit the Shaft to the Thread")};
+      break;
+    }
+  }
+  return note;
+}
+
+void fitNoteAction(int, const CommandState& state, const CommandContext& context) {
+  auto* host = const_cast<DocumentHost*>(dynamic_cast<const DocumentHost*>(&context));
+  const QString value = fitting(state) ? QStringLiteral("keep") : QStringLiteral("fit");
+  if (host == nullptr || !host->chooseInCommand(QStringLiteral("solid.thread"), kFitFaces, value)) {
+    qInfo().noquote() << QStringLiteral("Thread: the fit was not taken");
+  }
+}
+
+// What the panel says under its inputs once the faces are fitted: what
+// was changed (the model's words), and why a face was not fitted. Before
+// the fit the model's warning says in words what the face's diameter and
+// the thread's are (the panel's message) and the note row offers the fit.
+QString fitText(const CommandState& state, const CommandContext&) {
+  if (!fitting(state)) {
+    return QString();
+  }
+  const QJsonObject kept = state.object(kFitReport);
+  QStringList lines;
+  for (const QJsonValue& fit : kept.value(QStringLiteral("fitted")).toArray()) {
+    QString message = fit.toObject().value(QStringLiteral("message")).toString();
+    if (!message.isEmpty()) {
+      message[0] = message[0].toUpper();
+      lines.append(message + QLatin1Char('.'));
+    }
+  }
+  for (const QJsonValue& value : kept.value(QStringLiteral("fit_left")).toArray()) {
+    const QString reason = value.toObject().value(QStringLiteral("reason")).toString();
+    if (!reason.isEmpty()) {
+      lines.append(QObject::tr("Not fitted: %1.").arg(reason));
+    }
+  }
+  return lines.join(QLatin1Char('\n'));
+}
+
 // ---------------------------------------------------------------------------
 // Print shapes for holes printed lying (mitcad#1515): Print Shape Round,
 // Teardrop or Flat Roof, whose Roof Sag is the printed fit hole_roof_sag.
@@ -1581,6 +1692,33 @@ CommandDef threadCommand(const CommandContext& context) {
           .withVisible([partial](const CommandState& s) { return partial(s) || tapers(s); }),
   };
   def.inputs += chamferInputs(context);
+  // A face that does not fit the thread (mitcad#1632): the note's button
+  // fits it (the hole's or the shaft's value or dimension set to the
+  // thread's diameter), the preview shows what moves with it, and OK adds
+  // the thread and the fit as one undo step. The fit's choice is hidden;
+  // the shared parameter's shows when the fit would change one.
+  def.inputs += {
+      choiceInput(kFitFaces, QObject::tr("Fit to Thread"),
+                  {{QStringLiteral("keep"), QStringLiteral("Keep")}, {QStringLiteral("fit"), QStringLiteral("Fit")}},
+                  QStringLiteral("keep"))
+          .withVisible([](const CommandState&) { return false; }),
+      choiceInput(kFitShared, QObject::tr("Shared Parameter"),
+                  {{QStringLiteral("own"), QStringLiteral("Own Value")},
+                   {QStringLiteral("parameter"), QStringLiteral("Change the Parameter")}},
+                  QStringLiteral("own"))
+          .withTooltip(QObject::tr("A parameter other places use too: change it everywhere, or give the dimension "
+                                   "its own value"))
+          .withVisible([](const CommandState& s) { return fitting(s) && !fitChoice(s).isEmpty(); }),
+      noteInput(QStringLiteral("fit_note"), fitNote, fitNoteAction),
+  };
+  def.previewReported = keepFitReport;
+  def.addOptions = [](QJsonObject& command, const CommandState& state) {
+    if (fitting(state)) {
+      command.insert(QStringLiteral("fit_faces"), true);
+      command.insert(QStringLiteral("shared"), state.choice(kFitShared));
+    }
+  };
+  def.note = fitText;
   def.enabled = [&context] { return hasBodies(context); };
 
   def.build = [](const CommandState& state, const CommandContext&) {
@@ -1647,6 +1785,8 @@ CommandDef threadCommand(const CommandContext& context) {
     // A thread saved before mitcad#733 stays straight.
     state.setChecked(kTaperThread, feature.value(QStringLiteral("taper")).toBool());
     loadChamfer(feature, state, context);
+    // An edited thread is fitted by Auto Fix, not by the panel (mitcad#1632).
+    state.setChecked(kFitEditing, true);
   };
 
   // Starts are offered for a custom thread only (mitcad#893): a thread of a

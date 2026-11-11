@@ -541,6 +541,31 @@ bool DocumentSession::commandTaskAsync(const QString& label, const QString& stag
   return started;
 }
 
+bool DocumentSession::queryAsync(const QString& label, const QJsonObject& request, QueryRead read,
+                                 QObject* context, Completion completion) {
+  auto result = std::make_shared<AsyncResult>();
+  Document* document = &*m_state.document;
+  const QByteArray json = compactJson(request);
+  const bool started = startAsync(label, label, [document, json, read = std::move(read)](ModelJob& job) {
+    {
+      const AttachedJob attached(*document, job);
+      const QJsonDocument answer = parseJson(document->query(rustStr(json)));
+      if (job.control().is_cancelled()) {
+        throw ComputationCancelled();
+      }
+      read(answer.isArray() ? QJsonValue(answer.array()) : QJsonValue(answer.object()));
+    }
+    // Read past a cancel: given way all the same (yieldBackgroundJob).
+    if (job.control().is_cancelled()) {
+      throw ComputationCancelled();
+    }
+  }, result, context, std::move(completion));
+  if (started && m_async) {
+    m_async->yields = true;
+  }
+  return started;
+}
+
 bool DocumentSession::yieldBackgroundJob() {
   if (!m_async || !m_async->yields || m_job != &m_async->job) {
     return !busy();

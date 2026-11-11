@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: MIT
+# The BUILD lists as text (mitcad#1641), on build-lists-text.json (three
+# components of one box each, one with a long name; no BUILD parts):
+#   1. The lists window opened by Bill of Materials (Cut List itself needs
+#      BUILD parts), its Cut List tab chosen by Ctrl+Tab: Copy as CSV puts
+#      rows ending in CRLF on the clipboard, and Save as CSV… writes the
+#      same text.
+#   2. Copy as Text: the tab's three tables as aligned plain text (each
+#      table's heading, a blank line between tables, the Quantity column
+#      right-aligned, Component padded to the long name), every line ending
+#      in CRLF; Save as Text… writes exactly the clipboard's text.
+#   3. Bill of Materials: Copy as Text has its one table without a heading;
+#      Save as Text… writes the same.
+# Run by tools/ui-build-lists-text-test.sh (Linux) and
+# tools/ui-windows-build-lists-text-test.ps1 (Windows), which give the
+# folder for the files in MITCAD_TEST_WORK.
+expect-ever 'View area'
+wait-idle
+expect-model-bodies 3 4400
+
+# 1. The cut list's CSV. Cut List (build.cut_list) is enabled only in a
+# design with BUILD parts; the lists window that Bill of Materials opens
+# has the Cut List tab too, reached here by Ctrl+Tab from the Property
+# columns field (ui-bom-grouping opens the window so as well).
+command build.parts_list
+focus-dialog '^Bill of Materials$'
+focus-widget buildPartsColumns
+mark
+key Ctrl+Tab
+expect-log '^Build lists tab: Cut List$'
+mark
+button '.*' listCopyCsv
+expect-log '^Build list copied as CSV: '
+expect-clipboard '\A(?:[^\r\n]*\r\n)+\z'
+expect-clipboard '(?m)^Other Components\r\nQuantity,Component,Supplier,Part Number\r$'
+expect-clipboard '(?m)^1,A component with a rather long name,,\r$'
+button '.*' listSaveCsv
+focus-dialog '^Save List as CSV$'
+focus-widget fileNameEdit
+key Ctrl+a
+type "${MITCAD_TEST_WORK}/cut-list.csv"
+key Return
+expect-dialog-gone '^Save List as CSV$'
+focus-dialog '^Bill of Materials$'
+expect-log '^Build list saved as CSV: '
+expect-clipboard-file "${MITCAD_TEST_WORK}/cut-list.csv"
+
+# 2. The cut list as text.
+mark
+button '.*' listCopyText
+expect-log '^Build list copied as text: '
+expect-log '^Build list text:        1  A component with a rather long name$'
+expect-clipboard '\A(?:[^\r\n]*\r\n)+\z'
+expect-clipboard '\ACut List\r\nQuantity  Component  Length \(mm\)  End A  End B  Machining  Own Features  Supplier  Part Number  Mass Each \(kg\)\r\n\r\nStock\r\nComponent  Stock Length \(mm\)  '
+expect-clipboard '\r\n\r\nOther Components\r\nQuantity  Component {28}Supplier  Part Number\r\n'
+expect-clipboard '(?m)^       1  Bracket\r$'
+expect-clipboard '(?m)^       1  Plate\r$'
+expect-clipboard '(?m)^       1  A component with a rather long name\r$'
+button '.*' listSaveText
+focus-dialog '^Save List as Text$'
+focus-widget fileNameEdit
+key Ctrl+a
+type "${MITCAD_TEST_WORK}/cut-list.txt"
+key Return
+expect-dialog-gone '^Save List as Text$'
+focus-dialog '^Bill of Materials$'
+expect-log '^Build list saved as text: '
+expect-clipboard-file "${MITCAD_TEST_WORK}/cut-list.txt"
+key Escape
+expect-dialog-gone '^Bill of Materials$'
+focus-main
+
+# 3. The bill of materials as text: one table, no heading.
+command build.parts_list
+focus-dialog '^Bill of Materials$'
+mark
+button '.*' listCopyText
+expect-log '^Build list copied as text: 4 line\(s\)$'
+expect-clipboard '\A(?:[^\r\n]*\r\n)+\z'
+expect-clipboard '\AQuantity  Component {28}Supplier  Part Number  Supplier Part Numbers  Library  Version  License\r\n'
+expect-clipboard '(?m)^       1  A component with a rather long name\r$'
+button '.*' listSaveText
+focus-dialog '^Save List as Text$'
+focus-widget fileNameEdit
+key Ctrl+a
+type "${MITCAD_TEST_WORK}/bill-of-materials.txt"
+key Return
+expect-dialog-gone '^Save List as Text$'
+focus-dialog '^Bill of Materials$'
+expect-log '^Build list saved as text: '
+expect-clipboard-file "${MITCAD_TEST_WORK}/bill-of-materials.txt"
+key Escape
+expect-dialog-gone '^Bill of Materials$'
+focus-main
+expect-never 'Build list (CSV|text) not written'

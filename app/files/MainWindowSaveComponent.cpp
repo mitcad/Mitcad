@@ -143,6 +143,7 @@ void MainWindow::saveComponentAsDesign(const QString& component, const QString& 
     options.root = place.first;
     options.folder = place.second;
     options.name = shown;
+    offerNewFolder(options);
     const std::optional<ProjectPickerResult> chosen = pickInProjects(this, options);
     if (!chosen) {
       qDebug().noquote() << "Save Component as Design cancelled";

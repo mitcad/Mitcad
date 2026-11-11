@@ -1,0 +1,59 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Editing a 3D sketch through the commands its editing context sends (mitcad#1526; W2, W3, W17): a route A-B-C from the origin, AB along +X 30, BC along +Y 20, fully constrained. AB to 50 moves B and C (W2). BC's length removed: C keeps one freedom along Y (W3). A free line CD given a true length of 15 keeps its direction. Fix and Unfix of D. A drag of C along Y is one undo step. A fit-point spline from D with a free end, its fit points fixed: its end tangent handle dragged to (0, 30, 0), which the definition keeps; undone. Ids as the commands give them out: points and curves share one numbering, relations and dimensions another."},
+  {"cmd": "sketch3d.create"},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": [0, 0, 0], "end": [28, 1, 0], "axis": "x", "length": 30,
+    "start_source": "origin"},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": "p2", "end": [31, 18, 0], "axis": "y", "length": 20},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 0, "fully_constrained": true},
+    "points": [{"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [30, 0, 0]}, {"id": "p4", "at": [30, 20, 0]}]}}},
+
+  {"comment": "W2: AB's length 30 to 50, one undo step."},
+  {"cmd": "sketch3d.set_dimension", "sketch": "F1", "dimension": "k3", "value": "50 mm"},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Edit Dimension in 3DSketch1"}}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 0},
+    "points": [{"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [50, 0, 0]}, {"id": "p4", "at": [50, 20, 0]}]}}},
+
+  {"comment": "W3: BC's length removed by its id: C free along Y only."},
+  {"cmd": "sketch3d.remove", "sketch": "F1", "items": ["k5"]},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 1, "fully_constrained": false},
+    "points": [{"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [50, 0, 0]}, {"id": "p4", "at": [50, 20, 0]}]}}},
+
+  {"comment": "A free line CD, then its true length 15: its direction stays free (three freedoms of D, one taken)."},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": "p4", "end": [50, 20, 10]},
+  {"cmd": "sketch3d.add_dimension", "sketch": "F1", "dimension": {"type": "length", "line": "c7"}, "value": 15},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 3},
+    "points": [{"id": "p1"}, {"id": "p2"}, {"id": "p4", "at": [50, 20, 0]}, {"id": "p6", "at": [50, 20, 15]}]}}},
+
+  {"comment": "Fix of D, then Unfix: only the Fix goes."},
+  {"cmd": "sketch3d.fix", "sketch": "F1", "points": ["p6"]},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {"status": {"dof": 1}}}},
+  {"cmd": "sketch3d.fix", "sketch": "F1", "points": ["p6"], "fixed": false},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {"status": {"dof": 3}}}},
+
+  {"comment": "C dragged along Y to 35 (previewed first: nothing changes), one undo step."},
+  {"cmd": "sketch3d.drag", "sketch": "F1", "preview": true, "points": [{"point": "p4", "to": [50, 35, 0]}]},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "points": [{"id": "p1"}, {"id": "p2"}, {"id": "p4", "at": [50, 20, 0]}, {"id": "p6"}]}}},
+  {"cmd": "sketch3d.drag", "sketch": "F1", "points": [{"point": "p4", "to": [50, 35, 0]}]},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Drag in 3DSketch1"}}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "points": [{"id": "p1"}, {"id": "p2", "at": [50, 0, 0]}, {"id": "p4", "at": [50, 35, 0]}, {"id": "p6"}]}}},
+
+  {"comment": "W17: a fit-point spline from D with a free end, its new fit points fixed; its end tangent handle dragged to (0, 30, 0): one step, the definition keeps the tangent; undone."},
+  {"cmd": "sketch3d.add_spline", "sketch": "F1", "points": ["p6", [60, 45, 15], [70, 35, 15]],
+    "ends": ["natural", "free"]},
+  {"cmd": "sketch3d.fix", "sketch": "F1", "points": ["p8", "p9"]},
+  {"cmd": "sketch3d.drag", "sketch": "F1", "tangents": [{"curve": "c10", "end": "end", "to": [0, 30, 0]}]},
+  {"expect": {"feature": "3DSketch1", "status": "ok"}},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Drag in 3DSketch1"}}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "curves": [{"id": "c3"}, {"id": "c5"}, {"id": "c7"},
+               {"id": "c10", "type": "fitted_spline", "tangents": [null, [0, 30, 0]]}]}}},
+  {"cmd": "undo"},
+  {"expect": {"query": {"query": "document"}, "result": {"undo": "Fix in 3DSketch1"}}}
+]

@@ -185,7 +185,7 @@ bool isSelection(Field kind) {
   return kind != Field::Distance && kind != Field::Angle && kind != Field::Along;
 }
 
-InputDef fieldInput(const FieldSpec& field) {
+InputDef fieldInput(const FieldSpec& field, const CommandContext& context) {
   const QString key = QString::fromLatin1(field.key);
   const QString name = QObject::tr(field.label);
   const auto face = [&](std::function<bool(const QString&)> geometry) {
@@ -222,9 +222,20 @@ InputDef fieldInput(const FieldSpec& field) {
                  item.geometry == QStringLiteral("torus");
         });
   case Field::Path:
-    return selectionInput(key, name, kPathKinds, 1, 0)
-        .withTooltip(QObject::tr("A sketch line, arc or circle, connected edges, or an intersection curve"))
-        .withAccepts(isPathItem);
+    // A 3D sketch's curves too, or its route whole from the Browser or the
+    // timeline (mitcad#1550).
+    return selectionInput(key, name, kPathKinds | SelectKind::Sketch, 1, 0)
+        .withTooltip(
+            QObject::tr("A sketch line, arc or circle, connected edges, an intersection curve, or 3D sketch curves"))
+        .withAccepts([&context](const SelectionItem& item) { return spatialPathTakes(item, context); })
+        .withRefusedHint(
+            [&context](const SelectionItem& item, const CommandState&) { return spatialPathRefusal(item, context); })
+        .withOnPick([key](const SelectionItem& item, CommandState& state,
+                          const CommandContext& model) { takeWholeRoute(item, state, model, key); },
+                    false)
+        .withItemsText([key](const Selection& items, const CommandState& state, const CommandContext& model) {
+          return spatialRouteListing(items, false, keptPathReversed(state, key), model, key);
+        });
   case Field::Distance:
     return valueInput(key, name, ValueKind::Length, QStringLiteral("10 mm"));
   case Field::Angle:
@@ -245,7 +256,12 @@ QString firstSelection(const Spec& spec) {
   return QString();
 }
 
-QJsonValue pathRef(const Selection& items, Built& error) {
+QJsonValue pathRef(const Selection& items, Built& error, const CommandContext& context, bool reversed) {
+  // Curves of a 3D sketch, or the sketch whole: its typed path
+  // (mitcad#1550), one curve or a route of several.
+  if (!spatialOwner(items, context).isEmpty() || (items.size() == 1 && wholeSketchPick(items.first()))) {
+    return pathOf(items, false, error, QStringLiteral("path"), context, reversed);
+  }
   if (items.first().kind == SelectKind::SketchCurve) {
     if (items.size() != 1) {
       error = Built::failure(QObject::tr("Select one sketch curve, or edges."), QStringLiteral("path"));
@@ -448,7 +464,7 @@ void addDatumRefLink(QJsonObject& datumLinks, const SelectionItem& item, const D
   datumLinks.insert(item.owner, link);
 }
 
-CommandDef construction(const Spec& spec) {
+CommandDef construction(const Spec& spec, const CommandContext& context) {
   CommandDef def;
   def.id = QString::fromLatin1(spec.id);
   def.name = QObject::tr(spec.name);
@@ -463,7 +479,7 @@ CommandDef construction(const Spec& spec) {
   const bool plane = def.featureType == QStringLiteral("construction_plane");
   const QString base = firstSelection(spec);
   for (const FieldSpec& field : spec.fields) {
-    InputDef input = fieldInput(field);
+    InputDef input = fieldInput(field, context);
     if (field.kind == Field::Angle && type == QStringLiteral("tangent")) {
       // At the clicked side of the face by default (mitcad#446).
       input.defaultText = QStringLiteral("0 deg");
@@ -606,7 +622,7 @@ CommandDef construction(const Spec& spec) {
         }
         break;
       case Field::Path: {
-        const QJsonValue path = pathRef(state.items(key), result);
+        const QJsonValue path = pathRef(state.items(key), result, context, keptPathReversed(state, key));
         if (!result.error.isEmpty()) {
           return result;
         }
@@ -653,6 +669,8 @@ CommandDef construction(const Spec& spec) {
         if (const auto items = pathItems(slot, context)) {
           state.setItems(key, *items);
         }
+        // A 3D sketch's path keeps its direction (mitcad#1550).
+        keepPathDirection(slot, state, key);
         break;
       default:
         state.setItems(key, {itemOf(slot, context)});
@@ -765,9 +783,8 @@ CommandDef construction(const Spec& spec) {
 } // namespace
 
 void registerConstructCommands(CommandRegistry& registry, const CommandContext& context) {
-  Q_UNUSED(context);
   for (const Spec& spec : specs()) {
-    registry.add(construction(spec));
+    registry.add(construction(spec, context));
   }
 }
 

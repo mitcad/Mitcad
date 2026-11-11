@@ -263,7 +263,8 @@ expression (`"d1 / 2 + 5 mm"`, `"30 deg"`; syntax and unit rules in
   its own. `BuckleDiameter = BuckleDiameter * 2` (the own name on the
   left) names and sets the own parameter as before, so it is refused as a
   circular reference, as any parameter's own name in its own expression
-  is (`set_parameter`).
+  is (`set_parameter`). A 3D sketch's dimensions follow the same rule in
+  `sketch3d.set_dimension`, with the same result fields (mitcad#1550).
 - **A feature value that uses the slot's own parameter** (mitcad#1536)
   follows the same rule in `edit_feature`: `depth * 2` in the distance of
   an extrusion whose distance is `depth` (its own parameter) keeps `depth`,
@@ -455,15 +456,23 @@ plane or point along a path) is a `PathRef`:
 | `{"sketch": "F1", "curves": ["c1", "c4"]}` | curves of a sketch (any order), joined end to end |
 | `{"sketch": "F1", "curves": ["c1"], "chain": true}` | also every curve joined to them end to end (construction curves only when listed) |
 | `{"sketch": "F1", "curve": "c1"}` | one curve; a circle starts at its `start_angle` (the sketch x axis by default) and runs counter-clockwise |
+| `"reversed": true` (with `curves` or `curve`) | the same curves, the other way (mitcad#1550: a 3D sketch turned back into 2D keeps its paths' direction this way) |
 | `{"body": "F2.b0", "edges": ["E{…}", …]}` | connected edges of a body, in order; each name must name one edge |
 | `{"start": [x, y, z], "end": [x, y, z]}` | a fixed line |
 | `{"helix": {"center": [x, y, z], "axis": [x, y, z], "x_axis": [x, y, z], "radius": r, "pitch": p, "start_angle": a, "end_angle": b}}` | a fixed helix (mitcad#385): the points `center + r (cos t x + sin t (axis × x)) + p t / 2π axis` (`x` is `x_axis` made square to the axis) for `t` from `start_angle` to `end_angle` (radians, either way round: the path runs from the first to the second); `p`, the rise per turn counter-clockwise about the axis, is negative for a left-handed helix |
 | `{"fixed_curves": [{"type": "line", "start": [x, y, z], "end": [x, y, z]}, {"type": "conic", "center", "normal", "x_axis", "major", "minor", "start", "end", "closed"}, {"type": "spline", "degree": d, "poles": [[x, y, z], …], "weights": [w, …], "knots": [k, …]}]}` | fixed curves in model space, joined end to end (mitcad#548): lines, circle or ellipse arcs (`center + major cos t x_axis + minor sin t (normal × x_axis)` for `t` from `start` to `end`), B-splines (`weights` left out: not rational; the full knot vector, `poles + degree + 1` knots, never decreasing); the FreeCAD import's edges that lie in no plane, a conical helix as its file stores it. Not a construction plane's or point's path, nor a path pattern's |
 | `{"feature": "F5"}` | the curve of an Intersection Curve before the feature, in its component, or with a construction feature's `datum_links` in another (mitcad#1417) ([Intersection Curve](#intersection-curve-mitcad1405)); every path takes it, and ribs' and webs' curves when it lies in one plane |
 
+A Pipe's or Sweep's path (and a sweep's guide rails and auxiliary curve)
+may also be curves of a 3D sketch: `{"spatial_sketch": "F3", "curves":
+["c3", "c6"], "reversed": false}`, with `"chain": true` for chain
+selection ([Pipe and Sweep along 3D sketch curves](#pipe-and-sweep-along-3d-sketch-curves-mitcad1523));
+a loft's centre line and rails and the other paths do not take it yet.
+
 A path runs from the free end of the first listed curve or edge when it
 ends the chain, else along the first listed curve's own direction (a
-closed chain from that curve's start). A path may not branch or have
+closed chain from that curve's start); `"reversed": true` runs it the
+other way. A path may not branch or have
 gaps; a closed curve is a path by itself. A path pattern's path is a
 sketch line, arc or circle, a chain of sketch lines and arcs (`{"sketch":
 "F1", "curves": ["c1", "c2"]}`, mitcad#464), or a fixed line (not edges).
@@ -2077,6 +2086,77 @@ unit, the face by its reference:
   in more solids than it was, or none, is named where no wall told why:
   "M10x1.5: the thread cut body F2.b0 into 2 pieces", "M10x1.5: the
   thread left nothing of body F2.b0".
+
+#### Fitting the face to the thread (mitcad#1632)
+
+A face whose diameter is too far from the thread's (the first warning
+above) is fitted by changing what sets its diameter to the thread's crest
+diameter: the minor diameter on a hole, the major diameter on a shaft.
+The thread's evaluation finds what sets it
+(`core/model/src/features/thread/fit.rs`) and keeps it with the result
+(`thread_fits`, also in the result store); `auto_fix` and `add_feature`
+with `fit_faces` change it (`core/model/src/document/thread_fit.rs`).
+
+- **What sets the diameter:** a Hole's wall, the hole's `diameter` (a
+  simple hole: not tapped, tapered, a clearance or a press-fit hole); a
+  Cylinder's round side, its `diameter`; the side an Extrude or a Cut
+  makes of a sketch circle or arc, or a Revolve of a sketch line along
+  its axis, the one driving dimension of the sketch that moves the
+  curve's radius or its distance from the axis (each active driving
+  dimension is tried with its value moved a little and the sketch solved
+  again: a diameter or a radius dimension, a distance from a point or a
+  line on the axis, a linear diameter, ...), whose value is then solved
+  for. The sketch's other geometry follows as its constraints and
+  dimensions say: a wall dimensioned 3 mm from the bore's line moves out
+  with it.
+- **No source:** a face of an imported body, one a fillet or a boolean
+  made, a face whose diameter comes from several dimensions or from none,
+  or one moved after it was made: the warning ends `; the hole has to be
+  changed by hand (<why>)` (`the shaft` on a shaft), and Auto Fix is not
+  offered for it.
+- **The expression keeps its form:** one number of the dimension's
+  expression is solved for, the one that carries most of its value, in
+  its own unit and with as few decimals as give the value within half a
+  micrometre (M76x2's minor diameter 73.8349 mm: `72/2` becomes
+  `73.835/2`; `1 in` becomes `1.25 in`); an expression no number of which
+  can give it becomes the plain value. The value is worked out from the
+  face's diameter as the geometry measured it and the dimension's slope
+  (a diameter 1, a radius or a distance from the axis 2), so that the
+  sketch solver's last digits do not reach it.
+- **A named parameter:** a dimension whose value is a parameter's name
+  (`bore`) or whose expression uses one (`bore/2`, the parameter that
+  carries most of it): when nothing else uses the parameter it is
+  changed, its own expression keeping its form. When other places use it
+  (other slots of the definitions, other parameters' expressions), the
+  fit is not silent: `shared` `parameter` changes the parameter (the
+  result says in how many other places it is used), `shared` `own` gives
+  the dimension a value of its own in its place (a new dimension
+  parameter where the slot named the parameter); without `shared` the
+  fit is left, and `auto_fix`'s `choices` names the parameter.
+- **Checked before it is taken,** as Auto Fix's reference fixes: a fit
+  that would make a feature that built fail, or after which the face
+  still does not fit, is not taken, with the reason.
+- `add_feature` of a thread with `"fit_faces": true` (and `shared`) adds
+  the thread and fits its faces in one undo step (`Add Thread1`); its
+  result has `fitted` (as `auto_fix`'s) and `fit_left` (`face` and its
+  `reason` or `choice`). The same in a preview (`fit_faces`, `shared`): it
+  shows what moves with the face. A preview of a thread whose faces do
+  not fit has `thread_fits`: each `face` (its name, for agents), `body`,
+  `diameter`, `needed` (mm), `internal`, `fixable`, and `reason` (why
+  not), `source` (the feature that sets it) or `choice` (`parameter`,
+  `others`).
+
+Tests: `core/model-tests/features-profile/src/thread_autofix_tests.rs`
+(a Hole, an extruded circle, a revolved line and its wall, a Cylinder; a
+named parameter used elsewhere, both choices, and one used only there; a
+face no dimension sets; `fit_faces` and its undo; the previews),
+`features::thread::fit::tests`, `document::thread_fit::tests` (the
+expressions), and `cli.thread_fit_reported` on a reported design
+(`tools/cli/thread-fit-reported-test.cmake`, under
+`MITCAD_MITCAD_REPORTED`: a revolved bore of `72/2` under an M76x2 thread;
+as saved the fit is refused because a chamfer on the step between the bore
+and the thread's crest would fail; without that chamfer the bore becomes
+`73.835/2`, nothing newly fails, the 3 mm wall stays).
 
 ### fillet
 
@@ -4411,7 +4491,7 @@ results](#failed-features-in-command-results)).
 
 | Command | Fields | Result |
 |---|---|---|
-| `add_feature` | `def`, `name` (optional), `component` (optional: a component's uid or name; the active component when left out), `after` or `index` (optional: where in the timeline, see [Adding a feature in the middle of the timeline](#adding-a-feature-in-the-middle-of-the-timeline)) | `uid`, `name`, `parameters` (created); for a new-component operation placed beside a component that takes no components `placed_in`, `instead_of`, `placement_warning` ([Design policy](#design-policy)) |
+| `add_feature` | `def`, `name` (optional), `component` (optional: a component's uid or name; the active component when left out), `after` or `index` (optional: where in the timeline, see [Adding a feature in the middle of the timeline](#adding-a-feature-in-the-middle-of-the-timeline)); `fit_faces` and `shared` (a thread, at the marker: its faces fitted to it in the same undo step, [Fitting the face to the thread](#fitting-the-face-to-the-thread-mitcad1632)) | `uid`, `name`, `parameters` (created); with `fit_faces` `fitted` and `fit_left`; for a new-component operation placed beside a component that takes no components `placed_in`, `instead_of`, `placement_warning` ([Design policy](#design-policy)) |
 | `edit_feature` | `uid`, `def` (same type) | `parameters` (created); `user_parameters` and `notes` when a value that uses its slot's own parameter kept that parameter as a user parameter ([Values](#values), mitcad#1536); when the edit makes a new component placed beside a component that takes no components `placed_in`, `instead_of`, `placement_warning` ([Design policy](#design-policy)) |
 | `delete_feature` | `uid`, `dependents` (default false) | `deleted`: uids in timeline order; `notices` for the cut-scope exclusions it dropped ([Assembly scope for Extrude Cut](#assembly-scope-for-extrude-cut)) |
 | `suppress_feature` | `uid`, `suppressed` (default true), or `expression` (a condition the suppression follows; [Bindings](#bindings-values-from-expressions)) | |
@@ -5526,7 +5606,7 @@ made, in order) and `status` (as the `sketch` query: `dof`,
 | `sketch.set_centerline` | `lines`, `centerline` (default true) | |
 | `sketch.set_fixed` | `entities`, `fixed` (default true) | |
 | `sketch.drag` | `entity`: a point with `to` [x, y], or a curve with `by` [dx, dy] or `radius`; or `entities` (points and curves) with `by` | pulls as far as the constraints allow; a derived offset's curve or point pulls its source chain by as much; `entities` drags a selection together (see [Dragging a selection](#dragging-a-selection)) |
-| `sketch.move` | `entities`, and `by` [dx, dy], or `from` and `to` (point inputs: Point to Point, by `to` − `from`, both read before the move; mitcad#1563), or `rotate` {`center` (point input; left out: the entities' middle, mitcad#1563), `angle`}; `copy` | a move keeps the constraints (the points are dragged); a copy copies the constraints among the entities; a derived offset's curves move their source chain, their copies are ordinary curves; `made` lists the copies; a rotation turns what holds the moved geometry to the axes, see [Rotating sketch geometry](#rotating-sketch-geometry) |
+| `sketch.move` | `entities`, and `by` [dx, dy], or `from` and `to` (point inputs: Point to Point, by `to` − `from`, both read before the move; mitcad#1563), or `rotate` {`center` (point input; left out: the entities' middle, mitcad#1563), `angle`}; `copy`; `hold` (constraints added after the move where it was dropped, a moved entity standing for its copy, mitcad#1645; see [Holding moved geometry where it was dropped](#holding-moved-geometry-where-it-was-dropped)) | a move keeps the constraints (the points are dragged); a copy copies the constraints among the entities; a derived offset's curves move their source chain, their copies are ordinary curves; `made` lists the copies; a rotation turns what holds the moved geometry to the axes, see [Rotating sketch geometry](#rotating-sketch-geometry) |
 | `sketch.trim` | `curve`, `at` [x, y] | removes the piece around `at` between the curves crossing it; a curve nothing crosses is deleted; a cut end on an existing point becomes that point, so that both curves of a crossing trimmed there share one end; a projected or computed point holds it with a point-to-point `coincident` instead, and elsewhere (a T) the end is a new point on the crossing curve (mitcad#1191, see [Points that become one](#points-that-become-one)); a joined end that meets a curve there tangentially gets a `tangent` to it, and a `tangent` that held the cut-off end to a curve no longer touching it then goes (mitcad#1220, same section); a curve trimmed in the middle falls into two, a line's pieces `collinear` and an arc's or an elliptical arc's `equal`, so that they stay on one line or curve (mitcad#1314); of a closed spline the rest becomes a spline by control points (mitcad#783); refused for a projected curve (linked or not: `sketch.convert_projected` first, mitcad#357, also for `sketch.extend`, `sketch.fillet` and `sketch.chamfer`) and for a curve a derived offset computes; a trim or an extension that ends on a derived offset's curve ends in a plain point, since its curves take no constraints (mitcad#361) |
 | `sketch.extend` | `curve`, `at` | extends the end nearest `at` (a line or an arc) to the next curve; an arc extended all the way round becomes a circle; reaching an existing point joins it (a shared end; a projected or computed point holds the end with a point-to-point `coincident` instead), elsewhere the end lies on the curve; result `joined`: the point reached, when it joined one (see [Points that become one](#points-that-become-one)) |
 | `sketch.insert_spline_point` | `curve` (a spline), `at` [x, y] | a point on the spline where it is nearest `at`: a fit point between its neighbours, or a control point by knot insertion that keeps the shape exactly; result `made`: the new point; see [Insert Point on a spline](#insert-point-on-a-spline) (mitcad#836) |
@@ -6159,6 +6239,31 @@ Point with `from` and `to` (mitcad#1563, GitHub mitcad/Mitcad#212):
     say which.
 - A copy (`copy`) leaves out the directional constraints of turned
   copies, as before.
+
+### Holding moved geometry where it was dropped
+
+`sketch.move` takes `hold` (mitcad#1645, GitHub mitcad/Mitcad#245):
+constraints, as `sketch.add_constraint` takes them, that hold the moved
+geometry where the user dropped it on a point or a curve (the
+application's Move/Copy: its Target Point, its handle). They are added
+after the move, in its undo step:
+
+```json
+{"cmd": "sketch.move", "sketch": "F1", "entities": ["c4"], "from": "p3", "to": "p7", "copy": true,
+ "hold": [{"type": "coincident", "point": "p3", "entity": "p7"}]}
+```
+
+- With `copy`, a moved entity a hold names stands for its copy: above,
+  the copy's centre is held on `p7`, the original stays free.
+- Two curve ends held together stay two points (unlike
+  `sketch.add_constraint`, which makes them one, "Points that become
+  one"), so the copy's `made` ids stay what they are.
+- A hold the sketch refuses (it conflicts with the others, or they imply
+  it) is left out and the sketch is as it was without it; the move is
+  kept, and the result's `warnings` say so (`not held where it was
+  dropped: …`, the constraint for agents in the detail).
+- Code: `SketchEdit::hold_moved` (`core/sketch/src/modify.rs`). Tests:
+  `core/model-tests/sketch/src/sketch_move_hold_1645_tests.rs`.
 
 ### Scaling a sketch
 
@@ -6875,7 +6980,7 @@ constraints.
 
 | Command | Fields | Result |
 |---|---|---|
-| `import_file` | `path` (.step/.stp, .iges/.igs, .brep/.brp, .stl, .obj), `name` (of the feature, optional), `unit_mm` (STL and OBJ: mm per file unit, default 1), `structure` (STEP: `components` default, `base`; [STEP assemblies as components](#step-assemblies-as-components-mitcad1274)) | `uid`, `name`, `bodies`: `uid`, `name`, `kind`; `warnings` when empty bodies were left out; a STEP assembly kept also `structure`, `components`, `occurrences` |
+| `import_file` | `path` (.step/.stp, .iges/.igs, .brep/.brp, .stl, .obj), `name` (of the feature, optional), `unit_mm` (STL and OBJ: mm per file unit, default 1), `structure` (STEP: `components` default, `base`; [STEP assemblies as components](#step-assemblies-as-components-mitcad1274)), `wrap` (into a new component named after the file; default true for STEP, IGES and BRep into a design with content, else false; [Imports into a component of their own](#imports-into-a-component-of-their-own-mitcad1629)) | `uid`, `name`, `bodies`: `uid`, `name`, `kind`; `warnings` when empty bodies were left out; a STEP assembly kept also `structure`, `components`, `occurrences`; wrapped also `component`: `uid`, `name`, `occurrence` |
 | `export` | `path`, `bodies` (uids or names; all at the marker when left out), `format` (by extension when left out: `step`, `iges`, `stl`, `obj`, `brep`, `3mf`, `usdz`), `schema` (`ap214` default, `ap242`), `unit` (STEP, IGES, STL, OBJ, 3MF: `mm` default, `cm`, `m`, `in`, `ft`; [Mesh files](#mesh-files-in-a-unit-with-a-longest-edge)), `refinement` (STL, OBJ, 3MF, USDZ: `low`, `medium` default, `high` or `{"deviation": mm, "angle": radians, "face_triangles": n, "max_edge": mm}`; see [Mesh refinement](#mesh-refinement)), `ascii` (STL), `colors` (body uid or name: sRGB in [0, 1]), `coordinates` (`design` default, `component`), `occurrence` (a path), `design_folder` (USDZ: the folder relative texture paths are relative to, the design file's), `dialect` (3MF: the slicer whose print settings go with the bodies, [Print profiles](#print-profiles)), `on_bed` (3MF, STL, OBJ: on the print bed faces, [Print bed faces](#print-bed-faces)), `center`, `drop` and `auto_orient` (on the bed, each true by default: [Centered, dropped and oriented on the bed](#centered-dropped-and-oriented-on-the-bed)), `spacing` (on the bed: mm between neighbouring pieces beyond their brims, 5 default; [Spacing beyond the brims](#spacing-beyond-the-brims)), `occurrences` and `whole` (3MF: the placements written and the occurrences sent whole, [Export by occurrences](#export-by-occurrences)), `animation` (USDZ: time-sampled placements, [Animated USDZ](#animated-usdz)), `print_colors` (USDZ: the print colours by height, [Filament changes at print heights](#filament-changes-at-print-heights)) | `path`, `format`, `bodies` (uids); 3MF also `meshes`, `skipped`, and with `dialect` `dialect`, `filaments`, `warnings`, `printed` ([Print profiles](#print-profiles), mitcad#1052), `filament_changes` (the events written, mitcad#1596); USDZ also `materials`, `skipped`, `warnings`, and with `animation` `animation` (`fps`, `start`, `end`, `frames`, `moved`) |
 | `export_sketch` | `sketch` (uid or name; of a shared name the only sketch, [Feature names are not unique](#feature-names-are-not-unique-mitcad1107)), `path` (.dxf), `version` (`r2000` default, `r12`), `units` (the file's length unit, `mm`, `in`, … as `set_units` reads them; the design's when left out, [DXF units](#the-length-unit-of-dxf-exports-mitcad1408)), `construction` (bool, default false: also the construction curves and center lines, on the layer `construction`; [construction geometry](#construction-geometry-in-a-sketchs-dxf-mitcad1445)) | `path`, `entities`, `units` (the unit written), `construction` (whether construction geometry was written) |
 
@@ -6883,7 +6988,10 @@ constraints.
   IGES solid, BRep compound member or OBJ object, one mesh body for STL;
   a STEP assembly comes in as components instead unless `"structure":
   "base"` ([STEP assemblies as
-  components](#step-assemblies-as-components-mitcad1274)).
+  components](#step-assemblies-as-components-mitcad1274)). Into a design
+  that already has content, a STEP, IGES or BRep file comes in inside a
+  new component named after the file unless `"wrap": false` ([Imports
+  into a component of their own](#imports-into-a-component-of-their-own-mitcad1629)).
   Bodies keep the file's names and colours; `source` is the file name.
   One undo step (`Import bracket.step`).
   Empty bodies (a part without geometry) are left out, each with a
@@ -7017,13 +7125,51 @@ the reader `geometry/io` `read_step_structured`, the kernel's
 The query `{"query": "file_structure", "path": "machine.step"}` answers
 `{"assembly": true}` for a STEP file with two assembly usages or more
 (it reads the file as text, without the kernel), so that an application
-can offer the choice first; other files: `false`. A file that cannot be
+can offer the choice first; other files: `false`. It also answers `wrap`,
+whether `import_file` would wrap the file in a component of its own
+([Imports into a component of their own](#imports-into-a-component-of-their-own-mitcad1629)). A file that cannot be
 read is an error. Tests: `geometry.io` (`test_step_assembly_structure`:
 a nested assembly written through OCCT), `core.exchange`
 (`test_step_assembly_import`: MitCad's own export of a part placed four
 times and a sub-assembly, imported as components and as one base
 feature, the design file holding each part once), and the model's
 `import_file_keeps_a_step_assembly_as_components`.
+
+### Imports into a component of their own (mitcad#1629)
+
+A file that holds many parts mixes with what the design already holds
+when its bodies or components go straight into the active component, so
+an import into a design with content keeps the file together:
+
+```json
+{"cmd": "import_file", "path": "bracket.step"}
+```
+
+- With `wrap` true, `import_file` makes a component named after the file
+  without its directories and extension (`bracket` for
+  `/models/bracket.step`; a name already used gets a suffix, `bracket (1)`),
+  places one occurrence of it in the active component at the identity, and
+  puts the import inside it: the base feature of a part file, or the top
+  instances of a [STEP assembly](#step-assemblies-as-components-mitcad1274),
+  whose components are made as before. One undo step with the import
+  (`Import bracket.step`); a failed import leaves nothing, and a file that
+  cannot be read makes no component.
+- `wrap` defaults to true for a STEP, IGES or BRep file (by the extension)
+  imported into a design that has content: a feature (a sketch too) or a
+  component. An empty design, such as the new one a file is opened as,
+  takes the file as it is, and STL and OBJ files keep coming in as mesh
+  bodies of the active component. `"wrap": false` imports into the active
+  component as before; `"wrap": true` wraps any file.
+- The result adds `component`: `uid`, `name` and `occurrence` (the
+  occurrence placed).
+- The `file_structure` query answers `wrap` beside `assembly`: the
+  default the import would take for that file in this design, so that an
+  application can ask first (the app's **Where to Import**,
+  `app/COMMANDS.md`).
+
+Test: `import_file_wraps_a_file_in_a_component_named_after_it`
+(`core/model-tests/files`) and `core.exchange`
+(`test_step_assembly_import`).
 
 ### Coordinates and placements of exports
 
@@ -11515,6 +11661,29 @@ before it against its result, moved with the body), and the developed form
 edge at a panel corner) by where it runs: the corner whose vertex it joins on
 the front and back surfaces.
 
+An ordinary feature that only removes material across one or more folded
+bends (an extrusion cut through both flanges at a bend, a hole reaching a
+bend; mitcad#1628) is applied as `sheet_cut` applies its profiles: every
+chart's footprint is read from the result's faces on its front surface (a
+panel's plane, a bend's cylinder, whose faces' own parameter curves map
+exactly into the bend's developed coordinates), the material each chart lost
+there is mapped into the developed plane of a panel with the touched bends
+opened, removed from every chart in that plane in one trim whose seams are
+the registered ports, and the bends are folded again. The sheet stays valid:
+Unfold, Refold and Flat Pattern work, and the flat pattern shows the cut's
+developed outline. In a bend the cut then runs through the thickness normal
+to the material, not along the feature's walls: where the rebuilt sheet
+differs from the feature's result (only inside the bends it crosses, and
+only where the feature cut through the material there), the body becomes the
+rebuilt sheet and the feature has a warning (`Extrude2 cuts across a bend:
+cut normal to the sheet there, as Sheet Cut does`). Material added across a
+bend, a cut in a bend that does not go through the material, or walls in a
+panel that are not normal to it invalidate the sheet with that reason as
+before. A sheet feature on an invalid sheet (Unfold, a flange) fails
+naming the feature that took the sheet meaning away and its reason in
+words, without internal ids, and points to Sheet Cut; on a blocked sheet it
+names the failed feature.
+
 A pattern or mirror of features may repeat sheet features (a joined
 `sheet_face`, `sheet_flange`, `sheet_cut`, corner rounds, chamfers and reliefs)
 together with ordinary ones on one valid sheet body (mitcad#242). The copies are
@@ -12059,7 +12228,22 @@ at the marker gives `status: "unavailable"`; an invalid sheet, a stale or
 inconsistent development, a self-overlap or a developed solid that does not
 build gives `invalid`; a later failure that blocks the sheet gives `blocked`.
 They return `diagnostics` and no `regions`, so nothing can be exported from
-them. Omitting `body` lists every item. Repeated queries reuse the evaluation
+them. For an invalid or blocked sheet the one diagnostic says why in words,
+as a sheet feature on that sheet does (mitcad#1636): the feature that took
+the sheet meaning away by its name, its reason and a pointer to Sheet Cut
+(`this body is no longer sheet metal: Extrude3 changed it in a way its sheet
+metal cannot hold (it adds material where it crosses a bend); to cut across
+bends, use Sheet Cut instead`), or the feature that failed on a blocked
+sheet (`this body's sheet metal is blocked: Move1 failed on it`), without
+internal ids; the browser's Flat Pattern row shows it. The sheet's stored
+diagnostics with the features' ids are its `causes` (`feature`, `message`),
+for agents. Every other diagnostic is in words too (mitcad#1639): the body
+is "this body", the walls a failed development names are named by their
+features as the timeline names them (`SheetFlange3`, `SheetFlange3 (wall
+2)`, `SheetFlange1 (bend)`), the feature of an overlay by its name; the
+same diagnostics with the ids (`body F3.b0 has no Flat Pattern`, `panel F6
+slot 0 does not develop flat: …`) are its `details`, given only where they
+differ. Omitting `body` lists every item. Repeated queries reuse the evaluation
 while the sheet state, rules, settings and algorithm are unchanged.
 
 ```json
@@ -12134,8 +12318,8 @@ stationary first; none or several fail.
 `name`, `status`, `rules` and `rules_name`, the resolved `thickness`,
 `bend_radius` and `k_factor`, the numbers of `panels`, `bends` and `open`
 bends, and `flat_pattern`: null without an item, else its `status` (with
-`area` and `bends` when valid, `diagnostics` otherwise), `shown`, `stationary`
-and `reference_side`.
+`area` and `bends` when valid, `diagnostics` otherwise: the reason in words,
+as `flat_pattern` gives it), `shown`, `stationary` and `reference_side`.
 
 ### Showing the Flat Pattern
 
@@ -12159,7 +12343,16 @@ Writes the body's (uid or name) Flat Pattern to a `.dxf` file: the item's
 settings, or those a new item would get when the body has none (its lowest
 panel, the panel's x axis, the front); `reference_side` views the other side
 for this file only. Only a valid pattern is written; an invalid, blocked or
-unavailable one fails with its reasons and writes nothing. The drawing is made
+unavailable one fails with its reasons and writes nothing. The refusal a
+person reads names the body as the browser does, or says "this body" or
+"this sheet" when it has no name at the marker, never by its uid
+(mitcad#1639, the rule of mitcad#1327): `the Flat Pattern of Bracket is
+invalid: this body is no longer sheet metal: Scale1 changed it …`; its
+detail for agents (the text after the error's `[placed: …]` line) has the
+body's uid, the reasons with their ids and each cause as `[F5: …]`. The
+Flat Pattern's own refusals (`set_flat_pattern`, `remove_flat_pattern`) do
+the same (`Bracket has no Flat Pattern`, `the chosen fixed panel is not a
+panel of Bracket`). The drawing is made
 from the evaluated outline and bend lines, never from the solid: each cut
 contour once (no front/back duplicates), with consecutive pieces of one line or
 circle that chart seams split joined again (a straight edge across a bend is
@@ -12488,10 +12681,19 @@ dimension or a point is made from it. The answer is an array:
   ends, a conic as a whole (an arc of a circle that leaves the plane meets
   it in two points only), a B-spline's poles. Edges the kernel names none
   for are left out. A vertex counts when its point is in the plane.
-- The kernel lists a body's named edges (`Kernel::edges`), their curves
-  (`Kernel::curves_of`) and its vertices with their names and points
-  (`Kernel::indexed_element`); the coplanarity test is the model's. A body
-  whose bounding box does not reach the plane is skipped.
+- The kernel lists a body's named edges with their curves at once, by
+  index (`Kernel::named_edge_curves`, mitcad#1656: what
+  `Kernel::curves_of` gives for each edge's name, without resolving the
+  names back; a kernel without it lists `Kernel::edges` and asks
+  `Kernel::curves_of` each name), and its vertices with their names and
+  points (`Kernel::indexed_element`); the coplanarity test is the model's.
+  A body whose bounding box does not reach the plane is skipped. Its
+  enclosing box (`Kernel::enclosing_box`, cheap and kept by the shape) is
+  tested first: one that stays off the plane by its own tolerance needs no
+  tight box, which the kernel works out at a cost on first use (seconds
+  for an assembly of hundreds of bodies); the answer is the same, since the
+  tight box lies inside it (`cli.plane_geometry_bodies` compares both
+  forms with the answers before mitcad#1656).
 - Visibility is the model's (the body and every occurrence on its path
   shown, as the `instances` query's `visible`); Hide Above Sketch only cuts
   what the view draws, so the edges in the plane stay in the answer.
@@ -12524,7 +12726,10 @@ also has:
 - `height`: a vertex's height, a conic's centre's, else that of the middle
   of `path` (where a client shows a circle's centre).
 
-The bounding box test that skips a body is not made in this form.
+The bounding box test that skips a body is not made in this form; the
+enclosing box still saves a tight box for a body that stays off the plane.
+A job the query runs in stops between bodies when it is cancelled (the
+application reads this form off the UI thread, mitcad#1656).
 
 Tests: `core/model-tests/analysis/src/plane_geometry_tests.rs`.
 
@@ -12933,7 +13138,10 @@ feature's point of the timeline:
   - `face`: the distance to the face;
   - `centre`: to the middle of the profile the face belongs to, half its
     section further;
-  - `through`: to its far side.
+  - `through`: to its far side;
+  - `to_face` (mitcad#1630): to the plane of a face picked anywhere, not
+    only one in the ray's way (*Length to a face* below); `to` may then
+    also be an origin or construction plane.
 
   (The part is the body of the face, or of the derived part the frame is
   of; its far side is the farthest corner of its box along the ray.)
@@ -13101,7 +13309,7 @@ points*).
 
 | Command | Fields | Result |
 |---|---|---|
-| `build_place` | `part` (`{"library", "url", "rev", "component", "config"}`, or `{"source": "S1", "config"}` to reuse a source), `at` (below), `rotate` (an angle: 0, 90, 180 or 270 deg; a number is radians), `flip` (true: the other end first), `length` (a value, or `{"bind": {"occurrence", "geometry"}, "mode": "face"/"centre"/"through", "add"}`; left out: the source's default), `mitre` (`{"angle", "cut": "new"/"existing"/"shared"/"none"}`; left out: none, also on a square corner; `shared` on a corner at another angle at offset 0, mitcad#427; every cut keeps the lengths as long points and a shared one makes the outer corners meet, mitcad#443), `tilt` (on a side, mitcad#444: an angle from -80 to 80 deg, positive towards the target's end B; *Tilt*), `parameters` (other source parameters), `name` | `component`, `occurrence`, `name`, `features` (everything it added), `joint`, `bound`, `adds`, `warnings`, `place` (`side`, `end`, `frame`, `geometry` or `grounded`); undo step `Place <designation>` |
+| `build_place` | `part` (`{"library", "url", "rev", "component", "config"}`, or `{"source": "S1", "config"}` to reuse a source), `at` (below), `rotate` (an angle: 0, 90, 180 or 270 deg; a number is radians), `flip` (true: the other end first), `length` (a value, or `{"bind": {"occurrence", "geometry"}, "mode": "face"/"centre"/"through", "add"}`, or to a picked face `{"mode": "to_face", "face": {"occurrence", "geometry"}, "offset"}`, *Length to a face*; left out: the source's default), `mitre` (`{"angle", "cut": "new"/"existing"/"shared"/"none"}`; left out: none, also on a square corner; `shared` on a corner at another angle at offset 0, mitcad#427; every cut keeps the lengths as long points and a shared one makes the outer corners meet, mitcad#443), `tilt` (on a side, mitcad#444: an angle from -80 to 80 deg, positive towards the target's end B; *Tilt*), `parameters` (other source parameters), `name` | `component`, `occurrence`, `name`, `features` (everything it added), `joint`, `bound`, `adds`, `warnings`, `place` (`side`, `end`, `frame`, `geometry` or `grounded`); undo step `Place <designation>` |
 | `build_edit` | `component`, and any of `at.offset`, `at.from` (on a side or a rail, mitcad#417: `a`, `b` or `middle`, on a side `gap`, mitcad#1401; an offset alone is from the part's reference, a `from` alone keeps the part where it is and recomputes its offset), `rotate`, `flip` (true or false: which end meets), `length` (a value detaches, a `bind` binds), `ends` (`{"a": {"angle", "tilt"}, "b": ...}`; null squares an end; the length stays the long point, mitcad#443), `tilt` (a part on a side, mitcad#444: its tilt again, its ends recut; 0 squares it), `config`, `parameters`, `machining` (`[{"end": "a"/"b", "hole": {"diameter", "depth", "thread"}}]`: the part's own end machining, not a connector's; it replaces the whole list, an empty list takes it away) | `changed` (`offset`, `from`, `rotate`, `flip`, `detached`, `length`, `bound`, `tilt`, `ends`, `config`, `parameters`, `machining`); undo step `Edit <name>` |
 | `build_connect` | `junction` (an id from `build_junctions`), `part` (as `build_place`'s), `fasteners` (default true), `machining` (default true), `name` | `component`, `occurrence`, `adds`, `warnings` (a fastener that cannot be read is left out with a warning); undo step `Connect <designation>` |
 | `build_panel` | `at` (`{"occurrence", "geometry", "point"}`: a face or a slot frame of one of the frame's profiles), `part`, `thickness` (for a part whose thickness is a parameter), `parameters`, `name` | `component`, `occurrence`, `bound`, `fits` (false, with `reason`, when a fixed-width sheet is too narrow or too wide), `adds` (the clamps of a surface panel); undo step `Place <designation>` |
@@ -13353,7 +13561,7 @@ radians, as joints have them.
 | Query | Fields | Result |
 |---|---|---|
 | `build_preview` | `build_place`'s, `build_panel`'s or `build_connect`'s fields | what the command would do, without changing anything. A placing: `frame` (the new part's own axes at its end A, z running from A to B), `place` (`side`, `end`, `frame`, `geometry` or `grounded`, as `auto` decided), `length` (`value`: the length given, else what the part's ray gives in `mode`, else the source's default; `default`; `target`: what the ray meets first, `{occurrence, geometry}` with a frame of another BUILD part facing it, or the `bind` given, null when nothing; and `mode`), `ends` (`a`, `b`: `{angle, tilt}` or null; `target`: the target's end cut), `tilt` (radians, mitcad#444), `snaps` (on a side, mitcad#394: `{kind, offset, point}` for each place a click snaps to: `kind` `end_a`, `end_b`, `middle`, `gap` (mitcad#1401) or `grid`, `offset` the new part's near face from end A, `point` where its middle then stands on the slot, in the design), `side` (on a side: `{kind, from, offset, point, width, gap}`: the snap the click took (`end_a`, `end_b`, `middle`, `gap`, `grid`), null between snaps, or `clamped` when the placement was kept within the target; the reference and the offset from it the click resolved to, or the typed ones, as `at.from` and `at.offset` take them (mitcad#417); where the part stands; its width along the slot; `foot`, where the part's frame meets the slot, a tilted part's foot long point, in the design; null elsewhere), `end` (on an end, mitcad#417: `{zone, direction, turns, offset, mitre}`: `zone` `straight` or `edge` (what the click chose) or `given` (`at.direction`); `direction` the new part's axis in the host's coordinates; `turns` the four unit vectors square to the target in the host's coordinates, +x, +y, -x, -y of its end frame; `offset` a corner's offset, null when straight; `mitre` `{cut, angle}` the placement will use, the default resolved (`cut` `none`, `new`, `existing` or `shared`, `angle` in radians or null); null elsewhere), `host` (as `build_host` answers), `designation`, `warnings`. A panel: `frame`, `fits`, `reason`, `width`, `height`, `bound`. A connector: `frame`, `junction`, `fasteners` (`{frame, at}`), `fastener_parts`, `machining` (`{component, at, point, diameter, depth, thread}`). All: `body` (`"see analysis_shape"`) and `problems` (the refusal the command would give, then nothing else) |
-| `build_parts` | | `parts`: for each BUILD component, `component`, `name`, `role`, `source`, `part`, `joint`, `designation`, `supplier`, `part_number`, `config`, `length`, `ends`, `bound` (`{feature, parameter, to: {occurrence, geometry}, mode}`, or null), `flip`, `rotate`, `tilt` (radians, 0 square, mitcad#444), `machining` (its own, as `build_edit` takes it), `added_by`, `adds`, `junction`, `from` (a part on a side or a rail: `a`, `b`, `middle` or `gap`, else null), `gap` (from `gap`, mitcad#1401: the two profiles it is centred between, `[a, b]`, null for an end; else null) |
+| `build_parts` | | `parts`: for each BUILD component, `component`, `name`, `role`, `source`, `part`, `joint`, `designation`, `supplier`, `part_number`, `config`, `length`, `ends`, `bound` (`{feature, parameter, to: {occurrence, geometry}, mode, add}`, `add` the value in mm, a length to a face's offset, mitcad#1630; or null), `flip`, `rotate`, `tilt` (radians, 0 square, mitcad#444), `machining` (its own, as `build_edit` takes it), `added_by`, `adds`, `junction`, `from` (a part on a side or a rail: `a`, `b`, `middle` or `gap`, else null), `gap` (from `gap`, mitcad#1401: the two profiles it is centred between, `[a, b]`, null for an end; else null) |
 | `build_junctions` | `components` (optional: only the junctions of these) | `junctions`: `id` (`<a's component>:<a's at>\|<b's component>:<b's at>`, stable while the two parts and their meeting stay), `kind` (`L`, `T`, `cross`, `inline`), `a` and `b` (`component`, `occurrence`, `at` (`end_a`, `end_b`, the slot frame, or `side` on a closed side), `frame` (the part's own axes at its end A), `at_frame` (the `at` frame)), `angle` (between the axes), `systems` (`B8/30`), `space` (the free room in the inner corner: `{"x", "y", "z"}`: along a, along b to its farther end, across), `connectors` (components already there) |
 | `build_cut_list` | `kerf` (optional, default 3 mm) | `rows`, one per group of identical results (source, row, length, ends, machining and own features the same): `source`, `designation`, `supplier`, `part_number`, `config`, `length` (the part's length, its long point: the body's length on the long side of its angled ends, mitcad#443), `ends` (`a`, `b`: `{angle, tilt}` or null), `machining` (`{at, diameter, depth, thread, connector}`: holes from connectors, and the part's own, `connector` null), `features` (how many own features the part has: holes, cuts), `quantity`, `mass` (each, kg; a section of a typed size, mitcad#1328: the value of its build block's `area_parameter`, the source's parameter of its area in the part's combination, times the density and the length), `components`, and for a section of a typed size `size` (its options' values but the length, `B 76.2, T 4.8`: its rows and stock apart from its source's other sizes). `stock`: per source and row (and typed size, whose `designation` is the source's name with its `size` in parentheses), cut from its longest stock length, `{"source", "designation", "stock_length", "pieces": [lengths in cutting order], "bars" (where each stock piece's cuts end in `pieces`), "needed", "offcut", "too_long"}`, longest pieces first into the first stock piece they fit (a kerf after each). `kerf`. `other`: the parts list's rows for everything else |
 | `build_host` | | the BUILD host (mitcad#394, *Where parts go*): `component` (its uid), `name`, `path` (its first occurrence path from the root, uids joined by `/`, `""` for the root) and `active` (the active component); the app gives paths from it and points in its coordinates |
@@ -13461,6 +13669,38 @@ the slot (one in the middle when there is no room for two); they are its
   library, and the MCP server allows them (`classes::command_class_with`,
   which looks at the fields).
 - `build_edit`, `build_remove` and the queries are class `model`.
+
+### Length to a face
+
+A length may end at a face the part does not run into (mitcad#1630):
+the uprights of a split-level frame standing on bases at different
+heights, each ending level with the first one's top.
+
+```json
+{"cmd": "build_place", "part": {"source": "S1"}, "at": {"point": [200, 0, 100]},
+ "length": {"mode": "to_face",
+            "face": {"occurrence": "O1", "geometry": {"body": "F2.b0", "face": "F2:end_b"}},
+            "offset": 10}}
+```
+
+- `face` is what the length ends at, as `bind` names it: a planar face
+  (a profile's end face too), a frame of a placed part, or an origin or
+  construction plane of the BUILD host or of an occurrence under it.
+- The part ends where its axis, from its start, meets that plane, wherever
+  the face is: beside the part, above or below it. `offset` (a length,
+  default 0) is added along the part, so 10 ends 10 mm past the plane and
+  -10 short of it.
+- It is a `bound_length` with `mode` `to_face`, its `to` the face and its
+  `add` the offset: `{"bind": ..., "mode": "to_face", "add": ...}` says
+  the same. The length stays bound: moving the part the face is of, or
+  changing its length, moves this part's end with it.
+- Refused, with the reason, when the plane runs along the part's axis
+  (they never meet), when it is behind the part's start, or when the
+  offset would end the part at or before its start. A face that is not
+  planar is refused too; its place is painted.
+- `build_edit` takes the same `length` (an offset left out is 0); the
+  `build_parts` query names the mode `to_face` with the offset as `add`,
+  and `build_preview`'s `length.target` is the face given.
 
 ## BUILD: timber construction
 
@@ -15002,7 +15242,12 @@ operation is `new_body` or `new_component`, without participants).
   surface runs in order, ruled or smooth, `closed` back to the first; no
   end conditions, centre line or rails. Its faces are
   `<feature>:side(<curve>)` after the first section's curves. A surface
-  loft of profiles and faces is the loft's own `surface`.
+  loft of profiles and faces is the loft's own `surface`, with its rails
+  or centre line. A 3D sketch's curves are curve sections anywhere in
+  space (the sketch-curves form), its closed loops in its sketch plane
+  profile sections, and its curves in any plane rails or a centre line
+  in the typed path form (mitcad#1550, "Pipe and Sweep along 3D sketch
+  curves").
 - Refused: a join, cut or intersect; `curves` without `surface` (`only a
   surface extrusion sweeps sketch curves`); neither profiles nor curves;
   a thin surface extrusion; curves of another sketch than the profiles';
@@ -20578,6 +20823,10 @@ the same items.
 - `outline` (the curves and the texts' glyph contours as polylines) and
   `points` (lone points) are for a preview, in the source sketch's
   coordinates; `sketch.paste` takes only the `fragment`.
+- **3D sketches** (mitcad#1661): the query copies a 3D sketch's geometry
+  too (`kind` `3d`), which `sketch3d.paste` takes, as does a planar copy;
+  `sketch.paste` refuses a 3D sketch's copy. See "Copy and paste of 3D
+  sketch geometry".
 
 The application keeps the query's answer on the clipboard under the type
 `application/x-mitcad-sketch-fragment+json` (`app/COMMANDS.md`, Sketch
@@ -22817,7 +23066,13 @@ false. Single-body components have component rows; root bodies and the bodies
 of unstructured multi-body components have `body` rows instead of also being
 counted as a component row. Explicit feature-created, linked and library
 parts retain their component identity (including multi-body parts and their
-separate purchased-item rows). Bodyless component rows remain available, and purchased items
+separate purchased-item rows). So does a component with a part number of its
+own (the row's `part_number`: Identity › Part number, which Insert ›
+Component from Web sets from the file's name, or a library or BUILD part's;
+mitcad#1663): it is one row with `body` null and its quantity by its
+placements, whatever its body count, so a downloaded bearing of nine bodies is
+one bearing. A multi-body component without a part number keeps a row per
+body. Bodyless component rows remain available, and purchased items
 remain separate. Each row has `group_names` for the source names and its
 summed `quantity`. Existing library, supplier and requested `properties`
 columns come from the first source. Grouping is a query only: it changes no
@@ -23197,7 +23452,7 @@ bodies stay as they are and the warnings go:
 
 | Command | Fields | Result |
 |---|---|---|
-| `auto_fix` | `features`: uids (a selection, a timeline group's members); all features when left out or empty | `warnings` (the reference problems of those features before), `fixed` (those gone after), `changed` and `followed` (the features whose definitions changed; `followed` those not asked for), `left` (each problem left: `feature`, `name`, `message`, `advice`), `label` (the undo step's name, null when nothing changed) and `message`: `Auto Fix: 2 of 3 warnings fixed; Hole1: the body has no edge E{…}, pick it again` |
+| `auto_fix` | `features`: uids (a selection, a timeline group's members); all features when left out or empty; `shared` (`parameter` or `own`): what a thread's fit does with a named parameter other places use (mitcad#1632) | `warnings` (the reference problems and the thread fit warnings of those features before), `fixed` (those gone after), `changed` and `followed` (the features whose definitions changed; `followed` those not asked for), `left` (each problem left: `feature`, `name`, `message`, `advice`), `fitted` (each face fitted to its thread: `thread`, `name`, `face`, `diameter`, `needed`, `internal`, `source`, `source_name`, `parameter`, `named`, `old` and `new` expression, `others`, `message`), `choices` (the named parameters a fit left for a choice: `feature`, `parameter`, `others`), `filament_faces` (with every feature: the [filament changes at faces](#filament-changes-at-planes-and-faces) an edit renamed, written with the names found, mitcad#1643), `label` (the undo step's name, null when nothing changed) and `message`: `Auto Fix: 2 of 3 warnings fixed; Hole1: the body has no edge E{…}, pick it again` |
 
 - **What it writes** is read from the warnings themselves, which name the
   stored reference and exactly what the computation used: `face F2:side(c1[c4,c2])
@@ -23229,13 +23484,25 @@ bodies stay as they are and the warnings go:
   the feature fails and nothing is changed; `left` names it with `pick it
   again` or `pick one of them again`. Other warnings (a fillet built as
   rings) are not references and are neither counted nor changed.
+- **A thread whose face does not fit it** (mitcad#1632, [Fitting the face
+  to the thread](#fitting-the-face-to-the-thread-mitcad1632)): after the
+  references, the value or dimension that sets the face's diameter is
+  changed to the thread's crest diameter, checked the same way; `fitted`
+  names what was changed from what to what, and the message says it in
+  words: `Auto Fix: 1 of 1 warning fixed; Thread2: the hole fitted to the
+  thread: Sketch2's dimension 72/2 is now 73.835/2`. A face nothing Auto
+  Fix can change sets is left with `change the hole by hand (<why>)`; a
+  fit that would change a named parameter other places use is left
+  without `shared` (`choices`).
 - **One undo step:** `Auto Fix Extrude8` for one feature, `Auto Fix
   <group>` when the features are a timeline group's, else `Auto Fix 3
   Features`. Nothing fixed: no step. A cancelled computation (P7) changes
   nothing.
 - The `timeline` query gives a feature whose warnings Auto Fix can write
   `auto_fix`: how many (left out when none); the application offers Auto
-  Fix then.
+  Fix then. A thread whose fit would change a named parameter other
+  places use also has `auto_fix_choices` (`parameter`, `others`): the
+  application asks which way first.
 
 Tests: `core/model-tests/features-solid/src/auto_fix_tests.rs` (a region
 found as another and as the sum of two, a renamed face, a face renamed by
@@ -24423,6 +24690,996 @@ and the log line), `tools/ui-drawing-edge-line-test.sh` and
 (`app.ui-windows-drawing-edge-line`) on the shared steps
 `tools/ui-scripts/drawing-edge-line.mitcad-ui`.
 
+## 3D sketches: `spatial_sketch` and `sketch3d` (mitcad#1522)
+
+A 3D sketch holds points with three coordinates and lines, arcs, circles
+and splines through them, in a frame that follows its support (an origin
+plane, a construction plane or a planar face of the active component). It
+is a feature type of its own, `spatial_sketch`, with its own commands
+(`sketch3d.*`) and query (`sketch3d`): the planar `sketch.*` commands and
+the `sketch` query keep their meaning and refuse a 3D sketch (`3DSketch1
+(F2) is a 3D sketch: the sketch3d.* commands edit it`), and the `sketch3d`
+commands and query refuse a planar one. A 3D sketch's closed loops in its
+sketch plane bound profile regions as a planar sketch's do
+([below](#profile-regions-of-3d-sketches-mitcad1550)). The model side
+is `core/sketch/src/spatial.rs` (definition, solver adapter, output),
+`spatial_edit.rs` (its edits) and `core/model/src/document/spatial_sketches.rs`;
+`docs/architecture.md`, "3D sketches", says how they fit together.
+
+**Frame and values.** Points are local coordinates `[x, y, z]` in
+millimetres: `x` and `y` along the support's axes, `z` along its normal.
+Lengths, radii and arc lengths are millimetres, values follow
+[Values](#values) (a number, a parameter's name or an expression). The
+query gives each point also as `position` in the component's coordinates
+and the frame as `origin`, `x_axis`, `y_axis` and `normal`.
+
+**Ids.** Points, curves and texts share one numbering (`p1`, `c3`, `t5`),
+relations and dimensions another (`k2`), as in a planar sketch. A command's
+result gives the ids it made: `entities` (new points and curves in the
+order they were made), `points`, `curves`, `constraints`, `dimensions`,
+`parameters` (created for new driving dimensions), `removed` (when anything
+was removed), `made` (the main item: the line, arc, circle, spline, point,
+relation or dimension) and `status`; take ids from there or from the
+query. A point input is `[x, y, z]` (a new point, fixed by nothing: its
+coordinates only start the solve) or `"p3"` (an existing point, which joins
+the new curve to it); `[x, y]` is refused, as is a curve's id where a point
+is wanted.
+
+**One edit, one undo step.** Every `sketch3d.*` command but
+`sketch3d.create` names its sketch (`"sketch": "F2"`) and is one edit of
+the model: a segment or arc with its new points, attachments, axis or
+normal alignment, tangency and dimensions is solved with the support and
+the sources where they are now and taken whole, as one undo step (`Add Line
+in 3DSketch1`); one that does not solve, or whose input is invalid, is
+refused with nothing changed (definition, parameters, ids, history). The
+refusal says why in plain words for a person and, in its detail for
+agents, names the relations involved (mitcad#1644, `docs/ui-conventions.md`
+"What a message says": shown `3DSketch1: relations of the sketch
+contradict each other`, detail `3DSketch1: the relations k2, k7 contradict
+each other`, carried as the refusal's `[placed: ...]` tail); the
+`sketch3d` query's `failure` gives a failed evaluation's `kind`
+(`definition`, `support`, `reference`, `value`, `conflict`,
+`not_converged`, `invalid_geometry`), `message` (plain words), `detail`
+(the same with the ids, names and points, when it says more), `places` (a
+source's vertex, edge or face, when it has one), `constraints` and
+`entities` (the sketch's own places, by id). Refused input: a coordinate that is not
+finite, a segment, radius or spacing of an arc's ends or of a spline's
+successive points at most 1e-6 mm, three Three-Point points on one line, a
+sense without an axis, a field of another mode, a driving spline length.
+Consistent redundant relations are kept with one warning (`a relation is
+redundant: ...`, its detail `k7 is redundant: ...`) and take no freedom;
+the query marks them `redundant`.
+
+| Command | Fields | Result |
+|---|---|---|
+| `sketch3d.create` | `support` (default `xy`; `xz`, `yz`, a construction plane `"F5"` or a planar face `{"face", "body"}`), `name` (optional) | `uid`, `name` (`3DSketch1`) |
+| `sketch3d.add_point` | `at` [x, y, z], `source` (optional: a source point the point is attached to, or a source curve or a face of a body it is put on; see "Linked references" and "Points on faces" below), `fixed` (default false: a Fix where it is) | `made` the point |
+| `sketch3d.add_line` | `start`, `end` (point inputs), `construction`, `axis` (`x`, `y` or `z`: the line stays along that frame axis) and `sense` (`positive`, the default, or `negative`: from start to end), `length` (a driving true length), `offsets` ([dx, dy, dz]: driving signed offsets from start to end, `null` leaves one free), `start_source`, `end_source` (attachments, as `add_point`'s `source`) | `made` the line, `start`, `end`; a new end starts where the axis and length or the offsets put it |
+| `sketch3d.add_arc` | `mode`: `three_point` (`through` [x, y, z]: a position the arc passes, not stored), `center` (`center` point input, `normal` [x, y, z], or `normal_axis` alone for an axis's direction; a new end is placed on the arc's circle) or `tangent` (`from`: the line, arc or spline whose end `start` is; the arc continues it tangentially, in the plane of that tangent and `end`, with a `tangent` relation); `start`, `end` (point inputs), `construction`, `normal_axis` and `normal_sense` (`Keep Plane`: the normal along a frame axis), `radius`, `arc_length` (driving), `start_source`, `end_source` | `made` the arc, `center`, `start`, `end`; it runs counter-clockwise about its normal from start to end |
+| `sketch3d.add_circle` | `center` (point input), `radius` (value), `normal` [x, y, z] or `normal_axis` (with `normal_sense`: kept along that axis), or `plane` (`xy`, `yz` or `zx`: bound to the plane square to that axis, mitcad#1550), `through` (existing points held on it), `dimension` (default true: a driving radius dimension; false: the radius is a plain number and only starts the solve), `diameter` (the dimension and `radius` a diameter), `construction` | `made` the circle |
+| `sketch3d.add_spline` | `points` (point inputs), `degree` (left out: a cubic through the points, chord-length parameters; given: a B-spline by these control points, clamped uniform knots, weights 1), `closed` (fit points only: periodic through the first point), `ends` ([start, end] of an open fit-point spline: `natural`, the default, or `free`), `construction` | `made` the spline, `spline_points` its points in order; a fit-point spline's hidden control points are the solver's, not addressable |
+| `sketch3d.add_constraint` | `constraint`: as in the definition without `id`: `coincident` (`a`, `b`: points), `fix` (`point`; `at` left out: where it is now), `attach` (`point`, `source`), `align` (`line`, `axis`, `sense`), `point_on` (`point`, `curve`: a line between its ends, an arc's full circle, a spline within its range), `midpoint` (`point`, `curve`: a line or an arc), `tangent` (`a`, `b`: curves, `at`: their shared point; `sense` left out: taken from the geometry and then kept), `equal` (two lines' lengths or two arcs' or circles' radii), `normal_align` (`curve`, `axis`, `sense`: an arc's or circle's free normal), `on_sketch_plane` (`points`: their elevation groups join the sketch's one On Sketch Plane relation), and `parallel`, `perpendicular`, `symmetric`, `concentric`, `curvature` and `on_plane` (see "3D relations and dimensions" below, mitcad#1661) | `made` the relation (the On Sketch Plane relation it joined); in-plane relations are a converted sketch's only and refused |
+| `sketch3d.add_dimension` | `dimension`: as in the definition without `id` and `value`: `length` (`line`), `offset` (`a`, `b`: points, `axis`: the signed `b - a`), `radius`, `diameter`, `arc_length` (`curve`), `spline_length` (`curve`: driving or driven, mitcad#1661), `angle` (`a`, `b`: two lines, or a line and an arc or circle whose normal is the direction, or two normals; radians strictly between 0 and pi, a person's value in degrees; no intersection implied, mitcad#1661), `tangent_magnitude` (`curve`: an open spline, `end`: `start` or `end`; `abs(C'(t))` in its parameter, the stored tangent's length, mm; a fit-point spline's end must be free or held by a tangency or curvature continuity, mitcad#1661); `value` (default: what it measures now), `driven` (default false; a driven one takes no `value`; it gets a read-only reference parameter `d<n>` that the features after the sketch and the sketch's own driving dimensions may use, mitcad#1661) | `made` the dimension; a driving one's value is a parameter owned by the sketch, or the named parameter given |
+| `sketch3d.set_dimension` | `dimension` (`k3`), `value` | a number or expression changes its own parameter, a parameter's name binds it to that parameter, `name = expression` renames its parameter and sets it; a value that uses the dimension's own parameter keeps that parameter as a user parameter, and its bare name only moves it there (result `user_parameters` and `notes`, as `sketch.set_dimension`'s; see [Values](#values)); a driven one becomes driving; undo step `Edit Dimension in 3DSketch1` |
+| `sketch3d.set_driven` | `dimension`, `driven` (default true) | driven: it only measures, its parameter goes when nothing else uses it; driving: at its measured value |
+| `sketch3d.set_construction` | `curves`, `construction` (default true) | |
+| `sketch3d.fix` | `points`, `fixed` (default true) | Fix where each point is now; `fixed: false` (Unfix) removes the Fix only, an attachment stays (`removed`) |
+| `sketch3d.detach` | `points` | removes each point's attachment, or its Point on Curve and Midpoint relations with reference curves (a reference curve nothing uses any more goes with them); the point stays where it is, free as far as the other relations allow (`removed`) |
+| `sketch3d.release_from_plane` | `points` | their elevation groups (coincident points, a plane-bound curve's points) leave the On Sketch Plane relation, which goes when it is empty; `released`: the representatives taken out |
+| `sketch3d.release_plane` | `curves` (plane-bound arcs and circles, as a converted sketch has them) | `Release Plane`: the normal starts along its axis and is free from then on |
+| `sketch3d.remove` | `items` (`p3`, `c4`, `k5`), `dependents` (default false) | relations and dimensions, then curves (with their own relations; their points stay where another curve or relation uses them), then points; a point that a curve or relation not listed uses is refused naming them, unless `dependents` |
+| `sketch3d.drag` | `points` [{`point`, `to` [x, y, z]}], `tangents` [{`curve` (an open fit-point spline), `end` (`start` or `end`), `to` [x, y, z]: the wanted end tangent C'(t), the spline's parameter running from 0 to 1}] (mitcad#1526: a tangent handle's drag, at an end that is free or held by a tangency; a natural end is refused), at least one of the two; `preview` (default false) | pulls the points and the end tangents toward the targets as far as the relations allow (soft goals: no relation is stored; a tangent reached is kept with the spline as its `tangents`), one undo step `Drag in 3DSketch1`; `preview`: only `points` (every point where it would go), `curves` (each curve's `geometry` as the query gives it, where the drag would take it) and `status`, nothing changes |
+
+| Query | Fields | Result |
+|---|---|---|
+| `sketch3d` | `uid`; `path` (optional: {`curves`, `chain`, `reversed`}, mitcad#1527) | `uid`, `name`, `type` (`spatial_sketch`), `support`, `frame` {`origin`, `x_axis`, `y_axis`, `normal`} (null when the support was not found), `points` [{`id`, `at` (local, solved), `position` (component), `determined`, `on_sketch_plane`}], `curves` (as in the definition, with `plane_bound`, `determined` and `geometry`: a line's `start`, `end`, `length`; an arc's or circle's `normal`, `radius` and an arc's `sweep` and `length`; a spline's `degree`, `knots`, `weights`, `control_points`, and an open fit-point spline's `end_tangents` [start, end] (C'(t), where its tangent handles are, mitcad#1526); a reference curve's, as found from its source before the solve, also when it failed: `kind` `line` (`start`, `end`), `conic` (`center`, `normal`, `x_axis`, `major`, `minor`, `start`, `end`, `closed`), `bspline` (`degree`, `poles`, `weights`, `knots`) or `helix` (`center`, `axis`, `x_axis`, `radius`, `pitch`, `start`, `end`), local coordinates, mitcad#1524), `constraints` (as in the definition, with `in_plane`, a tangency's solved `sense`, an attachment's `target` as found before the solve, `redundant`), `dimensions` (as in the definition with `value` the parameter's name, `driven`, `expression`, `measured`, `in_plane`, `redundant`), `references` (the linked reference records, see "Linked references" below), `chains` (the chains chain selection finds, see "Pipe and Sweep along 3D sketch curves" below), `evaluated`, `status` {`dof`, `fully_constrained`, `determined` {`points`, `lines`, `curves`}, `redundant`, `measured` {`k3`: value}} (null when it did not solve), `failure` (when it failed), `warnings`, `texts` (a converted sketch's), `plane_curves` (its curves in its sketch plane, when it solved: see "Curves of 3D sketches that grow walls and surfaces" below), `route` (with `path`: see "Routes in the query" below) |
+
+**In the timeline and the browser** (mitcad#1524) a 3D sketch is a sketch:
+the `timeline` query gives its `dof` (when it solved) and its light bulb
+(`visible`, `visible_set`), which `set_feature_visible` sets as a planar
+sketch's (`Hide 3DSketch1`, one undo step); it is shown unless hidden.
+
+**The definition** (`add_feature`, `edit_feature`, the design file) is
+written flat, ids with each item; the stored positions, normals and radii
+are where the last solve left them and where the next one starts:
+
+```json
+{"type": "spatial_sketch", "support": "xy",
+ "points": [{"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [40, 0, 0]}],
+ "curves": [{"id": "c3", "type": "line", "start": "p1", "end": "p2"}],
+ "constraints": [{"id": "k1", "type": "attach", "point": "p1", "source": "origin"},
+                 {"id": "k2", "type": "align", "line": "c3", "axis": "x", "sense": "positive"}],
+ "dimensions": [{"id": "k3", "type": "length", "line": "c3", "value": "d1"}]}
+```
+
+Curves: `line` (`start`, `end`), `arc` (`center`, `start`, `end`, `normal`,
+`plane` {`axis`, `sense`} for a plane-bound one), `circle` (`center`,
+`radius`, `normal`, `plane`), `spline` (`degree`, `control`, `weights`,
+`knots`), `fitted_spline` (`points`, `closed`, `ends`, `tangents`: the
+end tangents C'(t) [start, end] the last solve left at a free or tangent
+end, null at another; the next solve starts from them, so a dragged
+handle stays, mitcad#1526), and a converted
+sketch's `ellipse`, `elliptical_arc` and `reference`; each with
+`construction` when it is one. Relations as `sketch3d.add_constraint` takes
+them, with `id` (and a Fix's `at`, a tangency's `sense`); a converted
+sketch's `in_plane` and `in_plane_fixed`. Dimensions as
+`sketch3d.add_dimension` takes them, with `id` and, when driving, `value`
+(the parameter's name); a driven one with `reference` (its reference
+parameter's name, mitcad#1661).
+
+**Parameters, history and files.** A driving dimension's own parameter
+belongs to the sketch: it goes with the dimension (or when the dimension
+becomes driven) and with the sketch; a named parameter it is bound to
+stays. Changing a parameter solves the sketch again from its stored
+positions; an upstream change that breaks it (a lost source vertex, a
+moved support that a dimension no longer agrees with) fails the feature
+and keeps its definition, and the query gives the failure without
+geometry. A fit-point spline's hidden control points are fitted to its fit
+points before each solve, so a solve moves no fit point that it need not
+move. Undo and redo restore the definition, the parameters and the ids; a
+drag's preview and a refused edit leave no step. The design file keeps the
+definition as above, under the feature type `spatial_sketch`: the file
+format's version stays (a new feature type adds no field to the file), a
+planar sketch is read and written as before, and a reader without the type
+refuses the design (`features[1] (3DSketch1): unknown variant
+spatial_sketch`) rather than dropping the sketch. The results of a 3D
+sketch are not kept in the result store: opening a design solves it again
+from its definition. No tool's state (a drawing plane, a pending point, a
+drag) is stored.
+
+**The drawing tools** of the application (mitcad#1525, app/COMMANDS.md
+"3D sketch drawing tools") send these commands as an API client would:
+a Line's typed Offsets as `offsets` (a field not typed `null`, a typed 0
+kept as a driving 0), Axis and Length as `axis`, `sense` and `length`,
+Keep Axis as `axis` and `sense`, Keep Plane as `normal_axis` and
+`normal_sense`, a snap's source as `start_source`, `end_source` or
+`source`; what a curve's command does not take follows it in the same
+undo step, merged with `merge_undo` (`Add Line in 3DSketch1`): an
+attachment of a spline point or an arc's centre (`sketch3d.attach`), a
+relation of a new point with the sketch's own curve (`point_on`,
+`midpoint`), an offset typed for an arc's or a spline's point
+(`sketch3d.add_dimension` of type `offset` from the point before it).
+No command is only the tools'. Tests: `core/model-tests/api/src/sketch3d_tests.rs`
+(`the_drawing_tools_commands_make_one_step_each`: offsets with an
+explicit zero, Axis and Length, a free end's two degrees of freedom, a
+merged Point on Curve undone as one step, a spline point's offset, a
+Center Point Arc with Keep Plane, radius and arc length) and CLI
+`sketch3d_tools` (the same on the geometry kernel with a Midpoint snap of
+a box edge that follows the box).
+
+**Editing** in the application (mitcad#1526, app/COMMANDS.md "3D sketch
+editing") sends these commands as an API client would: a relation or a
+dimension added from the selection (`sketch3d.add_constraint`,
+`sketch3d.add_dimension` without `value`: at what it measures; several
+alignments merged into one step), `sketch3d.set_dimension` and
+`sketch3d.set_driven` from the list, `sketch3d.remove` of a relation, a
+dimension or the selection (`dependents` once the user takes them),
+`sketch3d.fix`, `sketch3d.detach`, `sketch3d.attach` and
+`sketch3d.replace_reference` with a source picked in the view, and
+`sketch3d.drag` with `preview` while a point, a curve (its points by one
+offset) or a tangent handle is dragged, without it on release. Tests:
+`core/model-tests/api/src/sketch3d_tests.rs`
+(`tangent_handles_curves_and_dimensions_are_edited`),
+`core/model/src/spatial_sketch_tests.rs` (`a_dragged_tangent_handle_stays`)
+and CLI `sketch3d_edit` (W2, W3 and W17 through the commands).
+
+3D sketch geometry is copied with `sketch_fragment` and pasted into a 3D
+sketch with `sketch3d.paste`, which also takes a planar sketch's copy
+([below](#copy-and-paste-of-3d-sketch-geometry-mitcad1661));
+`sketch.paste` refuses a 3D sketch's copy. Pipe and
+Sweep take 3D sketch curves as paths
+([below](#pipe-and-sweep-along-3d-sketch-curves-mitcad1523)); a planar
+sketch turns into a 3D one in place with `sketch3d.convert`
+([below](#turning-a-planar-sketch-into-a-3d-sketch-mitcad1544)).
+
+Tests: `core/model-tests/api/src/sketch3d_tests.rs` (mock kernel: the
+route of W1-W3 from returned ids, its dimensions edited, bound to a named
+parameter and removed; refused compound actions and invalid input with
+nothing changed and no history, a consistent duplicate length; the bent
+route of W11 edited, saved, read again, edited and undone; W17's
+fit-point and control-point splines, a driven spline length, a drag
+previewed and taken, safe deletion; Fix, Unfix, Attach, Detach, On Sketch
+Plane, Release from Plane and Release Plane; planar commands and queries
+refusing a 3D sketch, a planar sketch read again unchanged beside one, an
+unknown feature type refused), `core/model/src/spatial_sketch_tests.rs`
+(the model's edits), CLI `sketch3d_route` and `sketch3d_route_reopen`
+(W11 through the commands, undone and redone, saved and opened again).
+
+### 3D relations and dimensions (mitcad#1661)
+
+`sketch3d.add_constraint` takes, besides the relations above:
+
+| Relation | Fields | Rows and freedom |
+|---|---|---|
+| `parallel` | `a`, `b`: each a line (its direction from start to end) or an arc or circle (its normal) | parallel either way, with no intersection implied: two rows |
+| `perpendicular` | `a`, `b` as `parallel` | at right angles, no intersection implied: one row |
+| `symmetric` | `a`, `b` (points), `plane` | the points mirrored across the plane: their middle on it and the line between them along its normal (three rows) |
+| `concentric` | `a`, `b` (arcs or circles), `normal` (default true) | one centre (three rows; none when they share the centre point) and, with `normal`, parallel planes (two rows); `"normal": false` keeps the centre only |
+| `curvature` | `a`, `b` (a spline and a line, an arc or a spline), `at` (the point where the spline ends and they join), `sense` (as a tangency's) | curvature continuity (G2): the tangency's rows and equal curvature vectors across the tangent (two rows); the spline's end then is held as by a tangency (its tangent handle drags, a natural end's curvature rows go); a cubic through fit points takes the rest from its next fit points |
+| `on_plane` | `points`, `plane` | each point on the plane (one row each; it slides on it) |
+
+A relation's `plane` is `{"frame": "z"}` (the plane of the sketch's frame
+square to that axis, through its origin: `z` is the sketch plane, `x` its
+YZ plane and `y` its ZX plane), `{"construction": "F3"}` (a construction
+plane of the sketch's component before it), `{"face": {"body": "F2.b0",
+"face": "F2:top"}}` (a planar face of a body before the sketch, of
+another component through `occurrence` and `context` as the linked
+references' sources) or `{"sketch": "F4"}` (another sketch's plane: a
+planar sketch's, or a 3D sketch's XY plane). A plane outside the sketch
+is found before each solve where it is now (`SpatialInputs::surfaces`), so
+the points follow a moved plane; one that is not found fails the sketch
+with a reference failure, its face painted; a later feature as the plane
+is refused as a link cycle. `sketch3d` lists the relation with its
+`plane`.
+
+Dimensions: `angle`, `spline_length` (driving or driven) and
+`tangent_magnitude`, as `sketch3d.add_dimension` above. The solve
+measures a spline's length with the formula a driving one holds
+(Gauss-Legendre quadrature of `abs(C')` on its knot spans), so a driving
+length measures its value.
+
+**Driven dimensions used by the sketch's own driving dimensions.** Every
+driven dimension has a read-only reference parameter (`reference` in the
+definition and the query, commented `3DSketch1 offset (driven)`), set from
+what it measures by each recompute; the features after the sketch use it
+as a planar sketch's (mitcad#231). A driving dimension of the same sketch
+may use it in its expression (`d4 / 2`): the sketch is then solved in
+stages, first with those driving dimensions held as driven so the driven
+ones measure without them, then whole with the measured values, again
+until the driven values no longer move (a chain settles in as many solves
+as it is long). One that moves what it uses never settles and is refused
+as a circular dependency, naming the dimensions in the agents' detail.
+
+Errors in words (mitcad#1327): `parallel takes two lines, or a line and an
+arc or circle (its normal)`, `an angle between two directions must be
+greater than 0° and less than 180°; make them parallel instead`, `a
+tangent magnitude needs a spline end that is free or tangent: a natural
+end has its tangent already`, `the plane of a relation was not found`,
+`a driving dimension uses a driven dimension of the sketch that it moves
+itself (a circular dependency)`; ids only in the agents' detail.
+
+Tests: `core/sketch/src/spatial_relations_tests.rs` (each relation and
+dimension: solve, drag, redundant and contradicting ones, the file form),
+`core/model-tests/api/src/sketch3d_relations_tests.rs` (planes outside the
+sketch followed when they move, saved and read again; a driven
+dimension's reference used by a driving one; curvature, concentric and
+tangent magnitude through the commands), the solver's rows in
+`core/solver/src/spatial.rs`.
+
+### Linked references of 3D sketches (mitcad#1543)
+
+A 3D sketch's points follow geometry from outside it through linked
+reference records, kept in its definition and found again before every
+solve: an **attachment** (`attach` relation) holds a point at a source
+point; a **reference curve** (`reference` curve) is a source curve that
+points lie on (`point_on`) or at the middle of (`midpoint`), one record per
+source and occurrence, reused by every point put on it.
+
+**Sources.** Written `"origin"` (the frame's origin) or an object named by
+its keys:
+
+- `{"body": "F2.b0", "vertex": "V{...}"}`: a point;
+- `{"body": "F2.b0", "edge": "E{...}"}`: a curve; with `"at": "start"`,
+  `"end"` or `"middle"` a point (the middle halfway along it by length,
+  the midpoint the planar body-midpoint snap uses: it stays the middle
+  when the edge changes);
+- `{"sketch": "F3", "point": "p2"}`: a point of another sketch, planar or
+  3D;
+- `{"sketch": "F3", "curve": "c4"}`: a curve of another sketch, planar or
+  3D; with `at` a point of it;
+- `{"feature": "F5"}`: an Intersection Curve's curve; with `at` a point of
+  it.
+
+A source of the sketch's own component comes before the sketch in the
+timeline (a later one is refused; one that uses the sketch, directly or
+through other features, is refused as a link cycle: `F7 (F7) uses this 3D
+sketch: a reference to it would make a link cycle`). Geometry of another
+component is seen through its occurrence, as a planar projection's
+(mitcad#100): in a command give `"occurrence": "O1/O3"` (and `"context"`,
+as `sketch.project` takes them) in the source, and the record keeps the
+`link` made from them (`{"source": "O1/O3", "target": ...}`, none for the
+sketch's own component); it follows that component's changes and the
+occurrences' placements. A vertex or an edge renamed by a sketch change is
+found again when that is unambiguous (a warning says so); an edge name that
+matches several edges is refused (name one with `#k`). A lost source (a
+deleted or suppressed feature, an entity gone from its sketch, a 3D sketch
+that does not solve) fails the sketch as a `reference` failure, keeping its
+definition: no point is silently detached and no last geometry is kept.
+
+**Modes.** A record is included in true 3D (`include`, the default: a
+vertex keeps its elevation), or with `"projected": true` projected along
+the sketch's normal onto its plane (`project`, as a planar sketch's
+Project makes it; a curve seen end on, which projects to a point, is
+refused as a reference curve).
+
+| Command | Fields | Result |
+|---|---|---|
+| `sketch3d.attach` | `point`, `source`, `projected` (default false) | a source point: an attachment; a source curve: a Point on Curve relation on its reference curve, made or reused (`reference`); `made` the relation. A point attached already is refused (Detach first) |
+| `sketch3d.include` | `source` (a curve), `projected` | `made` the reference curve, `reused` (true when the sketch had it); undo step `Include in 3DSketch1` (`Project ...` when projected) |
+| `sketch3d.replace_reference` | `item` (an attachment `k3` or a reference curve `c7`), `source` | `Replace Reference`: the record follows another source of the same kind (a point for an attachment, a curve the sketch has no record of yet for a reference curve); what uses it stays; refused with nothing changed when the new source is not eligible or the sketch does not solve with it |
+
+`sketch3d.add_point`'s `source`, `sketch3d.add_line`'s and
+`sketch3d.add_arc`'s `start_source` and `end_source`, and an `attach`
+relation of `sketch3d.add_constraint` take every source: a curve source
+puts the point on the curve. `sketch3d.detach` removes a point's
+attachment or its relations with reference curves, and a record nothing
+uses any more goes with its last user (also when its last relation is
+removed or its last point deleted). The `sketch3d` query lists the records
+in `references`: [{`id` (`k3` or `c7`), `kind` (`point`, `curve`, or
+`face` for an On Face relation, mitcad#1549),
+`source`, `body`, `occurrence` (the link's source path), `mode` (`include`
+or `project`), `users` (the attached point, or the relations with the
+reference curve), `status` (`ok`, `failed` with its `message`, or `unknown`
+when the last evaluation stopped before it)}].
+
+A 3D sketch's points and curves are sources too: of later 3D sketches, and
+of a later planar sketch's `sketch.project` (`{"sketch": "F3", "curve":
+"c4"}`, linked), which follows the 3D sketch's edits. An Intersection
+Curve takes a 3D sketch's curves too (mitcad#1550, "Every curve input"
+below).
+
+Tests: `core/sketch/src/spatial_tests.rs` (the sources' written forms, the
+records' kinds and reuse), `core/model/src/spatial_links_tests.rs` (W12: an
+edge's middle, start and a point on it follow a resized body, records
+reused, replaced with undo and redo, detached, saved and read again, a lost
+source; a turned support including and projecting; W13: another sketch's
+line end and circle followed, a planar sketch projecting a 3D spline; W14:
+another component's vertex and edge through its occurrence, moved and
+edited, link cycles refused), `core/model-tests/api/src/sketch3d_tests.rs`
+(the commands and the query's records, saved and read again) and CLI
+`sketch3d_links` (W12 on the geometry kernel).
+
+### Points on faces of 3D sketches (mitcad#1549)
+
+A point of a 3D sketch (a line's or an arc's end, a spline's fit or
+control point, a free point) may lie on a face of a body: an **On Face**
+relation (`on_face`), the face's linked reference record, kept in the
+definition and found again before every solve like the other records.
+Its source is written `{"body": "F2.b0", "face": "F2:side(c1[c4,c2])"}`
+(no `at`; `link`, or `occurrence` and `context` in a command, for a face
+of another component, as for the other sources). The relation takes one
+degree of freedom: the point keeps two to slide on the face.
+
+- A face whose surface is a plane, a cylinder, a cone, a sphere or a
+  torus is solved in closed form, on its whole surface (the row is the
+  signed distance to it).
+- Any other face (a B-spline surface, a surface of revolution, an offset
+  surface) is solved through the kernel's closest-point projection: the
+  point is put on the plane that touches the face at its nearest point,
+  and the solve is repeated from the projection of the solved point until
+  the point lies on the face itself within 1e-6 mm (a point that does not
+  reach it in 16 rounds fails the sketch as `not_converged`).
+
+The relation counts in the solve's redundancy and conflicts as the others
+do: a point fixed on the face makes it `redundant` (kept, said), one fixed
+off it is a `conflict` refusing the edit. When the face moves (its
+feature's parameter, an earlier feature edited, the occurrence moved),
+the point follows on the next solve. A lost face (its body's feature
+deleted or suppressed, the face gone) fails the sketch as a `reference`
+failure naming the relation, its definition kept and nothing detached.
+
+| Command | Fields | Result |
+|---|---|---|
+| `sketch3d.attach` | `point`, `source` a face | an On Face relation; `made` the relation. The same face twice is refused, `projected` is refused for a face; a point may lie on several faces (on two it slides along where they meet). A point attached to a source point is refused (Detach first) |
+| `sketch3d.replace_reference` | `item` an On Face relation `k4`, `source` a face | the relation follows another face |
+
+`sketch3d.add_point`'s `source`, `sketch3d.add_line`'s and
+`sketch3d.add_arc`'s `start_source` and `end_source`, and an `on_face`
+relation of `sketch3d.add_constraint` (`{"type": "on_face", "point":
+"p3", "source": {...}}`) put a point on a face. `sketch3d.detach` removes
+a point's On Face relations with its other links. The `sketch3d` query
+lists each On Face relation in `constraints` and in `references` with
+`kind` `face`, its `body`, `occurrence`, `users` (the point) and `status`.
+
+Tests: `core/solver/tests/spatial_surfaces.rs` (the closed forms, DOF,
+a moved surface, redundancy and conflict), `core/model/src/spatial_faces_tests.rs`
+(a line end on a planar face determined by two offsets and following a
+parameter change, a free point's two freedoms, Detach and Undo, saved and
+read again, a lost face; points on a cylinder, a sphere and a free-form
+face; a redundant and a contradictory relation; a converted sketch on a
+face) and CLI `sketch3d_faces` (a line end on a cylinder of another body,
+piped; the cylinder widened, the end and the pipe follow; its face lost).
+
+### Pipe and Sweep along 3D sketch curves (mitcad#1523)
+
+A Pipe's or a Sweep's `path` (and a sweep's `guide_rail`, `guide_rail2`
+and auxiliary `frame` curve), a loft's `centerline`, `rails` and auxiliary
+`frame` curve, a path pattern's `path` and a construction plane's or
+point's `path` (`along_path`, `normal_at_point`; mitcad#1550) may be curves
+of a 3D sketch of the same component before it, named by the typed path
+form:
+
+| JSON | Meaning |
+|---|---|
+| `{"spatial_sketch": "F3", "curves": ["c3", "c6", "c9"]}` | the curves, in any order, joined end to end |
+| `{"spatial_sketch": "F3", "curves": ["c3"], "chain": true}` | also every curve joined to them end to end (construction curves only when listed) |
+| `"reversed": true` (with either) | the path runs the other way |
+
+**Pieces.** Lines, arcs, elliptical arcs and splines (control-point and
+fit-point ones) in any mix; a construction curve when it is listed. A
+curve without ends (a circle, an ellipse, a closed fit-point spline) is a
+closed path by itself, and so is a curve that starts and ends at one
+point; with other curves it is refused at the recompute (`c7 is a closed
+curve: it is a closed path by itself, not a piece of a longer one`). A
+reference curve is refused (`3DSketch1's c12 is a reference curve,
+geometry from outside the sketch: it is no path piece (draw a curve on
+it)`). Each piece is the curve's model curve in the component's
+coordinates (a line, an arc as a circular conic, an ellipse as a conic, a
+spline as a B-spline, a fit-point spline by its solved control net),
+mapped once from the sketch's frame and turned round where the path runs
+against it.
+
+**Closed paths** (mitcad#1550). Curves that close a loop without
+branching are a closed path: from the first listed curve's start (its end
+when `reversed`) round to it again; one chained pick of any of its curves
+takes the whole loop. A Pipe and a Sweep along a closed path are closed
+(a Sweep's Distance 2 is none, as along a closed planar path).
+
+**Joints and order.** Curves join where they share a point, or where
+their ends are points made coincident (a `coincident` relation; in a sketch
+converted from a planar one also an in-plane coincidence of two points,
+whose ends must still meet). Ends that only lie near each other do not
+join, and curves that cross do not meet there. The curves must make one
+chain, open or closed, without branches; the joints, not the positions, decide the
+order, so it stays the same whatever a recompute solves. Chain selection
+adds the curves joined to the listed ones the same way.
+
+**Direction.** The path runs through the first listed curve along its own
+direction (a line from `start` to `end`, an arc counter-clockwise about its
+normal, a spline from its first point), against it with `"reversed":
+true`; first curve and direction are kept across edits and recomputes.
+Use the existing Pipe `corners` and Sweep orientation options: tangent
+joins (`tangent` relations) give a smooth path, a sharp corner a mitered or
+rounded one; no bend is added.
+
+**Associativity and failures.** The path is found from the sketch's
+current solve on every recompute: a dimension, a parameter or a moved
+support moves the pipe or sweep. When the feature is added or edited the
+selection is checked (the sketch is a 3D sketch before the feature, of
+its component; every listed curve is a curve of it that can be a piece,
+listed once; `no curves selected`, `3DSketch1 has no curve c99`); a
+planar path form naming a 3D sketch, or the 3D form naming a planar one,
+is refused naming the right form. Whether the curves still make one chain
+is found by the recompute, so an edit of the sketch that breaks it is taken
+and fails the Pipe or Sweep with the reason (`the path branches at p2 (10,
+0, 0): c3, c5 and c8 meet there`, `c9 does not join the others`); deleting a curve a path lists is refused (`Pipe1
+would no longer work: ...`). A sketch that fails (a lost support or
+source, conflicting relations) fails the feature using it, and no last
+geometry is used. A failure of the pipe's or sweep's own geometry is the
+consumer's: the sketch stays solved and editable.
+
+**Chains in the query.** The `sketch3d` query's `chains` lists what chain
+selection finds: [{`curves` (an open chain's in order from the free end of
+the end curve with the smaller id, a closed one's from its smallest curve,
+a branched one's in id order), `closed`, `branches` (the points where three
+or more meet, when any), `path` (the typed path that takes the chain whole,
+for an open or closed one without branches)}]; a curve without ends (a
+circle, an ellipse, a closed spline) is a closed chain of its own;
+construction curves and reference curves are in none.
+
+**Routes in the query** (mitcad#1527). `{"query": "sketch3d", "uid": "F3",
+"path": {"curves": ["c6", "c3"], "chain": false, "reversed": false}}` adds
+`route` to the answer: how a Pipe would run along those curves of the
+sketch (`chain` and `reversed` as in the typed path, both optional), found
+from the sketch's joints as the recompute finds it: {`curves` (in order
+along the path), `forward` (for each, whether the path runs along its own
+direction), `start`, `end` (the points the path starts and ends at; null
+for a closed curve), `closed` (mitcad#1550: it ends where it starts)}, or
+{`error`, `message`, `places`} with the reason a Pipe along them would
+fail or be refused: `error` for agents with the ids and points (`the path
+branches at p2 (40.000000, 0.000000, 0.000000): c3, c5 and c8 meet there`,
+`c9 does not join the others: ...`, `c7 is a closed curve: ...`,
+`3DSketch1 has no curve c99`), `message` the same in plain words (`the
+path branches at a point: 3 curves meet there`, mitcad#1644) and `places`
+the points it is about, when it has them. The application lists a picked path's route
+with it while a path input is open (app/COMMANDS.md, "Pipe and Sweep along
+3D sketches").
+
+**Every curve input** (mitcad#1550). Besides the paths above:
+
+- a path pattern's `path` and a construction plane's or point's `path`
+  take the typed form, measured along the path's exact pieces as along an
+  Intersection Curve (a fraction of the whole length, a length from the
+  start with `physical`, the point nearest to a point); Pattern on Path
+  along a 3D sketch's route moves the copies along it, and turns them with
+  its tangent with `along_path`;
+- an axis or a line reference (a construction axis through an edge, a
+  plane at an angle to a line, a plane through two lines or a line and a
+  point, a point where two lines or a line and a plane meet, a helix's or a
+  revolve's or a circular pattern's axis) takes a 3D sketch's line, `{"sketch":
+  "F3", "curve": "c4"}`, from its start to its end, and for an axis also
+  its arc or circle, the line through its centre along its normal;
+- a point reference (`{"sketch": "F3", "point": "p2"}`) takes a 3D sketch's
+  point where it is now;
+- an Intersection Curve's `first` or `second`, a boundary surface's curves
+  and a surface loft's sections of curves take a 3D sketch's curves in the
+  sketch-curves form (`{"sketch": "F3", "curves": [...], "chain": true}`):
+  curves anywhere in space, as a set, chain selection by the sketch's
+  joints; an Intersection Curve sweeps them along the normal of the 3D
+  sketch's support plane, as its Project takes geometry onto it.
+
+All of these follow the 3D sketch's edits and fail with it, as a Pipe does.
+What grows from curves in their sketch's plane (a rib's or web's curves,
+thin walls, the curves a surface extrusion, revolution or sweep sweeps)
+takes a 3D sketch's curves in its sketch plane in the planar form
+("Curves of 3D sketches that grow walls and surfaces" below); a tool of
+sketch curves takes a planar sketch's alone. A path's planar form naming
+a 3D sketch says which form to use (`3DSketch1 (F3) is a 3D sketch: as a
+path its curves are {"spatial_sketch": "F3", "curves": [...]}`).
+
+**The browser and the timeline.** The `timeline` query's `sketches` of a
+feature (mitcad#177) lists the 3D sketches it uses beside the planar ones:
+the browser lists a Pipe under its route's sketch, and editing the Pipe
+shows that sketch for the edit. A 3D sketch is not hidden when a feature
+uses it (planar sketches are, mitcad#7): its route stays in view.
+
+**Planar paths in a conversion.** `mitcad_model::features::path::spatial_rewrite`
+gives the typed path that a planar path along a sketch's curves becomes
+when that sketch turns into a 3D sketch in place (mitcad#1544): the same
+curve ids and `chain`, `reversed` set so that it runs the way the planar
+path ran, a closed one too (mitcad#1550). `rewrite_spatial_paths` does it
+for every path a feature holds (a Pipe's, a Sweep's, a loft's centre line,
+rails and auxiliary curve, a path pattern's, a construction plane's or
+point's) and refuses a surface sweep's curves, which grow from their
+sketch's plane.
+
+Tests: `core/model/src/spatial_path_tests.rs` (mock kernel: the route on a
+turned support driving a Pipe and a reversed Sweep, BC at 50 and the
+support turned, saved and read again; a subchain of a branching sketch,
+an explicit construction line, a Coincident joint, the failing and
+refused selections, an edit that breaks a chain, the query's chains; a
+failed sketch and a failing pipe; lines, a tangent arc and splines either
+way with W11's edits; a planar path rewritten),
+`core/model-tests/api/src/sketch3d_tests.rs` (the commands, the query's
+chains and a pipe from them; `routes_are_ordered_and_refused_as_paths`,
+mitcad#1527: the query's routes either way, from one pick and of a
+sub-chain, their refusals, a Pipe's sketches in the timeline and a rib's
+planar form refused) and CLI `sketch3d_pipe` (a pipe and a sweep
+along a line, a tangent arc and a spline on the geometry kernel, their
+volumes, AB edited). Closed paths and every curve input (mitcad#1550):
+`core/model/src/spatial_consumers_tests.rs` (a circle, a closed spline and
+a closed chain either way and from one chained pick, a closed curve with
+others refused, the chains; a loft's centre line, rails and curve
+sections; planes, points, an axis, a point and a path pattern along a 3D
+sketch following AB's edit; an Intersection Curve; every planar path
+rewritten by a conversion, a closed one too) and CLI `sketch3d_consumers`
+(the datums and the pattern's copies on the geometry kernel, before and
+after AB's edit; a pipe round a 3D sketch's circle, a torus).
+
+### Fillet of 3D sketches (mitcad#1548)
+
+`sketch3d.fillet` rounds the corner between two lines of a 3D sketch that
+share an end with a tangent arc of a radius, the bend of a tube route:
+
+| Command | Fields | Result |
+|---|---|---|
+| `sketch3d.fillet` | `sketch`; `a`, `b` (two lines that share an end: their corner) and/or `points` (corners: points where exactly two ordinary lines end; construction lines are rounded by naming them); `radius` (value: a number, a parameter's name or an expression) | one undo step `Fillet in 3DSketch1` for all the corners; `made` the arcs, `fillets` [{`corner`, `lines` [first, second], `arc`, `center`, `tangent_points` [on the first line, on the second], `corner_lines` (the two construction lines to the corner), `full_lines` (construction lines that took the lines' segment relations)}], `dimension` (the radius dimension), and the edit's `entities`, `points`, `curves`, `constraints`, `dimensions`, `parameters` and `status` |
+
+**What a corner becomes.** Both lines are trimmed back to the tangent
+points: they keep their ids, their direction (start and end stay in their
+order) and their other relations (an alignment, a tangency at the far
+end). A tangent arc of the radius in the lines' plane joins them,
+counter-clockwise about its normal from the tangent point on the first
+line to the one on the second, with two `tangent` relations (the first
+line and the arc, the arc and the second line) and a driving `radius`
+dimension. The corner point stays where the lines' extensions meet, with
+its own relations and dimensions (a Fix, an attachment, offsets typed for
+it): two construction lines run from the tangent points to it, the first
+`tangent` to the first line (in line with it) and both `equal`, which
+together hold it there with nothing redundant. What took a line as a
+segment to the corner, its `length` dimension, an `equal` of lines, a
+`point_on` or a `midpoint` relation, moves to a construction line between
+the line's other end and the corner, so that a typed length keeps
+measuring to the corner. In-plane relations of a converted sketch stay on
+the trimmed line. Construction lines make a construction arc.
+
+**Several corners.** Corners are rounded in the order given, `a` and `b`
+first: the first arc gets the radius dimension, the others are `equal` to
+it, so one value sets them all. A corner given by its point takes the two
+ordinary lines that end there when its turn comes, so both ends of a line
+can be rounded in one command (the second fillet trims what the first left
+of it).
+
+**Refusals** (the edit then changes nothing: definition, parameters, ids,
+history): a line named twice, a curve that is no line; lines that do not
+share an end (`c3 and c7 do not share an end: a fillet rounds the corner
+where two lines meet`); lines collinear at their corner, straight on or
+folded back (`c7 and c9 are collinear at p6: there is no corner to
+round`); a radius whose tangent point would not lie inside either line
+(`a radius of 35 mm does not fit c5: the arc would touch it 35 mm from the
+corner p2, and it is 30 mm long`), or that is not above 1e-6 mm; a point
+where not exactly two ordinary lines end (`p1 is no corner of two lines:
+...`, or `p2 is an end of the lines c3, c5, c7: name the two lines to
+round`); neither `a` and `b` nor `points`, and `a` without `b`.
+
+**Editing it later.** The radius is a dimension like any other:
+`sketch3d.set_dimension` (or a parameter bound to it) moves the tangent
+points and the centre, the corner stays. Undo restores the corner whole:
+the lines end at it again with their own lengths.
+
+**Paths through a fillet.** A Pipe's or a Sweep's path along curves of the
+3D sketch ([above](#pipe-and-sweep-along-3d-sketch-curves-mitcad1523))
+runs through the arc: a chain selection finds it by itself (the corner's
+construction lines are in no chain), and a path that lists both lines of a
+corner takes the arc into its `curves` in the fillet's undo step, so that
+the pipe still runs through the corner, now bent.
+
+The application's Fillet in a 3D sketch (app/COMMANDS.md "3D sketch
+Fillet") sends one `sketch3d.fillet` with `points` or `a` and `b` per
+corner picked.
+
+Tests: `core/model/src/spatial_fillet_tests.rs` (mock kernel: the route's
+corner trimmed with its ids, alignments and lengths kept, the arc tangent
+to both lines, nothing free or redundant; an obtuse corner in a slanted
+plane by its lines; the radius edited; both corners in one edit, the second
+Equal to the first; the refusals; undo restoring the corner; a pipe that
+lists the lines taking the arcs and a chained one finding them),
+`core/model-tests/api/src/sketch3d_tests.rs`
+(`corners_are_filleted_and_their_radius_edited`) and CLI
+`sketch3d_fillet` (a three-segment route rounded at both corners and
+piped, its volume; the radius edited; undone).
+
+### Plane-bound shapes of 3D sketches (mitcad#1550)
+
+The SKETCH tab's circle, ellipse, rectangle, polygon and text tools draw
+in a 3D sketch on a frame plane, `plane` `xy`, `yz` or `zx` (the plane
+square to Z, X or Y), through the first point given; new points of the
+shape are put in that plane. Each command is one undo step with all it
+makes, or refused with nothing changed:
+
+| Command | Fields | Result |
+|---|---|---|
+| `sketch3d.add_ellipse` | `center`, `major` (point inputs: the end of the major axis, a new one put in the plane through the centre), `minor_radius` (mm, where the solve starts), `plane`, `major_value`, `minor_value` (driving major and minor radius dimensions), `construction` | `made` the ellipse |
+| `sketch3d.add_rectangle` | `mode`: `two_point` (`a`, `b`: opposite corners), `center` (`center`, `corner`) or `three_point` (`a`, `b`: the first side, `c` [x, y, z]: a place of the opposite side); `plane`; `width`, `height` (driving lengths of the first and second side); `construction` | `made` the four lines counter-clockwise about the plane's axis from the lower left corner (in the plane's own first and second axis), `corners` the four points, `center` (a centre rectangle's), `construction` (its diagonal), `relations` |
+| `sketch3d.add_polygon` | `center`, `vertex` (the first corner of an inscribed polygon, an existing point too; the middle of the first side of a circumscribed one, a place), `sides` (3 to 256), `inscribed` (default true), `plane`, `radius` (driving radius of its circle), `construction` | `made` its sides, `corners`, `center`, `construction` (its circles), `relations` |
+| `sketch3d.add_text` | `text`, `at` [x, y, z] (the anchor), `plane`, `height`; `frame` [x, y, z] (the frame's opposite corner: a text in a frame), `angle`, `font`, `bold`, `italic`, `align`, `valign` | `made` [`t5`], `texts` |
+
+`sketch3d.add_circle` with `plane` (and `through`) is the circles'
+command.
+
+What they store, as the planar tools make them, in the shape's plane:
+
+- A rectangle or a polygon is lines through points with the planar
+  relations as **in-plane** relations of its plane (`in_plane` with
+  `normal`: `x`, `y` or `z`, the axis square to the plane; a converted
+  sketch's are `z` and leave it out): a 2-point or centre rectangle's
+  sides `horizontal` (along the plane's first axis: X of XY, Y of YZ, Z of
+  ZX) and `vertical` (along its second: Y, Z, X), a 3-point one's
+  `perpendicular`, a centre rectangle's construction diagonal with the
+  centre at its `midpoint`; an inscribed polygon's corners `coincident`
+  with its construction circle (bound to the plane) and its sides
+  `equal`, a circumscribed one's sides `tangent` to the inner circle and
+  its corners on the outer one. One `plane_bound` relation (`points`,
+  `normal`) keeps the shape's points in one plane square to that axis:
+  their coordinates along it stay equal, wherever the plane is. So a
+  shape has the planar shape's freedoms and one more, its plane's place;
+  nothing is redundant.
+- A circle on a plane is bound to it (`plane` {`axis`, `sense`}). An
+  ellipse (or an elliptical arc) is plane-bound with `normal` (`z` when
+  left out): its major point and an arc's ends stay in the plane through
+  its centre, and its **minor radius is solved**: `minor_radius` is where
+  the last solve left it, a `point_on` relation holds a point on the
+  ellipse, and the dimensions `major_radius` and `minor_radius`
+  (`{"type": "minor_radius", "curve": "c5"}`) drive it. The `sketch3d`
+  query's `geometry` of an ellipse is `major`, `minor` and `normal`.
+- A text is the planar text in its plane at `z` along its `normal`, its
+  `at` and frame in that plane's coordinates; a framed text's frame is a
+  construction rectangle of the plane whose corner, x corner and y corner
+  it follows. The query lists each text with `id`, `plane` (`XY`, `YZ`,
+  `ZX`) and its `outline` (polylines of local points, laid out with the
+  kernel's fonts), or `outline_error`. `sketch3d.remove` deletes a text by
+  its id (`t5`); its frame stays.
+
+Deleting a shape's line leaves its corners while other lines use them;
+a point only a `plane_bound` relation lists goes with the last curve that
+used it, and the relation goes when fewer than two points are left.
+
+### Shapes and lines on a rotated plane of 3D sketches (mitcad#1661)
+
+The drawing tools' placement plane rotates freely (app/COMMANDS.md "3D
+sketch drawing tools"); what they draw on it is stored with the rotated
+plane's **frame** `{"x": [x, y, z], "normal": [x, y, z]}` (local
+directions: `x` in the plane, `normal` across it, `y = normal × x`; made
+unit and square, `x` taken across the normal; refused when they have no
+length or `x` lies along the normal). The frame gives the plane's
+directions only: the shape's own points place it, and the sketch's frame
+never changes.
+
+- `sketch3d.add_circle`, `add_ellipse`, `add_rectangle`, `add_polygon`
+  and `add_text` take the frame as their `plane` in place of `xy`, `yz`
+  or `zx`. The shapes are what the frame planes' are (above) with the
+  frame's x and y as the plane's first and second axis: a rectangle's
+  sides `horizontal` along x and `vertical` along y, its points kept in one
+  plane square to the normal. A circle's normal is free, held along the
+  frame's normal by a `normal_along` relation; an ellipse stores
+  `frame` beside `normal`; a text stores `frame`, its `at`, angle and
+  frame in the frame's x and y and `z` along its normal (the query's
+  `plane` says `rotated`).
+- `sketch3d.add_line` takes `frame`: its `axis` (with `sense`, Keep Axis
+  and Axis and Length) and `offsets` are then along the frame's x, y and
+  normal, stored as an `align_along` relation and `offset_along`
+  dimensions.
+
+| Relation or dimension | Fields | Rows |
+|---|---|---|
+| `in_frame` | `relation` (a planar relation, as `in_plane`'s), `frame` | the planar relation on the points' coordinates along the frame's x and y (the solver's rotated planes, `SpatialSystem::add_in_plane_frame`) |
+| `frame_bound` | `points`, `frame` | their coordinates along the frame's normal equal the first's (one each but the first) |
+| `align_along` | `line`, `direction` (unit), `sense` | the line along the direction, anywhere (2), its sense validated as `align`'s |
+| `normal_along` | `curve` (an arc or circle with a free normal), `direction` (unit) | its normal along the direction, either way (2) |
+| `offset_along` (dimension) | `a`, `b`, `direction` (unit) | `(b - a).direction - value` (1), signed |
+
+`in_frame` relations come with the shapes only (`sketch3d.add_constraint`
+refuses them, as `in_plane`); the others can be added to any sketch. A
+sketch with them turns back into 2D only where its geometry lies in the
+sketch plane: they go with it as another frame plane's do, a tilted
+ellipse, a text on a rotated plane and a circle's normal held across the
+sketch's normal are named. Tests:
+`core/model-tests/api/src/sketch3d_tests.rs`
+(`shapes_on_a_rotated_plane_are_solved_saved_and_read_again`: a circle, a
+rectangle, an ellipse, a polygon, a text and lines along the frame's axes
+solved, saved and read again).
+
+### Turning a planar sketch into a 3D sketch (mitcad#1544)
+
+`{"cmd": "sketch3d.convert", "sketch": "F3"}` turns the planar sketch F3
+into a 3D sketch in place, as one undo step (`Convert Sketch1 to 3D
+Sketch`). Undo takes it back, and `sketch3d.convert_to_2d` turns a 3D
+sketch that all lies in its sketch plane back into a planar one
+([below](#turning-a-3d-sketch-back-into-2d-mitcad1550)); a 3D sketch is
+refused here (`is a 3D sketch already`).
+
+| Command | Fields | Result |
+|---|---|---|
+| `sketch3d.convert` | `sketch` (a planar sketch) | the same feature as a 3D sketch with its ids kept: `kept`, `in_plane`, `coincident`, `fixes`, `on_sketch_plane`, `attachments`, `references`, `dropped`, `rewritten` and `status` (below); refused as a whole, naming the features in the way |
+
+**What is kept.** The feature (its uid, name, place in the timeline,
+visibility), its support and its own frame (`frame`, the planar sketch's;
+its normal is the 3D sketch's local +Z), and every point, curve, text,
+constraint and dimension id, construction flag, driving dimension's
+parameter (name and expression), driven dimension and text. Points start
+where the planar sketch last solved them, at `z = 0`.
+
+| Planar | 3D sketch |
+|---|---|
+| point `(x, y)` | point `(x, y, 0)` |
+| line | line; a centre line becomes a construction line |
+| arc, circle | arc or circle whose normal is bound to +Z (`plane`; `sketch3d.release_plane` frees it) |
+| ellipse, elliptical arc, text | plane-bound ellipse, elliptical arc, text |
+| spline (control-point or fit-point, open or closed) | spline of the same kind, degree, weights and knots |
+| coincidence of two points | 3D coincidence (`coincident`) |
+| a fixed point or curve | in-plane fix (`in_plane_fixed`: its x and y) |
+| every other constraint and dimension | in-plane relation or dimension (`in_plane`), evaluated on the x and y of its points, with its id, value, expression and driving state |
+
+One `on_sketch_plane` relation keeps the geometry in the sketch plane: it
+lists the lowest id of each group of points whose elevations are tied
+(by coincidences and plane-bound curves), so a fully constrained planar
+sketch stays fully constrained (`dof` 0) and nothing becomes redundant. A
+group that something else holds (an attached point, a point on a projected
+curve) is not listed. `sketch3d.release_from_plane` frees a point's group
+(DOF +1 per group: its elevation); relations and dimensions added after the
+conversion are 3D ones (an in-plane length stays in plane until it is
+removed and dimensioned again).
+
+**Linked projections** keep following their sources (mode Project): a
+projected point of a vertex or another sketch's point is attached to it
+(`attach` with `projected`); a projected line stays a construction line
+whose ends are attached to the source curve's start and end (matched by
+where they are); any other projected curve becomes a reference curve of its
+source (`reference` with `projected`), with its ends attached where
+something uses them, a point on it (a planar coincidence with the curve) a
+`point_on` of the reference curve and a midpoint of it a `midpoint`.
+Unlinked projected geometry stays fixed (in-plane fixes), as construction
+geometry.
+
+**Consumers.** In the same step, later features' planar paths along the
+sketch's curves (a Pipe's or Sweep's path, guide rails, an auxiliary
+curve) are rewritten to the typed path with the same curves and direction
+([above](#pipe-and-sweep-along-3d-sketch-curves-mitcad1523)), and later
+sketches' linked projections of its points and curves keep following.
+
+**Profiles** (mitcad#1550): the features that use the sketch's profile
+regions (Extrude, Revolve, a Sweep's or Loft's profile, every other region
+user) keep them: the 3D sketch's closed loops in its sketch plane bound the
+same regions under the same keys
+([below](#profile-regions-of-3d-sketches-mitcad1550)).
+
+**Kept in the plane** (mitcad#1550): what 3D sketches have no own form for
+is kept in the 3D sketch's planar records (`planar` in the definition and
+the `sketch3d` query; `planar` in the result names them) and acts in the
+sketch plane as it acted in the planar sketch: patterns and offsets (their
+copies and results bound in the plane; the curves of derived offsets, of
+ellipses and splines, computed there after every solve), the placement on
+the plane (an offset, a move, a rotation), a plane of another component
+(found through its link), texts that follow text parameters, inactive
+constraints and dimensions (kept in plane, holding nothing), and every
+linked projection a reference record cannot stand for (a face's edges,
+section curves, a chain of edges, a source as an earlier feature left it,
+several curves of one source, a projected curve other than a line whose
+centre is used or that a relation other than a point on it names): its
+entities stay geometry held in the plane by in-plane fixes, moved to their
+sources at every evaluation. The planar flags (projected entities, centre
+lines, the sketch's axes, where the dimensions' values are shown) are kept
+too, so the sketch turns back into the same planar sketch.
+
+**Refused**, nothing converted, naming why or the features in the way: a
+later feature that takes the sketch in a form only a planar sketch has
+(every path, closed ones too, is rewritten; the curves a rib, a web, thin
+walls or a surface sweep grow from keep their form, which the 3D sketch's
+curves in its sketch plane have too, mitcad#1550), a feature
+or a parameter that uses a driven dimension's reference parameter (a 3D
+sketch's driven dimensions have none) and a change that would make an
+evaluated feature fail.
+
+**Result.** `uid`, `name`, `type` (`spatial_sketch`), `kept` {`points`,
+`curves`, `texts`, `constraints`, `dimensions`} (the planar ids kept),
+`in_plane` (the constraints and dimensions kept in plane), `coincident`
+(kept as 3D coincidences), `fixes` (the new in-plane fixes),
+`on_sketch_plane` {`relation`, `points`}, `attachments` (made for linked
+projections), `references` (projected curves made reference curves),
+`dropped` (points of those curves that nothing else used), `rewritten`
+[{`uid`, `name`}] and `status` (as an edit's). The `sketch3d` query then
+flags in-plane relations and dimensions (`in_plane`), plane-bound curves
+(`plane_bound`) and the points kept on the sketch plane
+(`on_sketch_plane`).
+
+```json
+{"cmd": "sketch3d.convert", "sketch": "F1"}
+```
+→ `{"uid": "F1", "name": "Sketch1", "type": "spatial_sketch", "kept":
+{"points": ["p5", "p6", "p7", "p8"], "curves": ["c1", "c2", "c3", "c4"],
+"texts": [], "constraints": ["k1", "k2", "k3", "k4"], "dimensions": ["k5",
+"k6"]}, "in_plane": ["k1", "k2", "k3", "k4", "k5", "k6"], "coincident": [],
+"fixes": ["k7"], "on_sketch_plane": {"relation": "k8", "points": ["p5",
+"p6", "p7", "p8"]}, "attachments": [], "references": [], "dropped": [],
+"rewritten": [], "status": {"dof": 0, "fully_constrained": true, ...}}`
+
+The app's Sketch Palette has a `3D Sketch` box for the open sketch, and the
+Browser's and timeline's menus of a planar sketch `Convert to 3D Sketch`
+(`app/COMMANDS.md`); an agent's `sketch3d.convert` of the sketch it has
+open switches the editor the same way.
+
+Tests: `core/sketch/src/spatial_convert_tests.rs` (the mapping: a fully
+constrained rectangle at DOF 0 and its released corner, fixture 15's arc
+with a coincident line end without redundancy, frames, texts and driven
+dimensions, linked projections of a line and an arc, the refusals),
+`core/model/src/sketch_conversion_tests.rs` (mock kernel: W15's rectangle
+in place, undo, redo, saved and read again, a corner released; W16's
+refused Extrude, a Pipe's rewritten path, projections that keep following
+across conversions), `core/model-tests/api/src/sketch3d_tests.rs`
+(`a_planar_sketch_is_converted_in_place`) and CLI `sketch3d_convert` (a
+rectangle kept fully constrained, undone and redone, and a Pipe's path
+rewritten on the geometry kernel).
+
+### Profile regions of 3D sketches (mitcad#1550)
+
+A solved 3D sketch's closed loops in its sketch plane (`|z|` at most 1e-6
+mm: its On Sketch Plane geometry and any loop drawn there) bound profile
+regions as a planar sketch's curves do, with the supporting face's edges,
+its texts and derived offsets, and under the keys a planar sketch's same
+curves have (`r{c1[c4,c2],...}`). Loops out of the plane bound none. Extrude,
+Revolve, Sweep and Loft profiles and every other profile user take them as
+`{"sketch": "F3", "region": "r{...}"}`; the `profiles` query lists them, and
+the `sketch3d` query's `regions` names them.
+
+### Turning a 3D sketch back into 2D (mitcad#1550)
+
+`{"cmd": "sketch3d.convert_to_2d", "sketch": "F3"}` turns the 3D sketch F3,
+whose geometry all lies in its sketch plane, into a planar sketch in place,
+as one undo step (`Convert 3DSketch1 to 2D Sketch`). The `sketch3d` query's
+`flat` says whether it can (`off_plane` names what lies out of the plane,
+with the ids; `off_plane_messages` says the same in plain words,
+mitcad#1644).
+
+| Command | Fields | Result |
+|---|---|---|
+| `sketch3d.convert_to_2d` | `sketch` (a 3D sketch) | the same feature as a planar sketch with its ids kept: `kept` {`points`, `curves`, `texts`, `constraints`, `dimensions`}, `dropped`, `projected`, `notes`, `rewritten` [{`uid`, `name`}] and `dof`; refused naming what lies out of the plane or the features in the way |
+
+**What it becomes.** Every point, curve, text, relation and dimension id;
+in-plane relations and dimensions back as the planar ones they were, active
+or not, with their values' places; the planar records back in place
+(patterns, offsets, placement, plane link, text parameters, linked
+projections). 3D relations as their planar equivalents: a coincidence as a
+coincidence, an alignment along X or Y as horizontal or vertical, a point
+on a curve as a coincidence with it, midpoint, tangency, equal; a fix and an
+in-plane fix as a fixed entity; a true length as a length, an offset along X
+or Y as a signed horizontal or vertical distance, radius, diameter and arc
+length as theirs. An arc about -Z runs counter-clockwise with its ends
+swapped. What the plane holds by itself is left out (`dropped`): On Sketch
+Plane, a normal along Z, an offset along Z, a spline's driven length, a
+point on a planar face in the sketch plane. Attachments become linked
+projections with the point on them (a vertex or another sketch's point as
+a projected point, a curve's start, end or middle as the projected curve
+with the point on its end or middle; the origin as a fixed point), and
+reference curves linked projections of their sources keeping their ids
+(`projected`). A fit-point spline's free end becomes a natural one
+(`notes`).
+
+**Consumers.** In the same step, later features' paths along the sketch's
+curves (a Pipe's and a Sweep's path, rails and auxiliary curve, a Loft's
+centre line and rails, a path pattern's, a construction plane's or point's
+along a path) are rewritten to the planar form with the same curves, and
+each keeps its direction: where the planar chain of its curves would run
+the other way (a path against its first curve, an arc about -Z that runs
+counter-clockwise in 2D with its ends swapped), the planar path gets
+`"reversed": true` (see [Paths](#paths)); the profile
+users keep their regions.
+
+**Refused**, nothing changed: geometry out of the sketch plane, named (`p3
+is 7 mm off the sketch plane`, a curve whose normal is not the plane's, a
+line kept along Z), a point on a face that is not a plane in the sketch
+plane (Detach it first), a later feature in the way, a change that would
+make an evaluated feature fail.
+
+```json
+{"cmd": "sketch3d.convert_to_2d", "sketch": "F1"}
+```
+→ `{"uid": "F1", "name": "Sketch1", "type": "sketch", "kept": {"points":
+["p5", "p6", "p7", "p8"], "curves": ["c1", "c2", "c3", "c4"], "texts": [],
+"constraints": ["k1", "k2", "k3", "k4"], "dimensions": ["k5", "k6"]},
+"dropped": ["k7", "k8"], "projected": [], "notes": [], "rewritten": [],
+"dof": 0}`
+
+The app's 3D Sketch Palette has the `3D Sketch` box checked: unchecking it
+turns the open sketch back into 2D, and the Browser's and timeline's menus
+of a 3D sketch have `Convert to 2D Sketch` (`app/COMMANDS.md`).
+
+Tests: `core/sketch/src/spatial_planar_tests.rs` (a rectangle back to the
+same planar sketch, a point off the plane named, the region of a loop in
+the plane and none of one out of it, a kept pattern binding its copies),
+`core/sketch/src/spatial_convert_tests.rs` (what is kept),
+`core/model/src/sketch_conversion_tests.rs` (an extruded sketch both ways
+keeping its profile, a 3D sketch drawn in its plane back to 2D with its
+Pipe's path, refused off its plane, a pattern through both conversions),
+`core/model/src/spatial_sketch_tests.rs` (W9),
+`core/model-tests/api/src/sketch3d_tests.rs`
+(`a_3d_sketch_is_turned_back_into_2d`) and CLI `sketch3d_to_2d`.
+
+### Curves of 3D sketches that grow walls and surfaces (mitcad#1550)
+
+What grows from curves in their sketch's plane takes a 3D sketch's curves
+in its sketch plane, in the planar form, as its profiles are taken
+("Profile regions of 3D sketches" above): a rib's or web's `curves`, thin
+walls along curves (`thin.curves` of an extrusion), and the `curves` a
+surface extrusion, revolution or sweep sweeps:
+
+```json
+{"cmd": "add_feature", "def": {"type": "rib",
+  "curves": {"sketch": "F1", "curves": ["c3", "c5"]}, "thickness": 2,
+  "extent": {"type": "depth", "depth": 10}}}
+```
+
+The curves are those of the sketch plane's planar form (`|z|` at most 1e-6
+mm), with the ids the 3D sketch has; the feature grows in and along the
+sketch plane as from a 2D sketch on the same plane (the rib's thickness
+across it, a web's and a surface extrusion's along its normal), and follows
+the 3D sketch's edits. Chain selection (`"chain": true`) adds the curves
+joined end to end to the picked ones in the sketch plane (construction
+curves left out), as in a 2D sketch. The `sketch3d` query's `plane_curves`
+lists the curves that lie in the sketch plane now.
+
+**Refused.** Before the evaluation, as a path's selection is: an id the
+sketch does not have, one listed twice, a reference curve (draw a curve on
+it). At the evaluation, a curve out of the sketch plane fails the feature,
+naming the sketch and the curves (`3DSketch1's c7 does not lie in its
+sketch plane: walls and surfaces grow from a 3D sketch's curves in its
+sketch plane`); no other plane is taken in its stead. A planar sketch
+whose curves a rib, a web, thin walls or a surface sweep use turns into a
+3D sketch and back with them (`sketch3d.convert`, `sketch3d.convert_to_2d`).
+
+The app's Rib, Web, Extrude (Thin Extrude) and Surface Extrude, Surface
+Revolve and Surface Sweep panels take a 3D sketch's curves in its sketch
+plane and refuse a click on one out of it, saying why (`app/COMMANDS.md`);
+Surface Sweep's Path takes a 3D sketch's curves as a Pipe's does.
+
+Tests: `core/model/src/spatial_plane_curves_tests.rs` (mock kernel: a rib
+and a web from a route's curves in the plane, chained without the one out
+of it, thin walls and a surface extrusion, revolution and sweep following
+an edit, the curve out of the plane refused naming the sketch, a planar
+sketch with a rib, a surface extrusion and a surface sweep converted both
+ways), `core/model-tests/api/src/sketch3d_tests.rs`
+(`routes_are_ordered_and_refused_as_paths`), CLI `sketch3d_plane_curves`
+and the UI step in `tools/ui-sketch3d-test.sh`.
+
 ## Design review
 
 A read-only review of the current design (`design_review`, mitcad#1513).
@@ -24614,7 +25871,7 @@ it as print colours. The design's geometry is never cut or changed for it.
 
 | Command | Fields | Result |
 |---|---|---|
-| `set_filament_changes` | `plate` (a print plate's id or name; the design's own schedule when left out); `changes`: the whole schedule, `[{height, kind, material, appearance, message}]` (`kind` `change`, the default, or `pause`); `[]` takes it away (a plate then prints with the design's) | `{"changes"}`, the schedule as kept (sorted upwards); undo step `Set Filament Changes`, `Set Filament Changes of Short`, or `Clear Filament Changes…`, which recomputes nothing; none when nothing changes. Refused: an unknown plate, material or appearance, a height out of range, two events at one height, a change without a material, a pause with one, a message on a change |
+| `set_filament_changes` | `plate` (a print plate's id or name; the design's own schedule when left out); `changes`: the whole schedule, `[{height, kind, material, appearance, message}]` (or `at` and `body` in place of `height`: [at planes and faces](#filament-changes-at-planes-and-faces)) (`kind` `change`, the default, or `pause`); `[]` takes it away (a plate then prints with the design's) | `{"changes"}`, the schedule as kept (sorted upwards); undo step `Set Filament Changes`, `Set Filament Changes of Short`, or `Clear Filament Changes…`, which recomputes nothing; none when nothing changes. Refused: an unknown plate, material or appearance, a height out of range, two events at one height, a change without a material, a pause with one, a message on a change |
 
 | Query | Fields | Result |
 |---|---|---|
@@ -24739,6 +25996,106 @@ reopened; each slicer's file read back; a rotated print bed; two bodies
 sharing a plate and a conflict; a plate's own schedule; `model_render`'s
 and USDZ's print colours).
 
+### Filament changes at planes and faces
+
+mitcad#1643: an event's place is either a `height` (as above) or `at` a
+plane: a construction plane (`"F5"`), an origin plane (`"xy"`, `"xz"`,
+`"yz"`) or a planar face of a body (`{"body": "F2.b0", "face": "F2:end(…)"}`),
+by the model's usual [references](#references-to-geometry) (a face found again after
+edits, as other references are). Its height is worked out whenever it is
+asked for, so it follows the model: a change at the top of a base stays
+there when the base gets thicker, at a construction plane when its offset
+changes.
+
+- **Measured from a body**: along the print direction (the bed's normal
+  after the export's turn) from the lowest point of the body it is measured
+  from to the plane. That body is the face's own for a face; for a plane
+  the one the event names (`body`), else the plate's first body (a print
+  plate's first item; the design's first printed body as the design places
+  them for the design's own schedule, in an export the first body written
+  on the plate). In an export each object is measured from its own lowest
+  point, as the slicer lays it on the bed; the query and the print colours
+  measure the body's first shown placement in the design, turned by its
+  print bed face (else as designed). A construction plane of the body's
+  own component, or of the root, is taken where that component and the
+  body's placement put it.
+- **Left out, with a warning in words** (the plate's warnings, the
+  query's `warning`, the export's `warnings`), never moved: a plane or face
+  that is not level in the print orientation (*the filament change at
+  Plane3 is not level in the print orientation, so it is left out*: after
+  the automatic orientation picked another bed face, for example), one that
+  is gone or no longer flat, one at or below the bottom of its body, a
+  plane of another component than the body (but the root's), a body not
+  printed on the plate.
+- **Several objects on a plate**: the change is the plate's, written once
+  at the height of the body it is measured from, on that layer for every
+  object. When another object of the plate stood at another level in the
+  design (an export on the bed lays each piece on the bed itself), the
+  export says so once per plate: *Plate 1: the filament changes at planes
+  and faces are measured from Body1, and other objects of the plate stand
+  at other levels: each change happens on the same layer for all of them*.
+- **Auto Fix**: a face an edit renamed is found again under its new name
+  (as a feature's reference is), and the query's row says so
+  (`found_as`); [`auto_fix`](#auto-fix) of every feature (no `features`)
+  writes the names found into the schedules, in its one undo step
+  (`Auto Fix Filament Changes` when no feature changes), counted in its
+  result's `filament_faces` and message (`the face of a filament change
+  found again`).
+- **Whole sentences**: each warning and refusal is one sentence for each
+  kind of event (a change, a pause) and place (a height, a plane by its
+  name, a face of a body), so that each translates whole
+  (`docs/translations.md`); the place is never a phrase put into another
+  sentence.
+- **Validation**: an event has a `height` or an `at`, not both; `body`
+  only with `at` (a face's own body for a face); `at` must be a plane or a
+  planar face at the timeline marker when it is set, and a named body a
+  solid or mesh body; one event per plane or face (and body). Events at
+  heights come first, upwards, then those at planes and faces in their
+  order.
+- **Texts** name planes by their names in the timeline and the browser
+  (`Plane3`, an origin plane `XY`) and faces by their bodies (`a face of
+  Body1`), never by
+  topological names or coordinates (mitcad#1327); a face's `places` give
+  agents and the hover the face.
+
+| Field | In | Meaning |
+|---|---|---|
+| `at` | `set_filament_changes` events, the file | The plane or face (a reference) instead of `height` |
+| `body` | the same | The body an event at a plane is measured from (none: the plate's first) |
+| `height` | `filament_changes` rows | The height used: given, or worked out (null when left out) |
+| `source` | `filament_changes` rows, the export's `filament_changes` | `height`, `plane` or `face` |
+| `place` | `filament_changes` rows | Where it is, in words (`10 mm`, `Plane3`, `a face of Body1`) |
+| `at`, `body`, `places` | `filament_changes` rows; `at`, `body` in the export's events | The reference, the body measured from, a face's place |
+| `left_out`, `warning` | `filament_changes` rows | Left out, and why in words |
+| `found_as` | `filament_changes` rows | A face an edit renamed, by the name it is found as (Auto Fix writes it) |
+| `event` | `filament_changes` rows | The event as the schedule keeps it (to edit and set again) |
+| `start`, `choices` | the `filament_changes` result | The filament the plate starts with (its first body's `{material, appearance, name}`) and what a change can change to: each of the design's own materials in each appearance it offers, `{material, appearance, name, color}` (Send to Slicer's rows) |
+
+| Query | Fields | Result |
+|---|---|---|
+| `filament_change_preview` | `bodies` (uids; every shown printed body when left out) | What Send to Slicer draws over the view while its Filament changes section is open: `bands` (`[{color: "#RRGGBB", triangles: [x, y, z, …]}]`, nine numbers per triangle, design mm: each shown placement cut at its plate's layer boundaries in the colours it prints with, as `print_colors`), `rings` (six numbers per segment: where each change's boundary crosses the placement), `notes` (events left out) |
+
+```json
+{"cmd": "set_filament_changes", "changes": [
+  {"at": "F5", "material": "pla_two", "appearance": "blue_pla"},
+  {"at": {"body": "F2.b0", "face": "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"},
+   "kind": "pause", "message": "Insert the nuts"}]}
+{"query": "filament_changes"}
+→ {"changes": [{"height": 12.0, "source": "plane", "at": "F5", "body": "F2.b0",
+                "place": "Plane1", "boundary": 12.0, "print_z": 12.2, "layer": 61, ...},
+               {"height": 40.0, "source": "face", "place": "a face of Body1",
+                "places": [{"kind": "face", "body": "F2.b0", "name": "F2:end(…)"}],
+                "left_out": true, ...}], ...}
+```
+
+Tests: `core/model-tests/print/src/filament_change_tests.rs` (mock kernel:
+a change at a construction plane follows its offset, one at a face follows
+the body's growth, a plane not level in the print orientation is left out
+with its warning, two bodies at different levels warn once, save and
+reopen keep the references; the Bambu-family and PrusaSlicer events carry
+the plane's height and move with it); `print_changes` (the references'
+validation, the ring's segments).
+
 ## Pick marks as wide as their lines (mitcad#1618)
 
 The `drawing_pick` query's `items` of a line, a circle or an arc carry
@@ -24756,3 +26113,236 @@ see-through so that the line shows under it; a point keeps its own size
 `app/tests/drawing_sheet_view.cpp` (the mark's width at two zooms and its
 pixels beside the line); pictures of a hovered and a picked edge, fitted
 and zoomed in: `tools/ui-drawing-mark-width-look.sh <dir>`.
+
+## Drawing templates of one's own: sizes, images and the title block (mitcad#1625)
+
+Company and standard drawing formats (`core/model/src/drawing/mod.rs`,
+`template_def.rs`, `core/model-drawing/src/template.rs`, `pdf.rs`,
+`pdf_image.rs`, `svg.rs`, `dxf.rs`, `api/drawing_templates.rs`): sheets
+of a size of their own, images such as a logo in a title block, and a
+title block edited on the sheet (the application's title block editor,
+app/COMMANDS.md *The title block editor*).
+
+**Custom sheet sizes.** Wherever a sheet size is given (a sheet's `size`
+in `add_drawing`, `add_drawing_sheet`, `edit_drawing_sheet`, a template's
+`size`, `export_drawing`'s `sheet`, the design file) it is a name (`A4`
+… `A0`, `ANSI_A` … `ANSI_E`) or `{"width": 500, "height": 300}` in mm,
+each side 10 to 10 000 mm. Such a sheet lies as given: its `orientation`
+turns nothing. A template of such a size brings it to a new drawing as a
+named one does, and `save_drawing_template` keeps it. The `drawing`
+query's sheet `size` is the name, or `custom` with the sheet's `width`
+and `height`; the `drawings` query, the title block's `{size}` and the
+simple block's SHEET cell name it `500 x 300 mm`. Exports are written at
+that size (the PDF's page, the SVG's `width` and `height`, the DWG's
+paper). Refused: a side out of range (`a sheet of its own size is 10 to
+10000 mm each way`), an object with other fields than `width` and
+`height`, an unknown name.
+
+**Images in the title block.** A template's `title_block.images`: `[{"at":
+[x, y], "size": [w, h], "data": "<base64>"}]`, mm from the block's lower
+left corner, the file a PNG, JPEG or SVG image of 4 MB at most (known by
+its bytes: the PNG and JPEG signatures, an SVG's root element). The
+sheet's copy of the template keeps them, so a drawing carries its logo
+wherever its design goes. An image is drawn whole in its box, its
+proportions kept (a PNG's and a JPEG's pixels, an SVG's `viewBox`, else
+its `width` and `height`), in the box's middle, under the block's lines
+and texts. The `drawing` query's `title-block` group has it as `{"image":
+"<base64>", "format": "png", "at": [x, y], "size": [w, h]}` (the fitted
+box on the sheet); the exports: SVG an `<image>` with the file as a data
+URL; PDF a PNG decoded (any colour type, bit depth and interlacing) as an
+image with its transparency as a soft mask, a JPEG as it is, each file
+once per document; an SVG image (mitcad#1627) in PDF, DXF and DWG as
+its paths, read with usvg (CSS, `use`, transforms and shapes resolved):
+in a PDF as vector paths fitted in its box as the sheet draws it, its
+fills and strokes in their colours (a gradient as its mean colour),
+opacities as transparency, strokes' widths, caps, joins and dashes, clip
+paths; in DXF and DWG as lines (curves flattened within 0.01 mm) on a
+layer per colour and line weight, `IMAGE_<colour index>_<weight>` (the
+nearest colour index of the colour on white paper, 7 for black), a fill
+as its path's closed outline, a stroke on the weight nearest its width.
+An SVG image's text (mitcad#1637) goes in as the outlines of its glyphs,
+filled and stroked as its paths: laid out by usvg in the first font of
+its `font-family` the computer has (the system's fonts, read once per
+run, and the bundled Droid Sans, embedded in the model as sketch text
+embeds it in the geometry), else in Droid Sans, which is also every
+generic family (`sans-serif`, `serif`, `monospace`, `cursive`,
+`fantasy`) and the font of text that names none, so that such text has
+the same outlines on every machine; a character the font lacks from
+another font of the computer that has it.
+A PNG or JPEG image in DXF and DWG (which hold no raster image), and an
+SVG file usvg cannot read in any of the three, is its outline. The
+export's `warnings` say what is left out or drawn otherwise (`a DXF file
+holds no raster images: the title block's PNG and JPEG images are written
+as their outlines`, `an SVG image of the title block cannot be read: the
+PDF file has its outline`, for text in fonts the computer does not have
+`the title block's SVG images name fonts this computer does not have
+(Corporate Sans): the PDF file draws their text in Droid Sans` (each
+`font-family` list as the file names it, several with `; ` between), for
+characters no font of the computer has `the text of the title block's SVG
+images has characters no font on this computer has: the DWG file cannot
+draw them`, and for pictures inside an SVG image `the pictures inside the
+title block's SVG images are left out of the DXF file`). Masks and
+filters of an SVG image are not applied, and DXF and DWG draw its paths
+without its clip paths.
+Refused:
+an image of no box, one that is no image, larger than 4 MB or no base64.
+Template files may be 16 MB.
+
+**The title block edited on the sheet.**
+
+| Command | Fields | Result |
+|---|---|---|
+| `edit_drawing_title_block` | `drawing`, `sheet` (0), `title_block`: the whole block as a template has it (`width`, `height`, `lines`, `fields`, `images`, `projection_symbol`) | `drawing`, `sheet`; undo step `Edit title block of Sheet1 of Drawing1`; nothing changed is no undo step |
+
+It replaces the title block of the sheet's copy of its template; a sheet
+of the simple title block gets a copy of the ISO template (`id`
+`custom`, `name` `Custom`, without its size and projection method)
+around the block given, which `save_drawing_template` can then save.
+Refused as a template is (a field without a cell, an image that is
+none) and when the block with the revision table's room does not fit in
+the sheet's frame. The `drawing` query's drawn sheet gives what the
+editor edits: `frame` (its corners), `title_box` (the block's corners on
+the sheet) and `title_block_layout` (the block; the ISO template's for
+the simple block).
+
+```json
+{"cmd": "add_drawing", "size": {"width": 500, "height": 300}, "template": "iso"}
+{"cmd": "edit_drawing_title_block", "drawing": "D1", "title_block": {"width": 180, "height": 36,
+  "lines": [[0, 18, 180, 18], [0, 30, 50, 30]],
+  "fields": [{"label": "STOCK", "text": "{material}", "at": [0, 30], "size": [50, 6], "height": 2.5}],
+  "images": [{"at": [2, 2], "size": [30, 12], "data": "iVBORw0KGgo…"}]}}
+```
+
+Classes: `edit_drawing_title_block` is the model's. Tests:
+`core/model-tests/drawing/src/title_block_tests.rs` (a custom size kept,
+saved and exported at that size, and refused out of range; a template of
+a custom size with a logo round-tripping through the design file and a
+library and exported to PDF, SVG and DXF; an SVG logo fitted and its
+paths in the PDF, the DXF and the DWG without a warning, mitcad#1627; a
+block edited, undone and refused; the simple block edited into a
+template), the tests in `core/model-drawing/src/template.rs` (sizes'
+JSON, images' kinds, proportions and boxes),
+`core/model-drawing/src/pdf_image.rs` (PNG decoding, filters, Adam7,
+JPEG) and `core/model-drawing/src/svg_image.rs` (paths, paints,
+transforms, clips, the box, flattening);
+`tools/ui-drawing-title-block-test.sh`.
+
+## Copy and paste of 3D sketch geometry (mitcad#1661)
+
+The `sketch_fragment` query ("Copy and paste of sketch geometry") copies a
+3D sketch's points and curves too, and `sketch3d.paste` adds a copy to a
+3D sketch: another 3D sketch's (its z, relations, dimensions and linked
+references kept) or a planar sketch's (onto a frame plane at a place). Cut
+is the copy and then `sketch3d.remove` of the same items.
+
+```json
+{"query": "sketch_fragment", "sketch": "F1", "items": ["c3", "c5"]}
+→ {"sketch": "F1", "sketch_name": "3DSketch1", "kind": "3d", "base": [0, 0, 0],
+   "entities": 5, "texts": 0, "kept": 5, "left_out": 0, "references": 1,
+   "fragment": {"version": 1, "sketch": "F1", "base": [0, 0, 0],
+                "points": [...], "curves": [...], "constraints": [...],
+                "dimensions": [...], "left_out": 0}}
+{"cmd": "sketch3d.paste", "sketch": "F2", "fragment": {...}}
+{"cmd": "sketch3d.paste", "sketch": "F2", "fragment": {...}, "at": [100, 10, 5]}
+{"cmd": "sketch3d.paste", "sketch": "F2", "fragment": {<a planar sketch's>},
+ "plane": "yz", "at": [0, 5, 7]}
+→ {"made": ["p1", "p2", "p3", "c4", "c5"], "kept": 5, "left_out": 0, "dropped": 0,
+   "entities": [...], "constraints": [...], "dimensions": [...], "status": {...},
+   "warnings": [...]}
+```
+
+| Command | Fields | Result |
+|---|---|---|
+| `sketch3d.paste` | `sketch`; `fragment` (a `sketch_fragment` answer's, of a 3D or a planar sketch); `at` [x, y, z] (where the base point goes: where it was for a 3D sketch's copy, the origin for a planar one); `plane` (`xy`, `yz` or `zx`: a planar copy's plane through `at`, `xy` by default) | one undo step `Paste in 3DSketch2`; `made` (new points, curves and texts in the fragment's order), `kept`, `left_out`, `dropped` (linked references left out), `values`, `warnings` (in words), and the edit's `entities`, `points`, `curves`, `constraints`, `dimensions`, `parameters` and `status` |
+
+- **What is copied** (`items`: points `p3`, curves `c4`, texts `t5`;
+  relations and dimensions listed are ignored, they come with their
+  geometry): the selected points, curves and texts, the points the curves
+  use and the points of a text's frame, each point with its three local
+  coordinates. A relation or dimension is kept when it names copied
+  geometry and nothing else but the sketch's reference curves (a reference
+  curve it names comes with it); one that names copied geometry and other
+  geometry of the sketch is left out and counted (`left_out`). On Sketch
+  Plane and a shape's Plane-Bound relation keep the copied points they
+  list. Attachments, points on faces and reference curves keep their
+  sources as they are (`references` counts them). Driving dimensions keep
+  their value and expression as a planar copy's do.
+- **The fragment** has `curves` and no `entities` (a planar fragment always
+  has `entities`): that tells the two apart. `sketch` is the sketch it was
+  copied from; `base` the first selected item's first point (a line's or
+  an arc's start, a circle's centre, a spline's first point, a text's
+  anchor) in local coordinates.
+- **`sketch3d.paste`** adds the copy with new ids (`made`: points, curves
+  and texts in the fragment's order), as one undo step `Paste in
+  3DSketch2`. A 3D sketch's copy is moved by `at - base` (without `at` it
+  goes where it was: the same local coordinates and z); it takes no
+  `plane`. A Fix is fixed where the point goes; the copy's On Sketch Plane
+  points join the sketch's own relation. A planar sketch's copy (its
+  `held` does not apply) goes onto the frame plane `plane` (`xy`, the
+  default, `yz` or `zx`) through `at` (the origin by default), its base
+  point at `at`: its points on that plane, its arcs and circles bound to it
+  (their normal its axis), its ellipses, elliptical arcs and texts on it, a
+  coincidence of two points a 3D coincidence, its other constraints and
+  dimensions in-plane ones of that plane (`in_plane` with `normal`), a
+  fixed point a Fix where it goes, all its points kept in the plane by one
+  Plane-Bound relation; a centre line becomes a construction line.
+  Constraints and dimensions on the planar sketch's origin and axes,
+  inactive ones and common spacings are left out and counted.
+- **References outside the copy** are kept as the same references where
+  the sketch can use their sources: the origin; geometry of features
+  before the sketch in the timeline, of its own component; another
+  component's (through a link) only when the copy's sketch is of the same
+  component, where the link starts. Otherwise the attachment, the point on
+  a face or the reference curve is left out (`dropped` counts them) with
+  the relations that named a dropped reference curve (in `left_out`). A
+  reference curve of a source the sketch has a record of already is that
+  record (mitcad#1543). When a source kept does not evaluate in the
+  sketch (a copy of another design), the paste is made again without its
+  sources and says so.
+- **Warnings**, in words with no ids (mitcad#1327): `N relation(s) and
+  dimension(s) left out: they name geometry the copied geometry lacks`
+  (what this paste or the planar copy's move onto a plane left out; what
+  the copy left out was said at the copy), `N link(s) to geometry outside
+  the copy left out: this sketch cannot use their sources`, and the
+  dimensions that took their values (as a planar paste's).
+- **Refused**: a fragment of a newer version, one whose curves use points
+  it lacks or that names an id twice, an empty one, a place that is not
+  finite, `plane` with a 3D sketch's copy, and a paste that does not solve
+  (nothing changes). `sketch.paste` refuses a 3D sketch's copy: `3D sketch
+  geometry cannot be pasted into a 2D sketch: paste it into a 3D sketch`.
+
+The application's Copy, Cut and Paste in a 3D sketch use these
+(`app/COMMANDS.md`, "3D sketches"): a 3D sketch's copy goes where it was,
+a planar one onto the active placement plane at the anchor.
+
+Classes: `sketch3d.paste` is the model's. Code:
+`core/sketch/src/spatial_clipboard.rs`,
+`core/model-api/src/sketch_clipboard.rs` (the query),
+`core/model-api/src/sketch3d.rs` (the command). Tests:
+`core/model-tests/api/src/sketch3d_clipboard_tests.rs` (a route between 3D
+sketches keeping z, relations, dimensions and the origin attachment as one
+undo step; a copy moved to a place with what it left out; a cut's copy
+pasted; a reference left out in words or kept; planar geometry onto the YZ
+plane; a 3D copy refused by a 2D sketch),
+`tools/ui-sketch3d-keys-clipboard-test.sh` and
+`tools/ui-windows-sketch3d-keys-clipboard-test.ps1`.
+
+## The key of a sketch's body geometry (mitcad#1646)
+
+`{"query": "plane_geometry_key", "sketch": "F3"}` answers
+`{"key": "<32 hex digits>"}`, a fingerprint of what the sketch's
+[`plane_geometry`](#body-geometry-in-a-sketchs-plane) query reads: the
+sketch's frame and, for each body it looks at, the body, the version of
+its shape (the result that made it), the occurrence path it is seen at
+and the transform into the sketch's coordinates. The same key means the
+same `plane_geometry` answer, in the plane and with `out_of_plane`
+alike, so a client keeps what it read while the key stays. An edit of
+the sketch itself (an entity, a constraint or a dimension added) changes
+the document's revision but not the key, as the bodies before the sketch
+stay; a body before it built again differently, shown or hidden, or an
+occurrence moved changes it. The key is cheap (no kernel call), unlike
+the out-of-plane answer of a large assembly: hundreds of thousands of
+items, seconds to list. Refused as `plane_geometry` is: an unknown
+feature, one that is not a sketch, a sketch with no plane yet. Tests:
+`core/model-tests/analysis/src/plane_geometry_tests.rs`
+(`plane_geometry_key_*`).

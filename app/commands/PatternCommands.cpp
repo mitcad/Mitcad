@@ -545,11 +545,29 @@ CommandDef pathPatternCommand(const CommandContext& context) {
       // Several curves are a chain, joined end to end (mitcad#464).
       // Or an Intersection Curve (mitcad#1405), picked in the view or on the
       // timeline.
-      selectionInput(QStringLiteral("path"), QObject::tr("Path"), SelectKind::SketchCurve | SelectKind::Feature, 1, 0)
-          .withTooltip(QObject::tr("A sketch line, arc or circle, a chain of them, or an intersection curve"))
-          .withAccepts([](const SelectionItem& item) {
-            // A feature only as an Intersection Curve's curve (mitcad#1610).
-            return isFeatureCurve(item) || isLine(item) || isCircular(item);
+      // Or curves of a 3D sketch, or its route whole from the Browser or
+      // the timeline (mitcad#1550).
+      selectionInput(QStringLiteral("path"), QObject::tr("Path"),
+                     SelectKind::SketchCurve | SelectKind::Feature | SelectKind::Sketch, 1, 0)
+          .withTooltip(QObject::tr("A sketch line, arc or circle, a chain of them, an intersection curve, or 3D "
+                                   "sketch curves"))
+          .withAccepts([&context](const SelectionItem& item) {
+            // A planar sketch gives lines, arcs and circles; a 3D sketch
+            // any curve that is a path piece.
+            if (item.kind == SelectKind::SketchCurve && !isLine(item) && !isCircular(item)) {
+              return isSpatialSketch(item.owner, context) && spatialPathTakes(item, context);
+            }
+            return item.kind == SelectKind::SketchCurve || spatialPathTakes(item, context);
+          })
+          .withRefusedHint([&context](const SelectionItem& item, const CommandState&) {
+            return spatialPathRefusal(item, context);
+          })
+          .withOnPick([](const SelectionItem& item, CommandState& state,
+                         const CommandContext& model) { takeWholeRoute(item, state, model, QStringLiteral("path")); },
+                      false)
+          .withItemsText([](const Selection& items, const CommandState& state, const CommandContext& model) {
+            return spatialRouteListing(items, false, keptPathReversed(state, QStringLiteral("path")), model,
+                                       QStringLiteral("path"));
           }),
       distanceTypeInput(),
       directionTypeInput(QStringLiteral("direction_type"), QObject::tr("Direction Type")),
@@ -568,15 +586,21 @@ CommandDef pathPatternCommand(const CommandContext& context) {
   };
   def.enabled = [&context] { return hasBodies(context); };
 
-  def.build = [](const CommandState& state, const CommandContext&) {
+  def.build = [](const CommandState& state, const CommandContext& context) {
     Built result;
     const QJsonObject objects = objectsOf(state, result);
     if (!result.error.isEmpty()) {
       return result;
     }
-    const Selection& curves = state.items(QStringLiteral("path"));
-    const QJsonValue path = curves.size() > 1 || curves.first().kind == SelectKind::Feature
-                                ? pathOf(curves, false, result, QStringLiteral("path"))
+    const QString id = QStringLiteral("path");
+    const Selection& curves = state.items(id);
+    // A 3D sketch's curves or the sketch whole: its typed path, running as
+    // an edited one ran (mitcad#1550).
+    const bool spatial = !spatialOwner(curves, context).isEmpty() ||
+                         (curves.size() == 1 && wholeSketchPick(curves.first()));
+    const QJsonValue path = spatial ? pathOf(curves, false, result, id, context, keptPathReversed(state, id))
+                            : curves.size() > 1 || curves.first().kind == SelectKind::Feature
+                                ? pathOf(curves, false, result, id)
                                 : curves.first().reference();
     if (!result.error.isEmpty()) {
       return result;
@@ -611,6 +635,8 @@ CommandDef pathPatternCommand(const CommandContext& context) {
     } else {
       state.setItems(QStringLiteral("path"), {itemOf(path, context)});
     }
+    // A 3D sketch's path keeps its direction (mitcad#1550).
+    keepPathDirection(path, state, QStringLiteral("path"));
     state.setChoice(QStringLiteral("distance_type"),
                     feature.value(QStringLiteral("distance_type")).toString(QStringLiteral("spacing")));
     state.setChoice(QStringLiteral("direction_type"), directionTypeOf(feature));
@@ -623,9 +649,11 @@ CommandDef pathPatternCommand(const CommandContext& context) {
                                                        : QStringLiteral("identical"));
   };
 
-  // A fixed line as the path has no input.
+  // A fixed line as the path has no input; a 3D sketch's path is its
+  // curves (mitcad#1550).
   def.canEdit = [](const QJsonObject& feature) {
-    return feature.value(QStringLiteral("path")).toObject().contains(QStringLiteral("sketch"));
+    const QJsonObject path = feature.value(QStringLiteral("path")).toObject();
+    return path.contains(QStringLiteral("sketch")) || path.contains(QStringLiteral("spatial_sketch"));
   };
 
   def.describe = [build = def.build](const CommandState& state, const CommandContext& model) {

@@ -2,7 +2,9 @@
 //! Copy, Cut and Paste of sketch geometry (mitcad#788,
 //! `mitcad_model::sketch::clipboard`): the `sketch_fragment` query that
 //! copies, and the `sketch.paste` command; see `commands.md`, "Copy and
-//! paste of sketch geometry".
+//! paste of sketch geometry". The same query copies a 3D sketch's geometry
+//! (mitcad#1661, `mitcad_model::sketch::spatial_clipboard`), which
+//! `sketch3d.paste` takes.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -10,12 +12,13 @@ use serde_json::{Value, json};
 use super::ApiError;
 use super::sketch::report_json;
 use mitcad_model::Document;
-use mitcad_model::features::FeatureDef;
+use mitcad_model::features::{FeatureDef, SpatialSketchDef};
 use mitcad_model::ids::FeatureUid;
 use mitcad_model::kernel::Kernel;
 use mitcad_model::sketch::clipboard::{Fragment, copy, held};
 use mitcad_model::sketch::geometry::Curve2;
 use mitcad_model::sketch::modify::Item;
+use mitcad_model::sketch::spatial_clipboard::{self, SpatialFragment};
 
 /// The `sketch_fragment` query: the selected items of a sketch as a
 /// fragment to paste.
@@ -31,6 +34,34 @@ pub(super) struct FragmentQuery {
 fn polyline(curve: &Curve2) -> Value {
     let (t0, t1) = curve.domain();
     json!(curve.sample(t0, t1))
+}
+
+/// The `sketch_fragment` answer of a 3D sketch (mitcad#1661): `kind` `3d`,
+/// the `base` point (local `[x, y, z]`), how many points and curves
+/// (`entities`) and texts it holds, the relations and dimensions it `kept`
+/// and `left_out`, the linked reference records it keeps (`references`),
+/// and the `fragment` that `sketch3d.paste` takes.
+fn spatial_fragment_json<K: Kernel>(
+    doc: &Document<K>,
+    uid: FeatureUid,
+    name: &str,
+    def: &SpatialSketchDef,
+    items: &[String],
+) -> Result<Value, ApiError> {
+    let copied = spatial_clipboard::copy(def, doc.parameters(), uid, items);
+    let fragment = copied.map_err(ApiError)?;
+    Ok(json!({
+        "sketch": uid,
+        "sketch_name": name,
+        "kind": "3d",
+        "base": fragment.base,
+        "entities": fragment.points.len() + fragment.curves.len(),
+        "texts": fragment.texts.len(),
+        "kept": fragment.constraints.len() + fragment.dimensions.len(),
+        "left_out": fragment.left_out,
+        "references": fragment.sources().len(),
+        "fragment": fragment,
+    }))
 }
 
 /// The document's methods of this module used across the api, as an
@@ -61,6 +92,11 @@ impl<K: Kernel> SketchClipboardOps<K> for Document<K> {
             .feature(uid)
             .ok_or_else(|| ApiError(format!("feature {uid} does not exist")))?;
         let FeatureDef::Sketch(def) = &entry.def else {
+            // A 3D sketch's geometry with its z, relations and sources
+            // (mitcad#1661).
+            if let FeatureDef::SpatialSketch(def) = &entry.def {
+                return spatial_fragment_json(self, uid, &entry.name, def, &query.items);
+            }
             return Err(ApiError(format!("{} ({uid}) is not a sketch", entry.name)));
         };
         // Linked projections where their sources are now.
@@ -140,6 +176,14 @@ impl<K: Kernel> SketchClipboardOps<K> for Document<K> {
         fragment: Value,
         at: Option<[f64; 2]>,
     ) -> Result<Value, ApiError> {
+        // A 3D sketch's copy keeps its z and sources, which a planar sketch
+        // has no place for (mitcad#1661).
+        if SpatialFragment::is_spatial(&fragment) {
+            return Err(ApiError(
+                "3D sketch geometry cannot be pasted into a 2D sketch: paste it into a 3D sketch"
+                    .to_owned(),
+            ));
+        }
         let fragment: Fragment =
             serde_json::from_value(fragment).map_err(|e| ApiError(format!("fragment: {e}")))?;
         let base = fragment.base;

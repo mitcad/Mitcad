@@ -1,0 +1,23 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Send to Slicer's Filament changes (mitcad#1643, tools/ui-filament-changes-test.sh): a 20 x 20 x 40 box (F2.b0, Body1) at 30, 30 on XY, of a material in red (its default) and blue; Plane1 (F3) offset 15 mm above XY, its middle beside the box; a bench printer and a 0.2 mm process; the box on Plate 1 (plate1), which prints with the design's filament changes until it has its own."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[30,30],"width":20,"height":20},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent":{"type":"distance","distance":40},"operation":"new_body"}},
+  {"expect":{"feature":"F2","status":"ok"}},
+  {"cmd":"add_feature","def":{"type":"construction_plane","definition":{"type":"offset","plane":"xy","distance":15}}},
+  {"expect":{"feature":"F3","status":"ok"}},
+  {"cmd":"create_print_profile","kind":"printer","name":"Bench",
+   "values":{"bed_shape":[[0,0],[256,0],[256,256],[0,256]],"max_print_height":250,"nozzle_diameter":0.4,"filament_slots":4}},
+  {"cmd":"create_print_profile","kind":"process","name":"Standard","values":{"layer_height":0.2}},
+  {"cmd":"set_property","owner":"C0","set":"Print Printer","key":"profile","value":"bench"},
+  {"cmd":"set_property","owner":"C0","set":"Print Process","key":"profile","value":"standard"},
+  {"cmd":"create_appearance","id":"red_pla","name":"Red","base_color":[1.0,0.0,0.0]},
+  {"cmd":"create_appearance","id":"blue_pla","name":"Blue","base_color":[0.0,0.0,1.0]},
+  {"cmd":"create_material","id":"pla_two","name":"PLA Two","density":1.24,"class":"plastic",
+   "appearances":["red_pla","blue_pla"],"filament":{"filament_type":"PLA","temperature":215}},
+  {"cmd":"set_body_material","uid":"F2.b0","material":"pla_two","appearance_id":"red_pla"},
+  {"cmd":"add_print_plate"},
+  {"cmd":"place_on_plate","plate":"Plate 1","items":[{"body":"F2.b0"}]}
+]

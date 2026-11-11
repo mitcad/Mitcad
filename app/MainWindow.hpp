@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include <QByteArray>
 #include <QByteArrayView>
 #include <QDialog>
 #include <QHash>
@@ -19,6 +20,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <Bnd_Box.hxx>
 #include <gp_Trsf.hxx>
 
 #include "OcctViewer.hpp"
@@ -59,6 +61,7 @@ class WindowManager;
 class AutosaveManager;
 class AutoselectPanel;
 class BrowserController;
+class FilamentChangeDialog;
 class CommandRegistry;
 class CommandSearch;
 class ComputeProgress;
@@ -111,6 +114,8 @@ struct RecoverableSession;
 
 namespace sketch {
 class SketchPalette;
+class Sketch3dController; // 3D sketches (mitcad#1524)
+class Sketch3dPalette;
 }
 namespace mcp {
 class AgentIndicator;
@@ -302,8 +307,13 @@ public:
   // MainWindowParameterPicks.cpp).
   std::vector<ShownSketch> shownSketches() const override;
   // The Construct commands' question whether to activate the picked
-  // geometry's component (mitcad#960; MainWindowActivate.cpp).
-  void pickComing(const CommandDef& def, const SelectionItem& item) override;
+  // geometry's component (mitcad#960), and a feature that changes the
+  // picked body activating its component (mitcad#1634; MainWindowActivate.cpp).
+  void pickComing(const CommandDef& def, const InputDef& input, const SelectionItem& item) override;
+  // The panel's Activate button for picks of several components
+  // (mitcad#1634, browser/ActivateOnPick.hpp).
+  QJsonObject activationOffer(const CommandSession& session) const override;
+  void takeActivationOffer(CommandSession& session) override;
 
   // SketchHost
   const Selection& selection() const override { return m_selection; }
@@ -357,6 +367,12 @@ public:
   void showNamedView(const QString& view) override;
   void saveNamedView(const QString& name, bool replace) override;
   void exportSketch(const QString& sketch) override;
+  // Convert to 3D Sketch from the Browser (mitcad#1544,
+  // MainWindowSketch3d.cpp): the planar sketch opened, then converted.
+  void convertSketchTo3d(const QString& sketch) override;
+  // Convert to 2D Sketch from the Browser (mitcad#1550): the 3D sketch
+  // opened, then turned back into 2D.
+  void convertSketchTo2d(const QString& sketch) override;
   void editAnalysis(const QString& name) override;
   void animateJoint(const QString& uid) override;
   void previewJoint(const QString& uid, const QString& occurrence) override;
@@ -662,6 +678,11 @@ private:
   TopoDS_Shape sketchFace(const QString& uid) const;
   gp_Trsf sketchPlacement(const QString& uid) const override;
   QString sketchOccurrence(const QString& uid) const override;
+  // The Dimension tool's body geometry out of the plane off the UI thread
+  // (mitcad#1656, DocumentSession::queryAsync).
+  bool modelReadableNow() override;
+  bool queryInBackground(const QJsonObject& query, const BackgroundRead& read, QObject* context,
+                         const BackgroundDone& done) override;
 
   // Dragging components the joints move (mitcad#55, MainWindowJoints.cpp):
   // the `joint_drag` query per pointer move shows where the occurrences go,
@@ -783,6 +804,19 @@ private:
   // the question names it ("sketch", "plane", "axis", "point"; madeBy).
   // Activated, the component is, as one undo step of its own; true then.
   bool askToActivatePicked(const SelectionItem& item, const QString& refused, const QString& made);
+  // A feature that changes the bodies it picks (mitcad#1634,
+  // browser/ActivateOnPick.hpp): the first pick of another component's body
+  // activates that component, without a question, as one undo step outside
+  // the panel's undo range (CommandSession::runActivation), and the panel
+  // shows where the feature goes. Never for an agent's request (MCP), nor
+  // for picks of the active component's or a third component's bodies made
+  // before. True when it activated.
+  bool activateForPick(const CommandDef& def, const SelectionItem& item);
+  // The same for the selection made before such a command: all of its body
+  // picks of one other component activate that component before the panel
+  // opens (its own undo step); the notice to show once the panel is there,
+  // empty when nothing was activated.
+  QString activateForPreselection(const CommandDef& def, const Selection& preselection);
   // An agent's picks (mcpSelect) ask nothing.
   bool m_mcpPicking = false;
   // Create Sketch's plane pick (MainWindowVisibility.cpp): with
@@ -831,6 +865,79 @@ private:
   bool sketchExists(const QString& uid) const;
   // The sketch an item belongs to (profiles, sketch curves and points).
   static QString sketchOf(const SelectionItem& item);
+
+  // 3D sketches (mitcad#1524, MainWindowSketch3d.cpp). Create Sketch asks
+  // for the kind before the plane: 2D (the default) or 3D, on the row the
+  // command card shows while it waits for the plane (also Create 3D
+  // Sketch, which starts it with 3D chosen). A 3D sketch is edited in
+  // sketch mode with its own controller: the planar one (m_sketch) stays
+  // inactive, the view shows the sketch's points and curves in space, the
+  // 3D Sketch Palette its status, and the planar tools are disabled saying
+  // why. Finish Sketch, undo and a rolled-back timeline work as for a
+  // planar sketch.
+  void setUpSketch3d();
+  void setSketchKind(bool spatial);
+  void showSketchKindRow(bool shown);
+  void createSpatialSketch(const QJsonObject& fields);
+  void enterSketch3d(const QString& uid, bool existing, const QString& picked = QString());
+  // Whether a feature is a 3D sketch (also the one just created, before the
+  // snapshot has it).
+  bool isSpatialSketch(const QString& uid) const;
+  // The sketch being edited, of either kind; empty when none.
+  QString editingSketchUid() const;
+  QString editingSketchName() const;
+  bool editingSketchEmpty() const;
+  // A sketch's points and curves for the view, of either kind (the
+  // `sketch` or `sketch3d` query).
+  std::vector<SketchEntityDisplay> sketchDisplay(const QString& uid) const;
+  // Why a command is not available while a 3D sketch is edited; empty when
+  // it is (Finish Sketch, the view's and the window's commands).
+  QString sketch3dRefusal(const CommandDef& def) const;
+  // An agent's command in the edited 3D sketch: its sketch3d commands,
+  // edit_feature of it, undo and redo (MainWindowMcp.cpp's mcpSketchStep).
+  bool mcpSketch3dStep(const QJsonObject& request, QJsonObject* answer, QString& reason);
+  // Delete in a 3D sketch: its selected points and curves
+  // (`sketch3d.remove`), one undo step; a point that curves still use
+  // waits for Delete with Dependents in the palette (mitcad#1526).
+  void deleteSketch3dSelection();
+  // The SKETCH tab's Coincident, Tangent, Equal, Fix, Midpoint and Sketch
+  // Dimension on an edited 3D sketch's selection (mitcad#1526); false for
+  // another command or outside a 3D sketch.
+  bool runSketch3dEdit(const QString& id);
+  // The SKETCH tab's Copy, Cut and Paste in an edited 3D sketch
+  // (mitcad#1661, Sketch3dController's); false for another command.
+  bool runSketch3dClipboard(const QString& id);
+  // The 3D sketch manipulator's keys as commands of their own (mitcad#1661):
+  // Tab, Shift+Tab and Up Arrow by default, changed in Keyboard Shortcuts
+  // (Sketch); enabled while a drawing tool other than Fillet is active.
+  void registerSketch3dKeys();
+  // One of them pressed: a field with the keyboard keeps the key (Tab and
+  // Shift+Tab move between fields); otherwise the controller switches.
+  void runSketch3dKey(const QString& id);
+  // Where a click picks each point and curve of the edited 3D sketch, for
+  // UI tests ("3D sketch entity F3/c5 at x,y"), when they moved.
+  void logSketch3dEntities();
+  QString m_loggedSketch3dEntities;
+  // The open 2D sketch turned into a 3D sketch in place (mitcad#1544: the
+  // Sketch Palette's 3D Sketch box, the Browser's Convert to 3D Sketch):
+  // `sketch3d.convert`, one undo step within the sketch's edit, and the 3D
+  // editor takes the sketch (the spatial tool set, the manipulator at the
+  // origin on XY). Refused while a tool has pending input; a refusal names
+  // the features in the way.
+  void convertOpenSketchTo3d();
+  // The open 3D sketch turned back into a 2D sketch in place (mitcad#1550:
+  // the 3D Sketch Palette's box unchecked, the Browser's Convert to 2D
+  // Sketch): `sketch3d.convert_to_2d`, one undo step within the sketch's
+  // edit, and the 2D editor takes the sketch. Refused while a tool is
+  // active; a refusal names what lies out of the plane.
+  void convertOpenSketchTo2d();
+  // After Undo or Redo in sketch mode: the editor of the sketch's kind
+  // now (an undone conversion back in the 2D editor, a redone one in the
+  // 3D editor), within the same sketch edit.
+  void followSketchKind();
+  // Opens the edited sketch's other editor, keeping the sketch edit (its
+  // undo depth, rolled-back marker and occurrence).
+  void switchSketchEditor(bool spatial);
 
   void undo();
   void redo();
@@ -1149,6 +1256,11 @@ private:
   // or with `refused` given only put there (the caller asks).
   std::optional<QJsonObject> projectWrite(const QString& root, QJsonObject command, const QString& title,
                                           QJsonObject* refused = nullptr);
+  // The project picker's New Folder (mitcad#1649) for a Place picker: the
+  // folder made with the Projects panel's create_folder (projectWrite: a
+  // version of its own, pushed as the panel's), its refusal handed to the
+  // picker; the panel read again.
+  void offerNewFolder(ProjectPickerOptions& options);
   // The open design was moved or renamed to `path`: the window's file, its
   // version base and its edit lock follow.
   void openDesignMoved(const QString& path);
@@ -1299,12 +1411,15 @@ private:
   bool importPath(const QString& path, bool interactive, QString* error = nullptr);
   bool importCad(const QString& path, double unitMillimetres, QString* error,
                  QJsonObject* imported = nullptr, const QString& structure = QString(),
-                 bool repeatedParts = false);
+                 bool repeatedParts = false, std::optional<bool> wrap = std::nullopt);
   // A STEP file with an assembly asks how it comes in (mitcad#1274): the
   // import_file `structure` chosen, empty when nothing was asked (another
   // file, no assembly), nothing when cancelled; `repeatedParts` its Find
-  // repeated parts box (mitcad#1277).
-  std::optional<QString> askImportStructure(const QString& path, bool* repeatedParts = nullptr);
+  // repeated parts box (mitcad#1277); `wrapByDefault` whether import_file
+  // would wrap the file in a component of its own (the file_structure
+  // query's `wrap`, mitcad#1629).
+  std::optional<QString> askImportStructure(const QString& path, bool* repeatedParts = nullptr,
+                                            bool* wrapByDefault = nullptr);
   // Insert Mesh's Convert to solid (mitcad#1082): each mesh body of the
   // import result made a faceted solid; one undo step with the import
   // (`depth`: the undo depth before it) when any converts, and a refused
@@ -1453,6 +1568,47 @@ private:
   // (false).
   bool sendToSlicer(const CommandState& state, const QStringList& whole = {},
                     PrintBedChoices* bedFaces = nullptr);
+  // Send to Slicer's Filament changes (mitcad#1643,
+  // files/MainWindowFilamentChanges.cpp): the section's inputs (shown with
+  // 3MF, `threeMf`); the design's schedule as the `filament_changes` query
+  // lists it (read again after a model change, the last one while a job
+  // computes), a row's place and what happens there in words; Filament
+  // Change (FilamentChangeDialog) on a row (-1 a new change, -2 a new
+  // pause); the whole schedule set, one undo step (refused: why, in the
+  // dialog or the status bar); a change at a plane or face picked (Change
+  // At) or, with the dialog open, its event moved there; the view's print
+  // colours and rings while the panel is open (`bodies` sent, `shown` with
+  // 3MF), cleared at its end; Filament Change Here… of the context menu,
+  // which opens the panel and adds the change when it shows.
+  std::vector<InputDef> filamentChangeInputs(const std::function<bool(const CommandState&)>& threeMf);
+  QJsonObject filamentChangesNow() const;
+  QString filamentChangePlace(int row) const;
+  QString filamentChangeText(int row) const;
+  QString filamentReferenceName(const SelectionItem& item) const;
+  void editFilamentChange(int row);
+  bool setFilamentChanges(const QJsonArray& events, FilamentChangeDialog* dialog);
+  void filamentChangeAt(const SelectionItem& item);
+  void filamentChangesChanged(const QStringList& bodies, bool shown, const QString& plate = QString());
+  void showFilamentChangePreview();
+  void endFilamentChanges();
+  void filamentChangeHere(const SelectionItem& item);
+  // The faces the schedule's events are at, in an input's colour, for Send
+  // to Slicer's marks.
+  std::vector<std::pair<SelectionItem, QColor>> filamentChangeMarks() const;
+  void addPendingFilamentChange();
+  mutable QJsonObject m_filamentChanges;
+  mutable bool m_filamentChangesStale = true;
+  mutable QString m_filamentChangesLogged;
+  QPointer<FilamentChangeDialog> m_filamentChangeDialog;
+  SelectionItem m_filamentChangeHere;
+  QStringList m_filamentPreviewBodies;
+  bool m_filamentPreviewShown = false;
+  // The schedule the section edits: a print plate's id (Plates…), empty
+  // for the design's (Send to Slicer); the plate Filament Change Here…
+  // opens Plates… on, and the plate a face's body prints on.
+  QString m_filamentPlate;
+  QString m_filamentChangeHerePlate;
+  QString printPlateOf(const SelectionItem& item) const;
   // Whether a face is its body's print bed face (mitcad#731): one of the
   // faces the stored name finds (`bedFaces`, the body's names at the
   // marker), by name or by the faces of the shape
@@ -1630,6 +1786,16 @@ private:
   // The palette's page of the command pages: the palette, or in the docked
   // layout a scroll area around it (mitcad#412).
   QWidget* m_palettePage = nullptr;
+  // 3D sketches (mitcad#1524): the controller, the 3D Sketch Palette and
+  // its page, Create Sketch's kind row on the idle page and the kind
+  // chosen for the sketch it makes.
+  sketch::Sketch3dController* m_sketch3d = nullptr;
+  sketch::Sketch3dPalette* m_palette3d = nullptr;
+  QWidget* m_palette3dPage = nullptr;
+  QWidget* m_sketchKindRow = nullptr;
+  QToolButton* m_sketchKind2d = nullptr;
+  QToolButton* m_sketchKind3d = nullptr;
+  bool m_sketchSpatial = false;
   // The sketch tool shown checked (mitcad#1027): the command whose run is
   // starting one, and the one checked.
   QString m_startingSketchTool;
@@ -1653,6 +1819,8 @@ private:
   SectionReport m_sectionReport; // mitcad#1230
   QString m_loggedCaps;       // the section caps last logged
   QString m_loggedReach;      // how far the bodies reach in front of the sketch, last logged
+  // The placed shapes' boxes it was measured with (mitcad#1646).
+  QHash<QByteArray, Bnd_Box> m_reachBoxes;
   QString m_loggedThreads = QStringLiteral("Cosmetic threads shown: 0"); // as last logged
   QString& m_lastError = m_documentSession->state().lastError;
   bool& m_lastCancelled = m_documentSession->state().lastCancelled;
@@ -2193,6 +2361,10 @@ private:
   void registerViewShowCommands();
   void toggleViewShow(const QString& kind);
   void syncViewShowChecks();
+  // Whether the design's origin is drawn outside Create Sketch's plane
+  // pick: View › Show › Origins and the Origin folder's light bulb both on
+  // (mitcad#1642), as showDatums draws it.
+  bool originsShown() const { return m_snapshot.showOrigins && m_snapshot.originShown; }
   QString m_loggedViewShow; // the last "View Show menu: …" line (UI tests)
   CommandDef commentTargetCommand(bool retarget);
   void followComments();

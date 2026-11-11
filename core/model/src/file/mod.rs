@@ -215,9 +215,11 @@
 //! `filament_changes` (`[{"plate", "changes": [{"height", "kind",
 //! "material", "appearance", "message"}]}]`: `plate` a print plate's id,
 //! left out for the design's own schedule; heights in mm above the print
-//! bed, upwards; `kind` left out for a change, `"pause"` for a pause), see
+//! bed, upwards; `kind` left out for a change, `"pause"` for a pause; an
+//! event at a plane or face, mitcad#1643, has `at`, a reference, and
+//! perhaps `body` in place of `height`, after those at heights), see
 //! [`crate::print_changes`]. Builds without them treat the field as
-//! unknown.
+//! unknown; builds before mitcad#1643 refuse a file with `at`.
 //!
 //! Drawings of the root and the components (mitcad#707), when there are
 //! any: `drawings` (`uid` `D<n>`, `name`, `component` unless the root's,

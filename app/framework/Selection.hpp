@@ -6,6 +6,7 @@
 #include <optional>
 
 #include <QFlags>
+#include <QHashFunctions>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QString>
@@ -94,6 +95,13 @@ struct SelectionItem {
 };
 
 using Selection = QVector<SelectionItem>;
+
+// For sets of items (mitcad#1631: a window over a large design picks tens
+// of thousands of edges; QVector::contains for each made that quadratic).
+// Hashes what operator== compares.
+inline size_t qHash(const SelectionItem& item, size_t seed = 0) noexcept {
+  return qHashMulti(seed, static_cast<unsigned>(item.kind), item.owner, item.name, item.occurrence);
+}
 
 // The curve of an Intersection Curve (mitcad#1405, mitcad#1417): a feature
 // item whose geometry is "curve" (featureCurveGeometry), as the view's drawn

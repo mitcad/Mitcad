@@ -95,6 +95,17 @@ IndexedElement indexed_element(const geometry::Shape& shape, std::uint8_t kind, 
   return out;
 }
 
+rust::Vec<NamedBoundaryCurve> named_edge_curves(const geometry::Shape& shape) {
+  rust::Vec<NamedBoundaryCurve> result;
+  for (const geometry::NamedBoundaryCurve& c : geometry::named_edge_curves(shape)) {
+    NamedBoundaryCurve edge{};
+    edge.name = rust::String(c.name);
+    edge.curve = convert(c.curve);
+    result.push_back(std::move(edge));
+  }
+  return result;
+}
+
 rust::Vec<SectionPiece> section_curves(const geometry::Shape& shape, rust::Str name, std::array<double, 3> origin,
                                        std::array<double, 3> normal) {
   rust::Vec<SectionPiece> result;

@@ -72,6 +72,13 @@ struct IndexedElement {
 
 IndexedElement indexed_element(const Shape& shape, char kind, int index);
 
+// Every named edge of a shape with its curve, by index (mitcad#1656): what
+// curves_of gives for each edge's own name, without resolving the names
+// back (a scan of every edge per name on a body of few faces). Edges
+// without a name, and those whose curve cannot be read (curves_of's
+// failure for that name), are left out.
+std::vector<NamedBoundaryCurve> named_edge_curves(const Shape& shape);
+
 // Section curves of sketches (mitcad#389): where `plane` cuts the faces a
 // name resolves to (every face of the shape for an empty name), each piece
 // as curves_of gives an edge's curve, with the names of the faces it lies

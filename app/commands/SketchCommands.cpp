@@ -12,6 +12,8 @@
 #include <cmath>
 #include <cstddef>
 #include <memory>
+#include <optional>
+#include <vector>
 
 #include <QDir>
 #include <QFileInfo>
@@ -74,6 +76,22 @@ std::function<bool(const SelectionItem&)> linesOf(SketchController& c) {
   };
 }
 
+// A line input that also takes the sketch's x and y axes (mitcad#876:
+// Mirror's Mirror Line; mitcad#1655: Rectangular Pattern's Direction): an
+// axis picked shows its name in the field, a line its count.
+InputDef lineOrAxisInput(const QString& id, const QString& label, int min, SketchController& c) {
+  InputDef input = selectionInput(id, label, SelectKind::SketchCurve, min, 1)
+                       .withAccepts(linesOf(c))
+                       .withItemsText([&c](const Selection& items, const CommandState&, const CommandContext&) {
+                         const QString axis = items.size() == 1 ? c.model().axisOf(items.first().name) : QString();
+                         return axis == QStringLiteral("x")   ? QObject::tr("Sketch x axis")
+                                : axis == QStringLiteral("y") ? QObject::tr("Sketch y axis")
+                                                              : QString();
+                       });
+  input.sketchAxes = true;
+  return input;
+}
+
 QJsonArray names(const Selection& items) {
   QJsonArray result;
   for (const SelectionItem& item : items) {
@@ -134,10 +152,7 @@ void addMirror(CommandRegistry& registry, SketchController& c) {
   def.tooltip = QObject::tr("Mirrored copies about a line or a sketch axis, kept symmetric");
   // The line, or the sketch's x or y axis (mitcad#876), which sketch mode
   // picks for this input only, as its pick id.
-  InputDef mirrorLine =
-      selectionInput(QStringLiteral("axis"), QObject::tr("Mirror Line"), SelectKind::SketchCurve, 1, 1)
-          .withAccepts(linesOf(c));
-  mirrorLine.sketchAxes = true;
+  const InputDef mirrorLine = lineOrAxisInput(QStringLiteral("axis"), QObject::tr("Mirror Line"), 1, c);
   def.inputs = {
       selectionInput(QStringLiteral("entities"), QObject::tr("Objects"),
                      SelectKind::SketchCurve | SelectKind::SketchPoint, 1, 0)
@@ -249,6 +264,69 @@ std::array<bool, 2> symmetricDirections(const CommandState& s) {
           s.choice(QStringLiteral("direction_type2")) == symmetricDirection()};
 }
 
+QString pointPositions(const sketch::SketchModel& model, const QStringList& entities);
+
+// A rectangular pattern's Direction: the picked line's, from its start to
+// its end, or the picked sketch axis's (mitcad#1655), else the sketch's x
+// axis.
+sketch::V2 patternDirection(const CommandState& s, SketchController& c) {
+  const Selection& line = s.items(QStringLiteral("direction"));
+  if (!line.isEmpty()) {
+    if (const auto along = c.model().lineDirection(line.first().name)) {
+      return *along;
+    }
+  }
+  return sketch::V2{1.0, 0.0};
+}
+
+// The second direction's tooltip (mitcad#1640): it is never picked, it
+// runs at right angles to Direction.
+QString acrossDirection() { return QObject::tr("Across Direction, at right angles to it in the sketch"); }
+
+// Rectangular Pattern's handle (mitcad#1640): an arrow along Direction at
+// the originals' first copy, which drags Spacing, and one at right angles
+// to it at the first copy of the second direction, which drags Spacing 2;
+// either against its direction while its Flip is on. An arrow whose
+// Quantity is 1 is faint, a hint of where those copies would go.
+std::optional<SketchHandle> patternHandle(const CommandState& s, SketchController& c) {
+  QStringList originals;
+  for (const SelectionItem& item : s.items(QStringLiteral("entities"))) {
+    originals << item.name;
+  }
+  const auto middle = sketch::middleOf(c.model(), originals);
+  if (!middle) {
+    return std::nullopt;
+  }
+  const sketch::V2 first = patternDirection(s, c);
+  const std::array<sketch::V2, 2> directions{first, sketch::perp(first)};
+  SketchHandle handle;
+  handle.at = {middle->x, middle->y};
+  handle.x = QStringLiteral("distance1");
+  handle.y = QStringLiteral("distance2");
+  handle.moves = originals;
+  handle.square = false;
+  handle.snapsToGeometry = false;
+  handle.dragHint = QObject::tr("Drag: the spacing follows in steps of the grid (Shift or Alt: freely).");
+  std::array<std::array<double, 2>, 2> starts{};
+  for (std::size_t k = 0; k < 2; ++k) {
+    const QString n = QString::number(k + 1);
+    const double value = s.value(QStringLiteral("distance") + n);
+    const double spacing = std::isfinite(value) ? value : 0.0;
+    const sketch::V2 way = flipApplies(s.choice(QStringLiteral("direction_type") + n),
+                                       s.checked(QStringLiteral("flip") + n))
+                               ? -directions[k]
+                               : directions[k];
+    const sketch::V2 start = *middle + way * spacing;
+    handle.values[k] = spacing;
+    handle.axes[k] = {way.x, way.y};
+    starts[k] = {start.x, start.y};
+    const double quantity = s.value(QStringLiteral("quantity") + n);
+    handle.faint[k] = !(std::isfinite(quantity) && std::lround(quantity) > 1);
+  }
+  handle.starts = starts;
+  return handle;
+}
+
 void addRectangularPattern(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.rectangular_pattern", QObject::tr("Rectangular Pattern"),
                                  "rectangular-pattern", "CREATE/Patterns", CommandDef::Kind::Feature);
@@ -258,20 +336,52 @@ void addRectangularPattern(CommandRegistry& registry, SketchController& c) {
       selectionInput(QStringLiteral("entities"), QObject::tr("Objects"),
                      SelectKind::SketchCurve | SelectKind::SketchPoint, 1, 0)
           .withAccepts(ofSketch(c)),
-      selectionInput(QStringLiteral("direction"), QObject::tr("Direction"), SelectKind::SketchCurve, 0, 1)
-          .withAccepts(linesOf(c)),
+      // A line, or the sketch's x or y axis (mitcad#1655), so a sketch of
+      // circles alone has a direction to pick.
+      lineOrAxisInput(QStringLiteral("direction"), QObject::tr("Direction"), 0, c)
+          .withTooltip(QObject::tr("A line, or the sketch's x or y axis; the x axis when none is picked")),
       sketchDirectionType(QStringLiteral("direction_type1"), QObject::tr("Direction Type")),
       valueInput(QStringLiteral("quantity1"), QObject::tr("Quantity"), ValueKind::Unitless, QStringLiteral("3")).withStepMinimum(1),
       valueInput(QStringLiteral("distance1"), QObject::tr("Spacing"), ValueKind::Length, QStringLiteral("10")),
       flipInput(QStringLiteral("flip1"), QObject::tr("Flip"))
           .withTooltip(QObject::tr("Copies against the direction"))
           .withVisible(notSymmetric(QStringLiteral("direction_type1"))),
-      sketchDirectionType(QStringLiteral("direction_type2"), QObject::tr("Direction Type 2")),
-      valueInput(QStringLiteral("quantity2"), QObject::tr("Quantity 2"), ValueKind::Unitless, QStringLiteral("1")).withStepMinimum(1),
-      valueInput(QStringLiteral("distance2"), QObject::tr("Spacing 2"), ValueKind::Length, QStringLiteral("10")),
+      // The second direction is never picked: it runs across Direction, a
+      // quarter turn from it (mitcad#1640). Quantity 2 starts at 2, so the
+      // preview shows a grid at once; one row is a click on its step down.
+      sketchDirectionType(QStringLiteral("direction_type2"), QObject::tr("Direction Type 2"))
+          .withTooltip(QObject::tr("Across Direction, at right angles to it in the sketch; Symmetric: on both "
+                                   "sides (an odd quantity)")),
+      valueInput(QStringLiteral("quantity2"), QObject::tr("Quantity 2"), ValueKind::Unitless, QStringLiteral("2"))
+          .withStepMinimum(1)
+          .withTooltip(acrossDirection()),
+      valueInput(QStringLiteral("distance2"), QObject::tr("Spacing 2"), ValueKind::Length, QStringLiteral("10"))
+          .withTooltip(acrossDirection()),
       flipInput(QStringLiteral("flip2"), QObject::tr("Flip 2"))
           .withTooltip(QObject::tr("Copies against the second direction"))
           .withVisible(notSymmetric(QStringLiteral("direction_type2"))),
+  };
+  def.sketchHandle = [&c](const CommandState& s) { return patternHandle(s, c); };
+  // Where the copies are once a preview is shown (the sketch read again),
+  // for UI tests: "Preview Rectangular Pattern copies: p9 (-10.000,
+  // -15.000), …", their points in the pattern's order. Not when a preview
+  // is taken back or failed.
+  const QString commandName = def.name;
+  def.sketchPreviewShown = [&c, commandName](const QJsonObject& answer) {
+    const std::vector<sketch::PatternData>& patterns = c.model().patterns;
+    if (answer.isEmpty() || patterns.empty()) {
+      return;
+    }
+    // The pattern the answer names (`constraints`), else the newest one.
+    const QJsonArray made = answer.value(QStringLiteral("constraints")).toArray();
+    const QString id = made.isEmpty() ? QString() : made.at(0).toString();
+    const sketch::PatternData* shown = &patterns.back();
+    for (const sketch::PatternData& p : patterns) {
+      if (p.id == id) {
+        shown = &p;
+      }
+    }
+    qDebug().noquote() << QStringLiteral("Preview %1 copies: %2").arg(commandName, pointPositions(c.model(), shown->copies));
   };
   def.build = [&c](const CommandState& s, const CommandContext&) -> Built {
     const int n1 = static_cast<int>(std::lround(s.value(QStringLiteral("quantity1"))));
@@ -286,14 +396,8 @@ void addRectangularPattern(CommandRegistry& registry, SketchController& c) {
       return Built::failure(QObject::tr("A symmetric direction needs an odd quantity."),
                             symmetric[0] && n1 % 2 == 0 ? QStringLiteral("quantity1") : QStringLiteral("quantity2"));
     }
-    QJsonArray direction{1.0, 0.0};
-    const Selection& line = s.items(QStringLiteral("direction"));
-    if (!line.isEmpty()) {
-      if (const sketch::CurveData* d = c.model().curve(line.first().name)) {
-        const sketch::V2 u = sketch::unit(d->curve.b - d->curve.a);
-        direction = QJsonArray{u.x, u.y};
-      }
-    }
+    const sketch::V2 u = patternDirection(s, c);
+    const QJsonArray direction{u.x, u.y};
     QJsonObject cmd = base(c, "sketch.rectangular_pattern");
     cmd.insert(QStringLiteral("entities"), names(s.items(QStringLiteral("entities"))));
     cmd.insert(QStringLiteral("direction"), direction);
@@ -858,6 +962,24 @@ void addMove(CommandRegistry& registry, SketchController& c) {
     } else {
       cmd.insert(QStringLiteral("by"), QJsonArray{s.value(QStringLiteral("dx")), s.value(QStringLiteral("dy"))});
     }
+    // Held where it was dropped on a point or a curve (mitcad#1645): the
+    // Origin Point where the Target Point snapped, or the objects' point
+    // at the handle's place where its drag dropped it; the copy's point
+    // with Create Copy (the model's `hold`).
+    std::vector<QJsonObject> hold;
+    if (type == QStringLiteral("point_to_point")) {
+      hold = c.pickHold(*objects, s.items(QStringLiteral("from")).first().name,
+                        s.items(QStringLiteral("to")).first().name);
+    } else if (type != QStringLiteral("rotate")) {
+      hold = c.handleHold(*objects, s.value(QStringLiteral("dx")), s.value(QStringLiteral("dy")));
+    }
+    if (!hold.empty()) {
+      QJsonArray holds;
+      for (const QJsonObject& k : hold) {
+        holds.append(k);
+      }
+      cmd.insert(QStringLiteral("hold"), holds);
+    }
     cmd.insert(QStringLiteral("copy"), s.checked(QStringLiteral("copy")));
     return Built::of(cmd);
   };
@@ -946,8 +1068,10 @@ void addEditPattern(CommandRegistry& registry, SketchController& c) {
           .withTooltip(QObject::tr("Copies against the direction"))
           .withVisible(rectangular),
       valueInput(QStringLiteral("quantity2"), QObject::tr("Quantity 2"), ValueKind::Unitless, QStringLiteral("1")).withStepMinimum(1)
+          .withTooltip(acrossDirection())
           .withVisible(rectangular),
       valueInput(QStringLiteral("distance2"), QObject::tr("Spacing 2"), ValueKind::Length, QStringLiteral("10"))
+          .withTooltip(acrossDirection())
           .withVisible(rectangular),
       flipInput(QStringLiteral("flip2"), QObject::tr("Flip 2"))
           .withTooltip(QObject::tr("Copies against the second direction"))

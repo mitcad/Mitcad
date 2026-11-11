@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/sketch app/browser
+# check-all sources: app/sketch app/browser app/MainWindowNative.cpp
 # check-all sources: core/model/src/policy.rs core/model/src/document/policy.rs core/model-api/src/policy.rs app/MainWindow.cpp
 # Sketches and the timeline in a design of two components side by side,
 # through the real UI (mitcad#98, mitcad#99, mitcad#100):
 #   - With Cover active, a sketch on the top face of Part's block: linked
 #     to the face, at its height; Project takes the face into it, linked.
-#   - The timeline's filter: the active component's features, the playback
+#   - The timeline's filter: Active Component with its subcomponents at
+#     the start (mitcad#1662), every feature with the root active; Include
+#     Subcomponents off: the active component's features, the playback
 #     buttons stepping over the others; a component chosen in the
 #     browser; Find in Timeline on a hidden feature shows all again.
 #   - Cover deleted: the root is active, and a sketch there on Part's face
@@ -98,10 +100,13 @@ ui_expect_log "Bodies shown: F2.b0 in O1" "Part's block shown"
 ui_expect_log "Browser radio Root/Cover:1 at" "Cover in the browser"
 # A design opens with the root active (mitcad#426): Cover is activated here.
 ui_expect_log "Opened with the root active; C2 was active in the file" "the design opened with the root active"
+ui_expect_log "Timeline filter: Active Component (Root) with Subcomponents: 2 of 2 features" \
+  "the timeline starts at Active Component with subcomponents: every feature with the root active"
 ui_mark
 ui_step "activate Cover (radio)"         ui_click_logged "Browser radio Root/Cover:1"
 ui_expect_new "Activated Cover" "Cover is active"
-ui_expect_log "Timeline filter: all components" "the timeline shows every component"
+ui_expect_new "Timeline filter: Active Component (Cover) with Subcomponents: 0 of 2 features" \
+  "the timeline follows the activation: Cover has no features yet"
 
 echo "--- A sketch in Cover on a face of Part (mitcad#100)"
 sketch_on_top_face
@@ -125,9 +130,12 @@ ui_mark
 ui_step "open the filter"                ui_click_logged "Timeline button filter"
 ui_expect_new "Context menu: All Components | Active Component | Root | Part | Cover | Include Subcomponents" \
   "the filter's choices"
-ui_step "choose Active Component"        ui_menu_choose "Active Component"
+ui_step "choose Include Subcomponents"   ui_menu_choose "Include Subcomponents"
+ui_expect_new "Timeline filter saved: active, no subcomponents" "the choice saved for the next window"
 ui_expect_new "Timeline filter: Active Component (Cover): 1 of 3 features" "only Cover's sketch shown"
-ui_expect_new "Timeline Sketch2 at" "Sketch2 laid out"
+# Cover has no subcomponents, so the toggle leaves the shown set and the
+# strip's layout as they were (mitcad#1662): no new layout line is due.
+ui_expect_log "Timeline Sketch2 at" "Sketch2 laid out"
 ui_mark
 ui_step "step back"                      ui_click_logged "Timeline button back"
 ui_expect_new "Marker at 2 of 3" "one step back: before Sketch2"
@@ -144,11 +152,17 @@ ui_mark
 ui_step "right-click Part:1"             ui_click_logged "Browser Root/Part:1" 3
 ui_step "choose Show in Timeline Only"   ui_menu_choose "Show in Timeline Only"
 ui_expect_new "Timeline filter: Part: 2 of 3 features" "Part's sketch and extrude shown"
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "^Timeline filter saved" &&
+  ui_fail "one named component's filter was saved"
+echo "ok   one named component's filter is not saved"
 ui_mark
 ui_step "right-click Cover's sketch"     ui_click_logged "Browser Root/Cover:1/Sketches/Sketch2" 3
 ui_step "choose Find in Timeline"        ui_menu_choose "Find in Timeline"
 ui_expect_new "Timeline filter cleared to show Sketch2" "a hidden feature clears the filter"
 ui_expect_new "Timeline filter: all components" "every feature shown again"
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "^Timeline filter saved" &&
+  ui_fail "Find in Timeline saved its clearing as the choice"
+echo "ok   Find in Timeline's clearing is not saved"
 
 echo "--- Cover deleted; a sketch in the root on Part's face (mitcad#99)"
 ui_mark

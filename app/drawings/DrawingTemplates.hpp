@@ -24,7 +24,8 @@ struct TemplateChoice {
   QString choice;
   // As the dialogs show it: "ISO", "Company A3 (User)", "Simple Title Block".
   QString label;
-  // The sheet size it starts with ("A3"), empty when none.
+  // The sheet size it starts with ("A3", or "500x300" for a size of its
+  // own, mitcad#1625: sheetSizeText), empty when none.
   QString size;
   // The projection method it starts with ("first_angle", mitcad#725),
   // empty when none.
@@ -33,6 +34,16 @@ struct TemplateChoice {
   // built-in one's id, a user's or a project's data, "" for none.
   QJsonValue value;
 };
+
+// A sheet size as the dialogs keep it (mitcad#1625): a named size as the
+// model names it ("A3", "ANSI_B"), a size of its own as "500x300" (mm,
+// width by height); empty for none.
+QString sheetSizeText(const QJsonValue& size);
+// The model's `size` of such a text: the name, or {"width", "height"}.
+QJsonValue sheetSizeValue(const QString& text);
+// The width and height of a size of its own ("500x300"); false for a named
+// size or anything else.
+bool customSheetSize(const QString& text, double* width, double* height);
 
 // The choices of a `drawing_templates` answer, in its order, then the
 // simple title block.

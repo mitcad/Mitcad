@@ -100,7 +100,8 @@ echo "=== 1. Delete on a body's row (Docked)"
 ui_start_app --open "$WORK/imported.mitcad"
 ui_step "fit (F6)"                         ui_key F6
 ui_expect_log "Bodies shown: F1.b0, F1.b1, F1.b2" "the three imported bodies shown"
-ui_expect_log "View Show menu: Origins on | Construction on | Sketches on" "View › Show's entries, all on"
+ui_expect_log "View Show menu: Origins off | Construction on | Sketches on" \
+  "View › Show's entries, Origins unchecked while the Origin folder's light bulb is off (mitcad#1642)"
 ui_expect_log "Browser Root/Bodies/Middle at" "the browser lists Middle"
 
 ui_mark
@@ -139,7 +140,8 @@ ui_stop_app
 echo "=== 2. View › Show of the whole design (Floating)"
 ui_start_app --chrome=floating --open "$WORK/components.mitcad"
 ui_step "fit (F6)"                         ui_key F6
-ui_expect_log "View Show menu: Origins on | Construction on | Sketches on" "View › Show's entries, all on"
+ui_expect_log "View Show menu: Origins off | Construction on | Sketches on" \
+  "View › Show's entries, Origins unchecked while the Origin folder's light bulb is off (mitcad#1642)"
 ui_expect_log "Construction shown: " "the planes drawn"
 expect_planes "both components' planes drawn"
 ui_expect_log "Sketches shown: F2, F4" "both components' sketches drawn"

@@ -380,8 +380,46 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("keep_drawing_model_items", Model),
     // Line styles in drawing views (mitcad#1546, `drawing_lines.rs`).
     ("edit_drawing_line", Model),
+    // 3D sketches (mitcad#1522, `sketch3d.rs`).
+    ("sketch3d.create", Model),
+    ("sketch3d.add_point", Model),
+    ("sketch3d.add_line", Model),
+    ("sketch3d.add_arc", Model),
+    ("sketch3d.add_circle", Model),
+    ("sketch3d.add_spline", Model),
+    ("sketch3d.add_constraint", Model),
+    ("sketch3d.add_dimension", Model),
+    ("sketch3d.set_dimension", Model),
+    ("sketch3d.set_driven", Model),
+    ("sketch3d.set_construction", Model),
+    ("sketch3d.fix", Model),
+    ("sketch3d.detach", Model),
+    ("sketch3d.release_from_plane", Model),
+    ("sketch3d.release_plane", Model),
+    ("sketch3d.remove", Model),
+    ("sketch3d.drag", Model),
+    // Linked reference geometry of 3D sketches (mitcad#1543).
+    ("sketch3d.attach", Model),
+    ("sketch3d.include", Model),
+    ("sketch3d.replace_reference", Model),
+    // A planar sketch turned into a 3D sketch in place (mitcad#1544).
+    ("sketch3d.convert", Model),
+    // A 3D sketch's Fillet of corners between lines (mitcad#1548).
+    ("sketch3d.fillet", Model),
+    // A 3D sketch in its sketch plane turned back into a planar sketch
+    // (mitcad#1550).
+    ("sketch3d.convert_to_2d", Model),
+    // Plane-bound drawing tools of 3D sketches (mitcad#1550).
+    ("sketch3d.add_ellipse", Model),
+    ("sketch3d.add_rectangle", Model),
+    ("sketch3d.add_polygon", Model),
+    ("sketch3d.add_text", Model),
+    // Paste of copied sketch geometry into a 3D sketch (mitcad#1661).
+    ("sketch3d.paste", Model),
     // Filament changes at print heights (mitcad#1596).
     ("set_filament_changes", Model),
+    // A sheet's title block edited on the sheet (mitcad#1625).
+    ("edit_drawing_title_block", Model),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -594,12 +632,18 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("feature_curves", Model),
     // The closed loop of a sketch curve (mitcad#1541).
     ("sketch_loop", Model),
+    // A 3D sketch with its last evaluation (mitcad#1522).
+    ("sketch3d", Model),
     // Read-only guidance from existing modeling results (mitcad#1513).
     ("design_review", Model),
     // Narrow gaps between bodies printed in place (mitcad#1519).
     ("print_min_gap", Model),
     // Filament changes at print heights (mitcad#1596).
     ("filament_changes", Model),
+    // A key of a sketch's plane_geometry answer (mitcad#1646).
+    ("plane_geometry_key", Model),
+    // The print colours and rings Send to Slicer draws (mitcad#1643).
+    ("filament_change_preview", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

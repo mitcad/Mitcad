@@ -52,6 +52,27 @@ QString SketchModel::axisOf(const QString& id) const {
   return QString();
 }
 
+std::optional<V2> SketchModel::lineDirection(const QString& id) const {
+  // An axis by its name first: its pick is no curve until a step makes it.
+  const QString axis = axisOf(id);
+  if (axis == QStringLiteral("x")) {
+    return V2{1.0, 0.0};
+  }
+  if (axis == QStringLiteral("y")) {
+    return V2{0.0, 1.0};
+  }
+  for (const CurveData& c : curves) {
+    if (c.id == id && c.isLine()) {
+      const V2 along = c.curve.b - c.curve.a;
+      const double length = norm(along);
+      if (length > 1e-12) {
+        return along / length;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 bool SketchModel::isAxisOrOrigin(const QString& id) const {
   if (id.isEmpty()) {
     return false;

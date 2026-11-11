@@ -38,6 +38,8 @@ use std::fmt::Write as _;
 
 use super::{ExportOutput, Shared, xml_escape};
 use crate::document::EffectivePrint;
+use crate::features::geom_ref::GeomRef;
+use crate::ids::BodyUid;
 use crate::print_changes::{ChangeKind, mm};
 use crate::print_keys::Dialect;
 
@@ -55,12 +57,15 @@ pub enum LayerAction {
     Pause(String),
 }
 
-/// An event placed on a plate's layers: the height it was given (mm above
-/// the bed), the top of the first layer printed after it (mm) and that
-/// layer's number (from 1).
+/// An event placed on a plate's layers: its height (mm above the bed:
+/// given, or worked out from the plane or face `at` it is at, measured from
+/// `body`, mitcad#1643), the top of the first layer printed after it (mm)
+/// and that layer's number (from 1).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayerEvent {
     pub height: f64,
+    pub at: Option<GeomRef>,
+    pub body: Option<BodyUid>,
     pub print_z: f64,
     pub layer: u64,
     pub action: LayerAction,
@@ -85,12 +90,15 @@ pub struct ChangeExport {
     pub plates: Vec<PlateEvents>,
 }
 
-/// An event written into the project: its plate, height, `print_z`,
-/// layer, kind and the material it changes to.
+/// An event written into the project: its plate, height (and the plane
+/// or face it is at with the body it is measured from, mitcad#1643),
+/// `print_z`, layer, kind and the material it changes to.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WrittenEvent {
     pub plate: usize,
     pub height: f64,
+    pub at: Option<GeomRef>,
+    pub body: Option<BodyUid>,
     pub print_z: f64,
     pub layer: u64,
     pub kind: ChangeKind,
@@ -347,6 +355,8 @@ fn written(
     WrittenEvent {
         plate: plate.plate,
         height: event.height,
+        at: event.at.clone(),
+        body: event.body,
         print_z: event.print_z,
         layer: event.layer,
         kind: if target.is_some() {

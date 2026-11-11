@@ -71,6 +71,9 @@ signals:
   // The Auto constraint section was laid out shown: a scroll area around
   // the palette brings it into view (mitcad#412).
   void autoSectionShown(QWidget* section);
+  // The `3D Sketch` box was checked (mitcad#1544): the main window turns
+  // the open sketch into a 3D sketch in place.
+  void convertTo3dRequested();
 
 protected:
   void changeEvent(QEvent* event) override;
@@ -82,6 +85,9 @@ private:
   // The Auto constraint section (mitcad#189): shown once the drawing tool
   // has drawn an entity, with the choices of its session.
   void refreshAuto();
+  // The 3D Sketch box: unchecked, disabled while a tool has pending input
+  // (mitcad#1544).
+  void refreshSpatial();
   void logAutoLayout();
   // Logs where the Clean Up Stale Projections button is, when shown.
   void logCleanUp() const;
@@ -122,6 +128,7 @@ private:
   QCheckBox* m_constraints = nullptr;
   QCheckBox* m_profiles = nullptr;
   QCheckBox* m_hideAbove = nullptr;
+  QCheckBox* m_spatial = nullptr; // 3D Sketch: converts the sketch (mitcad#1544)
   QComboBox* m_dimensionText = nullptr;
   QWidget* m_autoSection = nullptr;
   QRadioButton* m_autoFirst = nullptr;

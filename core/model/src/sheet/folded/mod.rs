@@ -53,43 +53,7 @@ pub(super) fn read<K: Kernel>(
 /// named by their features as the timeline shows them: `SheetFlange3`, a
 /// further wall `SheetFlange3 (wall 2)`, a bend `SheetFlange1 (bend)`.
 pub(crate) fn name_walls<K: Kernel>(ctx: &EvalContext<'_, K>, message: &str) -> String {
-    let digits = |text: &str| text.bytes().take_while(u8::is_ascii_digit).count();
-    let mut named = String::new();
-    let mut rest = message;
-    loop {
-        let found = ["panel F", "bend F"]
-            .iter()
-            .filter_map(|key| rest.find(key).map(|at| (at, *key)))
-            .min();
-        let Some((at, key)) = found else {
-            named.push_str(rest);
-            return named;
-        };
-        named.push_str(&rest[..at]);
-        let after = &rest[at + key.len()..];
-        let feature_digits = digits(after);
-        let slot_text = after[feature_digits..].strip_prefix(" slot ");
-        let parsed = slot_text.and_then(|slot_text| {
-            let slot_digits = digits(slot_text);
-            let feature = after[..feature_digits].parse::<u64>().ok()?;
-            let slot = slot_text[..slot_digits].parse::<u64>().ok()?;
-            Some((feature, slot, &slot_text[slot_digits..]))
-        });
-        let Some((feature, slot, tail)) = parsed else {
-            named.push_str(&rest[at..at + key.len()]);
-            rest = after;
-            continue;
-        };
-        let name = ctx.feature_name(FeatureUid(feature));
-        let panel = key.starts_with("panel");
-        named.push_str(&match (panel, slot) {
-            (true, 0) => name,
-            (true, k) => format!("{name} (wall {})", k + 1),
-            (false, 0) => format!("{name} (bend)"),
-            (false, k) => format!("{name} (bend {})", k + 1),
-        });
-        rest = tail;
-    }
+    super::name_walls(message, &|feature| ctx.feature_name(feature))
 }
 
 pub(super) fn publish<K: Kernel>(

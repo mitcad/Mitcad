@@ -158,7 +158,11 @@ fn special_entities(def: &SketchDef) -> BTreeMap<EntityUid, SketchReference> {
 /// A driving dimension's or a text's value as a fragment keeps it: the
 /// parameter's expression with the parameters it uses, or its name when it
 /// is not the sketch's own.
-fn value_of(params: &Parameters, owner: FeatureUid, id: ParamId) -> (Option<String>, Vec<String>) {
+pub(crate) fn value_of(
+    params: &Parameters,
+    owner: FeatureUid,
+    id: ParamId,
+) -> (Option<String>, Vec<String>) {
     let Some(p) = params.get(id) else {
         return (None, Vec::new());
     };

@@ -119,7 +119,7 @@ Write-Host '=== 1. Delete on a body''s row (Docked)'
 Ui-StartApp 'view-show-delete' @('--open', $imported)
 Ui-Step 'fit (F6)'                         { Ui-Key 'F6' }
 Ui-ExpectLog 'Bodies shown: F1.b0, F1.b1, F1.b2' 'the three imported bodies shown'
-Ui-ExpectLog 'View Show menu: Origins on | Construction on | Sketches on' 'View > Show''s entries, all on'
+Ui-ExpectLog 'View Show menu: Origins off | Construction on | Sketches on' 'View > Show''s entries, Origins unchecked while the Origin folder''s light bulb is off (mitcad#1642)'
 Ui-ExpectLog 'Browser Root/Bodies/Middle at' 'the browser lists Middle'
 
 Ui-Mark
@@ -161,7 +161,7 @@ Ui-ExpectNew 'Bodies shown: F1.b0, F1.b1, F1.b2' 'both back'
 Write-Host '=== 2. View > Show of the whole design (Floating)'
 Ui-StartApp 'view-show-kinds' @('--chrome=floating', '--open', $components)
 Ui-Step 'fit (F6)'                         { Ui-Key 'F6' }
-Ui-ExpectLog 'View Show menu: Origins on | Construction on | Sketches on' 'View > Show''s entries, all on'
+Ui-ExpectLog 'View Show menu: Origins off | Construction on | Sketches on' 'View > Show''s entries, Origins unchecked while the Origin folder''s light bulb is off (mitcad#1642)'
 Ui-ExpectLog 'Construction shown: ' 'the planes drawn'
 Expect-Planes 'both components'' planes drawn'
 Ui-ExpectLog 'Sketches shown: F2, F4' 'both components'' sketches drawn'

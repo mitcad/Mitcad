@@ -1,0 +1,119 @@
+# SPDX-License-Identifier: MIT
+# mitcad#1643: Send to Slicer's Filament changes on filament-changes.json:
+# a red 40 mm box (F2.b0) and Plane1 (F3) 15 mm above XY beside it.
+#   1. Add change: Filament Change opens on a new change 10 mm up to the
+#      blue; 12 typed and OK set it (one undo step), the row shows it and
+#      the view draws the box red below and blue above with the ring.
+#   3. Change At, then a click on Plane1: a change at the plane, its row
+#      named by the plane with the height it gives; its Remove takes it
+#      away.
+#   4. Closing the panel restores the normal look; Undo takes the Remove
+#      back (the panel shows Plane1's row again), Redo does it again.
+#   5. Filament Change Here… on Plane1's context menu opens Send to Slicer
+#      with a change row at it.
+#   6. Filament Change Here… on the box's top, a face of a body on Plate 1,
+#      opens Plates… on Plate 1, which gets a schedule of its own: the
+#      design's events and the change at the face. The design saved keeps
+#      both schedules and the references.
+# Run by tools/ui-filament-changes-test.sh (Linux) and
+# tools/ui-windows-filament-changes-test.ps1 (Windows).
+wait-idle
+command view.fit
+wait-log '^Datum F3 at ' 30
+
+# 1. A change at a typed height.
+mark
+command make.print3d
+expect-log '^Command Send to Slicer started'
+wait-log '^Panel Send to Slicer note filament_changes: None \[Add change\] \[Add pause\]' 30
+wait-log '^Panel Send to Slicer action filament_changes[.]0 at ' 30
+click-logged '^Panel Send to Slicer action filament_changes[.]0 at '
+focus-dialog '^Filament Change$' 30
+wait-log '^Filament change dialog: new, at 10 mm, change to PLA Two \(Blue\)$' 10
+type 12
+button '^OK$'
+focus-main
+wait-log '^Send to Slicer filament changes: 12 mm: Change to PLA Two \(Blue\)$' 30
+wait-log '^Panel Send to Slicer note change_1: Change to PLA Two \(Blue\) \[Edit\] \[Remove\]$' 30
+wait-log '^Filament change overlay: [0-9]+ triangle\(s\) in #0000FF, #FF0000; [0-9]+ ring segment\(s\)$' 30
+expect-no-log '^Filament changes refused'
+
+# 3. A change at a picked plane, then removed.
+click-logged '^Panel Send to Slicer input change_at at '
+mark
+wait-idle
+click-logged '^Datum F3 at '
+wait-log '^Filament changes: added a change at Plane1$' 30
+wait-log '^Send to Slicer filament changes: 12 mm: Change to PLA Two \(Blue\) [|] Plane1 \(15 mm\): Change to PLA Two \(Blue\)$' 30
+wait-log '^Panel Send to Slicer note change_2: Change to PLA Two \(Blue\) \[Edit\] \[Remove\]$' 30
+wait-log '^Panel Send to Slicer action change_2[.]1 at ' 30
+# The pointer over the row paints its plane.
+mark
+hover-logged '^Panel Send to Slicer input change_2 at '
+wait-log '^Panel Send to Slicer note change_2 hovered: 0 places, 1 items$' 10
+leave-widget input_change_2
+wait-log '^Panel Send to Slicer note change_2 left$' 10
+mark
+click-logged '^Panel Send to Slicer action change_2[.]1 at '
+wait-log '^Filament changes: removed Plane1 \(15 mm\)$' 30
+wait-log '^Send to Slicer filament changes: 12 mm: Change to PLA Two \(Blue\)$' 30
+
+# 4. The panel closed: the bodies look as before.
+mark
+key Escape
+key Escape
+wait-log '^Command Send to Slicer cancelled' 30
+wait-log '^Filament change overlay: none$' 30
+
+# 4. Undo and Redo (with the panel closed, as for every command): the
+# Remove of 3 is one step, taken back and brought again.
+mark
+key ctrl+z
+wait-log '^Undo: Set Filament Changes$' 30
+mark
+command make.print3d
+wait-log '^Send to Slicer filament changes: 12 mm: Change to PLA Two \(Blue\) [|] Plane1 \(15 mm\): Change to PLA Two \(Blue\)$' 30
+key Escape
+key Escape
+wait-log '^Command Send to Slicer cancelled' 30
+mark
+key ctrl+y
+wait-log '^Redo: Set Filament Changes$' 30
+
+# 5. Filament Change Here… on Plane1.
+wait-idle
+mark
+click-logged '^Datum F3 at ' right
+wait-log '^Context menu: .*Filament Change Here…' 10
+popup 'Filament Change Here…'
+wait-log '^Filament Change Here: Plane1$' 10
+wait-log '^Command Send to Slicer started' 30
+wait-log '^Filament changes: added a change at Plane1$' 30
+wait-log '^Panel Send to Slicer note change_2: Change to PLA Two \(Blue\) \[Edit\] \[Remove\]$' 30
+key Escape
+key Escape
+wait-log '^Command Send to Slicer cancelled' 30
+
+# 6. Filament Change Here… on the box's top: Plates… on Plate 1.
+mark
+command inspect.measure
+wait-log '^Pick face F2[.]b0/F2:end' 30
+key Escape
+wait-log '^Command Measure cancelled' 30
+mark
+click-logged '^Pick face F2[.]b0/F2:end' right
+wait-log '^Context menu: .*Filament Change Here…' 10
+popup 'Filament Change Here…'
+wait-log '^Filament Change Here: A face of Body1 on plate plate1$' 10
+wait-log '^Command Plates… started' 30
+wait-log '^Filament changes: added a change at A face of Body1$' 30
+wait-log '^Send to Slicer filament changes: Plate 1 \(its own\): 12 mm: Change to PLA Two \(Blue\) [|] Plane1 \(15 mm\): Change to PLA Two \(Blue\) [|] A face of Body1 \(40 mm\): Change to PLA Two \(Blue\)$' 30
+wait-log '^Panel Plates… note change_3: Change to PLA Two \(Blue\) \[Edit\] \[Remove\]$' 30
+mark
+key Escape
+key Escape
+wait-log '^Filament change overlay: none$' 30
+mark
+key ctrl+s
+wait-log '^Saved ' 30
+expect-never 'TestDriver: FAIL'

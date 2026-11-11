@@ -26,3 +26,5 @@ mod pipe_tight_bends_tests;
 mod press_fit_hole_tests;
 // Print shapes of holes printed lying: teardrop, flat roof (mitcad#1515).
 mod print_shape_hole_tests;
+// Auto Fix of a thread's face that does not fit it (mitcad#1632).
+mod thread_autofix_tests;

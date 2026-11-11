@@ -603,6 +603,7 @@ void MainWindow::saveToProject() {
   options.folder = place.second;
   options.name = path.isEmpty() ? documentName() : QFileInfo(path).completeBaseName();
   options.ownFile = windowReadOnly() ? QString() : path;
+  offerNewFolder(options);
   const std::optional<ProjectPickerResult> picked = pickInProjects(this, options);
   if (!picked) {
     qInfo().noquote() << QStringLiteral("Save to Project cancelled");
@@ -671,6 +672,7 @@ bool MainWindow::saveIntoProject(const QString& root, const QString& chosen) {
       options.root = root;
       options.name = QFileInfo(name).completeBaseName();
       options.ownFile = from;
+      offerNewFolder(options);
       const std::optional<ProjectPickerResult> picked = pickInProjects(this, options);
       if (!picked || picked->other || picked->newProject) {
         qInfo().noquote() << QStringLiteral("Save to Project cancelled");

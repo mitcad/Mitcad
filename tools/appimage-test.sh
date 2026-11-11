@@ -20,7 +20,9 @@
 #      libssl.so.3 and libcrypto.so.3 are both bundled or both absent, and
 #      no file names a library folder of the build machine (vcpkg's install
 #      trees, the render libraries' prefix, the built executables'
-#      RUNPATHs), as OpenSSL's ENGINESDIR and MODULESDIR did.
+#      RUNPATHs), as OpenSSL's ENGINESDIR and MODULESDIR did. GLib's
+#      libraries and libcups are the system's (mitcad#1654, mitcad#1089):
+#      none of them in usr/lib.
 #   2. Copied into a folder of its own and started with an empty
 #      environment (env -i; PATH /usr/bin:/bin, and update checks off):
 #      --version, then the demo block's screenshot (--screenshot), while
@@ -41,6 +43,20 @@
 #      as its bridge, and the command Connect AI Assistant registers (it
 #      logs it) is the AppImage file with `cli mcp --connect`; the same
 #      command with `mcp --list-instances` lists the running window.
+#   2d. Insert › Component from Web's web browser component (mitcad#1654),
+#      when there is one (--browser, or the built mitcad's build folder's
+#      browser-component): unpacked into a folder of the test's own as a
+#      download is unpacked, and loaded by the running AppImage from there
+#      (MITCAD_BROWSER_COMPONENT_DIR, so that it looks for no newer one on
+#      the internet); its module and libcef come from that folder, GLib from
+#      the system's (never usr/lib), and no library is loaded from two
+#      places.
+#      On a system with a newer GLib than the AppImage was built on (2.86
+#      or newer) the module did not load while the AppImage bundled GLib.
+#      A package (a zip, tools/browser-package.sh) is first checked to be
+#      stripped: `strings` over its module and helper finds none of the
+#      build machine's folders (the source tree, the built mitcad's build
+#      folder, its CEF distribution; mitcad#1658).
 #   3. The automatic update (docs/updates.md): the AppImage, taking itself
 #      for 0.0.0 (MITCAD_TEST_VERSION), finds a release whose manifest signs
 #      this AppImage as the linux-x64 download (mitcad-release, with a key
@@ -64,25 +80,38 @@
 #      request to the test's server.
 # Without a working FUSE the AppImage runs with APPIMAGE_EXTRACT_AND_RUN=1.
 #
-# Usage: tools/appimage-test.sh [--skip-stale] [--require-cuda] <AppImage> [<built mitcad>] [<mitcad-release>]
+# Usage: tools/appimage-test.sh [--skip-stale] [--require-cuda] [--browser <component>] <AppImage> [<built mitcad>] [<mitcad-release>]
 #   --skip-stale (the ctest app.appimage): exit 77, skipped, when there is
 #   no AppImage newer than the built mitcad.
 #   --require-cuda: the AppImage must have the CUDA kernels; implied when
 #   the built mitcad's build folder (its CMakeCache.txt) requires CUDA.
+#   --browser: the web browser component's package (its zip) or folder for
+#   2d; by default the built mitcad's build folder's browser-component,
+#   when it has one (a build with MITCAD_BROWSER_COMPONENT).
 # The release tool defaults to build/dev/core/mitcad-release.
 
 SKIP_STALE=0
 REQUIRE_CUDA=0
+BROWSER=""
 while [ $# -gt 0 ]; do
   case $1 in
     --skip-stale) SKIP_STALE=1 ;;
     --require-cuda) REQUIRE_CUDA=1 ;;
+    --browser)
+      BROWSER=${2:?--browser needs a component package or folder}
+      shift
+      ;;
     *) break ;;
   esac
   shift
 done
-IMAGE=${1:?usage: tools/appimage-test.sh [--skip-stale] [--require-cuda] <AppImage> [<built mitcad>] [<mitcad-release>]}
+IMAGE=${1:?usage: tools/appimage-test.sh [--skip-stale] [--require-cuda] [--browser <component>] <AppImage> [<built mitcad>] [<mitcad-release>]}
 BUILT=${2:-}
+if [ -z "$BROWSER" ] && [ -n "$BUILT" ] && [ -f "$(dirname "$BUILT")/../browser-component/component.json" ]; then
+  BROWSER=$(cd "$(dirname "$BUILT")/../browser-component" && pwd)
+fi
+[ -z "$BROWSER" ] || [ -e "$BROWSER" ] || { echo "FAIL: no web browser component $BROWSER"; exit 1; }
+[ -z "$BROWSER" ] || BROWSER=$(readlink -f "$BROWSER")
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 RELEASE_TOOL=${3:-$ROOT/build/dev/core/mitcad-release}
 # The newest glibc the AppImage may need: Ubuntu 24.04's (and the
@@ -292,6 +321,15 @@ fi
 carriers=$(grep -rlaF "${lookup[@]}" "$DIR" | sed "s|^$DIR/||")
 [ -z "$carriers" ] || ui_fail "these files name the build machine's library folders ($(printf '%s ' "${lookup[@]}" | sed 's/-e //g')): $(echo $carriers)"
 echo "ok   no file names the build machine's library folders"
+# GLib (mitcad#1654, packaging/linux/make-appimage.sh): the system's, which
+# the web browser component's libraries load too; and libcups, the system's
+# print service's own (mitcad#1089).
+for library in libglib-2.0 libgobject-2.0 libgio-2.0 libgmodule-2.0 libgthread-2.0 libcups; do
+  if compgen -G "$DIR/usr/lib/$library.so*" > /dev/null; then
+    ui_fail "the AppImage bundles $library, which stays the system's"
+  fi
+done
+echo "ok   GLib and libcups are the system's, none in usr/lib"
 # The CUDA kernels (mitcad#202): a release must have them, with cuew's
 # licence, whatever this machine's GPU.
 CUBINS=$(compgen -G "$DIR/usr/lib/mitcad/cycles/lib/kernel_sm_*.cubin.zst" | wc -l)
@@ -507,6 +545,88 @@ echo "ok   the registered command lists the running window $instance"
 ui_focus_dialog '^Connect AI Assistant$'
 ui_step "close Connect AI Assistant (Esc)" ui_key Escape
 ui_stop_app
+
+echo "--- 2d. The web browser component in the AppImage (mitcad#1654)"
+if [ -z "$BROWSER" ]; then
+  echo "note no web browser component to load (--browser, or a build with MITCAD_BROWSER_COMPONENT)"
+else
+  # Unpacked as a download is (BrowserComponentInstall), in a folder of
+  # its own.
+  browser_folder=$WORK/browser-component
+  mkdir -p "$browser_folder"
+  if [ -d "$BROWSER" ]; then
+    cp -a "$BROWSER/." "$browser_folder/"
+  else
+    python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$BROWSER" "$browser_folder" ||
+      ui_fail "could not unpack the web browser component $BROWSER"
+    # zipfile keeps no permissions: the helper must run.
+    chmod -R 755 "$browser_folder"
+  fi
+  browser_version=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' \
+    "$browser_folder/component.json") || ui_fail "the web browser component has no component.json"
+  if [ -d "$BROWSER" ]; then
+    echo "note the build's component folder: its module and helper keep their debug information (only a package is stripped)"
+  else
+    # A package (tools/browser-package.sh, mitcad#1658): its module and
+    # helper name no folder of the build machine, neither in debug
+    # information nor in CEF's logging macros' file names.
+    folders=("$ROOT" "$(cd "$ROOT" && pwd -P)")
+    if [ -n "$BUILT" ] && [ -d "$(dirname "$BUILT")/.." ]; then
+      build_folder=$(cd "$(dirname "$BUILT")/.." && pwd)
+      folders+=("$build_folder" "$(cd "$build_folder" && pwd -P)")
+      cef_root=$(sed -n 's/^MITCAD_CEF_ROOT:PATH=//p' "$build_folder/CMakeCache.txt" 2> /dev/null)
+      if [ -n "$cef_root" ] && [ -d "$cef_root" ]; then
+        folders+=("$cef_root" "$(cd "$cef_root" && pwd -P)")
+      fi
+    fi
+    patterns=()
+    for folder in "${folders[@]}"; do
+      patterns+=(-e "$folder/")
+    done
+    for binary in mitcad-webbrowser.so mitcad-webbrowser-helper; do
+      [ -f "$browser_folder/$binary" ] || ui_fail "the web browser component's package has no $binary"
+      if found=$(strings -a "$browser_folder/$binary" | grep -F "${patterns[@]}"); then
+        ui_fail "the package's $binary names the build machine's folders ($(wc -l <<< "$found" | tr -d ' ') strings, e.g. $(head -1 <<< "$found"))"
+      fi
+    done
+    echo "ok   the package's module and helper name no build folder (${#folders[@]} folders looked for)"
+  fi
+  MITCAD_BROWSER_COMPONENT_DIR=$browser_folder MITCAD_BROWSER_COMPONENTS_DIR=$WORK/browser-components \
+    MITCAD_WEB_PROFILE_DIR=$WORK/web-profile MITCAD_WEB_DOWNLOADS_DIR=$WORK/web-downloads \
+    UI_GDB=0 UI_APP=$COPY ui_start_app --demo
+  ui_mark
+  ui_step "Insert > Component from Web" ui_command "Component from Web"
+  for _ in $(seq 1 150); do
+    grep -qE "Component from Web: (loaded|the browser module did not load)" "$UI_LOG" && break
+    ui_crashed && ui_fail "the app crashed loading the web browser component"
+    sleep 0.2
+  done
+  if grep -q "Component from Web: the browser module did not load" "$UI_LOG"; then
+    ui_fail "the AppImage did not load the web browser component: $(grep -o 'the browser module did not load: .*' "$UI_LOG" | tail -1)"
+  fi
+  ui_expect_new "Component from Web: loaded $browser_folder/mitcad-webbrowser.so" \
+    "the AppImage loads the component $browser_version from its folder" 30
+  ui_expect_new "Component browser opened" "the browser window opens" 30
+  pid=$(xdotool getwindowpid "$UI_WINDOW")
+  appdir=$(tr '\0' '\n' < "/proc/$pid/environ" | sed -n 's/^APPDIR=//p')
+  loaded=$(grep -oE '/[^ ]+\.so[.0-9]*$' "/proc/$pid/maps" | sort -u)
+  while IFS= read -r library; do
+    case $library in
+      "$browser_folder"/*) ;;
+      *) library_ok "$library" "$appdir" || ui_fail "MitCad with the web browser component loaded $library" ;;
+    esac
+  done <<< "$loaded"
+  for library in mitcad-webbrowser.so libcef.so; do
+    grep -qxF "$browser_folder/$library" <<< "$loaded" || ui_fail "$library is not the component folder's"
+  done
+  if glib=$(grep -E '/lib(glib|gobject|gio|gmodule|gthread)-2\.0\.so' <<< "$loaded" | grep -F "$appdir/"); then
+    ui_fail "GLib loaded from the AppImage: $glib"
+  fi
+  twice=$(sed 's|.*/||' <<< "$loaded" | sort | uniq -d)
+  [ -z "$twice" ] || ui_fail "libraries loaded from two places: $(echo $twice)"
+  echo "ok   the module and libcef from the component's folder, GLib the system's ($(grep -m1 -oE '/[^ ]*libglib-2\.0\.so[.0-9]*' <<< "$loaded")), no library twice"
+  ui_stop_app
+fi
 
 echo "--- 3. The AppImage updates itself"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 2 -subj /CN=localhost \

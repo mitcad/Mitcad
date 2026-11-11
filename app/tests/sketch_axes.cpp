@@ -297,6 +297,48 @@ void preselectionTests() {
                                                   QStringLiteral("y_axis")}));
 }
 
+// The direction a line input such as Rectangular Pattern's Direction takes
+// (mitcad#1655): a sketch of a circle alone has the axes' picks, a line
+// its own way from start to end, the model's x axis line its axis.
+void lineDirectionTests() {
+  SketchModel model;
+  CurveData circle;
+  circle.id = QStringLiteral("c1");
+  circle.type = QStringLiteral("circle");
+  model.curves.push_back(circle);
+  const auto runs = [](const std::optional<V2>& got, V2 wanted) {
+    return got.has_value() && dist(*got, wanted) < 1e-12;
+  };
+  CHECK(runs(model.lineDirection(QStringLiteral("x_axis")), V2{1.0, 0.0}));
+  CHECK(runs(model.lineDirection(QStringLiteral("y_axis")), V2{0.0, 1.0}));
+  CHECK(!model.lineDirection(QStringLiteral("c1")).has_value());
+  CHECK(!model.lineDirection(QStringLiteral("origin")).has_value());
+  CHECK(!model.lineDirection(QStringLiteral("c9")).has_value());
+
+  CurveData slanted;
+  slanted.id = QStringLiteral("c2");
+  slanted.type = QStringLiteral("line");
+  slanted.curve = Curve2::line(V2{10.0, 10.0}, V2{7.0, 14.0});
+  model.curves.push_back(slanted);
+  CHECK(runs(model.lineDirection(QStringLiteral("c2")), V2{-0.6, 0.8}));
+  CurveData point;
+  point.id = QStringLiteral("c3");
+  point.type = QStringLiteral("line");
+  point.curve = Curve2::line(V2{5.0, 5.0}, V2{5.0, 5.0});
+  model.curves.push_back(point);
+  CHECK(!model.lineDirection(QStringLiteral("c3")).has_value());
+
+  // The y axis the model made, drawn here from its far end: still the
+  // axis's own way.
+  CurveData made;
+  made.id = QStringLiteral("c4");
+  made.type = QStringLiteral("line");
+  made.curve = Curve2::line(V2{0.0, kAxisLineLength}, V2{});
+  made.axis = QStringLiteral("y");
+  model.curves.push_back(made);
+  CHECK(runs(model.lineDirection(QStringLiteral("c4")), V2{0.0, 1.0}));
+}
+
 } // namespace
 
 int sketchAxesTests() {
@@ -306,5 +348,6 @@ int sketchAxesTests() {
   madeAxesTests();
   clickTests();
   preselectionTests();
+  lineDirectionTests();
   return failures;
 }

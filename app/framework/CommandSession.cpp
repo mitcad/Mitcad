@@ -1116,6 +1116,22 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
   // The pointer over the panel's message (mitcad#1327): the places of the
   // preview's notices are painted in the view while it stays.
   actions.messageHovered = [this](bool on) { hoverMessage(on); };
+  // The pointer over a note row (mitcad#1643): what the row is about.
+  actions.noteHovered = [this](const QString& key, bool on) { hoverNote(key, on); };
+  // The button beside the message (mitcad#1634): Activate <component>
+  // beside the refusal of picks of several components; once the model is
+  // idle, the host activates it and keeps only its picks.
+  actions.messageAction = [this] {
+    inputAction([this] {
+      if (m_activationOffer.isEmpty()) {
+        return;
+      }
+      qDebug().noquote() << QStringLiteral("Panel %1 activate %2 clicked")
+                                .arg(m_def.name, m_activationOffer.value(QStringLiteral("name")).toString());
+      m_host.takeActivationOffer(*this);
+      updateActivationOffer();
+    });
+  };
   // A link of an inspection's result ("point:x,y,z", Print Analysis'
   // thinnest wall, mitcad#620): the view shows that point of the design,
   // 20 mm across.
@@ -1148,6 +1164,10 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
     }
   }
   listItems();
+  // The selection made before the command may span components
+  // (mitcad#1634): the new presenter shows the Activate button.
+  m_activationOffer = QJsonObject();
+  updateActivationOffer();
   const QVector<Slot> shown = slotsOf(true);
   m_selectionsComplete = selectionsSatisfied();
   for (const Slot& slot : shown) {
@@ -1488,11 +1508,13 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
   const bool shiftApplies = !window && input->shiftClickApplies && input->max == 1 &&
                             modifiers.testFlag(Qt::ShiftModifier) && !modifiers.testFlag(Qt::ControlModifier);
   // A click on another component's geometry may ask to activate that
-  // component first (mitcad#960, the Construct commands' question): before
-  // the pick goes in and previews, not for a pick a click takes out again.
+  // component first (mitcad#960, the Construct commands' question), or
+  // activate it (mitcad#1634, a feature that changes the picked body):
+  // before the pick goes in and previews, not for a pick a click takes out
+  // again.
   if (!window && !accepted.isEmpty() && !isEditing() &&
       !containsEntry(m_state.items(key), accepted.first(), resolver())) {
-    m_host.pickComing(m_def, raw.first());
+    m_host.pickComing(m_def, *input, raw.first());
     if (m_done || activeInput() != input) {
       return;
     }
@@ -1666,6 +1688,7 @@ void CommandSession::selectionChanged(const QString& key) {
   logSelection(key);
   listItems();
   updateHighlights();
+  updateActivationOffer(); // mitcad#1634
   inputsChanged();
 }
 
@@ -1767,6 +1790,14 @@ void CommandSession::updateHighlights() {
       }
       highlights.push_back(std::move(shown));
     }
+  }
+  // What a note row the pointer is over is about (mitcad#1643).
+  for (const SelectionItem& item : m_noteHighlights) {
+    HighlightDisplay shown{item, m_host.itemShape(item), kTargetColor};
+    if (item.kind == SelectKind::Face) {
+      shown.body = m_host.bodyShape(item.owner);
+    }
+    highlights.push_back(std::move(shown));
   }
   for (const SelectionItem& item : m_previewHighlights) {
     if (item.kind == SelectKind::Component) {
@@ -2566,6 +2597,9 @@ void CommandSession::runPreview() {
     command = {{QStringLiteral("cmd"), QStringLiteral("edit_feature")},
                {QStringLiteral("uid"), m_editUid},
                {QStringLiteral("def"), built.def}};
+  } else if (m_def.addOptions) {
+    // As OK sends it (mitcad#1632).
+    m_def.addOptions(command, m_state);
   }
   addAutoOperation(command);
   const QByteArray key = compactJson(command);
@@ -2978,6 +3012,32 @@ void CommandSession::showPanelMessage(const QString& message, NoticeLevel level)
   }
 }
 
+void CommandSession::hoverNote(const QString& key, bool on) {
+  InputNote note;
+  if (on) {
+    if (const auto slot = slotOf(key); slot && slot->def->type == InputDef::Type::Note && slot->def->noteFor) {
+      note = slot->def->noteFor(scopeOf(*slot));
+    }
+  }
+  const bool paints = !note.places.isEmpty() || !note.hover.isEmpty();
+  if (!paints && m_hoveredNote.isEmpty()) {
+    return; // nothing painted, nothing to take away
+  }
+  // For the UI tests: what the row paints, and when it stops.
+  if (paints) {
+    qDebug().noquote() << QStringLiteral("Panel %1 note %2 hovered: %3 places, %4 items")
+                              .arg(m_def.name, key)
+                              .arg(note.places.size())
+                              .arg(note.hover.size());
+  } else {
+    qDebug().noquote() << QStringLiteral("Panel %1 note %2 left").arg(m_def.name, m_hoveredNote);
+  }
+  m_hoveredNote = paints ? key : QString();
+  m_noteHighlights = note.hover;
+  m_host.hoverNoticePlaces(QStringLiteral("panel note"), note.places, std::vector<BodyDisplay>());
+  updateHighlights();
+}
+
 void CommandSession::hoverMessage(bool on) {
   if (on == m_messageHovered && !on) {
     return;
@@ -3038,6 +3098,11 @@ QString CommandSession::okMessage(const QJsonObject& report) {
       message.prepend(m_shownNote);
       qDebug().noquote() << QStringLiteral("Panel %1 note: %2").arg(m_def.name, m_shownNote);
     }
+  }
+  if (!m_activationNotice.isEmpty()) {
+    // The component the command activated for its picks first
+    // (mitcad#1634): where the feature goes.
+    message.prepend(m_activationNotice);
   }
   return message.join(QLatin1Char('\n'));
 }
@@ -4560,6 +4625,10 @@ QJsonObject CommandSession::addFeatureCommand(const Built& built) const {
   QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("add_feature")}, {QStringLiteral("def"), built.def}};
   if (!m_addTo.isEmpty()) {
     command.insert(QStringLiteral("component"), m_addTo);
+  }
+  // The command's own options (mitcad#1632: Thread's fit_faces).
+  if (m_def.addOptions) {
+    m_def.addOptions(command, m_state);
   }
   return command;
 }

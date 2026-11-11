@@ -61,10 +61,15 @@ public:
   // filter), the active component's (kActiveFilter) or a component's (its
   // uid), with those of the components placed in it when `subcomponents`.
   // Joints and rigid groups that place occurrences of a shown component
-  // are shown too. This window's view, not saved.
-  void setFilter(const QString& filter, bool subcomponents);
+  // are shown too. A window starts at the saved choice, Active Component
+  // with its subcomponents by default (mitcad#1662); a choice of all or the
+  // active component is saved (`timeline/filter`, `timeline/subcomponents`)
+  // when `remember`, one named component is this window's only.
+  void setFilter(const QString& filter, bool subcomponents, bool remember = true);
   QString filter() const { return m_filter; }
   bool filterSubcomponents() const { return m_subcomponents; }
+  // Whether the filter hides any feature now (its button highlighted).
+  bool hidesFeatures() const { return m_hiddenCount > 0; }
   static const QString kActiveFilter;
   // Shared presentation metadata and menu for native timeline adapters.
   QSet<QString> filteredFeatures() const;
@@ -198,6 +203,8 @@ private:
                     const QHash<QString, QString>& occurrenceComponents) const;
   void showFilterMenu();
   void updateFilterButton();
+  // The choice of all or the active component saved (mitcad#1662).
+  void saveFilter() const;
   // The search (mitcad#179): the field's text changed; the matches found
   // again (after a change of the text or the timeline); a step to the
   // previous or next match, or to one; the list of matches over the field;
@@ -232,7 +239,9 @@ private:
   QString m_editing; // the feature being renamed
   QString m_logged;
   QString m_filter; // empty: all components; kActiveFilter or a component's uid
-  bool m_subcomponents = false;
+  bool m_subcomponents = true;
+  int m_featureCount = 0; // the timeline's features
+  int m_hiddenCount = 0;  // of them, the ones the filter hides
   QToolButton* m_filterButton = nullptr;
   QString m_loggedFilter;
   // The search (mitcad#179).

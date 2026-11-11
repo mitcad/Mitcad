@@ -1591,6 +1591,20 @@ if(BUILD_TESTING)
   target_sources(test_app PRIVATE tests/drawing_sheet_view.cpp drawings/DrawingSheetView.cpp
                                   drawings/DrawingSheetView.hpp)
 endif()
+# Drawing templates of the user's own (mitcad#1625): the title block editor
+# on the sheet and a sheet's custom size in Create Drawing and Sheet….
+target_sources(mitcad PRIVATE
+  drawings/SheetSizeRows.cpp
+  drawings/SheetSizeRows.hpp
+  drawings/TitleBlockEditor.cpp
+  drawings/TitleBlockEditor.hpp)
+if(BUILD_TESTING)
+  # The editor's lines, fields and images, their snaps, moves and deletes
+  # and the block it gives back: plain Qt Core (the sheet's view paints
+  # it).
+  target_sources(test_app PRIVATE tests/title_block_editor.cpp drawings/TitleBlockEditor.cpp
+                                  drawings/TitleBlockEditor.hpp)
+endif()
 if(BUILD_TESTING)
   # The view's context menu (mitcad#494): which commands a selection
   # completes (first) and which need further picks (More), from the command
@@ -1988,6 +2002,15 @@ target_sources(mitcad PRIVATE
   print/PurgeVolumesDialog.cpp
   print/PurgeVolumesDialog.hpp)
 
+# Filament changes at planes, faces and heights in Send to Slicer
+# (mitcad#1643): the panel's section, the Filament Change window and the
+# view's print colours and rings.
+target_sources(mitcad PRIVATE
+  files/MainWindowFilamentChanges.cpp
+  print/FilamentChangeDialog.cpp
+  print/FilamentChangeDialog.hpp
+  view/FilamentChangeOverlay.cpp)
+
 # A filament's variants per printer and nozzle (mitcad#1054): the Variants
 # tab of the Materials window.
 target_sources(mitcad PRIVATE
@@ -2097,7 +2120,10 @@ endif()
 
 # Copy, Cut and Paste of sketch geometry (mitcad#788): the sketch fragment
 # on the clipboard and the Paste tool.
-target_sources(mitcad PRIVATE sketch/SketchClipboard.cpp)
+target_sources(mitcad PRIVATE sketch/SketchClipboard.cpp sketch/SketchClipboard.hpp)
+# Copy, Cut and Paste in a 3D sketch, and a 2D sketch's copy pasted into
+# one (mitcad#1661).
+target_sources(mitcad PRIVATE sketch/Sketch3dClipboard.cpp)
 
 # Redefine Sketch Plane (mitcad#787): a sketch moved to another plane or
 # face and placed there by an offset, a move, a rotation and a flip.
@@ -2389,6 +2415,14 @@ if(BUILD_TESTING)
   # the offscreen platform.
   target_sources(test_app PRIVATE tests/activate_question.cpp browser/ActivateQuestion.cpp
                  browser/ActivateQuestion.hpp)
+endif()
+# A feature that changes the picked body (Fillet, Chamfer, Shell, ...) on
+# another component's body activates that component without a question
+# (mitcad#1634, app/COMMANDS.md "Activating the picked component"): the
+# command table and the decisions, plain Qt Core.
+target_sources(mitcad PRIVATE browser/ActivateOnPick.cpp browser/ActivateOnPick.hpp)
+if(BUILD_TESTING)
+  target_sources(test_app PRIVATE tests/activate_on_pick.cpp browser/ActivateOnPick.cpp browser/ActivateOnPick.hpp)
 endif()
 # A feature's build state on the timeline and the selection card
 # (mitcad#961): the cell's fill, its status ring inside the selection's and
@@ -2957,6 +2991,74 @@ if(BUILD_TESTING)
   target_sources(test_app PRIVATE tests/icon_size_style.cpp framework/IconSizeStyle.cpp
                  framework/IconSizeStyle.hpp)
 endif()
+# 3D sketches (mitcad#1524, app/COMMANDS.md "3D sketches"): Create
+# Sketch's 2D or 3D choice, the 3D sketch's editing context (its frame,
+# points, curves, references and badges in the view, the 3D Sketch
+# Palette) and the 2D tools disabled in it.
+target_sources(mitcad PRIVATE
+  MainWindowSketch3d.cpp
+  sketch/Sketch3dController.cpp
+  sketch/Sketch3dController.hpp
+  sketch/Sketch3dModel.cpp
+  sketch/Sketch3dModel.hpp
+  sketch/Sketch3dPalette.cpp
+  sketch/Sketch3dPalette.hpp)
+if(BUILD_TESTING)
+  # The sketch3d query read and worded (status, details, sources,
+  # descriptions, the log line): plain Qt Core.
+  target_sources(test_app PRIVATE tests/sketch3d_model.cpp sketch/Sketch3dModel.cpp sketch/Sketch3dModel.hpp)
+endif()
+# The 3D sketch's drawing tools (mitcad#1525, app/COMMANDS.md "3D sketch
+# drawing tools"): placement on the temporary planes, axes and normal,
+# snaps, typed values, arcs and splines, committed as sketch3d commands.
+target_sources(mitcad PRIVATE
+  sketch/Sketch3dDraw.cpp
+  sketch/Sketch3dDraw.hpp
+  sketch/Sketch3dSnaps.cpp
+  sketch/Sketch3dTools.cpp)
+# The plane-bound drawing tools (mitcad#1550): circles, the ellipse,
+# rectangles, polygons and the text on the active XY, YZ or ZX plane.
+target_sources(mitcad PRIVATE sketch/Sketch3dShapes.cpp)
+if(BUILD_TESTING)
+  # Placement, snap priority, typed values, arc geometry and the commands
+  # the tools send: plain Qt Core.
+  target_sources(test_app PRIVATE tests/sketch3d_draw.cpp sketch/Sketch3dDraw.cpp sketch/Sketch3dDraw.hpp)
+endif()
+# Editing a 3D sketch (mitcad#1526, app/COMMANDS.md "3D sketch editing"):
+# relations and dimensions from the selection and their palette list,
+# Fix, Unfix, Detach, Attach and Replace Reference, dragging points,
+# curves and tangent handles, Delete with Dependents.
+target_sources(mitcad PRIVATE
+  sketch/Sketch3dEdit.cpp
+  sketch/Sketch3dEdit.hpp
+  sketch/Sketch3dEditing.cpp)
+if(BUILD_TESTING)
+  # The commands an edit sends, what a delete takes, drag goals, tangent
+  # handles, the B-spline samples and the palette's words: plain Qt Core.
+  target_sources(test_app PRIVATE tests/sketch3d_edit.cpp sketch/Sketch3dEdit.cpp sketch/Sketch3dEdit.hpp)
+endif()
+# A 3D sketch's Fillet (mitcad#1548, app/COMMANDS.md "3D sketch Fillet"):
+# corners picked by their point or two lines, a typed or dragged radius
+# previewed, each corner one sketch3d.fillet.
+target_sources(mitcad PRIVATE
+  sketch/Sketch3dFillet.cpp
+  sketch/Sketch3dFillet.hpp
+  sketch/Sketch3dFilletTool.cpp)
+if(BUILD_TESTING)
+  # Corners, the arc of a radius and its fit, the dragged radius and the
+  # command: plain Qt Core.
+  target_sources(test_app PRIVATE tests/sketch3d_fillet.cpp sketch/Sketch3dFillet.cpp sketch/Sketch3dFillet.hpp)
+endif()
+# Pipe and Sweep along 3D sketches (mitcad#1527, app/COMMANDS.md "Pipe and
+# Sweep along 3D sketches"): the typed path, the kept direction, path
+# pieces, a whole-sketch pick's route and the panel's route listing.
+target_sources(mitcad PRIVATE
+  commands/SpatialPaths.cpp
+  commands/SpatialPaths.hpp)
+if(BUILD_TESTING)
+  # Read from the model's JSON answers: plain Qt Core.
+  target_sources(test_app PRIVATE tests/spatial_paths.cpp commands/SpatialPaths.cpp commands/SpatialPaths.hpp)
+endif()
 
 # A sketch edit refused for conflicting constraints (mitcad#1566,
 # app/COMMANDS.md "Conflicting constraints"): the message shown without the
@@ -3002,4 +3104,33 @@ if(BUILD_TESTING)
   # Qt Core, Gui and Widgets.
   target_sources(test_app PRIVATE tests/menu_bar.cpp framework/MenuBarReveal.cpp framework/MenuBarReveal.hpp
                  framework/EnterRepeat.cpp framework/EnterRepeat.hpp)
+endif()
+
+# The BUILD lists' tables as CSV and as an aligned plain-text table, with
+# CRLF line ends (mitcad#1641, app/COMMANDS.md "BUILD"): Copy as Text and
+# Save as Text… beside the CSV and PDF buttons.
+target_sources(mitcad PRIVATE build/ListTables.cpp build/ListTables.hpp)
+if(BUILD_TESTING)
+  # CSV's row ends, the text table's columns and alignment: plain Qt Core.
+  target_sources(test_app PRIVATE tests/list_tables.cpp build/ListTables.cpp build/ListTables.hpp)
+endif()
+
+# The project picker's New Folder (mitcad#1649, app/COMMANDS.md "Project
+# picker"): a folder made in the chosen project, named in place.
+target_sources(mitcad PRIVATE projects/PickerNewFolder.cpp projects/PickerNewFolder.hpp)
+if(BUILD_TESTING)
+  # The name proposed, the name typed, why the button waits: plain Qt Core.
+  target_sources(test_app PRIVATE tests/picker_new_folder.cpp projects/PickerNewFolder.cpp
+                 projects/PickerNewFolder.hpp)
+endif()
+
+# The Start page's rounded backdrop (mitcad#1439, app/COMMANDS.md "The Start
+# tab"): inset from the view's edges with the floating cards' radius, the
+# view's background around it.
+target_sources(mitcad PRIVATE files/StartBackdrop.cpp files/StartBackdrop.hpp)
+if(BUILD_TESTING)
+  # Its rectangle and margins, its colour in the middle and not at the
+  # corners, the view's gradient around it: plain Qt Gui, painted into
+  # images.
+  target_sources(test_app PRIVATE tests/start_backdrop.cpp files/StartBackdrop.cpp files/StartBackdrop.hpp)
 endif()

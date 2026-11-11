@@ -11,8 +11,10 @@
 #      image formats, the SVG icon engine, TLS, the CUPS print support of
 #      File › Print) and a qt.conf. What every
 #      Linux desktop has (glibc, X11 and xcb, OpenGL, fontconfig,
-#      FreeType, ...) stays the system's: linuxdeploy's exclude list. Then
-#      the ELF files are stripped.
+#      FreeType, ...) stays the system's: linuxdeploy's exclude list, and
+#      ours: GLib (below), libcups and the GPU drivers. The libraries
+#      nothing in the AppDir needs then go, and the ELF files are
+#      stripped.
 #      The AppImage's entry point is packaging/linux/AppRun (mitcad#1170):
 #      `MitCad.AppImage cli <arguments>` runs the bundled mitcad-cli,
 #      anything else MitCad.
@@ -59,6 +61,22 @@
 # update check uses, and its TLS with a configuration that does not load
 # (it falls back) and with one that does (no fallback).
 #
+# GLib (mitcad#1654): libglib-2.0, libgobject-2.0, libgio-2.0,
+# libgmodule-2.0 and libgthread-2.0 are the system's, never bundled. Qt
+# links libglib; Insert › Component from Web's web browser component, which
+# MitCad loads at run time from the user's data folder, links libgobject
+# and libgio through CEF, and its libraries find the system's (its RUNPATH
+# is its own folder). With the build machine's GLib 2.80 in usr/lib, the
+# bundled libglib was loaded at start-up and the system's libgobject came
+# later on top of it: two GLib builds in one process, and on a system with
+# GLib 2.86 or newer no browser at all ("libgobject-2.0.so.0: undefined
+# symbol: g_string_copy", a function of 2.86 that the system's libgobject
+# calls and the bundled libglib lacks). GLib keeps its interface from one
+# version to the next, and every system the AppImage starts on (glibc 2.39,
+# Ubuntu 24.04 and newer) has GLib 2.80 or newer, the version it is built
+# against. tools/appimage-test.sh checks that the AppImage has none of them
+# and loads the web browser component in it.
+#
 # Usage: packaging/linux/make-appimage.sh <build dir> <built mitcad> <AppImage>
 # Environment: MITCAD_APPIMAGE_TOOLS (default ~/appimage-tools), QMAKE
 # (Qt's qmake, which tells the Qt plugin where Qt is), CMAKE.
@@ -71,6 +89,8 @@ TOOLS=${MITCAD_APPIMAGE_TOOLS:-$HOME/appimage-tools}
 CMAKE=${CMAKE:-cmake}
 WORK=$BUILD/appimage
 APPDIR=$WORK/AppDir
+# GLib's libraries (see the header), which stay the system's.
+GLIB_FAMILY="libglib-2.0 libgobject-2.0 libgio-2.0 libgmodule-2.0 libgthread-2.0"
 RUNTIME=$TOOLS/runtime-x86_64
 
 for tool in linuxdeploy linuxdeploy-plugin-qt appimagetool; do
@@ -113,12 +133,19 @@ oidn=$(LD_LIBRARY_PATH=$libraries ldd "$WORKER" | sed -n 's/.*libOpenImageDenois
 for module in "$(dirname "$oidn")"/libOpenImageDenoise_device_{cpu,cuda,hip,sycl}.so*; do
   [ -e "$module" ] && [ ! -L "$module" ] && executables+=(--library "$module")
 done
-executables+=(--exclude-library 'libcuda.so*' --exclude-library 'libamdhip64.so*')
+excluded=('libcuda.so*' 'libamdhip64.so*')
 # File › Print (mitcad#1089): Qt's CUPS print support plugin talks to the
 # system's print service through the system's libcups, which stays the
 # system's like the GPU drivers (a desktop without it prints to PDF files
 # only: Qt then leaves the plugin unloaded).
-executables+=(--exclude-library 'libcups.so*')
+excluded+=('libcups.so*')
+# GLib (mitcad#1654, see the header): the system's, like glibc.
+for library in $GLIB_FAMILY; do
+  excluded+=("$library.so*")
+done
+for pattern in "${excluded[@]}"; do
+  executables+=(--exclude-library "$pattern")
+done
 # OpenSSL (see the header): the libssl.so.3 next to the libcrypto.so.3 that
 # the executables link, so that the AppImage has both or neither.
 crypto=""
@@ -136,10 +163,53 @@ fi
 export LD_LIBRARY_PATH=$libraries${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 export PATH=$TOOLS/bin:$PATH
 export QMAKE
+# linuxdeploy does not pass its --exclude-library patterns on to its Qt
+# plugin, which deploys the libraries of Qt's plugins with its own copy of
+# linuxdeploy's code: the plugin reads them from this variable (semicolons
+# between the patterns). Without it the plugin bundled what linuxdeploy had
+# left out (GLib through Qt's plugins, libcups through the print support
+# plugin; mitcad#1654).
+LINUXDEPLOY_EXCLUDED_LIBRARIES=$(IFS=';'; echo "${excluded[*]}")
+export LINUXDEPLOY_EXCLUDED_LIBRARIES
 linuxdeploy --appdir "$APPDIR" \
   "${executables[@]}" \
   --desktop-file "$APPDIR/usr/share/applications/mitcad.desktop" \
   --plugin qt
+# None of them in the AppDir, whichever step deployed it.
+for pattern in "${excluded[@]}"; do
+  for library in "$APPDIR"/usr/lib/$pattern; do
+    [ -e "$library" ] || [ -L "$library" ] || continue
+    echo "the AppDir has ${library#"$APPDIR"/}, which stays the system's" >&2
+    exit 1
+  done
+done
+# linuxdeploy and its Qt plugin still copy the libraries an excluded one
+# needs (libmount and libselinux of libgio, Avahi and GnuTLS of libcups,
+# libXau of libxcb): libraries nothing in the AppDir needs, which only
+# look as if MitCad used them. They go, again while a removal leaves
+# another one unneeded; what is loaded by name (--library: OpenSSL's
+# libssl, Open Image Denoise's device modules) stays.
+kept=()
+for ((i = 0; i < ${#executables[@]}; i++)); do
+  [ "${executables[i]}" = --library ] && kept+=("$(basename "${executables[i + 1]}")")
+done
+while :; do
+  needed=$(find "$APPDIR/usr" -type f -print0 | while IFS= read -r -d '' file; do
+    if [ "$(head -c 4 "$file" | od -An -c | tr -d ' ')" = '177ELF' ]; then
+      readelf -d "$file" | sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\1/p'
+    fi
+  done | sort -u)
+  unneeded=()
+  for library in "$APPDIR"/usr/lib/*.so*; do
+    name=$(basename "$library")
+    if [ -f "$library" ] && ! grep -qxF "$name" <<< "$needed" && ! printf '%s\n' "${kept[@]}" | grep -qxF "$name"; then
+      unneeded+=("$library")
+    fi
+  done
+  [ ${#unneeded[@]} -gt 0 ] || break
+  echo "Not needed in the AppDir: $(basename -a "${unneeded[@]}" | tr '\n' ' ')"
+  rm -f "${unneeded[@]}"
+done
 # Qt's own translations as linuxdeploy copies them (all of Qt's languages):
 # MitCad loads Qt's catalogue of its own interface languages from
 # usr/share/mitcad/translations, which the install rules fill

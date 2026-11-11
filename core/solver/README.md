@@ -12,7 +12,9 @@ The sketch model keeps its own stable ids (`EntityUid`, see
 
 The same iteration, factorization, rank analysis and differentiation
 solve the joints of assemblies: rigid bodies joined by joints
-([Joints](#joints-rigid-bodies), `src/rigid.rs`).
+([Joints](#joints-rigid-bodies), `src/rigid.rs`) and the points and lines
+of 3D sketches ([Spatial points and lines](#spatial-points-and-lines-3d-sketches),
+`src/spatial.rs`).
 
 ## Usage
 
@@ -355,6 +357,132 @@ Carlson limit them, so it never passes the samples either side.
 - **Analysis.** The row counts in the rank: two gears on revolute
   joints have one degree of freedom together; a coupling that
   contradicts driven motions is named in the conflict.
+
+## Spatial points and lines (3D sketches)
+
+`SpatialSystem` (`src/spatial.rs`, mitcad#1520) solves the points and
+lines of 3D sketches, separate from the planar `System`: its own unknown
+layout, rows and ownership on the same iteration, drag, factorization,
+dual numbers and rank analysis. The components come from the helper the
+planar preparation uses (`prepare::connected_components`); the planar
+direction graph (angles modulo pi) is not used.
+
+```rust
+use mitcad_solver::{Axis, AxisSense, SpatialConstraint::*, SpatialOptions, SpatialSystem};
+
+let mut s = SpatialSystem::new();
+let a = s.add_point([0.0, 0.0, 0.0])?;
+let b = s.add_point([38.0, 1.0, -2.0])?;  // a start position, not a fix
+let ab = s.add_line(a, b)?;               // refers to a and b: no unknowns
+s.add_constraint(Attach { point: a, target: [0.0; 3] })?;  // the origin
+s.add_constraint(Align { line: ab, axis: Axis::X, sense: AxisSense::Positive })?;
+let len = s.add_constraint(Length { line: ab, value: 40.0 })?;
+let r = s.solve(&SpatialOptions::default());  // r.status, r.conflicts, r.issues
+let an = s.analyze();                         // an.dof == 0, a and b determined
+```
+
+Points have three coordinates in the sketch's local orthonormal frame;
+the frame (`O + R p` in the component) is the caller's and no unknown: a
+source vertex `V` becomes the local target `R^T (V - O)` of an `Attach`
+before the solve (`set_target` when it moves). Lines that share an end
+point id are joined there; separate points are joined only by
+`Coincident`. Every residual is a length in mm:
+
+| Relation | Rows (`d = b - a`) |
+|---|---|
+| `Coincident(a, b)` | `d_x`, `d_y`, `d_z` (3; never `|d|^2`, whose gradient vanishes where it holds) |
+| `Fix { point, at }`, `Attach { point, target }` | `p_k - t_k` (3) |
+| `Align { line, axis, sense }` | the two transverse differences (2): parallel to the axis anywhere, not on it |
+| `Offset { a, b, axis, value }` | `d_j - value` (1), signed, may be 0 |
+| `Length { line, value }` | `|d| - value` (1); on an aligned line `d_j - s value` (linear, `s` the alignment's sense) |
+
+Driven measurements (`line_length`, `offset`, `measure`) add no rows.
+New values (`set_value`, `set_target`) keep the prepared rows and plans;
+adding or removing points, lines or constraints (identity, attachments,
+the compiled form of a length) prepares them again.
+
+- **Before solving**, the definition is checked: a line whose ends are
+  one point by identity or coincidences is `Invalid`; alignments of one
+  pair of points with two axes or two senses, or an offset along the
+  aligned axis against the sense (or zero), are `Conflicting`.
+- **Acceptance** is absolute: every residual within `tolerance`
+  (`SPATIAL_TOLERANCE`, 1e-6 mm), refined by the iteration to 1e-9 mm
+  where floating point allows, whatever the route's length; the size
+  that scales drag steps is the local extent, not the distance from the
+  origin. Large value changes are applied in steps (continuation).
+- **Validation** after convergence: a line at most `SPATIAL_MIN_SEGMENT`
+  (1e-6 mm) long or an aligned line pointing against its sense makes the
+  result `Invalid`.
+- **Failure** is classified at the least-squares point: dependent rows
+  whose residuals cannot vanish together are `Conflicting` (named by
+  constraint, the newest first); a row without gradient (a length of a
+  line whose ends are at one place) is `SpatialIssue::Singular` under
+  `NotConverged`; else `NotConverged`. Anything but `Converged` restores
+  every point (the whole system, not only the failed component).
+- **Drag** goals are soft; a coordinate no row uses (a wholly free
+  point) goes to its target directly.
+- **Analysis**: DOF is `unknowns - rank` (redundant rows take none
+  away); a point is determined when its three coordinates are, a line
+  when both points are, and nothing is reported fully constrained unless
+  the geometry is solved, valid and without conflicts.
+
+### Spatial arcs, splines and curve relations
+
+mitcad#1542 adds curves (`SpatialCurveId`; `SpatialCurve` is a line or a
+curve where a relation takes either) with the unknowns of the solver
+study:
+
+| Curve | Unknowns | Internal rows | DOF |
+|---|---|---|---|
+| `add_arc(c, s, e, SpatialNormal::Free(n))` | its points and a unit normal | `abs(s-c)-abs(e-c)`, `n.(s-c)`, `n.(e-c)`, `L (n.n-1)/2` | 8 |
+| `add_arc(.., SpatialNormal::Axis(k, sense))` (plane-bound) | its points | `abs(s-c)-abs(e-c)`, `s_k-c_k`, `e_k-c_k` | 6 |
+| `add_circle(c, r, normal)` | centre, radius, normal (free) | the unit row (free) | 6 / 4 |
+| `add_bspline` | control points (degree, knots, weights fixed) | none | 3 per point |
+| `add_fitted_spline` | fit points and hidden control points, chord-length parameters fixed | interior fit points, natural end `C''`, periodic seam | 3 per fit point, + 3 per free end |
+| `add_reference_curve` (`SpatialReferenceCurve`: line, conic, B-spline, helix) | none (constant) | none | 0 |
+
+Arcs run counter-clockwise about their normal. The basis of
+`spline.rs` evaluates two and three coordinates alike (`Coords`), and the
+interpolation takes either.
+
+| Relation | Rows |
+|---|---|
+| `PointOn` a line / arc or circle / spline or reference curve | `p-a-t(b-a)` (3) / `n.(p-c)`, `abs(p-c)-r` (2) / `p-C(t)` (3); `t` is an unknown kept in the curve's range |
+| `Midpoint` of a line / arc / reference curve | `2m-a-b` / `abs(m-s)-abs(m-e)`, `n.(m-c)`, `abs(m-c)-abs(s-c)` (side validated) / `m - target` |
+| `Tangent { a, b, at }` | line-round `u.(P-c)`, `L u.n`; round-round `u_a.(P-c_b)`, `L u_a.n_b`; otherwise `L u.w1(v)`, `L u.w2(v)` with the frame axis least aligned with `v` (prepared again when `abs(v.e) > 0.9`) |
+| `Equal`, `Radius`, `Diameter`, `ArcLength` | length or radius differences, `abs(s-c) theta - A` |
+| `NormalAlign { curve, axis, sense }` | `L n_i`, `L n_k` |
+| `OnSketchPlane(p)` | `p_z` |
+| `OnSurface { point, surface }` (mitcad#1549; `SpatialSurface`: plane, cylinder, cone, sphere, torus; `set_surface` replaces it) | the signed distance to the surface (1): `n.(p-o)`; `abs(w-(w.a)a)-r`; `(rho-r-h tan(t)) cos(t)`; `abs(p-c)-r`; `sqrt((rho-R)^2+h^2)-r` |
+| `add_in_plane(planar Constraint)` | the planar rows, on the x and y columns |
+
+Unit-vector rows are multiplied by their entity's characteristic length
+`L` (at least 1 mm), so every residual is in mm; curve parameters are
+weighted by their curve's length, normals by their radius. Tangency and
+normal-alignment senses are validated after the solve, like an
+alignment's; a radius, an arc chord or a spline spacing at most
+`SPATIAL_MIN_SEGMENT` is `SpatialIssue::DegenerateCurve`, an arc's
+midpoint on its complement `MidpointOffArc`. `circle_through` is the
+Three-Point Arc helper and refuses collinear input.
+
+In-plane relations (a converted sketch): `in_plane_point` and
+`in_plane_curve` give a shadow planar `System`'s points and entities for
+the spatial ones (a fitted spline with the same basis and hidden control
+points), and `add_in_plane` compiles a planar constraint or dimension
+with `prepare::compile_mapped`, the planar row compilation extracted
+from `prepare` behind a column mapping: the planar rows, evaluated on the
+spatial x and y columns. The planar direction graph runs over these
+relations only. `elevation_groups` names the points that carry one
+`OnSketchPlane` each after a conversion (one per group of points whose
+elevations coincidences and plane-bound arcs tie), so that DOF and
+redundancy stay the planar sketch's.
+
+The relations' rows come before the curves' internal rows in the rank
+analysis: a dependency among a curve's own rows (a half circle turning
+about its diameter) is that curve's geometry and no relation's
+redundancy. A curve is determined when its points and own unknowns are;
+curve parameters are auxiliary. `drag_with` takes fitted spline end
+tangents (`SpatialTangentGoal`) as soft goals.
 
 ## Performance
 

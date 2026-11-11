@@ -299,6 +299,13 @@ pub use cage::ControlCage;
 // (mitcad#1405).
 pub mod intersection_curve;
 pub use intersection_curve::IntersectionCurveDef;
+// 3D Sketch: points and lines in a frame that follows a support
+// (mitcad#1521).
+pub mod spatial_sketch;
+pub use spatial_sketch::{SpatialSketchDef, SpatialSketchOutput};
+// Pipe and Sweep along curves of 3D sketches (mitcad#1523).
+pub mod spatial_path;
+pub use spatial_path::SpatialPath;
 
 use crate::assembly::Assembly;
 use crate::datum::Datum;
@@ -473,6 +480,8 @@ feature_types! {
     Envelope(EnvelopeDef),
     // Intersection Curve (mitcad#1405).
     IntersectionCurve(IntersectionCurveDef),
+    // 3D Sketch (mitcad#1521).
+    SpatialSketch(SpatialSketchDef),
 }
 
 /// Brings a feature definition in an earlier form up to date before it is
@@ -673,6 +682,9 @@ pub struct FeatureOutput<S> {
     /// part), as they were before the thread (mitcad#436, mitcad#628): the
     /// threads query lists the thread from them.
     pub threaded_walls: Vec<hole::ThreadedWall>,
+    /// A thread's faces whose diameter does not fit it, with what sets
+    /// each (mitcad#1632): Auto Fix changes that.
+    pub thread_fits: Vec<thread::ThreadFitMiss>,
     /// What the feature picked, drawn where it was (a Fillet's or a
     /// Chamfer's edges, mitcad#957); None when the kernel gave nothing.
     pub inputs: Option<FeatureInputs>,
@@ -695,6 +707,7 @@ impl<S> Default for FeatureOutput<S> {
             mounts: BTreeMap::new(),
             measured: Vec::new(),
             threaded_walls: Vec::new(),
+            thread_fits: Vec::new(),
             inputs: None,
             curve: None,
         }
@@ -760,6 +773,26 @@ impl CheckContext<'_> {
         let entry = self.feature(uid)?;
         match &entry.def {
             FeatureDef::Sketch(sketch) => Ok((entry, sketch)),
+            // Its profiles are taken through `profile_sketch` (mitcad#1550).
+            // The name for a person, the uid for agents (mitcad#1644).
+            FeatureDef::SpatialSketch(_) => Err(crate::notice::said(
+                format!("{} is a 3D sketch, which this does not take", entry.name),
+                format!(
+                    "{} ({uid}) is a 3D sketch, which this does not take",
+                    entry.name
+                ),
+            )),
+            _ => Err(format!("{} ({uid}) is not a sketch", entry.name)),
+        }
+    }
+
+    /// A sketch before this feature whose profile regions it uses: a planar
+    /// sketch, or a 3D sketch, whose closed loops in its sketch plane bound
+    /// regions as a planar sketch's do (mitcad#1550).
+    pub fn profile_sketch(&self, uid: FeatureUid) -> Result<&FeatureEntry, String> {
+        let entry = self.feature(uid)?;
+        match &entry.def {
+            FeatureDef::Sketch(_) | FeatureDef::SpatialSketch(_) => Ok(entry),
             _ => Err(format!("{} ({uid}) is not a sketch", entry.name)),
         }
     }
@@ -911,6 +944,9 @@ pub struct EvalContext<'a, K: Kernel> {
     /// object that is no longer in its body is found in the body as it was
     /// before this feature, as the original found it.
     pub(crate) objects_before: Option<FeatureUid>,
+    /// What a 3D sketch's evaluation gave (mitcad#1521): kept with its
+    /// result also when it failed (its frame and failure, no geometry).
+    pub(crate) spatial: Option<spatial_sketch::SpatialSketchOutput>,
     /// The bodies of other components that the geometry the feature refers
     /// to is on, by their links (a construction plane's, mitcad#196): read
     /// in their components and moved into the feature's coordinates.
@@ -947,6 +983,7 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             sweep_place: None,
             move_basis: None,
             objects_before: None,
+            spatial: None,
             geom_links: std::collections::BTreeMap::new(),
             datum_links: std::collections::BTreeMap::new(),
             next_body: 0,
@@ -994,7 +1031,7 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             .sheet(body)
             .ok_or_else(|| format!("sheet {body} is unavailable"))?;
         if state.value.status() != "valid" {
-            return Err(format!("sheet {body} is {}", state.value.status()));
+            return Err(self.sheet_refusal(&state.value));
         }
         let owner = self.env.owners.get(&body).copied();
         let shape = owner
@@ -1006,6 +1043,13 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             return Err(format!("sheet {body} does not match current geometry"));
         }
         Ok(state.value)
+    }
+
+    /// Why a sheet that is not valid cannot be used, in the user's terms
+    /// (mitcad#1628): the text the Flat Pattern's reason says too
+    /// (`sheet::refusal`, mitcad#1636).
+    fn sheet_refusal(&self, state: &crate::sheet::SheetState) -> String {
+        crate::sheet::refusal(state, &|feature| self.feature_name(feature))
     }
 
     pub fn warn(&mut self, message: impl Into<String>) {
@@ -1361,11 +1405,7 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
     /// longer exists after Extrude2", the edge painted; agents read its
     /// name).
     pub fn missing_edge(&self, body: BodyUid, edge: &EdgeName) -> String {
-        let named = self.missing_edge_named(body, edge);
-        let said = match named.strip_prefix(&format!("edge {edge} ")) {
-            Some(rest) => format!("an edge {rest}"),
-            None => "the body has no such edge".to_owned(),
-        };
+        let (said, named) = self.missing_edge_said(body, edge);
         crate::notice::placed(
             said,
             crate::notice::NoticePlace::edge(edge.to_string()).in_body(&body.to_string()),
@@ -1373,7 +1413,9 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
         )
     }
 
-    fn missing_edge_named(&self, body: BodyUid, edge: &EdgeName) -> String {
+    /// What the person reads and what agents read, each a whole message
+    /// (mitcad#1626).
+    fn missing_edge_said(&self, body: BodyUid, edge: &EdgeName) -> (String, String) {
         let mut existed = false;
         let mut lost_after = None;
         for result in self.env.history {
@@ -1387,9 +1429,10 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             existed = present;
         }
         if let Some(feature) = lost_after {
-            return format!(
-                "edge {edge} no longer exists after {}",
-                self.feature_name(feature)
+            let name = self.feature_name(feature);
+            return (
+                format!("an edge no longer exists after {name}"),
+                format!("edge {edge} no longer exists after {name}"),
             );
         }
         for feature in edge.features() {
@@ -1400,13 +1443,17 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
                 .find(|r| r.uid == feature)
                 .is_some_and(|r| !r.status.is_ok());
             if failed {
-                return format!(
-                    "edge {edge} does not exist because {} failed",
-                    self.feature_name(feature)
+                let name = self.feature_name(feature);
+                return (
+                    format!("an edge does not exist because {name} failed"),
+                    format!("edge {edge} does not exist because {name} failed"),
                 );
             }
         }
-        format!("the body has no edge {edge}")
+        (
+            "the body has no such edge".to_owned(),
+            format!("the body has no edge {edge}"),
+        )
     }
 
     /// Checks that every edge resolves on the shape and gives the names

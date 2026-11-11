@@ -31,7 +31,20 @@
 // picker target <key>/<path>: free" ("exists", "invalid"); "Project
 // picker <title>: chose <path>" ("another folder", "another file", "new project",
 // "cancelled").
+//
+// New Folder (Place, mitcad#1649): a folder made in the selected project or
+// folder, named in place in the list as the Projects panel's New Folder is
+// (New Folder, New Folder 2, ...): Enter makes it with the caller's
+// `makeFolder` (the panel's create_folder, a version of its own), Esc or
+// the focus elsewhere takes the row away. A refusal is shown below the row
+// and the editor stays. Logs: "Project picker New Folder: enabled"
+// ("disabled: <why>"; when it changes), "Project picker: naming a new
+// folder in <key>: <name>" (the editor open, also again after a refusal),
+// "Project picker: New Folder <key>/<path>" (made), "Project picker: New
+// Folder refused (<class>): <message>", "Project picker: New Folder
+// cancelled" ("not made" when the write failed or was cancelled).
 
+#include <functional>
 #include <optional>
 
 #include <QString>
@@ -39,6 +52,15 @@
 class QWidget;
 
 namespace mitcad {
+
+// What the caller's `makeFolder` did: made, or refused with the core's
+// error class and its message in words (shown in the picker); neither when
+// the write failed or was cancelled and was told already.
+struct ProjectFolderMade {
+  bool made = false;
+  QString errorClass; // exists, invalid_path, locked, ...
+  QString message;
+};
 
 struct ProjectPickerOptions {
   enum class Mode { Place, Design, Project };
@@ -60,6 +82,10 @@ struct ProjectPickerOptions {
   // Place: a file that is no clash (the design's own file for Save As);
   // Design: a design not offered (the open design). Absolute; "" none.
   QString ownFile;
+  // Place: a New Folder button left of New Project... (mitcad#1649), which
+  // makes the folder `path` (relative, '/') in the project at `root` with
+  // this; none without it.
+  std::function<ProjectFolderMade(const QString& root, const QString& path)> makeFolder;
 };
 
 struct ProjectPickerResult {

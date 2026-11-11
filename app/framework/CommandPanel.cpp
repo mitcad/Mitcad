@@ -127,12 +127,15 @@ QString choiceLabel(const QString& label) {
     QT_TRANSLATE_NOOP("Choice", "Along Y"), QT_TRANSLATE_NOOP("Choice", "Along Z (standing)"),
     QT_TRANSLATE_NOOP("Choice", "Auto"), QT_TRANSLATE_NOOP("Choice", "Auto: from the members"),
     QT_TRANSLATE_NOOP("Choice", "Auto: through"), QT_TRANSLATE_NOOP("Choice", "Auto: through it"),
+    QT_TRANSLATE_NOOP("Choice", "Auto: to a face"),
+    QT_TRANSLATE_NOOP("Choice", "Auto: to a face you pick, plus an offset"),
     QT_TRANSLATE_NOOP("Choice", "Auto: to its center"), QT_TRANSLATE_NOOP("Choice", "Auto: to the center"),
     QT_TRANSLATE_NOOP("Choice", "Auto: to the face"), QT_TRANSLATE_NOOP("Choice", "Auto: to the face it meets"),
     QT_TRANSLATE_NOOP("Choice", "Auto: to the wall it meets"),
     QT_TRANSLATE_NOOP("Choice", "Automatic: where the click is"),
     QT_TRANSLATE_NOOP("Choice", "Between two members: on a member's side, to the member it meets"),
-    QT_TRANSLATE_NOOP("Choice", "Bound: through"), QT_TRANSLATE_NOOP("Choice", "Bound: to the center"),
+    QT_TRANSLATE_NOOP("Choice", "Bound: through"), QT_TRANSLATE_NOOP("Choice", "Bound: to a face, plus an offset"),
+    QT_TRANSLATE_NOOP("Choice", "Bound: to the center"),
     QT_TRANSLATE_NOOP("Choice", "Bound: to the face"), QT_TRANSLATE_NOOP("Choice", "Butt"),
     QT_TRANSLATE_NOOP("Choice", "Center distance"), QT_TRANSLATE_NOOP("Choice", "Cut the existing component"),
     QT_TRANSLATE_NOOP("Choice", "Cut the new component"), QT_TRANSLATE_NOOP("Choice", "Detached: this length"),
@@ -201,6 +204,10 @@ QString choiceLabel(const QString& label) {
     // Print shapes of holes printed lying (mitcad#1515; Round and Teardrop
     // are listed above).
     QT_TRANSLATE_NOOP("Choice", "Flat Roof"),
+    // Thread's fit of its faces (mitcad#1632): the hidden choice its note's
+    // button sets, and what the fit does with a shared parameter.
+    QT_TRANSLATE_NOOP("Choice", "Keep"), QT_TRANSLATE_NOOP("Choice", "Fit"),
+    QT_TRANSLATE_NOOP("Choice", "Own Value"), QT_TRANSLATE_NOOP("Choice", "Change the Parameter"),
     // The thread types of the model's thread table (ThreadStandard::title).
     QT_TRANSLATE_NOOP("Choice", "British Standard Whitworth"), QT_TRANSLATE_NOOP("Choice", "ANSI Taper Pipe Threads (NPT)"),
     QT_TRANSLATE_NOOP("Choice", "ISO Tyre Valve Threads"), QT_TRANSLATE_NOOP("Choice", "Metric Forming Screw Threads"),
@@ -735,6 +742,23 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
       CommandPresenter::actions().messageHovered(hovered);
     }
   });
+  // What the panel offers beside its message (mitcad#1634: Activate
+  // <component> beside the refusal of another component's body), hidden
+  // while it offers nothing. The keyboard stays in the value fields.
+  m_messageAction = new QPushButton(this);
+  m_messageAction->setObjectName(QStringLiteral("commandMessageAction"));
+  m_messageAction->setFocusPolicy(Qt::NoFocus);
+  m_messageAction->setAutoDefault(false);
+  m_messageAction->hide();
+  layout->addWidget(m_messageAction, 0, Qt::AlignLeft);
+  connect(m_messageAction, &QPushButton::clicked, this, [this] {
+    qDebug().noquote() << QStringLiteral("Panel %1 message action clicked: %2").arg(m_def.name, m_messageActionText);
+    if (CommandPresenter::actions().messageAction) {
+      CommandPresenter::actions().messageAction();
+    }
+  });
+  // Its moves move what it logs (mitcad#528), as the rows' do.
+  m_messageAction->installEventFilter(this);
 
   auto* buttons = new QDialogButtonBox;
   m_buttonBox = buttons;
@@ -1209,6 +1233,12 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
     // and import line.
     row.noteRow = new NoteRow;
     connect(row.noteRow, &NoteRow::actionClicked, this, [this, key](int index) { emit noteActionClicked(key, index); });
+    // The pointer over the row paints what it is about (mitcad#1643).
+    connect(row.noteRow, &NoteRow::hovered, this, [this, key](bool on) {
+      if (CommandPresenter::actions().noteHovered) {
+        CommandPresenter::actions().noteHovered(key, on);
+      }
+    });
     field = row.noteRow;
     break;
   }
@@ -1887,6 +1917,23 @@ void CommandPanel::setMessage(const QString& message, NoticeLevel level) {
   scheduleLogFit();
 }
 
+void CommandPanel::setMessageAction(const QString& text, const QString& tooltip) {
+  if (text == m_messageActionText && m_messageAction->toolTip() == tooltip) {
+    return;
+  }
+  m_messageActionText = text;
+  // A component's own ampersands are no mnemonics.
+  QString shown = text;
+  shown.replace(QLatin1Char('&'), QStringLiteral("&&"));
+  m_messageAction->setText(shown);
+  m_messageAction->setToolTip(tooltip);
+  m_messageAction->setVisible(!text.isEmpty());
+  qDebug().noquote() << (text.isEmpty() ? QStringLiteral("Panel %1 message action hidden").arg(m_def.name)
+                                        : QStringLiteral("Panel %1 message action: %2").arg(m_def.name, text));
+  // Where it is now, and the rows it moved, for the UI tests.
+  scheduleLogLayout();
+}
+
 void CommandPanel::scheduleLogFit() {
   if (m_fitTimer == nullptr) {
     m_fitTimer = new QTimer(this);
@@ -2250,6 +2297,11 @@ QStringList CommandPanel::layoutLines() const {
   // over it paints the places its notices name).
   if (m_message != nullptr && m_message->isVisibleTo(this)) {
     lines << QStringLiteral("Panel %1 message at %2").arg(m_def.name, position(m_message));
+  }
+  // The button beside it while it offers something (mitcad#1634).
+  if (m_messageAction != nullptr && m_messageAction->isVisibleTo(this)) {
+    lines << QStringLiteral("Panel %1 message action %2 at %3")
+                 .arg(m_def.name, m_messageActionText, position(m_messageAction));
   }
   // What a long panel's page shows of it: a place outside the view is
   // scrolled away, and a wheel over the bar scrolls it (UI tests in a low

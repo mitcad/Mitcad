@@ -18,3 +18,6 @@ mod cut_sheet_tests;
 mod face_dxf_tests;
 // The DXF exports' length unit (mitcad#1408).
 mod dxf_units_tests;
+// Custom sheet sizes, title block images and the title block editor
+// (mitcad#1625).
+mod title_block_tests;

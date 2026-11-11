@@ -809,9 +809,17 @@ query.
 
 `command` is null, or the state of the panel: `id`, `name`, `editing`,
 `in_sketch`, `inputs`, `ready` or `message`, `preview_ok`,
-`preview_failed`, `preview_warnings`, `busy` and `panel`. `inputs` is by
-key, with `label`, `type` and the values. `panel` holds `message`,
-`result`, `ok_enabled` and `notes` by key. `app` holds `version`,
+`preview_failed`, `preview_warnings`, `busy`, `activate` and `panel`.
+`inputs` is by key, with `label`, `type` and the values. `activate` is
+there when a feature that changes the picked body (Fillet, Chamfer,
+Shell, …) has picks of a component other than the active one
+(mitcad#1634): `component`, `name` and `drops` (the picks of other
+components that activating it drops). An agent's pick never activates the
+component by itself: cancel the command, activate the component
+(`activate_component`) and start the feature again.
+`panel` holds `message`, `result`, `ok_enabled`, `notes` by key and
+`message_action`, the text of the button under the message while it
+shows (`Activate Lid`). `app` holds `version`,
 `build`, `qt`, `platform`, `ui` and `chrome`.
 
 **`ui_log`** returns the log lines after `since`. `lines` holds `seq`,

@@ -8,7 +8,10 @@
 //! so they keep the solid feature's names, `<feature>:side(<segment>)`;
 //! the curves' walls are `<feature>:side(<curve>)`. A surface sweep is a
 //! new body or a new component: the profiles' walls one surface body, the
-//! curves' walls another.
+//! curves' walls another. The profiles and the curves may be a 3D
+//! sketch's (mitcad#1550): its regions and curves in its sketch plane,
+//! one curve out of the plane failing the feature, naming the sketch
+//! ([`SketchCurves::check_in_plane`]).
 
 use super::extrude::{Operation, ProfileRef, check_profiles};
 use super::path::{self, SketchCurves};
@@ -49,7 +52,8 @@ pub(crate) fn check_inputs(
         check_profiles(ctx, profiles)?;
     }
     if let Some(curves) = curves {
-        curves.check(ctx)?;
+        // A 3D sketch's in its sketch plane too (mitcad#1550).
+        curves.check_in_plane(ctx)?;
         if profiles.first().is_some_and(|p| p.sketch != curves.sketch) {
             return Err("the curves must be of the profiles' sketch".to_owned());
         }

@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: MIT
+# The sketch Rectangular Pattern's second direction (mitcad#1640, GitHub
+# mitcad/Mitcad#243) on sketch-pattern-dir2.json's Sketch1 (two framing
+# points at (-40, -30) and (40, 30), a circle of radius 3 about (-20, -15)):
+#   1. The circle selected, Rectangular Pattern opens with Quantity 3 along
+#      Direction (the sketch's x axis, Spacing 10) and Quantity 2 of 2
+#      across it (Spacing 2 10): the preview's five copies make a 3 x 2
+#      grid, the second row at y -5. The handle has an arrow at the first
+#      copy along x (Spacing) and one at the second row's first copy along
+#      y (Spacing 2).
+#   2. The second arrow dragged 10 mm up: Spacing 2 is 20 mm, the second
+#      row at y 5, and Spacing is left as typed.
+#   3. Quantity 2 of 1: one row, the second arrow faint; back to 2, OK adds
+#      the 3 x 2 pattern.
+# The drag goes in the grid's steps (the handle snaps to nothing else), so
+# its 10 mm come out whole unless the grid is off; the patterns allow the
+# pointer's rounding to a pixel either way.
+# The wrapper replaces ENTER_SKETCH with the frontend's ordinary timeline
+# activation. The clicks stay within x -30..30 mm, y -25..25 mm: the free
+# part of the view after the fit also in session 0's 1024x768 window on
+# Windows. Run by tools/ui-sketch-pattern-dir2-test.sh (Linux) and
+# tools/ui-windows-sketch-pattern-dir2-test.ps1 (Windows).
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+
+# 1. The circle selected by its rim, the pattern from its defaults.
+mark
+sketch-click -17 -15
+expect-selection 1 0
+mark
+command sketch.rectangular_pattern
+wait-log '^Command Rectangular Pattern started'
+expect-log '^Rectangular Pattern Objects: 1 sketch curve'
+wait-log '^Preview Rectangular Pattern: ok'
+wait-log '^Preview Rectangular Pattern copies: '
+expect-input-text quantity1 '^3$'
+expect-input-text quantity2 '^2$'
+expect-log '^Preview Rectangular Pattern copies: p[0-9]+ \([^)]*\)(, p[0-9]+ \([^)]*\)){4}$'
+expect-log '^Preview Rectangular Pattern copies: .*\(0\.000, -15\.000\)'
+expect-log '^Preview Rectangular Pattern copies: .*\(-20\.000, -5\.000\)'
+expect-log '^Preview Rectangular Pattern copies: .*\(0\.000, -5\.000\)'
+wait-log '^Sketch handle at \(-20\.000, -15\.000\), arrows distance1 from \(-10\.000, -15\.000\) along \(1\.000, 0\.000\), distance2 from \(-20\.000, -5\.000\) along \(0\.000, 1\.000\)$'
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/sketch-pattern-dir2-grid.png'
+
+# 2. The second arrow pressed 1 mm from its start and dragged 10 mm up.
+mark
+sketch-pointer press -20 -4
+wait-log '^Sketch handle drag started on its distance2 arrow$'
+sketch-pointer move -20 0
+sketch-pointer move -20 3
+sketch-pointer move -20 6
+sketch-pointer release -20 6
+wait-log '^Sketch handle dropped: distance1 10\.000, distance2 (19\.9[0-9]{2}|20\.0[0-9]{2})$'
+wait-log '^Preview Rectangular Pattern copies: .*\(-20\.000, (4\.9[0-9]{2}|5\.0[0-9]{2})\)'
+expect-input-text distance2 '^(19\.9[0-9]*|20(\.0[0-9]*)?) mm$'
+expect-input-text distance1 '^10$'
+wait-log '^Sketch handle at \(-20\.000, -15\.000\), arrows distance1 from \(-10\.000, -15\.000\) along \(1\.000, 0\.000\), distance2 from \(-20\.000, (4\.9[0-9]{2}|5\.0[0-9]{2})\) along \(0\.000, 1\.000\)$'
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/sketch-pattern-dir2-dragged.png'
+
+# 3. One row: the second arrow faint; then two rows again and OK.
+mark
+type-in '^Panel Rectangular Pattern input quantity2 at ' '1'
+wait-log '^Preview Rectangular Pattern copies: p[0-9]+ \([^)]*\), p[0-9]+ \([^)]*\)$'
+wait-log '^Sketch handle at .*\(1\.000, 0\.000\), distance2 from .* faint$'
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/sketch-pattern-dir2-faint.png'
+mark
+type-in '^Panel Rectangular Pattern input quantity2 at ' '2'
+wait-log '^Preview Rectangular Pattern copies: p[0-9]+ \([^)]*\)(, p[0-9]+ \([^)]*\)){4}$'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Rectangular pattern of 1 object\(s\), 3 x 2$'
+wait-idle
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'Recompute failed|TestDriver: FAIL'

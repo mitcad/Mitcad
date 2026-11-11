@@ -403,6 +403,11 @@ named_enum! {
             rotate: Option<Rotation>,
             #[serde(default)]
             copy: bool,
+            /// Constraints that hold the moved geometry where it was
+            /// dropped on a point or a curve (mitcad#1645), added after the
+            /// move; with `copy`, a moved entity they name is its copy.
+            #[serde(default)]
+            hold: Vec<ConstraintKind>,
         },
         "sketch.trim" => Trim {
             sketch: FeatureUid,
@@ -1188,6 +1193,11 @@ pub(crate) trait SketchOps<K: Kernel> {
         sketch: FeatureUid,
         out_of_plane: bool,
     ) -> Result<Value, ApiError>;
+
+    /// The `plane_geometry_key` query (mitcad#1646): `{"key": "<hex>"}`,
+    /// the same while the `plane_geometry` answer of the sketch (in the
+    /// plane and out of it) stays the same.
+    fn plane_geometry_key_json(&self, sketch: FeatureUid) -> Result<Value, ApiError>;
 }
 
 impl<K: Kernel> SketchOps<K> for Document<K> {
@@ -1423,6 +1433,11 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
             .collect();
         Ok(Value::Array(items))
     }
+
+    fn plane_geometry_key_json(&self, sketch: FeatureUid) -> Result<Value, ApiError> {
+        let key = self.plane_geometry_key(sketch)?;
+        Ok(json!({"key": format!("{key:032x}")}))
+    }
 }
 
 /// A document's sketches as the `sketch` query answers them. An extension
@@ -1438,6 +1453,17 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
             .feature(uid)
             .ok_or_else(|| ApiError(format!("feature {uid} does not exist")))?;
         let FeatureDef::Sketch(def) = &entry.def else {
+            // mitcad#1522: a 3D sketch has its own query.
+            if matches!(entry.def, FeatureDef::SpatialSketch(_)) {
+                // The name for a person, the uid for agents (mitcad#1644).
+                return Err(ApiError(notice::said(
+                    format!("{} is a 3D sketch, which this does not take", entry.name),
+                    format!(
+                        "{} ({uid}) is a 3D sketch: the sketch3d query reads it",
+                        entry.name
+                    ),
+                )));
+            }
             return Err(ApiError(format!("{} ({uid}) is not a sketch", entry.name)));
         };
         let params = self.parameters();
@@ -2817,6 +2843,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     to,
                     rotate,
                     copy,
+                    hold,
                     ..
                 } => {
                     let map = match (by, from, to, rotate) {
@@ -2842,7 +2869,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                             );
                         }
                     };
-                    if copy {
+                    let copies = if copy {
                         let copies =
                             edit.copy_entities(&entities, &map, &Default::default(), true)?;
                         for r in &entities {
@@ -2856,8 +2883,14 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                                 );
                             }
                         }
+                        copies
                     } else {
                         edit.move_entities(&entities, &map)?;
+                        std::collections::BTreeMap::new()
+                    };
+                    // Held where it was dropped (mitcad#1645), in this step.
+                    if !hold.is_empty() {
+                        edit.hold_moved(&hold, &copies);
                     }
                 }
                 C::Trim { curve, at, .. } => edit.trim(curve, at)?,

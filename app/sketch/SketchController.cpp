@@ -712,9 +712,12 @@ void SketchController::leave() {
   ++m_modelRevision;
   m_body.clear();
   m_bodyKey.clear();
+  m_geometryRevision.clear();
+  m_geometryKey.clear();
   m_inPlaneItems.clear();
   m_outOfPlaneItems.clear();
   m_outOfPlaneKey.clear();
+  m_outOfPlaneReading.clear();
   m_bodyOutOfPlane = false;
   m_bodyScreen.clear();
   m_bodyScreenRevision = -1;
@@ -2102,16 +2105,18 @@ QString SketchController::entityAt(const QPointF& screen, unsigned filter) const
   return best;
 }
 
-const BodyGeometry& SketchController::bodyGeometry(bool outOfPlane) {
+const BodyGeometry& SketchController::bodyGeometry(bool outOfPlane, bool wait) {
   if (!isActive()) {
     return m_body;
   }
   // Queries wait while a job computes the model: the last read until then.
-  if (m_host.modelBusy()) {
+  // One that must read now has a read in the background give way.
+  if (wait ? !m_host.modelReadableNow() : m_host.modelBusy()) {
     return m_body;
   }
   bool changed = false;
-  const QString key = QStringLiteral("%1 %2 %3").arg(m_uid, m_revision).arg(m_toolSession);
+  const QString geometry = geometryKey();
+  const QString key = QStringLiteral("%1 %2 %3").arg(m_uid, geometry).arg(m_toolSession);
   if (key != m_bodyKey) {
     m_bodyKey = key;
     changed = true;
@@ -2131,41 +2136,140 @@ const BodyGeometry& SketchController::bodyGeometry(bool outOfPlane) {
     m_inPlaneItems = read.items();
   }
   // Out of the plane (mitcad#866): the Dimension tool's only, read once
-  // while the document stays as it is (not per tool session), as the model
-  // lists every edge and vertex of the bodies for it.
-  const QString outKey = QStringLiteral("%1 %2").arg(m_uid, m_revision);
+  // while the bodies before the sketch stay as they are (not per tool
+  // session, nor per dimension added, mitcad#1646), as the model lists
+  // every edge and vertex of the bodies for it: in an assembly of hundreds
+  // of bodies, seconds. Read off the UI thread (mitcad#1656): the tool
+  // answers at once with the items in the plane and gets the others when
+  // they are there (takeOutOfPlane), unless it must have them now.
+  const QString outKey = QStringLiteral("%1 %2").arg(m_uid, geometry);
+  const QString readBefore = m_outOfPlaneKey;
   if (outOfPlane && outKey != m_outOfPlaneKey) {
-    m_outOfPlaneKey = outKey;
-    changed = true;
-    m_outOfPlaneItems.clear();
-    BodyGeometry read;
-    try {
-      read.load(m_host.query({{QStringLiteral("query"), QStringLiteral("plane_geometry")},
-                              {QStringLiteral("sketch"), m_uid},
-                              {QStringLiteral("out_of_plane"), true}})
-                    .toArray(),
-                &curveFromJson);
-    } catch (const std::exception& e) {
-      qDebug().noquote() << QStringLiteral("Sketch body geometry out of the plane not read: %1").arg(errorText(e));
-    }
-    for (const BodyItem& item : read.items()) {
-      if (!item.inPlane) {
-        m_outOfPlaneItems.push_back(item);
+    if (wait) {
+      std::vector<BodyItem> items;
+      QString error;
+      try {
+        BodyGeometry read;
+        read.load(m_host.query(outOfPlaneQuery()).toArray(), &curveFromJson);
+        for (const BodyItem& item : read.items()) {
+          if (!item.inPlane) {
+            items.push_back(item);
+          }
+        }
+      } catch (const std::exception& e) {
+        error = errorText(e);
       }
+      takeOutOfPlane(outKey, std::move(items), error, false);
+    } else {
+      readOutOfPlaneLater(outKey);
     }
-    qDebug().noquote()
-        << QStringLiteral("Sketch body geometry out of the plane: %1 item(s)")
-               .arg(static_cast<qulonglong>(m_outOfPlaneItems.size()));
   }
-  if (changed || outOfPlane != m_bodyOutOfPlane) {
-    m_bodyOutOfPlane = outOfPlane;
-    std::vector<BodyItem> items = m_inPlaneItems;
-    if (outOfPlane) {
-      items.insert(items.end(), m_outOfPlaneItems.begin(), m_outOfPlaneItems.end());
-    }
-    m_body.set(std::move(items));
+  // Read now (waited for, or by a host that reads at once).
+  changed = changed || m_outOfPlaneKey != readBefore;
+  const bool withOut = outOfPlane && m_outOfPlaneKey == outKey;
+  if (changed || withOut != m_bodyOutOfPlane) {
+    m_bodyOutOfPlane = withOut;
+    setBodyItems();
   }
   return m_body;
+}
+
+void SketchController::setBodyItems() {
+  std::vector<BodyItem> items = m_inPlaneItems;
+  if (m_bodyOutOfPlane) {
+    items.insert(items.end(), m_outOfPlaneItems.begin(), m_outOfPlaneItems.end());
+  }
+  m_body.set(std::move(items));
+}
+
+QJsonObject SketchController::outOfPlaneQuery() const {
+  return {{QStringLiteral("query"), QStringLiteral("plane_geometry")},
+          {QStringLiteral("sketch"), m_uid},
+          {QStringLiteral("out_of_plane"), true}};
+}
+
+void SketchController::readOutOfPlaneLater(const QString& key) {
+  if (m_outOfPlaneReading == key) {
+    return; // under way
+  }
+  m_outOfPlaneReading = key;
+  // Read into BodyItems on the model's worker too: a large assembly's answer
+  // is over 100 000 items.
+  auto items = std::make_shared<std::vector<BodyItem>>();
+  const auto read = [items](const QJsonValue& answer) {
+    ScopedTiming timing("body geometry load");
+    BodyGeometry geometry;
+    geometry.load(answer.toArray(), &curveFromJson);
+    for (const BodyItem& item : geometry.items()) {
+      if (!item.inPlane) {
+        items->push_back(item);
+      }
+    }
+  };
+  QPointer<SketchController> self(this);
+  // A host that reads it at once answers inside the call: the caller then
+  // takes the items itself.
+  auto inside = std::make_shared<bool>(true);
+  const auto done = [self, key, items, inside](bool read, const QString& error) {
+    if (!self) {
+      return;
+    }
+    if (self->m_outOfPlaneReading == key) {
+      self->m_outOfPlaneReading.clear();
+    }
+    if (!read && error.isEmpty()) {
+      return; // gave way: asked again by the tool's next look
+    }
+    self->takeOutOfPlane(key, std::move(*items), error, !*inside);
+  };
+  const bool started = m_host.queryInBackground(outOfPlaneQuery(), read, this, done);
+  *inside = false;
+  if (!started && m_outOfPlaneReading == key) {
+    m_outOfPlaneReading.clear(); // the model computes: asked again later
+  }
+}
+
+void SketchController::takeOutOfPlane(const QString& key, std::vector<BodyItem> items, const QString& error,
+                                      bool later) {
+  // Read for another sketch or bodies that changed meanwhile: not these.
+  if (!isActive() || m_host.modelBusy() || key != QStringLiteral("%1 %2").arg(m_uid, geometryKey())) {
+    return;
+  }
+  m_outOfPlaneKey = key;
+  if (!error.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Sketch body geometry out of the plane not read: %1").arg(error);
+  }
+  m_outOfPlaneItems = std::move(items);
+  qDebug().noquote()
+      << QStringLiteral("Sketch body geometry out of the plane: %1 item(s)")
+             .arg(static_cast<qulonglong>(m_outOfPlaneItems.size()));
+  // Read off the UI thread, after the tool looked: it looks again where
+  // the pointer is, and takes them in its next bodyGeometry(true).
+  if (later) {
+    if (m_tool && m_cursorValid) {
+      m_tool->move(m_snap);
+    }
+    m_overlay->update();
+  }
+}
+
+QString SketchController::geometryKey() {
+  const QString revision = QStringLiteral("%1 %2").arg(m_uid, m_revision);
+  if (revision != m_geometryRevision) {
+    m_geometryRevision = revision;
+    try {
+      const QJsonObject answer = m_host.queryObject(
+          {{QStringLiteral("query"), QStringLiteral("plane_geometry_key")}, {QStringLiteral("sketch"), m_uid}});
+      m_geometryKey = answer.value(QStringLiteral("key")).toString();
+    } catch (const std::exception&) {
+      m_geometryKey.clear();
+    }
+    // Without a key (a sketch with no plane yet): the revision, as before.
+    if (m_geometryKey.isEmpty()) {
+      m_geometryKey = QStringLiteral("revision ") + m_revision;
+    }
+  }
+  return m_geometryKey;
 }
 
 const std::vector<SketchController::BodyScreen>& SketchController::bodyScreens() const {

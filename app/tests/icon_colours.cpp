@@ -2,7 +2,8 @@
 // The icons' colour roles (mitcad#230): every colour of every icon has a
 // role, the themed sources carry only the themes' colours on both themes,
 // the warm colours stay with construction, status colours are readable on
-// the dark theme, and disabled icons follow their own rule.
+// the dark theme, and disabled icons follow their own rule; Press Pull's
+// arrow stays apart from Extrude's (mitcad#1660).
 #include "framework/Icons.hpp"
 
 #include <algorithm>
@@ -17,6 +18,7 @@
 #include <QList>
 #include <QPainter>
 #include <QPixmap>
+#include <QRect>
 #include <QRegularExpression>
 #include <QSet>
 #include <QString>
@@ -295,6 +297,45 @@ void disabledTests() {
   }
 }
 
+// The bounds of an icon's action (orange) pixels, drawn from its source at
+// 48 px: anti-aliased edges blended with other colours are left out.
+QRect actionBounds(const QString& name) {
+  QImage image(48, 48, QImage::Format_ARGB32_Premultiplied);
+  image.fill(Qt::transparent);
+  QPainter painter(&image);
+  QSvgRenderer(iconSource(name)).render(&painter);
+  painter.end();
+  image = image.convertToFormat(QImage::Format_ARGB32);
+  const QColor action(0xe0, 0x7b, 0x1a);
+  QRect bounds;
+  for (int y = 0; y < image.height(); ++y) {
+    for (int x = 0; x < image.width(); ++x) {
+      const QColor pixel = image.pixelColor(x, y);
+      const bool orange = pixel.alpha() == 255 && std::abs(pixel.red() - action.red()) < 24 &&
+                          std::abs(pixel.green() - action.green()) < 24 &&
+                          std::abs(pixel.blue() - action.blue()) < 24;
+      if (orange) {
+        bounds |= QRect(x, y, 1, 1);
+      }
+    }
+  }
+  return bounds;
+}
+
+// Press Pull and Extrude stay apart at ribbon size (mitcad#1660, GitHub
+// mitcad/Mitcad#252): Extrude's arrow points up, Press Pull's two-way arrow
+// runs sideways across the box's side face.
+void pressPullTests() {
+  const QRect extrude = actionBounds(QStringLiteral("extrude"));
+  const QRect pressPull = actionBounds(QStringLiteral("press-pull"));
+  CHECK(!extrude.isEmpty() && !pressPull.isEmpty());
+  CHECK(extrude.height() > extrude.width());
+  CHECK(pressPull.width() > pressPull.height());
+  // The arrow crosses the box, not above it: its middle is in the icon's
+  // lower half.
+  CHECK(pressPull.center().y() > 24);
+}
+
 // With MITCAD_ICON_PREVIEW set to a folder: every icon on the dark and the
 // light theme's surface, normal over disabled, for a look at the colours.
 void writePreviews() {
@@ -338,6 +379,7 @@ int iconColourTests() {
   roleValueTests();
   iconSourceTests();
   disabledTests();
+  pressPullTests();
   writePreviews();
   return failures;
 }

@@ -1,0 +1,12 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The starting design of the GitHub mitcad/Mitcad#202 UI tests (mitcad#1550): tools/ui-sketch3d-202-test.sh, tools/ui-windows-sketch3d-202-test.ps1 and tools/ui-macos-sketch3d-202-test.sh. Box1 (F1, F1.b0) in the root: 40 x 30 x 20 at (20, 20), its top face at z 20, off the origin planes (a face on one would take the plane's pick). The component Post (its occurrence O1, placed where it was made) with a taller box (F2, F2.b0): 20 x 20 x 50 at (80, 60), its top corners at (80 or 100, 60 or 80, 50), on another plane than Box1's top face. The root is active again: the sketch drawn in the UI is the root's."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [20, 20], "length": 40, "width": 30, "height": 20, "operation": "new_body"}},
+  {"cmd": "create_component", "name": "Post"},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [80, 60], "length": 20, "width": 20, "height": 50, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"expect": {"body": "F1.b0", "volume": 24000}},
+  {"expect": {"body": "F2.b0", "volume": 20000}}
+]

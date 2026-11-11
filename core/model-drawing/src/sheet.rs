@@ -7,6 +7,8 @@
 //! serif: the standard fonts of PDF readers and browsers stand in for it).
 
 use super::P2;
+use super::template::ImageKind;
+use mitcad_model::appearance::ImageData;
 
 /// The kinds of line (ISO 128-2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,6 +198,16 @@ pub enum Item {
         angle: f64,
         anchor: Anchor,
         text: String,
+    },
+    /// An image (a title block's logo, mitcad#1625) stretched over its box:
+    /// `at` its lower left corner, `size` its width and height, the box
+    /// already of the image's proportions (`template::fitted_box`). `data`
+    /// is the file's bytes as base64.
+    Image {
+        at: P2,
+        size: P2,
+        kind: ImageKind,
+        data: ImageData,
     },
 }
 

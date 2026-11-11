@@ -321,4 +321,77 @@ bool CommandSession::onShownBody(const SelectionItem& item) const {
   }
 }
 
+// A feature that changes the bodies it picks, on another component's body
+// (mitcad#1634): the picks the host decides by, the picks it drops when the
+// panel's Activate button activates one component, the notice and the
+// button.
+Selection CommandSession::picksOf(const QStringList& inputs) const {
+  Selection picks;
+  for (const Slot& slot : slotsOf(false)) {
+    if (slot.def->type == InputDef::Type::Selection && inputs.contains(slot.def->id)) {
+      picks += m_state.items(slot.key);
+    }
+  }
+  return picks;
+}
+
+int CommandSession::keepPicks(const QStringList& inputs, const std::function<bool(const SelectionItem&)>& keep) {
+  int dropped = 0;
+  QStringList changed;
+  for (const Slot& slot : slotsOf(false)) {
+    if (slot.def->type != InputDef::Type::Selection || !inputs.contains(slot.def->id)) {
+      continue;
+    }
+    Selection& items = m_state.items(slot.key);
+    Selection kept;
+    for (const SelectionItem& item : std::as_const(items)) {
+      if (keep(item)) {
+        kept.append(item);
+      }
+    }
+    if (kept.size() != items.size()) {
+      dropped += static_cast<int>(items.size() - kept.size());
+      items = kept;
+      changed << slot.key;
+    }
+  }
+  if (!changed.isEmpty()) {
+    if (m_presenter) {
+      m_presenter->refresh(m_state);
+    }
+    for (const QString& key : std::as_const(changed)) {
+      selectionChanged(key);
+    }
+  }
+  return dropped;
+}
+
+void CommandSession::setActivationNotice(const QString& text) {
+  m_activationNotice = text;
+  QString logged = text;
+  logged.replace(QLatin1Char('\n'), QStringLiteral(" "));
+  qDebug().noquote() << QStringLiteral("Panel %1 notice: %2").arg(m_def.name, logged);
+  showPanelMessage(text, NoticeLevel::Information);
+}
+
+void CommandSession::updateActivationOffer() {
+  const QJsonObject offer = m_done || isEditing() ? QJsonObject() : m_host.activationOffer(*this);
+  if (offer == m_activationOffer) {
+    return;
+  }
+  m_activationOffer = offer;
+  const QString name = offer.value(QStringLiteral("name")).toString();
+  if (name.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Panel %1 offers no activation").arg(m_def.name);
+  } else {
+    qDebug().noquote() << QStringLiteral("Panel %1 offers: Activate %2 (drops %3)")
+                              .arg(m_def.name, name)
+                              .arg(offer.value(QStringLiteral("drops")).toInt());
+  }
+  if (m_presenter) {
+    m_presenter->setMessageAction(name.isEmpty() ? QString() : tr("Activate %1").arg(name),
+                                  tr("Activate this component and keep only the picks in it"));
+  }
+}
+
 } // namespace mitcad

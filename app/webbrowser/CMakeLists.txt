@@ -153,6 +153,39 @@ endforeach()
 if(MSVC)
   set_property(TARGET libcef_dll_wrapper PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 endif()
+# No build machine's folders in the package (mitcad#1658): CEF's logging
+# macros (cef_logging.h: __FILE__, __builtin_FILE()) put the absolute path of
+# every wrapper source and CEF header that logs into the module and the
+# helper as strings, which stripping the debug information leaves. The
+# wrapper's are mapped to cef/... entirely (CEF's code, never debugged
+# here); the module's and the helper's macros only (below), so that their
+# debug information keeps the real paths for a debugger, and the release
+# strips it (tools/browser-package.sh). Windows keeps its paths in the PDBs,
+# which are not packaged.
+set(mitcad_browser_path_maps "")
+if(NOT MSVC)
+  get_filename_component(mitcad_cef_real_root "${CEF_ROOT}" REALPATH)
+  get_filename_component(mitcad_source_real_root "${PROJECT_SOURCE_DIR}" REALPATH)
+  set(mitcad_cef_roots "${CEF_ROOT}")
+  if(NOT mitcad_cef_real_root STREQUAL CEF_ROOT)
+    list(APPEND mitcad_cef_roots "${mitcad_cef_real_root}")
+  endif()
+  set(mitcad_source_roots "${PROJECT_SOURCE_DIR}")
+  if(NOT mitcad_source_real_root STREQUAL PROJECT_SOURCE_DIR)
+    list(APPEND mitcad_source_roots "${mitcad_source_real_root}")
+  endif()
+  foreach(mitcad_root IN LISTS mitcad_cef_roots)
+    target_compile_options(libcef_dll_wrapper PRIVATE "-ffile-prefix-map=${mitcad_root}/=cef/")
+  endforeach()
+  # MitCad's sources first, CEF's last: a CEF inside the source tree takes
+  # its own name.
+  foreach(mitcad_root IN LISTS mitcad_source_roots)
+    list(APPEND mitcad_browser_path_maps "-fmacro-prefix-map=${mitcad_root}/=")
+  endforeach()
+  foreach(mitcad_root IN LISTS mitcad_cef_roots)
+    list(APPEND mitcad_browser_path_maps "-fmacro-prefix-map=${mitcad_root}/=cef/")
+  endforeach()
+endif()
 if(NOT APPLE)
   # libcef itself (on macOS its framework is loaded at run time, never linked).
   # The release library in every configuration: the minimal distribution
@@ -182,6 +215,7 @@ target_include_directories(mitcad-webbrowser PRIVATE "${CMAKE_CURRENT_SOURCE_DIR
 # CEF's headers as the system's: MitCad's warning flags are for its own code.
 target_include_directories(mitcad-webbrowser SYSTEM PRIVATE "${CEF_INCLUDE_PATH}")
 target_link_libraries(mitcad-webbrowser PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets libcef_dll_wrapper mitcad_warnings)
+target_compile_options(mitcad-webbrowser PRIVATE ${mitcad_browser_path_maps})
 if(WIN32)
   target_compile_definitions(mitcad-webbrowser PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
@@ -206,6 +240,13 @@ set_target_properties(mitcad-webbrowser PROPERTIES
   # libcef beside it; Qt from the MitCad that loads it.
   BUILD_RPATH "${mitcad_browser_rpath}"
   INSTALL_RPATH "${mitcad_browser_rpath}")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # Only its own folder (mitcad#1654): CMake would add the build machine's
+  # Qt and CEF folders to the RUNPATH, which then went out in the package,
+  # and a user's machine with a folder of that name would have the module
+  # take its libraries from there.
+  set_target_properties(mitcad-webbrowser PROPERTIES BUILD_WITH_INSTALL_RPATH ON)
+endif()
 # Built with MitCad, so that a build's MitCad finds its component.
 add_dependencies(mitcad mitcad-webbrowser)
 
@@ -231,6 +272,7 @@ if(APPLE)
     add_executable(${mitcad_helper_target} MACOSX_BUNDLE cef/CefHelper.cpp)
     target_include_directories(${mitcad_helper_target} SYSTEM PRIVATE "${CEF_INCLUDE_PATH}")
     target_link_libraries(${mitcad_helper_target} PRIVATE libcef_dll_wrapper)
+    target_compile_options(${mitcad_helper_target} PRIVATE ${mitcad_browser_path_maps})
     set_target_properties(${mitcad_helper_target} PROPERTIES
       OUTPUT_NAME "${MITCAD_HELPER_NAME}"
       MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/${mitcad_helper_target}-Info.plist"
@@ -254,6 +296,7 @@ else()
   # named before anything uses it is dropped and the wrapper's calls stay
   # unresolved.
   target_link_libraries(mitcad-webbrowser-helper PRIVATE libcef_dll_wrapper libcef_lib)
+  target_compile_options(mitcad-webbrowser-helper PRIVATE ${mitcad_browser_path_maps})
   if(WIN32)
     target_compile_definitions(mitcad-webbrowser-helper PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
   endif()
@@ -261,7 +304,9 @@ else()
     CXX_STANDARD 20
     RUNTIME_OUTPUT_DIRECTORY "${MITCAD_BROWSER_COMPONENT_DIR}"
     BUILD_RPATH "$ORIGIN"
-    INSTALL_RPATH "$ORIGIN")
+    INSTALL_RPATH "$ORIGIN"
+    # Only its own folder, as the module's (above).
+    BUILD_WITH_INSTALL_RPATH ON)
   add_dependencies(mitcad-webbrowser mitcad-webbrowser-helper)
   set(mitcad_browser_executables "\"$<TARGET_FILE_NAME:mitcad-webbrowser-helper>\"")
   # CEF's runtime beside the module: libcef and what it loads, its resources

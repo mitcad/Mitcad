@@ -115,6 +115,7 @@ impl<K: Kernel> Evaluate<K> for TrimSurfaceDef {
                 sketch: *sketch,
                 curves: curves.clone(),
                 chain: false,
+                reversed: false,
             };
             let output = ctx.sketch(*sketch)?;
             let frame = output.frame;

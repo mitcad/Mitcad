@@ -23,8 +23,10 @@ named_enum! {
             /// left out.
             #[serde(default)]
             plate: Option<String>,
-            /// The whole schedule: `{height, kind, material, appearance,
-            /// message}` per event; empty takes it away.
+            /// The whole schedule: `{height | at (and body), kind,
+            /// material, appearance, message}` per event (mitcad#1643: `at`
+            /// a construction plane, an origin plane or a planar face);
+            /// empty takes it away.
             changes: Vec<FilamentChange>,
         },
     }
@@ -38,6 +40,16 @@ pub(super) struct FilamentChangesQuery {
     /// out.
     #[serde(default)]
     plate: Option<String>,
+}
+
+/// The `filament_change_preview` query (mitcad#1643): the print colours
+/// and the changes' rings that Send to Slicer draws over the bodies.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FilamentChangePreviewQuery {
+    /// Only these bodies (uids); every shown printed body when empty.
+    #[serde(default)]
+    bodies: Vec<mitcad_model::BodyUid>,
 }
 
 /// Runs the command: `{"changes"}`, the schedule as kept (sorted).
@@ -63,4 +75,12 @@ pub(super) fn query<K: Kernel>(
     query: &FilamentChangesQuery,
 ) -> Result<Value, ApiError> {
     Ok(doc.filament_changes_json(query.plate.as_deref())?)
+}
+
+/// The `filament_change_preview` query.
+pub(super) fn preview<K: Kernel>(
+    doc: &Document<K>,
+    query: &FilamentChangePreviewQuery,
+) -> Result<Value, ApiError> {
+    Ok(doc.filament_change_preview_json(&query.bodies))
 }

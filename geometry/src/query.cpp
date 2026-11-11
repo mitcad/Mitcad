@@ -269,10 +269,17 @@ BoundingBox enclosing_box(const Shape& shape) {
       result.max = gp_Pnt(b[3], b[4], b[5]);
       return result;
     }
+    if (const auto bounds = shape.enclosing_bounds()) {
+      const auto& b = *bounds;
+      result.empty = false;
+      result.min = gp_Pnt(b[0], b[1], b[2]);
+      result.max = gp_Pnt(b[3], b[4], b[5]);
+      return result;
+    }
     // The faces' control points, not the optimum of each curved face
     // (OCCT's particle swarm: seconds for a body of thousands of spline
-    // faces), and the shape's tolerances: a box that holds the shape. Not
-    // kept: the shape's own box is the tight one.
+    // faces), and the shape's tolerances: a box that holds the shape. Kept
+    // apart from the shape's own box, the tight one (mitcad#1656).
     Bnd_Box box;
     BRepBndLib::Add(shape.occt(), box, false);
     if (box.IsVoid()) {
@@ -283,6 +290,7 @@ BoundingBox enclosing_box(const Shape& shape) {
     result.empty = false;
     result.min = gp_Pnt(xmin, ymin, zmin);
     result.max = gp_Pnt(xmax, ymax, zmax);
+    shape.set_enclosing_bounds({xmin, ymin, zmin, xmax, ymax, zmax});
     return result;
   });
 }

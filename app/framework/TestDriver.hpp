@@ -204,7 +204,10 @@
 //   wheel-logged <regex> <notches> [mods]  the wheel over the last place a
 //                           log line matching regex has ("Panel <command>
 //                           input <id> at ..."), to the widget there, as
-//                           the one under the mouse (mitcad#1254)
+//                           the one under the mouse (mitcad#1254); a wheel
+//                           it leaves goes on to its parents, as the
+//                           user's does (a button's to the card's scroll
+//                           area, mitcad#1652), as for every wheel step
 //   wheel-logged-now <regex> <notches> [mods]  the same without waiting for
 //                           the model: while a panel's preview computes
 //                           (mitcad#1407)
@@ -689,6 +692,12 @@
 //   expect-file <path> [seconds]   the file or folder exists
 //   expect-files <dir> <glob> <count> [seconds]   <count> files in <dir>
 //                           match the glob (hidden ones included)
+//   expect-clipboard <regex> [seconds]   the clipboard's whole text matches
+//                           (6 s); its line ends as put there (\r\n),
+//                           (?m) for a line's ^ and $ (mitcad#1641)
+//   expect-clipboard-file <path> [seconds]   the file holds exactly the
+//                           clipboard's text, in UTF-8: a list's Save as
+//                           Text… against its Copy as Text (mitcad#1641)
 //   screenshot <png>        the main window (the 3D view composed in)
 //   screenshot-view <png>   the 3D view's framebuffer, as --screenshot
 //   screenshot-screen <png> macOS: what the window server shows of the

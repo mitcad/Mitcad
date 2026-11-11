@@ -37,6 +37,7 @@
 
 namespace mitcad {
 
+class CommandSession;
 class ManipulatorOverlay;
 class ParameterPicker;
 
@@ -222,12 +223,23 @@ public:
   // the returned guard lives, itemShape may read each sketch once for all
   // of its curves and points. The default batches nothing.
   virtual std::shared_ptr<void> itemShapeBatch() const { return nullptr; }
-  // A click is about to put `item` into a selection input of a command that
-  // makes a new feature (not an edit), before anything previews it
-  // (mitcad#960): the host may ask whether to activate the item's
-  // component (the Construct commands) and do so with
-  // CommandSession::runActivation. The default asks nothing.
-  virtual void pickComing(const CommandDef& /*def*/, const SelectionItem& /*item*/) {}
+  // A click is about to put `item` into the selection input `input` of a
+  // command that makes a new feature (not an edit), before anything
+  // previews it (mitcad#960): the host may ask whether to activate the
+  // item's component (the Construct commands), or activate it without a
+  // question (a feature that changes the picked body, mitcad#1634), and do
+  // so with CommandSession::runActivation. The default does nothing.
+  virtual void pickComing(const CommandDef& /*def*/, const InputDef& /*input*/, const SelectionItem& /*item*/) {}
+  // The picks of a new feature changed (mitcad#1634): the component the
+  // panel offers to activate beside the model's refusal of another
+  // component's body, as {"component": uid, "name", "drops": the picks
+  // of other components it drops}; empty when it offers none. Read from
+  // the document's structure only (no model query).
+  virtual QJsonObject activationOffer(const CommandSession& /*session*/) const { return {}; }
+  // The panel's Activate button was clicked, the model idle: the host
+  // activates the offered component (CommandSession::runActivation) and
+  // keeps only the picks in it (CommandSession::keepPicks).
+  virtual void takeActivationOffer(CommandSession& /*session*/) {}
   // The places of a notice under the pointer (mitcad#1327,
   // docs/ui-conventions.md "Messages and severity"): painted in the view
   // as the selection preview is until they are cleared (empty places);
@@ -377,6 +389,21 @@ public:
   // range (its own undo step, kept on Cancel), and every cached preview
   // dropped, since the same definition goes into another component now.
   bool runActivation(const QJsonArray& commands, const QString& label);
+  // A feature that changes the bodies it picks, on another component's
+  // body (mitcad#1634; CommandSessionVisibility.cpp). The picks of the
+  // selection inputs `inputs` (InputDef ids, also of a list's rows, shown
+  // or not), in the order of the inputs.
+  Selection picksOf(const QStringList& inputs) const;
+  // Drops from those inputs every pick `keep` refuses; the panel and the
+  // preview follow. Returns how many it dropped.
+  int keepPicks(const QStringList& inputs, const std::function<bool(const SelectionItem&)>& keep);
+  // The notice of the activation the command made, shown in the panel's
+  // message as information, before the preview's own (okMessage), until
+  // the panel closes; logged "Panel <command> notice: <text>".
+  void setActivationNotice(const QString& text);
+  // The component the panel offers to activate (CommandHost::activationOffer),
+  // empty when none: also the `activate` of the script state (MCP ui_state).
+  const QJsonObject& activationOffer() const { return m_activationOffer; }
   // Change Parameters while the panel is open (mitcad#564;
   // CommandSessionParameters.cpp): a command of the parameter table runs
   // as a light bulb's does, as its own undo step outside the command's
@@ -512,6 +539,11 @@ private:
   void activateFirstNeeded();
   void advanceIfFull();
   void selectionChanged(const QString& key);
+  // Asks the host again what the panel offers to activate and shows its
+  // button beside the message (mitcad#1634).
+  void updateActivationOffer();
+  QJsonObject m_activationOffer;
+  QString m_activationNotice;
   void logSelection(const QString& key) const;
   // The selections' picks by name where their inputs list them
   // (InputDef::itemsText, mitcad#544), once the model is idle.
@@ -758,6 +790,11 @@ private:
   std::vector<BodyDisplay> m_messageBodies;
   bool m_messageHovered = false;
   void hoverMessage(bool on);
+  // The note row the pointer is over that paints what it is about, and its
+  // items highlighted (InputNote::places and hover, mitcad#1643).
+  QString m_hoveredNote;
+  Selection m_noteHighlights;
+  void hoverNote(const QString& key, bool on);
   // The panel's message without a preview report (a hint, an error, a
   // progress): the shown preview's places and bodies go with it
   // (mitcad#1609).

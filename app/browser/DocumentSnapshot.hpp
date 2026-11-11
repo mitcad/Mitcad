@@ -53,6 +53,10 @@ struct DocumentSnapshot {
     // How many of its warnings Auto Fix can write into its definition
     // (mitcad#1223: the timeline's `auto_fix`); 0: Auto Fix is not offered.
     int autoFix = 0;
+    // A thread's fit that would change a named parameter other places use
+    // (mitcad#1632: the timeline's `auto_fix_choices`): each
+    // {parameter, others}; Auto Fix asks which way first.
+    QJsonArray autoFixChoices;
     // How many of a sketch's linked projections Project Again repairs
     // (mitcad#1303: the timeline's `project_again`); 0: not offered.
     int projectAgain = 0;
@@ -67,6 +71,13 @@ struct DocumentSnapshot {
     bool noted() const { return !importNote.isEmpty() || level == QStringLiteral("info"); }
 
     bool isSketch() const { return type == QStringLiteral("sketch"); }
+    // A 3D sketch (mitcad#1524): a sketch of its own kind, edited with
+    // the sketch3d commands. The Browser's Sketches folder, light bulbs,
+    // Edit Sketch and the view's sketch display take both kinds; what
+    // only a planar sketch has (profiles, Redefine Sketch Plane, Project
+    // Again, DXF export) asks isSketch().
+    bool isSpatialSketch() const { return type == QStringLiteral("spatial_sketch"); }
+    bool isAnySketch() const { return isSketch() || isSpatialSketch(); }
     // Construction planes, axes and points, and Intersection Curves
     // (mitcad#1405): the Browser's Construction folder, their light bulbs.
     bool isConstruction() const {

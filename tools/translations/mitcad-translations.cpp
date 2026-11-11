@@ -27,7 +27,8 @@
 //       or colon kept, to show untranslated and cut texts
 //   mitcad-translations messages SOURCE-ROOT [--write]
 //       the ctest repo.model-messages (mitcad#1284): the model's message
-//       templates of core/'s Rust sources against the generated list
+//       templates of core/'s Rust sources, with their cleaned forms as the
+//       application shows them (mitcad#1635), against the generated list
 //       app/framework/ModelMessageTemplates.cpp, or (--write) the list
 //       written again (tools/translations-update.cmake, before lupdate reads
 //       it into the model_<code>.ts files)
@@ -734,9 +735,12 @@ bool placeholderSpec(const std::string& inner) {
 
 // The template of a literal's text, or "" when it is no message: a text
 // with two words of letters side by side, not markup, not a value list.
-std::string messageTemplate(const std::string& text) {
+// With `names`, the name of each placeholder's argument ("{face}": "face";
+// "" for {}, {0} or one with a format spec).
+std::string messageTemplate(const std::string& text, std::vector<std::string>* names = nullptr) {
   std::string out;
   std::string fixed; // the text with a space for each placeholder
+  std::vector<std::string> arguments;
   int count = 0;
   for (std::size_t i = 0; i < text.size(); ++i) {
     const char c = text[i];
@@ -752,6 +756,8 @@ std::string messageTemplate(const std::string& text) {
         ++count;
         out += "%" + std::to_string(count);
         fixed += ' ';
+        const std::string inner = text.substr(i + 1, close - i - 1);
+        arguments.push_back(std::all_of(inner.begin(), inner.end(), identChar) ? inner : std::string());
         i = close;
         // "%1" followed by a digit would read as %10.
         if (i + 1 < text.size() && asciiDigit(text[i + 1])) return std::string();
@@ -787,6 +793,7 @@ std::string messageTemplate(const std::string& text) {
   const std::size_t first = fixed.find_first_not_of(" \t");
   if (first != std::string::npos && fixed[first] == '<') return std::string();
   if (fixed.find("=\"") != std::string::npos) return std::string();
+  if (names != nullptr) *names = arguments;
   return out;
 }
 
@@ -846,9 +853,12 @@ unsigned long hexValue(const std::string& digits) {
   return value;
 }
 
+std::vector<std::string> kindedTemplates(const std::string& text, const std::vector<std::string>& names);
+
 // The message templates of one Rust source: its string literals outside
 // comments, test modules and the arguments of panics, assertions,
-// expectations and logs, as messageTemplate takes them.
+// expectations and logs, as messageTemplate takes them, and each one's forms
+// with the names of kinds put in (kindedTemplates, mitcad#1638, #1650).
 void scanRust(const std::string& s, std::set<std::string>& found) {
   static const std::set<std::string> excluded = {
       "panic!", "unreachable!", "unimplemented!", "todo!", "assert!", "assert_eq!", "assert_ne!",
@@ -868,8 +878,11 @@ void scanRust(const std::string& s, std::set<std::string>& found) {
     for (const std::string& name : stack) {
       if (excluded.count(name) != 0) return;
     }
-    const std::string t = messageTemplate(text);
-    if (!t.empty()) found.insert(t);
+    std::vector<std::string> names;
+    const std::string t = messageTemplate(text, &names);
+    if (t.empty()) return;
+    found.insert(t);
+    for (const std::string& kinded : kindedTemplates(t, names)) found.insert(kinded);
   };
   std::size_t i = 0;
   while (i < n) {
@@ -1082,6 +1095,418 @@ std::set<std::string> scanCore(const fs::path& root, int& files) {
   return found;
 }
 
+// The cleaned forms of the templates (mitcad#1635). A message that names
+// topology, a body's uid or an internal id is shown cleaned of them
+// (`plain_message` and `FeatureError::from_text`, core/model-base/src/
+// notice.rs, mitcad#1327 and #1612): "line c4 does not exist" reads "a line
+// does not exist", "body F2.b0 (from Extrude1) belongs to …" "a body (from
+// Extrude1) belongs to …". So a template whose value comes after the word
+// of a kind ("line c%1", "body %1", a list "faces %1 and %2"), or that has
+// an id ("c%1 and c%2 are tangent"), has its cleaned form beside it, made
+// as that cleaner makes it: after the word of a kind the value taken out,
+// the word kept, "a" or "an" before a single one unless its noun phrase has
+// a word like "the", "its" or "the result's" (withArticle, mitcad#1638); an
+// id elsewhere its kind ("a curve", "curves"); a value followed by " mm" is
+// a length and stays. Then the cleaner's tidying and the values numbered
+// again. The words are notice.rs's; its test `cleaned_templates_are_listed`
+// checks the list against the cleaner itself. A value whose argument names
+// a kind of topology ("at {vertex}") and is not after the word of a kind is
+// listed with that kind put in ("at a vertex", kindedTemplate, mitcad#1638);
+// a list of them ("into {region_names}") with the kind's word for several, a name
+// of any kind ("of {topo}") with each kind (kindedTemplates, mitcad#1650).
+
+// The words after which the cleaner keeps the word and takes the name out
+// (notice.rs, KINDS), and those after which it puts no article (`cleaned`,
+// DETERMINERS).
+const char* const kCleanedKinds[] = {"face",     "faces",       "edge",        "edges",     "vertex",
+                                     "vertices", "corner",      "corners",     "region",    "regions",
+                                     "profile",  "profiles",    "body",        "bodies",    "point",
+                                     "points",   "curve",       "curves",      "line",      "lines",
+                                     "arc",      "arcs",        "circle",      "circles",   "constraint",
+                                     "constraints", "dimension", "dimensions", "feature",   "features",
+                                     "pattern",  "offset"};
+const char* const kCleanedDeterminers[] = {"the",  "a",    "an",    "its", "their",   "this", "that",
+                                           "each", "every", "one", "another", "which", "no"};
+// What joins a list of names into one ("faces %1 and %2").
+const char* const kCleanedJoins[] = {", ", " and ", ", and ", " or ", ", or ", " + "};
+// The words that end a noun phrase, looking back from the word of its kind
+// (notice.rs, PHRASE_ENDS), and those of them after which a verb comes
+// (VERB_LEADS): "does not fit face %1" reads "does not fit a face".
+const char* const kPhraseEnds[] = {
+    "at",     "on",      "of",     "in",      "into",   "onto",    "to",      "from",    "for",    "with",
+    "without", "by",     "behind", "between", "through", "along",  "across",  "over",    "under",  "above",
+    "below",  "beyond",  "near",   "after",   "before", "than",    "as",      "about",   "around", "against",
+    "past",   "via",     "within", "inside",  "outside", "per",    "and",     "or",      "but",    "nor",
+    "if",     "when",    "where",  "while",   "because", "then",   "is",      "are",     "was",    "were",
+    "be",     "been",    "being",  "has",     "have",   "had",     "do",      "does",    "did",    "not",
+    "can",    "cannot",  "could",  "must",    "may",    "might",   "will",    "would",   "shall",  "should",
+    "it",     "they",    "there",  "here",    "what",   "who",     "create",  "delete",  "add",    "remove",
+    "make",   "made",    "move",   "moved",   "change", "cut",     "fit",     "own",     "reach",  "develop",
+    "use",    "keep",    "pick",   "select",  "join",   "split",   "need",    "find",    "found",  "take",
+    "took",   "give",    "gave",   "get",     "got",    "put",     "meet",    "cross",   "follow", "show",
+    "hide"};
+const char* const kVerbLeads[] = {"to",  "do",  "does",  "did",   "not",   "can",   "cannot", "could",
+                                  "must", "may", "might", "will", "would", "shall", "should"};
+
+bool listedWord(const std::string& word, const char* const* words, std::size_t count) {
+  for (std::size_t i = 0; i < count; ++i) {
+    if (word == words[i]) return true;
+  }
+  return false;
+}
+
+std::string lowerAscii(std::string text) {
+  for (char& c : text) {
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  }
+  return text;
+}
+
+// The length of the template's placeholder at `i` (%1 to %99), or 0.
+std::size_t templatePlaceholderAt(const std::string& text, std::size_t i) {
+  if (text[i] != '%' || i + 1 >= text.size() || !asciiDigit(text[i + 1]) || text[i + 1] == '0') return 0;
+  return i + 2 < text.size() && asciiDigit(text[i + 2]) ? 3 : 2;
+}
+
+// Where the run of letters that ends at `end` starts (`end` when none).
+std::size_t lettersStart(const std::string& text, std::size_t end) {
+  std::size_t start = end;
+  while (start > 0 && asciiLetter(text[start - 1])) --start;
+  return start;
+}
+
+// A value of a template: its placeholder, and where the name it may be
+// starts (before an id's letter: "c%1" is a sketch's curve c4).
+struct TemplateValue {
+  std::size_t name = 0;
+  std::size_t placeholder = 0;
+  std::size_t end = 0;
+  char prefix = 0; // the id's letter, or 0
+};
+
+std::vector<TemplateValue> templateValues(const std::string& text) {
+  std::vector<TemplateValue> values;
+  for (std::size_t i = 0; i < text.size();) {
+    const std::size_t length = templatePlaceholderAt(text, i);
+    if (length == 0) {
+      ++i;
+      continue;
+    }
+    TemplateValue value;
+    value.name = i;
+    value.placeholder = i;
+    value.end = i + length;
+    // An id is a whole word: "c4", not "c4x".
+    if (i > 0 && std::strchr("cpkF", text[i - 1]) != nullptr &&
+        (i == 1 || !(identChar(text[i - 2]) || text[i - 2] == '.')) &&
+        (i + length == text.size() || !identChar(text[i + length]))) {
+      value.name = i - 1;
+      value.prefix = text[i - 1];
+    }
+    values.push_back(value);
+    i += length;
+  }
+  return values;
+}
+
+// A character of a word of a noun phrase: a letter, an apostrophe ("the
+// result's") or a hyphen ("pre-existing").
+bool phraseChar(char c) { return asciiLetter(c) || c == '\'' || c == '-'; }
+
+// `out`, which ends with the word of a kind at `start` (its name taken out),
+// with "a" or "an" put in as notice.rs's `cleaned` puts it (mitcad#1638):
+// none for several ("faces") or where the noun phrase has a word like "the"
+// or a possessive ("the driven dimension", "the result's face"); otherwise
+// before the phrase, its words looked back over up to three until a word
+// that ends it ("meets a boundary curve", "at a bend edge"), or before the
+// word of the kind when a verb comes first ("does not fit a face").
+std::string withArticle(std::string out, std::size_t start) {
+  const std::string word = out.substr(start);
+  if (word.empty() || lowerAscii(word).back() == 's') return out;
+  std::vector<std::size_t> starts; // the phrase's words before the kind's, nearest first
+  std::size_t at = start;
+  std::size_t place = start;
+  while (true) {
+    std::size_t gap = at;
+    while (gap > 0 && std::strchr(" \t\n\r", out[gap - 1]) != nullptr) --gap;
+    if (gap == at || gap == 0 || !phraseChar(out[gap - 1])) {
+      place = starts.empty() ? start : starts.back();
+      break;
+    }
+    std::size_t wordStart = gap;
+    while (wordStart > 0 && phraseChar(out[wordStart - 1])) --wordStart;
+    const std::string previous = lowerAscii(out.substr(wordStart, gap - wordStart));
+    if (std::none_of(previous.begin(), previous.end(), asciiLetter)) {
+      place = starts.empty() ? start : starts.back();
+      break;
+    }
+    if (listedWord(previous, kCleanedDeterminers, std::size(kCleanedDeterminers)) ||
+        (previous.size() >= 2 && previous.compare(previous.size() - 2, 2, "'s") == 0)) {
+      return out;
+    }
+    if (listedWord(previous, kPhraseEnds, std::size(kPhraseEnds)) || previous.back() == 's') {
+      if (listedWord(previous, kVerbLeads, std::size(kVerbLeads))) {
+        place = starts.size() >= 2 ? starts[starts.size() - 2] : start;
+      } else {
+        place = starts.empty() ? start : starts.back();
+      }
+      break;
+    }
+    if (starts.size() == 3) {
+      place = start;
+      break;
+    }
+    starts.push_back(wordStart);
+    at = wordStart;
+  }
+  std::size_t firstEnd = place;
+  while (firstEnd < out.size() && phraseChar(out[firstEnd])) ++firstEnd;
+  std::string first = out.substr(place, firstEnd - place);
+  const bool vowel = std::strchr("aeiou", lowerAscii(first.substr(0, 1))[0]) != nullptr;
+  const std::size_t head = out.find_last_not_of(" \t\n\r\f\v", place == 0 ? std::string::npos : place - 1);
+  const bool sentence = place == 0 || head == std::string::npos || std::strchr(".!?", out[head]) != nullptr;
+  const bool capital = first[0] >= 'A' && first[0] <= 'Z' && sentence;
+  std::string article = vowel ? "an " : "a ";
+  if (capital) article[0] = static_cast<char>(article[0] - 'a' + 'A');
+  if (place == start) {
+    first = lowerAscii(first);
+  } else if (capital && lowerAscii(first.substr(1)) == first.substr(1)) {
+    first[0] = static_cast<char>(first[0] - 'A' + 'a');
+  }
+  out.replace(place, firstEnd - place, article + first);
+  return out;
+}
+
+// A template's text after its names were taken out, tidied as the cleaner
+// does, its values numbered again in their order; "" when that is `text`.
+std::string tidiedTemplate(std::string out, const std::string& text) {
+  const std::pair<const char*, const char*> tidy[] = {{"()", ""}, {"( ", "("}, {" )", ")"}, {" ,", ","}, {"  ", " "}};
+  for (const auto& rule : tidy) {
+    const std::string from = rule.first;
+    for (std::size_t found = out.find(from); found != std::string::npos; found = out.find(from)) {
+      out.replace(found, from.size(), rule.second);
+    }
+  }
+  const std::size_t first = out.find_first_not_of(" \t\n\r\f\v");
+  if (first == std::string::npos) return std::string();
+  out = out.substr(first, out.find_last_not_of(" \t\n\r\f\v") + 1 - first);
+  std::string numbered;
+  int count = 0;
+  for (std::size_t i = 0; i < out.size();) {
+    const std::size_t length = templatePlaceholderAt(out, i);
+    if (length == 0) {
+      numbered += out[i++];
+      continue;
+    }
+    numbered += "%" + std::to_string(++count);
+    i += length;
+    // "%1" followed by a digit would read as %10.
+    if (i < out.size() && asciiDigit(out[i])) return std::string();
+  }
+  return numbered == text ? std::string() : numbered;
+}
+
+// Whether the value whose name starts at `s` comes after the word of a kind
+// ("line %1", "faces %1").
+bool afterKindWord(const std::string& text, std::size_t s) {
+  if (s < 2 || text[s - 1] != ' ') return false;
+  const std::size_t wordStart = lettersStart(text, s - 1);
+  return wordStart < s - 1 &&
+         listedWord(lowerAscii(text.substr(wordStart, s - 1 - wordStart)), kCleanedKinds, std::size(kCleanedKinds));
+}
+
+// "a curve" or "curves" put in for a name at `out`'s end, with a capital at
+// the start of a sentence.
+std::string kindPhrase(const std::string& out, const char* one, const char* many, int count) {
+  const bool vowel = std::strchr("aeiou", one[0]) != nullptr;
+  std::string phrase = count > 1 ? std::string(many) : std::string(vowel ? "an " : "a ") + one;
+  const std::size_t last = out.find_last_not_of(" \t\n\r\f\v");
+  if (last == std::string::npos || std::strchr(".!?", out[last]) != nullptr) {
+    phrase[0] = static_cast<char>(phrase[0] - 'a' + 'A');
+  }
+  return phrase;
+}
+
+// The cleaned form of a template, or "" when it has none.
+std::string cleanedTemplate(const std::string& text) {
+  // A renamed reference's warning has a cleaner of its own.
+  if (text.find(" found as ") != std::string::npos) return std::string();
+  const std::vector<TemplateValue> values = templateValues(text);
+  // The names taken out: from the start of the first to the end of the
+  // last of a list; after the word of a kind, or an id anywhere ("c%1 and
+  // c%2 are tangent": "curves are tangent").
+  struct Taken {
+    std::size_t start = 0;
+    std::size_t end = 0;
+    int count = 1;
+    char prefix = 0;
+    bool afterKind = false;
+  };
+  std::vector<Taken> taken;
+  for (std::size_t v = 0; v < values.size(); ++v) {
+    const TemplateValue& value = values[v];
+    Taken name;
+    name.start = value.name;
+    name.end = value.end;
+    name.prefix = value.prefix;
+    name.afterKind = afterKindWord(text, value.name);
+    // A length is no name.
+    if ((!name.afterKind && value.prefix == 0) || (value.prefix == 0 && text.compare(value.end, 3, " mm") == 0)) {
+      continue;
+    }
+    for (std::size_t next = v + 1; next < values.size(); ++next) {
+      const TemplateValue& other = values[next];
+      if (other.prefix != value.prefix || other.name < name.end ||
+          !listedWord(text.substr(name.end, other.name - name.end), kCleanedJoins, std::size(kCleanedJoins))) {
+        break;
+      }
+      name.end = other.end;
+      ++name.count;
+      v = next;
+    }
+    taken.push_back(name);
+  }
+  if (taken.empty()) return std::string();
+  std::string out;
+  std::size_t at = 0;
+  for (const Taken& name : taken) {
+    out += text.substr(at, name.start - at);
+    at = name.end;
+    if (!name.afterKind) {
+      // An id elsewhere: its kind in its stead ("a curve", "points"), with a
+      // capital at the start of a sentence.
+      const char* const kinds[][2] = {{"curve", "curves"}, {"point", "points"}, {"constraint", "constraints"},
+                                      {"feature", "features"}};
+      const std::size_t kind = name.prefix == 'c' ? 0 : name.prefix == 'p' ? 1 : name.prefix == 'k' ? 2 : 3;
+      out += kindPhrase(out, kinds[kind][0], kinds[kind][1], name.count);
+      continue;
+    }
+    // The word of the kind stays: "a line", "the line", "faces".
+    out.pop_back(); // its space
+    out = withArticle(out, lettersStart(out, out.size()));
+  }
+  out += text.substr(at);
+  // What taking the names out left, tidied as the cleaner does.
+  return tidiedTemplate(out, text);
+}
+
+// The kind of topology an argument's name names: "face", "seed_edge"; none
+// for others. A list of names, which the cleaner shows as their kind's word
+// for several ("edges", mitcad#1650), is named so on purpose: "region_names",
+// "split_face_names"; `several` says so. A plural alone ("{edges} edges")
+// is a count, not names.
+const char* const kNamedKinds[][2] = {
+    {"face", "faces"}, {"edge", "edges"}, {"vertex", "vertices"}, {"region", "regions"}};
+
+// Whether `name` is `word` or ends with "_" and `word`.
+bool namesWord(const std::string& name, const std::string& word) {
+  return name == word ||
+         (name.size() > word.size() && name.compare(name.size() - word.size() - 1, word.size() + 1, "_" + word) == 0);
+}
+
+int namedKind(const std::string& name, bool* several = nullptr) {
+  for (std::size_t k = 0; k < std::size(kNamedKinds); ++k) {
+    const std::string kind = kNamedKinds[k][0];
+    for (int many = 0; many < 2; ++many) {
+      if (namesWord(name, many == 0 ? kind : kind + "_names")) {
+        if (several != nullptr) *several = many == 1;
+        return static_cast<int>(k);
+      }
+    }
+  }
+  return -1;
+}
+
+// Whether the value that ends at `end` is followed by the word of the kind
+// `kind`, one or several ("%1 edges"): a count of them, not a name.
+bool beforeOwnKindWord(const std::string& text, std::size_t end, int kind) {
+  if (end >= text.size() || text[end] != ' ') return false;
+  std::size_t wordEnd = end + 1;
+  while (wordEnd < text.size() && asciiLetter(text[wordEnd])) ++wordEnd;
+  const std::string word = lowerAscii(text.substr(end + 1, wordEnd - end - 1));
+  return word == kNamedKinds[kind][0] || word == kNamedKinds[kind][1];
+}
+
+// The template with the names of kinds put in (mitcad#1638), or "" when it
+// has none: a value whose argument names a kind of topology ("{vertex}",
+// "{seed_edge}") outside the word of a kind is shown as that kind by the
+// cleaner ("at V{…}": "at a vertex"; a list "edges"), so that form is
+// listed and translated whole. The cleaned forms of it follow from it.
+std::string kindedTemplate(const std::string& text, const std::vector<std::string>& names) {
+  const std::vector<TemplateValue> values = templateValues(text);
+  if (values.size() != names.size()) return std::string();
+  std::string out;
+  std::size_t at = 0;
+  bool taken = false;
+  for (std::size_t v = 0; v < values.size(); ++v) {
+    const TemplateValue& value = values[v];
+    bool several = false;
+    const int kind = namedKind(names[v], &several);
+    const std::size_t s = value.placeholder;
+    // A name is a word of its own ("Edge%1" is no name).
+    const bool startsWord = s == 0 || !(identChar(text[s - 1]) || text[s - 1] == '.');
+    if (kind < 0 || afterKindWord(text, s) || value.prefix != 0 || !startsWord ||
+        beforeOwnKindWord(text, value.end, kind)) {
+      continue;
+    }
+    std::size_t end = value.end;
+    int count = several ? 2 : 1;
+    while (v + 1 < values.size()) {
+      const TemplateValue& other = values[v + 1];
+      if (namedKind(names[v + 1]) != kind || other.prefix != 0 ||
+          !listedWord(text.substr(end, other.placeholder - end), kCleanedJoins, std::size(kCleanedJoins))) {
+        break;
+      }
+      end = other.end;
+      ++count;
+      ++v;
+    }
+    out += text.substr(at, s - at);
+    at = end;
+    out += kindPhrase(out, kNamedKinds[kind][0], kNamedKinds[kind][1], count);
+    taken = true;
+  }
+  if (!taken) return std::string();
+  out += text.substr(at);
+  return tidiedTemplate(out, text);
+}
+
+// The templates with the names of kinds put in (kindedTemplate): one, or
+// none; three for an argument named "topo" or "*_topo", a topological name
+// of any kind (a projection's source, mitcad#1650), one with each kind it
+// may be ("the projection of a face", "... an edge", "... a vertex").
+std::vector<std::string> kindedTemplates(const std::string& text, const std::vector<std::string>& names) {
+  for (std::size_t v = 0; v < names.size(); ++v) {
+    if (!namesWord(names[v], "topo")) continue;
+    std::vector<std::string> all;
+    for (const char* const kind : {"face", "edge", "vertex"}) {
+      std::vector<std::string> named = names;
+      named[v] = names[v].substr(0, names[v].size() - 4) + kind;
+      for (const std::string& form : kindedTemplates(text, named)) {
+        if (std::find(all.begin(), all.end(), form) == all.end()) all.push_back(form);
+      }
+    }
+    return all;
+  }
+  const std::string kinded = kindedTemplate(text, names);
+  if (kinded.empty()) return {};
+  return {kinded};
+}
+
+// The templates with their cleaned forms, and theirs in turn: a value that
+// follows a name taken out comes after the word of its kind then ("feature
+// edge %1 %2": "a feature edge %1", "a feature edge").
+std::set<std::string> withCleanedForms(const std::set<std::string>& templates) {
+  std::set<std::string> all = templates;
+  std::vector<std::string> pending(templates.begin(), templates.end());
+  while (!pending.empty()) {
+    const std::string cleaned = cleanedTemplate(pending.back());
+    pending.pop_back();
+    if (!cleaned.empty() && all.insert(cleaned).second) pending.push_back(cleaned);
+  }
+  return all;
+}
+
 // A template as one line: its backslashes doubled, its line breaks \n (the
 // order of the generated list).
 std::string lineForm(const std::string& text) {
@@ -1156,7 +1581,8 @@ std::set<std::string> templatesOf(const std::string& source) {
 // list (the ctest repo.model-messages), or the list written again.
 int messages(const fs::path& root, bool write) {
   int files = 0;
-  const std::set<std::string> scanned = scanCore(root, files);
+  // The messages as the sources write them and as they are shown cleaned.
+  const std::set<std::string> scanned = withCleanedForms(scanCore(root, files));
   const fs::path list = root / kTemplatesFile;
   if (files == 0) {
     std::cerr << (root / "core").string() << ": no Rust sources\n";
@@ -1323,6 +1749,109 @@ int selfTest() {
   {
     const std::set<std::string> some = {"a \"quoted\" text here", "a back\\slash text", "two lines\nof text"};
     expect(templatesOf(templatesSource(some)) == some, "the generated list read back");
+  }
+  // The cleaned forms (mitcad#1635), as notice.rs's cleaner shows them.
+  {
+    const std::pair<const char*, const char*> cleanedForms[] = {
+        {"line c%1 does not exist", "a line does not exist"},
+        {"body %1 (from %2) belongs to %3; a feature works on the bodies of its own component",
+         "a body (from %1) belongs to %2; a feature works on the bodies of its own component"},
+        {"%1: curve c%2 does not exist", "%1: a curve does not exist"},
+        {"Edge %1 is not round", "An edge is not round"},
+        {"the edge %1 of %2 is gone", "the edge of %1 is gone"},
+        {"%1 has no face %2", "%1 has no face"},
+        {"faces %1 and %2 meet at an edge", "faces meet at an edge"},
+        {"the mirror line c%1 is not a line", "the mirror line is not a line"},
+        {"c%1 and c%2 are tangent at p%3: there is no corner to round",
+         "Curves are tangent at a point: there is no corner to round"},
+        {"%1: c%2 has no geometry", "%1: a curve has no geometry"},
+        {"its offset %1 mm from the placements", ""},
+        {"region %1 found as %2 after a change in %3", ""},
+        {"the radius %1 must be positive", ""},
+        // The article looks back over the noun phrase (mitcad#1638).
+        {"%1 can move what the driven dimension %2 measures", "%1 can move what the driven dimension measures"},
+        {"%1 makes a new body %2", "%1 makes a new body"},
+        {"the result's face %1 is gone", "the result's face is gone"},
+        {"its run's nosing profile %1 is open", "its run's nosing profile is open"},
+        {"the bend meets boundary curve %1 there", "the bend meets a boundary curve there"},
+        {"the faces at bend edge %1", "the faces at a bend edge"},
+        {"%1 does not fit face %2", "%1 does not fit a face"},
+        {"unknown embedded curve %1", "an unknown embedded curve"},
+        {"%1: bend line %2 is open", "%1: a bend line is open"},
+        {"%1: the thread cut body %2 into %3 pieces", "%1: the thread cut a body into %2 pieces"},
+        {"Create Profile %1", "Create a profile"},
+        {"DXF line %1: %2", "A DXF line: %1"},
+        {"it would change pre-existing body %1", "it would change a pre-existing body"},
+        {"Edge %1 is not round. Edge %2 is", "An edge is not round. An edge is"},
+    };
+    for (const auto& form : cleanedForms) {
+      const std::string made = cleanedTemplate(form.first);
+      expect(made == form.second, std::string("the cleaned form of \"") + form.first + "\": \"" + made + "\"");
+    }
+    expect(withCleanedForms({"line c%1 does not exist"}) ==
+               std::set<std::string>{"line c%1 does not exist", "a line does not exist"},
+           "a template and its cleaned form listed");
+  }
+  // A name put in as its kind where no word of a kind is before it
+  // (mitcad#1638), told by the argument's name.
+  {
+    struct Kinded {
+      const char* text;
+      std::vector<std::string> names;
+      const char* form;
+    };
+    const Kinded kinded[] = {
+        {"the hole at %1 is too small", {"vertex"}, "the hole at a vertex is too small"},
+        {"the sketch is on %1 of %2", {"face", "name"}, "the sketch is on a face of %1"},
+        {"%1 is not a cylinder, cone or torus (%2)", {"face", ""}, "A face is not a cylinder, cone or torus (%1)"},
+        {"the edge %1 is gone from %2", {"edge", "name"}, ""},
+        {"the seam on %1 and %2 is open", {"first_edge", "second_edge"}, "the seam on edges is open"},
+        {"the hole at %1 is too small", {""}, ""},
+        {"%1.Edge%2 is on another body", {"base", "edge"}, ""},
+        // A list of names in one value, named so on purpose (mitcad#1650):
+        // the word for several.
+        {"region %1 is split into %2 after a change in %3", {"", "region_names", "name"},
+         "region %1 is split into regions after a change in %2"},
+        {"the seam on %1 is open", {"open_edge_names"}, "the seam on edges is open"},
+        {"%1 is not split into %2", {"", "facets"}, ""},
+        // A count named like its kind is no list of names: none listed.
+        {"%1 of its %2 edges read from the file", {"", "edges"}, ""},
+        {"%1: the stored sketch has no geometry, its stored shape %2 edges", {"what", "edges"}, ""},
+        {"the %1 planar faces of the mesh do not build a closed solid (%2 left out)", {"faces", ""}, ""},
+        {"vertex index %1 of %2 vertices", {"i", "vertices"}, ""},
+        {"a flange on %1 edges whose edges were not read from the file", {"edges"}, ""},
+        {"%1%2 faces, %3 edges, %4 vertices", {"indent", "faces", "edges", "vertices"}, ""},
+        {"the envelope's %1 faces do not build a closed solid (%2 left out)", {"faces", ""}, ""},
+        {"%1 edges have no root half-edge with a mate (left out)", {"broken_edges"}, ""},
+        // A value followed by its own kind's word is a count of them.
+        {"%1 edges are open", {"edge"}, ""},
+        {"%1 edge is open", {"seam_edge"}, ""},
+    };
+    for (const Kinded& form : kinded) {
+      const std::string made = kindedTemplate(form.text, form.names);
+      expect(made == form.form, std::string("the form with its kinds of \"") + form.text + "\": \"" + made + "\"");
+    }
+    std::set<std::string> found;
+    scanRust("fn f() { let m = format!(\"the hole at {vertex} is too small\"); }\n", found);
+    expect(found == std::set<std::string>{"the hole at %1 is too small", "the hole at a vertex is too small"},
+           "a template and its form with its kinds listed");
+    // A name of any kind (mitcad#1650): a form for each kind it may be.
+    expect(kindedTemplates("the projection of %1 is gone", {"topo"}) ==
+               std::vector<std::string>{"the projection of a face is gone", "the projection of an edge is gone",
+                                        "the projection of a vertex is gone"},
+           "a name of any kind as each kind");
+    expect(kindedTemplates("%1 of %2: %3", {"name", "source_topo", ""}) ==
+               std::vector<std::string>{"%1 of a face: %2", "%1 of an edge: %2", "%1 of a vertex: %2"},
+           "a name of any kind among other values");
+    expect(kindedTemplates("the hole at %1 is too small", {"vertex"}) ==
+               std::vector<std::string>{"the hole at a vertex is too small"},
+           "one form for a name of one kind");
+    expect(kindedTemplates("the hole at %1 is too small", {"spot"}).empty(), "no form for another name");
+    found.clear();
+    scanRust("fn f() { let m = format!(\"the projection of {topo} is gone\"); }\n", found);
+    expect(found == std::set<std::string>{"the projection of %1 is gone", "the projection of a face is gone",
+                                          "the projection of an edge is gone", "the projection of a vertex is gone"},
+           "a template and its forms of each kind listed");
   }
   if (failures == 0) std::cout << "translations self-test passed\n";
   return failures == 0 ? 0 : 1;

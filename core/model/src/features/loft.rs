@@ -88,6 +88,7 @@ impl LoftSectionDef {
                 sketch: *sketch,
                 curves: curves.clone(),
                 chain: *chain,
+                reversed: false,
             }),
             _ => None,
         }
@@ -382,7 +383,7 @@ impl FeatureInfo for LoftDef {
             }
             match section {
                 LoftSectionDef::Profile { sketch, .. } => {
-                    ctx.sketch(*sketch).map_err(at)?;
+                    ctx.profile_sketch(*sketch).map_err(at)?;
                 }
                 LoftSectionDef::Face { body, face } => {
                     ctx.body(*body).map_err(at)?;
@@ -396,9 +397,10 @@ impl FeatureInfo for LoftDef {
                     }
                 }
                 LoftSectionDef::Point { point } => point.check(ctx, Want::Point).map_err(at)?,
+                // Curves of a planar or a 3D sketch (mitcad#1550).
                 LoftSectionDef::Curves { .. } => {
                     if let Some(curves) = section.sketch_curves() {
-                        curves.check(ctx).map_err(at)?;
+                        curves.check_any(ctx).map_err(at)?;
                     }
                 }
             }
@@ -441,6 +443,7 @@ impl FeatureInfo for LoftDef {
         if self.ruled && (imposed || !self.rails.is_empty()) {
             return Err("a ruled loft has no end conditions or rails".to_owned());
         }
+        // A 3D sketch's curves too, in their typed form (mitcad#1550).
         for path in self.centerline.iter().chain(&self.rails) {
             path.check(ctx)?;
         }
@@ -537,9 +540,9 @@ impl<K: Kernel> Evaluate<K> for LoftDef {
                         );
                         ctx.warn_at(
                             at(format!(
-                                "a loft section is one region; of the pieces of {} the first is \
-                                 used",
-                                profile.region
+                                "a loft section is one region; of the pieces of {region} the \
+                                 first is used",
+                                region = profile.region
                             )),
                             vec![place],
                         );
@@ -547,8 +550,8 @@ impl<K: Kernel> Evaluate<K> for LoftDef {
                     let region = regions.remove(0);
                     if region.loops.len() > 1 {
                         return Err(at(format!(
-                            "{UNSUPPORTED}a loft section with holes ({})",
-                            region.key
+                            "{UNSUPPORTED}a loft section with holes ({region})",
+                            region = region.key
                         )));
                     }
                     Found::Region(output.frame, region)
@@ -657,8 +660,9 @@ impl LoftDef {
                     "a loft of curve sections has only curve sections".to_owned()
                 ));
             };
-            let frame = ctx.sketch(curves.sketch).map_err(at)?.frame;
-            let mut chains = surface_sweeps::chains(ctx, &curves, &frame).map_err(at)?;
+            // A 3D sketch's curves where it has them (mitcad#1550).
+            let (frame, pieces) = curves.curves(ctx).map_err(at)?;
+            let mut chains = super::path::wall_chains(pieces, &frame).map_err(at)?;
             if chains.len() != 1 {
                 return Err(at(format!(
                     "the curves make {} chains; a section is one chain",

@@ -198,13 +198,6 @@ QString countText(const QJsonValue& value) {
   return value.toString();
 }
 
-QString csvField(const QString& cell) {
-  if (!cell.contains(QLatin1Char(',')) && !cell.contains(QLatin1Char('"')) && !cell.contains(QLatin1Char('\n'))) {
-    return cell;
-  }
-  return QStringLiteral("\"%1\"").arg(QString(cell).replace(QLatin1Char('"'), QStringLiteral("\"\"")));
-}
-
 void fill(QTableWidget* table, const ListTable& list) {
   table->clear();
   table->setColumnCount(static_cast<int>(list.columns.size()));
@@ -232,32 +225,13 @@ QTableWidget* newTable(const QString& name) {
   return table;
 }
 
-} // namespace
-
-QString csvOf(const QVector<ListTable>& tables) {
-  QStringList lines;
-  for (const ListTable& table : tables) {
-    if (!lines.isEmpty()) {
-      lines << QString();
-    }
-    if (tables.size() > 1 && !table.heading.isEmpty()) {
-      lines << csvField(table.heading);
-    }
-    QStringList header;
-    for (const QString& column : table.columns) {
-      header << csvField(column);
-    }
-    lines << header.join(QLatin1Char(','));
-    for (const QStringList& row : table.rows) {
-      QStringList cells;
-      for (const QString& cell : row) {
-        cells << csvField(cell);
-      }
-      lines << cells.join(QLatin1Char(','));
-    }
-  }
-  return lines.join(QLatin1Char('\n')) + QLatin1Char('\n');
+// The lines of a list's text (CRLF ends, mitcad#1641), blank ones left out,
+// for the log.
+QStringList logLines(const QString& text) {
+  return text.split(QStringLiteral("\r\n"), Qt::SkipEmptyParts);
 }
+
+} // namespace
 
 QVector<ListTable> cutListTables(const QJsonObject& answer) {
   // Timber (mitcad#478): its columns only when the design has timber.
@@ -625,7 +599,14 @@ BuildListsDialog::BuildListsDialog(const CommandContext& model, const QString& d
   copy->setObjectName(QStringLiteral("listCopyCsv"));
   auto* saveCsv = buttons->addButton(tr("Save as CSV…"), QDialogButtonBox::ActionRole);
   saveCsv->setObjectName(QStringLiteral("listSaveCsv"));
-  auto* pdf = buttons->addButton(tr("Save as &PDF…"), QDialogButtonBox::ActionRole);
+  // The tables as aligned plain text, for an email (mitcad#1641).
+  auto* copyTextButton = buttons->addButton(tr("Copy as &Text"), QDialogButtonBox::ActionRole);
+  copyTextButton->setObjectName(QStringLiteral("listCopyText"));
+  copyTextButton->setToolTip(tr("Copies the tab shown as plain text with its columns aligned, for an email"));
+  auto* saveTextButton = buttons->addButton(tr("Save as Text…"), QDialogButtonBox::ActionRole);
+  saveTextButton->setObjectName(QStringLiteral("listSaveText"));
+  saveTextButton->setToolTip(tr("Saves the tab shown as a text file with its columns aligned"));
+  auto* pdf =buttons->addButton(tr("Save as &PDF…"), QDialogButtonBox::ActionRole);
   pdf->setObjectName(QStringLiteral("listSavePdf"));
   // File › Print for the list (mitcad#1089): the window is modal, so it has
   // the button and the key itself.
@@ -639,6 +620,8 @@ BuildListsDialog::BuildListsDialog(const CommandContext& model, const QString& d
   layout->addWidget(buttons);
   connect(copy, &QPushButton::clicked, this, &BuildListsDialog::copyCsv);
   connect(saveCsv, &QPushButton::clicked, this, &BuildListsDialog::saveCsv);
+  connect(copyTextButton, &QPushButton::clicked, this, &BuildListsDialog::copyText);
+  connect(saveTextButton, &QPushButton::clicked, this, &BuildListsDialog::saveText);
   connect(m_groupIdentical, &QCheckBox::toggled, this, [this](bool checked) {
     QSettings().setValue(QStringLiteral("build/groupIdenticalParts"), checked);
     load();
@@ -801,11 +784,21 @@ QVector<ListTable> BuildListsDialog::shownTables() const { return m_tabs->curren
 void BuildListsDialog::copyCsv() {
   const QString csv = csvOf(shownTables());
   QApplication::clipboard()->setText(csv);
-  const QStringList lines = csv.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+  const QStringList lines = logLines(csv);
   for (const QString& line : lines) {
     qInfo().noquote() << QStringLiteral("Build list CSV: %1").arg(line);
   }
   qInfo().noquote() << QStringLiteral("Build list copied as CSV: %1 line(s)").arg(lines.size());
+}
+
+void BuildListsDialog::copyText() {
+  const QString text = textTableOf(shownTables());
+  QApplication::clipboard()->setText(text);
+  const QStringList lines = logLines(text);
+  for (const QString& line : lines) {
+    qInfo().noquote() << QStringLiteral("Build list text: %1").arg(line);
+  }
+  qInfo().noquote() << QStringLiteral("Build list copied as text: %1 line(s)").arg(lines.size());
 }
 
 void BuildListsDialog::print() {
@@ -835,6 +828,17 @@ void BuildListsDialog::print() {
 }
 
 void BuildListsDialog::saveCsv() {
+  saveList(tr("Save List as CSV"), QStringLiteral(".csv"), tr("CSV files (*.csv)"), tr("Save as CSV"),
+           QStringLiteral("CSV"), csvOf(shownTables()));
+}
+
+void BuildListsDialog::saveText() {
+  saveList(tr("Save List as Text"), QStringLiteral(".txt"), tr("Text files (*.txt)"), tr("Save as Text"),
+           QStringLiteral("text"), textTableOf(shownTables()));
+}
+
+bool BuildListsDialog::saveList(const QString& caption, const QString& extension, const QString& filter,
+                                const QString& errorTitle, const QString& what, const QString& contents) {
   const QString name = m_design.isEmpty() ? tr("Untitled") : QFileInfo(m_design).completeBaseName();
   const auto* host = dynamic_cast<const DocumentHost*>(parentWidget());
   QString fallback = host != nullptr ? host->documentFolder() : QString();
@@ -842,20 +846,20 @@ void BuildListsDialog::saveCsv() {
     fallback = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
   }
   const QString folder = dialogStartFolder(DialogGroup::Export, fallback);
-  const QString path = dialogSaveFileName(this, tr("Save List as CSV"),
-      QDir(folder).filePath(name + QStringLiteral(".csv")), tr("CSV files (*.csv)"));
+  const QString path = dialogSaveFileName(this, caption, QDir(folder).filePath(name + extension), filter);
   if (path.isEmpty()) {
-    return;
+    return false;
   }
   QSaveFile file(path);
-  const QByteArray bytes = csvOf(shownTables()).toUtf8();
+  const QByteArray bytes = contents.toUtf8();
   if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
-    qWarning().noquote() << QStringLiteral("Build list CSV not written: %1").arg(file.errorString());
-    sheetCritical(this, tr("Save as CSV"), file.errorString());
-    return;
+    qWarning().noquote() << QStringLiteral("Build list %1 not written: %2").arg(what, file.errorString());
+    sheetCritical(this, errorTitle, file.errorString());
+    return false;
   }
   rememberDialogFolder(DialogGroup::Export, path);
-  qInfo().noquote() << QStringLiteral("Build list saved as CSV: %1").arg(QDir::toNativeSeparators(path));
+  qInfo().noquote() << QStringLiteral("Build list saved as %1: %2").arg(what, QDir::toNativeSeparators(path));
+  return true;
 }
 
 void BuildListsDialog::savePdf() {

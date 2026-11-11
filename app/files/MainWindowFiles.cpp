@@ -177,6 +177,10 @@ QString importedLine(const QString& name, const QJsonObject& result) {
     }
     line += QStringLiteral(", repeated parts: %1 component(s), %2 copies").arg(repeated.size()).arg(copies);
   }
+  // The component the import wrapped the file in (mitcad#1629).
+  if (const QJsonObject component = result.value(QStringLiteral("component")).toObject(); !component.isEmpty()) {
+    line += QStringLiteral(", into component %1").arg(component.value(QStringLiteral("name")).toString());
+  }
   return line;
 }
 
@@ -638,6 +642,10 @@ bool MainWindow::startImportedDocument(const QString& path, QString& error) {
       if (repeatedParts) {
         command.insert(QStringLiteral("repeated_parts"), true);
       }
+      // A file opened is the design itself, not a component in it
+      // (mitcad#1629; the new document is empty, so this is the default
+      // too).
+      command.insert(QStringLiteral("wrap"), false);
       result = run(command);
     }
     return document;
@@ -780,14 +788,24 @@ bool MainWindow::importPath(const QString& path, bool interactive, QString* erro
   case FileKind::Cad: {
     QString structure;
     bool repeatedParts = false;
+    std::optional<bool> wrap;
     if (interactive) {
-      const std::optional<QString> chosen = askImportStructure(path, &repeatedParts);
+      bool wrapByDefault = false;
+      const std::optional<QString> chosen = askImportStructure(path, &repeatedParts, &wrapByDefault);
       if (!chosen) {
         return false;
       }
       structure = *chosen;
+      // Into a design with content: a new component named after the file,
+      // or the active component (mitcad#1629).
+      if (wrapByDefault) {
+        wrap = askImportPlace(this, path);
+        if (!wrap) {
+          return false;
+        }
+      }
     }
-    ok = importCad(path, 1.0, &reason, nullptr, structure, repeatedParts);
+    ok = importCad(path, 1.0, &reason, nullptr, structure, repeatedParts, wrap);
     break;
   }
   case FileKind::Mesh: {
@@ -827,17 +845,18 @@ bool MainWindow::importPath(const QString& path, bool interactive, QString* erro
   return ok;
 }
 
-std::optional<QString> MainWindow::askImportStructure(const QString& path, bool* repeatedParts) {
-  const QString suffix = QFileInfo(path).suffix().toLower();
-  if (suffix != QStringLiteral("step") && suffix != QStringLiteral("stp")) {
-    return QString();
-  }
+std::optional<QString> MainWindow::askImportStructure(const QString& path, bool* repeatedParts,
+                                                      bool* wrapByDefault) {
   bool assembly = false;
+  // Every file's answer says whether import_file wraps it in a component of
+  // its own (mitcad#1629); only a STEP file's is read for an assembly.
   try {
-    assembly = queryObject({{QStringLiteral("query"), QStringLiteral("file_structure")},
-                            {QStringLiteral("path"), QFileInfo(path).absoluteFilePath()}})
-                   .value(QStringLiteral("assembly"))
-                   .toBool();
+    const QJsonObject answer = queryObject({{QStringLiteral("query"), QStringLiteral("file_structure")},
+                                            {QStringLiteral("path"), QFileInfo(path).absoluteFilePath()}});
+    assembly = answer.value(QStringLiteral("assembly")).toBool();
+    if (wrapByDefault != nullptr) {
+      *wrapByDefault = answer.value(QStringLiteral("wrap")).toBool();
+    }
   } catch (const std::exception& e) {
     // The import says what is wrong with the file.
     qDebug().noquote() << QStringLiteral("file_structure of %1: %2").arg(path, errorText(e));
@@ -849,7 +868,7 @@ std::optional<QString> MainWindow::askImportStructure(const QString& path, bool*
 }
 
 bool MainWindow::importCad(const QString& path, double unitMillimetres, QString* error, QJsonObject* imported,
-                           const QString& structure, bool repeatedParts) {
+                           const QString& structure, bool repeatedParts, std::optional<bool> wrap) {
   if (!canChangeModel()) {
     *error = changeBlockedReason();
     return false;
@@ -864,6 +883,11 @@ bool MainWindow::importCad(const QString& path, double unitMillimetres, QString*
   // Find Repeated Parts in the import's undo step (mitcad#1277).
   if (repeatedParts) {
     command.insert(QStringLiteral("repeated_parts"), true);
+  }
+  // Into a new component or the active one, as asked (mitcad#1629); the
+  // model's default when nothing was asked.
+  if (wrap) {
+    command.insert(QStringLiteral("wrap"), *wrap);
   }
   QJsonObject result;
   if (!runModelCommand(command, &result)) {

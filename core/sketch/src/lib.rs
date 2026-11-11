@@ -96,6 +96,28 @@ pub mod again;
 mod fillet;
 // The closed loop a double-click on a curve selects (mitcad#1541).
 pub mod loops;
+// 3D sketches: points and lines in a support-relative frame, solved by the
+// spatial system, and their edits (mitcad#1521).
+pub mod spatial;
+pub mod spatial_edit;
+#[cfg(test)]
+mod spatial_tests;
+// Its 3D relations and dimensions of mitcad#1661.
+#[cfg(test)]
+mod spatial_relations_tests;
+// A planar sketch turned into a 3D sketch in place (mitcad#1544).
+pub mod spatial_convert;
+#[cfg(test)]
+mod spatial_convert_tests;
+// The sketch plane of a 3D sketch as a planar sketch: its profile regions,
+// the planar records a converted sketch keeps, and a 3D sketch back to 2D
+// (mitcad#1550).
+pub mod spatial_planar;
+#[cfg(test)]
+mod spatial_planar_tests;
+// Copy, Cut and Paste of 3D sketch geometry, and of planar sketch geometry
+// into a 3D sketch (mitcad#1661).
+pub mod spatial_clipboard;
 // Conflicting constraints in words, and the blocking ones of a refused
 // edit (mitcad#1566).
 pub mod conflict;

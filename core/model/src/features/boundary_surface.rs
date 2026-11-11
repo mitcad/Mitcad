@@ -110,6 +110,7 @@ impl BoundaryCurveRef {
             sketch,
             curves: self.curves.clone(),
             chain: self.chain,
+            reversed: false,
         })
     }
 
@@ -123,8 +124,9 @@ impl BoundaryCurveRef {
                     .to_owned(),
             );
         }
+        // Curves of a planar or a 3D sketch (mitcad#1550).
         if let Some(curves) = self.sketch_curves() {
-            curves.check(ctx)?;
+            curves.check_any(ctx)?;
         } else if !self.curves.is_empty() || self.chain {
             return Err("sketch curves of a boundary need their sketch".to_owned());
         }

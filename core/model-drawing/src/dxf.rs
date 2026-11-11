@@ -5,7 +5,11 @@
 //! and wide or extra wide on `HIDDEN_THICK`, `HIDDEN_EXTRA_THICK`,
 //! `SECTION_LINE_THICK`, `SECTION_LINE_EXTRA_THICK`, mitcad#1447; long dash
 //! double dotted on `PHANTOM`, `PHANTOM_THICK`, `PHANTOM_EXTRA_THICK`,
-//! mitcad#1546), texts on `TEXT`, arrowheads as their outlines. Each pen's
+//! mitcad#1546), texts on `TEXT`, arrowheads and a title block's raster
+//! images (mitcad#1625) as their outlines; a title block's SVG images as
+//! their paths' lines, curves flattened within the drawing's deflection,
+//! on a layer per colour and line weight, `IMAGE_<colour index>_<weight>`
+//! (mitcad#1627). Each pen's
 //! layer has its line type (`DASHED`, `CHAIN`, `PHANTOM` with the pen's
 //! dashes, else `CONTINUOUS`) and its line weight (the pen's width in
 //! hundredths of a millimetre) since mitcad#1546, so that another program
@@ -16,7 +20,116 @@
 
 use mitcad_dxf::{Drawing, Geometry, Layer, Linetype, Point2, Text, Units};
 
+use super::P2;
 use super::sheet::{Anchor, Item, Pen, Sheet, text_width};
+use super::svg_image::{self, Shape};
+use super::template::ImageKind;
+
+/// The standard line weights, hundredths of a millimetre.
+const LINE_WEIGHTS: [i16; 24] = [
+    0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200,
+    211,
+];
+
+/// The colour index nearest an sRGB colour (0 to 1 each): 7, which a
+/// program draws black on white paper, for black, 255 for white.
+fn colour_index(rgb: [f64; 3]) -> i16 {
+    let target = rgb.map(|c| c * 255.0);
+    let mut best = (7, f64::MAX);
+    for i in 1..=255u8 {
+        let c = if i == 7 {
+            [0; 3]
+        } else {
+            mitcad_dwg::objects::aci_rgb(i)
+        };
+        let d: f64 = (0..3).map(|k| (f64::from(c[k]) - target[k]).powi(2)).sum();
+        if d < best.1 {
+            best = (i16::from(i), d);
+        }
+    }
+    best.0
+}
+
+/// The layer of a title block image's lines of this colour index and
+/// width (mm), `IMAGE_<colour index>_<weight>`, added when it is new.
+fn image_layer(out: &mut Drawing, colour: i16, width: f64) -> String {
+    let hundredths = width * 100.0;
+    let weight = LINE_WEIGHTS
+        .iter()
+        .copied()
+        .min_by(|a, b| {
+            (f64::from(*a) - hundredths)
+                .abs()
+                .total_cmp(&(f64::from(*b) - hundredths).abs())
+        })
+        .unwrap_or(13);
+    let name = format!("IMAGE_{colour}_{weight}");
+    if out.layer(&name).is_none() {
+        let mut layer = Layer::new(name.clone());
+        layer.color = colour;
+        layer.lineweight = Some(weight);
+        out.layers.push(layer);
+    }
+    name
+}
+
+/// A title block's SVG image on the sheet (mitcad#1627): each fill as the
+/// closed outlines of its path on the layer of its colour (as it looks on
+/// white paper) and the narrow line's weight, each stroke as its path's
+/// lines on the layer of its colour and width; curves flattened within
+/// [`svg_image::DEFLECTION`]. Clip paths are not applied.
+fn vector_image(out: &mut Drawing, shapes: &[Shape]) {
+    let p = |q: P2| Point2::new(q[0], q[1]);
+    for shape in shapes {
+        // Each layer once, closed when a fill is on it.
+        let mut paints: Vec<(String, bool)> = Vec::new();
+        let mut add =
+            |layer: String, closed: bool| match paints.iter_mut().find(|(l, _)| *l == layer) {
+                Some(paint) => paint.1 |= closed,
+                None => paints.push((layer, closed)),
+            };
+        let fill = shape
+            .fill
+            .map(|f| image_layer(out, colour_index(f.colour.on_white()), Pen::Thin.width()));
+        let stroke = shape
+            .stroke
+            .as_ref()
+            .map(|s| image_layer(out, colour_index(s.colour.on_white()), s.width));
+        let (first, second) = if shape.stroke_first {
+            ((stroke, false), (fill, true))
+        } else {
+            ((fill, true), (stroke, false))
+        };
+        for (layer, closed) in [first, second] {
+            if let Some(layer) = layer {
+                add(layer, closed);
+            }
+        }
+        for (layer, fill) in &paints {
+            for subpath in &shape.subpaths {
+                let points = subpath.flattened(svg_image::DEFLECTION);
+                let count = points.len();
+                let segments = if *fill || subpath.closed {
+                    count
+                } else {
+                    count.saturating_sub(1)
+                };
+                for i in 0..segments {
+                    let (a, b) = (points[i], points[(i + 1) % count]);
+                    if a != b {
+                        out.push(
+                            layer.as_str(),
+                            Geometry::Line {
+                                start: p(a),
+                                end: p(b),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
 
 const PENS: [Pen; 14] = [
     Pen::Thick,
@@ -138,6 +251,38 @@ pub fn drawing(sheet: &Sheet) -> Drawing {
                 }
                 // A DXF drawing of lines has no shading.
                 Item::Shade { .. } => {}
+                // A title block's SVG image as its paths' lines
+                // (mitcad#1627); a raster image (a DXF drawing has none),
+                // or an SVG file that cannot be read, as its outline
+                // (mitcad#1625), which the export warns of.
+                Item::Image {
+                    at,
+                    size,
+                    kind,
+                    data,
+                } => {
+                    if *kind == ImageKind::Svg
+                        && let Ok(svg) = svg_image::of_base64(data.base64())
+                    {
+                        vector_image(&mut out, &svg.placed(*at, *size));
+                        continue;
+                    }
+                    let corners = [
+                        *at,
+                        [at[0] + size[0], at[1]],
+                        [at[0] + size[0], at[1] + size[1]],
+                        [at[0], at[1] + size[1]],
+                    ];
+                    for i in 0..4 {
+                        out.push(
+                            Pen::Thin.layer(),
+                            Geometry::Line {
+                                start: p(corners[i]),
+                                end: p(corners[(i + 1) % 4]),
+                            },
+                        );
+                    }
+                }
                 Item::Text {
                     at,
                     height,

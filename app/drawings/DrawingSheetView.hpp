@@ -37,10 +37,21 @@
 // them and a drag moves them together; the right button asks for the
 // sheet's menu of what is under the pointer, a double-click on a note for
 // its text.
+//
+// A title block's images (mitcad#1625, the groups' `image` items) are
+// painted from their files (PNG, JPEG, SVG) under the lines. While the
+// title block editor is on (setTitleBlockEditor) the left button's clicks
+// and drags and Delete are its own, the model's title block is hidden and
+// the editor's block painted instead: its grid, lines, fields (dashed
+// cells with their labels and texts as typed), images, the selected item
+// and a tool's line or box to the pointer. Logs "Title block <what>"
+// ("Title block line added: 0,30 50,30", "Title block field 3 selected").
 
 #include <functional>
 #include <optional>
 
+#include <QHash>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLineF>
@@ -59,6 +70,8 @@
 #include "DrawingTools.hpp"
 
 namespace mitcad::drawings {
+
+class TitleBlockEditor;
 
 // A view of the sheet, as the query gives it.
 struct SheetView {
@@ -234,6 +247,13 @@ public:
   void setFitMargins(const QMargins& margins);
   QPointF toSheet(const QPointF& widget) const;
   QPointF toWidget(const QPointF& sheet) const;
+  // The title block editor (mitcad#1625) the sheet's clicks go to, or none
+  // (null); the view does not own it.
+  void setTitleBlockEditor(TitleBlockEditor* editor);
+  TitleBlockEditor* titleBlockEditor() const { return m_blockEditor; }
+  // The editor changed outside the sheet (its panel): painted again.
+  void titleBlockChanged() { update(); }
+
   // How many times the sheet itself (the paper and the groups' lines,
   // fills and texts) was painted (mitcad#759): it is kept as a picture
   // painted again only for a new sheet, a zoom, a pan or another size, and
@@ -296,6 +316,9 @@ signals:
   // An annotation dragged alone, by this so far (or Alt pressed or
   // released meanwhile).
   void annotationDragged(int id, QPointF delta, bool freely);
+  // A click or a drag of the title block editor changed it or its
+  // selection (mitcad#1625).
+  void titleBlockEdited();
 
 protected:
   // Whether the pointer asks what a click would pick (`hoverRequested`):
@@ -344,6 +367,11 @@ private:
   bool followsPointer() const;
   // Paints the groups' items with the sheet's transform.
   void paintItems(QPainter& painter) const;
+  // Paints a title block's image over a box (sheet mm), its proportions
+  // kept; false when its file could not be read.
+  bool paintImage(QPainter& painter, const QString& base64, const QString& format, const QRectF& box) const;
+  // Paints the title block editor's block over the sheet (mitcad#1625).
+  void paintBlockEditor(QPainter& painter) const;
   // Paints the annotations' selection, broken ones and an annotation
   // tool's picks.
   void paintAnnotations(QPainter& painter) const;
@@ -367,6 +395,10 @@ private:
   QRectF previewBox() const;
   void logPreview(const QString& what);
 
+  // The title block editor on (mitcad#1625), none: off.
+  TitleBlockEditor* m_blockEditor = nullptr;
+  // The images' files read, by their base64 (a PNG's or a JPEG's pixels).
+  mutable QHash<QString, QImage> m_imageCache;
   QVector<SheetView> m_views;
   QVector<SheetAnnotation> m_annotations;
   QJsonArray m_groups;

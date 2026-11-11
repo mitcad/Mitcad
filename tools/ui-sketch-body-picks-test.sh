@@ -9,7 +9,8 @@
 #     and a value: the edge is projected (linked) and the dimension added
 #     in one undo step, and the point moves; one undo takes both back.
 #   - Esc after the first pick leaves the sketch unchanged.
-#   - Dimensioning again from the same edge uses its projection again.
+#   - Dimensioning again from the same edge uses its projection again,
+#     and the body geometry read before the dimension added (mitcad#1646).
 #   - With Hide Above Sketch on, a block corner is still picked.
 #   - A dimension between two block edges is driven.
 #   - The saved design has the linked projections and the dimensions.
@@ -182,6 +183,11 @@ ui_expect_new "Sketch Sketch2: 2 DOF" "the second point is 30 mm from the edge"
 since_mark "Projected the body" && ui_fail "the edge was projected a second time"
 since_mark "Sketch Sketch2: 2 linked projection(s)" && ui_fail "a second projection"
 echo "ok   the existing projection used"
+# The dimension added before changed the sketch, not the bodies before it:
+# the body geometry out of the plane is not read again (mitcad#1646, the
+# model's plane_geometry_key; seconds in an assembly of hundreds of bodies).
+since_mark "Sketch body geometry out of the plane:" && ui_fail "the body geometry was read again after a dimension"
+echo "ok   the body geometry kept after a dimension added"
 
 # The top right of the view is the orientation cube's: the clicks stay
 # away from it.

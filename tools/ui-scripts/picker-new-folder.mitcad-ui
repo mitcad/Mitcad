@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: MIT
+# mitcad#1649: the project picker's New Folder. The runner
+# (tools/ui-picker-new-folder-test.sh, the Windows
+# tools/ui-windows-picker-new-folder-test.ps1) made the Local project Shop
+# (${MITCAD_TEST_SHOP}) of the projects folder with plate.mitcad recorded,
+# and opened the loose design gear.mitcad, which is in no project; the
+# Projects panel is shown. All designs are synthetic.
+wait-idle
+expect-ever '^Projects tree: Shop \(local' 30
+
+# 1. Save to Project: the project selected, New Folder, a name typed and
+# Enter make the folder as a version; the new folder is then selected.
+mark
+command file.save_to_project
+focus-dialog '^Save to Project$' 30
+wait-log '^Project picker Save to Project: 1 projects: Shop \(local\)$' 30
+wait-log '^Project picker row Shop at ' 10
+dialog-click-logged '^Project picker row Shop at '
+wait-log '^Project picker selected Shop$' 10
+wait-log '^Project picker New Folder: enabled$' 10
+wait-log '^Project picker button New Folder at ' 10
+button '^New Folder$'
+wait-log '^Project picker New Folder: disabled: Type the new folder' 10
+wait-log '^Project picker: naming a new folder in Shop: New Folder$' 10
+type Brackets
+key Return
+wait-log '^Projects panel: create_folder recorded as ' 30
+wait-log '^Project picker: New Folder Shop/Brackets$' 30
+wait-log '^Project picker selected Shop/Brackets/$' 10
+wait-log '^Project picker target Shop/Brackets/gear\.mitcad: free$' 10
+wait-log '^Project picker New Folder: enabled$' 10
+expect-file '${MITCAD_TEST_SHOP}/Brackets'
+expect-no-log '^Project picker Save to Project: (chose|cancelled)'
+
+# 2. The same name again in the project: refused in words below the name,
+# the editor open again with what was typed; Esc takes the row away.
+mark
+dialog-click-logged '^Project picker row Shop at '
+wait-log '^Project picker selected Shop$' 10
+button '^New Folder$'
+wait-log '^Project picker: naming a new folder in Shop: New Folder$' 10
+type Brackets
+key Return
+wait-log '^Project picker: New Folder refused \(exists\): Brackets is there already$' 30
+wait-log '^Project picker: naming a new folder in Shop: Brackets$' 10
+wait-log '^Project picker row Shop \(new\) \(message\) at ' 10
+expect-no-log '^Project picker: New Folder Shop/'
+expect-no-log '^Project picker Save to Project: (chose|cancelled)'
+key Escape
+wait-log '^Project picker: New Folder cancelled$' 10
+wait-log '^Project picker New Folder: enabled$' 10
+
+# 3. Save in the new folder: the design is there, and the Projects panel
+# shows the folder with the design.
+mark
+dialog-click-logged '^Project picker row Shop/Brackets/ at '
+wait-log '^Project picker target Shop/Brackets/gear\.mitcad: free$' 10
+button '^Save$'
+wait-log '^Project picker Save to Project: chose ${MITCAD_TEST_SHOP:re}/Brackets/gear\.mitcad$' 10
+focus-main
+wait-log '^Save to Project: ${MITCAD_TEST_SHOP:re}/Brackets/gear\.mitcad saved in ' 30
+expect-file '${MITCAD_TEST_SHOP}/Brackets/gear.mitcad'
+wait-log '^Projects tree: Shop \(.*Brackets/gear\.mitcad v1' 30
+wait-idle
+
+# 4. Save As's picker has New Folder too: the name proposed taken with
+# Enter, then the picker cancelled. The folder stays (a version already),
+# and the Projects panel shows it.
+mark
+command file.save_as
+focus-dialog '^Save in a Project$' 30
+wait-log '^Project picker Save in a Project: 1 projects: Shop \(local\)$' 30
+wait-log '^Project picker row Shop at ' 10
+dialog-click-logged '^Project picker row Shop at '
+wait-log '^Project picker selected Shop$' 10
+wait-log '^Project picker New Folder: enabled$' 10
+button '^New Folder$'
+wait-log '^Project picker: naming a new folder in Shop: New Folder$' 10
+key Return
+wait-log '^Project picker: New Folder Shop/New Folder$' 30
+wait-log '^Project picker selected Shop/New Folder/$' 10
+button '^Cancel$'
+wait-log '^Project picker Save in a Project: cancelled$' 10
+focus-main
+expect-file '${MITCAD_TEST_SHOP}/New Folder'
+wait-log '^Projects tree: Shop \(.*New Folder/' 30
+expect-never 'TestDriver: FAIL'

@@ -60,6 +60,9 @@
 #   - A STEP assembly through File > Import (mitcad#1274): the Import STEP
 #     Assembly question, Enter keeps the assembly, the part placed twice
 #     one component with two occurrences; one undo step.
+#   - Import into a design with content (mitcad#1629): Where to Import,
+#     Enter puts the file into a new component named after it (the
+#     Browser's row block:1, pins:1), Alt+A into the active component.
 #   - Saving in a project (P12a): version 3, the B-rep data in the
 #     project's store, opened again with the same body.
 #
@@ -135,11 +138,20 @@ ui_expect_new "Exported $WORK/block.step: step, 1 body(ies)" "the block written 
 [ -s "$WORK/block.step" ] || ui_fail "no STEP file"
 ui_mark
 ui_step "File > Import it"                 import_from "$WORK/block.step"
+# The demo has content: Import asks where the file goes, and Enter makes a
+# component named after the file (mitcad#1629).
+ui_expect_new "Import place dialog opened: block.step" "Import asks where the file goes"
+ui_focus_dialog '^Where to Import$'
+ui_step "into a new component (Enter)"     ui_key Return
 ui_focus_main
+ui_expect_new "Import place: new component" "a new component chosen"
 ui_expect_new "Imported block.step as" "the STEP came in as a base feature"
+ui_expect_new ": 1 body(ies), into component block" "in the component block"
 ui_expect_volume "New body .*(F3\.b0): volume \([0-9.]*\) mm3" 48000 "the STEP body's volume"
+ui_browser_reveal "Browser Root/block:1"
+ui_expect_new "Browser Root/block:1 at" "the browser lists the component block, named after the file"
 ui_step "undo the import (Ctrl+Z)"         ui_key ctrl+z
-ui_expect_log "Undo: Import block.step" "the import is one undo step"
+ui_expect_log "Undo: Import block.step" "the import, its component with it, is one undo step"
 
 echo "--- STL"
 ui_mark
@@ -702,7 +714,7 @@ cat > "$WORK/placed.json" << EOF
 [
   {"cmd": "import_file", "path": "$WORK/pin.step"},
   {"expect": {"body": "Pin", "volume": 1000, "bbox": {"min": [90, 0, 0], "max": [100, 20, 5]}, "tolerance": 1e-5}},
-  {"cmd": "import_file", "path": "$WORK/pin-local.step"},
+  {"cmd": "import_file", "path": "$WORK/pin-local.step", "wrap": false},
   {"expect": {"body": "Pin (2)", "volume": 1000, "bbox": {"min": [0, 0, 0], "max": [20, 10, 5]}, "tolerance": 1e-5}}
 ]
 EOF
@@ -728,10 +740,16 @@ ui_step "File > Import the STEP assembly"  import_from "$WORK/pins.step"
 ui_expect_new "Import STEP Assembly dialog opened: pins.step" "Import asks how the assembly comes in"
 ui_focus_dialog '^Import STEP Assembly$'
 ui_step "as components (Enter)"            ui_key Return
-ui_focus_main
 ui_expect_new "Import STEP Assembly: components" "the assembly kept"
-ui_expect_new "pins.step as Base1: 1 body(ies), 1 component(s), 2 occurrence(s)" \
-  "the pin's part once, placed twice"
+# The design has content (the pin): where the file goes (mitcad#1629).
+ui_expect_new "Import place dialog opened: pins.step" "Import asks where the assembly goes"
+ui_focus_dialog '^Where to Import$'
+ui_step "into a new component (Enter)"     ui_key Return
+ui_focus_main
+ui_expect_new "pins.step as Base1: 1 body(ies), 1 component(s), 2 occurrence(s), into component pins" \
+  "the pin's part once, placed twice, in the component pins"
+ui_browser_reveal "Browser Root/pins:1"
+ui_expect_new "Browser Root/pins:1 at" "the browser lists the component pins"
 ui_step "undo the import (Ctrl+Z)"         ui_key ctrl+z
 ui_expect_new "Undo: Import pins.step" "the import is one undo step"
 # Find repeated parts (mitcad#1277): with One base feature the two pins
@@ -743,8 +761,12 @@ ui_expect_new "Import STEP Assembly dialog opened: pins.step" "Import asks again
 ui_focus_dialog '^Import STEP Assembly$'
 ui_step "Find repeated parts (Alt+R)"      ui_key alt+r
 ui_step "One base feature (Alt+O)"         ui_key alt+o
-ui_focus_main
 ui_expect_new "Import STEP Assembly: base, repeated parts" "one base feature, its copies to be found"
+ui_expect_new "Import place dialog opened: pins.step" "Import asks where it goes again"
+ui_focus_dialog '^Where to Import$'
+ui_step "Into the Active Component (Alt+A)" ui_key alt+a
+ui_focus_main
+ui_expect_new "Import place: active component" "into the active component, as before"
 ui_expect_new "pins.step as Base1: 2 body(ies), repeated parts: 1 component(s), 1 copies" \
   "the two pins one component placed twice"
 ui_step "undo the import (Ctrl+Z)"         ui_key ctrl+z

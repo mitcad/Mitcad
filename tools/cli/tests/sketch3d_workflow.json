@@ -1,0 +1,42 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. The 3D route workflow of mitcad#1527 on the geometry kernel, as the Pipe and Sweep panels write it: 3DSketch1 (F1) the route A-B-C-D from the origin, 40 along +X, 30 along +Y, 20 along +Z, its corners filleted with radius 10 (AB c3, arc c11, BC c5, arc c19, CD c7: 50 + 10 pi of path); Sketch1 (F2) an 8 mm circle on YZ at A. Pipe1 (F3) by one pick of BC with Chain Selection, run from D (Reverse); Sweep1 (F4) of the circle along the route picked whole (its curves listed). pi 4^2 (50 + 10 pi) = 4092.410827 each. BC to 50 (W2): pi 4^2 (70 + 10 pi) = 5097.720476, undone and redone; saved for sketch3d_workflow_reopen (W8)."},
+  {"cmd": "sketch3d.create"},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": [0, 0, 0], "end": [38, 1, 0], "axis": "x", "length": 40, "start_source": "origin"},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": "p2", "end": [41, 28, 0], "axis": "y", "length": 30},
+  {"cmd": "sketch3d.add_line", "sketch": "F1", "start": "p4", "end": [40, 31, 18], "axis": "z", "length": 20},
+  {"cmd": "sketch3d.fillet", "sketch": "F1", "points": ["p2", "p4"], "radius": 10},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "status": {"dof": 0, "fully_constrained": true},
+    "chains": [{"curves": ["c3", "c11", "c5", "c19", "c7"], "closed": false,
+                "path": {"spatial_sketch": "F1", "curves": ["c3", "c11", "c5", "c19", "c7"]}}]}}},
+  {"cmd": "sketch.create", "plane": "yz"},
+  {"cmd": "sketch.add_circle", "sketch": "F2", "center": [0, 0], "diameter": 8},
+
+  {"comment": "The route the Pipe panel lists for one pick of BC with Chain Selection, reversed: from D to A, each curve against its direction."},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1", "path": {"curves": ["c5"], "chain": true, "reversed": true}},
+    "result": {"route": {"curves": ["c7", "c19", "c5", "c11", "c3"], "forward": [false, false, false, false, false],
+                         "start": "p6", "end": "p1"}}}},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"spatial_sketch": "F1", "curves": ["c5"], "chain": true, "reversed": true},
+    "size": 8, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F3.b0", "volume": 4092.410827, "tolerance": 1e-3}},
+  {"cmd": "add_feature", "def": {"type": "sweep", "profiles": [{"sketch": "F2", "region": "r{c1}"}],
+    "path": {"spatial_sketch": "F1", "curves": ["c3", "c11", "c5", "c19", "c7"]}, "operation": "new_body"}},
+  {"expect": {"feature": "Sweep1", "status": "ok", "body": "F4.b0", "volume": 4092.410827, "tolerance": 1e-3}},
+
+  {"comment": "BC to 50 (W2, its length k5): C and D move 20 along +Y, and with C its fillet's tangent points p16, p17 and centre p18 (the corners stay with their fillets' points, as in sketch3d_fillet: 10 points); both follow with the same curves and direction; undone and redone."},
+  {"cmd": "sketch3d.set_dimension", "sketch": "F1", "dimension": "k5", "value": 50},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1"}, "result": {
+    "points": [
+      {"id": "p1", "at": [0, 0, 0]}, {"id": "p2", "at": [40, 0, 0]},
+      {"id": "p4", "at": [40, 50, 0]}, {"id": "p6", "at": [40, 50, 20]},
+      {"id": "p8", "at": [30, 0, 0]}, {"id": "p9", "at": [40, 10, 0]}, {"id": "p10", "at": [30, 10, 0]},
+      {"id": "p16", "at": [40, 40, 0]}, {"id": "p17", "at": [40, 50, 10]}, {"id": "p18", "at": [40, 40, 10]}]}}},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F3.b0", "volume": 5097.720476, "tolerance": 1e-3}},
+  {"expect": {"feature": "Sweep1", "status": "ok", "body": "F4.b0", "volume": 5097.720476, "tolerance": 1e-3}},
+  {"cmd": "undo"},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F3.b0", "volume": 4092.410827, "tolerance": 1e-3}},
+  {"cmd": "redo"},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F3.b0", "volume": 5097.720476, "tolerance": 1e-3}},
+  {"expect": {"query": {"query": "feature", "uid": "F3"}, "result": {
+    "def": {"path": {"spatial_sketch": "F1", "curves": ["c5"], "reversed": true, "chain": true}}}}}
+]

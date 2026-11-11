@@ -71,3 +71,8 @@ mod sketch_move_1563_tests;
 // Conflicting constraints in the user's words, the blocking one named
 // (mitcad#1566).
 mod sketch_conflict_message_1566_tests;
+// Move/Copy holds the moved geometry where it was dropped (mitcad#1645).
+mod sketch_move_hold_1645_tests;
+// Sketch refusals as whole messages, no English word put in as a value
+// (mitcad#1626).
+mod sketch_whole_messages_1626_tests;

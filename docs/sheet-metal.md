@@ -836,7 +836,34 @@ Decisions made while closing the import gaps of mitcad#211:
   Through-thickness changes (cuts, holes, their mirrors and patterns,
   library cut features, contour corners) keep the sheet; added material,
   changed bends, slanted walls and dressups of surface edges invalidate it
-  with that reason. Bends are not re-derived.
+  with that reason. A change that removes material from a folded bend is
+  a cut across bends (`sheet/rederive_bends.rs`, mitcad#1628): the result
+  must hold no material the input did not; every chart's footprint comes
+  from the result's faces on its front surface (a bend's from the kernel's
+  `sheet_cylinder_footprint`, the faces' parameter curves mapped affinely
+  into the bend chart: `u` the angle times the neutral radius, `v` the
+  axial position); in a bend the cut must also leave the back surface
+  where it left the front; the lost material of all charts that develop
+  into one plane with the touched bends open is merged into one set of
+  tools and cut by `developed_cut`, as Sheet Cut does. The rebuilt sheet
+  is the body's material: where it differs from the feature's result
+  (only inside the touched bends; anything else is refused with the
+  volume that differs), the body becomes the rebuilt sheet and the feature
+  warns that the cut is normal to the sheet there. A sheet feature on an
+  invalid sheet names the feature and its reason in words and points to
+  Sheet Cut (`EvalContext::require_sheet`). The Flat Pattern of an invalid
+  or blocked sheet gives the same text as its reason, shown in the
+  browser's Flat Pattern row, from the one helper `sheet::refusal`
+  (mitcad#1636); the ids stay in its `causes`. CLI `sheet_cut_across_bend`.
+  The Flat Pattern's other reasons, its export refusals and the refusals
+  of `set_flat_pattern` and `remove_flat_pattern` are in words as well
+  (mitcad#1639): the body by its name as the browser shows it, or "this
+  body", walls and overlays by their features' names; the ids are in the
+  `details` of the `flat_pattern` query and in the error's detail. The
+  browser's Flat Pattern row says it with one whole message per status
+  ("Flat Pattern of Bracket is invalid: …", `is blocked`, `is
+  unavailable`), its reasons translated as model messages. Test:
+  `sheet_flat_tests::flat_pattern_errors_name_the_body_in_words`.
 - **Patterns and mirrors of sheet features** (`sheet/replay.rs`). Copies in
   timeline order on the working sheet: a flange is rebuilt on the copy of
   its boundary (found by geometry in the current sheet, front or back

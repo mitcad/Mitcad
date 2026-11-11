@@ -47,6 +47,8 @@
 #include "../OcctViewer.hpp"
 #include "../framework/AppSettings.hpp"
 #include "../framework/Dialogs.hpp"
+#include "../framework/FloatingLayout.hpp"
+#include "../framework/GlassCard.hpp"
 #include "../framework/Icons.hpp"
 #include "../framework/PlaceWatcher.hpp"
 #include "../framework/TestSync.hpp"
@@ -55,6 +57,7 @@
 #include "../projects/ProjectBrowserData.hpp"
 #include "../projects/ProjectsTree.hpp"
 #include "RemoteTask.hpp"
+#include "StartBackdrop.hpp"
 #include "../framework/UiSizes.hpp"
 
 namespace mitcad {
@@ -64,6 +67,12 @@ namespace {
 const QString kCompactKey = QStringLiteral("start/compactList");
 
 constexpr int kRadius = 10;
+// The rounded backdrop (mitcad#1439): as far from the view's edges as the
+// floating cards keep, and as far from a band over the view's bottom as
+// they keep from each other; the content keeps kBackdropPadding inside it.
+constexpr int kBackdropInset = FloatingLayout::kMargin;
+constexpr int kBackdropGap = FloatingLayout::kGap;
+constexpr int kBackdropPadding = 8;
 constexpr int kPreviewWidth = 168;
 constexpr int kPreviewHeight = 112;
 constexpr int kCompactPreviewWidth = 54;
@@ -633,6 +642,12 @@ StartPage::StartPage(OcctViewer* viewer, Host host) : QWidget(viewer), m_viewer(
   setObjectName(QStringLiteral("startPage"));
   setAcceptDrops(true);
   setFocusPolicy(Qt::StrongFocus);
+  // The view's background around the rounded backdrop (paintEvent) follows
+  // the view's when it turns light or dark.
+  connect(viewer, &OcctViewer::backgroundToneChanged, this, qOverload<>(&QWidget::update));
+  // It paints every pixel of itself, opaque (paintEvent): nothing of the
+  // view under it needs to be drawn first.
+  setAttribute(Qt::WA_OpaquePaintEvent);
   m_compact = QSettings().value(kCompactKey, false).toBool();
   m_row = start::loadRow();
 
@@ -1017,7 +1032,14 @@ void StartPage::place() {
   if (m_host.bottomInset) {
     below = std::max(below, m_host.bottomInset());
   }
-  const QMargins margins(16, top + 12, 16, std::max(16, below + 8));
+  // The rounded backdrop between them (mitcad#1439), the content inside it.
+  if (top != m_backdropTop || below != m_backdropBelow) {
+    m_backdropTop = top;
+    m_backdropBelow = below;
+    update();
+  }
+  const QMargins margins = start::backdropMargins(kBackdropInset, top, below, kBackdropGap) +
+                           QMargins(kBackdropPadding, kBackdropPadding, kBackdropPadding, kBackdropPadding);
   if (m_column->contentsMargins() != margins) {
     m_column->setContentsMargins(margins);
     qDebug().noquote() << QStringLiteral("Start page margins: top %1, bottom %2").arg(margins.top()).arg(margins.bottom());
@@ -1617,8 +1639,19 @@ bool StartPage::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void StartPage::paintEvent(QPaintEvent*) {
+  // A rounded surface with the floating cards' radius (GlassCard's, not a
+  // capsule's) inset from the view's edges (mitcad#1439), the view's
+  // background around it: the page paints all of itself, so nothing the GL
+  // view under it drew last shows at its corners, in either layout.
   QPainter painter(this);
-  painter.fillRect(rect(), roleColor(ColorRole::Window, this));
+  start::Backdrop backdrop;
+  backdrop.fill = roleColor(ColorRole::Window, this);
+  backdrop.border = roleColor(ColorRole::Line, this);
+  m_viewer->backgroundColors(backdrop.viewTop, backdrop.viewBottom);
+  backdrop.radius = GlassCard::kRadius;
+  start::paintBackdrop(painter, size(),
+                       start::backdropRect(size(), kBackdropInset, m_backdropTop, m_backdropBelow, kBackdropGap),
+                       backdrop);
 }
 
 void StartPage::changeEvent(QEvent* event) {

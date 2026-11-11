@@ -154,18 +154,19 @@ bool shares(const Snap& snap) { return snap.atPoint() || snap.kind == Snap::Kind
 // (mitcad#353). `shared`: the command took an existing point for a click
 // that snapped onto one (pointInput), so there is nothing to hold; without
 // it (commands that take coordinates only) a snapped existing point gets a
-// coincident constraint.
-void holdPoint(SketchOp& op, const QJsonObject& result, const V2& at, const Snap& snap, bool shared) {
+// coincident constraint. Returns the point held, empty when none was.
+QString holdPoint(SketchOp& op, const QJsonObject& result, const V2& at, const Snap& snap, bool shared) {
   if (!snap.onGeometry() || (shared && shares(snap))) {
-    return;
+    return {};
   }
   const SketchModel& model = op.model();
   const QString point = pointNear(model, result, at);
   const auto where = model.pointAt(point);
   if (point.isEmpty() || !where || dist(*where, at) > 1e-6) {
-    return;
+    return {};
   }
   op.constrain(point, snap);
+  return point;
 }
 
 // A snap at a position the tool moved the point to (typed values,
@@ -2147,6 +2148,7 @@ protected:
         holdPoint(op, result, click(0), snapOf(0), true);
       }
       holdPoint(op, result, click(1), snapOf(1), true);
+      holdLastClick(op, result, arc);
     }
     if (m_c.typed(QStringLiteral("radius"))) {
       op.addDimension({{QStringLiteral("type"), QStringLiteral("radius")}, {QStringLiteral("curve"), arc}},
@@ -2170,6 +2172,33 @@ protected:
   }
 
 private:
+  // The last click held where its snap marker showed (mitcad#1645), as
+  // the circle tool holds its clicks: a 3-point arc's middle click on an
+  // existing point keeps the arc through that point; a centre point arc's
+  // end on a point or a curve, where the end landed there, is held there.
+  void holdLastClick(SketchOp& op, const QJsonObject& result, const QString& arc) {
+    if (clicked() < 3) {
+      return;
+    }
+    const Snap& last = snapOf(2);
+    if (m_mode == QStringLiteral("three_point") && (last.atPoint() || last.kind == Snap::Kind::Origin)) {
+      const QString point = op.pointInput(last).toString();
+      if (point.isEmpty() || arc.isEmpty()) {
+        return;
+      }
+      op.addConstraint({{QStringLiteral("type"), QStringLiteral("coincident")},
+                        {QStringLiteral("point"), point},
+                        {QStringLiteral("entity"), arc}});
+      // For UI tests.
+      qDebug().noquote() << QStringLiteral("Arc %1 held through %2").arg(arc, last.describe());
+    } else if (m_mode == QStringLiteral("center")) {
+      const QString end = holdPoint(op, result, click(2), last, false);
+      if (!end.isEmpty()) {
+        qDebug().noquote() << QStringLiteral("Arc %1 end %2 dropped on %3").arg(arc, end, last.describe());
+      }
+    }
+  }
+
   QString m_mode;
   double m_sweep = 0.0; // a centre point arc's sweep so far, signed
 };
@@ -3152,6 +3181,7 @@ public:
       return;
     }
     m_at = snap.at;
+    m_atSnap = snap;
     m_cursor = snap.at;
     m_pressed = true;
   }
@@ -3165,6 +3195,7 @@ public:
     const V2 d = snap.at - m_at;
     m_framed = std::abs(d.x) > 6 * m_c.pixel() && std::abs(d.y) > 6 * m_c.pixel();
     m_diagonal = snap.at;
+    m_diagonalSnap = snap;
     m_placed = true;
     m_c.setFields({{QStringLiteral("text"), QObject::tr("Text"), FieldSpec::Kind::Text},
                    {QStringLiteral("height"), QObject::tr("Height"), FieldSpec::Kind::Length}});
@@ -3202,6 +3233,18 @@ public:
     if (!op.run(cmd, &result)) {
       refuse(m_c, op, name());
       return true;
+    }
+    if (m_framed) {
+      // The frame's corners where they were dropped on a point or a curve
+      // are held there, as a drawing tool's points (mitcad#1645). A text
+      // without a frame has no point at its place to hold.
+      for (const Snap* dropped : {&m_atSnap, &m_diagonalSnap}) {
+        const QString held = holdPoint(op, result, dropped->at, *dropped, false);
+        if (!held.isEmpty()) {
+          // For UI tests.
+          qDebug().noquote() << QStringLiteral("Text frame corner %1 dropped on %2").arg(held, dropped->describe());
+        }
+      }
     }
     op.commit();
     qDebug().noquote() << QStringLiteral("Added text %1 \"%2\" %3 %4")
@@ -3243,6 +3286,9 @@ private:
 
   V2 m_at;
   V2 m_diagonal;
+  // Where the press and the release snapped, for the frame's corners.
+  Snap m_atSnap;
+  Snap m_diagonalSnap;
   V2 m_cursor;
   bool m_pressed = false;
   bool m_framed = false;

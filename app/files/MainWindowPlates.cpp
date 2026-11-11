@@ -44,6 +44,7 @@
 
 #include "../OcctViewer.hpp"
 #include "../browser/BrowserController.hpp"
+#include "../framework/TestSync.hpp"
 #include "mitcad/geometry/import.hpp"
 
 namespace mitcad {
@@ -239,6 +240,12 @@ CommandDef MainWindow::platesCommand() {
   // count and the plate's Spiral Vase; the plate drawn beside the design.
   const auto follow = [this, panel, readPlates](CommandState& state) {
     readPlates();
+    // Filament Change Here… on a face of a body on a plate (mitcad#1643):
+    // that plate chosen.
+    if (!m_filamentChangeHerePlate.isEmpty()) {
+      panel->choose = m_filamentChangeHerePlate;
+      m_filamentChangeHerePlate.clear();
+    }
     const QJsonArray plates = platesOf(panel->plates);
     QString chosen = panel->choose.isEmpty() ? state.choice(QStringLiteral("plate")) : panel->choose;
     panel->choose.clear();
@@ -267,6 +274,9 @@ CommandDef MainWindow::platesCommand() {
                                   plateItemsText(plate).isEmpty() ? QStringLiteral("nothing of its own") : plateItemsText(plate))
                              .arg(plate.value(QStringLiteral("pieces")).toInt());
     showPlateView(chosen);
+    // The chosen plate's filament changes (mitcad#1643): its own schedule,
+    // or the design's that it prints with; the view's print colours.
+    filamentChangesChanged({}, !chosen.isEmpty(), chosen);
   };
   // A model command of the panel's, refused with its reason; the rows then
   // follow.
@@ -502,13 +512,26 @@ CommandDef MainWindow::platesCommand() {
           },
           [](int, const CommandState&, const CommandContext&) {}),
   };
+  // The chosen plate's filament changes (mitcad#1643), as Send to Slicer's
+  // section edits the design's: a row per event, Add change and Add pause,
+  // Change At.
+  for (const InputDef& row : filamentChangeInputs(hasPlate)) {
+    def.inputs.append(row);
+  }
   def.build = [](const CommandState&, const CommandContext&) { return Built::of(QJsonObject()); };
   def.accept = [](const CommandState&, const CommandContext&) { return true; };
-  def.init = [follow](CommandState& state, const CommandContext&) { follow(state); };
+  def.init = [this, follow](CommandState& state, const CommandContext&) {
+    follow(state);
+    // A change Filament Change Here… asked for, once the panel shows.
+    TestSync::singleShot(0, this, [this] { addPendingFilamentChange(); });
+  };
   // A note row's button or the plate settings beside the panel changed the
   // design: the rows and the plate in the view follow.
   def.modelChanged = [follow](CommandState& state, const CommandContext&) { follow(state); };
-  def.ended = [this](bool) { showPlateView(QString()); };
+  def.ended = [this](bool) {
+    showPlateView(QString());
+    endFilamentChanges();
+  };
   return def;
 }
 

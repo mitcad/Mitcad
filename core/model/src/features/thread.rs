@@ -50,6 +50,10 @@
 
 use serde::{Deserialize, Serialize};
 
+// What sets a misfitting face's diameter (mitcad#1632).
+pub mod fit;
+pub use fit::{FitSource, ThreadFitMiss};
+
 use super::reference::FaceRef;
 use super::thread_table::{self, ThreadData, ThreadStandard};
 use super::{
@@ -895,7 +899,7 @@ impl FeatureInfo for ThreadDef {
 impl<K: Kernel> Evaluate<K> for ThreadDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let faces = self.faces.clone();
-        let threaded = self.threaded(ctx, ctx.uid, &mut |ctx| {
+        let (threaded, fits) = self.threaded(ctx, ctx.uid, &mut |ctx| {
             let mut targets = Vec::new();
             for face in &faces {
                 let shape = ctx.surface_body(face.body)?;
@@ -917,6 +921,8 @@ impl<K: Kernel> Evaluate<K> for ThreadDef {
                 .into_iter()
                 .map(|(uid, shape)| BodyChange::Set(uid, shape))
                 .collect(),
+            // The faces that do not fit, for Auto Fix (mitcad#1632).
+            thread_fits: fits,
             ..FeatureOutput::default()
         })
     }
@@ -926,6 +932,10 @@ impl<K: Kernel> Evaluate<K> for ThreadDef {
 /// for a pattern's copy the transform that took the original there
 /// (mitcad#733).
 type ThreadTargets<S> = Vec<(BodyUid, S, FaceName, Option<Transform>)>;
+
+/// What [`ThreadDef::threaded`] gives: each body's new shape, and the
+/// faces that do not fit the thread (mitcad#1632).
+type Threaded<S> = (Vec<(BodyUid, S)>, Vec<ThreadFitMiss>);
 
 /// What gives a thread its faces, read once the thread's own values are
 /// checked ([`ThreadDef::threaded`]).
@@ -952,7 +962,7 @@ impl ThreadDef {
             .iter()
             .map(|(f, t)| (body, shape.clone(), f.clone(), *t))
             .collect();
-        let mut threaded = self.threaded(ctx, feature, &mut |_| Ok(targets.clone()))?;
+        let (mut threaded, _) = self.threaded(ctx, feature, &mut |_| Ok(targets.clone()))?;
         Ok(threaded
             .pop()
             .map_or_else(|| shape.clone(), |(_, shape)| shape))
@@ -960,13 +970,14 @@ impl ThreadDef {
 
     /// The thread on the faces `targets` gives (read after the thread's own
     /// values are checked), its new faces named after `feature`: each
-    /// body's new shape.
+    /// body's new shape, and the faces whose diameter does not fit the
+    /// thread with what sets it (mitcad#1632).
     fn threaded<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
         feature: FeatureUid,
         targets: TargetsOf<'_, K>,
-    ) -> Result<Vec<(BodyUid, K::Shape)>, String> {
+    ) -> Result<Threaded<K::Shape>, String> {
         let part = thread_part(
             ctx,
             self.length,
@@ -1209,16 +1220,42 @@ impl ThreadDef {
             minor,
             unit,
         };
+        // Each such face with what sets its diameter (mitcad#1632): Auto
+        // Fix changes that; without it the warning says the face has to be
+        // changed by hand.
+        let mut misses = Vec::new();
         if !self.tapers() {
-            for (_, _, face, cylinder) in &placed {
+            let crest = if is_internal { minor } else { major };
+            let (features, params, sketches) = (ctx.env.features, ctx.env.params, ctx.env.sketches);
+            let frame = |uid: FeatureUid| sketches.get(&uid).map(|s| s.value.frame);
+            for (body, _, face, cylinder) in &placed {
                 let allowance = fit_allowance(data.pitch, radial_clearance);
                 if let Some(warning) = fit.diameter_warning(face, cylinder, allowance) {
-                    ctx.warn(warning);
+                    let source = fit::fit_source(features, params, &frame, face, cylinder, crest);
+                    let warning = match &source {
+                        Ok(_) => warning,
+                        Err(reason) => format!("{warning}; {}", fit.by_hand(reason)),
+                    };
+                    ctx.warn(warning.clone());
+                    let (source, reason) = match source {
+                        Ok(source) => (Some(source), None),
+                        Err(reason) => (None, Some(reason)),
+                    };
+                    misses.push(ThreadFitMiss {
+                        body: *body,
+                        face: face.clone(),
+                        diameter: 2.0 * cylinder.radius,
+                        needed: crest,
+                        internal: is_internal,
+                        warning,
+                        source,
+                        reason,
+                    });
                 }
             }
         }
         if !self.modeled && chamfer.is_none() && taper.is_none() {
-            return Ok(output);
+            return Ok((output, misses));
         }
         if self.modeled {
             check_clearance(
@@ -1299,7 +1336,7 @@ impl ThreadDef {
         if self.modeled && !self.tapers() {
             self.warn_cut_through(ctx, &fit, &placed, part, radial_clearance, &counts);
         }
-        Ok(output)
+        Ok((output, misses))
     }
 
     /// Warns where a modelled thread's root reached through the material
@@ -1455,6 +1492,17 @@ impl ThreadFit {
             length_text(off.abs(), self.unit),
             if off > 0.0 { "larger" } else { "smaller" }
         ))
+    }
+
+    /// What a fit warning adds when nothing Auto Fix can change sets the
+    /// face's diameter (mitcad#1632): `the hole has to be changed by hand
+    /// (<why>)`.
+    pub fn by_hand(&self, reason: &str) -> String {
+        if self.internal {
+            format!("the hole has to be changed by hand ({reason})")
+        } else {
+            format!("the shaft has to be changed by hand ({reason})")
+        }
     }
 
     /// How deep a modelled thread cuts into the material behind a face:

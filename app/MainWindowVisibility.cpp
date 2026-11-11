@@ -15,6 +15,7 @@
 #include "OcctViewer.hpp"
 #include "browser/BrowserController.hpp"
 #include "framework/CommandRegistry.hpp"
+#include "sketch/Sketch3dController.hpp"
 #include "view/ModeBanner.hpp"
 
 namespace mitcad {
@@ -67,7 +68,7 @@ QString MainWindow::activeCommandName() const {
   case Mode::PickPlane:
     return QStringLiteral("Create Sketch");
   case Mode::Sketch:
-    return m_sketch->isActive() ? m_sketch->model().name : QString();
+    return editingSketchName(); // either kind (mitcad#1524)
   default:
     return QString();
   }
@@ -98,14 +99,23 @@ void MainWindow::logSketchPicks() {
 }
 
 QString MainWindow::pickPlaneText() const {
-  return tr("Create Sketch: pick a plane or a planar face. Esc cancels.");
+  // The kind chosen names itself (mitcad#1524).
+  return m_sketchSpatial ? tr("Create 3D Sketch: pick a plane or a planar face. Esc cancels.")
+                         : tr("Create Sketch: pick a plane or a planar face. Esc cancels.");
 }
 
 void MainWindow::updateModeBanner() {
   if (m_modeBanner != nullptr) {
-    // Create Sketch's plane, or an annotation's pick (mitcad#702).
-    m_modeBanner->setText(m_mode == Mode::PickPlane ? pickPlaneText() : annotationPickText());
+    // Create Sketch's plane, or an annotation's pick (mitcad#702); while a
+    // 3D sketch is edited, that it is one (mitcad#1524).
+    const bool spatial = m_mode == Mode::Sketch && m_sketch3d != nullptr && m_sketch3d->isActive();
+    m_modeBanner->setText(m_mode == Mode::PickPlane ? pickPlaneText()
+                          : spatial ? tr("3D Sketch %1: Finish Sketch returns to the model.").arg(editingSketchName())
+                                    : annotationPickText());
   }
+  // Create Sketch's kind, on the command card while it waits for the plane
+  // (mitcad#1524).
+  showSketchKindRow(m_mode == Mode::PickPlane);
   // The planes startSketch put behind the model for the pick (mitcad#844)
   // go back with it: the sketch started, Esc, another document. A command's
   // session sets them for its own inputs (CommandSession::activate).
@@ -244,13 +254,25 @@ void MainWindow::registerViewShowCommands() {
 
 void MainWindow::toggleViewShow(const QString& kind) {
   bool shown = m_snapshot.showSketches;
-  if (kind == QStringLiteral("origins")) {
-    shown = m_snapshot.showOrigins;
+  const bool origins = kind == QStringLiteral("origins");
+  if (origins) {
+    // Checked while the design's origin is drawn: also its Origin folder's
+    // light bulb on (mitcad#1642). Turned on, it shows the origin, the
+    // light bulb with it in one undo step; checked with the light bulb off
+    // it drew nothing, and the first toggle hid what was not seen.
+    shown = originsShown();
   } else if (kind == QStringLiteral("construction")) {
     shown = m_snapshot.showConstruction;
   }
-  const QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("set_view_show")}, {kind, !shown}};
-  if (runVisibilityCommands(QJsonArray{command}, QString())) {
+  QJsonArray commands;
+  if (!origins || shown || !m_snapshot.showOrigins) {
+    commands.append(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("set_view_show")}, {kind, !shown}});
+  }
+  if (origins && !shown && !m_snapshot.originShown) {
+    commands.append(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("set_origin_visible")},
+                                {QStringLiteral("visible"), true}});
+  }
+  if (runVisibilityCommands(commands, tr("Show All Origins"))) {
     qDebug().noquote() << QStringLiteral("View show %1: %2")
                               .arg(kind, shown ? QStringLiteral("hidden") : QStringLiteral("shown"));
   }
@@ -259,7 +281,7 @@ void MainWindow::toggleViewShow(const QString& kind) {
 }
 
 void MainWindow::syncViewShowChecks() {
-  const std::pair<const char*, bool> checks[] = {{"view.show_origins", m_snapshot.showOrigins},
+  const std::pair<const char*, bool> checks[] = {{"view.show_origins", originsShown()},
                                                  {"view.show_construction", m_snapshot.showConstruction},
                                                  {"view.show_sketches", m_snapshot.showSketches}};
   for (const auto& [id, on] : checks) {

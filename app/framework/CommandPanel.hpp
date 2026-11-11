@@ -61,6 +61,9 @@ public:
   void setPlaceholder(const QString& key, const QString& text) override;
   // The command's status line: an error, or a hint when `error` is false.
   void setMessage(const QString& message, NoticeLevel level) override;
+  // The button under the message (mitcad#1634: Activate <component>);
+  // logged "Panel <command> message action <text> at x,y" with the places.
+  void setMessageAction(const QString& text, const QString& tooltip) override;
   // An inspection's answer (Measure, Interference): its text, or its rows
   // of names and values where it has them (Measure, mitcad#1010:
   // ResultRows, right under the inputs).
@@ -203,6 +206,10 @@ private:
   // with the level's icon and word.
   QString m_messageText;
   NoticeLevel m_messageLevel = NoticeLevel::Hint;
+  // The button under the message (setMessageAction), hidden while it has
+  // no text; the text as given.
+  QPushButton* m_messageAction = nullptr;
+  QString m_messageActionText;
   QLabel* m_result = nullptr;
   // The answer as rows, when the inspection gives them (mitcad#1010); the
   // label above keeps its text, hidden then.

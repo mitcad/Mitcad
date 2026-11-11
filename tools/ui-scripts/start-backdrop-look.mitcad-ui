@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# The Start page's rounded backdrop (mitcad#1439), a one-off visual check,
+# not a test: MitCad starts with the block of
+# tools/ui-scripts/start-page-delete.json (--open: no Start page at launch),
+# fitted so that it fills the view, and the Start tab shows the page over
+# it. The window is saved in the light and the dark colour scheme, in
+# ${MITCAD_TEST_WORK}:
+#   start-backdrop-${MITCAD_LOOK_LAYOUT}-light.png
+#   start-backdrop-${MITCAD_LOOK_LAYOUT}-dark.png
+# The backdrop is rounded at its four corners with the floating cards'
+# radius, inset from the view's edges, the view's background around it;
+# nothing of the block behind the page shows at the corners.
+# Run by tools/ui-start-backdrop-look.sh (Linux) and
+# tools/ui-windows-start-backdrop-look.ps1 (Windows), once per layout
+# (MITCAD_LOOK_LAYOUT: floating, docked).
+expect-ever 'View area' 30
+wait-idle
+expect-ever '^Ribbon tab START at ' 10
+command view.fit
+wait-idle
+mark
+click-logged '^Ribbon tab START at '
+expect-log '^Start page shown$'
+wait-idle
+sleep 500
+color-scheme light
+wait-idle
+sleep 1000
+screenshot '${MITCAD_TEST_WORK}/start-backdrop-${MITCAD_LOOK_LAYOUT}-light.png'
+color-scheme dark
+wait-idle
+sleep 1000
+screenshot '${MITCAD_TEST_WORK}/start-backdrop-${MITCAD_LOOK_LAYOUT}-dark.png'

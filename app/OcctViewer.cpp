@@ -65,6 +65,7 @@
 #include <QOpenGLFunctions>
 #include <QPainter>
 #include <QScreen>
+#include <QSet>
 #include <QSurfaceFormat>
 #include <QTimer>
 #include <QToolButton>
@@ -1725,6 +1726,15 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
     m_orientationCube->SetBoxSideLabel(side, label);
   }
 
+  // The next slice of a large selection's highlights (setHighlights,
+  // mitcad#1631); UI tests wait for them as for what they log.
+  m_highlightTimer = new QTimer(this);
+  m_highlightTimer->setSingleShot(true);
+  connect(m_highlightTimer, &QTimer::timeout, this, &OcctViewer::drawHighlightSlice);
+  TestSync::watch(m_highlightTimer);
+  bool stepSet = false;
+  const int step = qEnvironmentVariableIntValue("MITCAD_TEST_HIGHLIGHT_STEP_MS", &stepSet);
+  m_highlightStepMs = stepSet && step >= 0 ? step : -1;
   m_restTimer = new QTimer(this);
   m_restTimer->setSingleShot(true);
   m_restTimer->setInterval(kRestMilliseconds);
@@ -1962,6 +1972,23 @@ void OcctViewer::activatePicking(const occ::handle<AIS_Shape>& object) {
       }
     }
     activate(0, sensitivity);
+    // A construction curve ranks after an ordinary curve at the same depth:
+    // a 3D sketch's fillet keeps a construction line to its corner over the
+    // trimmed line (mitcad#1548), and a click on the line drawn solid picks
+    // that line, not the dashed one under it. Alone under the cursor, the
+    // construction curve is picked as before.
+    const auto look = m_sketchEntityLooks.find(object.get());
+    if (look != m_sketchEntityLooks.end() && look->second.construction && !look->second.point &&
+        !object->Shape().IsNull()) {
+      const occ::handle<SelectMgr_Selection>& selection = object->Selection(0);
+      const TopExp_Explorer edge(object->Shape(), TopAbs_EDGE);
+      if (!selection.IsNull() && edge.More()) {
+        const int priority = StdSelect_BRepSelectionTool::GetStandardPriority(edge.Current(), TopAbs_SHAPE) - 1;
+        for (const occ::handle<SelectMgr_SensitiveEntity>& entity : selection->Entities()) {
+          entity->BaseSensitive()->OwnerId()->SetPriority(priority);
+        }
+      }
+    }
     if (outline) {
       // OCCT ranks a compound after the edges at the same depth, so a curve
       // within its width beside a text (the text's frame) won over the text
@@ -3163,7 +3190,66 @@ void OcctViewer::setDatums(const std::vector<DatumDisplay>& datums) {
     display(object, mode, std::move(info), true);
     m_datums.push_back(object);
   }
+  // For UI tests (mitcad#1642): what of the design's origin is drawn, when
+  // that changes.
+  const OriginDrawing origin = originDrawing();
+  const QString drawn =
+      origin.empty() ? QStringLiteral("none")
+                     : QStringLiteral("planes %1; axes %2; point %3")
+                           .arg(origin.planes.isEmpty() ? QStringLiteral("none") : origin.planes.join(QStringLiteral(", ")),
+                                origin.axes.isEmpty() ? QStringLiteral("none") : origin.axes.join(QStringLiteral(", ")),
+                                origin.points.isEmpty() ? QStringLiteral("none") : origin.points.join(QStringLiteral(", ")));
+  if (drawn != m_loggedOriginDrawing) {
+    m_loggedOriginDrawing = drawn;
+    qDebug().noquote() << QStringLiteral("View origin drawn: %1").arg(drawn);
+  }
   sceneChanged();
+}
+
+OcctViewer::OriginDrawing OcctViewer::originDrawing() const {
+  // The root's origin datums by their ids (MainWindow's kOriginDatums).
+  static const QStringList kOrigin{QStringLiteral("xy"), QStringLiteral("xz"), QStringLiteral("yz"),
+                                   QStringLiteral("x"),  QStringLiteral("y"),  QStringLiteral("z"),
+                                   QStringLiteral("origin")};
+  OriginDrawing drawing;
+  for (const occ::handle<AIS_Shape>& datum : m_datums) {
+    const auto info = m_pickInfo.find(datum.get());
+    if (info == m_pickInfo.end() || !info->second.item.occurrence.isEmpty() ||
+        !kOrigin.contains(info->second.item.owner) || !m_context->IsDisplayed(datum)) {
+      continue;
+    }
+    // Displayed with something in it: a presentation shown that is not empty.
+    bool drawn = false;
+    for (const occ::handle<PrsMgr_Presentation>& presentation : datum->Presentations()) {
+      drawn = drawn || (!presentation.IsNull() && presentation->IsDisplayed() && !presentation->IsEmpty());
+    }
+    if (!drawn) {
+      continue;
+    }
+    const QString& uid = info->second.item.owner;
+    switch (info->second.item.kind) {
+    case SelectKind::Plane: {
+      // Its square filled: the face meshed, which the presentation does here.
+      bool meshed = false;
+      for (TopExp_Explorer it(datum->Shape(), TopAbs_FACE); it.More(); it.Next()) {
+        TopLoc_Location location;
+        const occ::handle<Poly_Triangulation>& mesh = BRep_Tool::Triangulation(TopoDS::Face(it.Current()), location);
+        meshed = meshed || (!mesh.IsNull() && mesh->NbTriangles() > 0);
+      }
+      if (meshed) {
+        drawing.planes << uid;
+      }
+      break;
+    }
+    case SelectKind::Axis:
+      drawing.axes << uid;
+      break;
+    default:
+      drawing.points << uid;
+      break;
+    }
+  }
+  return drawing;
 }
 
 namespace {
@@ -3337,34 +3423,137 @@ void OcctViewer::setProfilesFirst(bool on) {
   sceneChanged();
 }
 
-void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) {
-  for (const occ::handle<AIS_Shape>& highlight : m_highlights) {
-    remove(highlight);
+namespace {
+
+// How long setHighlights draws before the event loop runs again
+// (mitcad#1631): the rest is drawn in later turns, so that Esc, a click or
+// another selection is handled meanwhile and drops what is left.
+constexpr qint64 kHighlightSliceMs = 30;
+
+// The presentation an object shows now (its display mode's): one not
+// computed yet, or to be computed again, is none; a shadow of it would
+// draw what it was.
+occ::handle<Graphic3d_Structure> shownPresentation(AIS_InteractiveObject* object) {
+  if (object == nullptr) {
+    return occ::handle<Graphic3d_Structure>();
   }
-  m_highlights.clear();
-  m_profileHighlights.clear();
-  if (&highlights != &m_shownHighlights) {
-    m_shownHighlights = highlights;
+  for (NCollection_Sequence<occ::handle<PrsMgr_Presentation>>::Iterator it(object->Presentations()); it.More();
+       it.Next()) {
+    const occ::handle<PrsMgr_Presentation>& presentation = it.Value();
+    if (!presentation.IsNull() && presentation->IsDisplayed() && !presentation->MustBeUpdated()) {
+      return occ::handle<Graphic3d_Structure>(presentation);
+    }
   }
-  QStringList bodies; // highlighted whole, for the log
-  QStringList profiles; // "F1/r{...} 2 faces", for the log
-  // Where faces, edges, vertices and datums are highlighted, for UI tests
-  // ("face F2.b0/F2:side(c1) in O1 at 60.0,0.0,10.0": the middle of its
-  // bounding box in the design, mitcad#432).
-  const bool logPlaces = qEnvironmentVariableIsSet("MITCAD_LOG_PICKS");
-  QStringList places;
-  // The sketch curves and points highlighted, for the log (mitcad#897).
-  int sketchCurveHighlights = 0;
-  int sketchPointHighlights = 0;
-  // The sketch curves' highlights' line types, in order (mitcad#1619).
-  std::vector<Aspect_TypeOfLine> sketchLines;
+  return occ::handle<Graphic3d_Structure>();
+}
+
+// The highlights as setHighlights draws them (mitcad#1631): the faces or
+// the edges of one body picked through it (named by its shape, as
+// boundaryPicks below) in one object, not one object each. A window over a
+// large design picks thousands of edges; each its own object, with its own
+// presentation and pick structures, took seconds to draw and as long to
+// take away. A pick on the merged object still names the face or edge hit
+// (itemFor names it through the body).
+std::vector<HighlightDisplay> mergedHighlights(const std::vector<HighlightDisplay>& highlights) {
+  std::vector<HighlightDisplay> units;
+  units.reserve(highlights.size());
+  struct Group {
+    std::size_t unit = 0;
+    TopoDS_Compound compound;
+    int members = 1;
+  };
+  std::vector<Group> groups;
+  QHash<QString, std::size_t> byKey;
+  BRep_Builder builder;
   for (const HighlightDisplay& highlight : highlights) {
     if (highlight.shape.IsNull()) {
       continue;
     }
     const SelectKind kind = highlight.item.kind;
-    if (logPlaces && (kind == SelectKind::Face || kind == SelectKind::Edge || kind == SelectKind::Vertex ||
-                      kind == SelectKind::Plane || kind == SelectKind::Axis || kind == SelectKind::Point)) {
+    if (!highlight.body || (kind != SelectKind::Face && kind != SelectKind::Edge)) {
+      units.push_back(highlight);
+      continue;
+    }
+    const unsigned flags = (highlight.pickable ? 1u : 0u) | (highlight.light ? 2u : 0u) |
+                           (highlight.throughSolid ? 4u : 0u) | (highlight.hoverLook ? 8u : 0u) |
+                           (highlight.inputLines ? 16u : 0u);
+    const QString key = QStringLiteral("%1|%2|%3|%4|%5|%6")
+                            .arg(static_cast<unsigned>(kind))
+                            .arg(highlight.item.owner, highlight.item.occurrence)
+                            .arg(reinterpret_cast<quintptr>(highlight.body.get()))
+                            .arg(highlight.color.rgba())
+                            .arg(flags);
+    const auto found = byKey.constFind(key);
+    if (found == byKey.cend() ||
+        !units[groups[*found].unit].shape.Location().IsEqual(highlight.shape.Location())) {
+      if (found == byKey.cend()) {
+        byKey.insert(key, groups.size());
+        groups.push_back(Group{units.size(), TopoDS_Compound(), 1});
+      }
+      units.push_back(highlight);
+      continue;
+    }
+    Group& group = groups[*found];
+    if (group.members == 1) {
+      builder.MakeCompound(group.compound);
+      builder.Add(group.compound, units[group.unit].shape.Located(TopLoc_Location()));
+    }
+    builder.Add(group.compound, highlight.shape.Located(TopLoc_Location()));
+    ++group.members;
+  }
+  for (const Group& group : groups) {
+    if (group.members > 1) {
+      HighlightDisplay& unit = units[group.unit];
+      unit.shape = TopoDS_Shape(group.compound).Located(unit.shape.Location());
+    }
+  }
+  return units;
+}
+
+} // namespace
+
+void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) {
+  // What an earlier call left to draw is dropped (mitcad#1631): Esc, a
+  // click on empty space or another selection while a large selection's
+  // highlights are drawn.
+  if (m_highlightTimer != nullptr) {
+    m_highlightTimer->stop();
+  }
+  if (m_highlightBuild) {
+    qDebug().noquote() << QStringLiteral("View highlights dropped: %1 of %2 left undrawn")
+                              .arg(m_highlightBuild->units.size() - m_highlightBuild->next)
+                              .arg(m_highlightBuild->units.size());
+    m_highlightBuild.reset();
+  }
+  for (const occ::handle<AIS_Shape>& highlight : m_highlights) {
+    remove(highlight);
+  }
+  m_highlights.clear();
+  m_profileHighlights.clear();
+  eraseSelectionShadows();
+  if (&highlights != &m_shownHighlights) {
+    m_shownHighlights = highlights;
+  }
+  HighlightBuild build;
+  build.clock.start();
+  QStringList bodies; // highlighted whole, for the log
+  QStringList profiles; // "F1/r{...} 2 faces", for the log
+  // Where faces, edges, vertices and datums are highlighted, for UI tests
+  // ("face F2.b0/F2:side(c1) in O1 at 60.0,0.0,10.0": the middle of its
+  // bounding box in the design, mitcad#432).
+  build.logPlaces = qEnvironmentVariableIsSet("MITCAD_LOG_PICKS");
+  QStringList places;
+  // The sketch curves and points highlighted, for the log (mitcad#897).
+  int sketchCurveHighlights = 0;
+  int sketchPointHighlights = 0;
+  for (const HighlightDisplay& highlight : m_shownHighlights) {
+    if (highlight.shape.IsNull()) {
+      continue;
+    }
+    ++build.asked;
+    const SelectKind kind = highlight.item.kind;
+    if (build.logPlaces && (kind == SelectKind::Face || kind == SelectKind::Edge || kind == SelectKind::Vertex ||
+                            kind == SelectKind::Plane || kind == SelectKind::Axis || kind == SelectKind::Point)) {
       Bnd_Box box;
       BRepBndLib::Add(highlight.shape, box);
       if (!box.IsVoid()) {
@@ -3379,11 +3568,11 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
                       .arg(middle.Z(), 0, 'f', 1);
       }
     }
-    if (highlight.item.kind == SelectKind::Body) {
+    if (kind == SelectKind::Body) {
       bodies << (highlight.item.occurrence.isEmpty()
                      ? highlight.item.owner
                      : QStringLiteral("%1 in %2").arg(highlight.item.owner, highlight.item.occurrence));
-    } else if (highlight.item.kind == SelectKind::Profile) {
+    } else if (kind == SelectKind::Profile) {
       int faces = 0;
       for (TopExp_Explorer face(highlight.shape, TopAbs_FACE); face.More(); face.Next()) {
         ++faces;
@@ -3393,221 +3582,403 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
                       .arg(faces)
                       .arg(faces == 1 ? QString() : QStringLiteral("s"));
     }
-    // Named body sub-shapes are selected in local coordinates, as on the
-    // body itself. The overlay's own faces, edges and vertices remain
-    // available when its original body disappears behind a preview.
-    const bool boundaryPicks = highlight.body &&
-        (kind == SelectKind::Face || kind == SelectKind::Edge);
-    // Its lines from the copies its body is drawn with where it has the
-    // edges, so that the highlight lies on the line it highlights; a
-    // sketch's curve's from a copy cut as the curve is (mitcad#1633).
-    const ViewEdges* ownBody = bodyEdges(highlight.body.get());
-    occ::handle<AIS_Shape> object =
-        fineShape(boundaryPicks ? highlight.shape.Located(TopLoc_Location()) : highlight.shape, ownBody);
-    if (boundaryPicks && !highlight.shape.Location().IsIdentity()) {
-      object->SetLocalTransformation(highlight.shape.Location().Transformation());
-    }
-    // Its halo, see-through and hidden copies on the same polylines.
-    const ViewEdges* lines = ownBody;
-    if (const auto* fine = dynamic_cast<const FineLines<AIS_Shape>*>(object.get()); fine && fine->viewEdges()) {
-      lines = fine->viewEdges().get();
-    }
-    // A body's faces and edges, a sketch's curves: drawn as they are, never
-    // meshed here (drawWithoutMeshing, mitcad#1553).
-    drawWithoutMeshing(object);
-    const Quantity_Color color = occtColor(highlight.color);
-    int mode = AIS_WireFrame;
-    // A feature's inputs where they were (mitcad#957): lines, as the
-    // selected edges are drawn.
-    const SelectKind drawnAs = highlight.inputLines ? SelectKind::Edge : highlight.item.kind;
-    switch (drawnAs) {
-    case SelectKind::Face:
-    case SelectKind::Feature: // the faces it made (mitcad#28)
-    case SelectKind::Profile:
-    case SelectKind::Plane:
-    case SelectKind::Body:
-    case SelectKind::Component: {
-      object->SetColor(color);
-      // In a colour light does not change, as the hover's
-      // (setHighlightStyle): lit, a light colour washed out to white.
-      object->SetMaterial(flatMaterial(0.0f));
-      const bool whole =
-          highlight.item.kind == SelectKind::Body || highlight.item.kind == SelectKind::Component;
-      object->SetTransparency(whole && highlight.opaqueWholeBody ? 0.0f
-                              : highlight.hoverLook ? kHoverTransparency
-                              : highlight.light ? kLightTransparency
-                              : whole         ? kWholeTransparency
-                              : highlight.item.kind == SelectKind::Plane ? kPickedPlaneTransparency
-                                                                         : kSelectedTransparency);
-      // Drawn just in front of the face it covers.
-      object->Attributes()->ShadingAspect()->Aspect()->SetPolygonOffsets(Aspect_POM_Fill, -1.0f,
-                                                                         -4.0f);
-      const occ::handle<Prs3d_Drawer>& drawer = object->Attributes();
-      drawer->SetFaceBoundaryDraw(!highlight.light && (!whole || highlight.wholeBodyBoundaries));
-      drawer->SetFaceBoundaryAspect(new Prs3d_LineAspect(color, Aspect_TOL_SOLID, 2.0));
-      mode = AIS_Shaded;
-      break;
-    }
-    case SelectKind::SketchPoint: {
-      // A filled ball in the highlight's colour with a thin light outline,
-      // apart from the plain marker and a curve's highlight (mitcad#946).
-      const double ratio = devicePixelRatioF();
-      setPointImage(object, sketchMarkerImage(sketch::pointBallKey(highlight.color, ratio),
-                                              sketch::pointBallImage(highlight.color, ratio)));
-      break;
-    }
-    case SelectKind::Vertex:
-    case SelectKind::Point:
-      setPointStyle(object, color, Aspect_TOM_BALL, 1.5);
-      break;
-    default:
-      if (highlight.inputLines) {
-        // Lighter on a dark background, where the plain selection blue
-        // has little contrast (mitcad#957).
-        setEdgeStyle(object, m_backgroundDark ? occtColor(kInputLineColorDark) : color, kInputLineWidth);
-      } else if (kind == SelectKind::SketchCurve) {
-        // In the curve's own line type (mitcad#1619): a selected
-        // construction line stays dashed, a centre line dash-dot.
-        const Aspect_TypeOfLine type = sketchCurveLineType(highlight.item);
-        sketchLines.push_back(type);
-        setEdgeStyle(object, color, 3.5, type);
-      } else {
-        setEdgeStyle(object, color, 3.5);
-      }
-      break;
-    }
-    if (highlight.inputLines && m_backgroundDark) {
-      // The dark halo of a sketch's lines under the part in sight, against
-      // the scene's depth: the lines stand apart from the background and
-      // from the amber faces of their feature.
-      occ::handle<AIS_Shape> halo = fineShape(highlight.shape, lines);
-      drawWithoutMeshing(halo);
-      setEdgeStyle(halo, kSketchHaloDark, kSketchHaloWidth);
-      PickInfo haloInfo;
-      haloInfo.item = highlight.item;
-      haloInfo.highlight = true;
-      display(halo, AIS_WireFrame, std::move(haloInfo), false);
-      m_context->SetZLayer(halo, m_sketchHaloLayer);
-      m_highlights.push_back(halo);
-    }
-    if (highlight.hoverLook && mode == AIS_Shaded) {
-      // Through what hides it, as the Browser's hover (drawBrowserHover):
-      // the faces fainter in the layer without a depth test, their
-      // boundaries opaque, so that a part hidden inside shows its outline.
-      occ::handle<AIS_Shape> through = fineShape(highlight.shape, lines);
-      drawWithoutMeshing(through);
-      through->SetColor(color);
-      through->SetMaterial(flatMaterial(0.0f));
-      through->SetTransparency(kBrowserHoverThroughTransparency);
-      const occ::handle<Prs3d_Drawer>& throughDrawer = through->Attributes();
-      throughDrawer->SetFaceBoundaryDraw(true);
-      throughDrawer->SetFaceBoundaryAspect(new Prs3d_LineAspect(color, Aspect_TOL_SOLID, 2.0));
-      PickInfo throughInfo;
-      throughInfo.item = highlight.item;
-      throughInfo.highlight = true;
-      display(through, AIS_Shaded, std::move(throughInfo), false);
-      m_context->SetZLayer(through, m_browserHoverLayer);
-      m_highlights.push_back(through);
-    }
-    if (highlight.throughSolid) {
-      // Topmost disables depth testing. A subdued dashed boundary locates
-      // enclosed and rear faces; the normal shaded overlay is left intact.
-      // A feature's input lines (mitcad#957) instead go to a layer of their
-      // own after the top one, in the selection colour: the line in sight,
-      // drawn after it, covers its copy, so only the hidden parts show
-      // dashed, over the model's own edges.
-      occ::handle<AIS_Shape> hidden = fineShape(highlight.shape, lines);
-      drawWithoutMeshing(hidden);
-      if (highlight.inputLines) {
-        setEdgeStyle(hidden, color, kInputLineHiddenWidth, Aspect_TOL_DASH);
-      } else {
-        setEdgeStyle(hidden, occtColor(highlight.color.darker(135)), 1.5, Aspect_TOL_DASH);
-      }
-      // Boundaries only: no lines across the faces (OCCT's wireframe draws
-      // one U and one V iso line on each face by default, grey, which was
-      // drawn over the input lines in the same screen column).
-      const occ::handle<Prs3d_Drawer>& hiddenDrawer = hidden->Attributes();
-      hiddenDrawer->SetUIsoAspect(new Prs3d_IsoAspect(occtColor(highlight.color), Aspect_TOL_DASH, 1.0, 0));
-      hiddenDrawer->SetVIsoAspect(new Prs3d_IsoAspect(occtColor(highlight.color), Aspect_TOL_DASH, 1.0, 0));
-      PickInfo hiddenInfo;
-      hiddenInfo.item = highlight.item;
-      hiddenInfo.highlight = true;
-      display(hidden, AIS_WireFrame, std::move(hiddenInfo), false);
-      m_context->SetZLayer(hidden, highlight.inputLines ? m_inputLineLayer : Graphic3d_ZLayerId_Topmost);
-      m_highlights.push_back(hidden);
-    }
-    PickInfo info;
-    info.item = highlight.item;
-    info.highlight = true;
-    info.body = boundaryPicks ? highlight.body : nullptr;
-    display(object, mode, std::move(info), highlight.pickable);
     if (kind == SelectKind::SketchPoint) {
-      // With the plain markers, after the curves' highlights, and drawn
-      // after them in that layer, so that the ball covers its point's
-      // marker (mitcad#897).
-      m_context->SetZLayer(object, m_sketchPointLayer);
-      m_context->SetDisplayPriority(object, kSketchPointHighlightPriority);
       ++sketchPointHighlights;
-    } else {
-      // A light tint stays with the bodies, under the highlights on top;
-      // a feature's input line in sight over its dashed copy (mitcad#957).
-      // A selected region with the regions, over them, where they are
-      // drawn through the bodies (mitcad#1222).
-      const bool profileOver = kind == SelectKind::Profile && !highlight.light && !highlight.inputLines;
-      m_context->SetZLayer(object, highlight.light        ? Graphic3d_ZLayerId_Default
-                                   : highlight.inputLines ? m_inputLineSightLayer
-                                   : profileOver          ? profileHighlightLayer()
-                                                          : Graphic3d_ZLayerId_Top);
-      if (profileOver) {
-        m_context->SetDisplayPriority(object, Graphic3d_DisplayPriority_Above);
-        m_profileHighlights.push_back(object);
-      }
-      if (kind == SelectKind::SketchCurve) {
-        ++sketchCurveHighlights;
-      }
+    } else if (kind == SelectKind::SketchCurve) {
+      ++sketchCurveHighlights;
     }
-    m_highlights.push_back(object);
   }
-  const QString loggedSketch = QStringLiteral("%1 curve%2, %3 point%4")
-                                   .arg(sketchCurveHighlights)
-                                   .arg(sketchCurveHighlights == 1 ? QString() : QStringLiteral("s"))
-                                   .arg(sketchPointHighlights)
-                                   .arg(sketchPointHighlights == 1 ? QString() : QStringLiteral("s"));
-  if (loggedSketch != m_loggedSketchHighlights) {
-    m_loggedSketchHighlights = loggedSketch;
-    qDebug().noquote() << QStringLiteral("Sketch highlights: %1").arg(loggedSketch);
+  build.sketch = QStringLiteral("%1 curve%2, %3 point%4")
+                     .arg(sketchCurveHighlights)
+                     .arg(sketchCurveHighlights == 1 ? QString() : QStringLiteral("s"))
+                     .arg(sketchPointHighlights)
+                     .arg(sketchPointHighlights == 1 ? QString() : QStringLiteral("s"));
+  // The sketch curves' highlights' line types, in order (mitcad#1619).
+  m_sketchHighlightLines = sketchHighlightLines(m_shownHighlights);
+  build.bodies = bodies.isEmpty() ? QStringLiteral("none") : bodies.join(QStringLiteral(", "));
+  build.profiles = profiles.isEmpty() ? QStringLiteral("none") : profiles.join(QStringLiteral("; "));
+  build.places = places.isEmpty() ? QStringLiteral("none") : places.join(QStringLiteral("; "));
+  build.units = mergedHighlights(m_shownHighlights);
+  m_highlightBuild = std::move(build);
+  drawHighlightSlice();
+}
+
+bool OcctViewer::highlightsPending() const { return m_highlightBuild.has_value(); }
+
+void OcctViewer::drawHighlightSlice() {
+  if (!m_highlightBuild) {
+    return;
+  }
+  HighlightBuild& build = *m_highlightBuild;
+  QElapsedTimer slice;
+  slice.start();
+  // No shadow is checked against its body while they are drawn
+  // (refreshSelectionShadows, from sceneChanged).
+  m_drawingHighlights = true;
+  while (build.next < build.units.size()) {
+    drawHighlight(build.units[build.next]);
+    ++build.next;
+    // One a slice for UI tests (MITCAD_TEST_HIGHLIGHT_STEP_MS), so that
+    // Esc surely comes while they are drawn.
+    if (m_highlightStepMs >= 0 || slice.elapsed() >= kHighlightSliceMs) {
+      break;
+    }
+  }
+  ++build.slices;
+  if (build.next < build.units.size()) {
+    // What is drawn so far shows; the rest after the input waiting.
+    sceneChanged();
+    m_drawingHighlights = false;
+    m_highlightTimer->start(m_highlightStepMs >= 0 ? m_highlightStepMs : 0);
+    return;
+  }
+  const HighlightBuild done = std::move(build);
+  m_highlightBuild.reset();
+  if (done.sketch != m_loggedSketchHighlights) {
+    m_loggedSketchHighlights = done.sketch;
+    qDebug().noquote() << QStringLiteral("Sketch highlights: %1").arg(done.sketch);
   }
   // "Sketch highlight lines: 1 dashed" (mitcad#1619): how many of the
   // sketch curves' highlights are drawn in each line type.
   QStringList lineCounts;
   for (const Aspect_TypeOfLine type : {Aspect_TOL_SOLID, Aspect_TOL_DASH, Aspect_TOL_DOTDASH}) {
-    const int count = static_cast<int>(std::count(sketchLines.cbegin(), sketchLines.cend(), type));
+    const int count =
+        static_cast<int>(std::count(m_sketchHighlightLines.cbegin(), m_sketchHighlightLines.cend(), type));
     if (count > 0) {
       lineCounts << QStringLiteral("%1 %2").arg(count).arg(lineTypeName(type));
     }
   }
-  m_sketchHighlightLines = std::move(sketchLines);
   const QString loggedLines = lineCounts.isEmpty() ? QStringLiteral("none") : lineCounts.join(QStringLiteral(", "));
   if (loggedLines != m_loggedSketchHighlightLines) {
     m_loggedSketchHighlightLines = loggedLines;
     qDebug().noquote() << QStringLiteral("Sketch highlight lines: %1").arg(loggedLines);
   }
-  const QString logged = bodies.isEmpty() ? QStringLiteral("none") : bodies.join(QStringLiteral(", "));
-  if (logged != m_loggedBodyHighlights) {
-    m_loggedBodyHighlights = logged;
-    qDebug().noquote() << QStringLiteral("View body highlights: %1").arg(logged);
+  if (done.bodies != m_loggedBodyHighlights) {
+    m_loggedBodyHighlights = done.bodies;
+    qDebug().noquote() << QStringLiteral("View body highlights: %1").arg(done.bodies);
   }
-  const QString loggedProfiles = profiles.isEmpty() ? QStringLiteral("none") : profiles.join(QStringLiteral("; "));
-  if (loggedProfiles != m_loggedProfileHighlights) {
-    m_loggedProfileHighlights = loggedProfiles;
-    qDebug().noquote() << QStringLiteral("View profile highlights: %1").arg(loggedProfiles);
+  if (done.profiles != m_loggedProfileHighlights) {
+    m_loggedProfileHighlights = done.profiles;
+    qDebug().noquote() << QStringLiteral("View profile highlights: %1").arg(done.profiles);
   }
-  const QString loggedPlaces = places.isEmpty() ? QStringLiteral("none") : places.join(QStringLiteral("; "));
-  if (logPlaces && loggedPlaces != m_loggedHighlightPlaces) {
-    m_loggedHighlightPlaces = loggedPlaces;
-    qDebug().noquote() << QStringLiteral("View highlight places: %1").arg(loggedPlaces);
+  if (done.logPlaces && done.places != m_loggedHighlightPlaces) {
+    m_loggedHighlightPlaces = done.places;
+    qDebug().noquote() << QStringLiteral("View highlight places: %1").arg(done.places);
+  }
+  if (done.slices > 1) {
+    // A large selection's highlights, drawn while the input was handled
+    // (mitcad#1631): how many, as how many objects and shadows, how long.
+    qDebug().noquote() << QStringLiteral("View highlights drawn: %1 in %2 object(s) and %3 shadow(s), "
+                                         "%4 slices, %5 ms")
+                              .arg(done.asked)
+                              .arg(m_highlights.size())
+                              .arg(m_selectionShadows.size())
+                              .arg(done.slices)
+                              .arg(done.clock.elapsed());
   }
   sceneChanged();
+  m_drawingHighlights = false;
+}
+
+std::vector<OcctViewer::ShadowSource> OcctViewer::shadowSources(const HighlightDisplay& highlight) const {
+  std::vector<ShadowSource> found;
+  const SelectKind kind = highlight.item.kind;
+  // Whole bodies in the plain selection look; a component's only where its
+  // highlight takes no clicks (the idle selection, whose filter never takes
+  // components): the shadows take none, the bodies under them do.
+  const bool plain = !highlight.shape.IsNull() && !highlight.inputLines && !highlight.hoverLook &&
+                     !highlight.light && !highlight.opaqueWholeBody && highlight.wholeBodyBoundaries;
+  if (!plain || (kind != SelectKind::Body && (kind != SelectKind::Component || highlight.pickable))) {
+    return found;
+  }
+  // A body's faces and its edges in sight (the hidden-edge styles' own
+  // object); false when the body is not drawn now.
+  const auto add = [&found](const BodyEntry& entry) {
+    const occ::handle<Graphic3d_Structure> faces = shownPresentation(entry.object.get());
+    if (faces.IsNull()) {
+      return false;
+    }
+    found.push_back({faces, false});
+    if (const occ::handle<Graphic3d_Structure> edges = shownPresentation(entry.visibleEdges.get()); !edges.IsNull()) {
+      found.push_back({edges, true});
+    }
+    return true;
+  };
+  const std::string occurrence = highlight.item.occurrence.toStdString();
+  if (kind == SelectKind::Body) {
+    const std::string uid = highlight.item.owner.toStdString();
+    const auto entry = m_bodies.find(occurrence.empty() ? uid : uid + "@" + occurrence);
+    if (entry == m_bodies.end() || entry->second.uid != uid || entry->second.occurrence != occurrence ||
+        !add(entry->second)) {
+      found.clear();
+    }
+    return found;
+  }
+  // A component's: the bodies it places, its sub-occurrences' too (as
+  // MainWindow::itemShape gathers them); all of them drawn, or none.
+  const std::string inside = occurrence + "/";
+  for (const auto& [key, entry] : m_bodies) {
+    (void)key;
+    if ((entry.occurrence == occurrence || entry.occurrence.rfind(inside, 0) == 0) && !add(entry)) {
+      found.clear();
+      return found;
+    }
+  }
+  return found;
+}
+
+bool OcctViewer::drawHighlightShadows(const HighlightDisplay& highlight) {
+  // A selected body drawn as one object (mitcad#1631): shadows of the
+  // presentations the view shows of it, drawn in the selection's look, as
+  // the Browser's hover draws a body (drawBrowserHover). Nothing is computed
+  // for them: no presentation of their own and no pick structures, which
+  // took seconds for every body of a large design and as long to take
+  // away. They take no clicks; the bodies under them do, as before.
+  const std::vector<ShadowSource> sources = shadowSources(highlight);
+  if (sources.empty()) {
+    return false;
+  }
+  occ::handle<Prs3d_Drawer> look = new Prs3d_Drawer();
+  // The line aspects setHighlightStyle widens are its own (drawBrowserHover).
+  look->SetLink(m_context->HighlightStyle(Prs3d_TypeOfHighlight_Dynamic));
+  look->SetOwnLineAspects();
+  setHighlightStyle(look, occtColor(highlight.color), kWholeTransparency);
+  // Just in front of the faces it covers, as the faces of a highlight are.
+  look->BasicFillAreaAspect()->SetPolygonOffsets(Aspect_POM_Fill, -1.0f, -4.0f);
+  const occ::handle<Graphic3d_StructureManager> manager = m_viewer->StructureManager();
+  for (const ShadowSource& source : sources) {
+    occ::handle<Prs3d_PresentationShadow> shadow = new Prs3d_PresentationShadow(manager, source.presentation);
+    // The faces over the body in the top layer; the edges in sight with
+    // the body's own, drawn after them in the selection's colour.
+    shadow->SetZLayer(source.edges ? m_edgeLayer : Graphic3d_ZLayerId_Top);
+    if (source.edges) {
+      shadow->SetDisplayPriority(Graphic3d_DisplayPriority_Above);
+    }
+    shadow->SetClipPlanes(source.presentation->ClipPlanes());
+    shadow->CStructure()->ViewAffinity = source.presentation->CStructure()->ViewAffinity;
+    shadow->CStructure()->IsForHighlight = 1;
+    shadow->Highlight(look, false); // shown with its Display below
+    shadow->Display();
+    m_selectionShadows.push_back(shadow);
+    m_selectionShadowSources.emplace_back(source.presentation.get(), source.presentation->Transformation().get());
+  }
+  m_shadowedHighlights.push_back(highlight);
+  return true;
+}
+
+void OcctViewer::eraseSelectionShadows() {
+  for (const occ::handle<Graphic3d_Structure>& shadow : m_selectionShadows) {
+    shadow->Erase();
+  }
+  m_selectionShadows.clear();
+  m_selectionShadowSources.clear();
+  m_shadowedHighlights.clear();
+}
+
+void OcctViewer::refreshSelectionShadows() {
+  if (m_drawingHighlights || m_shadowedHighlights.empty()) {
+    return;
+  }
+  // A body under them drawn anew, moved or no longer drawn: the
+  // highlights drawn again (a shadow of a presentation taken away would
+  // still draw it).
+  std::vector<std::pair<const void*, const void*>> sources;
+  sources.reserve(m_selectionShadowSources.size());
+  for (const HighlightDisplay& highlight : m_shadowedHighlights) {
+    for (const ShadowSource& source : shadowSources(highlight)) {
+      sources.emplace_back(source.presentation.get(), source.presentation->Transformation().get());
+    }
+  }
+  if (sources != m_selectionShadowSources) {
+    setHighlights(m_shownHighlights);
+  }
+}
+
+void OcctViewer::drawHighlight(const HighlightDisplay& highlight) {
+  const SelectKind kind = highlight.item.kind;
+  const Quantity_Color color = occtColor(highlight.color);
+  // Through what hides it (feature inspection): see below. On the
+  // polylines of `copies` (mitcad#1633).
+  const auto drawHidden = [this, &highlight, color](const ViewEdges* copies) {
+    // Topmost disables depth testing. A subdued dashed boundary locates
+    // enclosed and rear faces; the normal shaded overlay is left intact.
+    // A feature's input lines (mitcad#957) instead go to a layer of their
+    // own after the top one, in the selection colour: the line in sight,
+    // drawn after it, covers its copy, so only the hidden parts show
+    // dashed, over the model's own edges.
+    occ::handle<AIS_Shape> hidden = fineShape(highlight.shape, copies);
+    drawWithoutMeshing(hidden);
+    if (highlight.inputLines) {
+      setEdgeStyle(hidden, color, kInputLineHiddenWidth, Aspect_TOL_DASH);
+    } else {
+      setEdgeStyle(hidden, occtColor(highlight.color.darker(135)), 1.5, Aspect_TOL_DASH);
+    }
+    // Boundaries only: no lines across the faces (OCCT's wireframe draws
+    // one U and one V iso line on each face by default, grey, which was
+    // drawn over the input lines in the same screen column).
+    const occ::handle<Prs3d_Drawer>& hiddenDrawer = hidden->Attributes();
+    hiddenDrawer->SetUIsoAspect(new Prs3d_IsoAspect(occtColor(highlight.color), Aspect_TOL_DASH, 1.0, 0));
+    hiddenDrawer->SetVIsoAspect(new Prs3d_IsoAspect(occtColor(highlight.color), Aspect_TOL_DASH, 1.0, 0));
+    PickInfo hiddenInfo;
+    hiddenInfo.item = highlight.item;
+    hiddenInfo.highlight = true;
+    display(hidden, AIS_WireFrame, std::move(hiddenInfo), false);
+    m_context->SetZLayer(hidden, highlight.inputLines ? m_inputLineLayer : Graphic3d_ZLayerId_Topmost);
+    m_highlights.push_back(hidden);
+  };
+  if (drawHighlightShadows(highlight)) {
+    // A feature's body inspected through what hides it: its dashed copy
+    // beside the shadows (ui-timeline-inspection: an enclosed body).
+    if (highlight.throughSolid) {
+      drawHidden(nullptr);
+    }
+    return;
+  }
+  // Named body sub-shapes are selected in local coordinates, as on the
+  // body itself. The overlay's own faces, edges and vertices remain
+  // available when its original body disappears behind a preview.
+  const bool boundaryPicks = highlight.body &&
+      (kind == SelectKind::Face || kind == SelectKind::Edge);
+  // Its lines from the copies its body is drawn with where it has the
+  // edges, so that the highlight lies on the line it highlights; a
+  // sketch's curve's from a copy cut as the curve is (mitcad#1633). A
+  // body's faces or edges merged into one highlight (mergedHighlights) are
+  // all on the body's copies.
+  const ViewEdges* ownBody = bodyEdges(highlight.body.get());
+  occ::handle<AIS_Shape> object =
+      fineShape(boundaryPicks ? highlight.shape.Located(TopLoc_Location()) : highlight.shape, ownBody);
+  if (boundaryPicks && !highlight.shape.Location().IsIdentity()) {
+    object->SetLocalTransformation(highlight.shape.Location().Transformation());
+  }
+  // Its halo, see-through and hidden copies on the same polylines.
+  const ViewEdges* lines = ownBody;
+  if (const auto* fine = dynamic_cast<const FineLines<AIS_Shape>*>(object.get()); fine && fine->viewEdges()) {
+    lines = fine->viewEdges().get();
+  }
+  // A body's faces and edges, a sketch's curves: drawn as they are, never
+  // meshed here (drawWithoutMeshing, mitcad#1553).
+  drawWithoutMeshing(object);
+  int mode = AIS_WireFrame;
+  // A feature's inputs where they were (mitcad#957): lines, as the
+  // selected edges are drawn.
+  const SelectKind drawnAs = highlight.inputLines ? SelectKind::Edge : highlight.item.kind;
+  switch (drawnAs) {
+  case SelectKind::Face:
+  case SelectKind::Feature: // the faces it made (mitcad#28)
+  case SelectKind::Profile:
+  case SelectKind::Plane:
+  case SelectKind::Body:
+  case SelectKind::Component: {
+    object->SetColor(color);
+    // In a colour light does not change, as the hover's
+    // (setHighlightStyle): lit, a light colour washed out to white.
+    object->SetMaterial(flatMaterial(0.0f));
+    const bool whole =
+        highlight.item.kind == SelectKind::Body || highlight.item.kind == SelectKind::Component;
+    object->SetTransparency(whole && highlight.opaqueWholeBody ? 0.0f
+                            : highlight.hoverLook ? kHoverTransparency
+                            : highlight.light ? kLightTransparency
+                            : whole         ? kWholeTransparency
+                            : highlight.item.kind == SelectKind::Plane ? kPickedPlaneTransparency
+                                                                       : kSelectedTransparency);
+    // Drawn just in front of the face it covers.
+    object->Attributes()->ShadingAspect()->Aspect()->SetPolygonOffsets(Aspect_POM_Fill, -1.0f,
+                                                                       -4.0f);
+    const occ::handle<Prs3d_Drawer>& drawer = object->Attributes();
+    drawer->SetFaceBoundaryDraw(!highlight.light && (!whole || highlight.wholeBodyBoundaries));
+    drawer->SetFaceBoundaryAspect(new Prs3d_LineAspect(color, Aspect_TOL_SOLID, 2.0));
+    mode = AIS_Shaded;
+    break;
+  }
+  case SelectKind::SketchPoint: {
+    // A filled ball in the highlight's colour with a thin light outline,
+    // apart from the plain marker and a curve's highlight (mitcad#946).
+    const double ratio = devicePixelRatioF();
+    setPointImage(object, sketchMarkerImage(sketch::pointBallKey(highlight.color, ratio),
+                                            sketch::pointBallImage(highlight.color, ratio)));
+    break;
+  }
+  case SelectKind::Vertex:
+  case SelectKind::Point:
+    setPointStyle(object, color, Aspect_TOM_BALL, 1.5);
+    break;
+  default:
+    if (highlight.inputLines) {
+      // Lighter on a dark background, where the plain selection blue
+      // has little contrast (mitcad#957).
+      setEdgeStyle(object, m_backgroundDark ? occtColor(kInputLineColorDark) : color, kInputLineWidth);
+    } else if (kind == SelectKind::SketchCurve) {
+      // In the curve's own line type (mitcad#1619): a selected
+      // construction line stays dashed, a centre line dash-dot.
+      setEdgeStyle(object, color, 3.5, sketchCurveLineType(highlight.item));
+    } else {
+      setEdgeStyle(object, color, 3.5);
+    }
+    break;
+  }
+  if (highlight.inputLines && m_backgroundDark) {
+    // The dark halo of a sketch's lines under the part in sight, against
+    // the scene's depth: the lines stand apart from the background and
+    // from the amber faces of their feature.
+    occ::handle<AIS_Shape> halo = fineShape(highlight.shape, lines);
+    drawWithoutMeshing(halo);
+    setEdgeStyle(halo, kSketchHaloDark, kSketchHaloWidth);
+    PickInfo haloInfo;
+    haloInfo.item = highlight.item;
+    haloInfo.highlight = true;
+    display(halo, AIS_WireFrame, std::move(haloInfo), false);
+    m_context->SetZLayer(halo, m_sketchHaloLayer);
+    m_highlights.push_back(halo);
+  }
+  if (highlight.hoverLook && mode == AIS_Shaded) {
+    // Through what hides it, as the Browser's hover (drawBrowserHover):
+    // the faces fainter in the layer without a depth test, their
+    // boundaries opaque, so that a part hidden inside shows its outline.
+    occ::handle<AIS_Shape> through = fineShape(highlight.shape, lines);
+    drawWithoutMeshing(through);
+    through->SetColor(color);
+    through->SetMaterial(flatMaterial(0.0f));
+    through->SetTransparency(kBrowserHoverThroughTransparency);
+    const occ::handle<Prs3d_Drawer>& throughDrawer = through->Attributes();
+    throughDrawer->SetFaceBoundaryDraw(true);
+    throughDrawer->SetFaceBoundaryAspect(new Prs3d_LineAspect(color, Aspect_TOL_SOLID, 2.0));
+    PickInfo throughInfo;
+    throughInfo.item = highlight.item;
+    throughInfo.highlight = true;
+    display(through, AIS_Shaded, std::move(throughInfo), false);
+    m_context->SetZLayer(through, m_browserHoverLayer);
+    m_highlights.push_back(through);
+  }
+  if (highlight.throughSolid) {
+    drawHidden(lines);
+  }
+  PickInfo info;
+  info.item = highlight.item;
+  info.highlight = true;
+  info.body = boundaryPicks ? highlight.body : nullptr;
+  display(object, mode, std::move(info), highlight.pickable);
+  if (kind == SelectKind::SketchPoint) {
+    // With the plain markers, after the curves' highlights, and drawn
+    // after them in that layer, so that the ball covers its point's
+    // marker (mitcad#897).
+    m_context->SetZLayer(object, m_sketchPointLayer);
+    m_context->SetDisplayPriority(object, kSketchPointHighlightPriority);
+  } else {
+    // A light tint stays with the bodies, under the highlights on top;
+    // a feature's input line in sight over its dashed copy (mitcad#957).
+    // A selected region with the regions, over them, where they are
+    // drawn through the bodies (mitcad#1222).
+    const bool profileOver = kind == SelectKind::Profile && !highlight.light && !highlight.inputLines;
+    m_context->SetZLayer(object, highlight.light        ? Graphic3d_ZLayerId_Default
+                                 : highlight.inputLines ? m_inputLineSightLayer
+                                 : profileOver          ? profileHighlightLayer()
+                                                        : Graphic3d_ZLayerId_Top);
+    if (profileOver) {
+      m_context->SetDisplayPriority(object, Graphic3d_DisplayPriority_Above);
+      m_profileHighlights.push_back(object);
+    }
+  }
+  m_highlights.push_back(object);
 }
 
 void OcctViewer::setPreview(const TopoDS_Shape& shape, PreviewStyle style) {
@@ -4785,12 +5156,16 @@ void OcctViewer::OnSelectionChanged(const occ::handle<AIS_InteractiveContext>& c
     return;
   }
   Selection items;
+  // Each item once, by a set (mitcad#1631: a window over a large design
+  // holds tens of thousands of edges and faces).
+  QSet<SelectionItem> taken;
   for (m_context->InitSelected(); m_context->MoreSelected(); m_context->NextSelected()) {
     if (auto item = itemFor(m_context->SelectedOwner())) {
       if (!m_windowPick) {
         item->at = pickedPoint(m_context->SelectedOwner());
       }
-      if (!items.contains(*item)) {
+      if (!taken.contains(*item)) {
+        taken.insert(*item);
         items.append(*item);
       }
     }
@@ -4803,7 +5178,8 @@ void OcctViewer::OnSelectionChanged(const occ::handle<AIS_InteractiveContext>& c
       if (!accepts(owner)) {
         continue;
       }
-      if (const auto item = itemFor(owner); item && !items.contains(*item)) {
+      if (const auto item = itemFor(owner); item && !taken.contains(*item)) {
+        taken.insert(*item);
         items.append(*item);
       }
     }
@@ -4963,6 +5339,12 @@ void OcctViewer::restoreCamera() {
     // Anaglyph 3D switched in the sketch stays as it is (mitcad#1449).
     keepProjection(*m_view->Camera());
   }
+  sceneChanged();
+}
+
+void OcctViewer::keepCamera() {
+  settleCamera();
+  m_savedCamera.Nullify();
   sceneChanged();
 }
 
@@ -6707,6 +7089,7 @@ void OcctViewer::sceneChanged() {
   }
   m_view->Invalidate(); // a cached frame is no longer valid
   refreshBrowserHover(); // a body of a browser row's drawn anew (mitcad#1022)
+  refreshSelectionShadows(); // a selected body's likewise (mitcad#1631)
   requestFrame();
 }
 
@@ -7455,6 +7838,20 @@ std::optional<gp_Pnt> OcctViewer::planePoint(const QPointF& position, const gp_A
     return std::nullopt; // the plane is behind the eye there
   }
   return gp_Pnt(from + direction * reach);
+}
+
+std::optional<std::pair<gp_Pnt, gp_Dir>> OcctViewer::pointerRay(const QPointF& position) const {
+  if (m_view.IsNull() || m_view->Window().IsNull()) {
+    return std::nullopt;
+  }
+  const NCollection_Vec2<int> pixel = toDevicePixels(position);
+  double x = 0, y = 0, z = 0, dx = 0, dy = 0, dz = 0;
+  m_view->ConvertWithProj(pixel.x(), pixel.y(), x, y, z, dx, dy, dz);
+  const gp_Vec direction(dx, dy, dz);
+  if (direction.Magnitude() < 1e-12) {
+    return std::nullopt;
+  }
+  return std::make_pair(gp_Pnt(x, y, z), gp_Dir(direction));
 }
 
 void OcctViewer::endOccurrenceDrag(const QPointF& position, bool cancelled) {

@@ -28,13 +28,14 @@ use std::path::{Path, PathBuf};
 pub use mitcad_model::drawing::template_def::*;
 
 use super::compose::{fitted, projection_symbol};
-use super::sheet::{Anchor, Group, Pen};
+use super::sheet::{Anchor, Group, Item, Pen};
 use super::{P2, Projection};
 
 /// The folder of templates in a user's or a project's library.
 pub const TEMPLATES_DIR: &str = "drawing-templates";
-/// The largest template file read.
-const MAX_FILE: u64 = 1 << 20;
+/// The largest template file read: its images' base64 makes it large
+/// (mitcad#1625).
+const MAX_FILE: u64 = 16 << 20;
 
 /// The built-in templates' data.
 const BUILT_IN: [&str; 2] = [
@@ -98,8 +99,22 @@ pub fn draw(filled: &Filled, width: f64, height: f64) -> Vec<Group> {
     frame.rect(Pen::Frame, frame_min, frame_max);
     let (min, max) = t.title_box(width, height);
     let mut block = Group::new("title-block");
-    block.rect(Pen::Frame, min, max);
     let at = |p: P2| [min[0] + p[0], min[1] + p[1]];
+    // Its images first, under its lines and texts (mitcad#1625); one
+    // that is no image (the template's check refuses it) is left out.
+    for image in &t.title_block.images {
+        let Ok((bytes, kind)) = image.decoded() else {
+            continue;
+        };
+        let (lo, size) = fitted_box(at(image.at), image.size, image_aspect(&bytes, kind));
+        block.items.push(Item::Image {
+            at: lo,
+            size,
+            kind,
+            data: image.data.clone(),
+        });
+    }
+    block.rect(Pen::Frame, min, max);
     for l in &t.title_block.lines {
         block.line(Pen::Thin, at([l[0], l[1]]), at([l[2], l[3]]));
     }
@@ -506,6 +521,68 @@ mod tests {
                 .contains("'user' or the 'project'")
         );
         std::fs::remove_dir_all(&own).ok();
+    }
+
+    #[test]
+    fn custom_sheet_sizes_read_and_write_as_their_json() {
+        // mitcad#1625: a name, or a width and a height.
+        let size: SheetSize = serde_json::from_str(r#"{"width": 500, "height": 300}"#).unwrap();
+        assert_eq!(
+            size,
+            SheetSize::Custom {
+                width: 500.0,
+                height: 300.0
+            }
+        );
+        assert_eq!(size.key(), "custom");
+        assert_eq!(size.name(), "500 x 300 mm");
+        assert_eq!(
+            serde_json::to_value(size).unwrap(),
+            serde_json::json!({"width": 500.0, "height": 300.0})
+        );
+        // As it lies, whatever the orientation.
+        assert_eq!(size.oriented(crate::Orientation::Portrait), (500.0, 300.0));
+        assert_eq!(size.landscape(), (500.0, 300.0));
+        let a3: SheetSize = serde_json::from_str(r#""A3""#).unwrap();
+        assert_eq!(a3, SheetSize::A3);
+        assert_eq!(serde_json::to_string(&a3).unwrap(), r#""A3""#);
+        assert_eq!(a3.oriented(crate::Orientation::Portrait), (297.0, 420.0));
+        assert!(serde_json::from_str::<SheetSize>(r#""A9""#).is_err());
+        assert!(serde_json::from_str::<SheetSize>(r#"{"width": 1, "height": 300}"#).is_err());
+        assert!(serde_json::from_str::<SheetSize>("12").is_err());
+    }
+
+    #[test]
+    fn images_are_known_by_their_bytes_and_fitted_in_their_box() {
+        assert_eq!(image_kind(b"\x89PNG\r\n\x1a\nrest"), Some(ImageKind::Png));
+        assert_eq!(image_kind(&[0xff, 0xd8, 0xff, 0xe0]), Some(ImageKind::Jpeg));
+        let svg = br#"<?xml version="1.0"?>
+<!-- a logo -->
+<svg xmlns="http://www.w3.org/2000/svg" stroke-width="2" width="40mm" height="10mm"><g/></svg>"#;
+        assert_eq!(image_kind(svg), Some(ImageKind::Svg));
+        assert_eq!(image_kind(b"<svgfoo/>"), None);
+        assert_eq!(image_kind(b"plain text"), None);
+        // An SVG's width and height without a viewBox; its viewBox first.
+        assert_eq!(image_aspect(svg, ImageKind::Svg), Some(4.0));
+        let boxed = br#"<svg viewBox="0,0,30,60" width="10" height="10"/>"#;
+        assert_eq!(image_aspect(boxed, ImageKind::Svg), Some(0.5));
+        assert_eq!(
+            image_aspect(br#"<svg width="100%"/>"#, ImageKind::Svg),
+            None
+        );
+        // Whole in its box, in the middle, its proportions kept.
+        assert_eq!(
+            fitted_box([10.0, 20.0], [40.0, 40.0], Some(2.0)),
+            ([10.0, 30.0], [40.0, 20.0])
+        );
+        assert_eq!(
+            fitted_box([0.0, 0.0], [40.0, 10.0], Some(2.0)),
+            ([10.0, 0.0], [20.0, 10.0])
+        );
+        assert_eq!(
+            fitted_box([1.0, 2.0], [3.0, 4.0], None),
+            ([1.0, 2.0], [3.0, 4.0])
+        );
     }
 
     /// A fresh folder of a test's own beside the test program in the build

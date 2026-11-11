@@ -471,6 +471,40 @@ impl System {
         }))
     }
 
+    /// A fitted spline with a given basis, fit parameters and hidden
+    /// control points (as [`System::add_fitted_spline`] would compute them):
+    /// the spatial system's in-plane adapter mirrors its own fitted splines
+    /// with it, so that both share one basis (mitcad#1542).
+    pub(crate) fn add_fitted_with(
+        &mut self,
+        fit_points: &[PointId],
+        ends: [SplineEnd; 2],
+        basis: Arc<SplineBasis>,
+        params: Vec<f64>,
+        hidden: &[[f64; 2]],
+    ) -> Result<EntityId, Error> {
+        let fit = fit_points
+            .iter()
+            .map(|&p| self.pidx(p))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut ctrl = vec![fit[0]];
+        for c in hidden {
+            ctrl.push(self.new_point(c[0], c[1], true));
+        }
+        ctrl.push(if ends[0] == SplineEnd::Periodic {
+            fit[0]
+        } else {
+            fit[fit.len() - 1]
+        });
+        Ok(self.add_entity(EntityData::Fitted {
+            basis,
+            fit,
+            ctrl,
+            params,
+            ends,
+        }))
+    }
+
     /// Removes an entity that no constraint refers to. Its points stay.
     pub fn remove_entity(&mut self, e: EntityId) -> Result<(), Error> {
         self.ent(e)?;

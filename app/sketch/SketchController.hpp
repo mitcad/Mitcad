@@ -17,6 +17,7 @@
 
 #include <QHash>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QMouseEvent>
 #include <QObject>
 #include <QPointF>
@@ -101,6 +102,30 @@ public:
   // The occurrence whose placement sketch mode edits; own-component body
   // preselection must come from this occurrence as well.
   virtual QString sketchOccurrence(const QString& /*uid*/) const { return QString(); }
+  // A query that may take long read off the UI thread (mitcad#1656: the
+  // Dimension tool's body geometry out of the plane in a large assembly):
+  // `read` gets the answer (on the model's worker), then `done` runs on
+  // this thread with whether it was read, or the query's error; neither
+  // runs once `context` is gone. Not read (false, no error): the read gave
+  // way to the user's next action and is asked for again later. False when
+  // it cannot start now (the model computes). The default reads it at once.
+  // Whether the model can be read now, a read in the background giving way
+  // for it (the default: when the model computes nothing).
+  virtual bool modelReadableNow() { return !modelBusy(); }
+  using BackgroundRead = std::function<void(const QJsonValue& answer)>;
+  using BackgroundDone = std::function<void(bool read, const QString& error)>;
+  virtual bool queryInBackground(const QJsonObject& query, const BackgroundRead& read, QObject* context,
+                                 const BackgroundDone& done) {
+    Q_UNUSED(context);
+    QString error;
+    try {
+      read(this->query(query));
+    } catch (const std::exception& failure) {
+      error = QString::fromUtf8(failure.what());
+    }
+    done(error.isEmpty(), error);
+    return true;
+  }
 };
 
 namespace sketch {
@@ -421,14 +446,29 @@ public:
   // points, the drag of Move/Copy's handle), which the overlay marks as a
   // tool's.
   bool commandSnapping() const { return m_snapPicking || m_handleDrag.has_value(); }
+  // The constraints that hold Move/Copy's moved geometry where it was
+  // dropped on a point or a curve (mitcad#1645, `sketch.move`'s `hold`),
+  // empty when it was not: for its handle (Translate), the point of the
+  // `objects` at the handle's place, while X and Y Distance are still the
+  // drop's `dx` and `dy` (mm); for Point to Point, the Origin Point `from`
+  // (a point of the objects) where the Target Point pick `to` snapped, not
+  // on the objects themselves.
+  std::vector<QJsonObject> handleHold(const QStringList& objects, double dx, double dy) const;
+  std::vector<QJsonObject> pickHold(const QStringList& objects, const QString& from, const QString& to) const;
   // A running command's handle in the sketch (CommandDef::sketchHandle,
   // mitcad#1563) as the view shows it: its square and the tips of its
-  // arrows along the sketch's x and y axes, and the part dragged ('x',
-  // 'y', 'b' for the square, else 0).
+  // arrows along the sketch's x and y axes (or along a pattern's two
+  // directions from their own starts, without a square, mitcad#1640), the
+  // arrows shown faint, and the part dragged ('x', 'y', 'b' for the
+  // square, else 0).
   struct HandleShape {
     QPointF center;
+    QPointF xFrom;
+    QPointF yFrom;
     QPointF xTip;
     QPointF yTip;
+    bool square = true;
+    std::array<bool, 2> faint{};
     char dragged = 0;
   };
   std::optional<HandleShape> handleShape() const;
@@ -571,10 +611,15 @@ public:
   bool selectChainAt(const QPointF& screen, Qt::KeyboardModifiers modifiers);
   // Body edges and vertices in the sketch plane (mitcad#256, mitcad#258), for
   // the tool that picks or snaps to them: the model's plane_geometry query,
-  // read once per tool session and again after the document changed. With
-  // `outOfPlane` (the Dimension tool, mitcad#866) also the others, as what
-  // they project to: read once while the document stays as it is.
-  const BodyGeometry& bodyGeometry(bool outOfPlane = false);
+  // read once per tool session and again after the bodies it reads changed
+  // (the model's plane_geometry_key, mitcad#1646). With `outOfPlane` (the
+  // Dimension tool, mitcad#866) also the others, as what they project to:
+  // read once while that key stays, not after each dimension added.
+  // With `outOfPlane` the items out of the plane are read off the UI thread
+  // (mitcad#1656): until they are there, the tool has those in the plane,
+  // and once they are, it is told again where the pointer is. `wait` reads
+  // them now (a selection the tool takes as it starts).
+  const BodyGeometry& bodyGeometry(bool outOfPlane = false, bool wait = false);
   // As last read, for drawing (no query).
   const BodyGeometry& bodyGeometryShown() const { return m_body; }
   // Changes whenever the sketch is read again (a tool's view of it is
@@ -727,6 +772,19 @@ private:
   QPointF m_handlePressScreen;
   bool m_handleMoved = false; // further than a click from the press
   std::array<double, 2> m_handleSent{};
+  // Where a drop holds the moved geometry (mitcad#1645): the point of the
+  // objects at the handle's place as its drag started, where the handle
+  // went last, the last drop on a point or a curve (that point, the snap
+  // and the values it set), and where each snap input's pick snapped.
+  QString m_handleBase;
+  V2 m_handlePlace;
+  struct HandleDrop {
+    QString point;
+    Snap snap;
+    std::array<double, 2> values{};
+  };
+  std::optional<HandleDrop> m_handleDrop;
+  QHash<QString, Snap> m_pickSnaps;
   QString m_loggedHandle;
   bool m_construction = false;
   bool m_signedDistances = false;
@@ -825,15 +883,30 @@ private:
   StalePreview m_stalePreview;
 
   // Body edges and vertices in the sketch plane (mitcad#256): what was read,
-  // for which sketch, document revision and tool session.
+  // for which sketch, geometry key and tool session.
   BodyGeometry m_body;
   QString m_bodyKey;
+  // The model's plane_geometry_key (mitcad#1646), read once per document
+  // revision (m_geometryRevision): it stays while an edit of the sketch
+  // itself leaves the bodies before it as they are.
+  QString geometryKey();
+  QString m_geometryRevision;
+  QString m_geometryKey;
   // The items in the plane (per tool session) and out of it (mitcad#866:
-  // per document revision), and whether m_body has the latter.
+  // per geometry key), and whether m_body has the latter.
   std::vector<BodyItem> m_inPlaneItems;
   std::vector<BodyItem> m_outOfPlaneItems;
   QString m_outOfPlaneKey;
   bool m_bodyOutOfPlane = false;
+  // The key whose items out of the plane are being read off the UI thread
+  // (mitcad#1656), and what makes the read and takes its answer.
+  QString m_outOfPlaneReading;
+  QJsonObject outOfPlaneQuery() const;
+  void readOutOfPlaneLater(const QString& key);
+  // `later`: read off the UI thread after the tool looked, which is then
+  // told again where the pointer is.
+  void takeOutOfPlane(const QString& key, std::vector<BodyItem> items, const QString& error, bool later);
+  void setBodyItems();
   // Where the items out of the plane are in the view (mitcad#866), made
   // again only when the items or the camera change.
   struct BodyScreen {

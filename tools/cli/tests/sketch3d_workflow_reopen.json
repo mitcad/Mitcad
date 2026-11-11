@@ -1,0 +1,12 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. sketch3d_workflow's design opened again (W8, mitcad#1527): BC still 50, Pipe1's typed path still BC chained and reversed, its route from D, both bodies as saved; BC back to 30 moves them back."},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F3.b0", "volume": 5097.720476, "tolerance": 1e-3}},
+  {"expect": {"feature": "Sweep1", "status": "ok", "body": "F4.b0", "volume": 5097.720476, "tolerance": 1e-3}},
+  {"expect": {"query": {"query": "feature", "uid": "F3"}, "result": {
+    "def": {"path": {"spatial_sketch": "F1", "curves": ["c5"], "reversed": true, "chain": true}}}}},
+  {"expect": {"query": {"query": "sketch3d", "uid": "F1", "path": {"curves": ["c5"], "chain": true, "reversed": true}},
+    "result": {"route": {"curves": ["c7", "c19", "c5", "c11", "c3"], "start": "p6", "end": "p1"}}}},
+  {"cmd": "sketch3d.set_dimension", "sketch": "F1", "dimension": "k5", "value": 30},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F3.b0", "volume": 4092.410827, "tolerance": 1e-3}},
+  {"expect": {"feature": "Sweep1", "status": "ok", "body": "F4.b0", "volume": 4092.410827, "tolerance": 1e-3}}
+]

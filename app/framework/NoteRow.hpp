@@ -9,7 +9,10 @@
 
 #include "NoticeLevel.hpp"
 
+class QEnterEvent;
+class QEvent;
 class QHBoxLayout;
+class QMouseEvent;
 class QLabel;
 class QPushButton;
 class QVBoxLayout;
@@ -43,6 +46,14 @@ public:
 signals:
   // A button was clicked: its index.
   void actionClicked(int index);
+  // The pointer came over the row (true) or left it (mitcad#1643: the
+  // places of what the row is about painted meanwhile).
+  void hovered(bool on);
+
+protected:
+  void enterEvent(QEnterEvent* event) override;
+  void mouseMoveEvent(QMouseEvent* event) override;
+  void leaveEvent(QEvent* event) override;
 
 private:
   QLabel* m_label = nullptr;
@@ -58,6 +69,8 @@ private:
   QHBoxLayout* m_textRow = nullptr;
   QVBoxLayout* m_links = nullptr;     // link actions, a row each
   QWidget* m_buttonsWidget = nullptr; // the text buttons' row, hidden without any
+  bool m_hovered = false;             // the pointer over the row (hovered)
+  void setHovered(bool on);
 };
 
 } // namespace mitcad

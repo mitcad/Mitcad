@@ -291,7 +291,7 @@ ui_step "select the point"               select_at 60 -50
 ui_step "rectangular pattern (search)"   ui_command "Rectangular Pattern"
 ui_expect_log "Preview Rectangular Pattern: ok" "rectangular pattern previewed"
 ui_step "OK (Enter)"                     ui_key Return
-ui_expect_log "Rectangular pattern of 1 object(s), 3 x 1" "rectangular pattern"
+ui_expect_log "Rectangular pattern of 1 object(s), 3 x 2" "rectangular pattern (Quantity 2 of 2, mitcad#1640)"
 ui_step "select the bottom line"         select_at 20 -80
 ui_step "and the right line (Ctrl)"      select_at 30 -70 ctrl
 ui_step "sketch fillet (search)"         ui_command "Sketch Fillet"

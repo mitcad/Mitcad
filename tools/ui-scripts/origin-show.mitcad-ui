@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: MIT
+# The design's origin shown and hidden both ways (mitcad#1642, GitHub
+# mitcad/Mitcad#240), on a new design. The origin is drawn while the Origin
+# folder's light bulb and View › Show › Origins are both on (mitcad#1287);
+# either alone drew nothing, so each of them now shows it, turning the
+# other on in the same undo step, and View › Show › Origins is checked
+# only while the origin is drawn. Each state is read from the view itself:
+# "View origin drawn: ..." (the planes, axes and point displayed with
+# something in their presentations, a plane's square meshed) and
+# expect-view-origin (also the planes' colour in the view's own frame).
+#   1. The Origin folder's eye shows the origin and hides it again.
+#   2. View › Show › Origins with the light bulb off: shown, the light
+#      bulb turned on with it; again: hidden, the light bulb kept on.
+#   3. The eye while View › Show › Origins is off and the light bulb on:
+#      shown, not hidden unseen.
+#   4. Both off (as a design may be saved): the eye shows the origin in one
+#      undo step, and so does View › Show › Origins; Undo hides it again.
+# Run by tools/ui-origin-show-test.sh (Linux) and
+# tools/ui-windows-origin-show-test.ps1 (Windows).
+wait-idle
+expect-ever '^Browser eye Root/Origin at '
+expect-ever '^View Show menu: Origins off [|]'
+expect-view-origin hidden
+
+# 1. The Origin folder's eye.
+mark
+click-logged '^Browser eye Root/Origin at '
+wait-log '^Visibility Root/Origin: shown$'
+wait-log '^View origin drawn: planes xy, xz, yz; axes x, y, z; point origin$'
+wait-log '^View Show menu: Origins on [|]'
+wait-idle
+expect-view-origin shown
+mark
+click-logged '^Browser eye Root/Origin at '
+wait-log '^Visibility Root/Origin: hidden$'
+wait-log '^View origin drawn: none$'
+wait-log '^View Show menu: Origins off [|]'
+wait-idle
+expect-view-origin hidden
+
+# 2. View › Show › Origins with the light bulb off.
+mark
+menu View/Show/Origins
+wait-log '^View show origins: shown$'
+wait-log '^Design origin shown in the view; the Origin folder.s light bulb on$'
+wait-log '^View origin drawn: planes xy, xz, yz; axes x, y, z; point origin$'
+wait-log '^View Show menu: Origins on [|]'
+wait-idle
+expect-view-origin shown
+mark
+menu View/Show/Origins
+wait-log '^View show origins: hidden$'
+wait-log '^Design origin hidden in the view; the Origin folder.s light bulb on$'
+wait-log '^View origin drawn: none$'
+wait-log '^View Show menu: Origins off [|]'
+wait-idle
+expect-view-origin hidden
+
+# 3. The eye with the light bulb on and View › Show › Origins off.
+mark
+click-logged '^Browser eye Root/Origin at '
+wait-log '^Visibility Root/Origin: shown$'
+wait-log '^Design origin shown in the view; the Origin folder.s light bulb on$'
+wait-log '^View origin drawn: planes xy, xz, yz; axes x, y, z; point origin$'
+wait-log '^View Show menu: Origins on [|]'
+wait-idle
+expect-view-origin shown
+
+# 4. Both off: each control shows the origin in one undo step.
+mark
+model-command '{"cmd":"set_view_show","origins":false}'
+model-command '{"cmd":"set_origin_visible","visible":false}'
+wait-log '^Design origin hidden in the view; the Origin folder.s light bulb off$'
+wait-log '^View origin drawn: none$'
+wait-idle
+capture-undo-depth both_off
+mark
+click-logged '^Browser eye Root/Origin at '
+wait-log '^Visibility Root/Origin: shown$'
+wait-log '^Design origin shown in the view; the Origin folder.s light bulb on$'
+wait-log '^View origin drawn: planes xy, xz, yz; axes x, y, z; point origin$'
+wait-idle
+expect-view-origin shown
+expect-undo-depth ${both_off} 1
+mark
+key ctrl+z
+wait-log '^Undo: Show Origin$'
+wait-log '^Design origin hidden in the view; the Origin folder.s light bulb off$'
+wait-log '^View origin drawn: none$'
+wait-idle
+expect-view-origin hidden
+mark
+menu View/Show/Origins
+wait-log '^View show origins: shown$'
+wait-log '^Design origin shown in the view; the Origin folder.s light bulb on$'
+wait-log '^View origin drawn: planes xy, xz, yz; axes x, y, z; point origin$'
+wait-idle
+expect-view-origin shown
+expect-undo-depth ${both_off} 1
+mark
+key ctrl+z
+wait-log '^Undo: Show All Origins$'
+wait-log '^View origin drawn: none$'
+wait-idle
+expect-view-origin hidden

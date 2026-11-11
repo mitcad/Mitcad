@@ -23,3 +23,5 @@ mod options_tests;
 mod connector_corner_tests;
 // The middle of a free stretch of a side (mitcad#1401).
 mod side_gap_tests;
+// A length to a picked face plus an offset (mitcad#1630).
+mod to_face_tests;

@@ -33,5 +33,8 @@ mod project_again_tests;
 // A dimension's value that uses its own parameter keeps that parameter as
 // a user parameter (mitcad#1535).
 mod own_parameter_tests;
+// A 3D sketch dimension's value that uses its own parameter keeps that
+// parameter as a user parameter, as a planar one does (mitcad#1535).
+mod sketch3d_own_parameter_tests;
 // Remove Name: a parameter's automatic name back (mitcad#1577).
 mod remove_name_tests;

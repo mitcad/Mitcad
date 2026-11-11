@@ -205,6 +205,35 @@ void MainWindow::registerComponentWebCommand() {
                   QStringLiteral("model"),    QStringLiteral("part")};
   web.run = [this] { openComponentBrowser(); };
   m_registry->add(web);
+
+  // For tests (mitcad#1663): with MITCAD_TEST_WEB_FILE naming a local file,
+  // Insert Web File (Test) brings it in as a download the browser handed
+  // over, through the same import, without the web browser component.
+  const QString testFile = qEnvironmentVariable("MITCAD_TEST_WEB_FILE");
+  if (testFile.isEmpty()) {
+    return;
+  }
+  CommandDef test;
+  test.id = QStringLiteral("test.component_web_file");
+  test.name = QStringLiteral("Insert Web File (Test)");
+  test.icon = QStringLiteral("insert-component");
+  test.tooltip = QStringLiteral("For tests: brings in MITCAD_TEST_WEB_FILE as Component from Web does");
+  test.kind = CommandDef::Kind::Action;
+  test.mode = CommandDef::Mode::Model;
+  test.tab.clear();
+  test.run = [this, testFile] {
+    const QString file = QFileInfo(testFile).fileName();
+    const WebFileCheck check = checkWebFileName(file);
+    if (check.kind != WebFileKind::Component && check.kind != WebFileKind::Document) {
+      qWarning().noquote() << QStringLiteral("Component from Web: the test file %1 is refused: %2").arg(file, check.note);
+      return;
+    }
+    QString error;
+    if (!importWebDownload(testFile, check.kind, &error)) {
+      qWarning().noquote() << QStringLiteral("Component from Web: the test file %1 was not imported: %2").arg(file, error);
+    }
+  };
+  m_registry->add(test);
 }
 
 void MainWindow::openComponentBrowser() {
@@ -465,7 +494,10 @@ bool MainWindow::importWebDownload(const QString& path, WebFileKind kind, QStrin
       *error = m_lastError;
       return false;
     }
-    QJsonObject command = cmd("import_file", {{QStringLiteral("path"), absolute}});
+    // Straight into the component just made, not into one more of its own
+    // (import_file's `wrap`, mitcad#1629).
+    QJsonObject command =
+        cmd("import_file", {{QStringLiteral("path"), absolute}, {QStringLiteral("wrap"), false}});
     if (fileKind(path) == FileKind::Mesh) {
       command.insert(QStringLiteral("unit_mm"), 1.0);
     }
