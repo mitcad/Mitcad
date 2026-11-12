@@ -67,6 +67,12 @@ protected:
 
 private:
   void installWindowMenu(MainWindow* window);
+  // A new window's size and place before it shows (mitcad#1710,
+  // framework/WindowPlace.hpp): the kept place for the first window, the
+  // last size cascaded from a shown one for another.
+  void placeNewWindow(MainWindow* window, MainWindow* source);
+  // The active window's place kept for the next start.
+  void saveActiveWindowPlace() const;
   QList<QPointer<MainWindow>> m_windows;
   QPointer<MainWindow> m_active;
   std::function<void(MainWindow*)> m_presenter;

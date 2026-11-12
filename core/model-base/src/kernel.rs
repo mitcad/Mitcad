@@ -1966,6 +1966,24 @@ pub trait Kernel: Send {
     ) -> Result<Vec<(TopoName, Curve3)>, KernelError> {
         Err(KernelError::Unsupported("named edge curves"))
     }
+
+    // Narrow gaps between bodies that touch: their faces measured pair by
+    // pair (mitcad#1672; `api/print.rs`, `print_analysis::face_gap`).
+
+    /// Every pair of a face of `a` and a face of `b` less than `within` mm
+    /// apart ([`FaceSeparation`]), the faces by index in the order of
+    /// [`Kernel::faces`], in no particular order. Only faces whose boxes
+    /// lie within `within` of each other are measured; each pair's
+    /// distance is the exact minimum, as [`Kernel::measure_between`] gives
+    /// it for the two faces.
+    fn face_separations(
+        &self,
+        _a: &Self::Shape,
+        _b: &Self::Shape,
+        _within: f64,
+    ) -> Result<Vec<FaceSeparation>, KernelError> {
+        Err(KernelError::Unsupported("face separations"))
+    }
 }
 
 /// [`Kernel::shape_unpacker`]: `unpack` makes a shape of
@@ -2660,6 +2678,28 @@ pub enum HoleShape {
         depth: f64,
         angle: f64,
     },
+    /// A hex pocket for a nut (mitcad#1518) about the round hole: a regular
+    /// hexagon `across_flats` wide, `depth` deep from `offset` below the
+    /// hole's start (0: open at the start). `angle` turns it about the axis
+    /// (radians) from where its first flat's normal lies along the model's
+    /// x axis projected onto the start plane (its y axis for a hole along
+    /// x), as a press fit's section. `slot` (a side slot to slide the nut
+    /// in) runs the pocket out sideways to `slot` from the axis, a quarter
+    /// turn counterclockwise about the hole's direction from the first
+    /// flat's normal: along the first flat, as wide as across the flats
+    /// and as deep, its sides the first and the fourth flat carried on.
+    /// Faces: `hole<i>.pocket<k>` (the flats, k from 0 counterclockwise
+    /// about the hole's direction; a slot takes the second and the third
+    /// away and carries the first and the fourth on), `hole<i>.pocket_floor`,
+    /// `hole<i>.pocket_roof` (an offset pocket's top, a slot's too) and a
+    /// slot's `hole<i>.slot_end`.
+    NutPocket {
+        across_flats: f64,
+        depth: f64,
+        angle: f64,
+        offset: f64,
+        slot: Option<f64>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -2676,7 +2716,7 @@ pub enum HoleEnd<S> {
 /// (the start point, pointing into the material), faces named
 /// `<feature>:hole<i>.<part>`: `wall`, `tip` (drill point or flat bottom),
 /// `cbore_wall`, `cbore_floor`, `csink`, `cdrill` (a counterdrill's cone)
-/// and `top` (at the start).
+/// and `top` (at the start); a nut pocket's ([`HoleShape::NutPocket`]) besides.
 #[derive(Debug, Clone)]
 pub struct HoleSpec<'a, S> {
     pub feature: FeatureUid,
@@ -2699,6 +2739,42 @@ pub struct HoleSpec<'a, S> {
     /// (mitcad#1515): their roof instead of the round wall's upper arc;
     /// None for round holes.
     pub print_shape: Option<HolePrintShape>,
+    /// Print bridging of a counterbore, or of a nut pocket at the start,
+    /// that opens toward the print bed (mitcad#1516); None for none.
+    pub bridging: Option<HoleBridging>,
+}
+
+/// How a recess's floor is bridged for printing (mitcad#1516).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BridgeMode {
+    /// One layer closes the bore over the floor: a membrane drilled out
+    /// after printing.
+    Sacrificial,
+    /// The first layer leaves open only a strip as wide as the hole across
+    /// the recess (bridges span the recess on both sides of it), the second
+    /// only the square of the hole's diameter on it (bridged across it).
+    Stepped,
+}
+
+/// Print bridging of the recesses that open toward the print bed
+/// (mitcad#1516): a counterbore, or a nut pocket at the hole's start with
+/// no slot, whose hole goes up away from the bed leaves the bore's ring in
+/// the air; its layers above the recess's floor bridge it. The stepped
+/// strip runs along the direction a press fit's angle is measured from
+/// (turned by a nut pocket's angle). Faces: `hole<i>.bridge0` (the first
+/// layer's top; stepped, two pieces beside the square), `hole<i>.bridge0.side0`
+/// and `.side1` (the strip's sides), `hole<i>.bridge0.end` (the strip's ends
+/// at the recess's wall), `hole<i>.bridge1` (the square's top, four corners
+/// round the bore) and `hole<i>.bridge1.side0` to `.side3` (its sides); a
+/// name held by several pieces is numbered `#k`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HoleBridging {
+    pub mode: BridgeMode,
+    /// Each bridge layer's thickness, the print's layer height (above 0).
+    pub layer: f64,
+    /// Per position, whether its recess opens toward the bed and is
+    /// bridged.
+    pub holes: Vec<bool>,
 }
 
 /// The print shape of holes printed lying (mitcad#1515): over the hole's
@@ -3197,4 +3273,24 @@ pub struct RigidCopy {
     pub of: usize,
     /// From body `of` onto this one, rigid; the identity for `of` itself.
     pub transform: Transform,
+}
+
+// Narrow gaps between bodies that touch (mitcad#1672).
+
+/// What [`Kernel::face_separations`] gives for a pair of faces.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FaceSeparation {
+    /// The face of the first shape, by index in [`Kernel::faces`]' order.
+    pub face_a: usize,
+    /// The face of the second shape.
+    pub face_b: usize,
+    /// The minimum distance, mm; 0 when the faces touch or cross.
+    pub distance: f64,
+    /// The closest points.
+    pub on_a: Vec3,
+    pub on_b: Vec3,
+    /// The faces' outward unit normals there (as the face is oriented in
+    /// its body); zero where a face has none (an apex, a pole).
+    pub normal_a: Vec3,
+    pub normal_b: Vec3,
 }

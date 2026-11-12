@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# The design window's kept place (mitcad#1710, GitHub mitcad/Mitcad#283),
+# the start after window-place-restore.mitcad-ui: the window opens
+# maximized; made normal, it is 900 x 600 at 70, 50 again. A new window
+# (Window › New Window) opens at that last size, cascaded from it.
+# Run by tools/ui-window-place-test.sh and
+# tools/ui-windows-window-place-test.ps1.
+expect-ever '^Window place restored: .*, maximized$' 10
+wait-idle
+expect-window-state maximized
+window-state normal
+expect-window-state normal
+sleep 300
+wait-idle
+expect-window-place 70 50 900 600
+mark
+command window.new
+expect-log '^Window place cascaded: -?[0-9]+,-?[0-9]+ 900x600 ' 10
+wait-idle

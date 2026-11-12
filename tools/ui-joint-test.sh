@@ -14,6 +14,10 @@
 #     of freedom; the joint edited from the timeline (rest 60 degrees).
 #   - Drive Joint from the joint's row in the browser: 45 degrees, kept as
 #     the joint's position.
+#   - Animate Joint (mitcad#1701): every frame from the joint solver, no
+#     preview computed per frame, the whole animation within 20 % of its
+#     intended time; also on the reported design of GitHub #256 when
+#     MITCAD_MITCAD_REPORTED has it.
 #   - Joint Origin on the cap's top face in the cap's component (activated
 #     with its radio button), 5 mm up; As-Built Joint of the cap to the
 #     plate; Rigid Group of the pin and the cap, picked in the browser.
@@ -74,6 +78,24 @@ save() {
   ui_mark
   ui_key ctrl+s
   ui_expect_new "Saved $FILE" "saved"
+}
+
+# animation_timed joint: Animate Joint's last "Animated <joint>: 36 frames
+# in N ms (intended M ms): S shown, P previews" (mitcad#1701): no frame
+# computed as a preview (no recompute or meshing per frame) and the whole
+# animation within 20 % of its intended time.
+animation_timed() {
+  local line
+  line=$(grep -F "Animated $1: " "$UI_LOG" | tail -1)
+  [[ $line =~ :\ ([0-9]+)\ frames\ in\ ([0-9]+)\ ms\ \(intended\ ([0-9]+)\ ms\):\ ([0-9]+)\ shown,\ ([0-9]+)\ previews$ ]] ||
+    ui_fail "Animate $1 logged no frames and time: '$line'"
+  local frames=${BASH_REMATCH[1]} took=${BASH_REMATCH[2]} intended=${BASH_REMATCH[3]}
+  local shown=${BASH_REMATCH[4]} previews=${BASH_REMATCH[5]}
+  [ "$previews" = 0 ] || ui_fail "Animate $1 computed $previews of its frames as previews"
+  [ "$shown" -ge 1 ] && [ "$shown" -le "$frames" ] || ui_fail "Animate $1 showed $shown of $frames frames"
+  [ $((took * 10)) -ge $((intended * 8)) ] && [ $((took * 10)) -le $((intended * 12)) ] ||
+    ui_fail "Animate $1 took $took ms, intended $intended ms"
+  echo "ok   Animate $1: $frames frames in $took ms (intended $intended ms), $shown shown, no previews"
 }
 
 ui_start_display
@@ -171,11 +193,13 @@ ui_step "a click on the pin"             ui_click_logged "Body F4.b0 in O2"
 ui_expect_new "Selected: 1 face [face F4:" "a click without a drag still selects"
 ui_step "clear the selection (Esc)"      ui_key Escape
 
-echo "--- Animate Joint: Joint1 through its limits, previews only"
+echo "--- Animate Joint: Joint1 through its limits, the document unchanged"
 ui_mark
 ui_step "animate (search)"               ui_command "Animate Joint"
-ui_expect_new "Animating Joint1 rz: 36 frames from 45 deg to 45 deg" "from 45 degrees to the limits and back"
-ui_expect_new "Animated Joint1: 36 frames" "every frame shown" 30
+ui_expect_new "Animating Joint1 rz: 36 frames from 45 deg to 45 deg in 1440 ms, frames by the joint solver" \
+  "from 45 degrees to the limits and back, every frame from the joint solver"
+ui_expect_new "Animated Joint1: 36 frames in " "the animation ended" 30
+animation_timed "Joint1"
 ui_mark
 ui_step "undo (Ctrl+Z)"                  ui_key ctrl+z
 ui_expect_new "Undo: Drive Joint1" "the animation left no undo step: the last is the drive"
@@ -241,4 +265,58 @@ check "the saved design has the joints, the joint origin and the group" \
   '{"expect": {"query": {"query": "datum", "uid": "F8"}, "result": {"origin": [5, 5, 10]}}}'
 
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+
+# The reported design of GitHub #256 (mitcad#1701; under
+# MITCAD_MITCAD_REPORTED, never committed): a small mechanism whose Animate
+# was slow; its first driven revolute joint animated from the browser's
+# joint menu, every frame from the joint solver and on time.
+REPORTED_ZIP=""
+if [ -n "${MITCAD_MITCAD_REPORTED:-}" ]; then
+  REPORTED_ZIP=$(find "$MITCAD_MITCAD_REPORTED/github-256" -maxdepth 1 -name '*.zip' 2> /dev/null | sort | head -1)
+fi
+if [ -n "$REPORTED_ZIP" ] && command -v unzip > /dev/null && command -v python3 > /dev/null; then
+  echo "--- The reported design of GitHub #256: Animate Joint on its driven revolute joint"
+  mkdir -p "$WORK/reported"
+  unzip -o -q "$REPORTED_ZIP" -d "$WORK/reported" || ui_fail "the reported design's zip"
+  REPORTED=$(find "$WORK/reported" -name '*.mitcad' | sort | head -1)
+  [ -n "$REPORTED" ] || ui_fail "no design in the reported zip"
+  # The first revolute joint (or as-built joint) driven by a position.
+  JOINT=$(python3 -I -c '
+import json, sys
+design = json.load(open(sys.argv[1], encoding="utf-8"))
+for f in design.get("features", []):
+    if f.get("type") in ("joint", "as_built_joint") and f.get("kind") == "revolute" and "rz" in (f.get("position") or {}):
+        print(f["name"])
+        break
+' "$REPORTED")
+  [ -n "$JOINT" ] || ui_fail "the reported design has no driven revolute joint"
+  ui_stop_app
+  UI_WINDOW_WAIT=180 ui_start_app --open "$REPORTED"
+  for _ in $(seq 1 900); do
+    grep -qF -- "Opened $REPORTED" "$UI_LOG" && break
+    sleep 0.2
+  done
+  ui_expect_log "Opened $REPORTED" "the reported design opened"
+  ui_wait_idle
+  ui_sync
+  # A design longer than the browser opens folded below the root (mitcad#426).
+  ui_step "scroll the browser to the joint"  ui_browser_reveal "Browser Root/Joints/$JOINT"
+  if ! ui_place_valid "Browser Root/Joints/$JOINT"; then
+    ui_browser_reveal "Browser arrow Root/Joints"
+    ui_step "open the Joints folder"     ui_click_logged "Browser arrow Root/Joints"
+    ui_step "scroll the browser to the joint"  ui_browser_reveal "Browser Root/Joints/$JOINT"
+  fi
+  ui_expect_log "Browser Root/Joints/$JOINT at" "the joint's row in the browser"
+  ui_mark
+  ui_step "joint's menu (right click)"   ui_click_logged "Browser Root/Joints/$JOINT" 3
+  ui_expect_new "Context menu: Edit $JOINT | Drive $JOINT | Animate $JOINT" "the joint's menu offers Animate"
+  ui_step "animate"                      ui_menu_choose "Animate $JOINT"
+  ui_expect_new "Animating $JOINT rz: 36 frames from " "the animation starts"
+  ui_expect_new "in 1440 ms, frames by the joint solver" "every frame from the joint solver"
+  ui_expect_new "Animated $JOINT: 36 frames in " "the animation ended" 60
+  animation_timed "$JOINT"
+else
+  echo "skip the reported design of GitHub #256 (MITCAD_MITCAD_REPORTED, unzip, python3)"
+fi
+
 ui_finish "UI joint test"

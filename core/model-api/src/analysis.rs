@@ -2586,7 +2586,10 @@ fn vec3(value: &Value) -> Vec3 {
 fn properties_text(text: &mut String, body: &Value) {
     let number = |key: &str| body[key].as_f64().unwrap_or(f64::NAN);
     let material = match body["material"].as_str() {
-        Some(id) => analysis::material(id).map_or(id, |m| m.name).to_owned(),
+        // A built-in one by its name, the woods too (mitcad#1706).
+        Some(id) => mitcad_model::material::built_in_material(id)
+            .map_or(id, |m| m.name.as_str())
+            .to_owned(),
         None => "custom".to_owned(),
     };
     // A body of a component: where its occurrence places it (mitcad#1110).

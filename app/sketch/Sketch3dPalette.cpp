@@ -1323,6 +1323,7 @@ void Sketch3dPalette::buildReferences() {
     m_editPlaces.insert(QStringLiteral("reference %1 text").arg(id), text);
     const QString name = entityName(model, id);
     auto* replace = new QToolButton;
+    replace->setObjectName(QStringLiteral("sketch3dReference replace ") + id);
     replace->setText(tr("Replace"));
     replace->setToolTip(tr("Replace Reference: %1 follows a source of its kind you click next").arg(name));
     replace->setFocusPolicy(Qt::NoFocus);
@@ -1354,6 +1355,15 @@ void Sketch3dPalette::buildReferences() {
 bool Sketch3dPalette::itemFieldEvent(QLineEdit* edit, QEvent* event) {
   const QString id = m_itemFields.key(edit);
   switch (event->type()) {
+  case QEvent::MouseButtonPress:
+  case QEvent::MouseButtonDblClick:
+    // As for the tool fields, activating the floating card can restore
+    // its previous focus instead of giving the clicked field the keys.
+    if (!edit->hasFocus()) {
+      edit->setFocus(Qt::MouseFocusReason);
+      qDebug().noquote() << QStringLiteral("3D sketch item %1 field takes the keyboard (click)").arg(id);
+    }
+    return false; // the field still handles the original click and selection
   case QEvent::ShortcutOverride: {
     // Enter and Esc are the field's: the window's OK and Cancel would
     // otherwise take them first.

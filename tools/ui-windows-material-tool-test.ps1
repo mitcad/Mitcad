@@ -378,7 +378,7 @@ Ui-ExpectNew 'Appearance tool: appearances read again, ' 'the tool read its appe
 Ui-ExpectNew ', new: Shop Red' 'Shop Red is offered'
 Ui-FocusMain
 Picker-Choose 'Panel Appearance input value' 'Appearance' 'Shop Red'
-Ui-ExpectNew 'Panel Appearance tile value: Shop Red (This Design)' 'the picker button shows Shop Red'
+Ui-ExpectNew 'Panel Appearance tile value: Shop Red (This design)' 'the picker button shows Shop Red'
 Ui-Mark
 Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
 Ui-ExpectNew "Appearance $look for 1 body(ies)" 'Body2, still selected, gets Shop Red'

@@ -304,6 +304,13 @@ public:
   // keyboard then goes to the first value, else the view keeps it.
   bool startsWithValues() const { return m_selectionsComplete; }
   const CommandDef& def() const { return m_def; }
+  // Repeat (mitcad#1686), before start: a new feature's panel starts from
+  // these settings (the values, choices and checks of the command's last
+  // OK), its selections empty. An edit ignores them.
+  void setRepeatSettings(const PanelSettings& settings) { m_repeatSettings = settings; }
+  // After a new feature's OK: its panel's settings, for a Repeat of the
+  // command; none after Cancel or an edit.
+  const std::optional<PanelSettings>& committedSettings() const { return m_committedSettings; }
   bool isEditing() const { return !m_editUid.isEmpty(); }
   // Before start: the session edits an analysis kept in the document (an
   // entry of the `analyses` query) instead of adding one (mitcad#41).
@@ -372,6 +379,19 @@ public:
   // change (mitcad#1097: an Annotate panel's annotation follows the view's
   // direction, which its placement depends on).
   void previewAgain();
+  // Features a panel's button added at the marker, before the feature,
+  // while the command runs (mitcad#1648: Flange's Edit Profile makes the
+  // profile sketch on the wall): `count` of them, after the undo depth
+  // `depth` (a negative count: so many of them were taken back). An edit's
+  // roll-back and its way back move past them, and Cancel takes them back
+  // with the command.
+  void featuresInserted(int count, int depth);
+  // The panel set aside while a sketch it uses is edited (mitcad#1648):
+  // its preview goes and nothing previews meanwhile; resume() shows the
+  // inputs again and computes the preview anew.
+  void suspend();
+  void resume();
+  bool suspended() const { return m_suspended; }
   // A light bulb of the browser while the panel is open (mitcad#295;
   // CommandSessionVisibility.cpp): runs the visibility commands as one undo
   // step `label` outside the command's undo range. An applied sketch
@@ -672,6 +692,8 @@ private:
   void finish(bool committed);
   // False when the roll-back stays (its computation was cancelled).
   bool rollForward();
+  // Cancel's undo of what featuresInserted recorded (mitcad#1648).
+  void takeBackInserted();
   // OK of an inspection that keeps an analysis in the document: adds it,
   // or changes the one edited; false when the model refuses it.
   bool keepAnalysis();
@@ -743,6 +765,11 @@ private:
   bool m_markerMoved = false; // the edit rolled the marker back
   int m_markerPosition = 0;   // where the edited feature is
   int m_originalMarker = 0;   // where the marker was before
+  // What a panel's button added before the feature (featuresInserted): the
+  // undo depth before it (-1: nothing), and how many features.
+  int m_insertedDepth = -1;
+  int m_insertedCount = 0;
+  bool m_suspended = false; // a sketch the command uses is edited (suspend)
   CommandState m_state;
   Selection m_previewHighlights;
   QPointer<CommandPanel> m_panel; // only the legacy Qt frontend
@@ -858,6 +885,18 @@ private:
   std::optional<PanelSizeKey> m_settingsKey; // the size the faces give now
   QString m_consideredKey;                 // the size last compared
   std::optional<QSet<QString>> m_changedBeforePick; // the changes before a pick's own reaction
+  // Sets the inputs outside lists to `settings` in the inputs' order,
+  // those in `changed` left (listed in `left`), what was set listed in
+  // `restored`; `react` runs a set input's own reaction (onChange) as a
+  // change in the panel does. `source` names the settings in the log.
+  void restoreSettings(const PanelSettings& settings, const QSet<QString>& changed, bool react,
+                       const QString& source, QStringList& restored, QStringList& left);
+  // Repeat (mitcad#1686): the settings given by setRepeatSettings, once,
+  // on a new feature's start.
+  void applyRepeatSettings();
+  std::optional<PanelSettings> m_repeatSettings;    // to start from (Repeat)
+  std::optional<PanelSettings> m_committedSettings; // the last OK's (for Repeat)
+  bool m_operationRepeated = false;                 // Repeat set an operation chosen by hand
 
   // Parameter names picked from the view (mitcad#250;
   // CommandSessionPicks.cpp): while a value field has the keyboard, the

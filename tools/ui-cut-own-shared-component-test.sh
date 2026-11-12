@@ -64,7 +64,7 @@ ui_step "a high window"                  xdotool windowsize "$UI_WINDOW" 1400 99
 eval "$(xdotool getwindowgeometry --shell "$UI_WINDOW")"
 ui_step "fit (F6)"                       ui_key F6
 ui_expect_log "Bodies shown: " "the design is shown"
-# A design opens with the root active (mitcad#426); the cut is Ring's.
+# Saved with the root active, it opens so (mitcad#1678); the cut is Ring's.
 ui_mark
 ui_step "activate Ring (radio)"          ui_click_logged "Browser radio Root/Ring:1"
 ui_expect_new "Activated Ring" "Ring is active"

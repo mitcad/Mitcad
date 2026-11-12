@@ -675,9 +675,10 @@ impl<K: Kernel> Document<K> {
         })
     }
 
-    /// Makes a component active as the document opens (mitcad#426): the
-    /// application activates the root of every design it opens, whatever
-    /// active component the file stores. No undo step and no new revision,
+    /// Makes a component active as the document opens: the application
+    /// activates again the component a design read from a file stores as
+    /// active (mitcad#1678), which checks that it still can be, and the
+    /// root of an import (mitcad#426). No undo step and no new revision,
     /// so a design opened unmodified stays unmodified and the undo and redo
     /// steps stay as they were; nothing evaluation reads changes, so
     /// nothing is recomputed. Saving stores the component active then.

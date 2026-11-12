@@ -175,7 +175,7 @@ RenderEnvironmentDialog::RenderEnvironmentDialog(DocumentHost& host, OcctViewer&
     }
   });
 
-  QFormLayout* ground = group(tr("Ground"));
+  QFormLayout* ground = group(tr("Ground", "render environment: the floor under the bodies"));
   ground->addRow(addCheck(QStringLiteral("ground.shadows"), tr("Shadows on the ground"),
                           tr("A ground under the bodies shows their shadows; without it there is no ground")));
   ground->addRow(addCheck(QStringLiteral("ground.reflections"), tr("Reflections on the ground"),

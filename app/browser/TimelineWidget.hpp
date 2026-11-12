@@ -82,6 +82,15 @@ public:
   // changed. Missing features are ignored; the selection stays in timeline
   // order.
   void setSelectedFeatures(const QStringList& uids);
+  // Marks the features that made what is selected in the view (mitcad#1704:
+  // a face's feature, a body's last feature, a sketch's sketch) with the
+  // owner's mark, a dashed ring of the selection's colour (FeatureStatus.hpp,
+  // CellState::marked); the timeline's own selection stays as it is and
+  // wins over a mark. A folded group's cell shows its members' marks.
+  // Emits nothing. When they changed: logged in timeline order ("Timeline
+  // owner marks: F2 Extrude1", "Timeline owner marks: none") and, when none
+  // of their cells is in sight, the last one is scrolled to.
+  void setMarkedFeatures(const QStringList& uids);
   QString selectedFeature() const;
   // The selected features (Ctrl toggles, a Shift run or an external set), in timeline order.
   QStringList selectedFeatures() const;

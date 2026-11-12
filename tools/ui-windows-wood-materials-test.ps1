@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/print/MaterialProperties.cpp app/print/MaterialsDialog.cpp app/print/PrintLibrary.cpp app/framework/TestDriver.cpp core/model/src/material_dataset.rs core/model/data/wood_materials.json
+# check-all sources: app/print/MaterialProperties.cpp app/print/MaterialsDialog.cpp app/print/PrintLibrary.cpp app/framework/TestDriver.cpp app/framework/Appearances.cpp core/model/src/material_dataset.rs core/model/data/wood_materials.json
+# check-all sources: core/model/src/material.rs core/model/src/document/materials.rs core/model/src/document/material_import.rs
 # check-all sources: core/model-base/src/material_class.rs core/model-base/src/appearance.rs core/model-api/src/materials.rs
-# The bundled dataset's woods and panels in the class Wood (mitcad#1552),
-# in the build VM: the same driver script as the Linux test
-# (tools/ui-scripts/wood-materials.mitcad-ui: the Materials window's New
+# The woods and panels in the class Wood (mitcad#1552, mitcad#1706), in
+# the build VM: the same driver script as the Linux test
+# (tools/ui-scripts/wood-materials.mitcad-ui: the five built-in woods and
+# panels in the Built-in group's Wood class, the Materials window's New
 # menu with Wood, Browse Material Dataset... with its two sources, "oak"
-# found in the class Wood with its values and source, and Wood - Oak
-# created into the design in the Materials window's Wood group with its
-# look) on a design mitcad-cli makes. The pictures go to the output folder.
+# found in the class Wood with its values and source, three plywoods
+# picked and created into the design's Wood group in one undo step, and
+# Select All of the plywoods skipping every name there already) on a
+# design mitcad-cli makes. The pictures go to the output folder.
 param(
   [string]$App,
   [string]$Cli,
@@ -32,6 +35,6 @@ $exitCode = $script:UiProcess.ExitCode
 if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "wood materials driver failed (exit code $exitCode)"
 }
-Ui-ExpectLog 'TestDriver: done' 'oak found in the class Wood and created as a Wood material of the design'
+Ui-ExpectLog 'TestDriver: done' 'the built-in woods listed, three plywoods made at once and the names there skipped'
 Ui-StopApp
 Write-Host 'PASS: wood materials'

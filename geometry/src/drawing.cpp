@@ -468,16 +468,22 @@ bool fit_circle(const std::vector<Point2>& points, std::size_t from, std::size_t
 }
 
 // Whether the points from `from` to `to` follow an arc of one circle within
-// `tolerance`, turning one way, at most once round, each segment's sagitta
-// within it too; `sweep` is the signed angle they turn through.
+// `tolerance`, turning one way, at most once round; `sweep` is the signed
+// angle they turn through. Each segment lies within it of the arc too: its
+// ends' distance from the circle and the arc's sagitta over it together
+// (mitcad#1671: apart, each within the tolerance, a short line next to an
+// arc was taken into it, the arc twice the tolerance from the line).
 bool on_arc(const std::vector<Point2>& points, std::size_t from, std::size_t to, double tolerance, Circle& circle,
             double& sweep) {
   if (!fit_circle(points, from, to, circle)) {
     return false;
   }
-  for (std::size_t k = from; k <= to; ++k) {
+  const auto off = [&](std::size_t k) {
     const Point2 v = minus2(points[k], circle.center);
-    if (std::abs(std::hypot(v[0], v[1]) - circle.radius) > tolerance) {
+    return std::abs(std::hypot(v[0], v[1]) - circle.radius);
+  };
+  for (std::size_t k = from; k <= to; ++k) {
+    if (off(k) > tolerance) {
       return false;
     }
   }
@@ -492,7 +498,7 @@ bool on_arc(const std::vector<Point2>& points, std::size_t from, std::size_t to,
       return false;
     }
     turning = sign;
-    if (circle.radius * (1.0 - std::cos(delta / 2.0)) > tolerance) {
+    if (std::max(off(k), off(k + 1)) + circle.radius * (1.0 - std::cos(delta / 2.0)) > tolerance) {
       return false;
     }
     total += delta;
@@ -752,17 +758,30 @@ void add_polygonal(const TopoDS_Shape& compound, bool visible, DrawnKind kind, d
   }
 }
 
+// How much farther than the triangulation the polygonal algorithm's drawn
+// lines may lie from the edges: they are fitted within this many times its
+// deviation.
+constexpr double kFitted = 1.5;
+
 // The deviation the quick path's triangulation may have: a 2000th of the
 // shapes' size (the diagonal of their box), 0.06 mm on a 120 mm assembly,
-// a tenth of a thin line at the scale a sheet shows such a view; at least
-// the view's deflection.
-double quick_deflection(const std::vector<TopoDS_Shape>& parts, double deflection) {
+// a tenth of a thin line at the scale a sheet shows such a view; at most
+// that which keeps the drawn lines within the view's own deviation
+// (DrawingViewSpec::quick_deviation, from its scale on the sheet:
+// mitcad#1671, where a 2000th of a 6 m frame, 3 mm, showed as crooked
+// lines and squared corners in an enlarged view of it); at least the
+// view's deflection.
+double quick_deflection(const std::vector<TopoDS_Shape>& parts, const DrawingViewSpec& spec) {
   Bnd_Box box;
   for (const TopoDS_Shape& part : parts) {
     BRepBndLib::Add(part, box);
   }
   const double size = box.IsVoid() ? 1.0 : std::sqrt(box.SquareExtent());
-  return std::max(deflection, size * 5e-4);
+  double deviation = size * 5e-4;
+  if (spec.quick_deviation > 0.0) {
+    deviation = std::min(deviation, spec.quick_deviation / kFitted);
+  }
+  return std::max(spec.deflection, deviation);
 }
 
 // Whether the exact algorithm is slow on the parts, so that a view takes
@@ -791,6 +810,125 @@ double exact_work(const PartCounts& c) {
 }
 
 bool exact_is_slow(const PartCounts& c) { return c.freeform > 0 || exact_work(c) > kExactWorkLimit; }
+
+void add_counts(PartCounts& to, const PartCounts& c) {
+  to.parts += c.parts;
+  to.planes += c.planes;
+  to.analytic += c.analytic;
+  to.freeform += c.freeform;
+  to.conic_edges += c.conic_edges;
+  to.curve_edges += c.curve_edges;
+}
+
+// --- The quick path body by body (mitcad#1671) ----------------------------------
+
+// How far two outlines must overlap before one shape can hide the other's
+// lines: shapes that only touch in the view (a tube standing on a plate,
+// seen from its end) cannot.
+constexpr double kOverlap = 1e-3;
+
+// A shape's box in the view's coordinates: around its box's corners.
+struct ViewBox {
+  bool empty = true;
+  double x0 = 0.0;
+  double y0 = 0.0;
+  double x1 = 0.0;
+  double y1 = 0.0;
+
+  bool overlaps(const ViewBox& other) const {
+    return !empty && !other.empty && std::min(x1, other.x1) - std::max(x0, other.x0) > kOverlap &&
+           std::min(y1, other.y1) - std::max(y0, other.y0) > kOverlap;
+  }
+};
+
+// `tight`: the box of the shape's surfaces themselves, not of their
+// tolerances (or B-splines' poles), so that shapes that only touch do not
+// overlap; else a quicker box around them.
+ViewBox view_box(const TopoDS_Shape& part, const ViewFrame& frame, bool tight) {
+  Bnd_Box box;
+  if (tight) {
+    BRepBndLib::AddOptimal(part, box, false, false);
+  } else {
+    BRepBndLib::Add(part, box, false);
+  }
+  ViewBox out;
+  if (box.IsVoid()) {
+    return out;
+  }
+  double xmin = 0.0, ymin = 0.0, zmin = 0.0, xmax = 0.0, ymax = 0.0, zmax = 0.0;
+  box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+  for (int k = 0; k < 8; ++k) {
+    const Point2 p = frame.project(gp_Pnt((k & 1) ? xmax : xmin, (k & 2) ? ymax : ymin, (k & 4) ? zmax : zmin));
+    if (out.empty) {
+      out = {false, p[0], p[1], p[0], p[1]};
+      continue;
+    }
+    out.x0 = std::min(out.x0, p[0]);
+    out.y0 = std::min(out.y0, p[1]);
+    out.x1 = std::max(out.x1, p[0]);
+    out.y1 = std::max(out.y1, p[1]);
+  }
+  return out;
+}
+
+// Which parts a view on the quick path projects exactly (true at their
+// indices): none of those on which the exact algorithm is slow alone, nor any part
+// whose box in the view overlaps one of the parts the quick path takes,
+// so that every line one part can hide of another is hidden by one
+// algorithm; and none when the exact algorithm is slow on the rest
+// together. The two algorithms then draw their parts apart.
+std::vector<bool> exact_parts(const std::vector<TopoDS_Shape>& parts, const std::vector<PartCounts>& counts,
+                              const ViewFrame& frame) {
+  const std::size_t n = parts.size();
+  std::vector<bool> exact(n, true);
+  std::vector<std::size_t> queue;
+  for (std::size_t i = 0; i < n; ++i) {
+    if (exact_is_slow(counts[i])) {
+      exact[i] = false;
+      queue.push_back(i);
+    }
+  }
+  if (queue.empty() || queue.size() == n) {
+    return std::vector<bool>(n, false);
+  }
+  std::vector<ViewBox> boxes;
+  boxes.reserve(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    boxes.push_back(view_box(parts[i], frame, exact[i]));
+  }
+  while (!queue.empty()) {
+    const std::size_t q = queue.back();
+    queue.pop_back();
+    for (std::size_t i = 0; i < n; ++i) {
+      if (exact[i] && boxes[q].overlaps(boxes[i])) {
+        exact[i] = false;
+        queue.push_back(i);
+      }
+    }
+  }
+  PartCounts rest;
+  bool any = false;
+  for (std::size_t i = 0; i < n; ++i) {
+    if (exact[i]) {
+      add_counts(rest, counts[i]);
+      any = true;
+    }
+  }
+  if (!any || exact_is_slow(rest)) {
+    return std::vector<bool>(n, false);
+  }
+  return exact;
+}
+
+template <class T> std::vector<T> picked(const std::vector<T>& items, const std::vector<bool>& which, bool value) {
+  std::vector<T> out;
+  for (std::size_t i = 0; i < items.size(); ++i) {
+    if (which[i] == value) {
+      out.push_back(items[i]);
+    }
+  }
+  return out;
+}
 
 // The algorithm's lines (its compounds, made when they are asked for:
 // "extract" in the trace), then each as a drawn curve ("convert"): fitted
@@ -910,7 +1048,12 @@ void project_exact(const std::vector<TopoDS_Shape>& parts, const std::vector<std
 void project_polygonal(const std::vector<TopoDS_Shape>& parts, const std::vector<std::size_t>& sources,
                        const HLRAlgo_Projector& projector, const DrawingViewSpec& spec, DrawnView& view,
                        ViewTrace& trace) {
-  const double deflection = quick_deflection(parts, spec.deflection);
+  const double deflection = quick_deflection(parts, spec);
+  if (trace.on()) {
+    char text[48];
+    std::snprintf(text, sizeof text, "deflection=%.4g", deflection);
+    trace.note(text);
+  }
   occ::handle<HLRBRep_PolyAlgo> algo = new HLRBRep_PolyAlgo();
   // The copies as loaded: each shape's lines are asked for by its copy.
   std::vector<TopoDS_Shape> loaded;
@@ -930,7 +1073,7 @@ void project_polygonal(const std::vector<TopoDS_Shape>& parts, const std::vector
   trace.mark("update");
   HLRBRep_PolyHLRToShape out;
   out.Update(algo);
-  collect(out, loaded, sources, spec, view, trace, 1.5 * deflection);
+  collect(out, loaded, sources, spec, view, trace, kFitted * deflection);
 }
 
 // MITCAD_DRAWING_TRACE=compare: the time of the algorithm the view did not
@@ -1260,10 +1403,15 @@ DrawnView project_view(const std::vector<ShapePtr>& shapes, const DrawingViewSpe
       return view;
     }
     // The quick path where the exact algorithm is slow (mitcad#962,
-    // mitcad#1033).
+    // mitcad#1033), for the parts that need it (mitcad#1671).
     bool quick = false;
+    std::vector<PartCounts> each;
     if (spec.exact && spec.quick && !meshes) {
-      const PartCounts counts = count_parts(parts);
+      PartCounts counts;
+      for (const TopoDS_Shape& part : parts) {
+        each.push_back(count_parts(std::vector<TopoDS_Shape>{part}));
+        add_counts(counts, each.back());
+      }
       if (trace.on()) {
         char work[48];
         std::snprintf(work, sizeof work, " work=%.0f", exact_work(counts));
@@ -1274,6 +1422,30 @@ DrawnView project_view(const std::vector<ShapePtr>& shapes, const DrawingViewSpe
     } else if (trace.on()) {
       trace.note(shape_counts(parts));
       trace.mark("count");
+    }
+    if (quick) {
+      // The parts the exact algorithm can take on their own, apart from
+      // those the quick path takes.
+      const std::vector<bool> exact = exact_parts(parts, each, frame);
+      trace.mark("split");
+      if (std::find(exact.begin(), exact.end(), true) != exact.end()) {
+        DrawnView split = view;
+        try {
+          project_exact(picked(parts, exact, true), picked(indices, exact, true), projector, spec, split, trace);
+          project_polygonal(picked(parts, exact, false), picked(indices, exact, false), projector, spec, split,
+                            trace);
+          split.polygonal = true;
+          trace.note("result=split exact-parts=" +
+                     std::to_string(std::count(exact.begin(), exact.end(), true)) +
+                     " quick-parts=" + std::to_string(std::count(exact.begin(), exact.end(), false)));
+          trace.finish();
+          return split;
+        } catch (const Standard_Failure&) {
+          // All parts on the quick path below.
+          trace.mark("failed");
+          trace.note("split-failed");
+        }
+      }
     }
     if (spec.exact && !meshes && !quick) {
       DrawnView exact = view;

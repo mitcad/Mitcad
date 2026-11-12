@@ -551,6 +551,66 @@ TopoDS_Wire Spine::part(double from, double to) const {
   return wire.Wire();
 }
 
+gp_Pnt Spine::edge_point(int i, double local) const {
+  const Piece& piece = m_pieces.at(static_cast<std::size_t>(i));
+  return piece.curve->Value(parameter(piece, std::clamp(local, 0.0, piece.length)));
+}
+
+gp_Dir Spine::edge_tangent(int i, double local) const {
+  const Piece& piece = m_pieces.at(static_cast<std::size_t>(i));
+  gp_Pnt p;
+  gp_Vec v;
+  piece.curve->D1(parameter(piece, std::clamp(local, 0.0, piece.length)), p, v);
+  if (v.Magnitude() <= Precision::Confusion()) {
+    throw std::invalid_argument("the path has no direction at a point");
+  }
+  return piece.forward ? gp_Dir(v) : gp_Dir(v.Reversed());
+}
+
+std::optional<std::pair<double, gp_Dir>> Spine::edge_bend(int i, double local) const {
+  const Piece& piece = m_pieces.at(static_cast<std::size_t>(i));
+  gp_Pnt p;
+  gp_Vec d1;
+  gp_Vec d2;
+  piece.curve->D2(parameter(piece, std::clamp(local, 0.0, piece.length)), p, d1, d2);
+  const double speed = d1.Magnitude();
+  if (speed <= Precision::Confusion()) {
+    return std::nullopt;
+  }
+  // The part of the second derivative across the tangent, over the speed
+  // squared: the curvature times the normal (either way along the curve).
+  const gp_Vec across = d2 - d1 * (d2.Dot(d1) / (speed * speed));
+  const double curvature = across.Magnitude() / (speed * speed);
+  if (curvature <= 1.0e-12) {
+    return std::nullopt;
+  }
+  return std::make_pair(curvature, gp_Dir(across));
+}
+
+std::optional<gp_Circ> Spine::edge_circle(int i) const {
+  const Piece& piece = m_pieces.at(static_cast<std::size_t>(i));
+  const GeomAdaptor_Curve curve(piece.curve, piece.first, piece.last);
+  if (curve.GetType() != GeomAbs_Circle) {
+    return std::nullopt;
+  }
+  gp_Circ circle = curve.Circle();
+  // The circle's parameter runs counter-clockwise about its axis.
+  if (!piece.forward) {
+    circle.SetAxis(circle.Axis().Reversed());
+  }
+  return circle;
+}
+
+Spine::EdgeCurve Spine::edge_curve(int i) const {
+  const Piece& piece = m_pieces.at(static_cast<std::size_t>(i));
+  return {piece.curve, piece.first, piece.last, piece.forward};
+}
+
+bool Spine::edge_straight(int i) const {
+  const Piece& piece = m_pieces.at(static_cast<std::size_t>(i));
+  return GeomAdaptor_Curve(piece.curve, piece.first, piece.last).GetType() == GeomAbs_Line;
+}
+
 gp_Dir any_normal(const gp_Dir& direction) {
   const gp_Dir axis = std::abs(direction.X()) < 0.6 ? gp_Dir(1, 0, 0)
                       : std::abs(direction.Y()) < 0.6 ? gp_Dir(0, 1, 0)

@@ -152,6 +152,32 @@ void lookTests() {
   CHECK(!look.statusRing.isValid() && look.badge && look.badgeLevel == NoticeLevel::Information &&
         !look.fill.isValid());
   CHECK(timeline::describeCell(state, look) == QStringLiteral("info, badge"));
+  // The feature that made something selected in the view (mitcad#1704):
+  // the selection's colour as a dashed ring, without its fill; the
+  // selection's own ring and a search's match win over it.
+  state = cellState(FeatureState::Ok, false);
+  state.marked = true;
+  look = timeline::cellLook(state, c);
+  CHECK(look.outerRing == c.selectedBorder && look.outerDashed && !look.fill.isValid() && !look.badge);
+  CHECK(timeline::describeCell(state, look) == QStringLiteral("ok, marked, dashed outer ring"));
+  state.hovered = true;
+  look = timeline::cellLook(state, c);
+  CHECK(look.fill == c.hoverFill && look.outerRing == c.selectedBorder && look.outerDashed);
+  state = cellState(FeatureState::Failed, false);
+  state.marked = true;
+  state.hovered = true;
+  look = timeline::cellLook(state, c);
+  CHECK(look.fill == c.errorFill && look.statusRing == c.errorBorder && look.outerRing == c.selectedBorder &&
+        look.outerDashed && look.badge);
+  state = cellState(FeatureState::Ok, true);
+  state.marked = true;
+  look = timeline::cellLook(state, c);
+  CHECK(look.fill == c.selectedFill && look.outerRing == c.selectedBorder && !look.outerDashed);
+  state = cellState(FeatureState::Ok, false);
+  state.marked = true;
+  state.found = true;
+  look = timeline::cellLook(state, c);
+  CHECK(look.outerRing == c.found && !look.outerDashed);
   // The failed and warned cells' badges have their levels.
   CHECK(timeline::cellLook(cellState(FeatureState::Failed, false), c).badgeLevel == NoticeLevel::Error);
   CHECK(timeline::cellLook(cellState(FeatureState::Warning, false), c).badgeLevel == NoticeLevel::Warning);
@@ -374,6 +400,21 @@ void cardTests() {
   CHECK(featureStatusLine(QStringLiteral("suppressed"), QStringLiteral("skipped"), error, warning).isEmpty());
 }
 
+// A warning Auto Fix can fix names Auto Fix in the feature's tooltip and
+// the warnings badge's (mitcad#1677); nothing when it can fix none.
+void autoFixHintTests() {
+  CHECK(autoFixHint(0).isEmpty());
+  CHECK(autoFixHint(-1).isEmpty());
+  CHECK(autoFixHint(1) == QStringLiteral("Auto Fix (right-click) can fix this warning"));
+  CHECK(autoFixHint(2) == QStringLiteral("Auto Fix (right-click) can fix 2 of its warnings"));
+  CHECK(autoFixBadgeHint(0).isEmpty());
+  CHECK(autoFixBadgeHint(1) == QStringLiteral("Click for Auto Fix, which can fix 1 of these warnings"));
+  CHECK(autoFixBadgeHint(3) == QStringLiteral("Click for Auto Fix, which can fix 3 of these warnings"));
+  // One short line each (docs/ui-conventions.md: tooltips of controls).
+  CHECK(autoFixHint(12).size() <= 100);
+  CHECK(autoFixBadgeHint(12).size() <= 100);
+}
+
 } // namespace
 
 int featureStatusTests() {
@@ -387,5 +428,6 @@ int featureStatusTests() {
   issueBadgeTests();
   errorTextTests();
   cardTests();
+  autoFixHintTests();
   return failures;
 }

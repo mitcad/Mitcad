@@ -44,6 +44,101 @@ QString selectionOwnerText(const SelectionItem& item, const DocumentSnapshot& sn
   return lines.join(QStringLiteral("<br>"));
 }
 
+QString pickListText(const SelectionItem& item, const DocumentSnapshot& snapshot) {
+  QString kind = SelectionItem::kindText(item.kind);
+  if (!kind.isEmpty()) {
+    kind[0] = kind[0].toUpper();
+  }
+  QStringList parts;
+  // The occurrence that places it, by its names from the root; a level
+  // not in the snapshot ends the path (never its uid).
+  if (!item.occurrence.isEmpty()) {
+    QStringList names;
+    const QVector<DocumentSnapshot::Occurrence>* level = &snapshot.occurrences;
+    for (const QString& uid : item.occurrence.split(QLatin1Char('/'))) {
+      const auto found = std::find_if(level->cbegin(), level->cend(), [&](const auto& occurrence) {
+        return occurrence.uid == uid;
+      });
+      if (found == level->cend() || found->name.isEmpty()) {
+        break;
+      }
+      names << found->name;
+      level = &found->children;
+    }
+    if (!names.isEmpty()) {
+      parts << names.join(QStringLiteral(" › "));
+    }
+  }
+  const auto bodyName = [&]() -> QString {
+    const auto body = snapshot.bodies.constFind(item.owner);
+    return body == snapshot.bodies.cend() ? QString() : body->name;
+  };
+  const auto featureName = [&]() -> QString {
+    const DocumentSnapshot::Feature* feature = snapshot.feature(item.owner);
+    return feature == nullptr ? QString() : feature->name;
+  };
+  const auto add = [&parts](const QString& name) {
+    if (!name.isEmpty()) {
+      parts << name;
+    }
+  };
+  switch (item.kind) {
+  case SelectKind::Face:
+  case SelectKind::Edge:
+  case SelectKind::Vertex:
+    add(bodyName());
+    parts << kind;
+    break;
+  case SelectKind::Body: {
+    const QString name = bodyName();
+    parts << (name.isEmpty() ? kind : name);
+    break;
+  }
+  case SelectKind::Profile:
+  case SelectKind::SketchCurve:
+  case SelectKind::SketchPoint:
+  case SelectKind::SketchConstraint:
+  case SelectKind::SketchDimension:
+    add(featureName());
+    parts << kind;
+    break;
+  case SelectKind::Plane:
+  case SelectKind::Axis:
+  case SelectKind::Point: {
+    // The origin's planes, axes and point as the Browser names them.
+    static const QStringList origin = {QStringLiteral("xy"), QStringLiteral("xz"), QStringLiteral("yz"),
+                                       QStringLiteral("x"),  QStringLiteral("y"),  QStringLiteral("z")};
+    if (item.owner == QStringLiteral("origin")) {
+      parts << QCoreApplication::translate("Selection", "Origin");
+    } else if (origin.contains(item.owner)) {
+      parts << QCoreApplication::translate("Selection", "Origin") << item.owner.toUpper();
+    } else {
+      const QString name = featureName();
+      parts << (name.isEmpty() ? kind : name);
+    }
+    break;
+  }
+  case SelectKind::Component:
+    // An occurrence is named by its path above; else its component.
+    if (parts.isEmpty()) {
+      const auto component = std::find_if(snapshot.components.cbegin(), snapshot.components.cend(),
+                                           [&](const auto& one) { return one.uid == item.owner; });
+      parts << (component == snapshot.components.cend() || component->name.isEmpty() ? kind : component->name);
+    }
+    break;
+  case SelectKind::Sketch:
+  case SelectKind::Feature: {
+    const QString name = featureName();
+    parts << (name.isEmpty() ? kind : name);
+    break;
+  }
+  case SelectKind::None:
+    parts << kind;
+    break;
+  }
+  return parts.join(QStringLiteral(": "));
+}
+
 QString selectionMeasurementText(const QJsonObject& measured) {
   QStringList lines;
   const auto add = [&](const QString& label, const QJsonValue& value, const QString& unit) {

@@ -239,6 +239,10 @@
 //   expect-pick-offset <regex> <dx> <dy> <item-regex>
 //                           probe fresh viewport picks plus logical pixels
 //   click-pick-offset <regex> <dx> <dy> <item-regex>   probe, then click there
+//   hold-pick <regex>       a left press held still where a click picks the
+//                           item (probed as click-pick-offset, profiles too)
+//                           until the view logs "Pick list at" (at most 3 s),
+//                           then let go there (mitcad#1703)
 //   click-edge-release <index> modifier-first|button-first|key-up-moved|f4-elsewhere
 //                           Cmd/Ctrl-click a fresh visible edge, releasing the
 //                           modifier before or after the button, or before a
@@ -248,6 +252,9 @@
 //   click-visible-face      probe fresh visible OCCT face points, click one
 //                           through the viewport input path, then verify the
 //                           actual shared selection contains that exact face
+//   click-visible-item <kind>   the same for another kind the view picks
+//                           outside commands ("profile", "edge", "vertex":
+//                           SelectionItem::kindName; mitcad#1704)
 //   drag-logged <from regex> <to regex> [dx]    left drag between two logged
 //                           places; dx pixels right of the end
 //   drag-from <regex> <dx> <dy>         left drag from a logged place by
@@ -261,6 +268,9 @@
 //                           including solved points, curves and constraints
 //   expect-sketch-dimension-clear <text regex>   visible text clear of all
 //                           shown glyph bounds, with ordinary pick targets
+//   expect-sketch-dimensions-apart <text regex>   at least two dimensions'
+//                           values match, and none of their drawn value
+//                           boxes overlaps another (mitcad#1673)
 //   sketch-drag <x1> <y1> <x2> <y2>
 //   sketch-pointer press|move|release <x> <y> [mods]  separate held left-drag
 //                           events; mods (shift, alt, ...) held on that event
@@ -445,8 +455,9 @@
 //   window-resize <w> <h>   resize this test's Qt or native main window
 //   window-move <x> <y>     move only this test's Qt/native document relative
 //                           to its screen's visible origin
-//   window-state normal|minimized|fullscreen change the document state
-//   expect-window-state normal|minimized|fullscreen await its actual state
+//   window-state normal|minimized|maximized|fullscreen change the document state
+//   expect-window-state normal|minimized|maximized|fullscreen await its actual
+//                           state (maximized: Qt windows only, mitcad#1710)
 //   expect-viewport         check the real framebuffer dimensions against
 //                           the viewport's backing scale; log GL version,
 //                           logical screen size and reported refresh rate
@@ -620,6 +631,9 @@
 //                           gives both: '^Restore Version$|^Restore v1 ')
 //   focus-main              give them to the main window again (a dialog
 //                           that closed is replaced by the main window too)
+//   reveal-widget <objectName> scroll a named, visible Qt widget into view
+//                           without changing focus or activating the widget;
+//                           subsequent input still uses its logged place
 //   focus-widget <objectName> focus a visible Qt widget in the target window
 //                           or active popup; it becomes screenshot-dialog's target
 //   dialog-resize <w> <h>   resize the focused Qt dialog in logical pixels
@@ -646,6 +660,13 @@
 //                           minimum where it cannot be that short
 //   expect-main-frame <w> <h> [least] its real frame fits that
 //                           process-local area
+//   expect-window-place <x> <y> <w> <h> the Qt main window (its document
+//                           frame) with its frame's top left at x, y from its
+//                           screen's available area's top left (as
+//                           window-move) and its own area w x h (as
+//                           window-resize), within a pixel (mitcad#1710)
+//   expect-window-on-screen the Qt main window's whole frame within the
+//                           primary screen's available area (mitcad#1710)
 //   expect-widget-whole <object-name> the one visible Qt widget of that name
 //                           as high as its text needs (else its minimum
 //                           height) and cut by none of its parents (in view
@@ -732,6 +753,7 @@
 #include <atomic>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <vector>
 
 #include <QElapsedTimer>
@@ -831,6 +853,9 @@ private:
   void queueClick(const QPoint& at, Qt::MouseButton button, Qt::KeyboardModifiers modifiers, int clicks);
   void queueDialogClick(const QPoint& at, int clicks);
   void queueDrag(const QPoint& from, const QPoint& to, Qt::MouseButton button, Qt::KeyboardModifiers modifiers);
+  // hold-pick (mitcad#1703): the press held at `at` until the view logs its
+  // pick list after log line `since`, at most `limitMs`, then let go there.
+  void queueHoldRelease(const QPoint& at, int since, qint64 limitMs, std::shared_ptr<QElapsedTimer> held);
   void testManipulatorFeedback();
   void showDialogStyleFixture(const QString& kind);
   void testDialogControls(const QString& kind);
@@ -894,6 +919,7 @@ private:
   QHash<QString, QPointer<QWidget>> m_documentWindows;
   QPointer<QWidget> m_dialog; // the target of key, type and button; else the main window
   QPointer<QWidget> m_grab;   // the widget a pressed mouse button belongs to
+  QPointer<QWidget> m_pointerTarget; // the last ungrabbed pointer receiver
   // The submenu a popup stage opened ("Sub/Item"), taken by the stage
   // that chooses in it; set only while that stage is queued.
   QPointer<QWidget> m_submenu;

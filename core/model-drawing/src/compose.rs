@@ -1946,6 +1946,7 @@ pub fn section_spec(plane: &CutPlane, hidden: bool, smooth: bool, exact: bool) -
         quick: true,
         section: Some(*plane),
         deflection: 0.01,
+        scale: None,
     }
 }
 

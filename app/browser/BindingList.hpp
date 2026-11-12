@@ -76,8 +76,14 @@ struct BindingEntry {
 // An appearance or a material: its id, name and colour (`display_color`).
 struct BindingChoice {
   QString id;
-  QString name;
+  QString name; // as stored: what an expression's text names it by
   QColor color;
+  // As the interface shows it, when that differs (mitcad#1689: a built-in
+  // material's name translated); the default member initialiser keeps the
+  // brace inits of the three fields above free of
+  // -Wmissing-field-initializers.
+  QString shown{};
+  QString shownName() const { return shown.isEmpty() ? name : shown; }
 };
 
 // What the words need: the parameters' values now, and the appearances and

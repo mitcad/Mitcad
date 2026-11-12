@@ -249,10 +249,12 @@ key Return
 wait-log '^3D sketch Fit Point Spline: made c'
 key Escape
 wait-log '^3D sketch tool Fit Point Spline: stopped'
+# The spline commit logged the current entity places; starting a tool does
+# not change the geometry and need not log those identical places again.
+wait-log '^3D sketch entity ${S}/p2 at '
 mark
 command sketch.arc_tangent
 wait-log '^3D sketch tool Tangent Arc: started'
-wait-log '^3D sketch entity ${S}/p2 at '
 wait-idle
 click-logged '^3D sketch entity ${S}/p2 at '
 wait-log '^3D sketch Tangent Arc: continues c3 at p2'
@@ -341,27 +343,37 @@ mark
 dblclick-logged '^Timeline 3DSketch1 at '
 wait-log '^Editing 3D sketch F2 [(]3DSketch1[)]'
 wait-log '^3D sketch item k3 Length c3: 40[.]00 mm'
-wait-log '^3D sketch item k3 field at '
+reveal-widget 'sketch3dEdit coincident'
 wait-log '^3D sketch edit control coincident at '
 wait-idle
 mark
+reveal-widget 'sketch3dEdit drag axis X'
 click-logged '^3D sketch edit control drag axis X at '
 wait-log '^3D sketch drag on: along X'
+# The controls and the dimension rows need scrolling on a short screen.
+# Resolve a real widget first; the click still uses its newly logged place.
+reveal-widget 'sketch3dItem k3'
+wait-log '^3D sketch item k3 field at '
 wait-idle
 mark
 click-logged '^3D sketch item k3 field at '
+screenshot "${MITCAD_TEST_WORK}/dimension-click.png"
+expect-widget-property 'sketch3dItem k3' focus true
 key ctrl+a
 type 50
+expect-widget-property 'sketch3dItem k3' text 50
 key Return
 wait-log '^3D sketch edit value k3 = 50: done'
 wait-log '^3D sketch item k3 Length c3: 50[.]00 mm'
 wait-log '^3D sketch entity F2/p2 at '
+reveal-widget 'sketch3dItem k3'
 wait-log '^3D sketch item k3 remove at '
 wait-idle
 mark
 click-logged '^3D sketch item k3 driven at '
 wait-log '^3D sketch edit driven k3: done'
 wait-log '^3D sketch item k3 Length c3: 50[.]00 mm; driven'
+reveal-widget 'sketch3dItem k3'
 wait-log '^3D sketch item k3 remove at '
 wait-idle
 mark
@@ -387,6 +399,7 @@ mark
 click-logged '^3D sketch entity F2/c3 at '
 wait-log '\[sketch curve c3 of F2\]'
 wait-idle
+reveal-widget 'sketch3dEdit length'
 click-logged '^3D sketch edit control length at '
 wait-log '^3D sketch edit length: done, made k'
 mark
@@ -403,6 +416,7 @@ click-logged '^3D sketch entity F2/p2 at '
 wait-log '\[sketch point p2 of F2\]'
 key Delete
 wait-log '^3D sketch delete: p2 is used by c3'
+reveal-widget 'sketch3dEdit delete dependents'
 wait-log '^3D sketch edit control delete dependents at '
 expect-no-log '^3D sketch F2: deleted'
 wait-idle
@@ -411,6 +425,7 @@ wait-log '^3D sketch F2: deleted \['
 mark
 command edit.undo
 wait-log 'Undo: Delete in 3DSketch1'
+reveal-widget 'sketch3dReference replace c10'
 wait-log '^3D sketch reference c10 replace at '
 wait-idle
 mark
@@ -462,7 +477,11 @@ wait-log '^Sketch editor follows the history: Sketch1 is a 3D sketch'
 # Seen from the Home view, the 3D sketch keeps that view after Finish, not
 # the top view the 2D editor turned to (mitcad#1592).
 wait-idle
+# Model idleness does not wait for the Home camera animation. Capture the
+# resting orientation only after the navigation's real completion event.
+mark
 click-logged '^View home at '
+wait-log '^View navigation: [0-9]+ frame'
 wait-idle
 capture-view-orientation view3d
 mark

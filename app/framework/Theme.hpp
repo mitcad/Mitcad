@@ -85,6 +85,7 @@ enum class ColorRole {
   ProvisionalEdge,
   FeatureFaces,      // a selected Fillet's or Chamfer's own faces, apart from its input lines
   FeatureFacesHover, // the same, hovered
+  HandleActive,      // an axis-colored handle (Free Move's) hovered or dragged: none of the axis colors (mitcad#1707)
   // The 3D view's own objects.
   Body,
   Edge,

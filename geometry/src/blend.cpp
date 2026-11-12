@@ -290,22 +290,26 @@ gp_Pnt end_point(const TopoDS_Edge& edge, const TopoDS_Vertex& vertex) {
 // curves go in as they are: Gordon combines rational ones (conics, arcs)
 // exactly at a low degree, where their polynomial forms of high degree
 // overflow its degree limit. Where it still fails, the polynomial forms of
-// degree 5 are tried.
+// degree 5 are tried, also of polynomial curves of a higher degree: the
+// contact lines on an earlier G2 rounding's faces come at degree 9 to 13,
+// and Gordon's exact construction triples the degree of the curves it
+// reparametrizes, past its limit of 25 (mitcad#1711).
 occ::handle<Geom_BSplineSurface> blend_surface(const std::vector<occ::handle<Geom_Curve>>& profiles,
                                                const std::vector<occ::handle<Geom_Curve>>& guides) {
   try {
     return gordon_surface(profiles, guides, kFit);
   } catch (const std::runtime_error&) {
   }
+  constexpr int kPlainDegree = 5;
   const auto plain = [](const std::vector<occ::handle<Geom_Curve>>& curves) {
     std::vector<occ::handle<Geom_Curve>> result;
     for (const occ::handle<Geom_Curve>& curve : curves) {
       const occ::handle<Geom_BSplineCurve> spline = occ::down_cast<Geom_BSplineCurve>(curve);
-      if (spline.IsNull() || !spline->IsRational()) {
+      if (spline.IsNull() || (!spline->IsRational() && spline->Degree() <= kPlainDegree)) {
         result.push_back(curve);
         continue;
       }
-      GeomConvert_ApproxCurve approximation(spline, 0.1 * kFit, GeomAbs_C2, 200, 5);
+      GeomConvert_ApproxCurve approximation(spline, 0.1 * kFit, GeomAbs_C2, 200, kPlainDegree);
       if (!approximation.HasResult() || approximation.MaxError() > 0.1 * kFit) {
         throw std::runtime_error("a fillet's cross-section could not be made polynomial");
       }

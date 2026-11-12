@@ -21,7 +21,7 @@
 # Each group of shots is a run of its own (its own settings with 3MF as the
 # format, projects and autosave folders, a copy of the design), so that a
 # failed step costs only that run's shots. Floating chrome unless named:
-#   01-3dprint-panel.png        3D Print (3MF) after Import from slicer...
+#   01-3dprint-panel.png        3D Print (3MF) after Import from Slicer...
 #                               of the project: the Printer and Process
 #                               rows, the line beside the button, Details...
 #   02-import-details.png       Details...: the Import Details window
@@ -336,7 +336,7 @@ expect-ever 'Browser Root/Bodies/Body3 at' 30
 sleep 1500
 '@
 
-# 01, 02: 3D Print (3MF from the settings), Import from slicer... through
+# 01, 02: 3D Print (3MF from the settings), Import from Slicer... through
 # Qt's own file dialog (--no-native-dialogs): the path typed in its name
 # field and Open clicked (Return could go to the field's completer), then
 # Details....

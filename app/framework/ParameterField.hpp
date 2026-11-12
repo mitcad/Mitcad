@@ -66,7 +66,7 @@ struct ParameterFieldOptions {
   bool anyKind = false; // a parameter table's expression: any kind
   QString own;          // the field's own parameter, if it has one
   QString sketch;       // the sketch the field is in
-  // What the field sets, for the log and Create User Parameter's editor
+  // What the field sets, for the log and Add User Parameter's editor
   // ("Extrude distance", "sketch dimension").
   QString label;
   // The field takes `name = expression` for its own parameter
@@ -87,7 +87,7 @@ struct ParameterFieldOptions {
   // the caret after the `name = ` takes the whole `name = ` off at once,
   // and the field's tooltip says so while a name shows (mitcad#1614).
   bool removeName = false;
-  // The list offers Create User Parameter... (not where a dialog would end
+  // The list offers Add User Parameter... (not where a dialog would end
   // the editing, as in a table's cell).
   bool create = true;
   // Up and Down, and the mouse wheel while the field has the keyboard, step
@@ -116,7 +116,7 @@ struct ParameterFieldOptions {
 //
 // The list also offers what mitcad#568 asks for: `name = …` names the
 // field's own parameter (a hint and an action that writes the form), and
-// Create User Parameter... makes an independent user parameter in a
+// Add User Parameter... makes an independent user parameter in a
 // small editor (its name prefilled with the name typed) and puts its
 // reference in. The field's right-click menu has the same actions.
 //
@@ -248,7 +248,7 @@ private:
   // while it is open.
   Anchor anchor() const;
   // The name typed at the caret that no parameter has and that can name
-  // one, for Create User Parameter... and `name = …`; empty otherwise.
+  // one, for Add User Parameter... and `name = …`; empty otherwise.
   QString typedName(const Anchor& where) const;
   // Whether the typed name is the field's leading word, before any `=`:
   // what `name = …` would name.

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<!-- The MIME type of MitCad designs (mitcad#1539), for file managers and
+     their thumbnailers (mitcad.thumbnailer); installed as
+     share/mime/packages/mitcad.xml. A design file is JSON text. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-mitcad">
+    <comment>MitCad design</comment>
+    <sub-class-of type="application/json"/>
+    <glob pattern="*.mitcad"/>
+  </mime-type>
+</mime-info>

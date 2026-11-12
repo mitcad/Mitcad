@@ -73,3 +73,5 @@ mod sketch3d_relations_tests;
 // Copy, Cut and Paste of 3D sketch geometry, and planar geometry pasted into
 // a 3D sketch (mitcad#1661).
 mod sketch3d_clipboard_tests;
+// The `bodies` query's last feature of each body (mitcad#1704).
+mod body_last_features_tests;

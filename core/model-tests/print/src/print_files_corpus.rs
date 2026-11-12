@@ -2,7 +2,7 @@
 //! Slicers' print settings in real 3MF projects (mitcad#640), never
 //! committed: every project that the `index.tsv` of a folder of
 //! `MITCAD_3MF_CORPUS` (a `PATH`-like list) lists is imported into a fresh
-//! design as the application's Import from slicer... imports it
+//! design as the application's Import from Slicer... imports it
 //! (`import_print_profile` into the design), checked against its row, then
 //! exported in the same dialect and read back: every value read into
 //! Mitcad's keys must come back alike.

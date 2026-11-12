@@ -1458,11 +1458,28 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
         if shown.is_empty() {
             return Ok(Arc::new(ViewProjection::default()));
         }
-        let key = view_key("drawing-view-v1", &self.keyed(shown), spec);
-        if let Some(projection) = self.drawing_cache().projection(key) {
+        // An exact projection is the same at any scale, kept by the view
+        // alone; one from a triangulation follows the view's scale
+        // (mitcad#1671), kept by it too, so that a view's details and its
+        // scale's changes project again only then.
+        let exact_key = view_key("drawing-view-v1", &self.keyed(shown), spec);
+        if let Some(projection) = self.drawing_cache().projection(exact_key) {
+            return Ok(projection);
+        }
+        let mut fp = Fingerprint::new("drawing-view-scaled-v1");
+        fp.u128(exact_key).option(spec.quick_deviation(), |fp, d| {
+            fp.f64(d);
+        });
+        let scaled_key = fp.finish();
+        if let Some(projection) = self.drawing_cache().projection(scaled_key) {
             return Ok(projection);
         }
         let projection = Arc::new(self.project_now(shown, spec)?);
+        let key = if projection.polygonal {
+            scaled_key
+        } else {
+            exact_key
+        };
         self.drawing_cache()
             .keep_projection(key, Arc::clone(&projection));
         Ok(projection)

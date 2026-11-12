@@ -214,7 +214,7 @@ hover_face "$TOP" "the top face, lit head-on"
 echo "--- Home"
 ui_mark
 ui_step "home" ui_command "Home"
-ui_expect_new "Camera direction -0.577 0.577 -0.577" "isometric again"
+ui_expect_new "Camera direction -0.568 0.654 -0.5 up" "the default view again (Home, mitcad#1698)"
 view front-top "0 0.707 -0.707"
 hover_face "$TOP" "the top face from the front and above"
 hover_face "$FRONT" "the front face from the front and above"

@@ -314,6 +314,7 @@ enum StoredRead {
     Source(crate::build::SourceId, Option<Hex>),
     Pieces(FeatureUid, Vec<Hex>),
     PrintBed(BodyUid, Option<String>),
+    PrintLayer(Option<u64>),
 }
 
 impl StoredRead {
@@ -341,6 +342,7 @@ impl StoredRead {
             Read::Source(id, v) => Self::Source(*id, hex(v)),
             Read::Pieces(uid, fits) => Self::Pieces(*uid, fits.iter().map(|f| Hex(*f)).collect()),
             Read::PrintBed(uid, face) => Self::PrintBed(*uid, face.clone()),
+            Read::PrintLayer(bits) => Self::PrintLayer(*bits),
         }
     }
 
@@ -370,6 +372,7 @@ impl StoredRead {
             Self::Source(id, v) => Read::Source(*id, version(v)),
             Self::Pieces(uid, fits) => Read::Pieces(*uid, fits.iter().map(|f| f.0).collect()),
             Self::PrintBed(uid, face) => Read::PrintBed(*uid, face.clone()),
+            Self::PrintLayer(bits) => Read::PrintLayer(*bits),
         })
     }
 }

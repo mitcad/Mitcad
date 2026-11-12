@@ -37,7 +37,7 @@ namespace mitcad {
 // mitcad#568, mitcad#815): an fx button beside it whose menu lists the
 // design's parameters by ParameterSuggest's rules (those the field cannot
 // take disabled, with the reason in their tooltip), then Name This Value,
-// Create User Parameter… and Edit Formula…, which run the shared
+// Add User Parameter… and Edit Formula…, which run the shared
 // ParameterField workflow and its dialogs on a hidden Qt proxy of the
 // field, and the parameter names for AppKit's completion (F5 or
 // Option-Esc). A chosen name goes into the field as typing would, so the

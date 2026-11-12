@@ -80,11 +80,12 @@ public:
     return false;
   }
 
-  // CefRenderHandler
+  // CefRenderHandler: the view in physical pixels at a scale of 1, the
+  // page's zoom the display's scale (mitcad#1657, CefView.hpp). It cannot
+  // scale twice where a CEF would honour the screen's scale (macOS's Retina
+  // included): the scale CEF is given is 1 everywhere.
   void GetViewRect(CefRefPtr<CefBrowser>, CefRect& rect) override {
-    const int width = m_view != nullptr ? m_view->width() : 0;
-    const int height = m_view != nullptr ? m_view->height() : 0;
-    rect = CefRect(0, 0, std::max(1, width), std::max(1, height));
+    rect = m_view != nullptr ? m_view->viewRect() : CefRect(0, 0, 1, 1);
   }
   bool GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo& info) override {
     if (m_view == nullptr) {
@@ -92,7 +93,7 @@ public:
     }
     CefRect rect;
     GetViewRect(browser, rect);
-    info.device_scale_factor = static_cast<float>(m_view->devicePixelRatioF());
+    info.device_scale_factor = 1.0f;
     info.rect = rect;
     info.available_rect = rect;
     return true;
@@ -101,9 +102,11 @@ public:
     if (m_view == nullptr) {
       return false;
     }
-    const QPoint point = m_view->mapToGlobal(QPoint(viewX, viewY));
-    screenX = point.x();
-    screenY = point.y();
+    // CEF's screen is of physical pixels as its view.
+    const double scale = m_view->scale();
+    const QPoint point = m_view->mapToGlobal(QPointF(viewX / scale, viewY / scale)).toPoint();
+    screenX = static_cast<int>(std::lround(point.x() * scale));
+    screenY = static_cast<int>(std::lround(point.y() * scale));
     return true;
   }
   void OnPaint(CefRefPtr<CefBrowser>, PaintElementType type, const RectList&, const void* buffer, int width,
@@ -119,13 +122,13 @@ public:
   }
   void OnPopupSize(CefRefPtr<CefBrowser>, const CefRect& rect) override {
     if (m_view != nullptr) {
-      m_view->popupSized(QRect(rect.x, rect.y, rect.width, rect.height));
+      m_view->popupSized(m_view->fromCef(QRect(rect.x, rect.y, rect.width, rect.height)));
     }
   }
   void OnImeCompositionRangeChanged(CefRefPtr<CefBrowser>, const CefRange&, const RectList& bounds) override {
     if (m_view != nullptr && !bounds.empty()) {
       const CefRect& last = bounds.back();
-      m_view->imeBoundsChanged(QRect(last.x, last.y, last.width, last.height));
+      m_view->imeBoundsChanged(m_view->fromCef(QRect(last.x, last.y, last.width, last.height)));
     }
   }
 
@@ -159,6 +162,11 @@ public:
     qDebug().noquote() << QStringLiteral("Component browser loading: %1").arg(loading ? QStringLiteral("yes") : QStringLiteral("no"));
     if (m_view != nullptr) {
       m_view->loadingChanged(loading, canGoBack, canGoForward);
+    }
+  }
+  void OnLoadStart(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, TransitionType) override {
+    if (m_view != nullptr && frame->IsMain()) {
+      m_view->pageCommitted();
     }
   }
   void OnLoadEnd(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, int status) override {
@@ -299,13 +307,8 @@ std::uint32_t modifiersOf(Qt::KeyboardModifiers modifiers, Qt::MouseButtons butt
   return flags;
 }
 
-CefMouseEvent mouseEventAt(const QPointF& position, Qt::KeyboardModifiers modifiers, Qt::MouseButtons buttons) {
-  CefMouseEvent event;
-  event.x = static_cast<int>(position.x());
-  event.y = static_cast<int>(position.y());
-  event.modifiers = modifiersOf(modifiers, buttons);
-  return event;
-}
+// The zoom level of a zoom factor: Chromium's levels are powers of 1.2.
+double zoomLevelOf(double factor) { return std::log(factor) / std::log(1.2); }
 
 // The Windows virtual key code of a Qt key, which CEF takes on every
 // platform (windows_key_code); 0 for a key it has none for.
@@ -396,7 +399,7 @@ CefRange noRange() { return CefRange(UINT32_MAX, UINT32_MAX); }
 
 } // namespace
 
-CefView::CefView(QWidget* parent) : QWidget(parent) {
+CefView::CefView(QWidget* parent) : QWidget(parent), m_scale(devicePixelRatioF()) {
   setFocusPolicy(Qt::StrongFocus);
   setMouseTracking(true);
   setAttribute(Qt::WA_InputMethodEnabled, true);
@@ -432,6 +435,61 @@ void CefView::createBrowser() {
 }
 
 CefRefPtr<CefBrowserHost> CefView::host() const { return m_browser ? m_browser->GetHost() : nullptr; }
+
+// --- The display's scale (mitcad#1657) -----------------------------------------
+
+CefRect CefView::viewRect() {
+  const double ratio = devicePixelRatioF();
+  if (std::abs(ratio - m_scale) > 1e-9) {
+    m_scale = ratio;
+    // Not from within CEF's call: the zoom once it has returned.
+    QMetaObject::invokeMethod(this, &CefView::applyZoom, Qt::QueuedConnection);
+  }
+  return CefRect(0, 0, std::max(1, static_cast<int>(std::lround(width() * m_scale))),
+                 std::max(1, static_cast<int>(std::lround(height() * m_scale))));
+}
+
+void CefView::applyScale() {
+  m_scale = devicePixelRatioF();
+  if (CefRefPtr<CefBrowserHost> browserHost = host()) {
+    browserHost->NotifyScreenInfoChanged();
+    browserHost->WasResized();
+  }
+  applyZoom();
+}
+
+void CefView::applyZoom() {
+  CefRefPtr<CefBrowserHost> browserHost = host();
+  if (!browserHost) {
+    return;
+  }
+  // The display's scale as the page's zoom. Chromium keeps a zoom per site
+  // (a stored one applies as a page of the site commits) and none other
+  // is offered: the display's is set again.
+  const double level = zoomLevelOf(m_scale);
+  if (std::abs(browserHost->GetZoomLevel() - level) > 1e-6) {
+    browserHost->SetZoomLevel(level);
+    const QString address = QString::fromStdString(m_browser->GetMainFrame()->GetURL().ToString()).left(60);
+    qDebug().noquote() << QStringLiteral("Component browser zoom: %1 for %2")
+                              .arg(m_scale, 0, 'f', 2)
+                              .arg(address.isEmpty() ? QStringLiteral("the new browser") : address);
+  }
+}
+
+CefMouseEvent CefView::mouseEventAt(const QPointF& position, Qt::KeyboardModifiers modifiers,
+                                    Qt::MouseButtons buttons) const {
+  CefMouseEvent event;
+  event.x = static_cast<int>(std::lround(position.x() * m_scale));
+  event.y = static_cast<int>(std::lround(position.y() * m_scale));
+  event.modifiers = modifiersOf(modifiers, buttons);
+  return event;
+}
+
+QRect CefView::fromCef(const QRect& rect) const {
+  return QRect(static_cast<int>(std::lround(rect.x() / m_scale)), static_cast<int>(std::lround(rect.y() / m_scale)),
+               static_cast<int>(std::lround(rect.width() / m_scale)),
+               static_cast<int>(std::lround(rect.height() / m_scale)));
+}
 
 void CefView::closeBrowser() {
   if (m_client) {
@@ -490,10 +548,7 @@ void CefView::clickAt(const QPoint& point) {
   }
   // Real input: a click the page takes as the user's own (a site's
   // download after the first one needs a user's gesture).
-  CefMouseEvent event;
-  event.x = point.x();
-  event.y = point.y();
-  event.modifiers = 0;
+  CefMouseEvent event = mouseEventAt(QPointF(point), Qt::NoModifier, Qt::NoButton);
   browserHost->SendMouseMoveEvent(event, false);
   event.modifiers = EVENTFLAG_LEFT_MOUSE_BUTTON;
   browserHost->SendMouseClickEvent(event, MBT_LEFT, false, 1);
@@ -519,7 +574,7 @@ void CefView::clearBrowsingData() {
 void CefView::browserCreated(CefRefPtr<CefBrowser> browser) {
   m_creating = false;
   m_browser = browser;
-  host()->WasResized();
+  applyScale();
   host()->WasHidden(!isVisible());
   if (hasFocus()) {
     host()->SetFocus(true);
@@ -542,17 +597,13 @@ void CefView::painted(bool popup, const void* buffer, int width, int height) {
   // CEF's BGRA pixels, premultiplied: Qt's ARGB32 on a little-endian machine.
   QImage image(static_cast<const uchar*>(buffer), width, height, width * 4, QImage::Format_ARGB32_Premultiplied);
   QImage copy = image.copy();
-  // The frame's own scale (mitcad#1654), which need not be the view's: the
-  // pinned CEF paints its windowless frames at a scale of 1 whatever
-  // GetScreenInfo tells it (at 1.65 a frame of the view's size in logical
-  // pixels), and a scale it does take can lag behind the window's. Marked
-  // with the view's scale, such a frame filled only 1/1.65 of the view at
-  // its top left while the mouse events, in the view's coordinates, landed
-  // where the page would have been at full size. A frame of the view's size
-  // at another scale is marked with that one, so that it fills the view
-  // (blurred where it is of fewer pixels) and the page lies where the
-  // clicks land. A frame of another size (painted before a resize) keeps
-  // the view's scale.
+  // The frame's own scale (mitcad#1654), which need not be the view's: CEF
+  // is given the view in physical pixels (mitcad#1657), so a frame is of
+  // the view's size times the scale CEF last asked with, which can lag
+  // behind the window's. A frame of the view's shape is marked with its own
+  // scale, so that it fills the view (blurred only while it is of fewer
+  // pixels) and the page lies where the clicks land. A frame of another
+  // shape (painted before a resize) keeps the view's scale.
   const QSize logical = popup ? m_popupRect.size() : size();
   double ratio = devicePixelRatioF();
   if (logical.width() > 0 && logical.height() > 0) {
@@ -602,7 +653,11 @@ void CefView::imeBoundsChanged(const QRect& caret) {
   updateMicroFocus();
 }
 
+void CefView::pageCommitted() { applyZoom(); }
+
 void CefView::addressChanged(const QString& url) {
+  // A page committed (one from the back-forward cache too): its site's zoom.
+  applyZoom();
   m_url = QUrl(url);
   emit urlChanged(m_url);
 }
@@ -664,10 +719,7 @@ void CefView::downloadChanged(std::uint32_t id, qint64 received, qint64 total, D
 
 void CefView::screenChanged() {
   qDebug().noquote() << QStringLiteral("Component browser scale: %1").arg(devicePixelRatioF(), 0, 'f', 2);
-  if (CefRefPtr<CefBrowserHost> browserHost = host()) {
-    browserHost->NotifyScreenInfoChanged();
-    browserHost->WasResized();
-  }
+  applyScale();
 }
 
 bool CefView::event(QEvent* event) {
@@ -713,7 +765,7 @@ void CefView::showEvent(QShowEvent* event) {
   }
   if (CefRefPtr<CefBrowserHost> browserHost = host()) {
     browserHost->WasHidden(false);
-    browserHost->NotifyScreenInfoChanged();
+    applyScale();
   } else {
     createBrowser();
   }
@@ -767,9 +819,12 @@ void CefView::leaveEvent(QEvent* event) {
 
 void CefView::wheelEvent(QWheelEvent* event) {
   if (CefRefPtr<CefBrowserHost> browserHost = host()) {
+    // In CEF's pixels, so that a notch moves the page as far on the screen
+    // at any scale.
     const QPoint delta = event->angleDelta();
-    browserHost->SendMouseWheelEvent(mouseEventAt(event->position(), event->modifiers(), event->buttons()), delta.x(),
-                                     delta.y());
+    browserHost->SendMouseWheelEvent(mouseEventAt(event->position(), event->modifiers(), event->buttons()),
+                                     static_cast<int>(std::lround(delta.x() * m_scale)),
+                                     static_cast<int>(std::lround(delta.y() * m_scale)));
     event->accept();
   }
 }

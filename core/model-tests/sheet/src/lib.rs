@@ -9,5 +9,6 @@
 
 mod sheet_flat_tests;
 mod sheet_more_tests;
+mod sheet_profile_tests;
 mod sheet_tests;
 mod sheet_ui_tests;

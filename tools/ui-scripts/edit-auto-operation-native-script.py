@@ -64,9 +64,9 @@ for line in source.read_text(encoding="utf-8").splitlines():
         add("native-expand cut_targets_list",
             "expect-native-visible cut_body_F1.b0@ true",
             "expect-native-visible cut_body_F2.b0@ true",
-            r"expect-native-text cut_targets_status '^1 components selected \(2 bodies\)$'",
+            r"expect-native-text cut_targets_status '^1 component selected \(2 bodies\)$'",
             "native-pointer-click cut_body_F2.b0@",
-            r"expect-native-text cut_targets_status '^1 components selected \(1 bodies\)$'")
+            r"expect-native-text cut_targets_status '^1 component selected \(1 body\)$'")
         skip_next = "key Home Right Down Down Space"
     elif line == "button '^OK$'":
         add(f"expect-native-text input_operation '^{operation}$'")

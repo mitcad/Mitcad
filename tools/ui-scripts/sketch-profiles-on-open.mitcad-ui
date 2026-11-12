@@ -1,0 +1,124 @@
+# SPDX-License-Identifier: MIT
+# Preferences › Sketch › Show profiles when a sketch opens (mitcad#1670,
+# GitHub mitcad/Mitcad#255, settings sketch/showProfilesOnOpen, on by
+# default), on sketch-profiles-on-open.json (Sketch1 and Sketch2, each a
+# rectangle that an extrusion took, so that the view shades no profile
+# outside sketch mode and the edited sketch's one region inside it):
+#   1. On (the default): Edit Sketch1 opens with the palette's Show
+#      profiles checked and its region shaded, as before.
+#   2. Turned off in Preferences › Sketch (OK): logged and saved.
+#   3. Edit Sketch1: Show profiles unchecked, no region shaded; checking
+#      it shades the region (for this sketch only). Finish.
+#   4. Edit Sketch2, the next sketch: it opens with Show profiles off
+#      again.
+#   5. Turned on again: Edit Sketch2 opens with the region shaded;
+#      unchecking it hides it, and Edit Sketch1 opens with it shaded again.
+# Run by tools/ui-sketch-profiles-on-open-test.sh (Linux) and
+# tools/ui-windows-sketch-profiles-on-open-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+expect-profiles 0
+
+# 1. On (the default): the sketch opens as before.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+expect-log '^Sketch Sketch1 opens with Show profiles on$'
+wait-idle
+expect-widget-property paletteProfiles checked true
+expect-profiles 1
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-idle
+expect-profiles 0
+
+# 2. Turned off in Preferences › Sketch.
+mark
+command tools.preferences.sketch
+focus-dialog '^Preferences$'
+expect-widget-property showProfilesOnOpen checked true
+button '^Show profiles when a sketch opens$' showProfilesOnOpen
+expect-widget-property showProfilesOnOpen checked false
+button '^OK$'
+expect-dialog-gone '^Preferences$'
+focus-main
+wait-log '^Preferences: show profiles when a sketch opens off$'
+expect-setting sketch/showProfilesOnOpen false
+wait-idle
+
+# 3. Edit Sketch1: Show profiles off, no region shaded; checked, shaded.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+expect-log '^Sketch Sketch1 opens with Show profiles off$'
+wait-idle
+expect-widget-property paletteProfiles checked false
+expect-profiles 0
+mark
+button '^Show profiles$' paletteProfiles
+wait-log '^Show profiles on$'
+wait-idle
+expect-widget-property paletteProfiles checked true
+expect-profiles 1
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-idle
+expect-profiles 0
+
+# 4. The next sketch opens with Show profiles off again.
+mark
+dblclick-logged '^Timeline Sketch2 at '
+wait-log '^Editing sketch F3 \(Sketch2\)'
+expect-log '^Sketch Sketch2 opens with Show profiles off$'
+wait-idle
+expect-widget-property paletteProfiles checked false
+expect-profiles 0
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-idle
+
+# 5. On again: sketches open with their regions shaded, as before.
+mark
+command tools.preferences.sketch
+focus-dialog '^Preferences$'
+expect-widget-property showProfilesOnOpen checked false
+button '^Show profiles when a sketch opens$' showProfilesOnOpen
+button '^OK$'
+expect-dialog-gone '^Preferences$'
+focus-main
+wait-log '^Preferences: show profiles when a sketch opens on$'
+expect-setting sketch/showProfilesOnOpen true
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch2 at '
+wait-log '^Editing sketch F3 \(Sketch2\)'
+expect-log '^Sketch Sketch2 opens with Show profiles on$'
+wait-idle
+expect-widget-property paletteProfiles checked true
+expect-profiles 1
+mark
+button '^Show profiles$' paletteProfiles
+wait-log '^Show profiles off$'
+wait-idle
+expect-widget-property paletteProfiles checked false
+expect-profiles 0
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+expect-log '^Sketch Sketch1 opens with Show profiles on$'
+wait-idle
+expect-widget-property paletteProfiles checked true
+expect-profiles 1
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-idle
+expect-profiles 0
+expect-never 'Recompute failed|TestDriver: FAIL'

@@ -16,6 +16,8 @@ pub mod ffi {
         section_origin: [f64; 3],
         section_normal: [f64; 3],
         deflection: f64,
+        /// `ViewSpec::quick_deviation`; 0 when the view has no scale.
+        quick_deviation: f64,
     }
 
     /// One projected edge. `kind`: 0 sharp, 1 smooth, 2 outline; `shape`:
@@ -101,6 +103,7 @@ pub fn view(spec: &ViewSpec) -> ffi::DrawingView {
         section_origin,
         section_normal,
         deflection: spec.deflection,
+        quick_deviation: spec.quick_deviation().unwrap_or(0.0),
     }
 }
 

@@ -294,6 +294,9 @@ const std::vector<RoleEntry>& roleTable() {
       MITCAD_SAME(ProvisionalEdge, linear(0.80, 0.42, 0.02), View),
       MITCAD_SAME(FeatureFaces, hex(0xf5a524), View),
       MITCAD_SAME(FeatureFacesHover, hex(0xffcf86), View),
+      // White over the handle's dark halo: no axis' hue, no status hue and
+      // not the selection's blue, which the Z axis' is close to (mitcad#1707).
+      MITCAD_SAME(HandleActive, hex(0xffffff), View),
       // The 3D view's own objects.
       MITCAD_SAME(Body, linear(0.70, 0.74, 0.80), View),
       MITCAD_SAME(Edge, linear(0.12, 0.13, 0.15), View),

@@ -8,8 +8,9 @@
 # makes (tools/ui-scripts/view-arrow-keys.json): with the keyboard in the
 # 3D view, Right turns the camera round to the right by 15 degrees and Left
 # back, Up and Down with a perspective camera, the zoom kept (the camera
-# logged); with the keyboard in Extrude's value field the keys leave the
-# view as it is.
+# logged), and 7, 1 and Home show the isometric, front and home views
+# (mitcad#1684); with the keyboard in Extrude's value field the keys leave
+# the view as it is and 7 types the digit.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-view-arrow-keys-test.sh
@@ -32,5 +33,5 @@ for _ in $(seq 1 600); do
 done
 kill -0 "$UI_RUNNER" 2> /dev/null && { ui_fail 'arrow keys driver timed out'; exit 1; }
 wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; exit 1; }
-ui_expect_log 'TestDriver: done' 'the arrow keys turn the view, not from a value field'
-ui_finish 'UI arrow keys turn the view'
+ui_expect_log 'TestDriver: done' 'the arrow keys, Home and 1 to 7 move the view, not from a value field'
+ui_finish 'UI arrow keys, Home and 1 to 7 move the view'

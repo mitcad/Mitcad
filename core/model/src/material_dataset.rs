@@ -19,7 +19,9 @@
 //! woods' Young's moduli, each entry's `reference` naming the public
 //! source its values were checked against (`docs/material-files.md`), in
 //! the class Wood. Both are searched and listed as one dataset, the
-//! third-party materials first.
+//! third-party materials first. Five common ones are also built-in
+//! materials, their values read from here (mitcad#1706,
+//! `crate::material::BUILT_IN_WOODS`).
 
 use std::sync::LazyLock;
 

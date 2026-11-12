@@ -551,6 +551,7 @@ impl<K: Kernel> PrintOps<K> for Document<K> {
         let mut moved: Vec<Option<K::Shape>> = (0..bodies.len()).map(|_| None).collect();
         let mut pairs = Vec::new();
         let mut touching = 0;
+        let mut unmeasured = 0;
         for (i, j) in candidates {
             self.print_stop()?;
             let (a, b) = (&bodies[i], &bodies[j]);
@@ -561,21 +562,8 @@ impl<K: Kernel> PrintOps<K> for Document<K> {
             let value = match self.print_cache().result(key) {
                 Some(value) => value,
                 None => {
-                    for k in [i, j] {
-                        if moved[k].is_none() && !bodies[k].placement.is_identity() {
-                            match kernel.transform_shape(
-                                bodies[k].shape,
-                                &bodies[k].placement,
-                                None,
-                            ) {
-                                Ok(shape) => moved[k] = Some(shape),
-                                Err(e) => {
-                                    return Ok(
-                                        json!({"error": format!("{}: {e}", bodies[k].name)}),
-                                    );
-                                }
-                            }
-                        }
+                    if let Err(error) = placed(kernel, &bodies, &mut moved, [i, j]) {
+                        return Ok(json!({"error": error}));
                     }
                     let shape_a = moved[i].as_ref().unwrap_or(a.shape);
                     let shape_b = moved[j].as_ref().unwrap_or(b.shape);
@@ -609,10 +597,59 @@ impl<K: Kernel> PrintOps<K> for Document<K> {
             let distance = value["distance"].as_f64().unwrap_or_default();
             let inside = value["inside"].as_bool().unwrap_or_default();
             match print_analysis::gap_kind(distance, inside, gap) {
-                print_analysis::GapKind::Touching => touching += 1,
+                print_analysis::GapKind::Touching => {
+                    touching += 1;
+                    // A body inside the other's material: interference's.
+                    if inside {
+                        continue;
+                    }
+                    // Bodies that touch somewhere (a wheel lying on the body
+                    // its peg goes through, mitcad#1672): the gaps between
+                    // their faces that do not touch.
+                    let face_key = print_analysis::face_gap_key(key, gap);
+                    let found = match self.print_cache().result(face_key) {
+                        Some(found) => found,
+                        None => {
+                            if let Err(error) = placed(kernel, &bodies, &mut moved, [i, j]) {
+                                return Ok(json!({"error": error}));
+                            }
+                            let shape_a = moved[i].as_ref().unwrap_or(a.shape);
+                            let shape_b = moved[j].as_ref().unwrap_or(b.shape);
+                            let found =
+                                Arc::new(match kernel.face_separations(shape_a, shape_b, gap) {
+                                    Ok(separations) => {
+                                        match print_analysis::face_gap(&separations, gap) {
+                                            Some(narrowest) => json!({
+                                                "measured": true,
+                                                "distance": narrowest.distance,
+                                                "on_a": narrowest.on_a,
+                                                "on_b": narrowest.on_b,
+                                            }),
+                                            None => json!({"measured": true}),
+                                        }
+                                    }
+                                    // Counted as not measured: the answer
+                                    // must not say there is no gap.
+                                    Err(_) => json!({"measured": false}),
+                                });
+                            self.print_cache().keep_result(face_key, Arc::clone(&found));
+                            found
+                        }
+                    };
+                    if found["measured"].as_bool() != Some(true) {
+                        unmeasured += 1;
+                    } else if let Some(narrowest) = found["distance"].as_f64() {
+                        pairs.push(json!({
+                            "a": a.uid, "b": b.uid, "names": [a.name, b.name],
+                            "distance": narrowest, "on_a": found["on_a"], "on_b": found["on_b"],
+                            "touches": true,
+                        }));
+                    }
+                }
                 print_analysis::GapKind::Narrow => pairs.push(json!({
                     "a": a.uid, "b": b.uid, "names": [a.name, b.name],
                     "distance": distance, "on_a": value["on_a"], "on_b": value["on_b"],
+                    "touches": false,
                 })),
                 print_analysis::GapKind::Clear => {}
             }
@@ -629,8 +666,29 @@ impl<K: Kernel> PrintOps<K> for Document<K> {
             "pairs": pairs,
             "closest": closest,
             "touching": touching,
+            "unmeasured": unmeasured,
         }))
     }
+}
+
+/// Moves the bodies `which` where they are printed from, each once (into
+/// `moved`; a body printed where it is needs no copy), or why one cannot
+/// be moved.
+fn placed<K: Kernel>(
+    kernel: &K,
+    bodies: &[PrintBody<'_, K::Shape>],
+    moved: &mut [Option<K::Shape>],
+    which: [usize; 2],
+) -> Result<(), String> {
+    for k in which {
+        if moved[k].is_none() && !bodies[k].placement.is_identity() {
+            let shape = kernel
+                .transform_shape(bodies[k].shape, &bodies[k].placement, None)
+                .map_err(|e| format!("{}: {e}", bodies[k].name))?;
+            moved[k] = Some(shape);
+        }
+    }
+    Ok(())
 }
 
 /// A box placed: the box of its corners moved by the placement.

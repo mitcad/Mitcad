@@ -20,3 +20,7 @@ mod design_properties_tests;
 mod unknown_fields_tests;
 // Animated USDZ export (mitcad#1597).
 mod usdz_animation_tests;
+// Occurrence placements kept rigid and straightened on opening (mitcad#1664).
+mod occurrence_placement_tests;
+// The preview a design file carries for file managers (mitcad#1539).
+mod design_preview_tests;

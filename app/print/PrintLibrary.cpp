@@ -283,16 +283,21 @@ QString editingLine(const LibraryItem& item) {
     return QObject::tr("Editing: My library — every design of yours can use it");
   }
   if (!item.sourceName.isEmpty()) {
-    // A copy: its library item stays as it is (no sync, mitcad#1135).
+    // A copy: its library item stays as it is (no sync, mitcad#1135); a
+    // built-in material's name as the language shows it (mitcad#1689).
+    const bool ownMaterial =
+        item.kind == QLatin1String("material") && item.sourcePlace == QLatin1String("mitcad");
     return QObject::tr("Editing: this design only — %1's %2 stays as it is")
-        .arg(placeName(item.sourcePlace), item.sourceName);
+        .arg(placeName(item.sourcePlace), ownMaterial ? shownOwnMaterialName(item.sourceName) : item.sourceName);
   }
   return QObject::tr("Editing: this design only");
 }
 
 bool matchesSearch(const LibraryItem& item, const QString& text) {
   const QString wanted = text.trimmed();
-  return wanted.isEmpty() || item.name.contains(wanted, Qt::CaseInsensitive);
+  // The name shown or the stored one (mitcad#1689: Steel finds Teräs).
+  return wanted.isEmpty() || item.shownName().contains(wanted, Qt::CaseInsensitive) ||
+         item.name.contains(wanted, Qt::CaseInsensitive);
 }
 
 QStringList copyTargets(const LibraryItem& item, bool hasDesign, bool inProject) {
@@ -534,7 +539,7 @@ bool confirmDelete(QWidget* parent, const LibraryItem& item, const QString& logN
     // Saved in a library: it goes from there, the design keeps its copy.
     const QString from =
         item.library == QStringLiteral("project") ? QObject::tr("this project's library") : QObject::tr("My library");
-    question = QObject::tr("Delete %1 from %2?").arg(item.name, from);
+    question = QObject::tr("Delete %1 from %2?").arg(item.shownName(), from);
     if (any("bodies") || any("components") || any("chosen_by") || item.chosen || item.copyUsed) {
       question += QLatin1Char(' ') + QObject::tr("This design keeps using it.");
     }
@@ -544,7 +549,7 @@ bool confirmDelete(QWidget* parent, const LibraryItem& item, const QString& logN
       question += QLatin1Char(' ') + QObject::tr("This design then uses Slicer default.");
     }
   } else {
-    question = QObject::tr("Delete %1?").arg(item.name);
+    question = QObject::tr("Delete %1?").arg(item.shownName());
     if (!users.isEmpty()) {
       const QString who = users.size() == 1   ? users.first()
                           : users.size() == 2 ? QObject::tr("%1 and %2").arg(users.at(0), users.at(1))
@@ -574,7 +579,8 @@ QJsonObject askChangedElsewhere(QWidget* parent, const LibraryItem& item, const 
   // not ask about the item again either way.
   asked().insert(askedKey(item));
   const QString question =
-      QObject::tr("%1 was changed in another design. Use the changes or keep this design's settings?").arg(item.name);
+      QObject::tr("%1 was changed in another design. Use the changes or keep this design's settings?")
+          .arg(item.shownName());
   qDebug().noquote() << QStringLiteral("%1 changed elsewhere: %2").arg(logName, item.name);
   QMessageBox box(QMessageBox::Question, QObject::tr("Changed in Another Design"), question, QMessageBox::NoButton,
                   parent);

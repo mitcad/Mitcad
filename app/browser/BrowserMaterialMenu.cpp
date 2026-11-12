@@ -200,11 +200,13 @@ void BrowserController::fillMaterialMenu(QMenu* submenu, QAction* more, const QS
         swatchIcon(item.displayColor.isValid() ? item.displayColor : viewColor(ColorRole::Body, false));
     const QStringList offered = offeredAppearances(item, designMaterials);
     const bool isChecked = item.key() == checked;
-    entries << item.name;
+    // As the language shows a built-in material (mitcad#1689).
+    const QString shown = item.shownName();
+    entries << shown;
     if (offered.size() >= 2) {
       // Its appearances (mitcad#1055): Material ▸ PLA Basic ▸ Black, the
       // targets' checked; filled and logged when it opens.
-      auto* looks = new QMenu(menuLabel(item.name), submenu);
+      auto* looks = new QMenu(menuLabel(shown), submenu);
       looks->menuAction()->setIcon(icon);
       looks->menuAction()->setIconVisibleInMenu(true);
       // The targets' material is checked as a plain entry is
@@ -213,7 +215,7 @@ void BrowserController::fillMaterialMenu(QMenu* submenu, QAction* more, const QS
         looks->menuAction()->setCheckable(true);
         looks->menuAction()->setChecked(true);
       }
-      entryActions.append({looks->menuAction(), item.name});
+      entryActions.append({looks->menuAction(), shown});
       const QString checkedHere = isChecked ? checkedLook : QString();
       // A library's item names and colours the appearances it carries,
       // which the design may not have yet (mitcad#1067).
@@ -245,15 +247,15 @@ void BrowserController::fillMaterialMenu(QMenu* submenu, QAction* more, const QS
                   names << name;
                 }
                 qDebug().noquote() << QStringLiteral("Context menu Material %1: %2")
-                                          .arg(item.name, names.join(QStringLiteral(" | ")));
+                                          .arg(item.shownName(), names.join(QStringLiteral(" | ")));
                 qDebug().noquote() << QStringLiteral("Context menu Material %1 checked: %2")
-                                          .arg(item.name, checkedLookName.isEmpty() ? QStringLiteral("none")
-                                                                                     : checkedLookName);
+                                          .arg(item.shownName(), checkedLookName.isEmpty() ? QStringLiteral("none")
+                                                                                           : checkedLookName);
               });
       submenu->insertMenu(more, looks);
       return;
     }
-    QAction* action = new QAction(icon, menuLabel(item.name), submenu);
+    QAction* action = new QAction(icon, menuLabel(shown), submenu);
     // The swatch is the material's look, shown in every style (also where
     // menus hide icons by default).
     action->setIconVisibleInMenu(true);
@@ -261,7 +263,7 @@ void BrowserController::fillMaterialMenu(QMenu* submenu, QAction* more, const QS
       action->setCheckable(true);
       action->setChecked(true);
     }
-    entryActions.append({action, item.name});
+    entryActions.append({action, shown});
     connect(action, &QAction::triggered, submenu,
             [this, item, bodies, component] { assignMaterialFromMenu(item, bodies, component); });
     submenu->insertAction(more, action);
@@ -298,7 +300,7 @@ void BrowserController::fillMaterialMenu(QMenu* submenu, QAction* more, const QS
   if (!rows.recent.isEmpty()) {
     QStringList recent;
     for (const int index : rows.recent) {
-      recent << items[index].name;
+      recent << items[index].shownName();
     }
     qDebug().noquote() << QStringLiteral("Context menu Material recent: %1").arg(recent.join(QStringLiteral(" | ")));
   }

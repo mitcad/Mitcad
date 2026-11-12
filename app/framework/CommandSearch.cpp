@@ -1,84 +1,26 @@
 // SPDX-License-Identifier: MIT
 #include "CommandSearch.hpp"
 
-#include <algorithm>
-#include <tuple>
+#include <utility>
 #include <vector>
 
 #include <QAction>
+#include <QFont>
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QPalette>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QtLogging>
 
 #include "CommandRegistry.hpp"
+#include "CommandSearchRank.hpp"
 #include "Language.hpp"
 #include "PanelTree.hpp"
 #include "../platform/MacCommandSearch.hpp"
 
 namespace mitcad {
-namespace {
-
-// Lower is a better match; -1 is none: `shown`, a name of the command (as
-// the interface shows it, or in English), against the text typed.
-int nameScore(const QString& shown, const CommandDef& def, const QString& text) {
-  if (text.isEmpty()) {
-    return 6;
-  }
-  const QString name = shown.toLower();
-  // The whole name first, so "export" finds Export... before Export Drawing...
-  QString bare = name;
-  if (bare.endsWith(QStringLiteral("..."))) {
-    bare.chop(3);
-  } else if (bare.endsWith(QChar(0x2026))) {
-    bare.chop(1);
-  }
-  if (bare == text) {
-    return 0;
-  }
-  if (name.startsWith(text)) {
-    return 1;
-  }
-  const QStringList words = name.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-  if (std::any_of(words.begin(), words.end(), [&](const QString& w) { return w.startsWith(text); })) {
-    return 2;
-  }
-  if (name.contains(text)) {
-    return 3;
-  }
-  for (const QString& keyword : def.keywords) {
-    if (keyword.toLower().startsWith(text)) {
-      return 4;
-    }
-  }
-  // The letters in order, as in "fll" for Fillet.
-  int at = 0;
-  for (const QChar c : text) {
-    at = static_cast<int>(name.indexOf(c, at));
-    if (at < 0) {
-      return -1;
-    }
-    ++at;
-  }
-  return 5;
-}
-
-// The name the interface shows, and in another language its English name
-// as well (mitcad#1460, mitcad#1284): "extrude" finds Extrude whatever the
-// language.
-int score(const CommandDef& def, const QString& text) {
-  const int shown = nameScore(def.name, def, text);
-  const QString english = englishText(def.name);
-  if (english == def.name) {
-    return shown;
-  }
-  const int other = nameScore(english, def, text);
-  return shown < 0 ? other : (other < 0 ? shown : std::min(shown, other));
-}
-
-} // namespace
 
 CommandSearch::CommandSearch(CommandRegistry& registry, QWidget* parent)
     : QFrame(parent, Qt::Popup), m_registry(registry) {
@@ -147,27 +89,50 @@ void CommandSearch::hideEvent(QHideEvent* event) {
 }
 
 void CommandSearch::fill(const QString& rawText) {
-  QString text = rawText.trimmed().toLower();
-  if (text.endsWith(QStringLiteral("..."))) { text.chop(3); }
-  else if (text.endsWith(QChar(0x2026))) { text.chop(1); }
-  text = text.trimmed();
-  std::vector<std::tuple<int, bool, QString, const CommandDef*>> found;
+  const QString text = search::normalizedText(rawText);
+  std::vector<const CommandDef*> defs;
+  std::vector<search::Candidate> candidates;
   for (const auto& def : m_registry.commands()) {
     QAction* action = m_registry.action(def->id);
-    const int rank = score(*def, text);
-    if (action == nullptr || rank < 0) {
+    if (action == nullptr) {
       continue;
     }
-    // Commands that can run now come first.
-    found.emplace_back(rank, !action->isEnabled(), def->name, def.get());
+    search::Candidate candidate;
+    candidate.id = def->id;
+    candidate.shown = def->name;
+    candidate.english = englishText(def->name);
+    candidate.keywords = def->keywords;
+    if (search::score(candidate, text) < 0) {
+      continue;
+    }
+    candidate.enabled = action->isEnabled();
+    // Asked only for the matches of a text typed (an empty search ranks
+    // every command alike, so no hint): it may look at the model.
+    if (!candidate.enabled && !text.isEmpty() && m_modeHint) {
+      candidate.modeHint = m_modeHint(*def);
+    }
+    defs.push_back(def.get());
+    candidates.push_back(std::move(candidate));
   }
-  std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) {
-    return std::tie(std::get<1>(a), std::get<0>(a), std::get<2>(a)) <
-           std::tie(std::get<1>(b), std::get<0>(b), std::get<2>(b));
-  });
+  // Among equal matches the commands run last first (mitcad#1690).
+  const search::Listing listing = search::list(candidates, text, search::recentCommands());
   m_list->clear();
-  for (const auto& entry : found) {
-    const CommandDef* def = std::get<3>(entry);
+  if (!listing.hint.isEmpty()) {
+    // A row of its own above the commands that wait for the mode
+    // (mitcad#1681): nothing to run, so Enter starts no weaker match; no id.
+    auto* hint = new QTreeWidgetItem(m_list, {listing.hint, QString()});
+    hint->setFlags(Qt::NoItemFlags);
+    hint->setToolTip(0, listing.hint);
+    QFont font = m_list->font();
+    font.setItalic(true);
+    hint->setFont(0, font);
+    // Readable, not greyed as the commands that cannot run are.
+    hint->setForeground(0, m_list->palette().brush(QPalette::Active, QPalette::Text));
+    hint->setFirstColumnSpanned(true);
+    qDebug().noquote() << QStringLiteral("Command search hint: %1").arg(listing.hint);
+  }
+  for (const int index : listing.rows) {
+    const CommandDef* def = defs[static_cast<size_t>(index)];
     QAction* action = m_registry.action(def->id);
     auto* item = new QTreeWidgetItem(
         m_list, {def->name, action->shortcut().toString(QKeySequence::NativeText)});
@@ -178,9 +143,9 @@ void CommandSearch::fill(const QString& rawText) {
       item->setFlags(item->flags() & ~Qt::ItemIsEnabled);
     }
   }
-  if (m_list->topLevelItemCount() > 0 &&
-      (m_list->topLevelItem(0)->flags() & Qt::ItemIsEnabled)) {
-    m_list->setCurrentItem(m_list->topLevelItem(0));
+  if (listing.current >= 0) {
+    const int row = listing.current + (listing.hint.isEmpty() ? 0 : 1);
+    m_list->setCurrentItem(m_list->topLevelItem(row));
   }
 }
 

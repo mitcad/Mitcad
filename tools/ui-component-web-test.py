@@ -199,7 +199,7 @@ def environment_for(directory, temporary, qt_bin=None, component=None):
         environment["PATH"] = qt_bin + os.pathsep + environment.get("PATH", "")
     for variable in ("SETTINGS", "AUTOSAVE", "PROJECTS", "THUMBNAIL", "CRASH"):
         environment["MITCAD_" + variable + "_DIR"] = str(Path(temporary) / variable.lower())
-    environment.update(MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_LANGUAGE="en",
+    environment.update(MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_NEW_DESIGN_VIEW="0", MITCAD_LANGUAGE="en",
                        MITCAD_NO_UPDATE_CHECK="1", QT_FORCE_STDERR_LOGGING="1",
                        MITCAD_WEB_DOWNLOADS_DIR=str(directory / "downloads"),
                        MITCAD_WEB_PROFILE_DIR=str(directory / "profile"),

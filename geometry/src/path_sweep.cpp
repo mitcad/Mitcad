@@ -83,6 +83,7 @@
 #include "canonical.hpp"
 #include "helix_brep.hpp"
 #include "history.hpp"
+#include "pipe_folds.hpp"
 #include "spine.hpp"
 #include "sweep.hpp"
 #include "util.hpp"
@@ -970,6 +971,7 @@ ShapePtr sweep(const SweepSpec& requested) {
       }
     }
     ShapePtr result;
+    bool resolved = false;
     if (varied) {
       Variation variation;
       if (guided) {
@@ -1031,22 +1033,46 @@ ShapePtr sweep(const SweepSpec& requested) {
           mode.kind = PipeMode::Kind::Binormal;
           mode.binormal = *spec.constant_binormal;
         }
-        std::vector<ShapePtr> parts;
+        const double tolerance = framed ? kFramedTolerance : kPipeTolerance;
+        std::vector<detail::SweptProfile> profiles;
         for (const detail::SweepFace& face : faces) {
           const auto [first, last] = cap_order(range, detail::cap_names(spec.feature, "start", face),
                                                detail::cap_names(spec.feature, "end", face));
-          const std::vector<NamedWire> loops = detail::face_loops(face.face, face.edges);
-          const ShapePtr outer = detail::pipe_shell(loops.front(), spine, mode, first, last, framed ? kFramedTolerance : kPipeTolerance);
-          std::vector<ShapePtr> holes;
-          for (std::size_t l = 1; l < loops.size(); ++l) {
-            holes.push_back(detail::pipe_shell(loops[l], spine, mode, {}, {}, framed ? kFramedTolerance : kPipeTolerance));
-          }
-          parts.push_back(detail::with_holes(outer, holes, "the sweep"));
+          profiles.push_back({detail::face_loops(face.face, face.edges), first, last});
         }
-        result = detail::fused(parts, "the sweep");
+        const auto whole = [&] {
+          std::vector<ShapePtr> parts;
+          for (const detail::SweptProfile& profile : profiles) {
+            const std::vector<NamedWire>& loops = profile.loops;
+            const ShapePtr outer =
+                detail::pipe_shell(loops.front(), spine, mode, profile.first, profile.last, tolerance);
+            std::vector<ShapePtr> holes;
+            for (std::size_t l = 1; l < loops.size(); ++l) {
+              holes.push_back(detail::pipe_shell(loops[l], spine, mode, {}, {}, tolerance));
+            }
+            parts.push_back(detail::with_holes(outer, holes, "the sweep"));
+          }
+          return detail::fused(parts, "the sweep");
+        };
+        // (mitcad#1697) Where the sweep passes through itself, in pieces.
+        const Spine swept(spine);
+        detail::FoldedSweep folded;
+        folded.spine = &swept;
+        folded.at = std::clamp(at - range.from, 0.0, swept.length());
+        folded.around = range.around;
+        folded.mode = mode;
+        folded.tolerance = tolerance;
+        folded.what = "the sweep";
+        const detail::UnfoldedSweep unfolded = detail::swept_resolving_folds(folded, profiles, whole);
+        result = unfolded.shape;
+        resolved = unfolded.resolved;
       }
     }
-    return detail::finished(*result, "the sweep");
+    ShapePtr done = detail::finished(*result, "the sweep");
+    if (resolved) {
+      done->add_info(detail::kFoldsResolved);
+    }
+    return done;
   });
 }
 
@@ -1150,17 +1176,43 @@ ShapePtr pipe(const PipeSpec& spec) {
     }
     (void)length;
     const TopoDS_Wire part = path.part(range.from, range.to);
-    const auto [first, last] =
+    const auto caps =
         cap_order(range, {face_name(spec.feature, "start")}, {face_name(spec.feature, "end")});
+    const auto& first = caps.first;
+    const auto& last = caps.second;
     const PipeMode mode = detail::perpendicular_mode(path, spec.path);
-    ShapePtr result = detail::pipe_shell(outer, part, mode, first, last, kPipeTolerance, spec.corners);
+    detail::SweptProfile profile;
+    profile.loops.push_back(outer);
     if (spec.thickness > 0.0) {
-      const NamedWire inner =
-          section(spec.feature, "inner", center, tangent, x, radius - shrink, corners, angle);
-      result = detail::with_holes(
-          result, {detail::pipe_shell(inner, part, mode, {}, {}, kPipeTolerance, spec.corners)}, "the pipe");
+      profile.loops.push_back(section(spec.feature, "inner", center, tangent, x, radius - shrink, corners, angle));
     }
-    return detail::finished(*result, "the pipe");
+    profile.first = first;
+    profile.last = last;
+    const auto whole = [&] {
+      ShapePtr result = detail::pipe_shell(outer, part, mode, first, last, kPipeTolerance, spec.corners);
+      if (profile.loops.size() > 1) {
+        result = detail::with_holes(
+            result, {detail::pipe_shell(profile.loops[1], part, mode, {}, {}, kPipeTolerance, spec.corners)},
+            "the pipe");
+      }
+      return result;
+    };
+    // (mitcad#1697) Where the pipe passes through itself, in pieces.
+    const Spine swept(part);
+    detail::FoldedSweep folded;
+    folded.spine = &swept;
+    folded.at = std::clamp(-range.from, 0.0, swept.length());
+    folded.around = range.around;
+    folded.mode = mode;
+    folded.tolerance = kPipeTolerance;
+    folded.corners = spec.corners;
+    folded.what = "the pipe";
+    const detail::UnfoldedSweep result = detail::swept_resolving_folds(folded, {profile}, whole);
+    ShapePtr done = detail::finished(*result.shape, "the pipe");
+    if (result.resolved) {
+      done->add_info(detail::kFoldsResolved);
+    }
+    return done;
   });
 }
 

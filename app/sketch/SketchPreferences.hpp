@@ -39,4 +39,12 @@ void saveClickAddsToSelection(bool on);
 bool escLeavesUnchangedSketch();
 void saveEscLeavesUnchangedSketch(bool on);
 
+// "Show profiles when a sketch opens" (mitcad#1670, GitHub
+// mitcad/Mitcad#255, settings "sketch/showProfilesOnOpen"), on by default:
+// each sketch opens with the palette's Show profiles as it says
+// (SketchController::enter); the palette's checkbox still turns the shading
+// on or off for that sketch only.
+bool showProfilesOnOpen();
+void saveShowProfilesOnOpen(bool on);
+
 } // namespace mitcad::sketch

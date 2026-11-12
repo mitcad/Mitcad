@@ -72,7 +72,8 @@ project_top_face() {
 }
 
 # Part:1 (O1, C1): Sketch1 (F1) 30 x 20, Extrude1 (F2) 10 up: Body1
-# (F2.b0). Cover:1 (O2, C2), empty and active, beside it in the root.
+# (F2.b0). Cover:1 (O2, C2), empty, beside it in the root; saved with the
+# root active.
 # Sketches on another component's face need both sides' design policy
 # (mitcad#220): Part takes attachments, Cover and the root may attach. Part
 # takes no components (mitcad#292).
@@ -88,7 +89,8 @@ cat > "$WORK/model.json" << 'EOF'
   {"cmd": "create_component", "name": "Cover"},
   {"cmd": "set_policy", "component": "Part", "policy": {"attachments_from_others": true, "components": false}},
   {"cmd": "set_policy", "component": "Cover", "policy": {"attach_to_others": true}},
-  {"cmd": "set_policy", "component": "Root", "policy": {"attach_to_others": true}}
+  {"cmd": "set_policy", "component": "Root", "policy": {"attach_to_others": true}},
+  {"cmd": "activate_component", "component": "Root"}
 ]
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
@@ -98,8 +100,8 @@ ui_start_app --open "$FILE"
 ui_step "fit (F6)"                       ui_key F6
 ui_expect_log "Bodies shown: F2.b0 in O1" "Part's block shown"
 ui_expect_log "Browser radio Root/Cover:1 at" "Cover in the browser"
-# A design opens with the root active (mitcad#426): Cover is activated here.
-ui_expect_log "Opened with the root active; C2 was active in the file" "the design opened with the root active"
+# A design opens with the component it was saved with active (mitcad#1678),
+# here the root: Cover is activated here.
 ui_expect_log "Timeline filter: Active Component (Root) with Subcomponents: 2 of 2 features" \
   "the timeline starts at Active Component with subcomponents: every feature with the root active"
 ui_mark

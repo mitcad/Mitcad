@@ -374,6 +374,58 @@ fn origin_isolation_and_favourites_are_saved_with_undo() {
     }
 }
 
+/// mitcad#1683: the application shows a new design's origin as it opens,
+/// with no undo step and no new revision; a design read from a file keeps
+/// the origin it saved.
+#[test]
+fn a_new_design_shows_its_origin_as_it_opens() {
+    let mut doc = Document::new_design(MockKernel::default());
+    let state = |doc: &Document<MockKernel>| {
+        let value = query(doc, json!({"query": "document"}));
+        (
+            value["display"]["origin"].clone(),
+            value["undo"].clone(),
+            value["revision"].clone(),
+            value["modified"].clone(),
+        )
+    };
+    let (origin, undo, revision, modified) = state(&doc);
+    assert_eq!(
+        (origin, &undo, modified),
+        (json!(false), &Value::Null, json!(false))
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "set_origin_visible", "visible": true, "opening": true}),
+    );
+    assert_eq!(
+        state(&doc),
+        (json!(true), Value::Null, revision, json!(false))
+    );
+    // A later step's undo keeps it shown.
+    command(
+        &mut doc,
+        json!({"cmd": "set_origin_visible", "visible": false}),
+    );
+    assert_eq!(state(&doc).1, "Hide Origin");
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(state(&doc).0, json!(true));
+
+    // Saved, the file keeps it; hidden, the file leaves it out and opens so.
+    let shown = doc.to_json();
+    let opened = Document::from_json(&shown, MockKernel::default()).unwrap();
+    assert!(opened.display().origin);
+    command(
+        &mut doc,
+        json!({"cmd": "set_origin_visible", "visible": false}),
+    );
+    let hidden = doc.to_json();
+    let file: Value = serde_json::from_str(&hidden).unwrap();
+    assert_eq!(file.get("display"), None, "{file}");
+    let opened = Document::from_json(&hidden, MockKernel::default()).unwrap();
+    assert!(!opened.display().origin);
+}
+
 #[test]
 fn timeline_groups_stay_runs_of_features() {
     let mut b = block();

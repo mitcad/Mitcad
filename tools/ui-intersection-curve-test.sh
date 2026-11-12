@@ -249,9 +249,12 @@ ui_expect_new "other-sketch-geometry=cross" "Project's filter has the row for ot
 ui_expect_log "Browser Root/Construction/IntersectionCurve1 at" "the curve's row in the Browser"
 ui_step "pick IntersectionCurve1's row"    ui_click_logged "Browser Root/Construction/IntersectionCurve1"
 ui_expect_new "Project Geometry: 1 feature [feature F4]" "the curve went to Project"
-ui_step "pick Sketch1 on the timeline"     ui_click_logged "Timeline Sketch1"
+# In sketch mode the timeline's place shows the sketch's items (mitcad#1492):
+# other sketches and features are picked in the Browser.
+ui_expect_log "Browser Root/Sketches/Sketch1 at" "Sketch1 in the browser"
+ui_step "pick Sketch1 in the browser"      ui_click_logged "Browser Root/Sketches/Sketch1"
 ui_expect_new "Project Geometry: 1 sketch, 1 feature [feature F4; sketch F1]" \
-  "a sketch clicked on the timeline goes in whole, as before"
+  "a sketch picked in the browser goes in whole, as before"
 ui_expect_new "Preview Project: ok" "the projection previewed"
 ui_wait_idle
 ui_focus_main
@@ -276,7 +279,8 @@ ui_sync
 ui_mark
 ui_step "intersect (search)"               ui_command "Intersect"
 ui_expect_new "Command search chose sketch.intersect" "Intersect started"
-ui_step "pick IntersectionCurve1 on the timeline" ui_click_logged "Timeline IntersectionCurve1"
+ui_expect_log "Browser Root/Construction/IntersectionCurve1 at" "the curve's row in the Browser"
+ui_step "pick IntersectionCurve1's row"    ui_click_logged "Browser Root/Construction/IntersectionCurve1"
 ui_expect_new "Intersect Geometry: 1 feature [feature F4]" "the curve went to Intersect"
 ui_expect_log "Browser Root/Sketches/Sketch1 at" "Sketch1 in the browser"
 ui_step "pick Sketch1 in the browser"      ui_click_logged "Browser Root/Sketches/Sketch1"

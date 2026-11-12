@@ -3,9 +3,9 @@
 # Input-driven Windows UI test of a design as it opens (mitcad#426) in the
 # build VM (tools/ui-windows-lib.ps1 says how the input is posted); the
 # Linux test is the last part of tools/ui-browser-collapse-test.sh:
-#   1. A design saved with Bracket:1 active (mitcad-cli) opens with the root
-#      active, unmodified, no inactive ghosts and no undo step; it fits the
-#      browser and opens expanded.
+#   1. A design saved with Bracket:1 active (mitcad-cli) opens with Bracket
+#      active, as saved (mitcad#1678), unmodified and no undo step; it fits
+#      the browser and opens expanded.
 #   2. A design of 16 components, each with a body (52 rows, more than the
 #      browser shows in the 1028 x 749 window of session 0), opens with the
 #      root open and its children in sight, folded; an arrow opens one.
@@ -70,19 +70,18 @@ Set-Content -Encoding ascii $largeScript $lines
 $output = & $cli run $largeScript --save $large
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $large)) { Ui-Fail "mitcad-cli: $($output -join ' / ')" }
 
-Write-Host '--- 1. Saved with Bracket active: opened with the root active'
+Write-Host '--- 1. Saved with Bracket active: opened with Bracket active (mitcad#1678)'
 Ui-StartApp 'browser-open-active' @('--open', $active)
-Ui-ExpectLog 'Opened with the root active; C1 was active in the file (unmodified)' 'the root is active, the design unmodified'
+Ui-ExpectLog 'Opened with C1 active, as saved (unmodified)' 'Bracket is active as saved, the design unmodified'
 Ui-ExpectLog 'Browser opened expanded: ' 'a small design opens expanded'
 if (Ui-LogLines | Where-Object { $_.Contains('Browser opened folded') }) { Ui-Fail 'the small design opened folded' }
 Ui-ExpectLog 'Browser Root/Bracket:1/Bodies/Body1 at' "Bracket's rows are open"
 Ui-Sync
-# After the design opened: the empty design of the start has Component1 active.
-$lines = @(Ui-LogLines)
-$opened = [array]::FindLastIndex($lines, [Predicate[string]] { param($l) $l.StartsWith('Opened with the root active') })
-$ghosts = @($lines | Select-Object -Skip ($opened + 1) | Where-Object { $_.StartsWith('View inactive ghosts: ') -and -not $_.EndsWith(': none') })
-if ($ghosts.Count -gt 0) { Ui-Fail "ghosts with the root active: $($ghosts[0])" }
-Write-Host 'ok   no ghosts'
+# The empty design of the start had its Component1 active: the view's
+# active component is Bracket's now.
+Ui-ExpectLog 'View inactive ghosts: 0 bodies (active Bracket:1)' 'the view has Bracket active'
+if (Ui-LogLines | Where-Object { $_.StartsWith('Opened with the root active') }) { Ui-Fail 'the design opened with the root active' }
+Write-Host 'ok   not with the root active'
 Ui-Mark
 Ui-Step 'undo (Ctrl+Z)'                  { Ui-Key 'ctrl+z' }
 # A moment for an undo step that should not come, as the Linux test waits.

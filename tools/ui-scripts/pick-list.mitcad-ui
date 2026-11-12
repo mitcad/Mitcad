@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: MIT
+# The pick list (mitcad#1703, GitHub mitcad/Mitcad#270) on pick-list.json: a
+# block (F1.b0, Body1) below the XY plane and Sketch1 (F2) on XY with a
+# square over the block's middle. Seen from the top, the square's profile
+# lies in front of the block's top face.
+#   1. A press held still on the square lists everything under it nearest
+#      first, in words: the profile, then the block's top face; its
+#      release selects nothing, and Esc closes the list.
+#   2. Inside Extrude, a row chosen from the list goes to the command's
+#      active input, not to the selection.
+#   3. Without a command, the pointer over the second row highlights the
+#      face, and a click on it selects the face as a click on it would.
+#   4. Held again, Ctrl with a click on the first row adds the profile.
+#   5. Held again, a click elsewhere in the view (its home button) closes
+#      the list.
+# Run by tools/ui-pick-list-test.sh (Linux) and
+# tools/ui-windows-pick-list-test.ps1 (Windows).
+wait-idle
+command view.top
+command view.fit
+expect-model-bodies 1 32000
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/pick-list-start.png'
+
+# 1. Held still on the square: the profile, then the top face behind it.
+mark
+hold-pick 'profile F2/'
+wait-log '^Pick list at [0-9]+,[0-9]+: [0-9]+ items: profile r\{.*\} of F2 \[Sketch1: Profile\]; face F1:top of F1\.b0 \[Body1: Face\]'
+wait-log '^Pick list row 1 profile r\{.*\} of F2 \[Sketch1: Profile\] at '
+wait-log '^Pick list row 2 face F1:top of F1\.b0 \[Body1: Face\] at '
+screenshot '${MITCAD_TEST_WORK}/pick-list-open.png'
+expect-no-log '^Selected: '
+mark
+key Escape
+wait-log '^Pick list closed: Esc$'
+wait-idle
+expect-no-log '^Selected: '
+
+# 2. In a command the chosen row goes to its active input.
+command solid.extrude
+wait-log '^View profiles first: on$'
+wait-idle
+mark
+hold-pick 'profile F2/'
+wait-log '^Pick list at [0-9]+,[0-9]+: [0-9]+ items: profile r\{.*\} of F2 \[Sketch1: Profile\]'
+click-logged '^Pick list row 1 profile '
+wait-log '^Pick list chose profile r\{.*\} of F2 \[Sketch1: Profile\]$'
+wait-log '^Extrude Profiles: '
+expect-no-log '^Selected: '
+mark
+key Escape
+expect-log 'Command Extrude cancelled'
+wait-log '^View profiles first: off$'
+wait-idle
+
+# 3. The second row: hovered, then chosen; the face is selected.
+mark
+hold-pick 'profile F2/'
+wait-log '^Pick list row 2 face F1:top of F1\.b0 \[Body1: Face\] at '
+expect-no-log '^Selected: '
+hover-logged '^Pick list row 2 face '
+wait-log '^Pick list hover face F1:top of F1\.b0$'
+screenshot '${MITCAD_TEST_WORK}/pick-list-hover-face.png'
+click-logged '^Pick list row 2 face '
+wait-log '^Pick list chose face F1:top of F1\.b0 \[Body1: Face\]$'
+wait-log '^Selected: 1 face \[face F1:top of F1\.b0\]$'
+
+# 4. Ctrl with a click on a row adds it, as Ctrl with a click does.
+mark
+hold-pick 'profile F2/'
+wait-log '^Pick list row 1 profile .* at '
+click-logged '^Pick list row 1 profile ' ctrl
+wait-log '^Pick list chose profile '
+wait-log '^Selected: 1 face, 1 profile '
+screenshot '${MITCAD_TEST_WORK}/pick-list-added.png'
+
+# 5. A click elsewhere in the view (its home button) closes the list.
+mark
+hold-pick 'profile F2/'
+wait-log '^Pick list at '
+click-logged '^View home at '
+wait-log '^Pick list closed: click elsewhere$'
+wait-idle
+expect-model-bodies 1 32000
+expect-never 'OCCT view event failed|Recompute failed'

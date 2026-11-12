@@ -33,7 +33,39 @@ struct ExportChoice {
   // default) or component (each in its component's coordinates); empty
   // when the design has no occurrences to choose by.
   QString coordinates;
+  // 3MF (mitcad#1679), as Send to Slicer writes the design's print plates
+  // (mitcad#1050): `plates` empty writes the bodies; "one_file" every plate
+  // in the one file, "file_per_plate" a file per plate beside the path,
+  // "plate" the plate `plate` (its id) alone.
+  QString plates;
+  QString plate;
+  // 3MF: the slicer whose print settings go with the bodies (the model's
+  // `dialect`: bambu_studio, orcaslicer, qidi_studio, prusaslicer, cura);
+  // empty: none.
+  QString dialect;
+  // 3MF: on the print bed (`on_bed`: each piece on its print bed face,
+  // else the automatic orientation's; implied by plates), centred on the
+  // plate and dropped onto the bed (`center`, `drop`).
+  bool onBed = false;
+  bool center = true;
+  bool drop = true;
 };
+
+// What Export offers a 3MF file of (mitcad#1679): the design's print plates
+// (id, name; none: no plate row) and the slicer the dialog starts with (the
+// design's when it has plates, as Send to Slicer's; empty: none).
+struct ExportPlates {
+  QVector<QPair<QString, QString>> plates;
+  QString dialect;
+};
+
+// The dialects Export offers for a 3MF file, as the model's `dialect`
+// takes them; the first, empty, is none.
+QStringList exportDialects();
+// The plates mode Export starts with (mitcad#1679): none without plates,
+// else every plate in one file, or a file per plate for a slicer that keeps
+// one plate (Cura).
+QString exportStartPlates(bool hasPlates, const QString& dialect);
 
 // Export: the file type, the bodies (all or the selected ones),
 // the unit of a STEP or IGES file (millimetres unless chosen otherwise,
@@ -48,9 +80,13 @@ struct ExportChoice {
 // edited or selected); `occurrences`: the design places bodies by
 // occurrences, so that the bodies' coordinates can be chosen;
 // `designUnit`: the design's length unit, a DXF file's first (mitcad#1408).
+// A 3MF file (mitcad#1679) offers the design's print plates of `plates`
+// (all in one file, a file per plate, one plate, or the bodies without
+// plates), the slicer, On the print bed, Center on Plate and Drop to Bed.
 std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int selectedBodies,
                                       const QVector<QPair<QString, QString>>& sketches,
-                                      const QString& sketch, bool occurrences, const QString& designUnit);
+                                      const QString& sketch, bool occurrences, const QString& designUnit,
+                                      const ExportPlates& plates = {});
 
 // The type Export starts with (mitcad#1164): an index into its list of
 // types (STEP AP214, STEP AP242, IGES, STL, OBJ, BRep, DXF, 3MF, USDZ, web

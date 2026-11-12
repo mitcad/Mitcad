@@ -60,7 +60,8 @@ cat > "$WORK/model.json" << 'EOF'
   {"cmd": "add_feature", "def": {"type": "construction_plane",
     "definition": {"type": "offset", "plane": "xy", "distance": 30}}},
   {"cmd": "add_feature", "def": {"type": "construction_plane",
-    "definition": {"type": "offset", "plane": "F4", "distance": 10}}}
+    "definition": {"type": "offset", "plane": "F4", "distance": 10}}},
+  {"cmd": "activate_component", "component": "Root"}
 ]
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }

@@ -78,6 +78,11 @@ struct BrowserNode {
     // The Center of Mass marker (mitcad#1094): a row of the root's under
     // Origin while the design has the marker; its light bulb shows it.
     CenterOfMass,
+    // A component's Features folder (mitcad#1699), while Show used sketches
+    // under their features is on: its features in timeline order (Feature
+    // rows, sketch empty), each with the sketches it uses under it (Sketch
+    // rows whose `feature` is that feature).
+    Features,
   };
 
   Type type = Type::None;
@@ -86,6 +91,10 @@ struct BrowserNode {
   QString component;  // the component the row belongs to
   QString featureType; // sketches, datums and features: construction_plane, ...
   QString sketch;     // a feature row: the sketch it is under
+  // A sketch row under a feature's row (mitcad#1699): that feature; empty
+  // in the Sketches folder. A sketch several features use has a row under
+  // each, told apart by this.
+  QString feature;
   QString name;       // as shown
   QString path;       // the names from the root, "Root/Bodies/Body1"
   bool visible = true; // its light bulb
@@ -95,13 +104,17 @@ struct BrowserNode {
   bool transparent = false;
   // A body: a mesh body (mitcad#399); its item's geometry is "mesh".
   bool mesh = false;
+  // A body, a component or a Bodies folder that Isolate leaves out
+  // (mitcad#1700): its eye is off whatever `visible` says (dimmed when only
+  // the isolation hides it), and a click adds it to the isolation.
+  bool isolatedOut = false;
 
   bool isValid() const { return type != Type::None; }
   bool isFolder() const {
     return type == Type::Bodies || type == Type::Sketches || type == Type::Construction ||
            type == Type::Origin || type == Type::Analyses || type == Type::Joints ||
            type == Type::MotionLinks || type == Type::Measurements || type == Type::Drawings ||
-           type == Type::ImageReferences;
+           type == Type::ImageReferences || type == Type::Features;
   }
   // The selection item the row stands for; invalid for folders and settings.
   SelectionItem item() const;
@@ -149,6 +162,9 @@ public:
     // A shown transparent body or component (mitcad#1093): the half-open
     // eye. Hidden, its bulb is the closed eye as any other.
     bool transparent = false;
+    // What its eye shows (mitcad#1700): its light bulb, off while Isolate
+    // leaves the row out (`node.isolatedOut`).
+    bool eyeOn = false;
   };
   QVector<PresentationRow> presentationRows() const;
   void setPresentationExpanded(const QString& key, bool expanded);
@@ -159,6 +175,25 @@ public:
 
   // Rebuilds the rows, keeping what was expanded, selected and scrolled to.
   void rebuild(const DocumentSnapshot& snapshot, bool originShown);
+  // Show used sketches under their features (mitcad#1699, Preferences >
+  // General; off by default): on, each component gets a Features folder
+  // after its Bodies with its features in timeline order (those without
+  // rows of their own: not sketches, construction geometry, joints or
+  // motion links), each feature with the sketches of its component it uses
+  // under it; a sketch several features use is under each of them, with
+  // the shared mark on its icon (a small link badge in the theme's accent)
+  // and "Used by <n> features" in its tooltip, logged with the rows
+  // ("Browser shared Root/Features/Extrude1/Sketch1: used by 2 features").
+  // The Sketches folder keeps the sketches no feature uses. Off, the rows
+  // are as before: the features under the sketches they use (mitcad#177).
+  // Takes effect at the next rebuild; logged "Browser used sketches under
+  // their features: on" when it changes.
+  void setConsumeSketches(bool on);
+  bool consumeSketches() const { return m_consumeSketches; }
+  // The active sketches of `component` that its features use (those the
+  // Features folder lists), by uid, with how many of them use each: what
+  // setConsumeSketches moves out of the Sketches folder.
+  static QHash<QString, int> sketchUsers(const DocumentSnapshot& snapshot, const QString& component);
   // Selects the rows of these items (from the view) and the feature rows
   // of these features (picked in the timeline or here); others are
   // deselected. Emits nothing. With scroll, it scrolls to the newest
@@ -168,6 +203,20 @@ public:
   // that stands for no item: the user's own pick of rows.
   void showSelection(const Selection& items, const QStringList& features = {}, bool scroll = true,
                      bool keepPicked = false);
+  // The owners of what is selected in the view (mitcad#1704): the rows of
+  // these bodies, sketches and occurrences (Body, Sketch and Component
+  // items, by uid and occurrence path; a sketch's rows in every occurrence
+  // when none is the item's) get a secondary mark, an outline of the accent
+  // colour without the selection's fill, in either layout and background.
+  // They are not selected: Delete and the row menus act on the selected
+  // rows alone. With scroll, when the marks changed and no selected or
+  // marked row is in sight, the tree scrolls to the row of the last body or
+  // sketch given (else of the last occurrence), opening its folded parents.
+  // Kept over rebuilds; an empty list takes them away. Logged when they
+  // change: "Browser owner marks: Root/Bodies/Body1, Root/Sketches/Sketch2"
+  // (sorted), "Browser owner marks: none"; a scroll as showSelection's,
+  // "Browser scrolled to <path>".
+  void setOwnerMarks(const Selection& owners, bool scroll = true);
   QVector<BrowserNode> selectedNodes() const;
   QStringList selectedPresentationKeys() const;
   void setPresentationSelection(const QStringList& keys);
@@ -352,6 +401,25 @@ private:
   void addFeatureRows(QTreeWidgetItem* parent, const DocumentSnapshot& snapshot,
                       const DocumentSnapshot::Feature& sketch, const QString& occurrence, bool shown,
                       const SketchUses& uses);
+  // A sketch's or a construction feature's row (`sketch` false) under
+  // `parent`: in its folder, or under the row of the feature `under` that
+  // uses it (mitcad#1699), where `users` features use it (more than one:
+  // the shared mark). `kindShown`: View › Show shows its kind.
+  QTreeWidgetItem* addSketchRow(QTreeWidgetItem* parent, const DocumentSnapshot& snapshot,
+                                const DocumentSnapshot::Feature& feature, const QString& occurrence,
+                                const QString& component, bool sketch, bool shown, bool kindShown,
+                                const QString& under = QString(), int users = 0);
+  // A feature row's looks, under a sketch or in the Features folder: the
+  // linked mark for a result in `linked` components (mitcad#177), its
+  // level, grey when `off` (suppressed, rolled back) or not shown, and the
+  // fx badge of a Suppress When condition (mitcad#809).
+  void markFeatureRow(QTreeWidgetItem* row, const DocumentSnapshot::Feature& feature, const QStringList& linked,
+                      bool off, bool shown);
+  // The Features folder of a component (mitcad#1699, setConsumeSketches):
+  // its features, each with the sketches it uses (`users`: sketchUsers).
+  void addFeaturesFolder(QTreeWidgetItem* parent, const DocumentSnapshot& snapshot, const QString& component,
+                         const QString& occurrence, bool shown, const SketchUses& uses,
+                         const QHash<QString, int>& users);
   // A sheet-metal body's rules and Flat Pattern under its row (mitcad#210).
   void addSheetRows(QTreeWidgetItem* bodyRow, const DocumentSnapshot& snapshot, const BrowserNode& body,
                     bool shown);
@@ -395,9 +463,17 @@ private:
   QHash<QString, QString> m_loggedLevels; // the rows' levels last logged, by path (mitcad#1040)
   // The rows whose transparent eye was logged last, by path (mitcad#1093).
   QSet<QString> m_loggedTransparent;
+  // The owners' marks of setOwnerMarks (mitcad#1704) on the rows there are:
+  // the row to scroll to (null: none marked).
+  QTreeWidgetItem* applyOwnerMarks();
+  Selection m_ownerMarks;     // as given
+  QString m_loggedOwnerMarks = QStringLiteral("none"); // the marked rows' paths, as last logged
+  // The rows logged last as left out by Isolate, by path (mitcad#1700).
+  QSet<QString> m_loggedIsolatedOut;
   QSet<QString> m_shownSelection;  // what showSelection last selected (items and features)
   QSet<QString> m_foldedSelection; // the selection Collapse All left; showSelection does not reveal it again
   bool m_building = false;
+  bool m_consumeSketches = false;    // setConsumeSketches (mitcad#1699)
   bool m_originShown = false;        // the Origin folder's light bulb, as last rebuilt
   bool m_originsKindShown = true;    // View › Show's Origins (mitcad#1287), as last rebuilt
   // The origin's rows greyed by its light bulb or View › Show.

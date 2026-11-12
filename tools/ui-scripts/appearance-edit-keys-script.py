@@ -86,7 +86,7 @@ add("focus-dialog '^Appearance Picker$'", "type 'Key test appearance'",
     "expect-log '^Appearance picker search: Key test appearance, first Key test appearance$'")
 capture("picker")
 add("key Return", "expect-log '^Appearance picker chose: Key test appearance$'", "focus-main",
-    "expect-log '^Panel Appearance tile value: Key test appearance [(]This Design[)]$'", "mark",
+    "expect-log '^Panel Appearance tile value: Key test appearance [(]This design[)]$'", "mark",
     "native-click commandOk" if native else "key Return",
     "expect-log '^Appearance custom1 for 1 body[(]ies[)]$'",
     "focus-main", "expect-undo-depth ${baseline} 5", "expect-model-bodies 1 48000",

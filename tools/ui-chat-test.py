@@ -130,7 +130,7 @@ def run(app, name, work, out, chrome, script, extra_args=(), on_log=None, timeou
         env[variable] = str(work / variable.lower())
     env.update(MITCAD_TEST_ASSISTANT_EXECUTABLES=str(work / "clients"), MITCAD_ASSISTANT_TEST_WORK=str(work),
                MITCAD_TEST_CHAT_SAVE_PATH=str(work / "designs" / "chat design.mitcad"),
-               MITCAD_TEST_LOG_URLS="1", MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_LANGUAGE="en",
+               MITCAD_TEST_LOG_URLS="1", MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_NEW_DESIGN_VIEW="0", MITCAD_LANGUAGE="en",
                MITCAD_NO_UPDATE_CHECK="1",
                QT_FORCE_STDERR_LOGGING="1", MITCAD_LOG_VOLUMES="1")
     source = work / (name + ".mitcad-ui")

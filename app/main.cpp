@@ -596,7 +596,7 @@ int runApplication(int argc, char* argv[]) {
     for (const auto& conflict : conflicts) qCritical().noquote() << conflict.description();
     if (!conflicts.isEmpty()) return 1;
     // The sketch constraints' keys (mitcad#1229), in sketches only; Add
-    // Comment keeps Shift+N.
+    // Comment keeps Shift+N; Home and 1 to 7 are the view's (mitcad#1684).
     static const char* const expected[][2] = {
         {"sketch.constraint.horizontal_vertical", "Shift+V"}, {"sketch.constraint.coincident", "Shift+C"},
         {"sketch.constraint.tangent", "Shift+T"},             {"sketch.constraint.equal", "Shift+E"},
@@ -604,7 +604,11 @@ int runApplication(int argc, char* argv[]) {
         {"sketch.constraint.fix", "Shift+F"},                 {"sketch.constraint.midpoint", "Shift+M"},
         {"sketch.constraint.concentric", "Shift+O"},          {"sketch.constraint.collinear", "Shift+L"},
         {"sketch.constraint.symmetric", "Shift+S"},           {"sketch.constraint.smooth", "Shift+G"},
-        {"comment.add", "Shift+N"}};
+        {"comment.add", "Shift+N"},
+        {"view.home", "Home"},                                {"view.front", "1"},
+        {"view.back", "2"},                                   {"view.left", "3"},
+        {"view.right", "4"},                                  {"view.top", "5"},
+        {"view.bottom", "6"},                                 {"view.iso", "7"}};
     bool expectedKeys = true;
     for (const auto& entry : expected) {
       const QString id = QString::fromLatin1(entry[0]);
@@ -624,10 +628,9 @@ int runApplication(int argc, char* argv[]) {
     qInfo() << "Registered default shortcuts have no conflicts";
     return 0;
   }
-  if (!nativeUiRequested) {
-    // Within the screen at a larger Interface size (mitcad#1495).
-    window.resize(mitcad::startWindowSize());
-  }
+  // The window's size and place are set as it was made: where it was when
+  // MitCad last closed, else startWindowSize() (WindowManager::createWindow,
+  // mitcad#1710).
   if (hasStartFile) {
     const QString& path = startFile;
     QString error;

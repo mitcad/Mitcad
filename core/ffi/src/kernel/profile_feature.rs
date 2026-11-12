@@ -61,7 +61,8 @@ pub mod ffi {
     }
 
     /// `geometry::HoleSpec`: positions as x, y, z triples; `shape` 0
-    /// simple, 1 counterbore, 2 countersink, 3 counterdrill (the
+    /// simple, 1 counterbore, 2 countersink, 3 counterdrill, 4 a nut pocket
+    /// (mitcad#1518: `pocket_*`, a `pocket_slot` of 0 for none) (the
     /// counterbore's diameter and depth, the countersink's angle); `extent`
     /// 0 distance, 1 through all (the first `through` bodies), 2 target.
     #[derive(Clone, Debug)]
@@ -98,6 +99,20 @@ pub mod ffi {
         /// a teardrop's point.
         print_roofs: Vec<f64>,
         print_roof_sag: f64,
+        /// A nut pocket (mitcad#1518; `HoleShape::NutPocket`): across the
+        /// flats, depth, turn, offset from the start and the slot's reach
+        /// from the axis (0: no slot).
+        pocket_across_flats: f64,
+        pocket_depth: f64,
+        pocket_angle: f64,
+        pocket_offset: f64,
+        pocket_slot: f64,
+        /// Print bridging (mitcad#1516; `HoleBridging`): 0 none, 1 a
+        /// sacrificial layer, 2 stepped bridges; each layer `bridge_layer`
+        /// thick; per position 1 where its recess is bridged.
+        bridging: u8,
+        bridge_layer: f64,
+        bridged: Vec<u8>,
     }
 
     #[derive(Clone, Debug)]
@@ -206,7 +221,7 @@ use mitcad_model::{
     HoleSpec, KernelError, Plane, RevolveSpec, SideEnd, Target, ThreadSpec, WallLocation,
 };
 
-use mitcad_model::kernel::HolePressFit;
+use mitcad_model::kernel::{BridgeMode, HolePressFit};
 
 use super::shape::ffi::{ShapeList, new_shape_list};
 use super::{Shape, occt};
@@ -390,7 +405,24 @@ pub fn hole_input(
             .as_ref()
             .and_then(|print| print.flat_roof)
             .unwrap_or(0.0),
+        pocket_across_flats: 0.0,
+        pocket_depth: 0.0,
+        pocket_angle: 0.0,
+        pocket_offset: 0.0,
+        pocket_slot: 0.0,
+        bridging: 0,
+        bridge_layer: 0.0,
+        bridged: Vec::new(),
     };
+    // Print bridging (mitcad#1516).
+    if let Some(bridging) = &spec.bridging {
+        input.bridging = match bridging.mode {
+            BridgeMode::Sacrificial => 1,
+            BridgeMode::Stepped => 2,
+        };
+        input.bridge_layer = bridging.layer;
+        input.bridged = bridging.holes.iter().map(|&h| u8::from(h)).collect();
+    }
     match spec.press_fit {
         None => {}
         Some(HolePressFit::Polygon {
@@ -437,6 +469,20 @@ pub fn hole_input(
             input.counterbore_diameter = diameter;
             input.counterbore_depth = depth;
             input.countersink_angle = angle;
+        }
+        HoleShape::NutPocket {
+            across_flats,
+            depth,
+            angle,
+            offset,
+            slot,
+        } => {
+            input.shape = 4;
+            input.pocket_across_flats = across_flats;
+            input.pocket_depth = depth;
+            input.pocket_angle = angle;
+            input.pocket_offset = offset;
+            input.pocket_slot = slot.unwrap_or(0.0);
         }
     }
     match &spec.end {

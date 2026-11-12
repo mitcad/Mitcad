@@ -17,8 +17,8 @@
 #   - Each arrow click opens one level; the levels below stay folded.
 #   - A second Collapse All, also when everything is folded already and the
 #     top row too, leaves the top row open and the rest folded.
-#   - Opening a design (mitcad#426): one saved with a component active opens
-#     with the root active and unmodified; one with more rows than the
+#   - Opening a design: one saved with a component active opens with that
+#     component active and unmodified (mitcad#1678); one with more rows than the
 #     browser shows opens with the root's children in sight and folded, and
 #     Collapse All there keeps the root open.
 #
@@ -169,7 +169,7 @@ expect_none "Browser Root/Sketches/Sketch1 at" "no more"
 expect_none "Visibility " "no light bulb changed"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 
-echo "--- A design saved with a component active opens with the root active (mitcad#426)"
+echo "--- A design saved with a component active opens with it active (mitcad#1678)"
 ui_stop_app
 # Bracket (C1) with Cylinder1 (F1), left active when saved.
 cat > "$WORK/active.json" << 'EOF'
@@ -184,14 +184,16 @@ EOF
   { cat "$WORK/cli-active.log"; ui_fail "mitcad-cli (active component)"; }
 grep -q '"active_component": *"C1"' "$WORK/active.mitcad" || ui_fail "the file does not store Bracket active"
 ui_start_app --open "$WORK/active.mitcad"
-ui_expect_log "Opened with the root active; C1 was active in the file (unmodified)" \
-  "the root is active, the design unmodified"
+ui_expect_log "Opened with C1 active, as saved (unmodified)" \
+  "Bracket is active as saved, the design unmodified"
 ui_expect_log "Browser opened expanded: " "a small design opens expanded"
 ui_expect_log "Browser Root/Bracket:1/Bodies/Body1 at" "Bracket's rows are open"
 ui_sync
-# After the design opened: the empty design of the start has Component1 active.
-sed -n '/^Opened with the root active/,$p' "$UI_LOG" | grep "^View inactive ghosts: " | grep -qv ": none$" && ui_fail "inactive components are ghosts: the root is not active"
-echo "ok   no ghosts"
+# The empty design of the start had its Component1 active: the view's
+# active component is Bracket's now.
+ui_expect_log "View inactive ghosts: 0 bodies (active Bracket:1)" "the view has Bracket active"
+grep -q "^Opened with the root active" "$UI_LOG" && ui_fail "the design opened with the root active"
+echo "ok   not with the root active"
 case "$(ui_window_title)" in
 *"* - MitCad") ui_fail "the window title marks the design modified" ;;
 esac

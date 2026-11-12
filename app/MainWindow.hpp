@@ -12,6 +12,7 @@
 #include <QByteArray>
 #include <QByteArrayView>
 #include <QDialog>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -116,6 +117,7 @@ namespace sketch {
 class SketchPalette;
 class Sketch3dController; // 3D sketches (mitcad#1524)
 class Sketch3dPalette;
+class SketchItemList; // in the timeline's place while sketching (mitcad#1492)
 }
 namespace mcp {
 class AgentIndicator;
@@ -428,6 +430,7 @@ public:
   bool chooseInCommand(const QString& command, const QString& input, const QString& value) override;
   // The print windows beside 3D Print (mitcad#655; files/MainWindowPrint.cpp).
   void commandInputsChanged() override;
+  bool editSketchInCommand(const QString& commandId, const QString& input, const QJsonObject& command) override;
   bool canChangePrintSettings() const override;
   // Change Parameters while a sketch or a feature is edited (mitcad#564;
   // MainWindowParameterEdits.cpp).
@@ -542,6 +545,13 @@ private:
   void createIdlePage();
   // Floating chrome: the panels as cards over the view.
   void createFloatingPanels();
+  // The timeline's place in either layout (mitcad#1492): the timeline, and
+  // in sketch mode the sketch's items in creation order instead
+  // (sketch::SketchItemList); updateTimelinePlace shows the one that
+  // belongs there, logging "Sketch item list in the timeline's place" and
+  // "Timeline back in its place".
+  QWidget* createTimelinePlace();
+  void updateTimelinePlace();
   int commandContentHeight() const;
   void updateCommandCard();
   // The message history (mitcad#1042) above `anchor` (the window's
@@ -551,6 +561,10 @@ private:
   // Why isAvailable says no, for a disabled button's tooltip (the
   // quick-access group, mitcad#1090); empty when it is available.
   QString unavailableReason(const CommandDef& def) const;
+  // The command search's row for a command the mode alone keeps from
+  // running (mitcad#1681): "Open a sketch first: Create Sketch (Alt+S)",
+  // "Finish the sketch first: ..."; empty otherwise.
+  QString modeHint(const CommandDef& def) const;
   void updateActions();
   void trigger(const QString& id) override;
   // The sketch tool on (SketchController::toolChanged) shows checked on the
@@ -570,6 +584,10 @@ private:
   // mode, the last command and the focus.
   bool repeatableCommand() const;
   void updateConfirmEnabled();
+  // Repeat (Enter, the view's context menu): starts command `id` again, its
+  // panel from the settings of its last OK, the selections empty
+  // (mitcad#1686).
+  void repeatCommand(const QString& id);
 
   // Model access. command() runs a model command as a job (MainWindowJobs.cpp)
   // and throws rust::Error when the model rejects it, ComputationCancelled
@@ -711,7 +729,8 @@ private:
   // Animate Joint: the joint selected in the timeline that has free
   // motions, else the newest one.
   void animateSelectedJoint();
-  // One frame of the animation: the joint previewed at its next value.
+  // The animation's clock ticked: the frame due now shown (those behind it
+  // skipped), from its joint solver placements or previewed.
   void animationFrame();
   void stopAnimation(const QString& why);
 
@@ -1107,10 +1126,11 @@ private:
   bool writeFile(const QString& path, const QString& description = QString(), VersionRecord* required = nullptr);
   // What follows writing the document's design file (`content`) to path:
   // the document is that file's now (mark_saved) and its autosave goes.
-  // `status`: what the status bar says (empty: "Saved <path>"), red when
-  // `problem`.
-  void afterSaved(const QString& path, QByteArrayView content, const QString& status = QString(),
-                  bool problem = false);
+  // `preview`: the 3D view as the save wrote it into the file, for the
+  // Start tab's preview too (null: none). `status`: what the status bar
+  // says (empty: "Saved <path>"), red when `problem`.
+  void afterSaved(const QString& path, QByteArrayView content, const QImage& preview,
+                  const QString& status = QString(), bool problem = false);
 
   // Versions (P12d, files/MainWindowVersions.cpp): Save in a project with
   // version history (a folder with .mitcad/project.json at the root of a
@@ -1615,7 +1635,7 @@ private:
   // (MainWindowContextMenu.cpp).
   static bool isPrintBedFace(const SelectionItem& face, const QStringList& bedFaces,
                              const std::shared_ptr<geometry::Shape>& shape);
-  // Import from slicer… of 3D Print (mitcad#655): a slicer's file into the
+  // Import from Slicer… of 3D Print (mitcad#655): a slicer's file into the
   // design, its line and report kept in `target`.
   void importPrintSettings(const std::shared_ptr<PrintImport>& target);
   // The design's printer as 3D Print shows it (mitcad#640): the root's
@@ -1736,9 +1756,13 @@ private:
   // A new design is opening (mitcad#844, mitcad#898): New Design in a
   // project opening the design it made, or an empty design (New, Close, an
   // empty project, the open design deleted). It opens with the component
-  // it stores as active (Component1), not with the root as a design read
-  // from a file (mitcad#426).
+  // it stores as active (Component1), as a design read from a file opens
+  // with the component it was saved with active (mitcad#1678).
   bool m_openingNewDesign = false;
+  // An import is opening (startImportedDocument, startF3dImport): it opens
+  // with its root active (mitcad#426), not with the component the import
+  // left active.
+  bool m_openingImport = false;
   // The open design's edit lock and the read-only mode (mitcad#89).
   LockController* m_locks = nullptr;
   // Save as New Version writes a read-only window's file all the same, and
@@ -1783,6 +1807,8 @@ private:
   ReportCenter* m_reports = nullptr;     // feedback and error reports (mitcad#61, mitcad#62)
   sketch::SketchController* m_sketch = nullptr;
   sketch::SketchPalette* m_palette = nullptr;
+  QStackedWidget* m_timelinePlace = nullptr;   // the timeline or the sketch's items
+  sketch::SketchItemList* m_sketchItems = nullptr; // (mitcad#1492)
   // The palette's page of the command pages: the palette, or in the docked
   // layout a scroll area around it (mitcad#412).
   QWidget* m_palettePage = nullptr;
@@ -1827,6 +1853,16 @@ private:
   QString m_placementNote; // the last command's placement warning (mitcad#292)
   QStackedWidget* m_commandPages = nullptr;
   QPointer<QWidget> m_panelScroll; // the running command's panel page
+  // A command set aside while a sketch it uses is edited (mitcad#1648,
+  // editSketchInCommand): the session and its panel page, its input that
+  // names the sketch, the sketch, and the features made before its feature.
+  // Leaving the sketch brings it back (resumeSketchingCommand).
+  QPointer<CommandSession> m_sketchingSession;
+  QPointer<QWidget> m_sketchingPage;
+  QString m_sketchingInput;
+  QString m_sketchingSketch;
+  int m_sketchingAdded = 0;
+  void resumeSketchingCommand();
   QLabel* m_idleInfo = nullptr;
   QHash<QString, QString> m_idleMeasurements;
   // How long the last updateIdleView took for its highlights and its card,
@@ -1929,6 +1965,10 @@ private:
   bool& m_commandInSketch = m_documentSession->state().commandInSketch;
   QPointer<CommandSession>& m_session = m_documentSession->state().activeCommand;
   QString& m_lastCommand = m_documentSession->state().lastCommand;
+  QHash<QString, PanelSettings>& m_repeatSettings = m_documentSession->state().repeatSettings;
+  // The command Repeat starts now (repeatCommand): its panel starts from
+  // m_repeatSettings (mitcad#1686).
+  QString m_repeatCommand;
   // Called when the running command ends (startCommand).
   std::function<void(bool committed)>& m_commandFinished = m_documentSession->state().commandFinished;
   Selection& m_selection = m_documentSession->state().selection;
@@ -1994,7 +2034,9 @@ private:
   std::optional<OccurrenceDragState> m_drag;
   QString m_dragHint; // the hover's drag hint shown (mitcad#150)
   // A joint being animated (mitcad#55): its definition, the motion and the
-  // values still to show; previews only, the document stays as it is.
+  // values still to show; the document stays as it is. Its frames are the
+  // joint solver's placements (`joint_poses`, mitcad#1701), else previews
+  // (contact sets), each shown when the clock says.
   struct JointAnimation {
     QString uid;
     QString name;
@@ -2002,8 +2044,13 @@ private:
     QJsonObject def;
     QVector<double> frames;
     double start = 0.0; // where the motion was before the first frame
-    int next = 0;
+    int next = 0;       // the first frame not shown yet
+    int last = -1;      // the frame shown last
     std::vector<BodyDisplay> bodies; // as shown when it began
+    QJsonArray poses; // per frame its `placements`; empty: previews
+    QElapsedTimer clock; // since it began
+    int shown = 0;       // frames shown (those behind the clock skipped)
+    int previews = 0;    // frames computed as previews
   };
   std::optional<JointAnimation> m_animation;
   // A motion preview's placements (Animate Joint, a study's playback;
@@ -2391,12 +2438,19 @@ private:
   // are hidden and come back as they were. A design that opens (or a new
   // one), a command of the 3D view (trigger) and an import leave it for
   // SOLID. A save writes the design's preview (recent::designPreviewPath),
-  // which the page's cards and File › Open Recent show.
+  // which the page's cards and File › Open Recent show; the same picture
+  // goes into the design's file for file managers (mitcad#1539,
+  // designPreviewPng).
   void createStartPage();
   void updateStartPage(const QString& tab);
   bool startPageShown() const;
   void leaveStartPage();
-  void saveDesignPreview(const QString& path);
+  // The 3D view as a design's preview, 256 px at most a side; null while
+  // the view is not shown.
+  QImage designPreviewImage() const;
+  // Its PNG file; empty for a null image.
+  static QByteArray designPreviewPng(const QImage& image);
+  void saveDesignPreview(const QString& path, const QImage& image);
   // Dropped files, on the window or the Start page: a design opens, the
   // other files come in (an import while no command runs).
   void openDropped(const QStringList& paths);

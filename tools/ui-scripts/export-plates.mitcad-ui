@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: MIT
+# File > Export of a 3MF file with the design's print plates (mitcad#1679),
+# the shared input script of tools/ui-export-plates-test.sh (Linux) and
+# tools/ui-windows-export-plates-test.ps1, on tools/ui-scripts/export-plates.json
+# (Body1 on Plate 1, Body2 on Plate 2 in vase mode). The Export dialog
+# starts as 3MF (the type remembered) and offers the plates, all of them in
+# one file for the design's slicer (Bambu Studio's, as Send to Slicer):
+#   1. Enter writes kit.3mf with both plates (the wrappers read it);
+#   2. A file per plate writes "each - Plate 1.3mf" and "each - Plate 2.3mf";
+#   3. Only Plate 2 writes two.3mf with that plate alone.
+wait-idle
+set-setting export/type 3mf
+
+# 1. Every plate in one file, as the dialog starts.
+mark
+command file.export
+focus-dialog '^Export$'
+wait-log 'Export dialog opened: .*type 3mf, .*plates one_file \(2\), slicer bambu_studio'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/kit.3mf"
+sleep 300
+key Return
+focus-main
+wait-log 'Export dialog: 3MF for 3D printing \(\*\.3mf\) to ${MITCAD_TEST_WORK:re}/kit\.3mf, refinement [a-z]+, plates one_file, slicer bambu_studio, on the bed'
+wait-log 'Exported plates one_file for bambu_studio: '
+wait-log 'Exported ${MITCAD_TEST_WORK:re}/kit\.3mf: 3mf, 2 plate\(s\)'
+expect-file "${MITCAD_TEST_WORK}/kit.3mf"
+
+# 2. A file per plate, beside the path given.
+mark
+command file.export
+focus-dialog '^Export$'
+wait-log 'Export dialog opened: .*plates one_file \(2\)'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/each.3mf"
+sleep 300
+focus-widget exportPlates
+key Down
+sleep 300
+key Return
+focus-main
+wait-log 'Export dialog: 3MF for 3D printing \(\*\.3mf\) to ${MITCAD_TEST_WORK:re}/each\.3mf, refinement [a-z]+, plates file_per_plate, slicer bambu_studio, on the bed'
+wait-log 'Exported ${MITCAD_TEST_WORK:re}/each\.3mf: 3mf, 2 plate\(s\) in 2 files'
+expect-file "${MITCAD_TEST_WORK}/each - Plate 1.3mf"
+expect-file "${MITCAD_TEST_WORK}/each - Plate 2.3mf"
+
+# 3. Only Plate 2 (after the bodies, all plates, a file per plate and
+# Plate 1), in the path given.
+mark
+command file.export
+focus-dialog '^Export$'
+wait-log 'Export dialog opened: .*plates one_file \(2\)'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/two.3mf"
+sleep 300
+focus-widget exportPlates
+key Down Down Down
+sleep 300
+key Return
+focus-main
+wait-log 'Export dialog: 3MF for 3D printing \(\*\.3mf\) to ${MITCAD_TEST_WORK:re}/two\.3mf, refinement [a-z]+, plates plate plate2, slicer bambu_studio, on the bed'
+wait-log 'Exported ${MITCAD_TEST_WORK:re}/two\.3mf: 3mf, 1 plate\(s\)'
+expect-file "${MITCAD_TEST_WORK}/two.3mf"
+expect-never 'TestDriver: FAIL|Could not export'

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+# The design window's kept place (mitcad#1710, GitHub mitcad/Mitcad#283),
+# the start after window-place-save.mitcad-ui: the window is where it was,
+# 900 x 600 at 70, 50 from its screen's available area's top left; then it
+# is maximized, and kept so when MitCad ends after the script.
+# Run by tools/ui-window-place-test.sh and
+# tools/ui-windows-window-place-test.ps1.
+expect-ever '^Window place restored: ' 10
+wait-idle
+expect-window-state normal
+expect-window-place 70 50 900 600
+window-state maximized
+expect-window-state maximized
+sleep 300
+wait-idle

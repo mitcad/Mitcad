@@ -140,7 +140,24 @@ std::shared_ptr<geometry::Shape> hole_tool(rust::Str feature, const HoleInput& i
   spec.type = input.shape == 1   ? geometry::HoleType::Counterbore
               : input.shape == 2 ? geometry::HoleType::Countersink
               : input.shape == 3 ? geometry::HoleType::Counterdrill
+              : input.shape == 4 ? geometry::HoleType::NutPocket
                                  : geometry::HoleType::Simple;
+  // A nut pocket (mitcad#1518): a slot of 0 is none.
+  spec.pocket_across_flats = input.pocket_across_flats;
+  spec.pocket_depth = input.pocket_depth;
+  spec.pocket_angle = input.pocket_angle;
+  spec.pocket_offset = input.pocket_offset;
+  if (input.pocket_slot > 0.0) {
+    spec.pocket_slot = input.pocket_slot;
+  }
+  // Print bridging (mitcad#1516): a flag per position.
+  spec.bridging = input.bridging == 1   ? geometry::Bridging::Sacrificial
+                  : input.bridging == 2 ? geometry::Bridging::Stepped
+                                        : geometry::Bridging::None;
+  spec.bridge_layer = input.bridge_layer;
+  for (const std::uint8_t bridged : input.bridged) {
+    spec.bridged.push_back(bridged != 0);
+  }
   spec.taper = input.taper;
   spec.counterbore_diameter = input.counterbore_diameter;
   spec.counterbore_depth = input.counterbore_depth;

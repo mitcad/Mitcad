@@ -91,6 +91,13 @@ key ctrl+a
 type "${MITCAD_TEST_WORK}/block.step"
 sleep 300
 key Return
+# Import asks where the file goes (mitcad#1629); keep the default new
+# component as the shared desktop workflow does, then check its contents.
+expect-log 'Import place dialog opened: block\.step'
+# Message boxes have no window title on macOS; match the same question.
+focus-dialog '^Import block\.step into a new component named block, or into the active component\?$'
+key Return
+expect-log 'Import place: new component'
 focus-main
 expect-log 'Imported block\.step as' 20
 capture imported 'New body \S+ \(F\d+\.b0\): volume ([0-9.]+) mm3' 30

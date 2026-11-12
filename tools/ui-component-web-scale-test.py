@@ -13,18 +13,19 @@ red button.
    for the screen's information again), the same.
 
 The places are read from the screen (xwd), and the clicks are X input
-(xdotool), as a user's. The pinned CEF paints its windowless frames at a
-scale of 1 whatever the view tells it; the view marked them with its own
-scale, so that the page filled only 1/1.65 of the view at its top left
-while clicks landed where the page would have been at full size.
+(xdotool), as a user's. CEF paints its windowless frames at a scale of 1
+whatever the view tells it (156.0.27 and .28); the view marked them with its
+own scale once, so that the page filled only 1/1.65 of the view at its top
+left while clicks landed where the page would have been at full size.
 
-With --device-scale, CEF must also paint its frames at the view's scale
-(the frame's pixel size the view's size times 1.65, sharp): the check for a
-new CEF version (mitcad#1657). Neither the pinned 156.0.27 nor 156.0.28 does
-(at 1.65 or 2, with GetScreenInfo giving the screen's rectangle too), so the
-registered test runs without it.
+With --device-scale (the registered test), the frames must also be of the
+view's physical pixels (the frame's pixel size the view's size times the
+scale, sharp; mitcad#1657): the view gives CEF its size in physical pixels
+and sets the page's zoom to the scale, so the page is laid out at the same
+CSS size (the button's place and size above check that) and painted into
+every pixel. --scale picks another scale (2: an integer one).
 
-Usage: ui-component-web-scale-test.py [--device-scale] <app> <output folder> <the built web browser component> [<Qt's bin>]
+Usage: ui-component-web-scale-test.py [--device-scale] [--scale S] <app> <output folder> <the built web browser component> [<Qt's bin>]
 Runs on its own hidden X display (cmake/SelectionUiTests.cmake: xvfb-run).
 """
 import importlib.util
@@ -35,7 +36,12 @@ import tempfile
 import threading
 import time
 
-SCALE = 1.65
+SCALE = 1.65  # --scale
+
+
+def scale_text():
+    """The scale as the log writes it ("1.65")."""
+    return "%.2f" % SCALE
 # The button on the page, in the page's (CSS) pixels.
 BUTTON = (120, 80, 160, 90)
 TOOLS = Path(__file__).resolve().parent
@@ -63,7 +69,9 @@ def page(next_page):
 
 def workflow(port, directory):
     host = "http://127\\.0\\.0\\.1:%d" % port
-    frame = "^Component browser frame: [0-9]+x[0-9]+ px at scale [0-9.]+ for a view of [0-9]+x[0-9]+ at scale 1\\.65$"
+    scale = scale_text().replace(".", "\\.")
+    frame = ("^Component browser frame: [0-9]+x[0-9]+ px at scale [0-9.]+ for a view of [0-9]+x[0-9]+ at scale %s$"
+             % scale)
     lines = [
         "wait-idle",
         "command insert.component_web",
@@ -73,7 +81,7 @@ def workflow(port, directory):
         "type http://127.0.0.1:%d/page1.html" % port,
         "key Return",
         "expect-log '^Component browser page: %s/page1\\.html' 60" % host,
-        # 1. The view at 1.65 (the start page's frame already).
+        # 1. The view at the scale (the start page's frame already).
         "expect-ever '%s' 30" % frame,
         "expect-file '%s' 120" % (directory / "phase1.done"),
         "expect-log '^Component browser navigates to %s/page2\\.html' 30" % host,
@@ -81,7 +89,7 @@ def workflow(port, directory):
         # 2. The window's scale changes.
         "mark",
         "invoke-widget componentBrowserView screenChanged",
-        "expect-log '^Component browser scale: 1\\.65$' 10",
+        "expect-log '^Component browser scale: %s$' 10" % scale,
         "expect-file '%s' 120" % (directory / "phase2.done"),
         "expect-log '^Component browser navigates to %s/page3\\.html' 30" % host,
         "quit",
@@ -212,7 +220,7 @@ def run(app, directory, component, qt_bin=None, device_scale=False):
                         (directory / "phase1.done").touch()
                         page2 = wait_log(log_path, "Component browser page: http://127.0.0.1:%d/page2.html" % port,
                                          0, 120)
-                        wait_log(log_path, "Component browser scale: 1.65", page2, 60)
+                        wait_log(log_path, "Component browser scale: " + scale_text(), page2, 60)
                         check_and_click(directory, log_path, 2, device_scale)
                         (directory / "phase2.done").touch()
                     except Exception as error:  # reported after the run
@@ -230,18 +238,23 @@ def run(app, directory, component, qt_bin=None, device_scale=False):
             text = log_path.read_text(encoding="utf-8", errors="replace")
             if (failure or app_run.returncode or any(line.startswith("TestDriver: FAIL") for line in text.splitlines())
                     or "TestDriver: quit" not in text):
-                raise RuntimeError("Component from Web at scale 1.65 failed: %s (%s)"
-                                   % ("; ".join(failure) or "see the log", log_path))
+                raise RuntimeError("Component from Web at scale %s failed: %s (%s)"
+                                   % (scale_text(), "; ".join(failure) or "see the log", log_path))
     finally:
         server.shutdown()
-    print("PASS: Component from Web at scale 1.65: the page fills the view and a click at the button's place on "
-          "the screen clicks it, before and after the window's scale changes")
+    print("PASS: Component from Web at scale %s: the page fills the view%s and a click at the button's place on "
+          "the screen clicks it, before and after the window's scale changes"
+          % (scale_text(), " at the view's physical pixels" if device_scale else ""))
 
 
 if __name__ == "__main__":
     arguments = sys.argv[1:]
     device_scale = "--device-scale" in arguments
     arguments = [argument for argument in arguments if argument != "--device-scale"]
+    if "--scale" in arguments:
+        at = arguments.index("--scale")
+        SCALE = float(arguments[at + 1])
+        del arguments[at:at + 2]
     if len(arguments) < 3:
         raise SystemExit(__doc__)
     run(*arguments[:4], device_scale=device_scale)

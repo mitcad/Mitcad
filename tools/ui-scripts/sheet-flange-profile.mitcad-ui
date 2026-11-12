@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: MIT
+# A Flange's profile sketch edited from its panel (mitcad#1648, GitHub
+# mitcad/Mitcad#237; app/COMMANDS.md "Flange"), on sheet-flange-profile.json
+# (the 35 x 20 sheet F3.b0 of Sketch1 F2, its side face at x = 5 free):
+#   1. Flange on the side face; its Profile row says the wall is a
+#      rectangle and offers Edit Profile.
+#   2. Edit Profile: the model makes Plane1 (F4) and Sketch2 (F5) on the
+#      wall before the flange; the panel is set aside and Sketch2 opens as
+#      Edit Sketch opens it. Its wall length (the dimension k4) is changed
+#      to 15, then Finish Sketch brings the panel back with its preview.
+#   3. OK: the flange is added with the profile, after Sketch2 in the
+#      timeline.
+#   4. The flange edited again: its Profile row offers Remove Profile; Edit
+#      Profile opens the same sketch (nothing added: it lies on the wall),
+#      Finish Sketch leaves it unchanged and the panel comes back; Esc
+#      cancels the command. (Esc leaves no sketch by default, mitcad#1623.)
+# Run by tools/ui-sheet-flange-profile-test.sh (Linux) and
+# tools/ui-windows-sheet-flange-profile-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+key F6
+wait-idle
+
+# 1. A new Flange on the side face at x = 5.
+mark
+command sheet.flange
+wait-log '^Pick places:' 30
+wait-idle
+click-pick 'face F3[.]b0/F3:sheet_side[0-9]*[(]F2:sheet_curve[(]c2[[]c1,c3[]][)][)] at'
+wait-log '^Preview Flange: ok' 30
+wait-idle
+expect-ever '^Panel Flange action profile_note[.]0 at '
+expect-no-log '^Panel Flange action profile_note[.]1 at '
+
+# 2. Edit Profile: the sketch made on the wall and opened.
+mark
+click-logged '^Panel Flange action profile_note[.]0 at '
+wait-log '^Flange: 2 feature[(]s[)] added before it$'
+wait-log '^Flange: editing sketch F5 [(]Sketch2[)] in the command, 2 feature[(]s[)] added$'
+wait-log '^Flange set aside while a sketch is edited$'
+wait-log '^Editing sketch F5 [(]Sketch2[)]$'
+wait-idle
+model-command '{"cmd":"sketch.set_dimension","sketch":"F5","dimension":"k4","value":15}'
+wait-idle
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-log '^Flange resumed$'
+wait-log '^Flange back from the sketch Sketch2$'
+wait-log '^Preview Flange: ok' 30
+wait-idle
+
+# 3. OK: the flange with its profile, after the sketch in the timeline.
+mark
+key Return
+wait-log '^Added flange with the profile F5, ' 30
+wait-log '^Added Flange as F6$' 30
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-ever '^Timeline Sketch2 at '
+expect-ever '^Timeline SheetFlange1 at '
+
+# 4. Edited again: the profile loaded; Edit Profile opens the same sketch.
+mark
+dblclick-logged '^Timeline SheetFlange1 at '
+wait-log '^Editing F6 with Flange$'
+wait-log '^Panel Flange action profile_note[.]1 at '
+wait-idle
+mark
+click-logged '^Panel Flange action profile_note[.]0 at '
+wait-log '^Flange: editing sketch F5 [(]Sketch2[)] in the command, 0 feature[(]s[)] added$'
+wait-log '^Editing sketch F5 [(]Sketch2[)]$'
+wait-idle
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-log '^Flange back from the sketch Sketch2$'
+wait-idle
+mark
+key Escape
+wait-log '^Command Flange cancelled$'
+wait-idle

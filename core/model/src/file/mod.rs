@@ -101,7 +101,14 @@
 //! rows of a rotation and a translation unless the identity, `grounded`,
 //! `"visible": false`), `active_component`, `root_component` (the root's
 //! name when renamed) and a feature's `component` when it is not the root
-//! (`C0`). Files without them load with every feature in the root.
+//! (`C0`). Files without them load with every feature in the root. An
+//! occurrence `transform` off a rotation within 1e-6 opens as it is; one
+//! that drifted further (a positive determinant, every singular value
+//! between 0.5 and 1.5: drift older builds compounded over many drags,
+//! mitcad#1664, mitcad#1666) is straightened to its nearest rotation with
+//! a warning that names the occurrence; a scale, a mirror, a degenerate
+//! transform or a number that is not finite refuses the file. Saving never
+//! writes a transform that opening would refuse.
 //!
 //! The numbers the next feature and occurrence take (mitcad#1320):
 //! `next_feature` and `next_occurrence`, each only where it is not one past
@@ -295,6 +302,18 @@
 //! definition, not in it: undo leaves them, and a design comparison does
 //! not see them.
 //!
+//! The design's preview (mitcad#1539), once the application's Save wrote
+//! one: `preview` (`format` `png`, `width`, `height`, `data`: the PNG in
+//! base64), the 3D view as that save left it, 256 px at most a side, which
+//! file managers show through `mitcad-thumbnailer` without loading the
+//! design (see `mitcad_model_base::design_preview`). Kept beside the
+//! definition like the statistics, and changed with them: a save that
+//! changes nothing else keeps the preview the file has
+//! ([`Document::save_file_previewed`]); other saves (autosave, the command
+//! line tool) write the one the design was read with. A preview that
+//! cannot be read is left out with a warning. Builds before it treat the
+//! field as unknown.
+//!
 //! Top-level fields this build does not know (mitcad#1132) are ignored:
 //! a newer MitCad wrote them (`future_notes`, say), and a field added later
 //! must not keep an older build from opening the design. Opening names
@@ -322,6 +341,8 @@ mod id_reserve;
 mod statistics;
 pub(crate) use self::statistics::KeptStatistics;
 pub use self::statistics::{DesignStatistics, SaveStamp, utc_text};
+// The preview the file carries for file managers (mitcad#1539).
+pub use mitcad_model_base::design_preview::DesignPreview;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -484,7 +505,11 @@ impl<K: Kernel> Document<K> {
     /// base feature's data is missing (a reference that was not resolved),
     /// which keeps its reference and makes the file version 3.
     pub fn to_json(&self) -> String {
-        v2::save_with(self.state(), &self.design_statistics())
+        v2::save_with(
+            self.state(),
+            &self.design_statistics(),
+            self.kept_design_preview().as_ref(),
+        )
     }
 
     /// The design file of this document as a project versions it (version
@@ -496,6 +521,7 @@ impl<K: Kernel> Document<K> {
     pub fn to_project_json(&self, store: &dyn BlobStore) -> std::io::Result<String> {
         let state = self.state();
         let statistics = self.design_statistics();
+        let preview = self.kept_design_preview();
         if state.display.is_default()
             && !state
                 .features
@@ -503,7 +529,7 @@ impl<K: Kernel> Document<K> {
                 .any(|f| matches!(f.def, FeatureDef::Base(_)))
             && state.library_sources.is_empty()
         {
-            return Ok(v2::save_with(state, &statistics));
+            return Ok(v2::save_with(state, &statistics, preview.as_ref()));
         }
         let mut written = HashSet::new();
         let mut referring = state.clone();
@@ -530,7 +556,7 @@ impl<K: Kernel> Document<K> {
                 ..(**entry).clone()
             });
         }
-        Ok(v2::save_with(&referring, &statistics))
+        Ok(v2::save_with(&referring, &statistics, preview.as_ref()))
     }
 
     /// Writes the design file to `path`, whole or not at all (a temporary
@@ -630,15 +656,43 @@ impl<K: Kernel> Document<K> {
         format: FileFormat,
         stamp: &SaveStamp,
     ) -> Result<String, DesignError> {
+        self.save_file_previewed(path, format, stamp, None)
+    }
+
+    /// [`Document::save_file_stamped`] with `preview`, the 3D view as the
+    /// application's Save sees it, as the design's preview (mitcad#1539).
+    /// It replaces the one the design has together with the statistics:
+    /// only when the file changes otherwise too, so that a save of an
+    /// unchanged design (the view only turned) records no new version.
+    /// Without a `preview` the design keeps the one it has. A save that
+    /// fails keeps the preview before it.
+    pub fn save_file_previewed(
+        &self,
+        path: &Path,
+        format: FileFormat,
+        stamp: &SaveStamp,
+        preview: Option<DesignPreview>,
+    ) -> Result<String, DesignError> {
         let before = self.kept_statistics();
+        let preview_before = self.kept_design_preview();
         let (unstamped, _) = self.file_text(path, format)?;
         let unchanged = std::fs::read(path).is_ok_and(|bytes| bytes == unstamped.as_bytes());
         if !unchanged {
             self.set_kept_statistics(before.stamped(stamp));
+            if let Some(preview) = preview {
+                self.set_kept_design_preview(Some(preview));
+            }
         }
         self.save_file(path, format).inspect_err(|_| {
             self.set_kept_statistics(before);
+            self.set_kept_design_preview(preview_before);
         })
+    }
+
+    /// The preview the design's file carries, or the one the last save
+    /// given a preview wrote (mitcad#1539); None for a design without one.
+    pub fn design_preview(&self) -> Option<DesignPreview> {
+        self.kept_design_preview()
     }
 
     /// The design's statistics as its file has them, or as the last
@@ -675,6 +729,7 @@ impl<K: Kernel> Document<K> {
         let document = Document::from_state(kernel, loaded.state)
             .with_warnings(loaded.warnings)
             .with_statistics(KeptStatistics::read(loaded.statistics, new))
+            .with_design_preview(loaded.preview)
             .with_unknown_fields(unknown);
         if let Some(directory) = absolute.parent() {
             document.set_source_directory(directory);
@@ -689,12 +744,14 @@ impl<K: Kernel> Document<K> {
             mut state,
             mut warnings,
             statistics,
+            preview,
             unknown_fields,
         } = load_parts(json)?;
         resolve(&mut state, store, &mut warnings);
         Ok(Document::from_state(kernel, state)
             .with_warnings(warnings)
             .with_statistics(KeptStatistics::read(statistics, false))
+            .with_design_preview(preview)
             .with_unknown_fields(UnknownFields {
                 file: None,
                 fields: unknown_fields,
@@ -708,12 +765,13 @@ impl<K: Kernel> Document<K> {
     pub fn to_json_with_marker(&self, marker: usize) -> String {
         let state = self.state();
         let statistics = self.design_statistics();
+        let preview = self.kept_design_preview();
         if marker == state.marker {
-            return v2::save_with(state, &statistics);
+            return v2::save_with(state, &statistics, preview.as_ref());
         }
         let mut moved = state.clone();
         moved.marker = marker.min(moved.features.len());
-        v2::save_with(&moved, &statistics)
+        v2::save_with(&moved, &statistics, preview.as_ref())
     }
 
     /// Reads a design file of version 1, 2 or 3. Nothing is evaluated yet;
@@ -731,6 +789,7 @@ impl<K: Kernel> Document<K> {
         Ok(Document::from_state(kernel, loaded.state)
             .with_warnings(loaded.warnings)
             .with_statistics(KeptStatistics::read(loaded.statistics, true))
+            .with_design_preview(loaded.preview)
             .with_unknown_fields(UnknownFields {
                 file: None,
                 fields: loaded.unknown_fields,
@@ -746,12 +805,14 @@ pub fn load_state(json: &str) -> Result<(DocState, Vec<String>), FileError> {
 }
 
 /// What a design file gives: its definition state, what loading changed,
-/// its statistics, if it has any (mitcad#1088), and its top-level fields
-/// that this build does not know (mitcad#1132).
+/// its statistics, if it has any (mitcad#1088), its preview, if it has one
+/// (mitcad#1539), and its top-level fields that this build does not know
+/// (mitcad#1132).
 struct Loaded {
     state: DocState,
     warnings: Vec<String>,
     statistics: Option<DesignStatistics>,
+    preview: Option<DesignPreview>,
     unknown_fields: Vec<String>,
 }
 
@@ -777,6 +838,13 @@ fn load_parts(json: &str) -> Result<Loaded, FileError> {
                 .map_err(|e| FileError::Schema(format!("statistics: {e}")))?,
         ),
     };
+    // Nor is the preview (mitcad#1539): one that cannot be read is left
+    // out with a warning, and the design opens as it would without it.
+    let preview = value
+        .as_object_mut()
+        .and_then(|top| top.remove(mitcad_model_base::design_preview::FIELD))
+        .filter(|preview| !preview.is_null())
+        .map(DesignPreview::from_value);
     // Top-level fields a newer MitCad wrote are ignored, with a warning
     // (mitcad#1132). Version 1 files are older than every such field.
     let unknown_fields = match version {
@@ -790,6 +858,14 @@ fn load_parts(json: &str) -> Result<Loaded, FileError> {
     if !unknown_fields.is_empty() {
         warnings.insert(0, unknown_fields_warning(&unknown_fields));
     }
+    let preview = match preview {
+        None => None,
+        Some(Ok(preview)) => Some(preview),
+        Some(Err(e)) => {
+            warnings.push(format!("the design's preview is left out: {e}"));
+            None
+        }
+    };
     // Ids in the top of their type would leave the session too few to
     // hand out (mitcad#944).
     id_reserve::check(&state)?;
@@ -802,6 +878,7 @@ fn load_parts(json: &str) -> Result<Loaded, FileError> {
         state,
         warnings,
         statistics,
+        preview,
         unknown_fields,
     })
 }
@@ -950,10 +1027,11 @@ pub fn brep_references(json: &str) -> Result<BTreeSet<Sha256>, FileError> {
 
 /// The text of a project's design file (version 3) as a single file, the
 /// B-rep data it refers to read from `store` and put inside, its
-/// statistics kept: what Remove Project writes before the project's store
-/// goes (mitcad#1562). None when the file refers to no data (it stays as
-/// it is). An error, so that nothing is lost, when data it refers to
-/// cannot be read or the file has fields a newer MitCad wrote.
+/// statistics and preview kept: what Remove Project writes before the
+/// project's store goes (mitcad#1562). None when the file refers to no
+/// data (it stays as it is). An error, so that nothing is lost, when data
+/// it refers to cannot be read or the file has fields a newer MitCad
+/// wrote.
 pub fn single_file_text(json: &str, store: &dyn BlobStore) -> Result<Option<String>, FileError> {
     if brep_references(json)?.is_empty() {
         return Ok(None);
@@ -962,6 +1040,7 @@ pub fn single_file_text(json: &str, store: &dyn BlobStore) -> Result<Option<Stri
         mut state,
         mut warnings,
         statistics,
+        preview,
         unknown_fields,
     } = load_parts(json)?;
     if !unknown_fields.is_empty() {
@@ -978,7 +1057,11 @@ pub fn single_file_text(json: &str, store: &dyn BlobStore) -> Result<Option<Stri
             warnings.join("; ")
         )));
     }
-    Ok(Some(v2::save_with(&state, &statistics.unwrap_or_default())))
+    Ok(Some(v2::save_with(
+        &state,
+        &statistics.unwrap_or_default(),
+        preview.as_ref(),
+    )))
 }
 
 /// Whether a base feature refers to B-rep data elsewhere.

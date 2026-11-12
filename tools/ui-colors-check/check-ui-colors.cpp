@@ -73,6 +73,7 @@ const Allowed kAllowed[] = {
     {"sketch/FontFiles.cpp", 1, "a font's preview sample"},
     {"print/MaterialsDialog.cpp", 1, "a filament without a color: its neutral swatch"},
     {"browser/BrowserMaterialMenu.cpp", 1, "a material without a color: its neutral swatch"},
+    {"thumbnails/ThumbnailHandler.hpp", 1, "the thumbnail handler's class id (a GUID's last eight bytes), not a color"},
     {"commands/MaterialCommands.cpp", 1, "a material without a color: its neutral swatch"},
     {"files/MainWindowPrint.cpp", 1, "Send to Slicer's material without a color: its neutral swatch"},
     {"print/SettingField.cpp", 3, "a color swatch's checkerboard under its transparency and its frame"},
@@ -89,7 +90,7 @@ const Allowed kAllowed[] = {
      "the ambient light's intensity, the key light's white, the background before the preference is read, and "
      "the white or black channels OCCT multiplies marker images, textures and the emissive highlights by"},
     {"LayoutGrid.hpp", 2, "the layout grid's lines on the view's dark background"},
-    {"drawings/DrawingSheetView.cpp", 5, "the drawing sheet's surroundings, shadows around its paper and the title block editor's grid on the white paper"},
+    {"drawings/DrawingSheetView.cpp", 7, "the drawing sheet's surroundings, shadows around its paper, the title block editor's grid and the placing preview's label backing on the white paper, and the hover words' pill drawn like the hint pill over the sheet (mitcad#1691)"},
     {"framework/Cursors.cpp", 2, "the cursors' artwork: a dark arm with a white halo"},
     {"framework/GlassCard.cpp", 4, "the glass cards' neutral grey rim and tint, their flat buttons' hover and press"},
     {"library/PartPicker.cpp", 1, "a neutral grey tint over a thumbnail"},

@@ -1,0 +1,23 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Isolate and the sketch geometry (mitcad#1702, GitHub #254), on a reported design (opened with --open, never committed; tools/cli/isolated-sketch-geometry-reported-test.cmake): twelve components side by side, a sketch (F220) of the leg component (O9) on the face of one of its bodies. The Dimension tool picked and hovered edges of the components that Isolate hid: the plane_geometry answer listed them. Out of the plane too (out_of_plane), so that every edge of the bodies looked at is listed."},
+  {"comment": "Nothing isolated: the frame's (O2) edges are listed beside the leg's own."},
+  {"expect": {"query": {"query": "plane_geometry", "sketch": "F220", "out_of_plane": true}, "some": {"occurrence": "O2"}}},
+  {"expect": {"query": {"query": "plane_geometry", "sketch": "F220", "out_of_plane": true}, "some": {"body": "F126.b0"}}},
+  {"comment": "The leg isolated: its own body's edges still, none of another component's."},
+  {"cmd": "set_isolation", "items": [{"occurrence": "O9"}]},
+  {"expect": {"query": {"query": "plane_geometry", "sketch": "F220", "out_of_plane": true}, "some": {"body": "F126.b0"}}},
+  {"expect": {"query": {"query": "plane_geometry", "sketch": "F220", "out_of_plane": true}, "none": {"occurrence": "O1"}}},
+  {"expect": {"query": {"query": "plane_geometry", "sketch": "F220", "out_of_plane": true}, "none": {"occurrence": "O2"}}},
+  {"expect": {"query": {"query": "plane_geometry", "sketch": "F220", "out_of_plane": true}, "none": {"occurrence": "O6"}}},
+  {"expect": {"query": {"query": "plane_geometry", "sketch": "F220", "out_of_plane": true}, "none": {"occurrence": "O7"}}},
+  {"expect": {"query": {"query": "plane_geometry", "sketch": "F220", "out_of_plane": true}, "none": {"occurrence": "O8"}}},
+  {"expect": {"query": {"query": "plane_geometry", "sketch": "F220", "out_of_plane": true}, "none": {"occurrence": "O10"}}},
+  {"expect": {"query": {"query": "plane_geometry", "sketch": "F220", "out_of_plane": true}, "none": {"occurrence": "O11"}}},
+  {"expect": {"query": {"query": "plane_geometry", "sketch": "F220", "out_of_plane": true}, "none": {"occurrence": "O14"}}},
+  {"expect": {"query": {"query": "plane_geometry", "sketch": "F220", "out_of_plane": true}, "none": {"occurrence": "O15"}}},
+  {"expect": {"query": {"query": "plane_geometry", "sketch": "F220", "out_of_plane": true}, "none": {"occurrence": "O16"}}},
+  {"expect": {"query": {"query": "plane_geometry", "sketch": "F220", "out_of_plane": true}, "none": {"occurrence": "O17"}}},
+  {"comment": "Unisolate: the frame's edges again."},
+  {"cmd": "set_isolation", "items": []},
+  {"expect": {"query": {"query": "plane_geometry", "sketch": "F220", "out_of_plane": true}, "some": {"occurrence": "O2"}}}
+]

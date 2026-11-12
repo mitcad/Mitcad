@@ -10,6 +10,7 @@ namespace mitcad {
 namespace {
 
 const char* kRecentKey = "materials/recent";
+const char* kRecentAppearancesKey = "appearances/recent";
 
 int indexOf(const QVector<MaterialChoice>& items, const QString& key) {
   for (int i = 0; i < items.size(); ++i) {
@@ -100,6 +101,32 @@ bool asksToReplaceAppearance(const QJsonObject& body, const QStringList& offered
     return false;
   }
   return !offered.contains(body.value(QStringLiteral("appearance")).toString());
+}
+
+QStringList recentAppearances() {
+  return QSettings().value(QLatin1String(kRecentAppearancesKey)).toStringList();
+}
+
+void rememberRecentAppearance(const QString& id) {
+  if (id.isEmpty()) {
+    return;
+  }
+  QSettings settings;
+  settings.setValue(QLatin1String(kRecentAppearancesKey),
+                    withRecentMaterial(recentAppearances(), id, kRecentAppearances));
+}
+
+QStringList recentAppearanceRows(const QStringList& known, const QStringList& recent, int limit) {
+  QStringList rows;
+  for (const QString& id : recent) {
+    if (rows.size() >= limit) {
+      break;
+    }
+    if (known.contains(id) && !rows.contains(id)) {
+      rows << id;
+    }
+  }
+  return rows;
 }
 
 } // namespace mitcad

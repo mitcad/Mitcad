@@ -326,7 +326,11 @@ label.
    buttons, dialog and window titles, tabs, groups, command-panel input
    labels, column headers. Sentence case: checkboxes, radio buttons,
    form-row labels, section headings inside dialogs, tooltips, messages,
-   placeholder text. One label is spelled one way everywhere it appears.
+   placeholder text. One label is spelled one way everywhere it appears:
+   a state or place a list, filter or tooltip names is in sentence case
+   in every one of them, also as a menu entry (*Rolled back*, *Import
+   notes*, *This design*, *My library*); inside a Title Case label it
+   takes that label's case (*Components in This Design…*).
    Title Case keeps articles, conjunctions and short prepositions in
    lower case inside a label (*a, an, the, and, but, or, nor, as, at, by,
    for, from, in, into, of, on, onto, per, to, via, with*): *Save as
@@ -617,7 +621,8 @@ writes a color literal (see [The checks](#5-the-checks)).
    convention; it is a fill, the error is a dashed outline with a
    message); the X / Y / Z axes stay red / green / blue, one set for
    the view cube, the joint triad and Free Move's arrows and rings
-   (mitcad#1581); the favorite star is yellow and
+   (mitcad#1581), which take `HandleActive` (white), not an axis' color,
+   while hovered or dragged (mitcad#1707); the favorite star is yellow and
    told apart from a warning by its shape; the cut sheet's red and blue
    are a file convention, not UI; the command inputs' green and the
    components' green are categories with a legend (the panel's swatches,
@@ -676,6 +681,7 @@ dynamic value.
 | | `PreviewTarget`, `ExtendedTool` | #00a6b4, #ff8c00 | what an inspection points at; a split's tool | |
 | | `Handle` | #e07b1a | manipulators, the timeline marker's handle, snaps, drawing picks | |
 | | `Provisional`, `FeatureFaces` | orange, amber | a mesh being made; a selected Fillet's own faces | |
+| | `HandleActive` | #ffffff | an axis-colored handle (Free Move's arrows and rings) hovered or dragged, white over its dark halo: none of the axis colors, no status hue, not the selection's blue that the Z axis' is close to (mitcad#1707); other handles take `Select` | |
 | View | `Body`, `Edge`, `HiddenEdge`, `Thread`, `BuildVolume`, `PrintBed`, `SectionCap`, `DatumPlane`, `DatumAxis`, `ProfileFill` | | the view's own objects | |
 | Sketch | `SketchFree`, `SketchFixed`, `SketchCenterline`, `SketchConstruction`, `SketchProjected`, `SketchInactive`, `SketchDriven`, `SketchDimension`, `SketchAxis`, `SketchPicked`, `SketchPreview`, `SketchGuide`, `SketchTrim`, `SketchHalo` | one value for the view and the overlay, by the background | the sketch's states | |
 | Domain | `Component0`–`Component7` | #e0892a, #3aa35b, #8e5bd0, #2aa7a7, #5560c8, #8d6e63, #c45a9a, #3d8bd9 | the components: timeline bands, section caps, Component Colors (no red, no olive) | |

@@ -1,0 +1,23 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. An automatic assembly cut leaves alone what moves against its component through joints (mitcad#1667), on a reported design (opened with --open, never committed; tools/cli/assembly-context-reported-test.cmake): a linkage of links and rods inserted from their own design files, joined by revolute and cylindrical joints. The links' and rods' cuts (holes and recesses) carry automatic assembly scopes; before the fix the second link's recess (Extrude28) and the single rod's holes (Extrude30) also cut the first link (E1 link, F47.b0) and the second (E2 link, F96.b0) where they overlap at the pivots, so the link bodies changed with the mechanism's pose (154.88 -> 104.03 mm3, 12 -> 15 faces) and lost the hole edges Joint12 and Joint13 were picked on."},
+  {"expect": {"feature": "Extrude28", "status": "ok"}},
+  {"expect": {"feature": "Extrude30", "status": "ok"}},
+  {"expect": {"feature": "Joint12", "status": "ok"}},
+  {"expect": {"feature": "Joint13", "status": "ok"}},
+  {"comment": "The link bodies are those of their own design files: E1 link 154.881 mm3 with 12 faces, E2 link 796.908 mm3 with 10 faces, with the hole edges the joints were picked on."},
+  {"expect": {"body": "F47.b0", "volume": 154.88071238306708, "tolerance": 1e-6, "faces": 12, "edges": 32,
+              "has_edge": "E{F47:side(c4)|F47:start(r{c6[c11,c14],c7[c14,c11],c11[c6,c7],c14[c7,c6]})}"}},
+  {"expect": {"body": "F96.b0", "volume": 796.9077810744699, "tolerance": 1e-6, "faces": 10, "edges": 24,
+              "has_edge": "E{F96:end(r{c6[c11,c17],c7[c17,c11],c11[c6,c7],c17[c6,c7]})|F96:side(c2)}"}},
+  {"comment": "The primary lever dragged one way and back: the joints hold and the link bodies stay as they are."},
+  {"cmd": "drag_occurrence", "occurrence": "primary_lever:1", "point": [-10, 340, 26.6], "target": [-6, 334, 26.6]},
+  {"expect": {"feature": "Joint12", "status": "ok"}},
+  {"expect": {"feature": "Joint13", "status": "ok"}},
+  {"expect": {"body": "F47.b0", "volume": 154.88071238306708, "tolerance": 1e-6, "faces": 12, "edges": 32}},
+  {"expect": {"body": "F96.b0", "volume": 796.9077810744699, "tolerance": 1e-6, "faces": 10, "edges": 24}},
+  {"cmd": "drag_occurrence", "occurrence": "primary_lever:1", "point": [-6, 334, 26.6], "target": [-14, 346, 26.6]},
+  {"expect": {"feature": "Joint12", "status": "ok"}},
+  {"expect": {"feature": "Joint13", "status": "ok"}},
+  {"expect": {"body": "F47.b0", "volume": 154.88071238306708, "tolerance": 1e-6, "faces": 12, "edges": 32}},
+  {"expect": {"body": "F96.b0", "volume": 796.9077810744699, "tolerance": 1e-6, "faces": 10, "edges": 24}}
+]

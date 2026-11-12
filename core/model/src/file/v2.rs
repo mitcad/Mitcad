@@ -13,7 +13,8 @@ use serde_json::{Map, Value};
 use super::{FORMAT, FileError, SINGLE_VERSION, VERSION, has_references, legacy_name};
 use crate::appearance::{Appearance, BASE_COLOR, ImageData, share_images, slot_name};
 use crate::assembly::{
-    Assembly, ComponentDef, ExternalLink, Occurrence, ROOT_NAME, from_rows, matrix_rows,
+    Assembly, ComponentDef, ExternalLink, Occurrence, ROOT_NAME, from_rows_straightened,
+    matrix_rows, saved_placement,
 };
 use crate::configurations::Configurations;
 use crate::document::{
@@ -169,6 +170,10 @@ struct FileOut<'a> {
     // `TOP_FIELDS`.
     #[serde(skip_serializing_if = "super::DesignStatistics::is_empty")]
     statistics: &'a super::DesignStatistics,
+    // The design's preview (mitcad#1539), when it has one: last, after
+    // the definition. Read apart from it like the statistics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<&'a super::DesignPreview>,
 }
 
 /// A component's default material (mitcad#640).
@@ -343,12 +348,16 @@ struct BodyOut<'a> {
 }
 
 pub(super) fn save(state: &DocState) -> String {
-    save_with(state, &super::DesignStatistics::default())
+    save_with(state, &super::DesignStatistics::default(), None)
 }
 
 /// [`save`] with the design's statistics (mitcad#1088), left out while
-/// nothing of them is known.
-pub(super) fn save_with(state: &DocState, statistics: &super::DesignStatistics) -> String {
+/// nothing of them is known, and its preview (mitcad#1539), if it has one.
+pub(super) fn save_with(
+    state: &DocState,
+    statistics: &super::DesignStatistics,
+    preview: Option<&super::DesignPreview>,
+) -> String {
     let (appearances, images) = appearances_out(&state.appearances);
     let parameters = &state.parameters;
     let context = parameters.context();
@@ -413,7 +422,11 @@ pub(super) fn save_with(state: &DocState, statistics: &super::DesignStatistics) 
                 component: o.component,
                 parent: o.parent,
                 number: o.number,
-                transform: (!o.transform.is_identity()).then(|| matrix_rows(&o.transform)),
+                // Never one that opening would refuse (mitcad#1664).
+                transform: {
+                    let placed = saved_placement(&o.transform);
+                    (!placed.is_identity()).then(|| matrix_rows(&placed))
+                },
                 grounded: o.grounded,
                 visible: (!o.visible).then_some(false),
                 pattern: o.pattern.clone(),
@@ -539,6 +552,7 @@ pub(super) fn save_with(state: &DocState, statistics: &super::DesignStatistics) 
         print_plates: &state.print_plates,
         filament_changes: &state.filament_changes,
         statistics,
+        preview,
     };
     let mut json =
         serde_json::to_string_pretty(&file).expect("the design file schema always serializes");
@@ -1024,9 +1038,12 @@ fn feature_in(i: usize, value: Value) -> Result<FeatureIn, FileError> {
 
 /// The components and occurrences of a file; files without them have
 /// only the root component, which holds every feature. Also the conditions
-/// occurrences are shown under (mitcad#800).
+/// occurrences are shown under (mitcad#800). The occurrences whose
+/// placements were a little off a rotation and were straightened
+/// (mitcad#1664) are added to `straightened`.
 fn assembly_in(
     top: &mut Map<String, Value>,
+    straightened: &mut Vec<OccurrenceUid>,
 ) -> Result<(Assembly, BTreeMap<OccurrenceUid, String>), FileError> {
     let mut assembly = Assembly::default();
     let mut visible_when = BTreeMap::new();
@@ -1071,7 +1088,14 @@ fn assembly_in(
         }
         let transform = match &o.transform {
             None => Transform::IDENTITY,
-            Some(rows) => from_rows(rows).map_err(|e| invalid(format!("occurrences[{i}]: {e}")))?,
+            Some(rows) => {
+                let (transform, repaired) = from_rows_straightened(rows)
+                    .map_err(|e| invalid(format!("occurrences[{i}]: {e}")))?;
+                if repaired {
+                    straightened.push(o.uid);
+                }
+                transform
+            }
         };
         assembly.next_occurrence = assembly.next_occurrence.max(o.uid.0 + 1);
         if let Some(text) = o.visible_when.filter(|t| !t.trim().is_empty()) {
@@ -1152,7 +1176,8 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
                 .map_err(|e| schema(format!("parameters[{i}]: {e}")))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let (assembly, occurrence_visible_when) = assembly_in(&mut top)?;
+    let mut straightened = Vec::new();
+    let (assembly, occurrence_visible_when) = assembly_in(&mut top, &mut straightened)?;
     let features = array(&mut top, "features", true)?
         .into_iter()
         .enumerate()
@@ -1692,6 +1717,14 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     }
     let feature_uids: BTreeSet<FeatureUid> = uids.iter().copied().collect();
     assembly.check(&feature_uids).map_err(invalid)?;
+    // Placements a little off a rotation, straightened (mitcad#1664).
+    for uid in straightened {
+        warnings.push(format!(
+            "the placement of {} was distorted and has been straightened \
+             to a rotation and a translation",
+            assembly.occurrence_name(uid)
+        ));
+    }
     // (The features by uid: a search per check made loading a large
     // design quadratic in its features, mitcad#841.)
     let index = crate::feature_index::FeatureIndex::default();

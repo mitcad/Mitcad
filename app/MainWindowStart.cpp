@@ -9,6 +9,8 @@
 
 #include <utility>
 
+#include <QBuffer>
+#include <QByteArray>
 #include <QCoreApplication>
 #include <QDir>
 #include <QDockWidget>
@@ -210,19 +212,36 @@ void MainWindow::newDesignUnitsChanged() {
   }
 }
 
-void MainWindow::saveDesignPreview(const QString& path) {
-  const QString preview = recent::designPreviewPath(path);
-  if (preview.isEmpty() || m_viewer == nullptr || !m_viewer->isVisible()) {
-    return;
+QImage MainWindow::designPreviewImage() const {
+  if (m_viewer == nullptr || !m_viewer->isVisible()) {
+    return {};
   }
   // The view as it is now, as a version's preview (saveVersionThumbnail);
   // the Start page over it is not in the view's frame.
   const QImage frame = m_viewer->grabFramebuffer();
   if (frame.isNull()) {
+    return {};
+  }
+  return frame.scaled(recent::kPreviewSize, recent::kPreviewSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+}
+
+QByteArray MainWindow::designPreviewPng(const QImage& image) {
+  QByteArray png;
+  if (image.isNull()) {
+    return png;
+  }
+  QBuffer buffer(&png);
+  if (!buffer.open(QIODevice::WriteOnly) || !image.save(&buffer, "PNG")) {
+    return {};
+  }
+  return png;
+}
+
+void MainWindow::saveDesignPreview(const QString& path, const QImage& image) {
+  const QString preview = recent::designPreviewPath(path);
+  if (preview.isEmpty() || image.isNull()) {
     return;
   }
-  const QImage image =
-      frame.scaled(recent::kPreviewSize, recent::kPreviewSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
   QDir().mkpath(QFileInfo(preview).absolutePath());
   QSaveFile out(preview);
   if (!out.open(QIODevice::WriteOnly) || !image.save(&out, "PNG") || !out.commit()) {

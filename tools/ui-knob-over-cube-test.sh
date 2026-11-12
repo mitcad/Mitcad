@@ -100,7 +100,7 @@ knob_over_cube() {
   shift
   ui_start_app --open "$WORK/cube.mitcad" "$@"
   ui_step "the home view"                  ui_click_logged "View home"
-  ui_expect_log "Camera direction -0.577 0.577 -0.577" "seen from the front, the right and above"
+  ui_expect_log "Camera direction -0.568 0.654 -0.5 up" "seen from the front, the right and above (the default view)"
   ui_step "fit (F6)"                       ui_key F6
   settle
 

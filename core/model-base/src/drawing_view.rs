@@ -47,9 +47,32 @@ pub struct ViewSpec {
     pub section: Option<CutPlane>,
     /// The largest distance of a polyline from the curve it stands for, mm.
     pub deflection: f64,
+    /// The view's scale on its sheet (sheet millimetres per model
+    /// millimetre), when it is on one: the quick path's lines then lie
+    /// within [`SHEET_DEVIATION`] of the edges on the sheet
+    /// ([`Self::quick_deviation`], mitcad#1671). Without it they follow the
+    /// size of the bodies.
+    pub scale: Option<f64>,
 }
 
+/// How far a line the quick path draws may lie from the edge it stands for
+/// on the sheet, mm: under a tenth of a thin line (0.18 to 0.25 mm), so
+/// that a view's straight edges stay straight and its rounded corners
+/// round however large the assembly (mitcad#1671).
+pub const SHEET_DEVIATION: f64 = 0.02;
+
 impl ViewSpec {
+    /// How far the quick path's lines may lie from the edges, model mm:
+    /// [`SHEET_DEVIATION`] at the view's scale, 0.1 mm at 1:5; at least the
+    /// deflection. None without a scale: the kernel then lets them deviate
+    /// by a 2000th of the bodies' size. The kernel never draws them coarser
+    /// than that either.
+    pub fn quick_deviation(&self) -> Option<f64> {
+        self.scale
+            .filter(|s| s.is_finite() && *s > 0.0)
+            .map(|s| (SHEET_DEVIATION / s).max(self.deflection))
+    }
+
     /// The view's y axis.
     pub fn y_axis(&self) -> Vec3 {
         cross(self.toward_eye, self.x_axis)

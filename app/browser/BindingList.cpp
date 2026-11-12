@@ -10,6 +10,7 @@
 #include <QJsonValue>
 
 #include "Bindings.hpp"
+#include "../framework/Appearances.hpp"
 
 namespace mitcad {
 namespace {
@@ -24,7 +25,7 @@ struct Text {
 
 QString field(const QJsonObject& object, const char* key) { return object.value(QLatin1String(key)).toString(); }
 
-QColor colorOf(const QJsonValue& value) {
+QColor choiceColor(const QJsonValue& value) {
   if (value.isArray()) {
     const QJsonArray rgb = value.toArray();
     if (rgb.size() >= 3) {
@@ -356,7 +357,7 @@ BindingLookup BindingLookup::read(const CommandContext& model) {
     for (const QJsonValue& value : model.queryArray(QStringLiteral("appearances"))) {
       const QJsonObject appearance = value.toObject();
       lookup.appearances.append(
-          {field(appearance, "id"), field(appearance, "name"), colorOf(appearance.value(QStringLiteral("display_color")))});
+          {field(appearance, "id"), field(appearance, "name"), choiceColor(appearance.value(QStringLiteral("display_color")))});
     }
   } catch (const std::exception&) {
     // Results shown as written.
@@ -365,7 +366,13 @@ BindingLookup BindingLookup::read(const CommandContext& model) {
     for (const QJsonValue& value : model.queryArray(QStringLiteral("materials"))) {
       const QJsonObject material = value.toObject();
       const QString id = field(material, "id");
-      lookup.materials.append({id, field(material, "name"), colorOf(material.value(QStringLiteral("display_color")))});
+      const QString name = field(material, "name");
+      lookup.materials.append({id, name, choiceColor(material.value(QStringLiteral("display_color")))});
+      // A built-in material's name as the language shows it (mitcad#1689).
+      const QString shown = shownMaterialName(id, name);
+      if (shown != name) {
+        lookup.materials.last().shown = shown;
+      }
       for (const QJsonValue& component : material.value(QStringLiteral("components")).toArray()) {
         lookup.componentMaterials.insert(component.toString(), id);
       }
@@ -555,7 +562,7 @@ QString readableExpression(const QString& expression, const QVector<BindingChoic
       }
       // An appearance's or a material's id as its name.
       const BindingChoice* named = BindingLookup::named(choices, literal);
-      out += named != nullptr ? named->name : literal;
+      out += named != nullptr ? named->shownName() : literal;
       i = j;
     } else if (c == QLatin1Char('=') && i + 1 < text.size() && text.at(i + 1) == QLatin1Char('=')) {
       out += QLatin1Char('=');
@@ -611,7 +618,7 @@ ReadableBinding readBinding(const BindingEntry& entry, const BindingLookup& look
   // What it gives now: a choice's name, or the default it falls back to.
   if (material || look) {
     if (const BindingChoice* now = BindingLookup::named(choices, entry.value); now != nullptr) {
-      readable.now = now->name;
+      readable.now = now->shownName();
       readable.nowColor = now->color;
     } else if (!entry.value.isEmpty()) {
       readable.now = entry.value;
@@ -636,7 +643,8 @@ ReadableBinding readBinding(const BindingEntry& entry, const BindingLookup& look
           id = lookup.componentMaterials.value(kRoot);
         }
         const BindingChoice* chosen = BindingLookup::named(lookup.materials, id.isEmpty() ? QStringLiteral("steel") : id);
-        const QString name = chosen != nullptr ? chosen->name : (id.isEmpty() ? Text::tr("Steel") : id);
+        const QString steel = shownMaterialName(QStringLiteral("steel"), QStringLiteral("Steel"));
+        const QString name = chosen != nullptr ? chosen->shownName() : (id.isEmpty() ? steel : id);
         readable.text = id.isEmpty() ? Text::tr("%1, the default").arg(name) : Text::tr("%1, the component's default").arg(name);
         if (chosen != nullptr) {
           readable.nowColor = chosen->color;

@@ -110,7 +110,7 @@ function Arrows-And-Home([string]$Constraint) {
   Turn 'left' '0 0 -1 up 0 1 0' 'left: back to the sketch'
   Ui-Mark
   Ui-Step 'Home'                           { Ui-ClickLogged 'View home' }
-  Expect-Camera '-0.577 0.577 -0.577' 'Home: the home view'
+  Expect-Camera '-0.568 0.654 -0.5 up' 'Home: the home view (the default view, mitcad#1698)'
   Still-Alive 'Home'
   if (Ui-LogLines | Select-Object -Skip $from | Where-Object { $_.Contains('Sketch finished') }) {
     Ui-Fail 'the sketch was finished by a view turn'

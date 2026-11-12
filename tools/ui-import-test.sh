@@ -243,8 +243,8 @@ ui_mark
 ui_step "new design (Ctrl+N)"              ui_key ctrl+n
 ui_expect_new "New document" "an empty document"
 # The component goes into Component1, which takes components (mitcad#421):
-# a new design starts with its Component1 active (mitcad#898), unlike a
-# design read from a file (mitcad#426).
+# a new design starts with its Component1 active (mitcad#898), unlike an
+# import (mitcad#426).
 ui_expect_new "Opened the new design with Component1 active" "Component1 is active"
 ui_mark
 ui_step "Insert Component (search)"        ui_command "Insert Component"
@@ -800,7 +800,15 @@ type_into_dialog 'Save As' "$WORK/project/block.mitcad"
 ui_focus_main
 ui_expect_log "Saved $WORK/project/block.mitcad" "saved into the project"
 grep -q '"version": 3' "$WORK/project/block.mitcad" || ui_fail "the project file is not version 3"
-grep -q '"data":' "$WORK/project/block.mitcad" && ui_fail "the B-rep data is inside the project file"
+# The bodies' B-rep stays out of the file (the design's preview, mitcad#1539,
+# is base64 data of its own and may be there).
+python3 -c '
+import json, sys
+doc = json.load(open(sys.argv[1]))
+inline = [b for f in doc.get("features", []) for b in f.get("bodies", [])
+          if isinstance(b.get("brep"), dict) and "data" in b["brep"]]
+sys.exit(1 if inline else 0)' "$WORK/project/block.mitcad" ||
+  ui_fail "the B-rep data is inside the project file"
 breps=$(find "$WORK/project/.mitcad/brep" -name '*.brep.zlib' | wc -l)
 [ "$breps" = 1 ] || ui_fail "$breps B-rep files in the project's store, expected 1"
 echo "ok   version 3, the B-rep data in the project's store"

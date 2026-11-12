@@ -8,7 +8,7 @@
 # The File menu's entries in their groups (mitcad#175). Every new design
 # starts with Component1 active (mitcad#898): the untitled design at the
 # start, after New and after Close; a design read from a file opens with
-# the root active instead (mitcad#426).
+# the component it was saved with active (mitcad#1678).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh). The app uses Qt's own file
 # dialog (--no-native-dialogs), so a path can be typed into it.
@@ -171,11 +171,12 @@ expect_file '[p["value"] for p in doc["parameters"] if p["name"] == "d3"]' "[20.
 echo "--- Open dialog, Don't Save on New Design"
 NEW_DESIGN="Opened the new design with Component1 active"
 # no_new_design_since_mark description: a design read from a file opens
-# with its root active (mitcad#426), not as a new design.
+# with the component it was saved with active (mitcad#1678), not as a new
+# design.
 no_new_design_since_mark() {
   ! tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qF "$NEW_DESIGN" ||
     ui_fail "$1: logged '$NEW_DESIGN'"
-  echo "ok   $1: opened with the root active, not as a new design"
+  echo "ok   $1: opened as saved, not as a new design"
 }
 ui_start_app --no-native-dialogs
 expect_title "Untitled - MitCad"

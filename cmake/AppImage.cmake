@@ -46,6 +46,16 @@ foreach(size 16 24 32 48 64 96 128 256)
     DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${size}x${size}/apps
     RENAME mitcad.png)
 endforeach()
+# File managers' thumbnails of designs (mitcad#1539): the thumbnailer (Rust,
+# no Qt, no OCCT), its freedesktop entry and the .mitcad MIME type. MitCad
+# started as the AppImage copies them into the user's data folder
+# (app/framework/DesktopEntry.cpp), where file managers look.
+install(PROGRAMS "$<TARGET_FILE:mitcad-thumbnailer>" DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES "${PROJECT_SOURCE_DIR}/packaging/linux/mitcad.thumbnailer"
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/thumbnailers)
+install(FILES "${PROJECT_SOURCE_DIR}/packaging/linux/mitcad-mime.xml"
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/mime/packages
+  RENAME mitcad.xml)
 
 # Mitcad's licence, the notices of what the AppImage bundles, the bundled
 # font's licence and the licence text of every vcpkg port.
@@ -117,7 +127,7 @@ add_custom_target(appimage
   COMMENT "Making ${mitcad_appimage}"
   VERBATIM
   USES_TERMINAL)
-add_dependencies(appimage mitcad mitcad-cli mitcad-render)
+add_dependencies(appimage mitcad mitcad-cli mitcad-render mitcad-thumbnailer)
 
 # The AppImage as a user runs it, in ctest: tools/appimage-test.sh checks
 # what it bundles, runs it with a clean environment on a hidden display and

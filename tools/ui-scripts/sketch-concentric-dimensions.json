@@ -1,0 +1,10 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "mitcad#1673: an empty sketch on xy framed by two fixed points, so that after a fit circles of 5 mm round (5, 3) are small in the view, as on the reported face; the UI script draws two concentric circles there with typed diameters."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy",
+    "entities": [
+      {"id": "p1", "type": "point", "at": [-20, -15], "fixed": true},
+      {"id": "p2", "type": "point", "at": [30, 20], "fixed": true}],
+    "constraints": []}},
+  {"expect": {"query": {"query": "sketch", "uid": "F1"}, "result": {"solved": true, "conflicts": []}}}
+]

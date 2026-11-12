@@ -8,6 +8,8 @@
 #include <QStringList>
 #include <QVector>
 
+#include "../framework/Appearances.hpp"
+
 class QCheckBox;
 class QComboBox;
 class QHBoxLayout;
@@ -65,6 +67,13 @@ struct LibraryItem {
   bool saved() const;
   // The user's own item not saved in a library yet: Save to offers it.
   bool unsaved() const;
+  // Its name as the lists, pickers, menus and questions show it
+  // (mitcad#1689): a material of MitCad's own (Built-in, or the design's
+  // copy of one) under its library name translated, else `name`. Commands,
+  // logs and the comparisons with stored names use `name`.
+  QString shownName() const {
+    return kind == QLatin1String("material") ? shownLibraryMaterialName(place, sourcePlace, id, name) : name;
+  }
 };
 
 // The `library_items` query of a kind (`project` the design's project, if

@@ -129,7 +129,7 @@ bool selectable(const QTreeWidgetItem* item) {
          item->data(0, kActionRole).toInt() != kHeader;
 }
 
-// Create User Parameter (mitcad#568): a name (the one typed, when it names
+// Add User Parameter (mitcad#568): a name (the one typed, when it names
 // nothing yet), an expression, a unit (the field's kind's) and a comment;
 // stays open with the reason when the name is taken or invalid, the unit
 // does not fit the field, or the model refuses the expression (a cycle, an
@@ -153,7 +153,7 @@ public:
   };
 
   CreateParameterDialog(Setup setup, QWidget* parent) : QDialog(parent), m_setup(std::move(setup)) {
-    setWindowTitle(tr("Create User Parameter"));
+    setWindowTitle(tr("Add User Parameter"));
     setObjectName(QStringLiteral("createUserParameter"));
     auto* form = new QFormLayout(this);
     QString about = tr("A new user parameter of its own. %1 (a %2) refers to it by name.")
@@ -203,7 +203,7 @@ public:
     connect(m_use, &QPushButton::clicked, this, [this] {
       m_chosen = m_existing;
       m_created = false;
-      qDebug().noquote() << QStringLiteral("Create User Parameter: using %1 for %2").arg(m_existing, m_setup.label);
+      qDebug().noquote() << QStringLiteral("Add User Parameter: using %1 for %2").arg(m_existing, m_setup.label);
       accept();
     });
     connect(m_name, &QLineEdit::textEdited, this, [this] {
@@ -280,7 +280,7 @@ private:
       problem = error.isEmpty() ? tr("The design did not take the parameter.") : error;
     }
     m_error->setText(problem);
-    qDebug().noquote() << QStringLiteral("Create User Parameter %1 refused: %2").arg(name, problem);
+    qDebug().noquote() << QStringLiteral("Add User Parameter %1 refused: %2").arg(name, problem);
   }
 
   Setup m_setup;
@@ -822,7 +822,7 @@ bool ParameterField::fill() {
   const ParameterSource* source = parameterSourceOf(m_edit);
   if (m_options.create && source != nullptr && source->addParameter && (browsing || !name.isEmpty())) {
     action(kCreate,
-           name.isEmpty() ? tr("Create User Parameter…") : tr("Create User Parameter “%1”…").arg(name),
+           name.isEmpty() ? tr("Add User Parameter…") : tr("Add User Parameter “%1”…").arg(name),
            tr("a new parameter of its own"), QStringLiteral("create"));
   }
   if (browsing && source != nullptr && source->query) {
@@ -1286,7 +1286,7 @@ void ParameterField::openCreateEditor() {
   const QPointer<QLineEdit> edit = m_edit;
   const QPointer<ParameterField> alive(this);
   CreateParameterDialog dialog(std::move(setup), m_edit->window());
-  qDebug().noquote() << QStringLiteral("Create User Parameter opened for %1: name %2, unit %3")
+  qDebug().noquote() << QStringLiteral("Add User Parameter opened for %1: name %2, unit %3")
                             .arg(m_options.label, typedName(at), dialog.unit());
   prepareModal(&dialog);
   const int result = execDialog(&dialog);
@@ -1297,7 +1297,7 @@ void ParameterField::openCreateEditor() {
   edit->window()->activateWindow();
   edit->setFocus(Qt::OtherFocusReason);
   if (result != QDialog::Accepted || dialog.chosen().isEmpty()) {
-    qDebug().noquote() << QStringLiteral("Create User Parameter cancelled for %1: %2").arg(m_options.label, edit->text());
+    qDebug().noquote() << QStringLiteral("Add User Parameter cancelled for %1: %2").arg(m_options.label, edit->text());
     return;
   }
   fetch(); // the new one is offered from now on
@@ -1435,7 +1435,7 @@ void ParameterField::showMenu(const QPoint& at) {
                           : nullptr;
   const ParameterSource* source = parameterSourceOf(m_edit);
   QAction* create = m_options.create && source != nullptr && source->addParameter
-                        ? menu->addAction(tr("Create User Parameter…"))
+                        ? menu->addAction(tr("Add User Parameter…"))
                         : nullptr;
   const QPointer<ParameterField> alive(this);
   QAction* chosen = execMenu(menu.get(), m_edit->mapToGlobal(at));

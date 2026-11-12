@@ -37,7 +37,7 @@ namespace mitcad {
 // mitcad#1071). The AppKit frontend shows it as a popover under the
 // anchor's native control (showNativePicker, mitcad#1068). Logged as
 // "<logName> picker opened: N appearances", "<logName> picker sections:
-// FDM Plastic 16 | General Plastic 6 | This Design 1 | Metal 8 | Resin 3 |
+// FDM Plastic 16 | General Plastic 6 | This design 1 | Metal 8 | Resin 3 |
 // Wood 17 | Other 11",
 // "<logName> picker search: <text>, M shown" and "<logName> picker
 // chosen: <name> (<id>)".
@@ -99,7 +99,7 @@ QVector<AppearanceSection> appearanceSections(const QVector<Appearance>& appeara
                                               const QString& designTitle);
 // The key of the design's others' section.
 QString designSectionKey();
-// The sections as logged: "FDM Plastic 16 | General Plastic 6 | This Design 1 | Metal 8".
+// The sections as logged: "FDM Plastic 16 | General Plastic 6 | This design 1 | Metal 8".
 QString appearanceSectionsText(const QVector<AppearanceSection>& sections);
 
 // The swatch of an appearance as the pickers and a material's list show

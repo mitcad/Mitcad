@@ -1743,7 +1743,7 @@ PublishLibraryDialog::PublishLibraryDialog(std::function<QString()> design, std:
   libraryForm->addRow(tr("&Author:"), m_libraryAuthor);
   layout->addWidget(library);
 
-  auto* item = new QGroupBox(tr("This design as a component"));
+  auto* item = new QGroupBox(tr("Library component"));
   mac::styleSection(item);
   auto* itemForm = new QFormLayout(item);
   m_id = new QLineEdit;

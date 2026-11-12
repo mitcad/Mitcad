@@ -163,10 +163,6 @@
         <translation>%1, asetettu käsin</translation>
     </message>
     <message>
-        <source>Steel</source>
-        <translation>Teräs</translation>
-    </message>
-    <message>
         <source>%1, the default</source>
         <translation>%1, oletus</translation>
     </message>
@@ -730,7 +726,7 @@
     </message>
     <message>
         <source>Typed length</source>
-        <translation>Kirjoitettu pituus</translation>
+        <translation>Syötetty pituus</translation>
     </message>
     <message>
         <source>HTD 3M</source>
@@ -910,7 +906,7 @@
     </message>
     <message>
         <source>Clearance</source>
-        <translation>Välys</translation>
+        <translation>Välysreikä</translation>
     </message>
     <message>
         <source>Counterbore</source>
@@ -1834,8 +1830,8 @@
         <translation>Mitoittaa kuvannon särmiä, ympyröitä ja kulmia</translation>
     </message>
     <message>
-        <source>Click the edges, circles or corners to dimension on a view</source>
-        <translation>Napsauta kuvannosta mitoitettavia särmiä, ympyröitä tai kulmia</translation>
+        <source>Click a straight edge for its length, or the edges, circles or corners to dimension</source>
+        <translation>Napsauta suoraa särmää mitoittaaksesi sen pituuden, tai mitoitettavia särmiä, ympyröitä tai kulmia</translation>
     </message>
     <message>
         <source>Type</source>
@@ -2386,11 +2382,11 @@
     </message>
     <message>
         <source>STL mesh (*.stl)</source>
-        <translation>STL-verkkomalli (*.stl)</translation>
+        <translation>STL-verkko (*.stl)</translation>
     </message>
     <message>
         <source>OBJ mesh (*.obj)</source>
-        <translation>OBJ-verkkomalli (*.obj)</translation>
+        <translation>OBJ-verkko (*.obj)</translation>
     </message>
     <message>
         <source>OCCT BRep (*.brep)</source>
@@ -2676,6 +2672,89 @@
     <message>
         <source>the render service published an invalid surface frame</source>
         <translation>renderöintipalvelu julkaisi virheellisen pintakehyksen</translation>
+    </message>
+</context>
+<context>
+    <name>MaterialName</name>
+    <message>
+        <source>Steel</source>
+        <translation>Teräs</translation>
+    </message>
+    <message>
+        <source>Stainless Steel</source>
+        <translation>Ruostumaton teräs</translation>
+    </message>
+    <message>
+        <source>Cast Iron</source>
+        <translation>Valurauta</translation>
+    </message>
+    <message>
+        <source>Aluminum</source>
+        <translation>Alumiini</translation>
+    </message>
+    <message>
+        <source>Copper</source>
+        <translation>Kupari</translation>
+    </message>
+    <message>
+        <source>Brass</source>
+        <translation>Messinki</translation>
+    </message>
+    <message>
+        <source>Titanium</source>
+        <translation>Titaani</translation>
+    </message>
+    <message>
+        <source>ABS Plastic</source>
+        <translation>ABS-muovi</translation>
+    </message>
+    <message>
+        <source>PLA Plastic</source>
+        <translation>PLA-muovi</translation>
+    </message>
+    <message>
+        <source>Nylon</source>
+        <translation>Nailon</translation>
+    </message>
+    <message>
+        <source>Polycarbonate</source>
+        <translation>Polykarbonaatti</translation>
+    </message>
+    <message>
+        <source>Glass</source>
+        <translation>Lasi</translation>
+    </message>
+    <message>
+        <source>Water</source>
+        <translation>Vesi</translation>
+    </message>
+    <message>
+        <source>Resin - Standard</source>
+        <translation>Hartsi - vakio</translation>
+    </message>
+    <message>
+        <source>PA (Nylon)</source>
+        <translation>PA (nailon)</translation>
+    </message>
+    <message>
+        <source>Wood - Pine</source>
+        <translation>Puu - mänty</translation>
+    </message>
+    <message>
+        <source>Wood - Oak</source>
+        <translation>Puu - tammi</translation>
+    </message>
+    <message>
+        <source>Wood - Birch</source>
+        <translation>Puu - koivu</translation>
+    </message>
+    <message>
+        <source>Plywood - birch</source>
+        <translation>Vaneri - koivu</translation>
+    </message>
+    <message>
+        <source>MDF - raw</source>
+        <translation>MDF - käsittelemätön</translation>
     </message>
 </context>
 <context>
@@ -3357,11 +3436,11 @@
     </message>
     <message>
         <source>Web viewer (saved as a version)</source>
-        <translation>Verkkokatseluohjelma (tallennetaan versiona)</translation>
+        <translation>Verkkokatselin (tallennetaan versiona)</translation>
     </message>
     <message>
         <source>&amp;Update the web viewer on each Save</source>
-        <translation>&amp;Päivitä verkkokatseluohjelma jokaisella tallennuksella</translation>
+        <translation>&amp;Päivitä verkkokatselin jokaisella tallennuksella</translation>
     </message>
     <message>
         <source>Each Save that records a version also updates the design&apos;s web page</source>
@@ -3373,7 +3452,7 @@
     </message>
     <message>
         <source>Not turned on: File › Project › Web Viewer writes a page per design into the project&apos;s web folder.</source>
-        <translation>Ei käytössä: Tiedosto › Projekti › Verkkokatseluohjelma kirjoittaa sivun kustakin mallista projektin web-kansioon.</translation>
+        <translation>Ei käytössä: Tiedosto › Projekti › Verkkokatselin kirjoittaa sivun kustakin mallista projektin web-kansioon.</translation>
     </message>
     <message>
         <source>The name the Projects panel shows for this project on this computer; empty: %1</source>
@@ -4389,11 +4468,11 @@
     </message>
     <message>
         <source>typed</source>
-        <translation>kirjoitettu</translation>
+        <translation>syötetty</translation>
     </message>
     <message>
         <source>typed: nothing in the way for an auto length</source>
-        <translation>kirjoitettu: automaattiselle pituudelle ei ole mitään tiellä</translation>
+        <translation>syötetty: automaattiselle pituudelle ei ole mitään tiellä</translation>
     </message>
     <message>
         <source>bound, %1</source>
@@ -4545,7 +4624,7 @@
     </message>
     <message>
         <source>The component&apos;s length: typed, in the box at the cursor, or dragged by its handle</source>
-        <translation>Komponentin pituus: kirjoitettuna, osoittimen vieressä olevaan kenttään tai kahvasta vetämällä</translation>
+        <translation>Komponentin pituus: syötettynä, osoittimen vieressä olevaan kenttään tai kahvasta vetämällä</translation>
     </message>
     <message>
         <source>To Face</source>
@@ -6397,7 +6476,7 @@
     </message>
     <message>
         <source>Pressure Angle</source>
-        <translation>Rynnökulma</translation>
+        <translation>Ryntökulma</translation>
     </message>
     <message>
         <source>Modules</source>
@@ -7797,7 +7876,7 @@
     </message>
     <message>
         <source>Typed: does not follow the size</source>
-        <translation>Kirjoitettu: ei seuraa kokoa</translation>
+        <translation>Syötetty: ei seuraa kokoa</translation>
     </message>
     <message>
         <source>Reset to size</source>
@@ -8000,6 +8079,10 @@
         <translation>&lt;b&gt;Keskiöetäisyys: %1&lt;/b&gt;</translation>
     </message>
     <message>
+        <source>Thin walls</source>
+        <translation>Ohuet seinämät</translation>
+    </message>
+    <message>
         <source>Interference</source>
         <translation>Päällekkäisyys</translation>
     </message>
@@ -8168,10 +8251,6 @@
         <translation>Jyrkin uloke, jonka tulostin tekee ilman tukea, pystysuorasta mitattuna</translation>
     </message>
     <message>
-        <source>Thin Walls</source>
-        <translation>Ohuet seinämät</translation>
-    </message>
-    <message>
         <source>Walls thinner than the printer can make</source>
         <translation>Seinämät, jotka ovat ohuempia kuin tulostin pystyy tekemään</translation>
     </message>
@@ -8182,6 +8261,10 @@
     <message>
         <source>The thinnest wall the printer makes: about twice the line width</source>
         <translation>Ohuin seinämä, jonka tulostin tekee: noin kaksi viivanleveyttä</translation>
+    </message>
+    <message>
+        <source>Narrow gaps</source>
+        <translation>Kapeat raot</translation>
     </message>
     <message>
         <source>Estimate</source>
@@ -8856,10 +8939,6 @@
         <translation>Valitse nokan profiili.</translation>
     </message>
     <message>
-        <source>Steel</source>
-        <translation>Teräs</translation>
-    </message>
-    <message>
         <source>Default (%1)</source>
         <translation>Oletus (%1)</translation>
     </message>
@@ -8880,8 +8959,8 @@
         <translation>Ei omaa ulkoasua: sen materiaalin ulkoasu</translation>
     </message>
     <message>
-        <source>This Design</source>
-        <translation>Tämä malli</translation>
+        <source>Recent</source>
+        <translation>Viimeisimmät</translation>
     </message>
     <message>
         <source>Varies with an option</source>
@@ -9169,7 +9248,7 @@
     </message>
     <message>
         <source>&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;Click where it mounts, or press Enter to drop it in at the origin and join it later with Joint.</source>
-        <translation>&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;Napsauta kiinnityskohtaa tai paina Enter pudottaaksesi sen origoon ja liitä se myöhemmin Liitos-toiminnolla.</translation>
+        <translation>&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;Napsauta kiinnityskohtaa, tai pudota se origoon painamalla Enter ja liitä se myöhemmin Liitos-toiminnolla.</translation>
     </message>
     <message>
         <source>By its frame %1, %2</source>
@@ -9313,7 +9392,7 @@
     </message>
     <message>
         <source>Grounded: it stays grounded at the new place.</source>
-        <translation>Maadoitettu: se pysyy maadoitettuna uudessa paikassa.</translation>
+        <translation>Kiinnitetty: se pysyy kiinnitettynä uudessa paikassa.</translation>
     </message>
     <message>
         <source>Move Face</source>
@@ -9956,6 +10035,22 @@
         <translation>, %1 ohutta aluetta</translation>
     </message>
     <message>
+        <source>One pair of touching bodies could not be checked.</source>
+        <translation>Yhtä toisiaan koskettavaa kappaleparia ei voitu tarkistaa.</translation>
+    </message>
+    <message>
+        <source>%1 pairs of touching bodies could not be checked.</source>
+        <translation>%1 toisiaan koskettavaa kappaleparia ei voitu tarkistaa.</translation>
+    </message>
+    <message>
+        <source>None found.</source>
+        <translation>Yhtään ei löytynyt.</translation>
+    </message>
+    <message>
+        <source>None: no bodies are closer than the gap where they do not touch.</source>
+        <translation>Ei yhtään: mitkään kappaleet eivät ole rakoa lähempänä toisiaan muualla kuin kosketuskohdissaan.</translation>
+    </message>
+    <message>
         <source>&lt;b&gt;Estimate:&lt;/b&gt; %1</source>
         <translation>&lt;b&gt;Arvio:&lt;/b&gt; %1</translation>
     </message>
@@ -9966,10 +10061,6 @@
     <message>
         <source>&lt;i&gt;An estimate: the slicer&apos;s settings decide.&lt;/i&gt;</source>
         <translation>&lt;i&gt;Arvio: viipaloijan asetukset ratkaisevat.&lt;/i&gt;</translation>
-    </message>
-    <message>
-        <source>Nothing to check: turn on Overhangs, Thin Walls, Narrow Gaps or Estimate.</source>
-        <translation>Ei tarkistettavaa: ota käyttöön Ulokkeet, Ohuet seinämät, Kapeat raot tai Arvio.</translation>
     </message>
     <message>
         <source>Overhang, angle %1°</source>
@@ -9988,12 +10079,12 @@
         <translation>&lt;b&gt;Kapeat raot&lt;/b&gt; (alle %1 mm)</translation>
     </message>
     <message>
-        <source>None: the bodies are apart by the gap or touch.</source>
-        <translation>Ei yhtään: kappaleet ovat vähintään raon päässä toisistaan tai koskettavat.</translation>
-    </message>
-    <message>
         <source> and </source>
         <translation> ja </translation>
+    </message>
+    <message>
+        <source>Nothing to check: turn on Overhangs, Thin walls, Narrow gaps or Estimate.</source>
+        <translation>Ei tarkistettavaa: ota käyttöön Ulokkeet, Ohuet seinämät, Kapeat raot tai Arvio.</translation>
     </message>
     <message>
         <source>Narrow gap, under %1 mm</source>
@@ -10010,10 +10101,6 @@
     <message>
         <source>Measuring the gaps</source>
         <translation>Mitataan rakoja</translation>
-    </message>
-    <message>
-        <source>Narrow Gaps</source>
-        <translation>Kapeat raot</translation>
     </message>
     <message>
         <source>Bodies printed in place closer than the gap may fuse</source>
@@ -10041,15 +10128,15 @@
     </message>
     <message>
         <source>Profiles holds sketch profiles, which a face does not join: to revolve the face, clear Profiles first.</source>
-        <translation>Profiilit-syötteessä on luonnosprofiileja, joihin tahko ei liity: pyöräyttääksesi tahkon tyhjennä ensin Profiilit.</translation>
+        <translation>Profiilit-syötteessä on luonnosprofiileja, joihin tahko ei liity: jos haluat pyöräyttää tahkon, tyhjennä ensin Profiilit.</translation>
     </message>
     <message>
         <source>Profiles holds sketch profiles, which a face does not join. To start at this face, click Start Object, then the face; to extrude the face, clear Profiles first.</source>
-        <translation>Profiilit-syötteessä on luonnosprofiileja, joihin tahko ei liity. Aloittaaksesi tästä tahkosta napsauta Alkukohde ja sitten tahkoa; pursottaaksesi tahkon tyhjennä ensin Profiilit.</translation>
+        <translation>Profiilit-syötteessä on luonnosprofiileja, joihin tahko ei liity. Jos haluat aloittaa tästä tahkosta, napsauta Alkukohde-syötettä ja sitten tahkoa; jos haluat pursottaa tahkon, tyhjennä ensin Profiilit.</translation>
     </message>
     <message>
         <source>Profiles holds sketch profiles, which a face does not join. To start at this face, set Start to Object; to extrude the face, clear Profiles first.</source>
-        <translation>Profiilit-syötteessä on luonnosprofiileja, joihin tahko ei liity. Aloittaaksesi tästä tahkosta aseta Alku arvoon Kohde; pursottaaksesi tahkon tyhjennä ensin Profiilit.</translation>
+        <translation>Profiilit-syötteessä on luonnosprofiileja, joihin tahko ei liity. Jos haluat aloittaa tästä tahkosta, aseta Alku arvoon Kohde; jos haluat pursottaa tahkon, tyhjennä ensin Profiilit.</translation>
     </message>
     <message>
         <source>Pulley</source>
@@ -10326,6 +10413,26 @@
     <message>
         <source>How far the wall past the edge&apos;s ends is cut back; 0: from the bend&apos;s end</source>
         <translation>Kuinka paljon särmän päiden yli ulottuvaa seinämää leikataan takaisin; 0: taivutuksen päästä</translation>
+    </message>
+    <message>
+        <source>The wall is the outline of its profile sketch.</source>
+        <translation>Seinämä on profiililuonnoksensa ääriviiva.</translation>
+    </message>
+    <message>
+        <source>The wall is a rectangle of the length and width.</source>
+        <translation>Seinämä on pituuden ja leveyden suorakulmio.</translation>
+    </message>
+    <message>
+        <source>Edit Profile</source>
+        <translation>Muokkaa profiilia</translation>
+    </message>
+    <message>
+        <source>Remove Profile</source>
+        <translation>Poista profiili</translation>
+    </message>
+    <message>
+        <source>Select the edge of the flange first.</source>
+        <translation>Valitse ensin laipan särmä.</translation>
     </message>
     <message>
         <source>Select a straight edge of a flat face of the sheet.</source>
@@ -12517,11 +12624,75 @@
     </message>
     <message>
         <source>Also write the sketch&apos;s construction curves and center lines, on the layer construction</source>
-        <translation>Kirjoita myös luonnoksen apukäyrät ja keskiviivat construction-tasolle</translation>
+        <translation>Kirjoita myös luonnoksen apukäyrät ja keskiviivat construction-kerrokselle</translation>
+    </message>
+    <message>
+        <source>The bodies, without plates</source>
+        <translation>Kappaleet ilman alustoja</translation>
+    </message>
+    <message>
+        <source>All plates in one file</source>
+        <translation>Kaikki alustat yhteen tiedostoon</translation>
+    </message>
+    <message>
+        <source>A file per plate</source>
+        <translation>Tiedosto kullekin alustalle</translation>
+    </message>
+    <message>
+        <source>Only %1</source>
+        <translation>Vain %1</translation>
+    </message>
+    <message>
+        <source>The design&apos;s print plates, laid out on the bed as Send to Slicer writes them</source>
+        <translation>Mallin tulostusalustat aseteltuina kuten Lähetä viipaloijaan ne kirjoittaa</translation>
+    </message>
+    <message>
+        <source>&amp;Plates:</source>
+        <translation>&amp;Alustat:</translation>
+    </message>
+    <message>
+        <source>The slicer whose print settings go with the bodies</source>
+        <translation>Viipaloija, jonka tulostusasetukset kirjoitetaan kappaleiden mukana</translation>
+    </message>
+    <message>
+        <source>S&amp;licer:</source>
+        <translation>&amp;Viipaloija:</translation>
+    </message>
+    <message>
+        <source>On the print bed</source>
+        <translation>Tulostusalustalla</translation>
+    </message>
+    <message>
+        <source>Each piece on its print bed face, else on the face it lies best on</source>
+        <translation>Kukin kappale tulostusalustapinnallaan, muuten pinnalla, jolla se asettuu parhaiten</translation>
+    </message>
+    <message>
+        <source>Center on Plate</source>
+        <translation>Keskitä alustalle</translation>
+    </message>
+    <message>
+        <source>The middle of each piece over the middle of the plate</source>
+        <translation>Kunkin kappaleen keskikohta alustan keskikohdan päälle</translation>
+    </message>
+    <message>
+        <source>Drop to Bed</source>
+        <translation>Laske alustalle</translation>
+    </message>
+    <message>
+        <source>The lowest point of each piece onto the bed</source>
+        <translation>Kunkin kappaleen alin kohta alustalle</translation>
+    </message>
+    <message>
+        <source>UltiMaker Cura has one build plate: choose a file per plate.</source>
+        <translation>UltiMaker Curassa on yksi tulostusalusta: valitse tiedosto kullekin alustalle.</translation>
     </message>
     <message>
         <source>The design has no sketch to export.</source>
         <translation>Mallissa ei ole vietävää luonnosta.</translation>
+    </message>
+    <message>
+        <source>%1 exist. Replace them?</source>
+        <translation>%1 ovat jo olemassa. Korvataanko ne?</translation>
     </message>
     <message>
         <source>Insert DXF</source>
@@ -12597,7 +12768,7 @@
     </message>
     <message>
         <source>Check a layer to insert.</source>
-        <translation>Valitse lisättävä taso.</translation>
+        <translation>Valitse lisättävä kerros.</translation>
     </message>
     <message>
         <source>Insert SVG</source>
@@ -12641,7 +12812,7 @@
     </message>
     <message>
         <source>Insert Mesh</source>
-        <translation>Lisää verkkomalli</translation>
+        <translation>Lisää verkko</translation>
     </message>
     <message>
         <source>Unit of %1:</source>
@@ -12653,7 +12824,7 @@
     </message>
     <message>
         <source>A new solid of flat faces by Convert Mesh; the mesh body is kept, hidden</source>
-        <translation>Uusi tasotahkoinen solidi Muunna verkkomalli -toiminnolla; verkkokappale säilytetään piilotettuna</translation>
+        <translation>Uusi tasotahkoinen solidi Muunna verkko -toiminnolla; verkkokappale säilytetään piilotettuna</translation>
     </message>
     <message>
         <source>Weld tolerance:</source>
@@ -13013,7 +13184,7 @@
     </message>
     <message>
         <source>Meshes: STL and OBJ (%1)</source>
-        <translation>Verkkomallit: STL ja OBJ (%1)</translation>
+        <translation>Verkot: STL ja OBJ (%1)</translation>
     </message>
     <message>
         <source>Drawings: DXF and SVG (%1)</source>
@@ -13178,7 +13349,7 @@
     </message>
     <message>
         <source>Save as Mesh</source>
-        <translation>Tallenna verkkomallina</translation>
+        <translation>Tallenna verkkona</translation>
     </message>
     <message>
         <source>3MF</source>
@@ -13262,7 +13433,7 @@
     </message>
     <message>
         <source>Not sent yet: %1 has %2 print bed faces. Click the green one to put on the bed.</source>
-        <translation>Ei vielä lähetetty: kohteella %1 on %2 tulostusalustan tahkoa. Napsauta vihreää tahkoa asettaaksesi sen alustalle.</translation>
+        <translation>Ei vielä lähetetty: kohteella %1 on %2 tulostusalustan tahkoa. Aseta se alustalle napsauttamalla vihreää tahkoa.</translation>
     </message>
     <message>
         <source>the piece</source>
@@ -13572,7 +13743,7 @@
     </message>
     <message>
         <source>Surface and empty bodies are not saved as meshes</source>
-        <translation>Pinta- ja tyhjiä kappaleita ei tallenneta verkkomalleina</translation>
+        <translation>Pinta- ja tyhjiä kappaleita ei tallenneta verkkoina</translation>
     </message>
     <message>
         <source>No body has a print bed face</source>
@@ -13701,54 +13872,6 @@
     <message>
         <source>the image %1 is missing</source>
         <translation>kuva %1 puuttuu</translation>
-    </message>
-    <message>
-        <source>Stainless Steel</source>
-        <translation>Ruostumaton teräs</translation>
-    </message>
-    <message>
-        <source>Cast Iron</source>
-        <translation>Valurauta</translation>
-    </message>
-    <message>
-        <source>Aluminum</source>
-        <translation>Alumiini</translation>
-    </message>
-    <message>
-        <source>Copper</source>
-        <translation>Kupari</translation>
-    </message>
-    <message>
-        <source>Brass</source>
-        <translation>Messinki</translation>
-    </message>
-    <message>
-        <source>Titanium</source>
-        <translation>Titaani</translation>
-    </message>
-    <message>
-        <source>ABS Plastic</source>
-        <translation>ABS-muovi</translation>
-    </message>
-    <message>
-        <source>PLA Plastic</source>
-        <translation>PLA-muovi</translation>
-    </message>
-    <message>
-        <source>Nylon</source>
-        <translation>Nailon</translation>
-    </message>
-    <message>
-        <source>Polycarbonate</source>
-        <translation>Polykarbonaatti</translation>
-    </message>
-    <message>
-        <source>Glass</source>
-        <translation>Lasi</translation>
-    </message>
-    <message>
-        <source>Water</source>
-        <translation>Vesi</translation>
     </message>
     <message>
         <source>Select</source>
@@ -14678,15 +14801,15 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>Line: click the start point.</source>
-        <translation>Viiva: napsauta alkupiste.</translation>
+        <translation>Viiva: napsauta alkupistettä.</translation>
     </message>
     <message>
         <source>Line: click the end point, or type the length (Tab: angle). Drag from the end for an arc; a right-click ends the chain.</source>
-        <translation>Viiva: napsauta loppupiste tai kirjoita pituus (Tab: kulma). Vedä päästä kaareksi; oikea napsautus päättää ketjun.</translation>
+        <translation>Viiva: napsauta loppupistettä tai kirjoita pituus (Tab: kulma). Vedä päästä kaareksi; oikea napsautus päättää ketjun.</translation>
     </message>
     <message>
         <source>Line: click the end point; double-click, Esc or a right-click ends the chain.</source>
-        <translation>Viiva: napsauta loppupiste; kaksoisnapsautus, Esc tai oikea napsautus päättää ketjun.</translation>
+        <translation>Viiva: napsauta loppupistettä; kaksoisnapsautus, Esc tai oikea napsautus päättää ketjun.</translation>
     </message>
     <message>
         <source>Line: release where the arc ends, or type the radius (Tab: sweep). Along the curve: a tangent arc; across it: a normal arc.</source>
@@ -14746,7 +14869,7 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>3-Point Rectangle: click the opposite side, or type the height.</source>
-        <translation>Kolmen pisteen suorakulmio: napsauta vastakkainen sivu tai kirjoita korkeus.</translation>
+        <translation>Kolmen pisteen suorakulmio: napsauta vastakkaista sivua tai kirjoita korkeus.</translation>
     </message>
     <message>
         <source>Rectangle: click the first corner.</source>
@@ -14794,7 +14917,7 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>Tangent Arc: click the end of a line or an arc.</source>
-        <translation>Tangenttikaari: napsauta viivan tai kaaren pää.</translation>
+        <translation>Tangenttikaari: napsauta viivan tai kaaren päätä.</translation>
     </message>
     <message>
         <source>Center Point Arc: click the center.</source>
@@ -14810,7 +14933,7 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>Tangent Arc: click the end point.</source>
-        <translation>Tangenttikaari: napsauta loppupiste.</translation>
+        <translation>Tangenttikaari: napsauta loppupistettä.</translation>
     </message>
     <message>
         <source>3-Point Arc: click the start point.</source>
@@ -14830,15 +14953,15 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>Edge Polygon: click the start of an edge.</source>
-        <translation>Sivumonikulmio: napsauta sivun alku.</translation>
+        <translation>Sivumonikulmio: napsauta sivun alkua.</translation>
     </message>
     <message>
         <source>Edge Polygon: click the end of the edge (Tab: sides).</source>
-        <translation>Sivumonikulmio: napsauta sivun loppu (Tab: sivut).</translation>
+        <translation>Sivumonikulmio: napsauta sivun loppua (Tab: sivut).</translation>
     </message>
     <message>
         <source>Edge Polygon: click the side the polygon is on.</source>
-        <translation>Sivumonikulmio: napsauta puoli, jolla monikulmio on.</translation>
+        <translation>Sivumonikulmio: napsauta sitä puolta, jolla monikulmio on.</translation>
     </message>
     <message>
         <source>%1: click the center.</source>
@@ -14898,15 +15021,15 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>Ellipse: click the center.</source>
-        <translation>Ellipsi: napsauta keskipiste.</translation>
+        <translation>Ellipsi: napsauta keskipistettä.</translation>
     </message>
     <message>
         <source>Ellipse: click the end of the major axis.</source>
-        <translation>Ellipsi: napsauta isoakselin pää.</translation>
+        <translation>Ellipsi: napsauta isoakselin päätä.</translation>
     </message>
     <message>
         <source>Ellipse: click a point on the ellipse, or type the minor radius.</source>
-        <translation>Ellipsi: napsauta ellipsin piste tai kirjoita pikkusäde.</translation>
+        <translation>Ellipsi: napsauta ellipsin pistettä tai kirjoita pikkusäde.</translation>
     </message>
     <message>
         <source>Major radius</source>
@@ -14938,7 +15061,7 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>Text: click where the text starts, or drag its frame.</source>
-        <translation>Teksti: napsauta tekstin alkukohta tai vedä sen kehys.</translation>
+        <translation>Teksti: napsauta tekstin alkukohtaa tai vedä sen kehys.</translation>
     </message>
     <message>
         <source>Text: type the text (Tab: height) and press Enter.</source>
@@ -14950,11 +15073,11 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>Text: click where the next text starts, or drag its frame.</source>
-        <translation>Teksti: napsauta seuraavan tekstin alkukohta tai vedä sen kehys.</translation>
+        <translation>Teksti: napsauta seuraavan tekstin alkukohtaa tai vedä sen kehys.</translation>
     </message>
     <message>
         <source>Extend: click near the end of a line or an arc to extend it.</source>
-        <translation>Jatka: napsauta lähellä viivan tai kaaren päätä jatkaaksesi sitä.</translation>
+        <translation>Jatka: jatka viivaa tai kaarta napsauttamalla sen pään lähellä.</translation>
     </message>
     <message>
         <source>Trim: click the part of a curve to remove.</source>
@@ -14994,7 +15117,7 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>Sketch Dimension: click where the value goes (or pick a second entity).</source>
-        <translation>Luonnosmitta: napsauta arvon paikka (tai poimi toinen kohde).</translation>
+        <translation>Luonnosmitta: napsauta arvon paikkaa (tai poimi toinen kohde).</translation>
     </message>
     <message>
         <source>Sketch Dimension: type the value or an expression and press Enter.</source>
@@ -15870,19 +15993,19 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>the web viewer&apos;s file %1 is missing from this build (%2)</source>
-        <translation>verkkokatseluohjelman tiedosto %1 puuttuu tästä koontiversiosta (%2)</translation>
+        <translation>verkkokatselimen tiedosto %1 puuttuu tästä koontiversiosta (%2)</translation>
     </message>
     <message>
         <source>line %1 of the web viewer&apos;s %2 is not &quot;&lt;specifier&gt; &lt;path&gt;&quot;</source>
-        <translation>verkkokatseluohjelman tiedoston %2 rivi %1 ei ole muotoa &quot;&lt;specifier&gt; &lt;path&gt;&quot;</translation>
+        <translation>verkkokatselimen tiedoston %2 rivi %1 ei ole muotoa &quot;&lt;specifier&gt; &lt;path&gt;&quot;</translation>
     </message>
     <message>
         <source>the web viewer&apos;s %1 has no %2</source>
-        <translation>verkkokatseluohjelman tiedostossa %1 ei ole kohtaa %2</translation>
+        <translation>verkkokatselimen tiedostossa %1 ei ole kohtaa %2</translation>
     </message>
     <message>
         <source>the web viewer&apos;s %1 has overlapping placeholders</source>
-        <translation>verkkokatseluohjelman tiedostossa %1 on päällekkäisiä paikkamerkkejä</translation>
+        <translation>verkkokatselimen tiedostossa %1 on päällekkäisiä paikkamerkkejä</translation>
     </message>
     <message>
         <source>Keep the Hole</source>
@@ -15927,6 +16050,22 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <message>
         <source>%1 picks of other components dropped.</source>
         <translation>%1 muiden komponenttien poimintaa jätettiin pois.</translation>
+    </message>
+    <message>
+        <source>Auto Fix (right-click) can fix this warning</source>
+        <translation>Korjaa automaattisesti (hiiren oikea painike) voi korjata tämän varoituksen</translation>
+    </message>
+    <message>
+        <source>Auto Fix (right-click) can fix %1 of its warnings</source>
+        <translation>Korjaa automaattisesti (hiiren oikea painike) voi korjata %1 sen varoituksista</translation>
+    </message>
+    <message>
+        <source>Click for Auto Fix, which can fix 1 of these warnings</source>
+        <translation>Napsauta: Korjaa automaattisesti voi korjata 1 näistä varoituksista</translation>
+    </message>
+    <message>
+        <source>Click for Auto Fix, which can fix %1 of these warnings</source>
+        <translation>Napsauta: Korjaa automaattisesti voi korjata %1 näistä varoituksista</translation>
     </message>
 </context>
 <context>
@@ -15991,26 +16130,26 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <name>RenderDevice</name>
     <message>
         <source>there is no render worker</source>
-        <translation>renderöintityöprosessia ei ole</translation>
+        <translation>renderöintiprosessia ei ole</translation>
     </message>
     <message>
         <source>the render worker did not list its devices</source>
-        <translation>renderöintityöprosessi ei luetellut laitteitaan</translation>
+        <translation>renderöintiprosessi ei luetellut laitteitaan</translation>
     </message>
     <message>
         <source>the render worker does not match this MitCad</source>
-        <translation>renderöintityöprosessi ei vastaa tätä MitCadia</translation>
+        <translation>renderöintiprosessi ei vastaa tätä MitCadia</translation>
     </message>
 </context>
 <context>
     <name>RenderWorker</name>
     <message>
         <source>The render worker %1 is not there or cannot be run; rendering with the shipped %2</source>
-        <translation>Renderöintityöprosessia %1 ei ole tai sitä ei voi ajaa; renderöidään mukana toimitetulla: %2</translation>
+        <translation>Renderöintiprosessia %1 ei ole tai sitä ei voi ajaa; renderöidään mukana toimitetulla: %2</translation>
     </message>
     <message>
         <source>The render worker %1 cannot be used (%2); rendering with the shipped %3</source>
-        <translation>Renderöintityöprosessia %1 ei voi käyttää (%2); renderöidään mukana toimitetulla: %3</translation>
+        <translation>Renderöintiprosessia %1 ei voi käyttää (%2); renderöidään mukana toimitetulla: %3</translation>
     </message>
 </context>
 <context>
@@ -16189,7 +16328,7 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>Machine Elements</source>
-        <translation>Koneenelimet</translation>
+        <translation>Koneenosat</translation>
     </message>
     <message>
         <source>Pattern</source>
@@ -16205,6 +16344,10 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <message>
         <source>Body: %1</source>
         <translation>Kappale: %1</translation>
+    </message>
+    <message>
+        <source>Origin</source>
+        <translation>Origo</translation>
     </message>
     <message>
         <source>Length</source>
@@ -16225,6 +16368,10 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <message>
         <source>Diameter</source>
         <translation>Halkaisija</translation>
+    </message>
+    <message>
+        <source>Items under the pointer</source>
+        <translation>Osoittimen alla olevat kohteet</translation>
     </message>
 </context>
 <context>
@@ -16577,7 +16724,7 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>Keep Axis along %1 contradicts the typed %2.</source>
-        <translation>Pidä akselilla %1 on ristiriidassa kirjoitetun arvon %2 kanssa.</translation>
+        <translation>Pidä akselilla %1 on ristiriidassa syötetyn arvon %2 kanssa.</translation>
     </message>
     <message>
         <source>The values give no finite point.</source>
@@ -16597,11 +16744,11 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>the typed Length %1</source>
-        <translation>kirjoitettu Pituus %1</translation>
+        <translation>syötetty Pituus %1</translation>
     </message>
     <message>
         <source>the typed %1 %2</source>
-        <translation>kirjoitettu %1 %2</translation>
+        <translation>syötetty %1 %2</translation>
     </message>
     <message>
         <source>Keep Axis along %1</source>
@@ -17366,32 +17513,60 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Rautalanka, piilossa olevat särmät</translation>
     </message>
     <message>
-        <source>Front</source>
-        <translation>Edestä</translation>
+        <source>Front View</source>
+        <translation>Näkymä edestä</translation>
     </message>
     <message>
-        <source>Back</source>
-        <translation>Takaa</translation>
+        <source>Looks at the design from the front</source>
+        <translation>Katsoo mallia edestä</translation>
     </message>
     <message>
-        <source>Left</source>
-        <translation>Vasemmalta</translation>
+        <source>Back View</source>
+        <translation>Näkymä takaa</translation>
     </message>
     <message>
-        <source>Right</source>
-        <translation>Oikealta</translation>
+        <source>Looks at the design from the back</source>
+        <translation>Katsoo mallia takaa</translation>
     </message>
     <message>
-        <source>Top</source>
-        <translation>Ylhäältä</translation>
+        <source>Left View</source>
+        <translation>Näkymä vasemmalta</translation>
     </message>
     <message>
-        <source>Bottom</source>
-        <translation>Alhaalta</translation>
+        <source>Looks at the design from the left</source>
+        <translation>Katsoo mallia vasemmalta</translation>
     </message>
     <message>
-        <source>Isometric</source>
-        <translation>Isometrinen</translation>
+        <source>Right View</source>
+        <translation>Näkymä oikealta</translation>
+    </message>
+    <message>
+        <source>Looks at the design from the right</source>
+        <translation>Katsoo mallia oikealta</translation>
+    </message>
+    <message>
+        <source>Top View</source>
+        <translation>Näkymä ylhäältä</translation>
+    </message>
+    <message>
+        <source>Looks at the design from the top</source>
+        <translation>Katsoo mallia ylhäältä</translation>
+    </message>
+    <message>
+        <source>Bottom View</source>
+        <translation>Näkymä alhaalta</translation>
+    </message>
+    <message>
+        <source>Looks at the design from the bottom</source>
+        <translation>Katsoo mallia alhaalta</translation>
+    </message>
+    <message>
+        <source>Isometric View</source>
+        <translation>Isometrinen näkymä</translation>
+    </message>
+    <message>
+        <source>Looks at the design from an isometric corner</source>
+        <translation>Katsoo mallia isometrisesti kulmasta</translation>
     </message>
     <message>
         <source>Gradient Background</source>
@@ -17439,11 +17614,11 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>Trackpad (two-finger scroll pans, pinch zooms, Alt orbits)</source>
-        <translation>Kosketuslevy (kahden sormen vieritys panoroi, nipistys zoomaa, Alt kiertää)</translation>
+        <translation>Ohjauslevy (kahden sormen vieritys panoroi, nipistys zoomaa, Alt kiertää)</translation>
     </message>
     <message>
         <source>Trackpad (two-finger scroll pans, pinch zooms, Shift orbits)</source>
-        <translation>Kosketuslevy (kahden sormen vieritys panoroi, nipistys zoomaa, Shift kiertää)</translation>
+        <translation>Ohjauslevy (kahden sormen vieritys panoroi, nipistys zoomaa, Shift kiertää)</translation>
     </message>
     <message>
         <source>Custom</source>
@@ -17500,6 +17675,34 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <message>
         <source>Suppliers</source>
         <translation>Toimittajat</translation>
+    </message>
+</context>
+<context>
+    <name>ViewCube</name>
+    <message>
+        <source>FRONT</source>
+        <extracomment>A face of the view cube, in capitals; a short word that fits the face.</extracomment>
+        <translation>ETU</translation>
+    </message>
+    <message>
+        <source>BACK</source>
+        <translation>TAKA</translation>
+    </message>
+    <message>
+        <source>LEFT</source>
+        <translation>VASEN</translation>
+    </message>
+    <message>
+        <source>RIGHT</source>
+        <translation>OIKEA</translation>
+    </message>
+    <message>
+        <source>TOP</source>
+        <translation>YLÄ</translation>
+    </message>
+    <message>
+        <source>BOTTOM</source>
+        <translation>ALA</translation>
     </message>
 </context>
 <context>
@@ -18013,8 +18216,12 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Sulje</translation>
     </message>
     <message>
-        <source>Appearances: Library and This Design</source>
+        <source>Appearances: library and this design</source>
         <translation>Ulkoasut: kirjasto ja tämä malli</translation>
+    </message>
+    <message>
+        <source>This design</source>
+        <translation>Tämä malli</translation>
     </message>
     <message>
         <source>Texture Sources on the Internet</source>
@@ -18031,10 +18238,6 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <message>
         <source>Library</source>
         <translation>Kirjasto</translation>
-    </message>
-    <message>
-        <source>This Design</source>
-        <translation>Tämä malli</translation>
     </message>
     <message>
         <source>Show the %1 appearances</source>
@@ -18185,7 +18388,7 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Ei mitään</translation>
     </message>
     <message>
-        <source>This Design</source>
+        <source>This design</source>
         <translation>Tämä malli</translation>
     </message>
     <message>
@@ -18449,7 +18652,7 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>Save as Mesh…</source>
-        <translation>Tallenna verkkomallina…</translation>
+        <translation>Tallenna verkkona…</translation>
     </message>
     <message>
         <source>Activate Component</source>
@@ -18485,11 +18688,12 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>Unground</source>
-        <translation>Poista maadoitus</translation>
+        <translation>Vapauta kiinnitys</translation>
     </message>
     <message>
         <source>Ground</source>
-        <translation>Maadoita</translation>
+        <comment>assembly: fix an occurrence in place</comment>
+        <translation>Kiinnitä</translation>
     </message>
     <message>
         <source>Show When…</source>
@@ -19112,6 +19316,18 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Kohteen %1 levitys on estetty: %2</translation>
     </message>
     <message>
+        <source>Hidden by Isolate: click to show it too</source>
+        <translation>Eristys piilottaa: näytä myös tämä napsauttamalla</translation>
+    </message>
+    <message>
+        <source>Used by %1 features</source>
+        <translation>Käytössä %1 piirteessä</translation>
+    </message>
+    <message>
+        <source>Features</source>
+        <translation>Piirteet</translation>
+    </message>
+    <message>
         <source>Flat Pattern of %1 is unavailable: %2</source>
         <translation>Kohteen %1 levitys ei ole käytettävissä: %2</translation>
     </message>
@@ -19193,7 +19409,7 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
     <message>
         <source>, grounded</source>
-        <translation>, maadoitettu</translation>
+        <translation>, kiinnitetty</translation>
     </message>
     <message numerus="yes">
         <source>, %n degree(s) of freedom</source>
@@ -19954,11 +20170,11 @@ Napsautus: %2</translation>
     </message>
     <message>
         <source>%1: this %2 is part of the preview, made by the %1 itself. Hold %3 to hide the preview and pick the part&apos;s own %4.</source>
-        <translation>%1: tämä %2 kuuluu esikatseluun, ja sen on tehnyt %1 itse. Pidä %3 painettuna piilottaaksesi esikatselun ja valitse kappaleen omat %4.</translation>
+        <translation>%1: tämä %2 kuuluu esikatseluun, ja sen on tehnyt %1 itse. Piilota esikatselu pitämällä %3 painettuna ja valitse kappaleen omat %4.</translation>
     </message>
     <message>
         <source>%1: the preview changed this %2, and which %2 of the part it comes from cannot be told. Hold %3 to hide the preview and pick the part&apos;s own %4.</source>
-        <translation>%1: tämä %2 on esikatselun muuttama, eikä voida päätellä, mistä kappaleen kohdasta se on peräisin. Pidä %3 painettuna piilottaaksesi esikatselun ja valitse kappaleen omat %4.</translation>
+        <translation>%1: tämä %2 on esikatselun muuttama, eikä voida päätellä, mistä kappaleen kohdasta se on peräisin. Piilota esikatselu pitämällä %3 painettuna ja valitse kappaleen omat %4.</translation>
     </message>
     <message>
         <source>Activate %1</source>
@@ -20089,7 +20305,7 @@ Napsautus: %2</translation>
     </message>
     <message>
         <source>Select to show this comment&apos;s target in the design</source>
-        <translation>Valitse näyttääksesi tämän kommentin kohteen mallissa</translation>
+        <translation>Valitsemalla näet tämän kommentin kohteen mallissa</translation>
     </message>
     <message>
         <source>The target of comment %1 is no longer in the design: select another and Retarget.</source>
@@ -20499,7 +20715,7 @@ Napsautus: %2</translation>
     </message>
     <message>
         <source>The bindings that follow the option; double-click to list them in the Bindings tab</source>
-        <translation>Vaihtoehtoa seuraavat sidonnat; kaksoisnapsauta luetellaksesi ne Sidonnat-välilehdellä</translation>
+        <translation>Vaihtoehtoa seuraavat sidonnat; luettele ne Sidonnat-välilehdellä kaksoisnapsauttamalla</translation>
     </message>
     <message>
         <source>The values before rules and rows restrict them: a list, a range, a table column or free</source>
@@ -20779,8 +20995,8 @@ Napsautus: %2</translation>
 <context>
     <name>mitcad::CreateParameterDialog</name>
     <message>
-        <source>Create User Parameter</source>
-        <translation>Luo käyttäjäparametri</translation>
+        <source>Add User Parameter</source>
+        <translation>Lisää käyttäjäparametri</translation>
     </message>
     <message>
         <source>A new user parameter of its own. %1 (a %2) refers to it by name.</source>
@@ -20866,12 +21082,28 @@ Napsautus: %2</translation>
         <translation>Juuri</translation>
     </message>
     <message>
+        <source>1 component selected (1 body)</source>
+        <translation>1 komponentti valittu (1 kappale)</translation>
+    </message>
+    <message>
+        <source>1 component selected (%1 bodies)</source>
+        <translation>1 komponentti valittu (%1 kappaletta)</translation>
+    </message>
+    <message>
+        <source>%1 components selected (1 body)</source>
+        <translation>%1 komponenttia valittu (1 kappale)</translation>
+    </message>
+    <message>
         <source>Update the inputs to preview affected components.</source>
         <translation>Päivitä syötteet esikatsellaksesi komponentit, joihin leikkaus vaikuttaa.</translation>
     </message>
     <message>
         <source>%1 components selected (%2 bodies)</source>
         <translation>%1 komponenttia valittu (%2 kappaletta)</translation>
+    </message>
+    <message>
+        <source>No eligible components intersect the cut. Try Flip: the other direction cuts a component.</source>
+        <translation>Leikkaus ei osu yhteenkään kelpaavaan komponenttiin. Kokeile Käännä-valintaa: toiseen suuntaan se leikkaa komponenttia.</translation>
     </message>
     <message>
         <source>No eligible components intersect the cut.</source>
@@ -21435,7 +21667,7 @@ Napsautus: %2</translation>
     </message>
     <message>
         <source>The formula text is the value. Insert a function or template, then edit it freely.</source>
-        <translation>Kaavan teksti on arvo. Lisää funktio tai kaavamalli ja muokkaa sitä sitten vapaasti.</translation>
+        <translation>Kaavan teksti on arvo. Lisää funktio tai kaavapohja ja muokkaa sitä sitten vapaasti.</translation>
     </message>
     <message>
         <source>Search functions, descriptions and examples</source>
@@ -21455,7 +21687,7 @@ Napsautus: %2</translation>
     </message>
     <message>
         <source>Choose a template</source>
-        <translation>Valitse kaavamalli</translation>
+        <translation>Valitse kaavapohja</translation>
     </message>
     <message>
         <source>How many fit</source>
@@ -21926,7 +22158,7 @@ Napsautus: %2</translation>
     </message>
     <message>
         <source>&lt;h3&gt;%1&lt;/h3&gt;&lt;p&gt;&lt;b&gt;Library:&lt;/b&gt; %2 (%3), not fetched yet&lt;br&gt;%4&lt;/p&gt;&lt;p&gt;&lt;b&gt;License:&lt;/b&gt; %5 %6&lt;/p&gt;%7&lt;p&gt;Press &lt;b&gt;Get Library&lt;/b&gt; to fetch the library; then &lt;b&gt;Insert&lt;/b&gt; places the component.&lt;/p&gt;</source>
-        <translation>&lt;h3&gt;%1&lt;/h3&gt;&lt;p&gt;&lt;b&gt;Kirjasto:&lt;/b&gt; %2 (%3), ei vielä haettu&lt;br&gt;%4&lt;/p&gt;&lt;p&gt;&lt;b&gt;Lisenssi:&lt;/b&gt; %5 %6&lt;/p&gt;%7&lt;p&gt;Paina &lt;b&gt;Hae kirjasto&lt;/b&gt; hakeaksesi kirjaston; sitten &lt;b&gt;Lisää&lt;/b&gt; sijoittaa komponentin.&lt;/p&gt;</translation>
+        <translation>&lt;h3&gt;%1&lt;/h3&gt;&lt;p&gt;&lt;b&gt;Kirjasto:&lt;/b&gt; %2 (%3), ei vielä haettu&lt;br&gt;%4&lt;/p&gt;&lt;p&gt;&lt;b&gt;Lisenssi:&lt;/b&gt; %5 %6&lt;/p&gt;%7&lt;p&gt;Hae kirjasto painamalla &lt;b&gt;Hae kirjasto&lt;/b&gt;; sitten &lt;b&gt;Lisää&lt;/b&gt; sijoittaa komponentin.&lt;/p&gt;</translation>
     </message>
     <message>
         <source>none</source>
@@ -22751,7 +22983,7 @@ Haetaanko ne?</translation>
     </message>
     <message>
         <source>Component Names on the LABEL Layer</source>
-        <translation>Komponenttien nimet LABEL-tasolla</translation>
+        <translation>Komponenttien nimet LABEL-kerroksella</translation>
     </message>
     <message>
         <source>Close Drawing</source>
@@ -22893,7 +23125,7 @@ Haetaanko ne?</translation>
     </message>
     <message>
         <source>Insert Mesh</source>
-        <translation>Lisää verkkomalli</translation>
+        <translation>Lisää verkko</translation>
     </message>
     <message>
         <source>Brings an STL or OBJ mesh in as a mesh body</source>
@@ -23069,11 +23301,11 @@ Haetaanko ne?</translation>
     </message>
     <message>
         <source>&amp;Web Viewer…</source>
-        <translation>&amp;Verkkokatseluohjelma…</translation>
+        <translation>&amp;Verkkokatselin…</translation>
     </message>
     <message>
         <source>&amp;Update Web Viewer</source>
-        <translation>&amp;Päivitä verkkokatseluohjelma</translation>
+        <translation>&amp;Päivitä verkkokatselin</translation>
     </message>
     <message>
         <source>&amp;Import…</source>
@@ -23193,7 +23425,7 @@ Haetaanko ne?</translation>
     </message>
     <message>
         <source>Meshes (*.stl *.obj);;All files (*)</source>
-        <translation>Verkkomallit (*.stl *.obj);;Kaikki tiedostot (*)</translation>
+        <translation>Verkot (*.stl *.obj);;Kaikki tiedostot (*)</translation>
     </message>
     <message>
         <source>DXF drawings (*.dxf);;All files (*)</source>
@@ -23276,6 +23508,14 @@ Haetaanko ne?</translation>
     <message>
         <source>, %1 material(s)</source>
         <translation>, %1 materiaalia</translation>
+    </message>
+    <message>
+        <source>%1 plate(s) in %2 files</source>
+        <translation>%1 alustaa %2 tiedostossa</translation>
+    </message>
+    <message>
+        <source>%1 plate(s)</source>
+        <translation>%1 alustaa</translation>
     </message>
     <message>
         <source>Exported %1 (%2).</source>
@@ -23776,10 +24016,6 @@ Lisää tallennetun mallin.</translation>
         <translation>3MF</translation>
     </message>
     <message>
-        <source>Import from slicer…</source>
-        <translation>Tuo viipaloijasta…</translation>
-    </message>
-    <message>
         <source>Printer</source>
         <translation>Tulostin</translation>
     </message>
@@ -23853,6 +24089,10 @@ Lisää tallennetun mallin.</translation>
     <message>
         <source>Angle</source>
         <translation>Kulma</translation>
+    </message>
+    <message>
+        <source>Import from Slicer…</source>
+        <translation>Tuo viipaloijasta…</translation>
     </message>
     <message>
         <source>Open in</source>
@@ -24152,11 +24392,11 @@ Lisää tallennetun mallin.</translation>
     </message>
     <message>
         <source>Save Meshes in Folder</source>
-        <translation>Tallenna verkkomallit kansioon</translation>
+        <translation>Tallenna verkot kansioon</translation>
     </message>
     <message>
         <source>Save as Mesh</source>
-        <translation>Tallenna verkkomallina</translation>
+        <translation>Tallenna verkkona</translation>
     </message>
     <message>
         <source>%1 in %2 exist. Replace them?</source>
@@ -24176,7 +24416,7 @@ Lisää tallennetun mallin.</translation>
     </message>
     <message>
         <source>Save Mesh</source>
-        <translation>Tallenna verkkomalli</translation>
+        <translation>Tallenna verkko</translation>
     </message>
     <message>
         <source>Saved %1.</source>
@@ -24767,7 +25007,7 @@ Lisää tallennetun mallin.</translation>
     </message>
     <message>
         <source>Save as Mesh…</source>
-        <translation>Tallenna verkkomallina…</translation>
+        <translation>Tallenna verkkona…</translation>
     </message>
     <message>
         <source>Clear Selection</source>
@@ -25118,6 +25358,14 @@ Lisää tallennetun mallin.</translation>
         <translation>ei käytettävissä nyt</translation>
     </message>
     <message>
+        <source>Open a sketch first: %1</source>
+        <translation>Avaa ensin luonnos: %1</translation>
+    </message>
+    <message>
+        <source>Finish the sketch first: %1</source>
+        <translation>Lopeta ensin luonnos: %1</translation>
+    </message>
+    <message>
         <source>%1 cannot be edited in MitCad yet.</source>
         <translation>Kohdetta %1 ei voi vielä muokata MitCadissa.</translation>
     </message>
@@ -25166,7 +25414,7 @@ Lisää tallennetun mallin.</translation>
     </message>
     <message>
         <source>&lt;b&gt;No command&lt;/b&gt;&lt;br&gt;Press S to search for a command, or right-click the selection for the commands that fit it.</source>
-        <translation>&lt;b&gt;Ei komentoa&lt;/b&gt;&lt;br&gt;Hae komentoa painamalla S tai napsauta valintaa hiiren kakkospainikkeella nähdäksesi siihen sopivat komennot.</translation>
+        <translation>&lt;b&gt;Ei komentoa&lt;/b&gt;&lt;br&gt;Hae komentoa painamalla S, tai näe valintaan sopivat komennot napsauttamalla sitä hiiren kakkospainikkeella.</translation>
     </message>
     <message numerus="yes">
         <source>%n more feature(s)</source>
@@ -25521,11 +25769,11 @@ Lisää tallennetun mallin.</translation>
     </message>
     <message>
         <source>%1 is grounded</source>
-        <translation>%1 on maadoitettu</translation>
+        <translation>%1 on kiinnitetty</translation>
     </message>
     <message>
         <source>%1 is in a rigid group with %2, which is grounded</source>
-        <translation>%1 on jäykässä ryhmässä kohteen %2 kanssa, joka on maadoitettu</translation>
+        <translation>%1 on jäykässä ryhmässä kohteen %2 kanssa, joka on kiinnitetty</translation>
     </message>
     <message>
         <source>The joints of %1 cannot be solved where the components are</source>
@@ -25985,7 +26233,7 @@ Lisää tallennetun mallin.</translation>
     </message>
     <message>
         <source>a mesh&apos;s triangles</source>
-        <translation>verkkomallin kolmiot</translation>
+        <translation>verkon kolmiot</translation>
     </message>
     <message>
         <source>a free-form surface, such as a thread&apos;s</source>
@@ -26171,15 +26419,15 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
     </message>
     <message>
         <source>Web Viewer…</source>
-        <translation>Verkkokatseluohjelma…</translation>
+        <translation>Verkkokatselin…</translation>
     </message>
     <message>
         <source>Turns on the project&apos;s web viewer: a web page per design and an index</source>
-        <translation>Ottaa projektin verkkokatseluohjelman käyttöön: verkkosivu kustakin mallista ja hakemisto</translation>
+        <translation>Ottaa projektin verkkokatselimen käyttöön: verkkosivu kustakin mallista ja hakemisto</translation>
     </message>
     <message>
         <source>Update Web Viewer</source>
-        <translation>Päivitä verkkokatseluohjelma</translation>
+        <translation>Päivitä verkkokatselin</translation>
     </message>
     <message>
         <source>Writes every design&apos;s web page and the index again</source>
@@ -26187,15 +26435,15 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
     </message>
     <message>
         <source>Web Viewer</source>
-        <translation>Verkkokatseluohjelma</translation>
+        <translation>Verkkokatselin</translation>
     </message>
     <message>
         <source>The web viewer is a project&apos;s: open a design of a project that keeps versions.</source>
-        <translation>Verkkokatseluohjelma kuuluu projektille: avaa versioita säilyttävän projektin malli.</translation>
+        <translation>Verkkokatselin kuuluu projektille: avaa versioita säilyttävän projektin malli.</translation>
     </message>
     <message>
         <source>The web viewer of %1 is not turned on: File › Project › Web Viewer turns it on.</source>
-        <translation>Projektin %1 verkkokatseluohjelmaa ei ole otettu käyttöön: Tiedosto › Projekti › Verkkokatseluohjelma ottaa sen käyttöön.</translation>
+        <translation>Projektin %1 verkkokatselinta ei ole otettu käyttöön: Tiedosto › Projekti › Verkkokatselin ottaa sen käyttöön.</translation>
     </message>
     <message>
         <source>Could not make the folder %1.</source>
@@ -26203,7 +26451,7 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
     </message>
     <message>
         <source>Writing the web viewer of %1</source>
-        <translation>Kirjoitetaan projektin %1 verkkokatseluohjelmaa</translation>
+        <translation>Kirjoitetaan projektin %1 verkkokatselinta</translation>
     </message>
     <message>
         <source>Writing the page of %1 (%2 of %3)</source>
@@ -26216,22 +26464,22 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
     <message>
         <source>Could not write the web viewer of %1:
 %2</source>
-        <translation>Projektin %1 verkkokatseluohjelmaa ei voitu kirjoittaa:
+        <translation>Projektin %1 verkkokatselinta ei voitu kirjoittaa:
 %2</translation>
     </message>
     <message>
         <source>Could not write the web viewer of %1: %2</source>
-        <translation>Projektin %1 verkkokatseluohjelmaa ei voitu kirjoittaa: %2</translation>
+        <translation>Projektin %1 verkkokatselinta ei voitu kirjoittaa: %2</translation>
     </message>
     <message>
         <source>The web viewer of %1 lacks %2 design(s) whose page could not be written:
 %3</source>
-        <translation>Projektin %1 verkkokatseluohjelmasta puuttuu %2 mallia, joiden sivua ei voitu kirjoittaa:
+        <translation>Projektin %1 verkkokatselimesta puuttuu %2 mallia, joiden sivua ei voitu kirjoittaa:
 %3</translation>
     </message>
     <message>
         <source>The web viewer of %1 is in %2: open index.html there in a browser%3.</source>
-        <translation>Projektin %1 verkkokatseluohjelma on kansiossa %2: avaa siellä oleva index.html selaimessa%3.</translation>
+        <translation>Projektin %1 verkkokatselin on kansiossa %2: avaa siellä oleva index.html selaimessa%3.</translation>
     </message>
     <message>
         <source>; recorded as a version (%1)</source>
@@ -26240,7 +26488,7 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
     <message>
         <source>The web viewer is written, but it could not be recorded as a version:
 %1</source>
-        <translation>Verkkokatseluohjelma on kirjoitettu, mutta sitä ei voitu kirjata versioksi:
+        <translation>Verkkokatselin on kirjoitettu, mutta sitä ei voitu kirjata versioksi:
 %1</translation>
     </message>
     <message>
@@ -26591,11 +26839,11 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
     </message>
     <message>
         <source>Not set yet: a value typed here is set on the body</source>
-        <translation>Ei vielä asetettu: tähän kirjoitettu arvo asetetaan kappaleelle</translation>
+        <translation>Ei vielä asetettu: tähän syötetty arvo asetetaan kappaleelle</translation>
     </message>
     <message>
         <source>Set on %1; a value typed here is set on the body</source>
-        <translation>Asetettu kohteelle %1; tähän kirjoitettu arvo asetetaan kappaleelle</translation>
+        <translation>Asetettu kohteelle %1; tähän syötetty arvo asetetaan kappaleelle</translation>
     </message>
     <message>
         <source>Remove %1</source>
@@ -26672,8 +26920,16 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
         <translation>Luo</translation>
     </message>
     <message>
-        <source>Make a material of your own with these values</source>
-        <translation>Tee näillä arvoilla oma materiaali</translation>
+        <source>Make a material of your own of each one picked, with its values</source>
+        <translation>Tee jokaisesta poimitusta oma materiaali sen arvoilla</translation>
+    </message>
+    <message>
+        <source>Select All</source>
+        <translation>Valitse kaikki</translation>
+    </message>
+    <message>
+        <source>Pick every material the search shows</source>
+        <translation>Poimi kaikki haun näyttämät materiaalit</translation>
     </message>
     <message>
         <source>the %1 (%2)</source>
@@ -26791,6 +27047,20 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
 </context>
 <context>
     <name>mitcad::MaterialsPanel</name>
+    <message numerus="yes">
+        <source>%n material(s) made from the dataset.</source>
+        <translation>
+            <numerusform>%n materiaali tehty aineistosta.</numerusform>
+            <numerusform>%n materiaalia tehty aineistosta.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n skipped: a material of the same name is there already.</source>
+        <translation>
+            <numerusform>%n ohitettu: samanniminen materiaali on jo olemassa.</numerusform>
+            <numerusform>%n ohitettu: samanniminen materiaali on jo olemassa.</numerusform>
+        </translation>
+    </message>
     <message>
         <source>Search materials</source>
         <translation>Hae materiaaleja</translation>
@@ -27024,10 +27294,6 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
         <translation>Vietiin %1 materiaalia tiedostoon %2.</translation>
     </message>
     <message>
-        <source>Steel</source>
-        <translation>Teräs</translation>
-    </message>
-    <message>
         <source>Default (%1)</source>
         <translation>Oletus (%1)</translation>
     </message>
@@ -27120,7 +27386,7 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
         <source>%1
 Click for this session&apos;s messages.</source>
         <translation>%1
-Napsauta nähdäksesi tämän istunnon viestit.</translation>
+Näet tämän istunnon viestit napsauttamalla.</translation>
     </message>
 </context>
 <context>
@@ -27466,7 +27732,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>Custom bindings:</source>
-        <translation>Mukautetut sidonnat:</translation>
+        <translation>Mukautetut näppäinmääritykset:</translation>
     </message>
     <message>
         <source>Input</source>
@@ -27478,7 +27744,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>Navigation bindings</source>
-        <translation>Navigoinnin määritykset</translation>
+        <translation>Navigoinnin näppäinmääritykset</translation>
     </message>
     <message>
         <source>Left drags used for selection and component movement are reserved. The orientation cube keeps its own gestures.</source>
@@ -27498,7 +27764,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>Trackpad scroll speed:</source>
-        <translation>Kosketuslevyn vieritysnopeus:</translation>
+        <translation>Ohjauslevyn vieritysnopeus:</translation>
     </message>
     <message>
         <source>How far an arrow key turns the 3D view</source>
@@ -27530,7 +27796,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>Mouse and Trackpad</source>
-        <translation>Hiiri ja kosketuslevy</translation>
+        <translation>Hiiri ja ohjauslevy</translation>
     </message>
     <message>
         <source>3D Mouse</source>
@@ -28129,14 +28395,6 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
         <translation>nimeää tämän kentän oman parametrin</translation>
     </message>
     <message>
-        <source>Create User Parameter…</source>
-        <translation>Luo käyttäjäparametri…</translation>
-    </message>
-    <message>
-        <source>Create User Parameter “%1”…</source>
-        <translation>Luo käyttäjäparametri “%1”…</translation>
-    </message>
-    <message>
         <source>a new parameter of its own</source>
         <translation>uusi oma parametri</translation>
     </message>
@@ -28170,7 +28428,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>Formula template</source>
-        <translation>Kaavamalli</translation>
+        <translation>Kaavapohja</translation>
     </message>
     <message>
         <source>Type to search names and comments</source>
@@ -28213,6 +28471,14 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
         <translation>palauttaa parametrille sen automaattisen nimen</translation>
     </message>
     <message>
+        <source>Add User Parameter…</source>
+        <translation>Lisää käyttäjäparametri…</translation>
+    </message>
+    <message>
+        <source>Add User Parameter “%1”…</source>
+        <translation>Lisää käyttäjäparametri “%1”…</translation>
+    </message>
+    <message>
         <source>Backspace on an empty value removes the name</source>
         <translation>Backspace tyhjässä arvossa poistaa nimen</translation>
     </message>
@@ -28224,8 +28490,8 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
         <translation>Parametrit</translation>
     </message>
     <message>
-        <source>User Parameter</source>
-        <translation>Käyttäjäparametri</translation>
+        <source>Add User Parameter…</source>
+        <translation>Lisää käyttäjäparametri…</translation>
     </message>
     <message>
         <source>Add a user parameter</source>
@@ -29576,8 +29842,8 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
         <translation>&amp;Tekijä:</translation>
     </message>
     <message>
-        <source>This design as a component</source>
-        <translation>Tämä malli komponenttina</translation>
+        <source>Library component</source>
+        <translation>Kirjastokomponentti</translation>
     </message>
     <message>
         <source>bracket-20 (a-z, 0-9, -)</source>
@@ -30300,6 +30566,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>Ground</source>
+        <comment>render environment: the floor under the bodies</comment>
         <translation>Maa</translation>
     </message>
     <message>
@@ -30988,7 +31255,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>The screenshot is saved as %1: drag it into the form to attach it.</source>
-        <translation>Kuvakaappaus on tallennettu nimellä %1: vedä se lomakkeeseen liittääksesi sen.</translation>
+        <translation>Kuvakaappaus on tallennettu nimellä %1: liitä se vetämällä se lomakkeeseen.</translation>
     </message>
     <message>
         <source>The debug log is %1: drag it into the form to attach it.</source>
@@ -31208,7 +31475,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>Click a row to change what a click and a window select</source>
-        <translation>Napsauta riviä muuttaaksesi, mitä napsautus ja ikkuna valitsevat</translation>
+        <translation>Muuta napsauttamalla riviä, mitä napsautus ja ikkuna valitsevat</translation>
     </message>
     <message>
         <source>Reset to Defaults</source>
@@ -31329,7 +31596,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     <message>
         <source>Some saved shortcuts conflict and are disabled. The commands remain in menus. Change these bindings or restore defaults:
 %1</source>
-        <translation>Jotkin tallennetut pikanäppäimet ovat ristiriidassa ja ne on poistettu käytöstä. Komennot ovat yhä valikoissa. Muuta näitä sidontoja tai palauta oletukset:
+        <translation>Jotkin tallennetut pikanäppäimet ovat ristiriidassa ja ne on poistettu käytöstä. Komennot ovat yhä valikoissa. Muuta näitä näppäinmäärityksiä tai palauta oletukset:
 %1</translation>
     </message>
     <message>
@@ -32510,6 +32777,10 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
         <translation>Aikajanan suodatin: %1: %2/%3 piirrettä</translation>
     </message>
     <message>
+        <source>Import notes</source>
+        <translation>Tuontihuomautukset</translation>
+    </message>
+    <message>
         <source>Active Component</source>
         <translation>Aktiivinen komponentti</translation>
     </message>
@@ -32560,14 +32831,6 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     <message>
         <source>Warnings</source>
         <translation>Varoitukset</translation>
-    </message>
-    <message>
-        <source>Import Notes</source>
-        <translation>Tuonnin huomautukset</translation>
-    </message>
-    <message>
-        <source>Rolled Back</source>
-        <translation>Palautettu taaksepäin</translation>
     </message>
 </context>
 <context>
@@ -32990,14 +33253,6 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
         <translation>Koko mallin kotinäkymä</translation>
     </message>
     <message>
-        <source>%1 View</source>
-        <translation>%1-näkymä</translation>
-    </message>
-    <message>
-        <source>Looks at the design from the %1</source>
-        <translation>Katsoo mallia suunnasta %1</translation>
-    </message>
-    <message>
         <source>Look At</source>
         <translation>Katso kohtisuoraan</translation>
     </message>
@@ -33318,6 +33573,14 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
         <translation>MitCadin versio pienellä tekstillä 3D-näkymän oikeassa alakulmassa</translation>
     </message>
     <message>
+        <source>Show used s&amp;ketches under their features</source>
+        <translation>Näytä käytetyt &amp;luonnokset piirteidensä alla</translation>
+    </message>
+    <message>
+        <source>The Browser lists each component&apos;s features with the sketches they use</source>
+        <translation>Selain luettelee kunkin komponentin piirteet ja niiden käyttämät luonnokset</translation>
+    </message>
+    <message>
         <source>&amp;Native macOS interface (experimental)</source>
         <translation>&amp;Natiivi macOS-käyttöliittymä (kokeellinen)</translation>
     </message>
@@ -33388,6 +33651,14 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     <message>
         <source>Esc with nothing else to cancel leaves a sketch you did not change; a new empty one is removed</source>
         <translation>Kun peruttavaa ei muuta ole, Esc poistuu luonnoksesta, jota et muuttanut; uusi tyhjä luonnos poistetaan</translation>
+    </message>
+    <message>
+        <source>Show &amp;profiles when a sketch opens</source>
+        <translation>Näytä &amp;profiilit, kun luonnos avautuu</translation>
+    </message>
+    <message>
+        <source>Sketches open with their closed regions shaded, as the palette&apos;s Show profiles does</source>
+        <translation>Luonnokset avautuvat suljetut alueet varjostettuina, kuten paletin Näytä profiilit tekee</translation>
     </message>
     <message>
         <source>Navigation</source>
@@ -33499,19 +33770,19 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>Choose a Worker…</source>
-        <translation>Valitse työprosessi…</translation>
+        <translation>Valitse renderöintiprosessi…</translation>
     </message>
     <message>
         <source>The renderer program; a worker you built runs instead of the shipped one</source>
-        <translation>Renderöintiohjelma; itse rakentamasi työprosessi ajetaan toimitetun sijaan</translation>
+        <translation>Renderöintiohjelma; itse rakentamasi renderöintiprosessi ajetaan toimitetun sijaan</translation>
     </message>
     <message>
         <source>Render Worker</source>
-        <translation>Renderöinnin työprosessi</translation>
+        <translation>Renderöintiprosessi</translation>
     </message>
     <message>
         <source>Render worker:</source>
-        <translation>Renderöinnin työprosessi:</translation>
+        <translation>Renderöintiprosessi:</translation>
     </message>
     <message>
         <source>System</source>
@@ -33703,7 +33974,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>How finely the 3D view draws small circles and arcs; exported meshes do not change</source>
-        <translation>Kuinka tarkasti 3D-näkymä piirtää pienet ympyrät ja kaaret; viedyt verkkomallit eivät muutu</translation>
+        <translation>Kuinka tarkasti 3D-näkymä piirtää pienet ympyrät ja kaaret; viedyt verkot eivät muutu</translation>
     </message>
     <message>
         <source>S&amp;mall circles:</source>
@@ -33783,7 +34054,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>Trackpad: pinch</source>
-        <translation>Kosketuslevy: nipistys</translation>
+        <translation>Ohjauslevy: nipistys</translation>
     </message>
     <message>
         <source>Zoom (in every scheme)</source>
@@ -33791,7 +34062,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>Trackpad: two-finger rotation</source>
-        <translation>Kosketuslevy: kahden sormen kierto</translation>
+        <translation>Ohjauslevy: kahden sormen kierto</translation>
     </message>
     <message>
         <source>Roll the view (in every scheme)</source>
@@ -33799,7 +34070,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>Trackpad: two-finger double tap</source>
-        <translation>Kosketuslevy: kahden sormen kaksoisnapautus</translation>
+        <translation>Ohjauslevy: kahden sormen kaksoisnapautus</translation>
     </message>
     <message>
         <source>Fit (in every scheme)</source>
@@ -33839,7 +34110,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>OK: finish the command, or the typed value</source>
-        <translation>OK: viimeistele komento tai hyväksy kirjoitettu arvo</translation>
+        <translation>OK: viimeistele komento tai hyväksy syötetty arvo</translation>
     </message>
     <message>
         <source>Esc</source>
@@ -33929,11 +34200,11 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>it ended (exit status %1)</source>
-        <translation>se päättyi (paluuarvo %1)</translation>
+        <translation>se päättyi (paluukoodi %1)</translation>
     </message>
     <message>
         <source>it ended (exit status %1): %2</source>
-        <translation>se päättyi (paluuarvo %1): %2</translation>
+        <translation>se päättyi (paluukoodi %1): %2</translation>
     </message>
     <message>
         <source>no answer in %1 s</source>
@@ -34217,7 +34488,7 @@ Napsauta nähdäksesi tämän istunnon viestit.</translation>
     </message>
     <message>
         <source>exit status %1</source>
-        <translation>paluuarvo %1</translation>
+        <translation>paluukoodi %1</translation>
     </message>
     <message>
         <source>Sign in Again: %1 Run the commands under How to fix in a terminal.</source>
@@ -35015,6 +35286,34 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
         <translation>DXF…</translation>
     </message>
     <message>
+        <source>a body</source>
+        <translation>kappale</translation>
+    </message>
+    <message>
+        <source>Center of %1</source>
+        <translation>%1: keskipiste</translation>
+    </message>
+    <message>
+        <source>Corner of %1</source>
+        <translation>%1: kulma</translation>
+    </message>
+    <message>
+        <source>Edge of %1</source>
+        <translation>%1: särmä</translation>
+    </message>
+    <message>
+        <source>Circle of %1</source>
+        <translation>%1: ympyrä</translation>
+    </message>
+    <message>
+        <source>Round face of %1</source>
+        <translation>%1: pyöreä tahko</translation>
+    </message>
+    <message>
+        <source>Face of %1</source>
+        <translation>%1: tahko</translation>
+    </message>
+    <message>
         <source>PDF…</source>
         <translation>PDF…</translation>
     </message>
@@ -35028,7 +35327,7 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     </message>
     <message>
         <source>Component Names on the LABEL Layer</source>
-        <translation>Komponenttien nimet LABEL-tasolla</translation>
+        <translation>Komponenttien nimet LABEL-kerroksella</translation>
     </message>
     <message>
         <source>Click where the dimension goes, or a second edge, circle or corner (Shift: no snap)</source>
@@ -36056,7 +36355,7 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     </message>
     <message>
         <source>Uncheck to disconnect it and refuse its connections</source>
-        <translation>Poista valinta katkaistaksesi sen yhteyden ja hylätäksesi sen yhteydet</translation>
+        <translation>Poistamalla valinnan katkaiset sen yhteyden ja hylkäät sen yhteydet</translation>
     </message>
     <message>
         <source>No assistant set up</source>
@@ -36823,7 +37122,7 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     </message>
     <message>
         <source>Move the pointer into the corner to drag the radius, or type the Radius.</source>
-        <translation>Siirrä osoitin nurkkaan vetääksesi sädettä tai kirjoita Säde.</translation>
+        <translation>Vedä sädettä siirtämällä osoitin nurkkaan tai kirjoita Säde.</translation>
     </message>
     <message>
         <source>Fillet: drag the radius along the corner&apos;s bisector and click, or type the Radius and press Enter.</source>
@@ -36835,7 +37134,7 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     </message>
     <message>
         <source>Fillet: click a corner where two lines meet, or the two lines; with a Radius typed the click rounds it at once. Esc ends the tool.</source>
-        <translation>Pyöristys: napsauta nurkkaa, jossa kaksi viivaa kohtaa, tai molempia viivoja; kun Säde on kirjoitettu, napsautus pyöristää nurkan heti. Esc lopettaa työkalun.</translation>
+        <translation>Pyöristys: napsauta nurkkaa, jossa kaksi viivaa kohtaa, tai molempia viivoja; kun Säde on syötetty, napsautus pyöristää nurkan heti. Esc lopettaa työkalun.</translation>
     </message>
     <message>
         <source>Corner %1</source>
@@ -36987,7 +37286,7 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     </message>
     <message>
         <source>Tangent Arc: click the end of a line, an arc or a spline to continue it.</source>
-        <translation>Tangenttikaari: napsauta viivan, kaaren tai splinin päätä jatkaaksesi sitä.</translation>
+        <translation>Tangenttikaari: jatka viivaa, kaarta tai spliniä napsauttamalla sen päätä.</translation>
     </message>
     <message>
         <source>Tangent Arc: click its end, or type its Radius and Arc Length and press Enter.</source>
@@ -37007,7 +37306,7 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     </message>
     <message>
         <source>Click the end of a line, an arc or a spline to continue it.</source>
-        <translation>Napsauta viivan, kaaren tai splinin päätä jatkaaksesi sitä.</translation>
+        <translation>Jatka viivaa, kaarta tai spliniä napsauttamalla sen päätä.</translation>
     </message>
     <message>
         <source>%1 seen edge-on: the last place is kept</source>
@@ -37171,15 +37470,15 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     </message>
     <message>
         <source>Ellipse: click the center; it lies on the %1 plane.</source>
-        <translation>Ellipsi: napsauta keskipiste; se on %1-tasolla.</translation>
+        <translation>Ellipsi: napsauta keskipistettä; se on %1-tasolla.</translation>
     </message>
     <message>
         <source>Ellipse: click the end of the major axis, or type the major radius.</source>
-        <translation>Ellipsi: napsauta isoakselin pää tai kirjoita isosäde.</translation>
+        <translation>Ellipsi: napsauta isoakselin päätä tai kirjoita isosäde.</translation>
     </message>
     <message>
         <source>Ellipse: click a point on the ellipse, or type the minor radius.</source>
-        <translation>Ellipsi: napsauta ellipsin piste tai kirjoita pikkusäde.</translation>
+        <translation>Ellipsi: napsauta ellipsin pistettä tai kirjoita pikkusäde.</translation>
     </message>
     <message>
         <source>Rectangle: click the first corner; it lies on the %1 plane.</source>
@@ -37207,7 +37506,7 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     </message>
     <message>
         <source>3-Point Rectangle: click the opposite side, or type the height.</source>
-        <translation>Kolmen pisteen suorakulmio: napsauta vastakkainen sivu tai kirjoita korkeus.</translation>
+        <translation>Kolmen pisteen suorakulmio: napsauta vastakkaista sivua tai kirjoita korkeus.</translation>
     </message>
     <message>
         <source>%1: click the center; it lies on the %2 plane.</source>
@@ -37219,19 +37518,19 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     </message>
     <message>
         <source>Edge Polygon: click the start of an edge; it lies on the %1 plane.</source>
-        <translation>Sivumonikulmio: napsauta sivun alku; se on %1-tasolla.</translation>
+        <translation>Sivumonikulmio: napsauta sivun alkua; se on %1-tasolla.</translation>
     </message>
     <message>
         <source>Edge Polygon: click the end of the edge (Tab: sides).</source>
-        <translation>Sivumonikulmio: napsauta sivun loppu (Tab: sivut).</translation>
+        <translation>Sivumonikulmio: napsauta sivun loppua (Tab: sivut).</translation>
     </message>
     <message>
         <source>Edge Polygon: click the side the polygon is on.</source>
-        <translation>Sivumonikulmio: napsauta puoli, jolla monikulmio on.</translation>
+        <translation>Sivumonikulmio: napsauta sitä puolta, jolla monikulmio on.</translation>
     </message>
     <message>
         <source>Text: click where the text starts on the %1 plane, or drag its frame.</source>
-        <translation>Teksti: napsauta tekstin alkukohta %1-tasolla tai vedä sen kehys.</translation>
+        <translation>Teksti: napsauta tekstin alkukohtaa %1-tasolla tai vedä sen kehys.</translation>
     </message>
     <message>
         <source>Text: type the text (Tab: height) and press Enter.</source>
@@ -37811,6 +38110,89 @@ Hyväksy säilyttää kohteen %1 ilman niitä; Peruuta kumoaa sen.</translation>
     </message>
 </context>
 <context>
+    <name>mitcad::sketch::SketchItemList</name>
+    <message>
+        <source>Line</source>
+        <translation>Viiva</translation>
+    </message>
+    <message>
+        <source>Circle</source>
+        <translation>Ympyrä</translation>
+    </message>
+    <message>
+        <source>Arc</source>
+        <translation>Kaari</translation>
+    </message>
+    <message>
+        <source>Ellipse</source>
+        <translation>Ellipsi</translation>
+    </message>
+    <message>
+        <source>Elliptical Arc</source>
+        <translation>Elliptinen kaari</translation>
+    </message>
+    <message>
+        <source>Fit Point Spline</source>
+        <translation>Sovituspistesplini</translation>
+    </message>
+    <message>
+        <source>Control Point Spline</source>
+        <translation>Ohjauspistesplini</translation>
+    </message>
+    <message>
+        <source>Curve</source>
+        <translation>Käyrä</translation>
+    </message>
+    <message>
+        <source>projected</source>
+        <translation>projisoitu</translation>
+    </message>
+    <message>
+        <source>construction</source>
+        <translation>apugeometria</translation>
+    </message>
+    <message>
+        <source>centerline</source>
+        <translation>keskiviiva</translation>
+    </message>
+    <message>
+        <source>Sketch items</source>
+        <translation>Luonnoksen osat</translation>
+    </message>
+    <message>
+        <source>Conflicts with other constraints or dimensions</source>
+        <translation>Ristiriidassa muiden rajoitteiden tai mittojen kanssa</translation>
+    </message>
+    <message>
+        <source>Follows from the other constraints and dimensions</source>
+        <translation>Seuraa muista rajoitteista ja mitoista</translation>
+    </message>
+    <message>
+        <source>Not met by the geometry: activating it moves it</source>
+        <translation>Geometria ei täytä tätä: aktivointi siirtää geometriaa</translation>
+    </message>
+    <message>
+        <source>Origin</source>
+        <translation>Origo</translation>
+    </message>
+    <message>
+        <source>Point</source>
+        <translation>Piste</translation>
+    </message>
+    <message>
+        <source>%1 (%2)</source>
+        <translation>%1 (%2)</translation>
+    </message>
+    <message>
+        <source>X axis</source>
+        <translation>X-akseli</translation>
+    </message>
+    <message>
+        <source>Y axis</source>
+        <translation>Y-akseli</translation>
+    </message>
+</context>
+<context>
     <name>mitcad::sketch::SketchOverlay</name>
     <message>
         <source>Not applied: inactive (Activate applies it)</source>
@@ -37919,6 +38301,14 @@ Hyväksy säilyttää kohteen %1 ilman niitä; Peruuta kumoaa sen.</translation>
         <translation>Näytä rajoitteet</translation>
     </message>
     <message>
+        <source>Show points</source>
+        <translation>Näytä pisteet</translation>
+    </message>
+    <message>
+        <source>Draw the end, center and sketch points; hidden points still snap and show under the pointer</source>
+        <translation>Piirrä pää-, keski- ja luonnospisteet; piilotetut pisteet kohdistuvat yhä ja näkyvät osoittimen alla</translation>
+    </message>
+    <message>
         <source>Show profiles</source>
         <translation>Näytä profiilit</translation>
     </message>
@@ -37976,7 +38366,7 @@ Hyväksy säilyttää kohteen %1 ilman niitä; Peruuta kumoaa sen.</translation>
     </message>
     <message>
         <source>&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;Esc ends the tool; Enter accepts typed values.</source>
-        <translation>&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;Esc lopettaa työkalun; Enter hyväksyy kirjoitetut arvot.</translation>
+        <translation>&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;Esc lopettaa työkalun; Enter hyväksyy syötetyt arvot.</translation>
     </message>
     <message>
         <source>&lt;b&gt;Sketch Palette&lt;/b&gt; &lt;span style=&apos;color:%2&apos;&gt;%1&lt;/span&gt;</source>

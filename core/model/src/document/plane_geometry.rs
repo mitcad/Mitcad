@@ -7,7 +7,9 @@
 //! whether they lie in the plane is decided here, within the model's linear
 //! tolerance. On request the edges and vertices out of the plane come too
 //! (mitcad#866), projected along its normal as `sketch.project` projects
-//! them, with where they are above or below it.
+//! them, with where they are above or below it. Only the bodies the view
+//! shows count: those hidden by their light bulbs and those Isolate leaves
+//! out are not looked at (mitcad#1702).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -385,13 +387,19 @@ impl<K: Kernel> Document<K> {
             })
         };
         let own_policy = self.policy(component);
+        // Isolate leaves out of the view what it does not show, so out of
+        // the picks and snaps too (mitcad#1702); the key follows, as it
+        // lists the bodies seen.
+        let isolation = self.isolation();
         // The visible bodies as the design places them: the sketch's own
         // component's once, in its own coordinates; another component's at
         // each occurrence that shows it, moved into the sketch's.
         let mut seen: Vec<Seen<'_, K::Shape>> = Vec::new();
         let mut own: BTreeSet<BodyUid> = BTreeSet::new();
         for instance in self.instances() {
-            if !instance.visible {
+            if !instance.visible
+                || !super::display::isolation_shows(&isolation, instance.body, &instance.path)
+            {
                 continue;
             }
             let Some(shape) = bodies.get(&instance.body) else {

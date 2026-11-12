@@ -4,7 +4,10 @@
 # to the right by the step (15 degrees by default), Left back, Up round
 # upwards (also with a perspective camera), the zoom kept; with the
 # keyboard in a command panel's value field the key moves the text cursor
-# and the view stays. Run by tools/ui-view-arrow-keys-test.sh (Linux) and
+# and the view stays. Home and 1 to 7 (mitcad#1684): with the keyboard in
+# the 3D view, 7 shows the isometric view, 1 the front view and Home the
+# home view; in the value field 7 types the digit and Home moves the text
+# cursor, the view stays. Run by tools/ui-view-arrow-keys-test.sh (Linux) and
 # tools/ui-windows-view-arrow-keys-test.ps1 (Windows).
 wait-idle
 command view.fit
@@ -45,6 +48,24 @@ expect-log '^View turned down by 15 degrees$'
 wait-log '^Camera direction -?0 1 -?0 up -?0 -?0 1 [(]perspective[)]' 30
 command view.orthographic
 
+# Home and the standard views' keys (mitcad#1684) in the 3D view: 7 the
+# isometric view, 1 the front view, Home the home view (the default view a
+# few degrees off the isometric one, mitcad#1698, as the design has no home
+# of its own).
+focus-widget modelView
+mark
+key 7
+expect-log '^View iso$'
+wait-log '^Camera direction -0[.]577 0[.]577 -0[.]577 up ' 30
+mark
+key 1
+expect-log '^View front$'
+wait-log '^Camera direction -?0 1 -?0 up -?0 -?0 1 [(]orthographic[)]' 30
+mark
+key Home
+expect-log '^View home$'
+wait-log '^Camera direction -0[.]568 0[.]654 -0[.]5 up ' 30
+
 # The keyboard in a value field: Left moves the text cursor, the view stays.
 mark
 command solid.extrude
@@ -58,6 +79,15 @@ mark
 key Left
 key Right
 expect-no-log '^View turned'
+expect-view-orientation ${in_field} unchanged
+# 7 types the digit and Home moves the text cursor (mitcad#1684): no
+# standard view, no home view.
+mark
+key ctrl+a
+type 7
+expect-log '^Extrude Distance: 7( mm)? = 7 mm$'
+key Home
+expect-no-log '^View (iso|home)$'
 expect-view-orientation ${in_field} unchanged
 # Back in the view, Esc cancels the command.
 focus-widget modelView

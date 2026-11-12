@@ -6,9 +6,12 @@
 //!
 //! The built-in materials are the fixed list of densities the model always
 //! had (`crate::analysis::MATERIALS`), with their ids (`steel`, `pla`,
-//! ...), now each with an appearance and, for plastics, a filament type. A
-//! design keeps materials of its own (`document/materials.rs`): made by
-//! the user, imported, or copied from a library; one with a built-in's id
+//! ...), now each with an appearance and, for plastics, a filament type;
+//! and common woods and panels of the bundled dataset (mitcad#1706,
+//! [`BUILT_IN_WOODS`]: `wood_oak`, `plywood_birch`, ...) with its values,
+//! looks and sources, of the class Wood. A design keeps materials of its
+//! own (`document/materials.rs`): made by the user, imported, or copied
+//! from a library; one with a built-in's id
 //! takes that built-in's place in the design. A copy remembers where it
 //! came from (`origin`: the library, the id and the version), so that a
 //! newer version in a library can be offered and a library change never
@@ -867,9 +870,29 @@ const BUILT_IN_LOOKS: &[(&str, Option<&str>, Option<&str>)] = &[
     ("resin_standard", Some("resin_grey"), None),
 ];
 
-/// The built-in materials, in the application's order.
+/// The built-in woods and panels (mitcad#1706): each one's id and the
+/// entry of the bundled dataset (`core/model/data/wood_materials.json`,
+/// [`crate::material_dataset`]) whose values, class, look and source it
+/// takes. Their ids hold `_`, which no library item's id (a name's slug,
+/// `wood-oak`) and no design's own (`custom1`) does.
+pub const BUILT_IN_WOODS: [(&str, &str); 5] = [
+    ("wood_pine", "wood/pine"),
+    ("wood_oak", "wood/oak"),
+    ("wood_birch", "wood/birch"),
+    ("plywood_birch", "panel/plywood_birch"),
+    ("mdf_raw", "panel/mdf_raw"),
+];
+
+/// The built-in materials, in the application's order: the fixed list of
+/// densities, then the woods and panels of the dataset (mitcad#1706).
 pub fn built_in() -> &'static [Material] {
     static BUILT_IN: LazyLock<Vec<Material>> = LazyLock::new(|| {
+        let woods = BUILT_IN_WOODS.iter().map(|(id, entry)| {
+            let mut wood = crate::material_dataset::material(entry)
+                .unwrap_or_else(|| panic!("the material dataset has no {entry}"));
+            wood.id = (*id).to_owned();
+            wood
+        });
         analysis::MATERIALS
             .iter()
             .map(|m| {
@@ -897,6 +920,7 @@ pub fn built_in() -> &'static [Material] {
                     reference: None,
                 }
             })
+            .chain(woods)
             .collect()
     });
     &BUILT_IN
@@ -1268,7 +1292,14 @@ mod tests {
 
     #[test]
     fn built_in_materials_keep_their_ids_with_looks() {
-        assert_eq!(built_in().len(), analysis::MATERIALS.len());
+        assert_eq!(
+            built_in().len(),
+            analysis::MATERIALS.len() + BUILT_IN_WOODS.len()
+        );
+        // The fixed list first, in its order, then the woods.
+        for (m, fixed) in built_in().iter().zip(analysis::MATERIALS) {
+            assert_eq!((m.id.as_str(), m.density), (fixed.id, fixed.density));
+        }
         let pla = built_in_material("pla").unwrap();
         assert_eq!(pla.density, 1.24);
         assert_eq!(pla.appearance.as_deref(), Some("plastic_white"));
@@ -1285,6 +1316,99 @@ mod tests {
             if let Some(a) = &m.appearance {
                 assert!(crate::appearance::library_appearance(a).is_some(), "{a}");
             }
+        }
+    }
+
+    /// mitcad#1706: the common woods and panels are built in, of the class
+    /// Wood, with the dataset's density, a solid wood's Young's modulus
+    /// and nothing the dataset does not give, its look and its source.
+    #[test]
+    fn the_built_in_woods_and_panels_are_the_datasets() {
+        // (id, name, g/cm³, MPa, look, source)
+        type Expected = (
+            &'static str,
+            &'static str,
+            f64,
+            Option<f64>,
+            &'static str,
+            &'static str,
+        );
+        let expected: [Expected; 5] = [
+            (
+                "wood_pine",
+                "Wood - Pine",
+                0.55,
+                Some(10_080.0),
+                "wood_pine",
+                "The Wood Database",
+            ),
+            (
+                "wood_oak",
+                "Wood - Oak",
+                0.755,
+                Some(12_150.0),
+                "wood_oak",
+                "The Wood Database",
+            ),
+            (
+                "wood_birch",
+                "Wood - Birch",
+                0.69,
+                Some(13_860.0),
+                "wood_birch",
+                "The Wood Database",
+            ),
+            (
+                "plywood_birch",
+                "Plywood - birch",
+                0.68,
+                None,
+                "plywood_birch",
+                "WISA",
+            ),
+            (
+                "mdf_raw",
+                "MDF - raw",
+                0.736,
+                None,
+                "panel_mdf",
+                "OEKOBAUDAT",
+            ),
+        ];
+        let woods: Vec<&Material> = built_in()
+            .iter()
+            .filter(|m| material_class(m) == MaterialClass::Wood)
+            .collect();
+        assert_eq!(woods.len(), expected.len());
+        for (i, wood) in woods.into_iter().enumerate() {
+            let (id, name, density, modulus, look, source) = expected[i];
+            let (own, entry) = BUILT_IN_WOODS[i];
+            assert_eq!((wood.id.as_str(), own), (id, id));
+            assert_eq!(built_in_material(id), Some(wood));
+            assert_eq!(wood.name, name, "{id}");
+            assert_eq!(wood.class, Some(MaterialClass::Wood), "{id}");
+            assert_eq!(material_group(wood), "wood", "{id}");
+            assert!((wood.density - density).abs() < 1e-9, "{id}");
+            match modulus {
+                Some(mpa) => assert!(
+                    (wood.properties.youngs_modulus.unwrap() - mpa).abs() < 1e-6,
+                    "{id}"
+                ),
+                None => assert_eq!(wood.properties.youngs_modulus, None, "{id}"),
+            }
+            assert_eq!(wood.properties.poissons_ratio, None, "{id}");
+            assert_eq!(wood.properties.yield_strength, None, "{id}");
+            assert_eq!(wood.appearance.as_deref(), Some(look), "{id}");
+            assert_eq!(wood.reference.as_ref().unwrap().source, source, "{id}");
+            assert!(!wood.has_print_settings(), "{id}");
+            // Taken from the dataset's entry, not written twice.
+            let row = crate::material_dataset::entry(entry).unwrap();
+            assert_eq!(row.name, wood.name, "{id}");
+            assert_eq!(row.density, Some(wood.density), "{id}");
+            assert_eq!(row.properties, wood.properties, "{id}");
+            // An id no library item (a slug) and no design's own takes.
+            assert!(valid_id(id) && id.contains('_'), "{id}");
+            assert!(analysis::material(id).is_none(), "{id}");
         }
     }
 

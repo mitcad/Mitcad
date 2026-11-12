@@ -1280,6 +1280,41 @@ fn activating_as_the_document_opens_is_no_undo_step_and_no_change() {
     assert!(error.contains("does not exist"), "{error}");
 }
 
+#[test]
+fn a_design_opens_with_the_component_it_was_saved_with_active() {
+    // Saved with Component1 active (mitcad#1678): the application reads the
+    // file's active component and activates it again as the document
+    // opens, which keeps it active, no undo step and no change.
+    let mut doc = Document::new(MockKernel::default());
+    doc.create_component(Some("Component1"), Transform::IDENTITY, true)
+        .unwrap();
+    small_block(&mut doc);
+    let json = doc.to_json();
+    let file: Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(file["active_component"], "C1");
+
+    let mut opened = Document::from_json(&json, MockKernel::default()).unwrap();
+    opened.recompute();
+    command(&mut opened, json!({"cmd": "mark_saved"}));
+    let document = query(&opened, json!({"query": "document"}));
+    let stored = query(&opened, json!({"query": "components"}))["active"].clone();
+    assert_eq!(stored, "C1");
+    let reply = command(
+        &mut opened,
+        json!({"cmd": "activate_component", "component": stored, "opening": true}),
+    );
+    assert_eq!(reply["component"], "C1");
+    assert_eq!(reply["previous"], "C1");
+    assert_eq!(opened.active_component(), ComponentUid(1));
+    let after = query(&opened, json!({"query": "document"}));
+    assert_eq!(after["modified"], false);
+    assert_eq!(after["revision"], document["revision"]);
+    assert_eq!(opened.undo_depth(), 0);
+    // Saved again, it still stores Component1 active.
+    let saved: Value = serde_json::from_str(&opened.to_json()).unwrap();
+    assert_eq!(saved["active_component"], "C1");
+}
+
 /// A 10 x 10 x 10 box at the origin of the active component, with the
 /// vertex at its corner (10, 0, 10) set in the mock kernel: the box's body
 /// and the vertex's name.

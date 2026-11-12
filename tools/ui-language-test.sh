@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/framework/Language.cpp app/framework/Language.hpp app/framework/CommandSearch.cpp
+# check-all sources: app/framework/CommandSearchRank.cpp app/framework/CommandSearchRank.hpp
 # check-all sources: app/framework/Ribbon.cpp app/main.cpp app/view/ViewController.cpp app/translations cmake/Translations.cmake
 # check-all sources: tools/translations app/framework/TestDriver.cpp tools/ui-scripts/language-fi.mitcad-ui
 # check-all sources: tools/ui-scripts/language-en.mitcad-ui tools/ui-scripts/language-pseudo.mitcad-ui
@@ -17,6 +18,9 @@
 #   4. pseudo: --language xx, the tests' pseudo-language, where the build
 #      has it (a test build): every text marked and longer, no group
 #      caption cut (language-pseudo.mitcad-ui).
+# In English and Finnish the command search outside a sketch also shows how
+# to open one when the sketch tools match best, and selects nothing; in
+# Finnish, in a sketch, the best sketch tool is selected (mitcad#1681).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-language-test.sh

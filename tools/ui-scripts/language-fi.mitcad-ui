@@ -6,7 +6,15 @@
 #   3. Preferences (Asetukset) › General › Language set to English: saved
 #      for the next start, this run stays Finnish;
 #   4. a model message (mitcad#1284), the model's refusal of a feature that
-#      does not exist, shown in Finnish (model_fi.ts) in plain words.
+#      does not exist, shown in Finnish (model_fi.ts) in plain words;
+#   5. the command search outside a sketch: the sketch tools that match best
+#      bring a row saying how to open a sketch and nothing is selected; in a
+#      sketch the best sketch tool is (mitcad#1681), and Center Rectangle
+#      is found by the two words of its Finnish name in either order
+#      (mitcad#1682);
+#   6. after Center Rectangle has run, "keskipiste" in the sketch selects
+#      it: among equal matches the commands run last come first
+#      (mitcad#1690).
 # Run by tools/ui-language-test.sh (Linux) and
 # tools/ui-windows-language-test.ps1 (Windows).
 expect-ever '^Language: fi [(]--language[)]$' 30
@@ -39,3 +47,69 @@ expect-setting interface/language en
 wait-idle
 model-command-refused '{"cmd":"rename_feature","uid":"F999","name":"Renamed"}'
 expect-ever '^Message band: error piirrett.+ ei ole$' 10
+
+# 5. The command search and the sketch (mitcad#1681). Outside a sketch,
+#    "keskipiste" matches the sketch tools best (Center Rectangle is
+#    Keskipistesuorakulmio), which wait for a sketch: a row above them says
+#    how to open one, nothing is selected, and Return starts no weaker
+#    match (Point at Center of Circle/Sphere/Torus, a word of its Finnish
+#    name). In a sketch on the XY plane the sketch tools run: no hint, the
+#    best of them selected, and "keskipistes" selects Center Rectangle.
+wait-idle
+focus-main
+command tools.search
+focus-widget commandSearchInput
+mark
+type keskipiste
+expect-command-search keskipiste - hint
+expect-log '^Command search hint: '
+key Return
+expect-no-log '^Command search chose '
+key Escape
+focus-main
+mark
+command sketch.create
+expect-log 'Datum xy at '
+click-logged '^Datum xy at '
+expect-log 'Sketch started on xy'
+wait-idle
+command tools.search
+focus-widget commandSearchInput
+type keskipiste
+expect-command-search keskipiste '*' no-hint
+key Escape
+focus-main
+# The compound typed as two words, in either order (mitcad#1682).
+command tools.search
+focus-widget commandSearchInput
+type 'keskipiste suorakulmio'
+expect-command-search 'keskipiste suorakulmio' sketch.rectangle_center no-hint
+key Escape
+focus-main
+command tools.search
+focus-widget commandSearchInput
+type 'suorakulmio keskipiste'
+expect-command-search 'suorakulmio keskipiste' sketch.rectangle_center no-hint
+key Escape
+focus-main
+command tools.search
+focus-widget commandSearchInput
+type keskipiste
+type s
+expect-command-search keskipistes sketch.rectangle_center no-hint
+mark
+key Return
+expect-log '^Command search chose sketch.rectangle_center$'
+# 6. Center Rectangle has run (its tool is on). "keskipiste" is the Midpoint
+#    constraint's whole Finnish name, and a whole-name match stays ahead of
+#    the command run last (mitcad#1690 orders only equal matches by recency;
+#    app/tests/command_search.cpp covers that with "center" in English).
+expect-log '^Sketch tool '
+wait-idle
+focus-main
+command tools.search
+focus-widget commandSearchInput
+type keskipiste
+expect-command-search keskipiste sketch.constraint.midpoint no-hint
+key Escape
+focus-main

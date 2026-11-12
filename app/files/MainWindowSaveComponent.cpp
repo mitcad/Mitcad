@@ -59,6 +59,12 @@ std::optional<bool> askSaveComponent(QWidget* parent, const QString& name, const
   }
   auto* replace = new QCheckBox(QObject::tr("&Replace with a link to the new file"));
   replace->setToolTip(QObject::tr("This design shows the new file's bodies in place of the component"));
+  // Logged as it changes, so that a test sees its key took effect before
+  // it saves.
+  QObject::connect(replace, &QCheckBox::toggled, &dialog, [](bool on) {
+    qDebug().noquote() << QStringLiteral("Save Component as Design dialog: replace with a link checked: %1")
+                              .arg(on ? QStringLiteral("yes") : QStringLiteral("no"));
+  });
   layout->addWidget(replace);
   // Parented to the dialog before Save… is made its default: a default
   // button set outside a dialog is not the dialog's, and the dialog then

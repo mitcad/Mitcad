@@ -19,3 +19,7 @@ mod chosen_dimension_tests;
 mod model_items_tests;
 // Widths and patterns of edges and bodies in a view (mitcad#1546).
 mod line_style_tests;
+// A center pattern's bolt circle and center lines as picks (mitcad#1693).
+mod bolt_circle_tests;
+// A radius on a fillet seen from the side (mitcad#1694).
+mod fillet_radius_tests;

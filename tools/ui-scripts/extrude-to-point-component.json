@@ -24,5 +24,7 @@
     "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
     "start": {"type": "object", "object": {"type": "line", "line": {"sketch": "F2", "curve": "c5"}}},
     "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
-  {"expect": {"feature": "Extrude2", "status": "ok", "volume": 2000, "tolerance": 1e-6}}
+  {"expect": {"feature": "Extrude2", "status": "ok", "volume": 2000, "tolerance": 1e-6}},
+  {"comment": "Saved with the root active, so that it opens with the root active (mitcad#1678)."},
+  {"cmd": "activate_component", "component": "Root"}
 ]

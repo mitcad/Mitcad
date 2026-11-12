@@ -5,14 +5,17 @@
 // native-screen-limit and expect-native-window-fits (TestDriver.hpp); the
 // left column's native-column-split and expect-native-card-height
 // (mitcad#1020); expect-widget-whole for a Qt widget shown whole
-// (mitcad#1590).
+// (mitcad#1590); expect-window-place and expect-window-on-screen for the
+// design window's kept place (mitcad#1710).
 #include "TestDriver.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include <QAbstractButton>
 #include <QDialogButtonBox>
 #include <QFontMetrics>
+#include <QGuiApplication>
 #include <QPoint>
 #include <QRect>
 #include <QRegularExpression>
@@ -181,6 +184,62 @@ bool TestDriver::runWindowFitStep(const QString& name, const QStringList& a, int
     }
     return true;
   };
+  if (name == QLatin1String("expect-window-place")) {
+    // expect-window-place <x> <y> <w> <h>: the kept place restored
+    // (mitcad#1710), as window-move and window-resize give it.
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+    if (mac::test::active() || !toInt(a.at(0), x) || !toInt(a.at(1), y) || !toInt(a.at(2), width) ||
+        !toInt(a.at(3), height) || width < 1 || height < 1) {
+      fail(line, QStringLiteral("expect-window-place <x> <y> <w> <h> requires a Qt main window"));
+      return true;
+    }
+    whenReady([this, x, y, width, height] {
+      const QWidget* top = topWindow();
+      if (top == nullptr || !top->isVisible() || top->screen() == nullptr) {
+        m_waitDetail = QStringLiteral("no shown main window");
+        return false;
+      }
+      const QRect available = top->screen()->availableGeometry();
+      const QPoint at = top->frameGeometry().topLeft() - available.topLeft();
+      m_waitDetail = QStringLiteral("frame at %1, %2 from the available area's top left, its own area %3x%4")
+                         .arg(at.x()).arg(at.y()).arg(top->width()).arg(top->height());
+      const bool placed = std::abs(at.x() - x) <= 1 && std::abs(at.y() - y) <= 1 && std::abs(top->width() - width) <= 1 &&
+                          std::abs(top->height() - height) <= 1;
+      if (placed) {
+        qInfo().noquote() << QStringLiteral("TestDriver: window place: %1").arg(m_waitDetail);
+      }
+      return placed;
+    }, 6, QStringLiteral("the main window is not at %1, %2 with the size %3x%4").arg(x).arg(y).arg(width).arg(height));
+    return true;
+  }
+  if (name == QLatin1String("expect-window-on-screen")) {
+    if (mac::test::active()) {
+      fail(line, QStringLiteral("expect-window-on-screen requires a Qt main window"));
+      return true;
+    }
+    whenReady([this] {
+      const QWidget* top = topWindow();
+      const QScreen* primary = QGuiApplication::primaryScreen();
+      if (top == nullptr || !top->isVisible() || primary == nullptr) {
+        m_waitDetail = QStringLiteral("no shown main window");
+        return false;
+      }
+      const QRect available = primary->availableGeometry();
+      const QRect frame = top->frameGeometry();
+      m_waitDetail = QStringLiteral("frame %1,%2 %3x%4 in the primary screen's available %5,%6 %7x%8")
+                         .arg(frame.x()).arg(frame.y()).arg(frame.width()).arg(frame.height())
+                         .arg(available.x()).arg(available.y()).arg(available.width()).arg(available.height());
+      const bool inside = available.contains(frame);
+      if (inside) {
+        qInfo().noquote() << QStringLiteral("TestDriver: window on screen: %1").arg(m_waitDetail);
+      }
+      return inside;
+    }, 6, QStringLiteral("the main window is not wholly within the primary screen's available area"));
+    return true;
+  }
   if (name == QLatin1String("fit-main-frame") || name == QLatin1String("expect-main-frame")) {
     int width = 0;
     int height = 0;

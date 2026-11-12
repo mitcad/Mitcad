@@ -28,3 +28,12 @@ mod press_fit_hole_tests;
 mod print_shape_hole_tests;
 // Auto Fix of a thread's face that does not fit it (mitcad#1632).
 mod thread_autofix_tests;
+// Automatic assembly cuts leave alone what moves against them through
+// joints (mitcad#1667).
+mod joint_motion_cut_tests;
+// A cut inserted from another design keeps to the copied design (mitcad#1667).
+mod inserted_cut_scope_tests;
+// Nut pockets and heat-set insert holes for printed parts (mitcad#1518).
+mod nut_pocket_insert_tests;
+// Print bridging of counterbores that open toward the bed (mitcad#1516).
+mod print_bridging_tests;

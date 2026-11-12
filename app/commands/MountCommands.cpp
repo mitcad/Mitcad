@@ -31,6 +31,7 @@
 #include <gp_Vec.hxx>
 
 #include "../browser/DocumentHost.hpp"
+#include "../browser/DocumentSnapshot.hpp"
 #include "../build/BuildModel.hpp"
 #include "../framework/Command.hpp"
 #include "../framework/CommandRegistry.hpp"
@@ -53,7 +54,7 @@ struct Active {
   QString component = kRoot;
   QString path;
   gp_Trsf world;
-  QString name = QStringLiteral("Root");
+  QString name = shownComponentName(kRoot, QStringLiteral("Root"));
 };
 
 Active activeOf(const CommandContext& context) {
@@ -67,7 +68,7 @@ Active activeOf(const CommandContext& context) {
   active.component = components.value(QStringLiteral("active")).toString(kRoot);
   for (const QJsonValue& value : components.value(QStringLiteral("components")).toArray()) {
     if (str(value.toObject(), "uid") == active.component) {
-      active.name = str(value.toObject(), "name");
+      active.name = shownComponentName(active.component, str(value.toObject(), "name"));
     }
   }
   if (active.component == kRoot) {

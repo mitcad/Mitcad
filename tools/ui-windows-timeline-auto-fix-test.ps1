@@ -5,7 +5,8 @@
 # tools/ui-scripts/timeline-auto-fix.mitcad-ui on the design that
 # mitcad-cli makes (tools/ui-scripts/timeline-auto-fix.json): an extrusion
 # whose region a sketch change split warns; Auto Fix in its timeline menu
-# fixes it as one undo step, and the warning comes back after Undo.
+# fixes it as one undo step, and the warning comes back after Undo. The
+# tooltips name Auto Fix, and the warnings badge offers it (mitcad#1677).
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-timeline-auto-fix-test.ps1 -App build\dev\mitcad.exe -Cli build\dev\tools\cli\mitcad-cli.exe [-Out dir] [-QtBin dir]
 param(

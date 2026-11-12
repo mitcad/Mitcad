@@ -56,9 +56,9 @@ use mitcad_model::{
     AnnotationFormat, Document, GeometricTolerance, MeasureKind, MeasurePick, Tolerance,
 };
 use mitcad_model_drawing::annotate::{
-    self, Along, AnnotationType, BodyGeometry, FlatFace, Frame, PenPattern, PenWidth, PickPoint,
-    RoundFace, Seen, SheetNote, SketchItem, SketchPen, SketchPenName, SurfaceFinish, Terminator,
-    ViewAnnotation, ViewPick, Want,
+    self, Along, AnnotationType, BodyGeometry, Drawn, FlatFace, Frame, MarkArm, PenPattern,
+    PenWidth, PickPoint, RoundFace, Seen, SheetNote, SketchItem, SketchPen, SketchPenName,
+    SurfaceFinish, Terminator, TorusFace, ViewAnnotation, ViewPick, Want,
 };
 use mitcad_model_drawing::clip::ViewMap;
 use mitcad_model_drawing::compose::{
@@ -272,6 +272,11 @@ pub(super) struct PickQuery {
     kind: Option<AnnotationType>,
     #[serde(default)]
     want: Option<Want>,
+    /// The visible lines the view draws of the picked body, and its name
+    /// (mitcad#1691: an annotation tool's hover outlines the body a
+    /// corner or an edge belongs to).
+    #[serde(default)]
+    outline: bool,
 }
 
 /// The `drawing_corners` query (mitcad#1338): the corners each drawn view
@@ -348,6 +353,71 @@ struct Candidate {
     line: Option<[P2; 2]>,
 }
 
+/// A centre pattern annotation's circle as its view sees it now
+/// (mitcad#1693), view mm: its circles' picks found, its centre and radius,
+/// its arc as drawn (none for the whole circle) and the model point that
+/// stands for its centre.
+struct PatternSeen {
+    holes: Vec<Found>,
+    center: P2,
+    radius: f64,
+    arc: Option<(f64, f64)>,
+    at: Vec3,
+}
+
+/// A line of a centre mark or a centre pattern's radial line that a view
+/// draws through a circle's centre (mitcad#1338, #1693): the centre a
+/// click on it picks for a point (none where no centre is pickable
+/// there), the line (sheet mm) and the line as a pick of its own.
+struct MarkLine<'c> {
+    centre: Option<&'c Candidate>,
+    line: [P2; 2],
+    pick: ViewPick,
+}
+
+/// The radius of a circle seen end on (view mm); 0 for anything else.
+fn rim_of(seen: &Seen) -> f64 {
+    match *seen {
+        Seen::Circle {
+            radius,
+            end_on: true,
+            ..
+        } => radius,
+        _ => 0.0,
+    }
+}
+
+/// A pick without the centre line or circle drawn for it: the circle (or
+/// the first pick) it names, picked whole.
+fn plain_pick(pick: &ViewPick) -> ViewPick {
+    ViewPick {
+        drawn: None,
+        ..pick.clone()
+    }
+}
+
+/// A pick of a line or a circle drawn for a pick (mitcad#1693): the
+/// pick's body, occurrence, edge or face, whole.
+fn drawn_pick(pick: &ViewPick, drawn: Drawn) -> ViewPick {
+    ViewPick {
+        point: None,
+        on_face: None,
+        on_cut: None,
+        drawn: Some(drawn),
+        ..pick.clone()
+    }
+}
+
+/// How far a view point is from a candidate as it is drawn (view mm): a
+/// centre line drawn for it along its drawn line (mitcad#1693), else from
+/// how the view sees it.
+fn drawn_distance(c: &Candidate, q: P2) -> f64 {
+    match c.line {
+        Some([a, b]) if c.pick.drawn.is_some() => annotate::segment_distance(q, a, b),
+        _ => c.found.seen.distance(q),
+    }
+}
+
 /// A view drawn, with what its annotations need: its index among the
 /// sheet's drawn views and the bodies it shows.
 pub(super) struct ViewAt<'a> {
@@ -375,6 +445,10 @@ pub(super) struct ViewAt<'a> {
     /// picks its circle's centre).
     center_marks: bool,
     marked: Vec<ViewPick>,
+    /// Its centre mark, centre pattern and centreline annotations: what a
+    /// pick of a line or a circle they draw is found again by
+    /// (mitcad#1693).
+    drawn_by: Vec<ViewAnnotation>,
 }
 
 impl ViewAt<'_> {
@@ -508,6 +582,54 @@ fn curve_distance(curve: &ViewCurve, p: P2) -> f64 {
             }
         }
     }
+}
+
+/// A pick's body as its view draws it (mitcad#1691): its name (`body`) and
+/// the visible lines of it (`lines`, each a list of sheet points, an arc's
+/// in steps of at most 10 degrees); no lines when the view does not know
+/// which body a line is of.
+fn body_outline(view: &ViewAt<'_>, pick: &ViewPick) -> Value {
+    let Some((index, shown)) = view
+        .shown
+        .iter()
+        .enumerate()
+        .find(|(_, s)| s.body == pick.body && s.path.as_slice() == pick.path())
+    else {
+        return Value::Null;
+    };
+    let map = &view.placed.map;
+    let lines: Vec<Value> = view
+        .placed
+        .projection
+        .edges
+        .iter()
+        .filter(|e| e.visible && e.source == Some(index))
+        .map(|e| {
+            let points: Vec<P2> = match &e.curve {
+                ViewCurve::Line(a, b) => vec![*a, *b],
+                ViewCurve::Polyline(points) | ViewCurve::Spline(ViewSpline { points, .. }) => {
+                    points.clone()
+                }
+                ViewCurve::Arc {
+                    center,
+                    radius,
+                    start,
+                    end,
+                } => {
+                    let sweep = (end - start).abs();
+                    let steps = ((sweep / 10f64.to_radians()).ceil() as usize).max(1);
+                    (0..=steps)
+                        .map(|i| {
+                            let a = start + (end - start) * i as f64 / steps as f64;
+                            [center[0] + radius * a.cos(), center[1] + radius * a.sin()]
+                        })
+                        .collect()
+                }
+            };
+            json!(points.iter().map(|p| map.at(*p)).collect::<Vec<_>>())
+        })
+        .collect();
+    json!({"body": shown.name, "lines": lines})
 }
 
 /// The pen of the lines a pick's mark lies along (mitcad#1618), so that the
@@ -885,6 +1007,178 @@ fn seen_round(
     ))
 }
 
+/// The tube's angles at a torus face's two ends (mitcad#1694), in its
+/// body's coordinates: from the circles round its axis that bound it (its
+/// own edges), each at the angle about the tube's centre circle where its
+/// radius and height put it (0 out from the axis, a quarter along the
+/// axis). None unless there are two such ends (a fillet's).
+fn torus_span(geometry: &BodyGeometry, torus: &TorusFace) -> Option<(f64, f64)> {
+    let tolerance = 1e-6 * torus.major.max(1.0);
+    let mut ends: Vec<f64> = Vec::new();
+    for (name, curve) in &geometry.edges {
+        let CurveGeometry::Circle {
+            center,
+            normal,
+            radius,
+            ..
+        } = curve
+        else {
+            continue;
+        };
+        if !name
+            .faces()
+            .iter()
+            .any(|f| *f == torus.face || torus.names.contains(f))
+        {
+            continue;
+        }
+        let n = mitcad_vec3::unit(*normal).unwrap_or([0.0, 0.0, 1.0]);
+        let along = mitcad_vec3::dot(sub3(*center, torus.center), torus.axis);
+        let off = mitcad_vec3::norm(sub3(
+            sub3(*center, torus.center),
+            mitcad_vec3::scale(torus.axis, along),
+        ));
+        if off > tolerance || mitcad_vec3::dot(n, torus.axis).abs() < 1.0 - 1e-6 {
+            continue;
+        }
+        let v = along.atan2(radius - torus.major);
+        let same = |w: &f64| {
+            let d = (v - w).rem_euclid(TAU);
+            d.min(TAU - d) < 1e-6
+        };
+        if !ends.iter().any(same) {
+            ends.push(v);
+        }
+    }
+    match ends.as_slice() {
+        [a, b] => Some((*a, *b)),
+        _ => None,
+    }
+}
+
+/// Whether a torus face reaches round its axis to the side `toward` (a
+/// unit direction from the axis, the body's coordinates): each circle that
+/// bounds it there passes that way (a whole circle always does).
+fn torus_reaches(geometry: &BodyGeometry, torus: &TorusFace, toward: Vec3) -> bool {
+    geometry.edges.iter().all(|(name, curve)| {
+        let CurveGeometry::Circle {
+            center,
+            normal,
+            radius,
+            start,
+            end,
+        } = curve
+        else {
+            return true;
+        };
+        if !name
+            .faces()
+            .iter()
+            .any(|f| *f == torus.face || torus.names.contains(f))
+            || mitcad_vec3::dot(
+                mitcad_vec3::unit(*normal).unwrap_or([0.0, 0.0, 1.0]),
+                torus.axis,
+            )
+            .abs()
+                < 1.0 - 1e-6
+        {
+            return true;
+        }
+        let there = mitcad_vec3::add_scaled(*center, toward, *radius);
+        if mitcad_vec3::distance(*start, there) < 1e-6 * radius.max(1.0) {
+            return true;
+        }
+        let sweep = annotate::arc_sweep(*center, *normal, *radius, *start, *end);
+        sweep >= TAU - 1e-9
+            || annotate::arc_sweep(*center, *normal, *radius, *start, there) <= sweep + 1e-9
+    })
+}
+
+/// A direction of the drawing's coordinates in a body's (its placement's
+/// turn undone: the transpose of a rigid one's).
+fn body_direction(transform: &Transform, d: Vec3) -> Vec3 {
+    let m = &transform.linear;
+    [
+        m[0][0] * d[0] + m[1][0] * d[1] + m[2][0] * d[2],
+        m[0][1] * d[0] + m[1][1] * d[1] + m[2][1] * d[2],
+        m[0][2] * d[0] + m[1][2] * d[1] + m[2][2] * d[2],
+    ]
+}
+
+/// How a view sees a torus face from the side (mitcad#1694: a fillet round
+/// a turned part), its axis in the view's plane: its outline either side
+/// of the axis, the arc of its tube (its minor radius) in the plane of the
+/// axis and the view's across, between the tube's angles at the face's
+/// ends ([`torus_span`]; the shorter way round), where the face reaches
+/// round its axis. Each with its side as a direction in the body's
+/// coordinates ([`ViewPick::side`]); none when it is seen otherwise or its
+/// ends are not two circles round its axis.
+fn seen_torus(
+    view: &ViewAt<'_>,
+    geometry: &BodyGeometry,
+    torus: &TorusFace,
+    transform: &Transform,
+) -> Vec<(Vec3, Found)> {
+    let spec = &view.placed.spec;
+    let Some(axis) = mitcad_vec3::unit(transform.apply_vector(torus.axis)) else {
+        return Vec::new();
+    };
+    if mitcad_vec3::dot(axis, spec.toward_eye).abs() > 1e-6 {
+        return Vec::new();
+    }
+    let Some(across) = mitcad_vec3::unit(mitcad_vec3::cross(axis, spec.toward_eye)) else {
+        return Vec::new();
+    };
+    let Some((v1, v2)) = torus_span(geometry, torus) else {
+        return Vec::new();
+    };
+    let center = transform.apply_point(torus.center);
+    let mut out = Vec::new();
+    for sign in [1.0, -1.0] {
+        let e = mitcad_vec3::scale(across, sign);
+        let Some(side) = mitcad_vec3::unit(body_direction(transform, e)) else {
+            continue;
+        };
+        if !torus_reaches(geometry, torus, side) {
+            continue;
+        }
+        let tube = mitcad_vec3::add_scaled(center, e, torus.major);
+        if !view.kept(tube) {
+            continue;
+        }
+        // The view angle of the tube's direction at angle v about its
+        // centre.
+        let angle = |v: f64| {
+            let d = spec.project(mitcad_vec3::add(
+                mitcad_vec3::scale(e, v.cos()),
+                mitcad_vec3::scale(axis, v.sin()),
+            ));
+            d[1].atan2(d[0])
+        };
+        let (a1, a2) = (angle(v1), angle(v2));
+        let forward = (a2 - a1).rem_euclid(TAU);
+        let arc = if forward <= PI {
+            (a1, a1 + forward)
+        } else {
+            (a2, a2 + (a1 - a2).rem_euclid(TAU))
+        };
+        out.push((
+            side,
+            Found {
+                seen: Seen::Circle {
+                    center: spec.project(tube),
+                    radius: torus.minor,
+                    end_on: true,
+                    across: [1.0, 0.0],
+                    arc: Some(arc),
+                },
+                at: tube,
+            },
+        ));
+    }
+    out
+}
+
 /// Whether a view draws a round face it sees from the side, its axis from
 /// `a` to `b` (view mm): one of its outlines, `radius` either side of the
 /// axis, lies on the view's visible lines (mitcad#1286). A hole across a
@@ -1179,6 +1473,23 @@ fn noun(kind: AnnotationType) -> &'static str {
     }
 }
 
+/// A new annotation's words without a format of its own: a diameter of a
+/// centre pattern's circle reads as the bolt circle's, `Ø60 B.C.`
+/// (mitcad#1693), its `after` editable as any dimension's.
+fn default_format(kind: AnnotationType, picks: &[ViewPick]) -> AnnotationFormat {
+    match (kind, picks) {
+        (AnnotationType::Diameter, [pick])
+            if matches!(pick.drawn, Some(Drawn::PatternCircle { .. })) =>
+        {
+            AnnotationFormat {
+                after: "B.C.".to_owned(),
+                ..AnnotationFormat::default()
+            }
+        }
+        _ => AnnotationFormat::default(),
+    }
+}
+
 /// The `type` of a dimension whose picks choose its type (mitcad#1272).
 pub(super) const CHOSEN: &str = "dimension";
 
@@ -1209,11 +1520,12 @@ impl Asked {
         }
     }
 
-    /// What a click for it picks: anything for a dimension.
+    /// What a click for it picks: anything for a dimension, a centre
+    /// pattern's circle too (mitcad#1693).
     pub(super) fn wants(self) -> Want {
         match self {
             Self::Type(kind) => kind.wants(),
-            Self::Dimension => Want::Any,
+            Self::Dimension => Want::Dimension,
         }
     }
 }
@@ -1394,6 +1706,18 @@ pub(super) trait DrawingAnnotationsOps<K: Kernel> {
         id: u32,
     ) -> Result<(ViewAnnotation, Vec<Seen>), ApiError>;
 
+    /// What an annotation placed on a view of a sheet writes (mitcad#1691:
+    /// a dimension's placing preview shows its value): its value, when it
+    /// measures one, and its words as the sheet writes them; None when it
+    /// would be broken.
+    fn placed_label(
+        &self,
+        drawing: &Drawing,
+        si: usize,
+        view: &ViewAt<'_>,
+        annotation: &ViewAnnotation,
+    ) -> Option<(Option<f64>, String)>;
+
     /// How its view sees an annotation's picks now; why not, when one is
     /// gone.
     fn annotation_seen(
@@ -1422,7 +1746,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         let shape = self
             .body_shape(body)
             .ok_or_else(|| format!("the body {body} is gone"))?;
-        let mut fp = Fingerprint::new("drawing-body-geometry-v2");
+        let mut fp = Fingerprint::new("drawing-body-geometry-v3");
         fp.str(&body.to_string());
         let own = fp.finish();
         fp.u128(self.body_version(body).unwrap_or(0));
@@ -1475,6 +1799,24 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                                     names,
                                     origin,
                                     normal,
+                                });
+                            }
+                        }
+                        // A fillet round a turned part (mitcad#1694).
+                        SurfaceGeometry::Torus {
+                            center,
+                            axis,
+                            major_radius,
+                            minor_radius,
+                        } => {
+                            if let Some(axis) = mitcad_vec3::unit(axis) {
+                                geometry.tori.push(TorusFace {
+                                    face,
+                                    names,
+                                    center,
+                                    axis,
+                                    major: major_radius,
+                                    minor: minor_radius,
                                 });
                             }
                         }
@@ -1591,23 +1933,35 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         let square = self.square_bodies(sheet, id, &shown, &placed.spec);
         let from_an_angle = angled(&placed.spec);
         let def = sheet.view(id);
-        let marked = def
+        // The annotations that draw centre lines (mitcad#1693: their lines
+        // and a centre pattern's circle are picked too).
+        let drawn_by: Vec<ViewAnnotation> = def
             .map(|v| {
                 v.annotations
                     .iter()
                     .filter(|a| {
                         matches!(
                             a.kind,
-                            AnnotationType::CenterMark | AnnotationType::CenterPattern
+                            AnnotationType::CenterMark
+                                | AnnotationType::CenterPattern
+                                | AnnotationType::Centerline
                         )
                     })
-                    .flat_map(|a| a.picks.iter().cloned())
+                    .cloned()
                     .collect()
             })
             .unwrap_or_default();
+        // A centre pattern draws radial lines through its circles, not
+        // their centre marks (mitcad#1693).
+        let marked = drawn_by
+            .iter()
+            .filter(|a| a.kind == AnnotationType::CenterMark)
+            .flat_map(|a| a.picks.iter().cloned())
+            .collect();
         Ok(ViewAt {
             center_marks: def.is_some_and(|v| v.center_marks),
             marked,
+            drawn_by,
             component: drawing.component,
             placed,
             shown,
@@ -1718,7 +2072,10 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         let frame = view.frame();
         let mut template = ViewAnnotation::new(first, kind, Vec::new());
         template.height = c.height;
-        template.format = c.format.clone().unwrap_or_default();
+        template.format = c
+            .format
+            .clone()
+            .unwrap_or_else(|| default_format(kind, &picks));
         template.tolerance = c.tolerance.clone();
         template.text = c.text.clone();
         template.frame = c.frame.clone();
@@ -2214,10 +2571,12 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         let view = self
             .view_at(drawing, si, &evaluated, id)
             .map_err(ApiError)?;
+        // No type and no want: the Dimension tool's Auto, which also picks
+        // a centre pattern's circle (mitcad#1693).
         let want = query
             .want
             .or_else(|| query.kind.map(AnnotationType::wants))
-            .unwrap_or_default();
+            .unwrap_or(Want::Dimension);
         let Some(found) = self.pick_at(&view, query.at, want) else {
             return Ok(json!({"view": id, "pick": null}));
         };
@@ -2317,8 +2676,19 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                 answer["next"] = json!(why);
             }
         }
-        // A centre picked on its centre mark's line (mitcad#1338): the line
-        // shown with it.
+        // The picked body as the view draws it (mitcad#1691): its visible
+        // lines, so that the hover shows which of bodies that touch a
+        // corner or an edge is on.
+        if query.outline {
+            answer["outline"] = body_outline(&view, &found.pick);
+        }
+        // A centre pattern's circle picked as a circle (mitcad#1693).
+        if matches!(found.pick.drawn, Some(Drawn::PatternCircle { .. })) {
+            answer["pattern_circle"] = json!(true);
+        }
+        // A centre picked on its centre mark's line (mitcad#1338), or the
+        // line itself picked (mitcad#1693: a centre mark's, a centre
+        // pattern's radial line, a centreline): the line shown with it.
         if let Some([a, b]) = found.line {
             answer["center_line"] = json!(true);
             if let Some(items) = answer["items"].as_array_mut() {
@@ -2738,12 +3108,49 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
         };
         let mut annotation = ViewAnnotation::new(id, kind, picks[..count].to_vec());
         annotation.along = along;
+        // Its words as add_drawing_annotation gives them (mitcad#1691: the
+        // preview writes its value; mitcad#1693: a bolt circle's `B.C.`
+        // when no format is given).
+        annotation.height = c.height;
+        annotation.format = c
+            .format
+            .clone()
+            .unwrap_or_else(|| default_format(kind, &annotation.picks));
+        annotation.tolerance = c.tolerance.clone();
+        annotation.text = c.text.clone();
         let points = view.true_distance(kind, along, &annotation.picks);
         let seen = found[..count]
             .iter()
             .map(|f| shown_seen(points, f))
             .collect();
         Ok((annotation, seen))
+    }
+
+    fn placed_label(
+        &self,
+        drawing: &Drawing,
+        si: usize,
+        view: &ViewAt<'_>,
+        annotation: &ViewAnnotation,
+    ) -> Option<(Option<f64>, String)> {
+        let units = match &drawing.sheets.get(si)?.units {
+            Some(symbol) => Units::by_symbol(symbol)?,
+            None => Units::of(self.parameters().context().default_length_unit),
+        };
+        let words_units = WordUnits::new(units.symbol, units.mm);
+        let letters = self.all_datum_letters();
+        let datums: Vec<&str> = letters.iter().map(String::as_str).collect();
+        let (_, value, text, _) = self
+            .lay_out_annotation(
+                annotation,
+                view,
+                words_units,
+                &datums,
+                None,
+                &drawing.defaults,
+            )
+            .ok()?;
+        Some((value, text))
     }
 
     fn annotation_seen(
@@ -2977,6 +3384,8 @@ fn kept_pick<K: Kernel>(
         point: None,
         on_face: None,
         on_cut: None,
+        drawn: None,
+        side: None,
     };
     if let Some(edge) = &pick.edge {
         let whole = ViewPick {
@@ -3264,7 +3673,40 @@ trait DrawingAnnotationsLocal<K: Kernel> {
         &self,
         view: &ViewAt<'_>,
         candidates: &'c [Candidate],
-    ) -> Vec<(&'c Candidate, [P2; 2])>;
+    ) -> Vec<MarkLine<'c>>;
+
+    /// A centre pattern annotation's circle as its view sees it now
+    /// (mitcad#1693); why not, when its circles are gone or stand on no
+    /// one circle.
+    fn pattern_seen(
+        &self,
+        view: &ViewAt<'_>,
+        pattern: &ViewAnnotation,
+    ) -> Result<PatternSeen, String>;
+
+    /// How a view sees a pick of a centre line or a centre pattern's
+    /// circle it draws (mitcad#1693): a centre pattern's circle (its arc
+    /// where it draws one) as a circle seen end on; a radial line from the
+    /// pattern's centre out past the pick's circle, a centre mark's line
+    /// from the circle's centre out past its rim, a centreline as drawn,
+    /// as lines. Why not, when the annotation drawing it or a pick is gone.
+    fn resolve_drawn(
+        &self,
+        view: &ViewAt<'_>,
+        pick: &ViewPick,
+        drawn: Drawn,
+    ) -> Result<Found, String>;
+
+    /// The centre lines a view draws as picks of their own (mitcad#1693):
+    /// its centre marks' lines, its centre patterns' radial lines and its
+    /// centrelines, each with its drawn line (view mm); with `circles`, its
+    /// centre patterns' circles instead.
+    fn drawn_candidates(
+        &self,
+        view: &ViewAt<'_>,
+        candidates: &[Candidate],
+        circles: bool,
+    ) -> Vec<Candidate>;
 }
 
 impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
@@ -3295,6 +3737,8 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 point,
                 on_face: None,
                 on_cut: None,
+                drawn: None,
+                side: None,
             };
             for (edge, curve) in &geometry.edges {
                 let curve = placed_curve(curve, &s.transform);
@@ -3336,6 +3780,20 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 if let Some((found, _)) = seen_round(view, &geometry, face, &s.transform) {
                     out.push(Candidate {
                         pick: pick(None, Some(&face.face), None),
+                        found,
+                        line: None,
+                    });
+                }
+            }
+            // A torus face seen from the side (mitcad#1694: a fillet round
+            // a turned part): its outline's arc either side of its axis.
+            for torus in &geometry.tori {
+                for (side, found) in seen_torus(view, &geometry, torus, &s.transform) {
+                    out.push(Candidate {
+                        pick: ViewPick {
+                            side: Some(side),
+                            ..pick(None, Some(&torus.face), None)
+                        },
                         found,
                         line: None,
                     });
@@ -3468,6 +3926,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             let marks = self.center_mark_lines(view, &candidates);
             let (_, centre, [a, b]) = marks
                 .into_iter()
+                .filter_map(|m| Some((m.centre?, m.line)))
                 .map(|(c, line)| (annotate::segment_distance(at, line[0], line[1]), c, line))
                 .filter(|(d, ..)| *d <= annotate::PICK_REACH)
                 .min_by(|x, y| x.0.total_cmp(&y.0))?;
@@ -3487,7 +3946,11 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 _ => None,
             });
             let (_, hit, [a, b], foot) = axes
-                .chain(self.center_mark_lines(view, &candidates))
+                .chain(
+                    self.center_mark_lines(view, &candidates)
+                        .into_iter()
+                        .filter_map(|m| Some((m.centre?, m.line))),
+                )
                 .map(|(c, [a, b])| {
                     let foot = Seen::Line(a, b).nearest(at);
                     (annotate::segment_distance(at, a, b), c, [a, b], foot)
@@ -3501,10 +3964,119 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             hit.line = Some([map.view_point(a), map.view_point(b)]);
             Some(hit)
         };
+        // A line the view draws is its own straight edge's (mitcad#1691): a
+        // round face seen from the side whose outline is that line (a
+        // rounded tube's corner, its outline on the tube's long line beside
+        // the edge where the round meets the flat) gives way to the straight
+        // edge along that outline, drawn and within reach; a click on the
+        // face's axis rather than its outline keeps the face (and a Radius
+        // or a Diameter wants it anyway).
+        let own_edge = |c: Candidate| {
+            let Seen::Axis { a, b, radius } = c.found.seen else {
+                return c;
+            };
+            let d = [b[0] - a[0], b[1] - a[1]];
+            let length = d[0].hypot(d[1]);
+            if c.pick.point.is_some()
+                || length < 1e-12
+                || annotate::segment_distance(q, a, b) <= radius / 2.0
+            {
+                return c;
+            }
+            let outline = c.found.seen.nearest(q);
+            let near = VISIBLE_NEAR / map.scale;
+            candidates
+                .iter()
+                .filter(|e| e.pick.point.is_none() && e.pick.edge.is_some())
+                .filter_map(|e| {
+                    let Seen::Line(p, r) = e.found.seen else {
+                        return None;
+                    };
+                    let along = [r[0] - p[0], r[1] - p[1]];
+                    let long = along[0].hypot(along[1]);
+                    let foot = e.found.seen.nearest(q);
+                    let distance = e.found.seen.distance(q);
+                    let parallel = long > 1e-12
+                        && (d[0] * along[1] - d[1] * along[0]).abs() <= 1e-6 * length * long;
+                    (parallel
+                        && distance <= reach
+                        && annotate::segment_distance(outline, p, r) <= near
+                        && view.sees(foot)
+                        && view.on_visible(foot))
+                    .then(|| (mitcad_vec3::dot(e.found.at, eye), distance, e))
+                })
+                .max_by(|x, y| x.0.total_cmp(&y.0).then(y.1.total_cmp(&x.1)))
+                .map_or(c, |(.., e)| e.clone())
+        };
+        // A centre line or a centre pattern's circle the view draws
+        // (mitcad#1693): the nearest within reach, as it is drawn.
+        let drawn_nearest = |circles: bool| {
+            self.drawn_candidates(view, &candidates, circles)
+                .into_iter()
+                .filter_map(|c| {
+                    let d = drawn_distance(&c, q);
+                    let foot = match c.line {
+                        Some([a, b]) => Seen::Line(a, b).nearest(q),
+                        None => c.found.seen.nearest(q),
+                    };
+                    (d <= reach && view.sees(foot)).then_some((d, c))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+        };
+        // The nearer of the model's pick and the one drawn, the model's
+        // when they are as near.
+        let either =
+            |model: Option<Candidate>, drawn: Option<(f64, Candidate)>| match (model, drawn) {
+                (Some(m), Some((d, c))) => {
+                    if m.found.seen.distance(q) <= d + tie {
+                        Some(m)
+                    } else {
+                        Some(c)
+                    }
+                }
+                (m, d) => m.or(d.map(|(_, c)| c)),
+            };
+        // A point within reach first, unless an arc or a circle is nearer
+        // the click than an edge's end (mitcad#1694: a small fillet's arc
+        // lies within reach of its edges' ends almost everywhere, and a
+        // click on it picks the arc); a centre stays the point it is.
+        let point_first = || {
+            let point = nearest(&is_point, point_reach)?;
+            if point.pick.point == Some(PickPoint::Center) {
+                return Some(point);
+            }
+            let round = nearest(
+                &|c: &Candidate| {
+                    c.pick.point.is_none() && matches!(c.found.seen, Seen::Circle { .. })
+                },
+                reach,
+            );
+            match round {
+                Some(round)
+                    if round.found.seen.distance(q) + tie < point.found.seen.distance(q) =>
+                {
+                    Some(round)
+                }
+                _ => Some(point),
+            }
+        };
         match want {
-            Want::Any => nearest(&is_point, point_reach)
-                .or_else(|| nearest(&|c: &Candidate| c.pick.point.is_none(), reach))
+            Want::Any => point_first()
+                .or_else(|| nearest(&|c: &Candidate| c.pick.point.is_none(), reach).map(own_edge))
                 .or_else(center_line),
+            // The Dimension tool's Auto (mitcad#1693): as Any, a drawn line
+            // its own edge's (mitcad#1691), or a centre pattern's circle
+            // the view draws when nearer.
+            Want::Dimension => point_first()
+                .or_else(|| {
+                    either(
+                        nearest(&|c: &Candidate| c.pick.point.is_none(), reach).map(own_edge),
+                        drawn_nearest(true),
+                    )
+                })
+                .or_else(center_line),
+            Want::Round => either(nearest(&is_round, reach), drawn_nearest(true)),
+            Want::Straight => either(nearest(&is_line, reach), drawn_nearest(false)),
             Want::Point => nearest(&is_point, point_reach.max(reach))
                 .or_else(|| {
                     // A circle's rim or a round face: its centre.
@@ -3521,7 +4093,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             // A datum label (mitcad#1296): as Any, else a planar face seen
             // face on under the click.
             Want::Datum => nearest(&is_point, point_reach)
-                .or_else(|| nearest(&|c: &Candidate| c.pick.point.is_none(), reach))
+                .or_else(|| nearest(&|c: &Candidate| c.pick.point.is_none(), reach).map(own_edge))
                 .or_else(|| self.face_on_at(view, q)),
             // The edge whose line Edit Line changes (mitcad#1546): an edge,
             // whole, whatever its curve.
@@ -3609,6 +4181,8 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                             point: None,
                             on_face: Some(on),
                             on_cut: None,
+                            drawn: None,
+                            side: None,
                         },
                         found: Found {
                             seen: Seen::Point(spec.project(at)),
@@ -3659,6 +4233,11 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
     }
 
     fn resolve_found(&self, view: &ViewAt<'_>, pick: &ViewPick) -> Result<Found, String> {
+        // A centre line or a centre pattern's circle the view draws
+        // (mitcad#1693).
+        if let Some(drawn) = pick.drawn {
+            return self.resolve_drawn(view, pick, drawn);
+        }
         let s = view
             .shown
             .iter()
@@ -3775,6 +4354,42 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                     _ => line.found(spec, low, high),
                 }
             }
+            // A fillet round a turned part seen from the side (mitcad#1694):
+            // its outline's arc on the side picked.
+            SurfaceGeometry::Torus {
+                center,
+                axis,
+                major_radius,
+                minor_radius,
+            } => {
+                let side = pick
+                    .side
+                    .and_then(mitcad_vec3::unit)
+                    .ok_or_else(|| "a rounded face is picked on one side of its axis".to_owned())?;
+                let torus = TorusFace {
+                    face: face.clone(),
+                    names: geometry
+                        .tori
+                        .iter()
+                        .find(|t| t.face == *face || t.names.contains(face))
+                        .map_or_else(|| vec![face.clone()], |t| t.names.clone()),
+                    center,
+                    axis: mitcad_vec3::unit(axis)
+                        .ok_or_else(|| "the rounded face has no axis".to_owned())?,
+                    major: major_radius,
+                    minor: minor_radius,
+                };
+                seen_torus(view, &geometry, &torus, &s.transform)
+                    .into_iter()
+                    .map(|(d, found)| (mitcad_vec3::dot(d, side), found))
+                    .filter(|(toward, _)| *toward > 1e-6)
+                    .max_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, found)| found)
+                    .ok_or_else(|| {
+                        "the rounded face is not seen from the side on that side of its axis"
+                            .to_owned()
+                    })?
+            }
             _ => return Err(format!("the face {face} of {} is not round", s.name)),
         };
         Ok(match pick.point {
@@ -3842,9 +4457,22 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 let first = seen[0].seen;
                 // A straight edge, or a piece of a section's cut line
                 // (mitcad#1361).
-                let has_length =
-                    (pick.edge.is_some() || pick.on_cut.is_some()) && pick.point.is_none();
+                let has_length = (pick.edge.is_some() || pick.on_cut.is_some())
+                    && pick.point.is_none()
+                    && pick.drawn.is_none();
                 match first {
+                    // A centre pattern's circle (mitcad#1693): its
+                    // diameter, the bolt circle's, on an arc too.
+                    Seen::Circle { .. }
+                        if matches!(pick.drawn, Some(Drawn::PatternCircle { .. })) =>
+                    {
+                        Ok(alone(AnnotationType::Diameter, kept, seen))
+                    }
+                    Seen::Line(..) if pick.drawn.is_some() => Err(
+                        "a center line alone measures nothing: pick a second center line or \
+                         edge to make an angle"
+                            .to_owned(),
+                    ),
                     Seen::Circle { arc: Some(_), .. } => {
                         Ok(alone(AnnotationType::Radius, kept, seen))
                     }
@@ -4429,7 +5057,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         &self,
         view: &ViewAt<'_>,
         candidates: &'c [Candidate],
-    ) -> Vec<(&'c Candidate, [P2; 2])> {
+    ) -> Vec<MarkLine<'c>> {
         let map = &view.placed.map;
         let mut groups = if view.center_marks {
             self.automatic_marks(view)
@@ -4473,18 +5101,255 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             .filter(|c| c.pick.point == Some(PickPoint::Center))
             .map(|c| (c, map.at(c.found.seen.point())))
             .collect();
+        let centre_at = |a: P2| {
+            centres
+                .iter()
+                .find(|(_, p)| (p[0] - a[0]).abs() < 1e-6 && (p[1] - a[1]).abs() < 1e-6)
+                .map(|(c, _)| *c)
+        };
         let mut out = Vec::new();
         for g in &groups {
             for item in &g.items {
                 let Item::Line { a, b, .. } = item else {
                     continue;
                 };
-                if let Some((c, _)) = centres
-                    .iter()
-                    .find(|(_, p)| (p[0] - a[0]).abs() < 1e-6 && (p[1] - a[1]).abs() < 1e-6)
-                {
-                    out.push((*c, [*a, *b]));
+                if let Some(c) = centre_at(*a) {
+                    // The mark's line as a pick of its own (mitcad#1693):
+                    // which of its four lines it is.
+                    let arm = MarkArm::nearest([b[0] - a[0], b[1] - a[1]]);
+                    out.push(MarkLine {
+                        centre: Some(c),
+                        line: [*a, *b],
+                        pick: drawn_pick(&c.pick, Drawn::CenterMark { arm }),
+                    });
                 }
+            }
+        }
+        // A centre pattern's radial lines (mitcad#1693), as it draws them:
+        // through each of its circles' centres, past its rim.
+        for pattern in view
+            .drawn_by
+            .iter()
+            .filter(|a| a.kind == AnnotationType::CenterPattern)
+        {
+            let Ok(seen) = self.pattern_seen(view, pattern) else {
+                continue;
+            };
+            for (hole, found) in pattern.picks.iter().zip(&seen.holes) {
+                let h = found.seen.point();
+                let d = [h[0] - seen.center[0], h[1] - seen.center[1]];
+                let length = d[0].hypot(d[1]);
+                if length < 1e-9 {
+                    continue;
+                }
+                let reach = (rim_of(&found.seen) + annotate::CENTER_BEYOND / map.scale) / length;
+                let from = [h[0] - d[0] * reach, h[1] - d[1] * reach];
+                let to = [h[0] + d[0] * reach, h[1] + d[1] * reach];
+                out.push(MarkLine {
+                    centre: centre_at(map.at(h)),
+                    line: [map.at(from), map.at(to)],
+                    pick: drawn_pick(
+                        hole,
+                        Drawn::PatternLine {
+                            pattern: pattern.id,
+                        },
+                    ),
+                });
+            }
+        }
+        out
+    }
+
+    fn pattern_seen(
+        &self,
+        view: &ViewAt<'_>,
+        pattern: &ViewAnnotation,
+    ) -> Result<PatternSeen, String> {
+        // Their own picks whole (never a line drawn for one: no loop).
+        let holes = pattern
+            .picks
+            .iter()
+            .map(|p| self.resolve_found(view, &plain_pick(p)))
+            .collect::<Result<Vec<Found>, String>>()?;
+        if !holes
+            .iter()
+            .all(|f| matches!(f.seen, Seen::Circle { end_on: true, .. } | Seen::Point(_)))
+        {
+            return Err("a center pattern is of circles seen end on".to_owned());
+        }
+        let scale = view.placed.map.scale;
+        let centres: Vec<P2> = holes.iter().map(|f| f.seen.point()).collect();
+        // As the sheet draws it: within 0.01 mm of paper.
+        let (center, radius) = annotate::pattern_circle(&centres, 0.01 / scale)
+            .ok_or_else(|| "the center pattern's circles stand on no one circle".to_owned())?;
+        let widest = holes.iter().map(|f| rim_of(&f.seen)).fold(0.0, f64::max);
+        let arc = annotate::pattern_span(&centres, center).map(|(start, end)| {
+            let beyond = (widest + annotate::CENTER_BEYOND / scale) / radius.max(1e-9);
+            let start = start - beyond;
+            (start, (end + beyond).min(start + TAU))
+        });
+        // Its centre in the model: in the plane of its first circle's.
+        let spec = &view.placed.spec;
+        let first = holes[0].at;
+        let seen = spec.project(first);
+        let at = mitcad_vec3::add(
+            mitcad_vec3::add(first, mitcad_vec3::scale(spec.x_axis, center[0] - seen[0])),
+            mitcad_vec3::scale(spec.y_axis(), center[1] - seen[1]),
+        );
+        Ok(PatternSeen {
+            holes,
+            center,
+            radius,
+            arc,
+            at,
+        })
+    }
+
+    fn resolve_drawn(
+        &self,
+        view: &ViewAt<'_>,
+        pick: &ViewPick,
+        drawn: Drawn,
+    ) -> Result<Found, String> {
+        let map = &view.placed.map;
+        let beyond = annotate::CENTER_BEYOND / map.scale;
+        let drawn_by = |id: u32, kind: AnnotationType| {
+            view.drawn_by
+                .iter()
+                .find(|a| a.id == id && a.kind == kind)
+                .ok_or_else(|| format!("the {} it is drawn by is gone", noun(kind)))
+        };
+        match drawn {
+            Drawn::PatternCircle { pattern } => {
+                let seen =
+                    self.pattern_seen(view, drawn_by(pattern, AnnotationType::CenterPattern)?)?;
+                Ok(Found {
+                    seen: Seen::Circle {
+                        center: seen.center,
+                        radius: seen.radius,
+                        end_on: true,
+                        across: [1.0, 0.0],
+                        arc: seen.arc,
+                    },
+                    at: seen.at,
+                })
+            }
+            Drawn::PatternLine { pattern } => {
+                let seen =
+                    self.pattern_seen(view, drawn_by(pattern, AnnotationType::CenterPattern)?)?;
+                // From the pattern's centre out through the circle's.
+                let circle = self.resolve_found(view, &plain_pick(pick))?;
+                let h = circle.seen.point();
+                let d = [h[0] - seen.center[0], h[1] - seen.center[1]];
+                let length = d[0].hypot(d[1]);
+                if length < 1e-9 {
+                    return Err("the circle lies on its center pattern's center".to_owned());
+                }
+                let reach = (rim_of(&circle.seen) + beyond) / length;
+                Ok(Found {
+                    seen: Seen::Line(seen.center, [h[0] + d[0] * reach, h[1] + d[1] * reach]),
+                    at: circle.at,
+                })
+            }
+            Drawn::CenterMark { arm } => {
+                let circle = self.resolve_found(view, &plain_pick(pick))?;
+                let Seen::Circle {
+                    center,
+                    radius,
+                    end_on: true,
+                    ..
+                } = circle.seen
+                else {
+                    return Err("a center mark's line is of a circle seen end on".to_owned());
+                };
+                // As the sheet draws it: from the centre along the sheet's
+                // axis, past the rim.
+                let c = map.at(center);
+                let d = arm.direction();
+                let reach = radius * map.scale + annotate::CENTER_BEYOND;
+                let tip = map.view_point([c[0] + d[0] * reach, c[1] + d[1] * reach]);
+                Ok(Found {
+                    seen: Seen::Line(center, tip),
+                    at: circle.at,
+                })
+            }
+            Drawn::Centerline { centerline } => {
+                let line = drawn_by(centerline, AnnotationType::Centerline)?;
+                let found = line
+                    .picks
+                    .iter()
+                    .map(|p| self.resolve_found(view, &plain_pick(p)))
+                    .collect::<Result<Vec<Found>, String>>()?;
+                let seen: Vec<Seen> = found.iter().map(|f| f.seen).collect();
+                let (a, b) = annotate::centerline_ends(&seen, beyond)
+                    .ok_or_else(|| "its centerline draws no straight line".to_owned())?;
+                let n = found.len().max(1) as f64;
+                let at = found.iter().fold([0.0; 3], |sum, f| {
+                    mitcad_vec3::add(sum, mitcad_vec3::scale(f.at, 1.0 / n))
+                });
+                Ok(Found {
+                    seen: Seen::Line(a, b),
+                    at,
+                })
+            }
+        }
+    }
+
+    fn drawn_candidates(
+        &self,
+        view: &ViewAt<'_>,
+        candidates: &[Candidate],
+        circles: bool,
+    ) -> Vec<Candidate> {
+        let found = |pick: ViewPick, line: Option<[P2; 2]>| {
+            self.resolve_found(view, &pick)
+                .ok()
+                .map(|found| Candidate { pick, found, line })
+        };
+        let mut out = Vec::new();
+        if circles {
+            for pattern in view
+                .drawn_by
+                .iter()
+                .filter(|a| a.kind == AnnotationType::CenterPattern)
+            {
+                let Some(first) = pattern.picks.first() else {
+                    continue;
+                };
+                let pick = drawn_pick(
+                    first,
+                    Drawn::PatternCircle {
+                        pattern: pattern.id,
+                    },
+                );
+                out.extend(found(pick, None));
+            }
+            return out;
+        }
+        let map = &view.placed.map;
+        for mark in self.center_mark_lines(view, candidates) {
+            let line = [map.view_point(mark.line[0]), map.view_point(mark.line[1])];
+            out.extend(found(mark.pick, Some(line)));
+        }
+        for centerline in view
+            .drawn_by
+            .iter()
+            .filter(|a| a.kind == AnnotationType::Centerline)
+        {
+            let Some(first) = centerline.picks.first() else {
+                continue;
+            };
+            let pick = drawn_pick(
+                first,
+                Drawn::Centerline {
+                    centerline: centerline.id,
+                },
+            );
+            if let Some(mut c) = found(pick, None)
+                && let Seen::Line(a, b) = c.found.seen
+            {
+                c.line = Some([a, b]);
+                out.push(c);
             }
         }
         out

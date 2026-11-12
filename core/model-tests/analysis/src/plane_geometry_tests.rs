@@ -711,3 +711,99 @@ fn plane_geometry_key_is_refused_as_plane_geometry_is() {
         assert!(key.is_err() && all.is_err(), "{sketch}: {key:?} {all:?}");
     }
 }
+
+/// The bodies an answer lists items of.
+fn bodies_listed(items: &[Value]) -> BTreeSet<String> {
+    items
+        .iter()
+        .map(|i| i["body"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn isolate_leaves_the_bodies_it_hides_out_of_the_sketch_geometry() {
+    // mitcad#1702 (GitHub #254): the Dimension tool hovered and picked
+    // edges of components that Isolate hid. A:1 (O1) with Body F2.b0 and
+    // B:1 (O2, 100 mm along X) with Body F4.b0; a sketch in A on its XY.
+    let mut doc = Document::new(MockKernel::default());
+    let square = |doc: &mut Document<MockKernel>, sketch: &str| {
+        command(doc, json!({"cmd": "sketch.create"}));
+        command(
+            doc,
+            json!({"cmd": "sketch.add_rectangle", "sketch": sketch, "corner": [0, 0],
+                   "width": 20, "height": 20}),
+        );
+        command(
+            doc,
+            json!({"cmd": "add_feature", "def": {"type": "extrude",
+                   "profiles": [{"sketch": sketch, "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+                   "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}}),
+        );
+    };
+    command(&mut doc, json!({"cmd": "create_component", "name": "A"}));
+    square(&mut doc, "F1");
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "Root"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "create_component", "name": "B",
+               "transform": {"translation": [100, 0, 0]}}),
+    );
+    square(&mut doc, "F3");
+    command(
+        &mut doc,
+        json!({"cmd": "activate_component", "component": "A"}),
+    );
+    command(&mut doc, json!({"cmd": "sketch.create"}));
+    // Every named edge of a body is this line on XY to the mock kernel.
+    doc.kernel().curves.borrow_mut().push(Curve3::Line {
+        start: [0.0, 0.0, 0.0],
+        end: [10.0, 0.0, 0.0],
+    });
+    let both: BTreeSet<String> = ["F2.b0", "F4.b0"].map(str::to_owned).into();
+    assert_eq!(bodies_listed(&plane_geometry_all(&doc, "F5")), both);
+    let key = plane_geometry_key(&doc, "F5");
+
+    // A:1 isolated: none of B's edges; another key.
+    command(
+        &mut doc,
+        json!({"cmd": "set_isolation", "items": [{"occurrence": "O1"}]}),
+    );
+    let items = plane_geometry_all(&doc, "F5");
+    assert_eq!(
+        bodies_listed(&items),
+        BTreeSet::from(["F2.b0".to_owned()]),
+        "{items:?}"
+    );
+    assert!(
+        items.iter().all(|i| i.get("occurrence").is_none()),
+        "{items:?}"
+    );
+    assert_ne!(plane_geometry_key(&doc, "F5"), key);
+
+    // B's body isolated as well: listed again.
+    command(
+        &mut doc,
+        json!({"cmd": "set_isolation", "items": [{"occurrence": "O1"},
+                                                 {"body": "F4.b0", "occurrence": "O2"}]}),
+    );
+    assert_eq!(bodies_listed(&plane_geometry_all(&doc, "F5")), both);
+
+    // Unisolate: both again, the key as before.
+    command(&mut doc, json!({"cmd": "set_isolation", "items": []}));
+    assert_eq!(bodies_listed(&plane_geometry_all(&doc, "F5")), both);
+    assert_eq!(plane_geometry_key(&doc, "F5"), key);
+
+    // Only B:1 isolated: the view leaves out the sketch's own component's
+    // body too, and so does the answer.
+    command(
+        &mut doc,
+        json!({"cmd": "set_isolation", "items": [{"occurrence": "O2"}]}),
+    );
+    assert_eq!(
+        bodies_listed(&plane_geometry_all(&doc, "F5")),
+        BTreeSet::from(["F4.b0".to_owned()])
+    );
+}

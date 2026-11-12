@@ -86,3 +86,5 @@ pub use sha256::Sha256;
 // (mitcad#1040).
 pub mod notice;
 pub use notice::{Notice, NoticeLevel};
+// The preview a design file carries for file managers (mitcad#1539).
+pub mod design_preview;

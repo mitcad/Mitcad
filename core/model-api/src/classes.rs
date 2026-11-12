@@ -420,6 +420,11 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("set_filament_changes", Model),
     // A sheet's title block edited on the sheet (mitcad#1625).
     ("edit_drawing_title_block", Model),
+    // A sheet-metal flange's profile sketch (mitcad#1648).
+    ("sheet_flange_profile", Model),
+    // Several materials made from the bundled dataset at once
+    // (mitcad#1706); into a library its files, see `command_class_with`.
+    ("create_dataset_materials", Model),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -644,6 +649,8 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("plane_geometry_key", Model),
     // The print colours and rings Send to Slicer draws (mitcad#1643).
     ("filament_change_preview", Model),
+    // Animate Joint's frames without a recompute (mitcad#1701).
+    ("joint_poses", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {
@@ -788,6 +795,7 @@ pub fn command_class_with(request: &serde_json::Value) -> Option<ApiClass> {
             | "delete_material"
             | "merge_materials"
             | "import_materials"
+            | "create_dataset_materials"
             | "set_component_material"
             | "set_body_material"
             | "create_print_profile"

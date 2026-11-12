@@ -224,6 +224,9 @@ impl<S> Cache<S> {
                     Read::PrintBed(uid, face) => {
                         super::print_bed_of(&state.body_attributes, *uid) == face.as_ref()
                     }
+                    Read::PrintLayer(bits) => {
+                        state.design_layer_height().map(f64::to_bits) == *bits
+                    }
                     Read::Sketch(uid, version) if before(uid).is_some() => {
                         done.sketches.get(uid).map(|s| s.version) == *version
                     }

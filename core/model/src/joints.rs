@@ -1989,7 +1989,13 @@ impl Mechanism {
             let motion = transform(&motion);
             for o in members {
                 let current = placements.get(o).copied().unwrap_or(Transform::IDENTITY);
-                changes.push(PlacementChange::Set(*o, motion.after(&current)));
+                // Rotations and translations again, to rounding
+                // (mitcad#1664, mitcad#1666), so that rounding does not pile
+                // up solve after solve; one far off is left to the command
+                // that would keep it, which refuses.
+                let moved = motion.after(&current);
+                let moved = crate::assembly::solved_placement(&moved).unwrap_or(moved);
+                changes.push(PlacementChange::Set(*o, moved));
             }
         }
         changes
@@ -2164,6 +2170,126 @@ pub(crate) fn drag(
         values: mechanism.values(&active),
         contact: None,
     })
+}
+
+/// Where a joint's motion driven to each of `values` in turn puts the
+/// occurrences of the joint's component (Animate Joint's frames,
+/// mitcad#1701): the joints of the component solved as a drag solves them,
+/// with the motion driven there (held within its limits) and the motions
+/// motion links couple to it following, each frame from the one before.
+/// Per frame the placements of every occurrence of `placements` (those
+/// that moved changed) and the joints' values. Nothing is recomputed: as a
+/// drag, the joints of other components and the shapes stay as they are.
+pub(crate) fn poses(
+    assembly: &Assembly,
+    joints: &JointsState,
+    placements: &BTreeMap<OccurrenceUid, Transform>,
+    joint: FeatureUid,
+    motion: Motion,
+    values: &[f64],
+) -> Result<Vec<Dragged>, String> {
+    let driven = joints
+        .active
+        .iter()
+        .find(|j| j.uid == joint && j.row.is_none())
+        .ok_or_else(|| "the joint is not in effect at the marker".to_owned())?;
+    let spec = driven
+        .motions
+        .iter()
+        .find(|s| s.motion == motion)
+        .copied()
+        .ok_or_else(|| format!("the joint has no free motion {motion}"))?;
+    let component = driven.component;
+    let links = links_of(joints, component);
+    // The motions the links couple to the driven one follow it (as
+    // `drive_joint` releases them).
+    let mut released: BTreeSet<(FeatureUid, Motion)> = BTreeSet::from([(joint, motion)]);
+    let mut queue = vec![(joint, motion)];
+    while let Some(at) = queue.pop() {
+        for link in &links {
+            let other = if link.a == at {
+                link.b
+            } else if link.b == at {
+                link.a
+            } else {
+                continue;
+            };
+            if released.insert(other) {
+                queue.push(other);
+            }
+        }
+    }
+    let mut active: Vec<ActiveJoint> = joints
+        .active
+        .iter()
+        .filter(|j| j.component == component)
+        .cloned()
+        .collect();
+    for j in active.iter_mut().filter(|j| j.row.is_none()) {
+        for s in &mut j.motions {
+            if released.contains(&(j.uid, s.motion)) {
+                s.target = None;
+            }
+        }
+    }
+    let mut current = placements.clone();
+    let mut out = Vec::with_capacity(values.len());
+    for &value in values {
+        if !value.is_finite() {
+            return Err("the values must be finite".to_owned());
+        }
+        let mut v = value;
+        if let Some(min) = spec.min {
+            v = v.max(min);
+        }
+        if let Some(max) = spec.max {
+            v = v.min(max);
+        }
+        for j in active
+            .iter_mut()
+            .filter(|j| j.uid == joint && j.row.is_none())
+        {
+            for s in j.motions.iter_mut().filter(|s| s.motion == motion) {
+                s.target = Some(v);
+            }
+        }
+        let refs: Vec<&ActiveJoint> = active.iter().collect();
+        let mut mechanism = Mechanism::new(
+            assembly,
+            &joints.groups,
+            component,
+            &refs,
+            &links,
+            &current,
+            false,
+        )?;
+        let result = mechanism.system.solve(&RigidOptions::default());
+        if !result.is_ok() {
+            return Err(format!(
+                "the joints do not hold with {motion} at {}",
+                if motion.is_rotation() {
+                    format!("{:.3} deg", v.to_degrees())
+                } else {
+                    format!("{v:.3} mm")
+                }
+            ));
+        }
+        let moved: Vec<(OccurrenceUid, Transform)> = mechanism
+            .changes(&current)
+            .into_iter()
+            .map(|c| match c {
+                PlacementChange::Move(o, t) | PlacementChange::Set(o, t) => (o, t),
+            })
+            .collect();
+        let frame_values = mechanism.values(&refs);
+        current.extend(moved.iter().copied());
+        out.push(Dragged {
+            placements: current.iter().map(|(o, t)| (*o, *t)).collect(),
+            values: frame_values,
+            contact: None,
+        });
+    }
+    Ok(out)
 }
 
 // Degrees of freedom.

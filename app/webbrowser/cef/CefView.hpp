@@ -8,6 +8,14 @@
 // to it. No native child window, so it needs no native embedding on any
 // platform (Wayland, macOS). Downloads go where the owner says
 // (beforeDownload), with their progress (downloadUpdated).
+//
+// Sharp at any display scale (mitcad#1657): CEF paints windowless frames at
+// a scale of 1 whatever GetScreenInfo says (156.0.27 and .28, at 1.65 and 2),
+// so the view is given to CEF in physical pixels at a scale of 1, and the
+// page's zoom is the display's scale: the page is laid out at the view's
+// size in CSS pixels and painted into every physical pixel. Mouse, wheel,
+// clickAt, the input method's and the popup's rectangles are converted
+// between the view's (logical) and CEF's (physical) coordinates.
 
 #include <cstdint>
 #include <functional>
@@ -65,7 +73,9 @@ public:
   // Runs a script in the page; what it tells MitCad comes back as
   // consoleMessage() of the lines it logs that start with "mitcad:".
   void runJavaScript(const QString& script);
-  // A left click at a point of the page, as real input (the tests').
+  // A left click at a point of the view, as real input (the tests'): a
+  // point of the page in its CSS pixels, which are the view's own at any
+  // display scale (the page's zoom is the scale).
   void clickAt(const QPoint& point);
   // Cookies and site sign-ins, HTTP authentication, the cache.
   void clearBrowsingData();
@@ -119,6 +129,23 @@ private:
   void sendMouse(QMouseEvent* event, bool up, int clicks);
   void sendKey(QKeyEvent* event, bool down);
 
+  // The display's scale handed to CEF (mitcad#1657): the view in physical
+  // pixels (viewRect) and the page's zoom (applyZoom).
+  double scale() const { return m_scale; }
+  // The view's rectangle in CEF's (physical) pixels, at the window's scale,
+  // which it takes (the zoom follows soon after when it changed).
+  CefRect viewRect();
+  // Takes the window's scale and tells CEF: the screen, the size, the zoom.
+  void applyScale();
+  // The page's zoom set to the scale, unless it is already: after every
+  // navigation's commit (Chromium keeps a zoom per site in the browsing
+  // profile, which would otherwise apply) and every change of the scale.
+  void applyZoom();
+  // A point of the view in CEF's pixels, and a rectangle of CEF's in the view's.
+  CefMouseEvent mouseEventAt(const QPointF& position, Qt::KeyboardModifiers modifiers,
+                             Qt::MouseButtons buttons) const;
+  QRect fromCef(const QRect& rect) const;
+
   // From the client (CEF's browser thread, which is Qt's main thread).
   void browserCreated(CefRefPtr<CefBrowser> browser);
   void browserClosing();
@@ -126,6 +153,7 @@ private:
   void popupShown(bool show);
   void popupSized(const QRect& rect);
   void imeBoundsChanged(const QRect& caret);
+  void pageCommitted();
   void addressChanged(const QString& url);
   void titleChangedTo(const QString& title);
   void loadingChanged(bool loading, bool canGoBack, bool canGoForward);
@@ -146,6 +174,9 @@ private:
   bool m_canGoBack = false;
   bool m_canGoForward = false;
   QImage m_frame;
+  // The scale CEF's pixels are of (mitcad#1657): the window's when CEF last
+  // asked for the view's rectangle.
+  double m_scale = 1.0;
   // The last frame's size and scale the log told (mitcad#1654).
   QString m_frameLogged;
   QPointer<QWindow> m_screenWindow; // whose screenChanged() is connected

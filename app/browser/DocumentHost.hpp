@@ -77,6 +77,17 @@ public:
   // (mitcad#655: the profile editor and Materials beside 3D Print): the
   // panel's inputs follow it (CommandSession::refreshInputs).
   virtual void commandInputsChanged() {}
+  // A sketch the running command uses, made or moved by the model command
+  // `command` (its result names the sketch as `sketch`, and `added` the
+  // features it put before the command's feature), edited without leaving
+  // the command (mitcad#1648: Flange's Edit Profile): the sketch becomes
+  // the text of the command's input `input`, the panel is set aside while
+  // the sketch is edited, and Finish Sketch brings it back. False when the
+  // command `commandId` is not the one running or the model refused.
+  virtual bool editSketchInCommand(const QString& /*commandId*/, const QString& /*input*/,
+                                   const QJsonObject& /*command*/) {
+    return false;
+  }
   // Whether the print windows can change the design now (mitcad#655): as
   // canChangeModel, and also while 3D Print's panel is open, which has no
   // preview and whose Edit... opens them; likewise beside the Material and

@@ -128,7 +128,7 @@ std::vector<ParameterPicker::Label> ParameterPicker::layout() const {
       label.shape = sketch::dimensionShape(d, model, projection, label.text);
       if (!label.shape.valid) {
         // Only the value then, where the dimension shows it.
-        label.shape.textAt = toScreen(d.text ? *d.text : sketch::defaultTextPosition(d, model, projection.pixel));
+        label.shape.textAt = toScreen(d.text ? *d.text : sketch::defaultTextPosition(d, model, projection));
       }
       label.rect = box(label.shape.textAt, label.text);
       labels.push_back(std::move(label));

@@ -170,4 +170,10 @@ QString selectionMeasurementText(const QJsonObject& measured);
 // Occurrence names include their full assembly path; root bodies omit it.
 QString selectionOwnerText(const SelectionItem& item, const DocumentSnapshot& snapshot);
 
+// An item of the view's pick list in words (mitcad#1703), in the interface
+// language: its occurrence's names, its owner's name and its kind,
+// "Bracket:1: Body2: Edge", "Sketch2: Profile", "Origin: XY"; never a
+// topological name or an id (a name not in the snapshot is left out).
+QString pickListText(const SelectionItem& item, const DocumentSnapshot& snapshot);
+
 } // namespace mitcad

@@ -1,27 +1,42 @@
 # SPDX-License-Identifier: MIT
-# The bundled dataset's woods and panels in the class Wood (mitcad#1552),
+# The woods and panels in the class Wood (mitcad#1552, mitcad#1706),
 # through the real Qt controls; shared by tools/ui-wood-materials-test.sh
 # (Linux, Xvfb) and tools/ui-windows-wood-materials-test.ps1. The design is
 # wood-materials.json: one box of the default material. Pictures go to
 # ${MITCAD_TEST_WORK}.
-#   1. The Materials window's New menu has Wood, before Other, and ends
-#      with Browse Material Dataset…, which opens the dataset (136
-#      materials) and names its two sources and their licences.
-#   2. A search for "oak" finds Wood - Oak alone, listed in the class
+#   1. The Materials window's Built-in group lists the five built-in woods
+#      and panels in its Wood class: Wood - Pine, Wood - Oak, Wood - Birch,
+#      Plywood - birch and MDF - raw (mitcad#1706).
+#   2. Its New menu has Wood, before Other, and ends with Browse Material
+#      Dataset…, which opens the dataset (136 materials) and names its two
+#      sources and their licences.
+#   3. A search for "oak" finds Wood - Oak alone, listed in the class
 #      Wood; selected, its density, Young's modulus and source show.
-#   3. Create into This design: Wood - Oak is a material of the design in
-#      the Materials window's Wood group, its Class Wood, its appearance
-#      the library's Wood - Oak, one undo step.
+#   4. A search for "plywood" shows the four plywoods; three picked (Home, End,
+#      Shift+Up twice) and created into This design: three Wood materials
+#      of the design, one undo step, the message line says 3 made; the
+#      first one selected, its Class Wood, its look the library's.
+#   5. The dataset again, "plywood", Select All, Create into This design:
+#      all four skipped (the built-in birch plywood, the three just made),
+#      nothing made, no undo step, the message line says so.
 wait-idle
 window-resize 1280 860
 focus-main
 capture-undo-depth start
 mark
 
-# 1. New ▸ Browse Material Dataset…
+# 1. The Built-in group's Wood class: the five.
 command solid.materials
 focus-dialog '^Materials$'
 wait-idle
+wait-log '^Materials row: wood/wood_pine Wood - Pine \(mitcad\)$' 10
+expect-log '^Materials row: wood/wood_oak Wood - Oak \(mitcad\)$'
+expect-log '^Materials row: wood/wood_birch Wood - Birch \(mitcad\)$'
+expect-log '^Materials row: wood/plywood_birch Plywood - birch \(mitcad\)$'
+expect-log '^Materials row: wood/mdf_raw MDF - raw \(mitcad\)$'
+screenshot-dialog '${MITCAD_TEST_WORK}/materials-built-in-woods.png'
+
+# 2. New ▸ Browse Material Dataset…
 mark
 button '^New'
 expect-log '^Materials new menu: Metal \| General Plastic \| FDM Plastic \| Resin \| Wood \| Other \| Browse Material Dataset…$'
@@ -31,7 +46,7 @@ expect-log '^Material dataset sources: material-properties dataset \(Apache-2\.0
 focus-dialog '^Material Dataset$'
 wait-idle
 
-# 2. "oak": Wood - Oak alone, in the class Wood.
+# 3. "oak": Wood - Oak alone, in the class Wood.
 mark
 focus-widget materialDatasetSearch
 type 'oak'
@@ -43,24 +58,70 @@ focus-widget materialDatasetList
 key Home
 expect-log '^Material dataset selected: Wood - Oak: Density: 0\.755 g/cm³ \| Young.s modulus: 12150 MPa \| '
 expect-log '^Material dataset selected: Wood - Oak: .*Source: The Wood Database, American white oak \(Quercus alba\)$'
+expect-log '^Material dataset picked: 1: Wood - Oak$'
 wait-idle
 screenshot-dialog '${MITCAD_TEST_WORK}/material-dataset-oak.png'
 
-# 3. Create into This design: a Wood material of the design.
+# 4. "plywood": three of the four picked and created into This design.
+mark
+focus-widget materialDatasetSearch
+key Ctrl+a
+type 'plywood'
+expect-log '^Material dataset search: plywood, 4 shown$'
+expect-log '^Material dataset row: Plywood - birch \| Wood$'
+expect-log '^Material dataset row: Plywood - spruce \| Wood$'
+wait-idle
+mark
+focus-widget materialDatasetList
+# Home first: without a current row End would only reach the first.
+key Home
+key End
+key Shift+Up
+key Shift+Up
+expect-log '^Material dataset picked: 3: Plywood - eucalyptus \| Plywood - pine \| Plywood - spruce$'
+wait-idle
+screenshot-dialog '${MITCAD_TEST_WORK}/material-dataset-plywoods.png'
 mark
 key Return
 expect-log '^Materials dataset menu: This design'
 popup 'This design'
-expect-log '^Material created from the dataset: Wood - Oak \(wood/oak\) as .+ in design$'
+expect-log '^Materials from the dataset into design: 3 made, 0 skipped \(\) of Plywood - eucalyptus \| Plywood - pine \| Plywood - spruce$'
+expect-log '^Material created from the dataset: Plywood - pine \(panel/plywood_pine\) as .+ in design$'
 expect-undo-depth ${start} 1
 focus-dialog '^Materials$'
 wait-idle
-expect-log '^Materials row: wood/.+ Wood - Oak \(design\)$'
+expect-log '^Materials message: 3 material\(s\) made from the dataset\.$'
+expect-log '^Materials row: wood/.+ Plywood - eucalyptus \(design\)$'
+expect-log '^Materials row: wood/.+ Plywood - pine \(design\)$'
+expect-log '^Materials row: wood/.+ Plywood - spruce \(design\)$'
 expect-log '^Materials class: Wood$'
-expect-log '^Materials appearances: Wood - Oak \(default\)$'
-expect-log '^Materials source: The Wood Database, American white oak \(Quercus alba\)$'
+expect-log '^Materials appearances: Plywood - Eucalyptus \(default\)$'
 wait-idle
 screenshot-dialog '${MITCAD_TEST_WORK}/materials-wood-group.png'
+
+# 5. Select All of "plywood": all four there already, skipped.
+mark
+button '^New'
+popup 'Browse Material Dataset…'
+focus-dialog '^Material Dataset$'
+wait-idle
+focus-widget materialDatasetSearch
+type 'plywood'
+expect-log '^Material dataset search: plywood, 4 shown$'
+wait-idle
+mark
+button '^Select All$'
+expect-log '^Material dataset picked: 4: Plywood - birch \| Plywood - eucalyptus \| Plywood - pine \| Plywood - spruce$'
+wait-idle
+mark
+button '^Create$'
+expect-log '^Materials dataset menu: This design'
+popup 'This design'
+expect-log '^Materials from the dataset into design: 0 made, 4 skipped \(Plywood - birch \| Plywood - eucalyptus \| Plywood - pine \| Plywood - spruce\) of '
+expect-undo-depth ${start} 1
+focus-dialog '^Materials$'
+wait-idle
+expect-log '^Materials message: 0 material\(s\) made from the dataset\. 4 skipped: a material of the same name is there already\.$'
 button '^Close$'
 focus-main
 wait-idle

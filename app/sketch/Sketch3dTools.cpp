@@ -1018,7 +1018,8 @@ void Sketch3dController::logHandles() {
     lines << QStringLiteral("3D sketch rotation handles: hidden");
   } else {
     // Where each ring is farthest from the other two on the screen, in
-    // the view and not under a card floating over it.
+    // the view and not under a card floating over it or the orientation
+    // cube (a press there turns the view, not the plane).
     const Xyz center = fromPoint().at;
     const double radius = ringRadius(center);
     std::array<QPolygonF, 3> rings;
@@ -1034,7 +1035,7 @@ void Sketch3dController::logHandles() {
       std::optional<QPointF> best;
       double bestPixels = -1.0;
       for (const QPointF& p : std::as_const(rings[k])) {
-        if (!view.contains(p) || m_viewer.isCovered(p)) {
+        if (!view.contains(p) || m_viewer.isCovered(p) || m_viewer.isOnOrientationCube(p)) {
           continue;
         }
         const double pixels =

@@ -1125,3 +1125,87 @@ fn cut_from_outside_still_refuses_one_occurrence_of_a_shared_component() {
     assert!(!is_cut(&f.doc, f.ring));
     assert!(!is_cut(&f.doc, f.other));
 }
+
+/// A component whose box's top face lies in the root's XY plane, and a cut
+/// of a 4 mm square sketched there at `corner`, 5 mm along +Z (out of the
+/// box), `flip` reversing it. The mock cuts only bodies its tool overlaps
+/// by volume, so a tool that only meets the top face misses.
+fn top_face_cut(corner: [f64; 2], flip: bool) -> (Document<MockKernel>, BodyUid, Value) {
+    let kernel = MockKernel::default();
+    kernel.cuts_by_bounds.set(true);
+    let mut doc = Document::new(kernel);
+    doc.create_component(Some("A"), Transform::translation([0.0, 0.0, -10.0]), true)
+        .unwrap();
+    let body = box_body(&mut doc);
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = doc
+        .add_rectangle(sketch, corner, &num(4.0), &num(4.0))
+        .unwrap()
+        .region;
+    let cut = json!({"type":"extrude",
+        "profiles":[{"sketch":sketch,"region":region}], "extent":{"type":"distance","distance":5},
+        "flip":flip, "operation":"cut", "cut_scope":{"context":{"component":"C0","occurrence":""},
+            "targets":{"type":"automatic","excluded":[]}}});
+    (doc, body, cut)
+}
+
+#[test]
+fn cut_out_of_the_body_suggests_flip_when_flipped_it_cuts() {
+    // Out of the top face: nothing is cut, and Flip would cut the box.
+    let (mut doc, body, cut) = top_face_cut([2.0, 2.0], false);
+    let report = doc.preview_add(&cut_definition(&cut), None).unwrap();
+    assert!(
+        matches!(report.status, FeatureStatus::Failed(ref message)
+            if message.starts_with("No eligible components intersect the cut") && message.contains("Try Flip")),
+        "{:?}",
+        report.status
+    );
+    // The report says so for the panel, and is otherwise the miss's own.
+    let targets = report.cut_targets.unwrap();
+    assert!(targets.flip_would_cut);
+    assert_eq!(
+        serde_json::to_value(&targets).unwrap()["flip_would_cut"],
+        json!(true)
+    );
+    assert!(!targets.can_commit);
+    assert_eq!(targets.selected_bodies, 0);
+    assert!(targets.rows.iter().all(|r| !r.intersects));
+    doc.add_feature(&cut_definition(&cut), None).unwrap();
+    assert!(!is_cut(&doc, body));
+
+    // Flipped, the same cut goes into the box and cuts it.
+    let (mut doc, body, cut) = top_face_cut([2.0, 2.0], true);
+    let report = doc.preview_add(&cut_definition(&cut), None).unwrap();
+    assert_eq!(report.status, FeatureStatus::Ok);
+    let targets = report.cut_targets.unwrap();
+    assert!(targets.can_commit && !targets.flip_would_cut);
+    doc.add_feature(&cut_definition(&cut), None).unwrap();
+    assert!(is_cut(&doc, body));
+}
+
+#[test]
+fn cut_that_misses_both_ways_does_not_suggest_flip() {
+    // Beside the box: neither direction reaches it.
+    for flip in [false, true] {
+        let (mut doc, body, cut) = top_face_cut([50.0, 50.0], flip);
+        let report = doc.preview_add(&cut_definition(&cut), None).unwrap();
+        assert!(
+            matches!(report.status, FeatureStatus::Failed(ref message)
+                if message == "No eligible components intersect the cut"),
+            "{:?}",
+            report.status
+        );
+        let targets = report.cut_targets.unwrap();
+        assert!(!targets.can_commit && !targets.flip_would_cut);
+        // Left out of the report when false.
+        assert!(
+            serde_json::to_value(&targets)
+                .unwrap()
+                .get("flip_would_cut")
+                .is_none()
+        );
+        doc.add_feature(&cut_definition(&cut), None).unwrap();
+        assert!(!is_cut(&doc, body));
+    }
+}

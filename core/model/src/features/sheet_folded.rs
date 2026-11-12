@@ -156,6 +156,15 @@ pub struct SheetFlangeDef<P = ParamId> {
     /// sheet (mitcad#1410); none: the wall's end is free.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub corner: Option<SheetFlangeCorner>,
+    /// A sketch before the flange whose closed region on the bend line is
+    /// the wall's outline (mitcad#1648): the wall's sketch frame
+    /// ([`crate::sheet::folded::flange_profile_frame`]) has its origin on
+    /// the bend line at the middle of the boundary, `x` along the bend line
+    /// and `y` along the wall. Its offsets and width then come from the
+    /// profile; the length only places nothing. None: the rectangular wall
+    /// of `length`, `offsets` and `width`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<FeatureUid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -335,6 +344,7 @@ impl<P> SheetFlangeDef<P> {
                 })
                 .transpose()?,
             corner: self.corner,
+            profile: self.profile,
         })
     }
 }
@@ -510,9 +520,15 @@ impl FeatureInfo for SheetFlangeDef {
         let mut r = References::default();
         r.body(self.body);
         boundary_ref(&mut r, &self.boundary);
+        if let Some(profile) = self.profile {
+            r.features.insert(profile);
+        }
         r
     }
     fn check(&self, c: &CheckContext<'_>) -> Result<(), String> {
+        if let Some(profile) = self.profile {
+            c.sketch(profile)?;
+        }
         checked(c, self.body, self.references())
     }
     fn creates_bodies(&self) -> bool {
@@ -582,6 +598,9 @@ impl FeatureInfo for SheetCornerChamferDef {
 impl<K: Kernel> Evaluate<K> for SheetFlangeDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let d = self.map_params(&mut |_, p| ctx.param(*p))?;
+        // A profile sketch left where an earlier angle or position put the
+        // wall says so (mitcad#1648); the wall follows its outline anyway.
+        crate::sheet::folded::warn_moved_profile(&d, ctx)?;
         crate::sheet::folded::flange(&d, ctx)
     }
 }

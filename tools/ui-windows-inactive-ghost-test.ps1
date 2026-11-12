@@ -8,10 +8,10 @@
 # with a 30 x 20 x 10 block, Shield:1 (O2) with a 40 x 2 x 20 plate in
 # front of it, Cover:1 (O3) empty and active, saved so (Cover's sketches
 # may lie on Part's faces):
-#   1. Ghost Inactive Components off in the settings: opened with the root
-#      active (mitcad#426), Cover activated: nothing is a ghost.
-#   2. On (the default): opened with the root active, nothing is a ghost;
-#      Cover activated, the block and the shield are ghosts.
+#   1. Ghost Inactive Components off in the settings: opened with Cover
+#      active, as saved (mitcad#1678): nothing is a ghost.
+#   2. On (the default): opened with Cover active, the block and the
+#      shield are ghosts.
 #      Create Sketch picks the block's top face, Project picks it again
 #      and projects it.
 #   3. The root activated: nothing is a ghost; undo of the activation
@@ -66,10 +66,7 @@ $ini = Join-Path $script:UiSettings 'Mitcad\Mitcad.ini'
 Add-Content -Encoding ascii $ini @('[view]', 'ghostInactive=false')
 Ui-StartApp 'inactive-ghost-off' @('--open', $design)
 Ui-ExpectLog 'F2.b0 in O1' "Part's block shown"
-Ui-ExpectLog 'Opened with the root active; C3 was active in the file (unmodified)' 'opened with the root active (mitcad#426)'
-Ui-Mark
-Ui-Step 'activate Cover'                 { Ui-ClickLogged 'Browser radio Root/Cover:1' }
-Ui-ExpectNew 'Activated Cover' 'Cover is active'
+Ui-ExpectLog 'Opened with C3 active, as saved (unmodified)' 'opened with Cover active, as saved (mitcad#1678)'
 Ui-Sync
 Start-Sleep -Milliseconds 500
 $ghosts = @(Ui-LogLines | Where-Object { $_.StartsWith('View inactive ghosts: ') -and -not $_.EndsWith(': none') })
@@ -81,18 +78,8 @@ Write-Host '--- 2. The setting on: a ghost stays pickable'
 (Get-Content $ini) -replace '^ghostInactive=false$', 'ghostInactive=true' | Set-Content -Encoding ascii $ini
 Ui-StartApp 'inactive-ghost' @('--open', $design)
 Ui-ExpectLog 'F2.b0 in O1' "Part's block shown"
-Ui-ExpectLog 'Opened with the root active; C3 was active in the file (unmodified)' 'opened with the root active (mitcad#426)'
-Ui-Sync
-# After the design opened: the empty design of the start has Component1 active.
-$lines = @(Ui-LogLines)
-$opened = [array]::FindLastIndex($lines, [Predicate[string]] { param($l) $l.StartsWith('Opened with the root active') })
-$ghosts = @($lines | Select-Object -Skip ($opened + 1) | Where-Object { $_.StartsWith('View inactive ghosts: ') -and -not $_.EndsWith(': none') })
-if ($ghosts.Count -gt 0) { Ui-Fail "ghosts with the root active: $($ghosts[0])" }
-Write-Host 'ok   nothing is a ghost with the root active'
-Ui-Mark
-Ui-Step 'activate Cover'                 { Ui-ClickLogged 'Browser radio Root/Cover:1' }
-Ui-ExpectNew 'Activated Cover' 'Cover is active'
-Ui-ExpectNew 'View inactive ghosts: 2 bodies (active Cover:1)' 'Cover active: the block and the shield are ghosts'
+Ui-ExpectLog 'Opened with C3 active, as saved (unmodified)' 'opened with Cover active, as saved (mitcad#1678)'
+Ui-ExpectLog 'View inactive ghosts: 2 bodies (active Cover:1)' 'Cover active: the block and the shield are ghosts'
 Ui-Mark
 Ui-Step 'create sketch (F7)'             { Ui-Key 'F7' }
 Ui-ExpectNew 'Pick places:' 'the picks are logged'

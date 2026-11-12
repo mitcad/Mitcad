@@ -23,6 +23,11 @@
 #      arrows and the rings go with it.
 #   4. Free Move's arrows and rings in the axis colors, Translate's arrows
 #      in the handles' color (#1581).
+#   5. In the front view (#1707; GitHub mitcad/Mitcad#272) the rings about
+#      X and Z are seen edge-on and the Y arrow end-on; the X arrow
+#      dragged from its head (beyond the rings) and the Z arrow from its
+#      middle (under the ring about X) move along X and Z, hovered and
+#      dragged in HandleActive, not an axis color.
 wait-idle
 key F6
 wait-idle
@@ -160,6 +165,7 @@ mark
 drag-from '^Manipulator Move/Copy tz at ' 0 -40
 wait-log '^Manipulator Move/Copy tz dragged to '
 expect-no-log '^Manipulator Move/Copy tz dragged to 0$'
+capture tz0 '^Manipulator Move/Copy tz dragged to (.+)$'
 wait-idle
 capture x '^Handle world Move/Copy tz: origin ([-0-9.]+),'
 capture y '^Handle world Move/Copy tz: origin [-0-9.]+,([-0-9.]+),'
@@ -179,6 +185,62 @@ expect-near ${z} ${knob} 0 0.000001
 capture z '^Handle world Move/Copy rz: center [-0-9.]+,[-0-9.]+,([-0-9.]+),'
 expect-near ${z} ${knob} 0 0.000001
 expect-input-text tx '^40( mm)?$'
+
+# --- 5. Head-on in the front view (mitcad#1707; GitHub mitcad/Mitcad#272):
+# the camera along Y, Z up. The rings about X and Z are seen edge-on, as
+# lines over the Z and X arrows, and the Y arrow end-on (drawn upwards,
+# over the Z arrow, before). The X arrow is grabbed at its head, beyond
+# the rings, and the Z arrow at its middle, where the ring about X lies
+# over it: each press takes the arrow, hovered and dragged in
+# HandleActive, and the drag moves along the arrow's axis only.
+mark
+command view.front
+wait-log '^Camera direction 0 1 0 up 0 0 1 [(]orthographic[)]' 30
+wait-idle
+wait-log '^Handle seen edge-on Move/Copy rx: no press within an arrow.s reach$'
+expect-log '^Handle seen edge-on Move/Copy rz: no press within an arrow.s reach$'
+expect-log '^Handle seen edge-on Move/Copy ty: no press$'
+wait-log '^Arrow head Move/Copy tx at '
+screenshot-view '${MITCAD_TEST_WORK}/move-handles-front.png'
+mark
+hover-logged '^Manipulator Move/Copy tx at '
+wait-log '^Handle hover Move/Copy tx: color HandleActive$'
+# The X arrow dragged right from its head.
+mark
+drag-from '^Arrow head Move/Copy tx at ' 40 0
+wait-log '^Handle drag Move/Copy tx: color HandleActive$'
+wait-log '^Manipulator Move/Copy tx dragged to '
+expect-no-log '^Manipulator Move/Copy (ty|tz|rx|ry|rz) dragged to '
+expect-no-log '^Manipulator Move/Copy tx dragged to 40$'
+wait-idle
+# Further along X than the 40 mm it had.
+capture tx '^Manipulator Move/Copy tx dragged to (.+)$'
+expect-near ${tx} 5040 0 4999.99
+capture x '^Handle world Move/Copy tx: origin .*, knob ([-0-9.]+),'
+capture x2 '^Handle world Move/Copy rx: center ([-0-9.]+),'
+expect-near ${x2} ${x} 0 0.000001
+capture y '^Handle world Move/Copy rx: center [-0-9.]+,([-0-9.]+),'
+expect-near ${y} 8660 0 0.000001
+capture z '^Handle world Move/Copy rx: center [-0-9.]+,[-0-9.]+,([-0-9.]+),'
+expect-near ${z} ${knob} 0 0.000001
+# The Z arrow dragged up from its middle.
+mark
+hover-logged '^Manipulator Move/Copy tz at '
+wait-log '^Handle hover Move/Copy tz: color HandleActive$'
+mark
+drag-from '^Manipulator Move/Copy tz at ' 0 -40
+wait-log '^Handle drag Move/Copy tz: color HandleActive$'
+wait-log '^Manipulator Move/Copy tz dragged to '
+expect-no-log '^Manipulator Move/Copy (tx|ty|rx|ry|rz) dragged to '
+expect-no-log '^Manipulator Move/Copy tz dragged to ${tz0:re}$'
+wait-idle
+capture z '^Handle world Move/Copy tz: origin .*, knob [-0-9.]+,[-0-9.]+,([-0-9.]+),'
+capture z2 '^Handle world Move/Copy rz: center [-0-9.]+,[-0-9.]+,([-0-9.]+),'
+expect-near ${z2} ${z} 0 0.000001
+capture x2 '^Handle world Move/Copy rz: center ([-0-9.]+),'
+expect-near ${x2} ${x} 0 0.000001
+capture y '^Handle world Move/Copy rz: center [-0-9.]+,([-0-9.]+),'
+expect-near ${y} 8660 0 0.000001
 
 # --- 4. Translate's arrows keep the handles' color.
 mark

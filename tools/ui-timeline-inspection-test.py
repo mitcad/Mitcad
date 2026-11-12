@@ -82,7 +82,7 @@ def main():
                     ("MITCAD_THUMBNAIL_DIR", "thumbnails"), ("MITCAD_CRASH_DIR", "crashes")):
                 case_env[variable] = str(work / name)
             case_env.update(MITCAD_TEST_INPUT=str(fixture), MITCAD_TEST_SHOTS=str(shots),
-                MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_LANGUAGE="en", MITCAD_NO_UPDATE_CHECK="1",
+                MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_NEW_DESIGN_VIEW="0", MITCAD_LANGUAGE="en", MITCAD_NO_UPDATE_CHECK="1",
                 QT_FORCE_STDERR_LOGGING="1")
             with (out / (chrome + ".log")).open("wb") as log:
                 result = run_gui([app, "--ui=qt", "--chrome=" + chrome,

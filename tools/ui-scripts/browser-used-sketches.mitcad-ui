@@ -1,0 +1,116 @@
+# SPDX-License-Identifier: MIT
+# Preferences › General › Show used sketches under their features
+# (mitcad#1699, off by default) on browser-used-sketches.json (Sketch1 used
+# by Extrude1 and Extrude2, Sketch2 used by no feature, Sketch3 used by
+# Extrude3 alone):
+#   0. Off: the Browser as before, every sketch in the Sketches folder and
+#      no Features folder.
+#   1. Turned on in Preferences: at once a Features folder with Extrude1,
+#      Extrude2 and Extrude3; Sketch1 and Sketch3 leave the Sketches folder,
+#      Sketch2 stays there.
+#   2. Opened, Extrude1 and Extrude2 each have Sketch1 under them, with the
+#      shared mark (used by 2 features); Extrude3 has Sketch3, unmarked.
+#   3. A click on Sketch1 under Extrude1 selects Sketch1: both of its rows
+#      and its timeline cell. Its light bulb under Extrude2 shows it.
+#   4. A feature row's menu is the timeline's (Find in Timeline); Edit
+#      Sketch from Sketch1's row under Extrude2 opens Sketch1.
+#   5. Turned off again: today's rows are back.
+# Run by tools/ui-browser-used-sketches-test.sh (Linux) and
+# tools/ui-windows-browser-used-sketches-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+
+# 0. Off (the default): the rows as before.
+expect-ever '^Browser Root/Sketches/Sketch1 at '
+expect-ever '^Browser Root/Sketches/Sketch2 at '
+expect-ever '^Browser Root/Sketches/Sketch3 at '
+expect-never '^Browser Root/Features'
+expect-never '^Browser shared '
+# A fresh profile has no saved value (off is the default): the Preferences
+# checkbox below shows it unchecked.
+
+# 1. On, from Preferences › General: applied at once.
+mark
+command tools.preferences.general
+focus-dialog '^Preferences$'
+expect-widget-property browserConsumeSketches checked false
+focus-widget browserConsumeSketches
+key Space
+expect-widget-property browserConsumeSketches checked true
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+wait-log '^Preferences: show used sketches under their features on$'
+expect-setting browser/consumeSketches true
+wait-log '^Browser used sketches under their features: on$'
+wait-log '^Browser Root/Features/Extrude1 at '
+wait-log '^Browser Root/Features/Extrude2 at '
+wait-log '^Browser Root/Features/Extrude3 at '
+wait-log '^Browser Root/Sketches/Sketch2 at '
+wait-log '^Browser Root/Sketches/Sketch1 out of sight$'
+wait-log '^Browser Root/Sketches/Sketch3 out of sight$'
+wait-idle
+
+# 2. The sketches under the features that use them; the shared mark on a
+# sketch two features use, none on one only Extrude3 uses.
+mark
+click-logged '^Browser arrow Root/Features/Extrude1 at '
+wait-log '^Browser Root/Features/Extrude1/Sketch1 at '
+wait-idle
+click-logged '^Browser arrow Root/Features/Extrude2 at '
+wait-log '^Browser Root/Features/Extrude2/Sketch1 at '
+wait-idle
+click-logged '^Browser arrow Root/Features/Extrude3 at '
+wait-log '^Browser Root/Features/Extrude3/Sketch3 at '
+wait-idle
+expect-log '^Browser shared Root/Features/Extrude1/Sketch1: used by 2 features$'
+expect-log '^Browser shared Root/Features/Extrude2/Sketch1: used by 2 features$'
+expect-no-log '^Browser shared Root/Features/Extrude3/'
+expect-no-log '^Browser Root/Sketches/Sketch1 at '
+
+# 3. Selection and the light bulb, the same from either row.
+mark
+click-logged '^Browser Root/Features/Extrude1/Sketch1 at '
+wait-log '^Browser selected: Root/Features/Extrude1/Sketch1, Root/Features/Extrude2/Sketch1$'
+wait-log '^Timeline selected: F1$'
+wait-idle
+mark
+click-logged '^Browser eye Root/Features/Extrude2/Sketch1 at '
+wait-log '^Visibility Root/Features/Extrude2/Sketch1: (shown|hidden)$'
+wait-idle
+
+# 4. The feature row's menu is the timeline's; Edit Sketch from the sketch
+# row under Extrude2 opens Sketch1.
+mark
+context-menu-logged '^Browser Root/Features/Extrude2 at ' 'Find in Timeline'
+expect-log '^Context menu: Edit Feature \| .*Find in Timeline'
+wait-log '^Found F3 in the timeline$'
+wait-idle
+mark
+context-menu-logged '^Browser Root/Features/Extrude2/Sketch1 at ' 'Edit Sketch'
+expect-log '^Context menu: Edit Sketch \| '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+wait-idle
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-idle
+
+# 5. Off again: the rows as before.
+mark
+command tools.preferences.general
+focus-dialog '^Preferences$'
+expect-widget-property browserConsumeSketches checked true
+focus-widget browserConsumeSketches
+key Space
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+wait-log '^Preferences: show used sketches under their features off$'
+expect-setting browser/consumeSketches false
+wait-log '^Browser used sketches under their features: off$'
+wait-log '^Browser Root/Sketches/Sketch1 at '
+wait-log '^Browser Root/Sketches/Sketch3 at '
+wait-log '^Browser Root/Features out of sight$'
+wait-idle
+expect-never 'Recompute failed|TestDriver: FAIL'

@@ -8,7 +8,9 @@
 # that mitcad-cli makes (tools/ui-scripts/timeline-auto-fix.json): an
 # extrusion whose region a sketch change split warns; Auto Fix in its
 # timeline menu fixes it as one undo step with the same volume, is no
-# longer offered, and comes back with the warning after Undo.
+# longer offered, and comes back with the warning after Undo. The cell's
+# and the warnings badge's tooltips name Auto Fix, and the badge's menu
+# offers it too (mitcad#1677).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-timeline-auto-fix-test.sh

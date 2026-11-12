@@ -54,7 +54,10 @@ component() {
   component Cover 28
   printf '  {"cmd": "rename_feature", "uid": "F3", "name": "Rounded Edge"},\n'
   printf '  {"cmd": "rename_feature", "uid": "F30", "name": "Rounded Edge 2"},\n'
-  printf '  {"cmd": "suppress_feature", "uid": "F6"}\n'
+  printf '  {"cmd": "suppress_feature", "uid": "F6"},\n'
+  # Saved with the root active, so that it opens so (mitcad#1678) and the
+  # timeline shows both components' features.
+  printf '  {"cmd": "activate_component", "component": "Root"}\n'
   echo "]"
 } > "$WORK/model.json"
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }

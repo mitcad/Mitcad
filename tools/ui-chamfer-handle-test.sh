@@ -363,9 +363,8 @@ ui_stop_app
 echo "=== A placed component"
 ui_start_app --open "$WORK/placed.mitcad"
 ui_step "fit (F6)"                         ui_key F6
-ui_mark
-ui_step "activate Part (radio)"            ui_click_logged "Browser radio Root/Part:1"
-ui_expect_new "Activated Part" "Part is active"
+# Saved with Part active, it opens so (mitcad#1678).
+ui_expect_log "Opened with C1 active, as saved (unmodified)" "Part is active"
 ui_step "chamfer (search)"                 ui_command "Chamfer"
 ui_mark
 remember "$TOP_RIGHT"

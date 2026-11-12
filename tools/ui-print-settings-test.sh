@@ -5,7 +5,7 @@
 # Print settings and materials (mitcad#640, mitcad#654, mitcad#655) through
 # the real UI, on a design of two boxes:
 #   1. 3D Print with 3MF: with no process chosen (Slicer default) Own
-#      settings names Body2's own walls (mitcad#747); Import from slicer…
+#      settings names Body2's own walls (mitcad#747); Import from Slicer…
 #      of a slicer's project (a 3MF
 #      in OrcaSlicer's form, written by mitcad-cli): the Printer and Process
 #      rows show the imported ones, the line at the panel's end says where
@@ -184,21 +184,21 @@ ui_start_app --open "$FILE" --no-native-dialogs
 ui_step "fit (F6)"                         ui_key F6
 ui_expect_log "Body F2.b0 at" "the boxes are in the view"
 
-echo "--- 1. 3D Print: Import from slicer…, its line and Details…"
+echo "--- 1. 3D Print: Import from Slicer…, its line and Details…"
 ui_mark
 ui_command "Send to Slicer"
 ui_expect_new "3D Print printer: Slicer default" "the design has no printer yet"
 ui_expect_new "Panel Send to Slicer note process_overrides: Body2: Walls [Edit]" \
   "Own settings names Body2's own walls with the process at Slicer default (mitcad#747)"
-ui_expect_new "Panel Send to Slicer action import.0 at" "Import from slicer… is shown with 3MF"
-ui_step "Import from slicer…"              ui_click_logged "Panel Send to Slicer action import.0"
+ui_expect_new "Panel Send to Slicer action import.0 at" "Import from Slicer… is shown with 3MF"
+ui_step "Import from Slicer…"              ui_click_logged "Panel Send to Slicer action import.0"
 ui_type_path "Import from Slicer" "$WORK/plate.3mf"
 ui_focus_main
 ui_expect_new "Imported print settings from plate.3mf: printers: Bench X 0.4 nozzle; processes: Standard" \
   "the printer and the process came in"
 ui_expect_new "3D Print import: plate.3mf imported" \
   "the line names the file, nothing failed"
-ui_expect_new "[Import from slicer…] [plate.3mf imported]" \
+ui_expect_new "[Import from Slicer…] [plate.3mf imported]" \
   "one button, the line under it the link to Details"
 ui_expect_new "[Assign…]" "the Materials row offers the new material to the bodies"
 ui_expect_new "3D Print printer: design/bench-x-0-4-nozzle" "the Printer row shows the imported printer"
@@ -721,8 +721,8 @@ echo "--- 6. A Bambu Studio project: nothing left unread (mitcad#654)"
 ui_focus_main
 ui_mark
 ui_command "Send to Slicer"
-ui_expect_new "Panel Send to Slicer action import.0 at" "Import from slicer… is shown"
-ui_step "Import from slicer…"              ui_click_logged "Panel Send to Slicer action import.0"
+ui_expect_new "Panel Send to Slicer action import.0 at" "Import from Slicer… is shown"
+ui_step "Import from Slicer…"              ui_click_logged "Panel Send to Slicer action import.0"
 ui_type_path "Import from Slicer" "$WORK/mount.3mf"
 ui_focus_main
 ui_expect_new "Imported print settings from mount.3mf: printers: Bench Mini 0.4 nozzle; processes: Extra Fine" \

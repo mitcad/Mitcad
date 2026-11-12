@@ -711,8 +711,8 @@ ui_mark
 ui_step "close: untitled (Ctrl+W)"       ui_key ctrl+w
 ui_expect_new "Document closed" "an untitled design"
 # The new untitled design starts with its Component1 active, as every new
-# design does (mitcad#898); a design read from a file opens with the root
-# active instead (mitcad#426).
+# design does (mitcad#898); an import opens with the root active instead
+# (mitcad#426).
 ui_expect_new "Opened the new design with Component1 active" "the new design has Component1 active"
 tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Opened with the root active" &&
   ui_fail "the new design after Close opened with the root active"

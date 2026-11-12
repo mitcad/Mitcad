@@ -24,7 +24,7 @@ bool used(const LibraryItem& item) {
 }
 
 // The design's own, a library's copied in, or a built-in one it uses (the
-// Material tool's "This Design").
+// Material tool's "This design").
 bool inDesign(const LibraryItem& item) {
   const bool builtIn = item.place == QStringLiteral("mitcad") && item.library.isEmpty();
   const bool designHasIt = !item.inDesign.isEmpty() || item.place == QStringLiteral("design") || item.library.isEmpty();
@@ -94,7 +94,7 @@ QVector<MaterialPickerRow> materialPickerRows(const QVector<LibraryItem>& items)
           }
           MaterialPickerRow row;
           row.key = item.key();
-          row.name = item.name;
+          row.name = item.shownName(); // a built-in one translated (mitcad#1689)
           row.heading = fdm ? heading : QObject::tr("Other materials: %1").arg(heading);
           row.color = item.displayColor;
           row.fdm = fdm;

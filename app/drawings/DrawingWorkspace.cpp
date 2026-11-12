@@ -3,7 +3,9 @@
 #include "framework/ModelMessages.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <tuple>
@@ -33,6 +35,7 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QSettings>
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QTabBar>
@@ -63,8 +66,92 @@
 namespace mitcad::drawings {
 namespace {
 
-// The width of the panel beside the sheet, pixels.
-constexpr int kPanelWidth = 230;
+// The width of the panel beside the sheet, pixels: dragged by its edge
+// between these, remembered in the settings (mitcad#1692).
+constexpr int kPanelMinWidth = 230;
+constexpr int kPanelMaxWidth = 640;
+const char* const kPanelWidthKey = "drawings/panelWidth";
+
+// The rows a base view's Shows list has in sight at most before it
+// scrolls (mitcad#1692), and at least.
+constexpr int kShowsMinRows = 3;
+constexpr int kShowsMaxRows = 14;
+
+// The panel's edge toward the sheet (mitcad#1692): a strip along its left
+// side with the resize cursor, painted by nothing (the panel's margin is
+// under it). A drag to the left widens the panel; `dragged` gets each
+// width on the way, `chosen` the one it is let go at.
+class PanelEdgeGrip : public QWidget {
+public:
+  static constexpr int kWidth = 6;
+
+  PanelEdgeGrip(QWidget* panel, std::function<void(int)> dragged, std::function<void(int)> chosen)
+      : QWidget(panel), m_dragged(std::move(dragged)), m_chosen(std::move(chosen)) {
+    setObjectName(QStringLiteral("drawingPanelEdge"));
+    setAttribute(Qt::WA_NoSystemBackground);
+    setFocusPolicy(Qt::NoFocus);
+    setCursor(Qt::SizeHorCursor);
+    panel->installEventFilter(this);
+    place();
+  }
+
+protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (watched == parentWidget() && (event->type() == QEvent::Resize || event->type() == QEvent::Show)) {
+      place();
+    }
+    return false;
+  }
+
+  void mousePressEvent(QMouseEvent* event) override {
+    if (event->button() != Qt::LeftButton) {
+      event->ignore();
+      return;
+    }
+    m_dragging = true;
+    m_startX = event->globalPosition().x();
+    m_startWidth = parentWidget()->width();
+    m_width = m_startWidth;
+    event->accept();
+  }
+
+  void mouseMoveEvent(QMouseEvent* event) override {
+    if (!m_dragging) {
+      event->ignore();
+      return;
+    }
+    const int moved = static_cast<int>(std::lround(event->globalPosition().x() - m_startX));
+    const int width = std::clamp(m_startWidth - moved, kPanelMinWidth, kPanelMaxWidth);
+    if (width != m_width) {
+      m_width = width;
+      m_dragged(width);
+    }
+    event->accept();
+  }
+
+  void mouseReleaseEvent(QMouseEvent* event) override {
+    if (!m_dragging) {
+      event->ignore();
+      return;
+    }
+    m_dragging = false;
+    m_chosen(m_width);
+    event->accept();
+  }
+
+private:
+  void place() {
+    setGeometry(0, 0, kWidth, parentWidget()->height());
+    raise();
+  }
+
+  std::function<void(int)> m_dragged;
+  std::function<void(int)> m_chosen;
+  bool m_dragging = false;
+  qreal m_startX = 0;
+  int m_startWidth = 0;
+  int m_width = 0;
+};
 
 // A base view's Shows row's body uid (empty for an occurrence) and its
 // occurrence path (mitcad#1293).
@@ -194,6 +281,32 @@ QString snapHint(const QJsonObject& answer) {
   return QObject::tr("%1 mm × %2")
       .arg(QString::number(answer.value(QStringLiteral("spacing")).toDouble(), 'g', 4))
       .arg(answer.value(QStringLiteral("multiple")).toInt());
+}
+
+// What an annotation tool's click would pick under the pointer, in words
+// (mitcad#1691): its kind (the `drawing_pick` answer's `seen`, "center
+// line" for a centre picked on its mark's line) and the body it is on,
+// "Corner of Tube 2"; never its ids.
+QString pickWords(const QString& seen, const QJsonObject& pick, const QString& body) {
+  const QString of = body.isEmpty() ? DrawingWorkspace::tr("a body") : body;
+  if (seen == QStringLiteral("point") || seen == QStringLiteral("center line")) {
+    return pick.value(QStringLiteral("point")).toString() == QStringLiteral("center")
+               ? DrawingWorkspace::tr("Center of %1").arg(of)
+               : DrawingWorkspace::tr("Corner of %1").arg(of);
+  }
+  if (seen == QStringLiteral("line")) {
+    return DrawingWorkspace::tr("Edge of %1").arg(of);
+  }
+  if (seen == QStringLiteral("circle") && !pick.contains(QStringLiteral("face"))) {
+    return DrawingWorkspace::tr("Circle of %1").arg(of);
+  }
+  if (seen == QStringLiteral("circle") || seen == QStringLiteral("axis")) {
+    return DrawingWorkspace::tr("Round face of %1").arg(of);
+  }
+  if (seen == QStringLiteral("face")) {
+    return DrawingWorkspace::tr("Face of %1").arg(of);
+  }
+  return {};
 }
 
 // What a `drawing_snap` answer says of the place, for the log: "line_offset
@@ -451,13 +564,34 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
   body->addWidget(m_sheetView, 1);
   m_panel = new QWidget;
   m_panel->setObjectName(QStringLiteral("drawingPanel"));
-  m_panel->setFixedWidth(kPanelWidth);
+  // Its width as it was left (mitcad#1692); its edge toward the sheet
+  // drags it wider or narrower, in both layouts.
+  {
+    const QVariant saved = QSettings().value(QLatin1String(kPanelWidthKey));
+    const int width = std::clamp(saved.isValid() ? saved.toInt() : kPanelMinWidth, kPanelMinWidth, kPanelMaxWidth);
+    m_panel->setFixedWidth(width);
+    if (saved.isValid()) {
+      qDebug().noquote() << QStringLiteral("Drawing panel width %1 (remembered)").arg(width);
+    }
+  }
+  new PanelEdgeGrip(
+      m_panel, [this](int width) { m_panel->setFixedWidth(width); },
+      [this](int width) {
+        m_panel->setFixedWidth(width);
+        QSettings().setValue(QLatin1String(kPanelWidthKey), width);
+        qDebug().noquote() << QStringLiteral("Drawing panel width %1 remembered").arg(width);
+        QTimer::singleShot(0, this, [this] { logButtons(); });
+      });
   auto* panel = new QVBoxLayout(m_panel);
   panel->setContentsMargins(8, 8, 8, 8);
   m_panelTitle = new QLabel;
   m_panelTitle->setFont(bold);
   panel->addWidget(m_panelTitle);
   m_form = new QFormLayout;
+  // Its fields take the panel's width on every platform (macOS's style
+  // keeps them at their size otherwise), as a command's panel does: a
+  // wider panel widens a base view's Shows (mitcad#1692).
+  m_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
   panel->addLayout(m_form);
   panel->addStretch(1);
   body->addWidget(m_panel);
@@ -1242,15 +1376,18 @@ void DrawingWorkspace::fillViewPanel(int id) {
     m_form->addRow(tr("Orientation"), named(orientation, "drawingViewOrientation"));
     // What it shows (mitcad#1293): the occurrences and bodies it keeps,
     // checked in a list of the component's; each change one undo step.
-    // Update from Model takes what the 3D view shows now.
-    m_form->addRow(tr("Shows"), named(showsList(id, json.value(QStringLiteral("subject")).toObject()), "drawingViewShows"));
+    // Update from Model takes what the 3D view shows now. Both span the
+    // panel under the label (mitcad#1692): the names have its whole width,
+    // and the button its whole text.
+    m_form->addRow(new QLabel(tr("Shows")));
+    m_form->addRow(named(showsList(id, json.value(QStringLiteral("subject")).toObject()), "drawingViewShows"));
     auto* update = new QPushButton(tr("Update from Model"));
     update->setToolTip(tr("Shows the occurrences and bodies the 3D view shows now"));
     connect(update, &QPushButton::clicked, this, [edit, id] {
       qDebug().noquote() << QStringLiteral("Drawing view %1 updated from the model").arg(id);
       edit(QStringLiteral("subject"), QStringLiteral(R"({"type": "design"})"));
     });
-    m_form->addRow(QString(), named(update, "drawingViewUpdate"));
+    m_form->addRow(named(update, "drawingViewUpdate"));
   }
   if (type == QStringLiteral("projected")) {
     QComboBox* side = comboOf(sideChoices(), json.value(QStringLiteral("side")).toString());
@@ -1515,10 +1652,26 @@ QWidget* DrawingWorkspace::showsList(int view, const QJsonObject& subject) {
     }
   }
   qDebug().noquote() << QStringLiteral("Drawing view %1 shows %2 of %3 bodies").arg(view).arg(bodiesShown).arg(bodiesListed);
-  // A few rows in sight (the occurrences folded); more scroll.
-  const int rows = std::clamp(static_cast<int>(tree->topLevelItemCount()), 3, 8);
-  const int rowHeight = tree->fontMetrics().height() + 6;
-  tree->setFixedHeight(rows * rowHeight + 2 * tree->frameWidth() + 2);
+  // Its height follows the rows in sight (those under a folded occurrence
+  // not counted), up to kShowsMaxRows; more scroll (mitcad#1692). Again
+  // when an occurrence is unfolded or folded.
+  const auto fitRows = [tree] {
+    int inSight = 0;
+    for (QTreeWidgetItemIterator it(tree); *it != nullptr; ++it) {
+      bool open = true;
+      for (const QTreeWidgetItem* up = (*it)->parent(); up != nullptr && open; up = up->parent()) {
+        open = up->isExpanded();
+      }
+      inSight += open ? 1 : 0;
+    }
+    const int rows = std::clamp(inSight, kShowsMinRows, kShowsMaxRows);
+    const int rowHeight =
+        std::max(tree->fontMetrics().height() + 6, tree->topLevelItemCount() > 0 ? tree->sizeHintForRow(0) : 0);
+    tree->setFixedHeight(rows * rowHeight + 2 * tree->frameWidth() + 2);
+  };
+  fitRows();
+  connect(tree, &QTreeWidget::itemExpanded, tree, fitRows);
+  connect(tree, &QTreeWidget::itemCollapsed, tree, fitRows);
   // Its rows' places logged again once it is laid out (the UI tests click
   // them), and when a row is unfolded.
   new PlaceWatcher(tree, [this] { logButtons(); });
@@ -1684,6 +1837,8 @@ void DrawingWorkspace::showPlacingPreview() {
   const bool lines = (type == QStringLiteral("linear") || type == QStringLiteral("dimension")) &&
                      m_pickPoints.size() >= 2;
   m_sheetView->setPlacingPreview(lines ? QStringLiteral("dimension") : QStringLiteral("leader"), m_pickPoints);
+  // Its value comes with the model's answer (previewMade).
+  m_sheetView->setPlacingLabel(QString());
 }
 
 void DrawingWorkspace::previewMade(const QJsonObject& answer) {
@@ -1691,6 +1846,9 @@ void DrawingWorkspace::previewMade(const QJsonObject& answer) {
   if (type.isEmpty() || !m_sheetView->isPlacing()) {
     return;
   }
+  // What the click there writes (mitcad#1691): the value the placed
+  // dimension gets, in its words and precision.
+  m_sheetView->setPlacingLabel(answer.value(QStringLiteral("label")).toString());
   const QJsonArray ends = answer.value(QStringLiteral("ends")).toArray();
   const QJsonArray direction = answer.value(QStringLiteral("direction")).toArray();
   if (type == QStringLiteral("linear") && ends.size() == 2 && direction.size() == 2) {
@@ -1811,6 +1969,8 @@ void DrawingWorkspace::hoverRequested(int view, QPointF at) {
 void DrawingWorkspace::hoverPick() {
   QString seen = QStringLiteral("nothing");
   QJsonArray items;
+  QString words;
+  QString outlined = QStringLiteral("none");
   bool lone = false;
   // A line's or an arc's clicks snap on the view under each (mitcad#1272);
   // a section's line's or a break's on the view of its first click, which
@@ -1842,6 +2002,11 @@ void DrawingWorkspace::hoverPick() {
                       {QStringLiteral("view"), on},
                       {QStringLiteral("at"), QJsonArray{m_hoverAt.x(), m_hoverAt.y()}}};
     addWanted(query, m_options.value(m_tool->id));
+    // An annotation tool's hover outlines the body its pick is on
+    // (mitcad#1691); a line's or an arc's snap does not.
+    if (picks) {
+      query.insert(QStringLiteral("outline"), true);
+    }
     try {
       const QJsonObject answer = m_host.model().queryObject(query);
       if (answer.value(QStringLiteral("pick")).isObject()) {
@@ -1850,7 +2015,23 @@ void DrawingWorkspace::hoverPick() {
         if (answer.value(QStringLiteral("center_line")).toBool()) {
           seen = QStringLiteral("center line");
         }
-        items = answer.value(QStringLiteral("items")).toArray();
+        // The body's lines first, under the pick's own marks.
+        const QJsonObject outline = answer.value(QStringLiteral("outline")).toObject();
+        const QJsonArray lines = outline.value(QStringLiteral("lines")).toArray();
+        for (const QJsonValue& line : lines) {
+          items.append(QJsonObject{{QStringLiteral("outline"), line}});
+        }
+        const QJsonObject pick = answer.value(QStringLiteral("pick")).toObject();
+        const QString body = outline.value(QStringLiteral("body")).toString();
+        if (picks) {
+          words = pickWords(seen, pick, body);
+          outlined = QStringLiteral("%1 (%2), %3 lines")
+                         .arg(pick.value(QStringLiteral("body")).toString(), body)
+                         .arg(lines.size());
+        }
+        for (const QJsonValue& item : answer.value(QStringLiteral("items")).toArray()) {
+          items.append(item);
+        }
         // A pick the Dimension tool's Auto cannot dimension alone
         // (mitcad#1361): the model says so.
         lone = answer.contains(QStringLiteral("alone")) && !answer.value(QStringLiteral("alone")).toBool();
@@ -1860,6 +2041,13 @@ void DrawingWorkspace::hoverPick() {
     }
   }
   m_sheetView->setHoverMarks(items);
+  m_sheetView->setHoverWords(words);
+  if (outlined != m_loggedOutline) {
+    m_loggedOutline = outlined;
+    // The body as the model's pick names it (F2.b0) and as the browser
+    // does, for the tests (mitcad#1691).
+    qDebug().noquote() << QStringLiteral("Drawing hover outline: %1").arg(outlined);
+  }
   // Before the first pick of the Dimension tool's Auto (mitcad#1361): over
   // a pick that makes no dimension alone the hint says what comes after
   // it; elsewhere the tool's own.
@@ -1933,6 +2121,7 @@ void DrawingWorkspace::addPick(const QJsonObject& answer, int view, QPointF at) 
   const QJsonArray point = answer.value(QStringLiteral("at")).toArray();
   m_pickPoints.append(point.size() == 2 ? QPointF(point.at(0).toDouble(), point.at(1).toDouble()) : at);
   m_sheetView->setHoverMarks(QJsonArray());
+  m_sheetView->setHoverWords(QString());
   m_sheetView->setPickMarks(m_pickItems);
   // A centre picked on its centre mark's line says so (mitcad#1338).
   qDebug().noquote() << QStringLiteral("Drawing picked %1 (%2): %3")
@@ -1985,6 +2174,7 @@ std::optional<QPointF> DrawingWorkspace::snapPoint(int view, const QPointF& at) 
   const QJsonObject pick = answer->value(QStringLiteral("pick")).toObject();
   qDebug().noquote() << QStringLiteral("Drawing point snapped to %1").arg(compact(pick));
   m_sheetView->setHoverMarks(QJsonArray());
+  m_sheetView->setHoverWords(QString());
   return QPointF(point.at(0).toDouble(), point.at(1).toDouble());
 }
 
@@ -1996,6 +2186,7 @@ void DrawingWorkspace::pickRequested(int view, QPointF at) {
   m_hoverTimer->stop();
   m_hoverView = -1;
   m_sheetView->setHoverMarks(QJsonArray());
+  m_sheetView->setHoverWords(QString());
   const QHash<QString, QString> options = m_options.value(m_tool->id);
   const int needed = m_tool->pickCount != nullptr ? m_tool->pickCount(options) : 1;
   // Every pick of one annotation is on the view of the first.
@@ -3131,6 +3322,7 @@ void DrawingWorkspace::dropPicks() {
   m_hoverTimer->stop();
   m_hoverView = -1;
   m_sheetView->setHoverMarks(QJsonArray());
+  m_sheetView->setHoverWords(QString());
   const bool sheetPicks = m_sheetView->cancelPicks();
   const bool toolPicks = clearToolPicks();
   if (sheetPicks || toolPicks) {
@@ -3993,8 +4185,18 @@ void DrawingWorkspace::logButtons() {
     const QPoint p = m_tabs->mapTo(window(), m_tabs->tabRect(i).center());
     lines << QStringLiteral("Drawing Sheet tab %1 at %2,%3").arg(i + 1).arg(p.x()).arg(p.y());
   }
+  // The panel's edge toward the sheet and its width (mitcad#1692).
+  if (const auto* edge = m_panel->findChild<QWidget*>(QStringLiteral("drawingPanelEdge"), Qt::FindDirectChildrenOnly)) {
+    lines << QStringLiteral("Drawing panel edge at %1").arg(at(edge));
+  }
+  lines << QStringLiteral("Drawing panel width %1").arg(m_panel->width());
   for (int row = 0; row < m_form->rowCount(); ++row) {
+    // A field beside its label, or one that spans the panel (a base
+    // view's Shows and Update from Model, mitcad#1692).
     QLayoutItem* item = m_form->itemAt(row, QFormLayout::FieldRole);
+    if (item == nullptr || item->widget() == nullptr) {
+      item = m_form->itemAt(row, QFormLayout::SpanningRole);
+    }
     if (item != nullptr && item->widget() != nullptr && !item->widget()->objectName().isEmpty()) {
       // A check box takes a click on its box and label only, not
       // across the row it stretches over: its place is its box.
@@ -4005,6 +4207,19 @@ void DrawingWorkspace::logButtons() {
         place = QStringLiteral("%1,%2").arg(box.x()).arg(box.y());
       }
       lines << QStringLiteral("Drawing panel %1 at %2").arg(field->objectName(), place);
+      // A list's and a button's width, and the width the button's text
+      // needs (mitcad#1692).
+      if (qobject_cast<const QTreeWidget*>(field) != nullptr) {
+        lines << QStringLiteral("Drawing panel %1 width %2, height %3")
+                     .arg(field->objectName())
+                     .arg(field->width())
+                     .arg(field->height());
+      } else if (qobject_cast<const QPushButton*>(field) != nullptr) {
+        lines << QStringLiteral("Drawing panel %1 width %2, its text needs %3")
+                     .arg(field->objectName())
+                     .arg(field->width())
+                     .arg(field->sizeHint().width());
+      }
       // A list's rows in sight, each by its text (a base view's Shows,
       // mitcad#1293): a click selects one, Space checks or clears it.
       if (auto* list = qobject_cast<QTreeWidget*>(item->widget())) {

@@ -113,7 +113,7 @@ void readCache(MaterialCache& cache, const CommandContext& context, bool materia
     }
   }
   if (cache.rootDefaultName.isEmpty()) {
-    cache.rootDefaultName = QObject::tr("Steel");
+    cache.rootDefaultName = QStringLiteral("Steel"); // as stored; shown translated (mitcad#1689)
   }
 }
 
@@ -165,7 +165,8 @@ const LibraryItem* materialItem(const MaterialCache& cache, const QString& key) 
 }
 
 QString defaultMaterialName(const MaterialCache& cache) {
-  return QObject::tr("Default (%1)").arg(cache.rootDefaultName);
+  // The default's name as the language shows a built-in one (mitcad#1689).
+  return QObject::tr("Default (%1)").arg(shownMaterialName(cache.rootDefault, cache.rootDefaultName));
 }
 
 QString materialName(const MaterialCache& cache, const QString& key) {
@@ -176,7 +177,7 @@ QString materialName(const MaterialCache& cache, const QString& key) {
     return unquotedText(key.mid(1));
   }
   const LibraryItem* item = findItem(cache.items, key);
-  return item != nullptr ? item->name : key;
+  return item != nullptr ? item->shownName() : key;
 }
 
 // The appearance a material gives its bodies.
@@ -260,8 +261,14 @@ QVector<PickerEntry> materialEntries(const MaterialCache& cache) {
                              colorSwatch(fallback != nullptr ? fallback->displayColor : QColor(), kSwatch * 2),
                              QObject::tr("No material of its own")});
   for (const LibraryItem* item : orderedMaterials(cache)) {
-    entries.append(PickerEntry{item->key(), item->name, materialSection(*item),
-                               colorSwatch(item->displayColor, kSwatch * 2), QString()});
+    PickerEntry entry{item->key(), item->shownName(), materialSection(*item),
+                      colorSwatch(item->displayColor, kSwatch * 2), QString()};
+    // A built-in material is also found by its stored English name
+    // (mitcad#1689).
+    if (entry.name != item->name) {
+      entry.search = item->name;
+    }
+    entries.append(entry);
   }
   return entries;
 }
@@ -277,7 +284,7 @@ Choices materialRowChoices(const MaterialCache& cache) {
       section = heading;
       choices.append({choiceHeadingPrefix() + heading, heading});
     }
-    choices.append({item->key(), item->name});
+    choices.append({item->key(), item->shownName()});
   }
   return choices;
 }
@@ -358,17 +365,37 @@ QString targetsMaterialClass(const MaterialCache& cache, const CommandState& sta
   return QString();
 }
 
-// The picker's entries: Default, then the appearances of the targets'
-// material's class first (mitcad#1102, as a material's Add…), then This
-// Design and the library's by class (mitcad#1133).
+// The picker's entries: Default, then the appearances the tool gave last
+// under Recent (mitcad#1685, the newest first; listed again under their
+// own headings), then those of the targets' material's class (mitcad#1102,
+// as a material's Add…), then This design and the library's by class
+// (mitcad#1133).
 QVector<PickerEntry> appearanceEntries(const MaterialCache& cache, bool withDefault, const QString& materialClass) {
   QVector<PickerEntry> entries;
   if (withDefault) {
     entries.append(PickerEntry{defaultKey(), QObject::tr("Default"), QString(), colorSwatch(QColor(), kSwatch * 2),
                                QObject::tr("No appearance of its own: its material's")});
   }
+  QStringList known;
+  for (const Appearance& appearance : cache.appearances) {
+    known << appearance.id;
+  }
+  QStringList recentNames;
+  for (const QString& id : recentAppearanceRows(known, recentAppearances())) {
+    for (const Appearance& appearance : cache.appearances) {
+      if (appearance.id == id) {
+        entries.append(PickerEntry{appearance.id, appearance.name, QObject::tr("Recent"),
+                                   appearanceSwatch(appearance, kSwatch * 2), QString()});
+        recentNames << appearance.name;
+        break;
+      }
+    }
+  }
+  qDebug().noquote() << QStringLiteral("Appearance picker recent: %1")
+                            .arg(recentNames.isEmpty() ? QStringLiteral("none")
+                                                       : recentNames.join(QStringLiteral(" | ")));
   const QVector<AppearanceSection> sections =
-      appearanceSections(cache.appearances, materialClass, QObject::tr("This Design"));
+      appearanceSections(cache.appearances, materialClass, QObject::tr("This design"));
   for (const AppearanceSection& section : sections) {
     for (const Appearance* appearance : section.appearances) {
       entries.append(PickerEntry{appearance->id, appearance->name, section.title,
@@ -379,12 +406,12 @@ QVector<PickerEntry> appearanceEntries(const MaterialCache& cache, bool withDefa
   return entries;
 }
 
-// A row's choices (the fx): As above, then This Design and the library's
+// A row's choices (the fx): As above, then This design and the library's
 // by class under their headings, as the picker (mitcad#1133).
 Choices appearanceRowChoices(const MaterialCache& cache) {
   Choices choices{{QString(), QObject::tr("As above")}};
   const QVector<AppearanceSection> sections =
-      appearanceSections(cache.appearances, QString(), QObject::tr("This Design"));
+      appearanceSections(cache.appearances, QString(), QObject::tr("This design"));
   for (const AppearanceSection& section : sections) {
     choices.append({choiceHeadingPrefix() + section.title, section.title});
     for (const Appearance* appearance : section.appearances) {
@@ -677,7 +704,7 @@ ChoiceTile valueTile(const ToolKind& kind, const MaterialCache& cache, const Com
     tile.title = key == defaultKey() ? QObject::tr("Default") : (found != nullptr ? found->name : unquotedText(key));
     tile.image = found != nullptr ? appearanceSwatch(*found, kTileSwatch) : colorSwatch(QColor(), kTileSwatch);
     tile.detail = key == defaultKey() ? QObject::tr("No appearance of its own")
-                  : found != nullptr  ? (found->library ? QObject::tr("Library") : QObject::tr("This Design"))
+                  : found != nullptr  ? (found->library ? QObject::tr("Library") : QObject::tr("This design"))
                                       : QString();
   }
   if (varies(kind, state)) {
@@ -832,7 +859,7 @@ QString materialsNow(const MaterialCache& cache, const CommandState& state, cons
       target.what = QObject::tr("Default");
       for (const QJsonValue& value : cache.designMaterials) {
         if (value.toObject().value(QStringLiteral("components")).toArray().contains(item.owner)) {
-          target.what = str(value.toObject(), "name");
+          target.what = shownMaterialName(str(value.toObject(), "id"), str(value.toObject(), "name"));
         }
       }
     } else {
@@ -848,7 +875,7 @@ QString materialsNow(const MaterialCache& cache, const CommandState& state, cons
         }
         try {
           const QJsonObject made = context.queryObject(query);
-          target.what = str(made, "name");
+          target.what = shownMaterialName(str(made, "id"), str(made, "name"));
           if (target.what.isEmpty()) {
             target.what = str(made, "id");
           }
@@ -976,7 +1003,7 @@ CommandDef materialCommand(const CommandContext& context) {
       .withChoices([cache](const CommandState&) {
         Choices choices{{defaultKey(), defaultMaterialName(*cache)}};
         for (const LibraryItem& item : cache->items) {
-          choices.append({item.key(), item.name});
+          choices.append({item.key(), item.shownName()});
         }
         return choices;
       })
@@ -1329,6 +1356,14 @@ CommandDef appearanceCommand(const CommandContext& context) {
     const QString shown = varies(kind, state) ? bindingOf(kind, *cache, state, nullptr)
                           : key == defaultKey() ? QString()
                                                 : key;
+    // After OK (the Material tool's recent materials likewise): one
+    // appearance given, not Default nor an expression, is remembered for
+    // the picker's Recent (mitcad#1685).
+    if (!varies(kind, state) && !key.isEmpty() && appearanceKeyOf(*cache, key) == key) {
+      rememberRecentAppearance(key);
+      qDebug().noquote() << QStringLiteral("Appearance tool: recent %1")
+                                .arg(recentAppearances().join(QStringLiteral(", ")));
+    }
     return QStringLiteral("Appearance %1 for %2 body(ies)%3")
         .arg(shown)
         .arg(state.items(QStringLiteral("bodies")).size())

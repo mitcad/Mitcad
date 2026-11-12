@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: MIT
+# Where what is picked in the view is (mitcad#1704, app/COMMANDS.md
+# "Selection"), on owner-marks.json (Body1 of Extrude1, an unused Sketch2):
+#   1. A face of Body1 picked in the view marks Body1's row and Extrude1
+#      in the timeline, as owner marks: neither is selected.
+#   2. Delete with the face selected acts on the face selection, as before:
+#      Extrude1 goes (not the marked body row); Undo brings it back.
+#   3. A profile of Sketch2 picked (in the dark theme) marks Sketch2's row
+#      and Sketch2 in the timeline; Esc clears the selection and the marks.
+#   4. After Collapse All a face picked again opens the Bodies folder and
+#      scrolls to the marked row.
+# Run by tools/ui-owner-marks-test.sh (Linux) and
+# tools/ui-windows-owner-marks-test.ps1 (Windows), Docked and Floating.
+expect-ever 'View area'
+wait-idle
+expect-model-bodies 1 4000
+command view.fit
+wait-idle
+capture-undo-depth baseline
+
+# 1. A face: its body row and its feature marked, not selected.
+mark
+click-visible-face
+expect-selection 1 0
+wait-log '^Browser owner marks: Root/Bodies/Body1$'
+wait-log '^Timeline owner marks: F2 Extrude1$'
+wait-idle
+expect-no-log '^Browser selected: .*Body1'
+expect-no-log '^Timeline selected: F2'
+screenshot '${MITCAD_TEST_WORK}/owner-marks-face-${MITCAD_TEST_CHROME}.png'
+
+# 2. Delete with the face selected: the face's feature, as before.
+focus-main
+focus-widget modelView
+mark
+key Delete
+wait-log '^Deleted Extrude1$'
+expect-no-log '^Deleted body '
+expect-model-bodies 0 0
+expect-undo-depth ${baseline} 1
+wait-log '^Browser owner marks: none$'
+wait-log '^Timeline owner marks: none$'
+mark
+command edit.undo
+expect-model-bodies 1 4000
+expect-undo-depth ${baseline} 0
+wait-idle
+
+# 3. A profile, in the dark theme: its sketch's row and the sketch marked.
+color-scheme dark
+wait-idle
+mark
+click-visible-item profile
+expect-selection 1 1
+wait-log '^Browser owner marks: Root/Sketches/Sketch2$'
+wait-log '^Timeline owner marks: F3 Sketch2$'
+wait-idle
+expect-no-log '^Browser selected: .*Sketch2'
+screenshot '${MITCAD_TEST_WORK}/owner-marks-profile-dark-${MITCAD_TEST_CHROME}.png'
+color-scheme light
+wait-idle
+focus-main
+focus-widget modelView
+mark
+key Escape
+expect-selection 0 0
+wait-log '^Browser owner marks: none$'
+wait-log '^Timeline owner marks: none$'
+
+# 4. Collapse All folds Body1's row away: a face picked again opens it.
+mark
+context-menu-logged '^Browser Root at ' 'Collapse All'
+wait-idle
+mark
+click-visible-face
+expect-selection 1 0
+wait-log '^Browser owner marks: Root/Bodies/Body1$'
+wait-log '^Browser scrolled to Root/Bodies/Body1$'
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/owner-marks-revealed-${MITCAD_TEST_CHROME}.png'
+expect-never 'TestDriver: FAIL'

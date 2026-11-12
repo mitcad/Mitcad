@@ -137,3 +137,46 @@ fn a_pipe_along_part_of_its_path_is_not_checked() {
     );
     assert!(said.is_empty(), "{said:?}");
 }
+
+#[test]
+fn folds_the_geometry_built_in_pieces_are_notes() {
+    // (mitcad#1697) Where the geometry builds the pipe in pieces fused into
+    // one solid and says so, the tight fillet and the short chamfer are
+    // notes, not warnings.
+    let (mut doc, first, second) = l_path();
+    fillet(&mut doc, &first, &second, 3.0);
+    doc.kernel()
+        .infos
+        .borrow_mut()
+        .insert("pipe", mitcad_model::sweeps::FOLDS_RESOLVED.to_owned());
+    let said = pipe(&mut doc, &first, json!({}));
+    assert!(said.is_empty(), "{said:?}");
+    assert_eq!(
+        doc.infos(FeatureUid(2)),
+        [
+            "the path bends with radius 3 mm at a curve of Sketch1, tighter than the 5 mm the pipe \
+          reaches; the pipe was built in pieces there, joined into one solid"
+        ]
+    );
+
+    let (mut doc, first, second) = l_path();
+    command(
+        &mut doc,
+        json!({"cmd": "sketch.chamfer", "sketch": "F1", "a": first, "b": second, "distance": 2}),
+    );
+    doc.kernel()
+        .infos
+        .borrow_mut()
+        .insert("pipe", mitcad_model::sweeps::FOLDS_RESOLVED.to_owned());
+    let said = pipe(&mut doc, &first, json!({}));
+    assert!(said.is_empty(), "{said:?}");
+    let notes = doc.infos(FeatureUid(2));
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].ends_with(
+            " is 2.828 mm long, shorter than the 4.142 mm the pipe's mitered corners need; the \
+             pipe was built in pieces there, joined into one solid"
+        ),
+        "{notes:?}"
+    );
+}

@@ -22,6 +22,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QImage>
 #include <QJsonDocument>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -107,6 +108,7 @@
 #include "framework/CommandRegistry.hpp"
 #include "framework/ChromeStyle.hpp"
 #include "framework/CommandSearch.hpp"
+#include "framework/CommandSearchRank.hpp"
 #include "framework/DebugLog.hpp"
 #include "framework/FitToScreen.hpp"
 #include "framework/FloatingLayout.hpp"
@@ -146,6 +148,7 @@
 #include "sketch/PaletteCreateTools.hpp"
 #include "sketch/Sketch3dController.hpp"
 #include "sketch/Sketch3dPalette.hpp"
+#include "sketch/SketchItemList.hpp"
 #include "sketch/SketchPalette.hpp"
 #include "sketch/SketchTool.hpp"
 // Click adds to the selection in sketches (mitcad#1403).
@@ -617,6 +620,8 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   connect(m_viewer, &OcctViewer::glFailed, this, &MainWindow::showError);
   // Picks arrive while the view is painting; react afterwards.
   connect(m_viewer, &OcctViewer::picked, this, &MainWindow::onPicked, Qt::QueuedConnection);
+  // The pick list's rows in words (mitcad#1703): the Browser's names.
+  m_viewer->setPickListNames([this](const SelectionItem& item) { return pickListText(item, m_snapshot); });
   // The pick places of the active input again once the cards over the view
   // have moved (the command's card laid out after its input took the
   // picks), so that none is under a card (mitcad#1086); only with
@@ -836,6 +841,7 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   m_versionWatermark = new VersionWatermark(m_viewer);
   m_search = new CommandSearch(*m_registry, this);
   connect(m_search, &CommandSearch::chosen, this, &MainWindow::trigger, Qt::QueuedConnection);
+  m_search->setModeHint([this](const CommandDef& def) { return modeHint(def); });
   createAutosave();
   createLive();
   // The chat panel (mitcad#947).
@@ -874,10 +880,11 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
 
   recompute();
   // The untitled design at the start is a new design too (mitcad#898),
-  // framed as every new design is (mitcad#1000).
+  // framed as every new design is (mitcad#1000): looking at Top with its
+  // origin shown (mitcad#1683, newDesignDocument shows it).
   if (!demo) {
     logNewDesignActive();
-    m_viewer->frameNewDesign();
+    m_viewer->frameNewDesign(newDesignAtTop());
   }
   showHint(m_registry->shortcutWarnings().isEmpty()
                ? tr("Create a sketch to start modeling. %1 finds commands.")
@@ -1798,7 +1805,7 @@ void MainWindow::createPanels() {
   addDockWidget(Qt::LeftDockWidgetArea, browserDock);
   auto* timelineDock = new QDockWidget(tr("Timeline"), this);
   timelineDock->setObjectName(QStringLiteral("timelineDock"));
-  timelineDock->setWidget(m_controller->timeline());
+  timelineDock->setWidget(createTimelinePlace());
   addDockWidget(Qt::BottomDockWidgetArea, timelineDock);
   if (QMenu* view = findChild<QMenu*>(QStringLiteral("viewMenu"))) {
     view->addAction(browserDock->toggleViewAction());
@@ -1873,7 +1880,7 @@ void MainWindow::createFloatingPanels() {
   auto* timelineCard = new GlassCard;
   timelineCard->setObjectName(QStringLiteral("timelineDock"));
   timelineCard->setCapsule(true);
-  timelineCard->setContent(m_controller->timeline(), QMargins(18, 4, 18, 4));
+  timelineCard->setContent(createTimelinePlace(), QMargins(18, 4, 18, 4));
 
   m_commandPages = new QStackedWidget;
   m_idleInfo = new QLabel;
@@ -1957,6 +1964,40 @@ void MainWindow::createFloatingPanels() {
       action->setChecked(true);
       connect(action, &QAction::toggled, card, &QWidget::setVisible);
     }
+  }
+}
+
+QWidget* MainWindow::createTimelinePlace() {
+  // The timeline, and while a sketch is edited the sketch's points, curves,
+  // constraints and dimensions in creation order in its place (mitcad#1492):
+  // a sketch's items are solved together, so the timeline's marker and its
+  // rollback mean nothing for them.
+  m_timelinePlace = new QStackedWidget;
+  m_timelinePlace->setObjectName(QStringLiteral("timelinePlace"));
+  m_timelinePlace->addWidget(m_controller->timeline());
+  m_sketchItems = new sketch::SketchItemList(*m_sketch);
+  m_timelinePlace->addWidget(m_sketchItems);
+  m_timelinePlace->setCurrentWidget(m_controller->timeline());
+  // After the list's own connection, so that it shows the sketch's items
+  // as it comes into the timeline's place.
+  connect(m_sketch, &sketch::SketchController::changed, this, &MainWindow::updateTimelinePlace);
+  return m_timelinePlace;
+}
+
+void MainWindow::updateTimelinePlace() {
+  if (m_timelinePlace == nullptr) {
+    return;
+  }
+  const bool sketching = m_sketch->isActive();
+  QWidget* shown = sketching ? static_cast<QWidget*>(m_sketchItems) : m_controller->timeline();
+  if (m_timelinePlace->currentWidget() == shown) {
+    return;
+  }
+  m_timelinePlace->setCurrentWidget(shown);
+  qDebug().noquote() << (sketching ? QStringLiteral("Sketch item list in the timeline's place")
+                                   : QStringLiteral("Timeline back in its place"));
+  if (sketching) {
+    m_sketchItems->logPlaces();
   }
 }
 
@@ -2156,6 +2197,33 @@ QString MainWindow::unavailableReason(const CommandDef& def) const {
   return QString();
 }
 
+QString MainWindow::modeHint(const CommandDef& def) const {
+  // Only when the mode is all that keeps it from running, as isAvailable
+  // decides: not in a read-only window, a panel or a 3D sketch's refusal.
+  if (windowReadOnly() && !readOnlyCommand(def)) {
+    return QString();
+  }
+  if (def.mode == CommandDef::Mode::Sketch && m_mode == Mode::Idle) {
+    return tr("Open a sketch first: %1").arg(m_registry->shortcutHint(QStringLiteral("sketch.create")));
+  }
+  if (def.mode == CommandDef::Mode::Model && m_mode == Mode::Sketch && sketch3dRefusal(def).isEmpty()) {
+    if (def.kind == CommandDef::Kind::Feature) {
+      // Extrude and Revolve take a sketch's profiles in the sketch.
+      const InputDef* input = def.primarySelection();
+      if (input != nullptr && input->filter.testFlag(SelectKind::Profile)) {
+        return QString();
+      }
+    }
+    // Not when it would still wait after the sketch (a drawing's tools,
+    // Center of Mass without bodies).
+    if (def.enabled && !def.enabled()) {
+      return QString();
+    }
+    return tr("Finish the sketch first: %1").arg(m_registry->shortcutHint(QStringLiteral("sketch.finish")));
+  }
+  return QString();
+}
+
 void MainWindow::updateActions() {
   m_autoselect->setActive(m_mode == Mode::Idle);
   updateModeBanner();
@@ -2217,6 +2285,12 @@ void MainWindow::trigger(const QString& id) {
   }
   if (m_reports != nullptr) {
     m_reports->noteAction(QStringLiteral("command ") + id);
+  }
+  // Run from anywhere (a key, the toolbar, a menu, the search): among equal
+  // matches the command search lists it first (mitcad#1690). Not the
+  // search itself, which would then head its own empty list.
+  if (def->id != QLatin1String("tools.search")) {
+    search::rememberRecentCommand(def->id);
   }
   // Delete in a 3D sketch removes its own selection (mitcad#1524).
   if (id == QStringLiteral("sketch.delete") && m_mode == Mode::Sketch && m_sketch3d != nullptr &&
@@ -2357,6 +2431,14 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
   if (!analysis.isEmpty()) {
     session->editAnalysis(analysis);
   }
+  // Started by Repeat: the panel starts from the settings of the command's
+  // last OK, its selections empty (mitcad#1686).
+  if (editUid.isEmpty() && analysis.isEmpty() && def.id == m_repeatCommand) {
+    if (const auto found = m_repeatSettings.constFind(def.id); found != m_repeatSettings.cend()) {
+      session->setRepeatSettings(found.value());
+    }
+  }
+  m_repeatCommand.clear();
 #ifdef MITCAD_MACOS_NATIVE_UI
   if (m_nativeWindow) {
     m_session = session;
@@ -2617,6 +2699,11 @@ void MainWindow::onCommandFinished(bool committed) {
 #endif
   CommandSession* session = m_session;
   m_session = nullptr;
+  // A new feature's OK: what a Repeat of its command starts from
+  // (mitcad#1686). Cancel and edits leave the last OK's.
+  if (committed && session != nullptr && session->committedSettings()) {
+    m_repeatSettings.insert(session->def().id, *session->committedSettings());
+  }
   // OK or Cancel: the panel's errors go with it (mitcad#1621), before its
   // "Done." or "Command canceled." takes the band.
   closeMessageSource(QStringLiteral("command"));
@@ -2676,8 +2763,20 @@ void MainWindow::confirm() {
     if (m_reports != nullptr) {
       m_reports->noteAction(QStringLiteral("repeat ") + id);
     }
-    trigger(id);
+    repeatCommand(id);
   }
+}
+
+void MainWindow::repeatCommand(const QString& id) {
+  if (modelBusy()) {
+    whenIdle(this, [this, id] { repeatCommand(id); });
+    return;
+  }
+  // Its panel starts from the last OK's settings (startFeatureCommand,
+  // mitcad#1686).
+  m_repeatCommand = id;
+  trigger(id);
+  m_repeatCommand.clear();
 }
 
 bool MainWindow::repeatableCommand() const {
@@ -6125,6 +6224,9 @@ void MainWindow::startSketch() {
   // face is still is. Put back when the pick ends (updateModeBanner).
   m_viewer->setPlanesBehind(true);
   m_viewer->setPlanesByDepth(true);
+  // A new design still at its Top turns to the default view first, so that
+  // all three origin planes can be picked, XZ and YZ too (mitcad#1698).
+  m_viewer->turnForPlanePick();
   inputActivated(kConstructionGeometry);
   updateIdleView();
   updateActions();
@@ -6428,6 +6530,11 @@ void MainWindow::leaveSketchMode() {
   m_commandPages->setCurrentWidget(m_idlePage);
   m_sketchExisting = false;
   m_sketchRestoreMarker = -1;
+  if (m_sketchingSession) {
+    // The command whose sketch this was comes back once the sketch is left
+    // (mitcad#1648: Flange's Edit Profile).
+    QTimer::singleShot(0, this, [this] { resumeSketchingCommand(); });
+  }
 }
 
 void MainWindow::showSketchLeft(const QString& uid, const QString& command) {
@@ -7005,11 +7112,18 @@ bool MainWindow::writeFile(const QString& path, const QString& description, Vers
   // Whole or not at all (a temporary file renamed over it); in a project
   // (P12a) version 3, with base features' B-rep data in the project's
   // store, else one file. A save that changes the file stamps the design's
-  // statistics: Last Saved, by the user, with this MitCad (mitcad#1088).
+  // statistics: Last Saved, by the user, with this MitCad (mitcad#1088),
+  // and with them the file's preview, the 3D view as it is now, which
+  // file managers show (mitcad#1539).
+  const QImage preview = designPreviewImage();
+  const QByteArray previewPng = designPreviewPng(preview);
   std::optional<rust::String> json;
   QString error;
   try {
-    json = idleDocument().save_design_stamped(rustStr(path.toUtf8()), "auto");
+    json = idleDocument().save_design_stamped(
+        rustStr(path.toUtf8()), "auto",
+        rust::Slice<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(previewPng.constData()),
+                                        static_cast<std::size_t>(previewPng.size())));
   } catch (const std::exception& e) {
     error = mitcad::modelMessage(e.what());
   }
@@ -7029,7 +7143,8 @@ bool MainWindow::writeFile(const QString& path, const QString& description, Vers
     paths << webViewerOnSave(**project, absolute, author, paths.size() > 1);
     status = recordVersion(**project, absolute, paths, message, author);
   }
-  afterSaved(path, QByteArrayView(json->data(), static_cast<qsizetype>(json->size())), status.status, status.problem);
+  afterSaved(path, QByteArrayView(json->data(), static_cast<qsizetype>(json->size())), preview, status.status,
+             status.problem);
   if (project) {
     rememberVersionBase(**project, absolute);
     // The version's preview for Version History (P12e).
@@ -7065,7 +7180,8 @@ bool MainWindow::writeFile(const QString& path, const QString& description, Vers
   return project && status.preserved;
 }
 
-void MainWindow::afterSaved(const QString& path, QByteArrayView content, const QString& status, bool problem) {
+void MainWindow::afterSaved(const QString& path, QByteArrayView content, const QImage& preview, const QString& status,
+                            bool problem) {
   m_filePath = QFileInfo(path).absoluteFilePath();
   m_projectDir.clear();
   markSaved(*m_document);
@@ -7076,7 +7192,7 @@ void MainWindow::afterSaved(const QString& path, QByteArrayView content, const Q
   addRecentFile(m_filePath);
   qInfo().noquote() << "Saved" << m_filePath;
   // Its preview for the Start tab and File › Open Recent (mitcad#1258).
-  saveDesignPreview(m_filePath);
+  saveDesignPreview(m_filePath, preview);
   if (status.isEmpty()) {
     showHint(tr("Saved %1").arg(QDir::toNativeSeparators(m_filePath)));
   } else if (problem) {
@@ -7206,9 +7322,15 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
   double milliseconds = 0.0;
   QString previousActive; // the component the file had active (mitcad#426)
   QString activateError;
+  // The component a design read from a file keeps active (mitcad#1678),
+  // and why it could not, should it be the root after all.
+  QString keptActive;
+  QString keptError;
   // A new design keeps the component it has active: New Design in a
   // project (mitcad#844) and an empty design (mitcad#898).
   const bool newDesign = m_openingNewDesign;
+  // An import opens with its root active (mitcad#426).
+  const bool imported = m_openingImport;
   // The result store (P7d): costly features come from it, and what was
   // costly to compute goes to it.
   const QByteArray store = resultStoreDirectory().toUtf8();
@@ -7238,19 +7360,45 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
       reading.start();
       rust::Box<Document> document = make(job);
       readMs = reading.elapsed();
-      // Every design opens with its root active (mitcad#426), whatever the
-      // file stores: no undo step, no new revision, so not modified. A new
-      // design keeps its Component1 active, as the untitled design at the
-      // start does: one of a project (mitcad#844) and an empty one
-      // (mitcad#898).
-      try {
-        if (!newDesign) {
-          previousActive = parseObject(document->command(rustStr(compactJson(
-                                           {{QStringLiteral("cmd"), QStringLiteral("activate_component")},
-                                            {QStringLiteral("component"), QStringLiteral("C0")},
+      // A new design shows its origin (mitcad#1683), also one a project or
+      // an agent made as a file; no undo step, not modified.
+      if (newDesign) {
+        showNewDesignOrigin(*document);
+      }
+      // A design read from a file (an open, a recovered document, a version)
+      // opens with the component it was saved with active (mitcad#1678), so
+      // that a component the user worked in stays active and its first
+      // sketch on a face asks nothing (mitcad#960); a component it can no
+      // longer be (linked since) gives way to the root. An import opens
+      // with its root active (mitcad#426). A new design keeps its
+      // Component1 active, as the untitled design at the start does: one of
+      // a project (mitcad#844) and an empty one (mitcad#898). None is an
+      // undo step or a new revision, so the document is not modified.
+      const auto activateOnOpening = [&document](const QString& component) {
+        return parseObject(document->command(rustStr(
+                               compactJson({{QStringLiteral("cmd"), QStringLiteral("activate_component")},
+                                            {QStringLiteral("component"), component},
                                             {QStringLiteral("opening"), true}}))))
-                               .value(QStringLiteral("previous"))
-                               .toString();
+            .value(QStringLiteral("previous"))
+            .toString();
+      };
+      try {
+        if (imported) {
+          previousActive = activateOnOpening(QStringLiteral("C0"));
+        } else if (!newDesign) {
+          const QByteArray componentsQuery =
+              compactJson({{QStringLiteral("query"), QStringLiteral("components")}});
+          const QString stored =
+              parseObject(document->query(rustStr(componentsQuery))).value(QStringLiteral("active")).toString();
+          if (!stored.isEmpty() && stored != QStringLiteral("C0")) {
+            try {
+              activateOnOpening(stored);
+              keptActive = stored;
+            } catch (const std::exception& e) {
+              keptError = errorText(e);
+              previousActive = activateOnOpening(QStringLiteral("C0"));
+            }
+          }
         }
       } catch (const std::exception& e) {
         activateError = errorText(e);
@@ -7325,12 +7473,17 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
   }
   updateVersionStatus();
   m_profileFaces.clear();
+  const QString openedState = isModified() ? QStringLiteral("modified") : QStringLiteral("unmodified");
   if (!activateError.isEmpty()) {
-    qWarning().noquote() << QStringLiteral("The root could not be activated on opening: %1").arg(activateError);
+    qWarning().noquote() << QStringLiteral("The active component could not be set on opening: %1").arg(activateError);
+  } else if (!keptError.isEmpty()) {
+    qWarning().noquote() << QStringLiteral("Opened with the root active; %1, active in the file, cannot be: %2 (%3)")
+                                .arg(previousActive, keptError, openedState);
+  } else if (!keptActive.isEmpty()) {
+    qInfo().noquote() << QStringLiteral("Opened with %1 active, as saved (%2)").arg(keptActive, openedState);
   } else if (!previousActive.isEmpty() && previousActive != QStringLiteral("C0")) {
-    qInfo().noquote() << QStringLiteral("Opened with the root active; %1 was active in the file (%2)")
-                             .arg(previousActive, isModified() ? QStringLiteral("modified")
-                                                               : QStringLiteral("unmodified"));
+    qInfo().noquote()
+        << QStringLiteral("Opened with the root active; %1 was active in the file (%2)").arg(previousActive, openedState);
   }
   reportRecompute(recomputed, milliseconds);
   if (!handOff.isEmpty()) {
@@ -7365,10 +7518,16 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
   }
   if (!m_keepView) {
     // A new design is empty: its first view frames the origin the same way
-    // whatever the window's size and the design before (mitcad#1000).
+    // whatever the window's size and the design before (mitcad#1000),
+    // looking at Top (mitcad#1683). A design read from a file into a view
+    // that still looks at a new design's Top (a new window's untitled
+    // design, a file given at the start) is seen from the default view, a
+    // few degrees off the isometric one (mitcad#1698); a view the user
+    // turned keeps its direction.
     if (newDesign) {
-      m_viewer->frameNewDesign();
+      m_viewer->frameNewDesign(newDesignAtTop());
     } else {
+      m_viewer->leaveNewDesignTop();
       m_viewer->fitAll();
     }
   }
@@ -7446,8 +7605,8 @@ bool MainWindow::installEmptyDocument(const QString& name, QString* error) {
   QString reason;
   // A new, empty design (New, Close, an empty project, the open design
   // deleted) starts with its Component1 active, as the untitled design at
-  // the start does (mitcad#898), not with the root as a design read from a
-  // file (mitcad#426).
+  // the start does (mitcad#898), not with the root as an import
+  // (mitcad#426).
   const bool wasOpeningNewDesign = m_openingNewDesign;
   m_openingNewDesign = true;
   // In the default units for new designs (Preferences > General,

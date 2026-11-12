@@ -806,6 +806,65 @@ fn gaps_are_touching_narrow_or_clear() {
 }
 
 #[test]
+fn the_face_gap_of_touching_bodies_skips_contacts_side_faces_and_overlaps() {
+    // mitcad#1672: a peg of radius 2.5 in a hole of 2.6 along Z, the
+    // wheel lying on the plate at z = 0 (plate a, wheel b).
+    use crate::kernel::FaceSeparation;
+    let pair = |faces: [usize; 2], on: [[f64; 3]; 2], normals: [[f64; 3]; 2]| FaceSeparation {
+        face_a: faces[0],
+        face_b: faces[1],
+        distance: mitcad_vec3::distance(on[0], on[1]),
+        on_a: on[0],
+        on_b: on[1],
+        normal_a: normals[0],
+        normal_b: normals[1],
+    };
+    // The plate's top on the wheel's bottom: a contact.
+    let contact = pair([0, 0], [[5.0, 0.0, 0.0]; 2], [[0.0; 3]; 2]);
+    // The hole's wall and the peg's: 0.1 mm across air, each wall's
+    // outward normal towards the other.
+    let peg = pair(
+        [1, 1],
+        [[2.6, 0.0, -2.0], [2.5, 0.0, -2.0]],
+        [[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+    );
+    // The plate's top beside the peg's wall at the hole's rim: 0.1 mm, but
+    // the top faces up, not towards the peg.
+    let rim = pair(
+        [0, 1],
+        [[2.6, 0.0, 0.0], [2.5, 0.0, 0.0]],
+        [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]],
+    );
+    let faces = [contact, rim, peg];
+    let found = print_analysis::face_gap(&faces, 0.3).unwrap();
+    assert_eq!((found.face_a, found.face_b), (1, 1));
+    assert!(close(found.distance, 0.1, 1e-6), "{found:?}");
+    assert!(!print_analysis::faces_across_a_gap(&rim));
+    // Under a narrower gap, or with only the contact and the rim: none.
+    assert!(print_analysis::face_gap(&[contact, rim, peg], 0.1).is_none());
+    assert!(print_analysis::face_gap(&[contact, rim], 0.3).is_none());
+    // A peg 0.1 mm too thick for its hole overlaps it: the walls face away
+    // from each other.
+    let overlap = pair(
+        [1, 1],
+        [[2.4, 0.0, -2.0], [2.5, 0.0, -2.0]],
+        [[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+    );
+    assert!(print_analysis::face_gap(&[contact, overlap], 0.3).is_none());
+    // A face without a normal there faces nothing.
+    let pole = FaceSeparation {
+        normal_a: [0.0; 3],
+        ..peg
+    };
+    assert!(!print_analysis::faces_across_a_gap(&pole));
+    // The cache keys differ by the gap.
+    assert_ne!(
+        print_analysis::face_gap_key(7, 0.3),
+        print_analysis::face_gap_key(7, 0.4)
+    );
+}
+
+#[test]
 fn only_bodies_whose_boxes_lie_within_the_gap_are_measured() {
     use crate::kernel::BoundingBox;
     let cube = |x: f64| {

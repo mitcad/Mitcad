@@ -372,7 +372,8 @@ pub struct DrawingOptions {
     /// Bodies with free-form faces (or many B-spline edges against many
     /// faces, mitcad#1033) are drawn from a fine triangulation
     /// either way, its edges as lines and arcs where they follow them
-    /// (`ViewSpec::quick`, mitcad#962).
+    /// within 0.02 mm on the sheet (`ViewSpec::quick`, mitcad#962,
+    /// mitcad#1671), and with them the bodies they overlap in the view.
     #[serde(default = "yes")]
     pub exact: bool,
 }

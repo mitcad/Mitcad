@@ -57,6 +57,7 @@
 
 #include "../browser/Bindings.hpp"
 #include "../browser/DocumentHost.hpp"
+#include "../framework/Appearances.hpp"
 #include "../framework/DialogFolders.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/Icons.hpp"
@@ -575,7 +576,9 @@ MaterialsPanel::MaterialsPanel(PrintItemsHost& host, const QString& logName, QWi
   connect(m_name, &QLineEdit::editingFinished, this, [this] {
     const LibraryItem* item = current();
     const QString name = m_name->text().trimmed();
-    if (item != nullptr && !item->readOnly && !name.isEmpty() && name != item->name) {
+    // The name shown is no rename: a built-in material's copy keeps its
+    // stored English name while the field shows it translated (mitcad#1689).
+    if (item != nullptr && !item->readOnly && !name.isEmpty() && name != item->name && name != item->shownName()) {
       edit({{QStringLiteral("name"), name}}, QStringLiteral("name = %1").arg(name));
     }
   });
@@ -887,14 +890,16 @@ void MaterialsPanel::rebuildList() {
     return made;
   };
   const auto addRow = [&](QTreeWidgetItem* under, const LibraryItem& item) {
-    auto* row = new QTreeWidgetItem(under, {item.name, QString()});
+    // A built-in material's name as the language shows it (mitcad#1689).
+    const QString shown = item.shownName();
+    auto* row = new QTreeWidgetItem(under, {shown, QString()});
     row->setIcon(0, swatch(item.displayColor));
     row->setData(0, kKeyRole, item.key());
     row->setData(0, NativeControlIdentifierRole, QStringLiteral("material.") + item.key());
     const bool inUse = !item.designId().isEmpty() && used.contains(item.designId());
     markInDesign(row, inUse, tr("Used in this design"));
     // The full name, also when the list is narrowed and elides it.
-    row->setToolTip(0, inUse ? tr("%1, used in this design").arg(item.name) : item.name);
+    row->setToolTip(0, inUse ? tr("%1, used in this design").arg(shown) : shown);
     if (item.hidden) {
       markHiddenRow(row, m_list->palette()); // listed by Show hidden (mitcad#1270)
     }
@@ -1083,7 +1088,7 @@ void MaterialsPanel::showCurrent() {
   const QJsonObject fields = itemFields(*item, m_designMaterials, QJsonObject());
   const bool editable = !item->readOnly;
   if (!m_name->hasFocus() || !m_name->isModified()) {
-    m_name->setText(item->name);
+    m_name->setText(item->shownName());
     m_name->setModified(false);
   }
   m_name->setReadOnly(!editable);
@@ -1321,7 +1326,7 @@ QString MaterialsPanel::appearanceName(const QString& id) const {
       QString itemId = item.id;
       itemId.replace(QLatin1Char('-'), QLatin1Char('_')).replace(QLatin1Char('/'), QLatin1Char('_'));
       if (itemId == materialId) {
-        return tr("%1 color").arg(item.name);
+        return tr("%1 color").arg(item.shownName());
       }
     }
     return tr("%1 color").arg(inWords(materialId));
@@ -1581,30 +1586,66 @@ void MaterialsPanel::newMaterial() {
 }
 
 void MaterialsPanel::newFromDataset() {
-  // Picked from the bundled dataset (mitcad#1213), then where it goes; the
-  // model fills its values in and names it as the entry.
+  // Picked from the bundled dataset (mitcad#1213), one or several
+  // (mitcad#1706), then where they go; the model fills their values in,
+  // names each as its entry and skips a name that is there already, all
+  // as one undo step.
   MaterialDatasetDialog dialog(m_host->model(), m_units, this);
   prepareModal(&dialog);
-  if (execDialog(&dialog) != QDialog::Accepted || dialog.chosenId().isEmpty()) {
+  if (execDialog(&dialog) != QDialog::Accepted || dialog.chosenIds().isEmpty()) {
     qDebug().noquote() << QStringLiteral("%1 dataset cancelled").arg(m_log);
     return;
   }
-  const QString entry = dialog.chosenId();
+  const QStringList entries = dialog.chosenIds();
+  const QStringList names = dialog.chosenNames();
   const QString place = askWhere(m_new, QStringLiteral("dataset"));
   if (place.isEmpty()) {
     return;
   }
-  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("create_material")},
-                      {QStringLiteral("dataset"), entry}};
+  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("create_dataset_materials")},
+                      {QStringLiteral("entries"), QJsonArray::fromStringList(entries)}};
   inPlace(command, place);
   QJsonObject result;
-  if (run(command, &result)) {
-    m_currentKey = place + QLatin1Char('/') + text(result, "id");
+  if (!run(command, &result)) {
+    refresh();
+    return;
+  }
+  const QJsonArray added = result.value(QStringLiteral("added")).toArray();
+  QStringList skipped;
+  for (const QJsonValue& name : result.value(QStringLiteral("skipped")).toArray()) {
+    skipped << name.toString();
+  }
+  // The first one made selected where it went; then what was done, in
+  // words (no ids).
+  if (!added.isEmpty()) {
+    m_currentKey = place + QLatin1Char('/') + added.first().toString();
     m_pendingFocus = m_currentKey;
+  }
+  // Each one made as before (mitcad#1213): the model gives the ids made in
+  // the entries' order and the names skipped, each skipped entry once.
+  QStringList stillSkipped = skipped;
+  int next = 0;
+  for (int i = 0; i < entries.size() && i < names.size() && next < added.size(); ++i) {
+    if (stillSkipped.removeOne(names.at(i))) {
+      continue;
+    }
     qDebug().noquote() << QStringLiteral("Material created from the dataset: %1 (%2) as %3 in %4")
-                              .arg(dialog.chosenName(), entry, text(result, "id"), place);
+                              .arg(names.at(i), entries.at(i), added.at(next).toString(), place);
+    ++next;
   }
   refresh();
+  QString message = tr("%n material(s) made from the dataset.", nullptr, static_cast<int>(added.size()));
+  if (!skipped.isEmpty()) {
+    message += QLatin1Char(' ') + tr("%n skipped: a material of the same name is there already.", nullptr,
+                                     static_cast<int>(skipped.size()));
+  }
+  setMessage(message);
+  qDebug().noquote() << QStringLiteral("Materials from the dataset into %1: %2 made, %3 skipped (%4) of %5")
+                            .arg(place)
+                            .arg(added.size())
+                            .arg(skipped.size())
+                            .arg(skipped.join(QStringLiteral(" | ")), names.join(QStringLiteral(" | ")));
+  qDebug().noquote() << QStringLiteral("%1 message: %2").arg(m_log, message);
 }
 
 void MaterialsPanel::importMaterials() {
@@ -1856,14 +1897,15 @@ void MaterialsPanel::remove() {
   for (const QJsonValue& value : std::as_const(m_designMaterials)) {
     const QJsonObject material = value.toObject();
     if (material.value(QStringLiteral("components")).toArray().contains(QStringLiteral("C0"))) {
-      rootDefault = text(material, "name");
+      // As the language shows a built-in one (mitcad#1689).
+      rootDefault = shownMaterialName(text(material, "id"), text(material, "name"));
       isRootDefault = text(material, "id") == target.designId();
     }
   }
-  QString steel = tr("Steel");
+  QString steel = shownMaterialName(QStringLiteral("steel"), QStringLiteral("Steel"));
   for (const QJsonValue& value : std::as_const(m_designMaterials)) {
     if (text(value.toObject(), "id") == QStringLiteral("steel")) {
-      steel = text(value.toObject(), "name");
+      steel = shownMaterialName(QStringLiteral("steel"), text(value.toObject(), "name"));
     }
   }
   if (isRootDefault) {
@@ -1949,7 +1991,8 @@ BodyMaterialCommands bodyMaterialCommands(QWidget* parent, const LibraryItem* it
                         ? MaterialsPanel::tr("%1 has an appearance set by hand.").arg(conflicts.first())
                         : MaterialsPanel::tr("%1 bodies have appearances set by hand.").arg(conflicts.size()),
                     QMessageBox::Cancel, parent);
-    box.setInformativeText(MaterialsPanel::tr("Replace it with the appearance of %1, or keep it?").arg(item->name));
+    box.setInformativeText(
+        MaterialsPanel::tr("Replace it with the appearance of %1, or keep it?").arg(item->shownName()));
     QPushButton* replace = box.addButton(MaterialsPanel::tr("&Replace"), QMessageBox::AcceptRole);
     QPushButton* keep = box.addButton(MaterialsPanel::tr("&Keep"), QMessageBox::RejectRole);
     box.setDefaultButton(replace);
@@ -2095,7 +2138,8 @@ void MaterialsPanel::logPlaces() {
       continue;
     }
     const LibraryItem* item = findItem(m_items, key);
-    const QString name = item != nullptr ? item->name : key;
+    // As the row shows it (mitcad#1689: a built-in material translated).
+    const QString name = item != nullptr ? item->shownName() : key;
     const QString place = at(m_list->viewport(), QPoint(60, rect.center().y()));
     if (!named.contains(name)) {
       named.insert(name);

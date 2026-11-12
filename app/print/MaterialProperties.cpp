@@ -388,7 +388,8 @@ MaterialDatasetDialog::MaterialDatasetDialog(const CommandContext& model, const 
   m_list->setHeaderLabels({tr("Material"), tr("Class")});
   m_list->setRootIsDecorated(false);
   panel::setCompactIndentation(m_list, panel::Indent::Flat);
-  m_list->setSelectionMode(QAbstractItemView::SingleSelection);
+  // Several at once (mitcad#1706): Ctrl and Shift, Ctrl+A or Select All.
+  m_list->setSelectionMode(QAbstractItemView::ExtendedSelection);
   m_list->header()->setSectionResizeMode(0, QHeaderView::Stretch);
   m_list->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
   m_list->header()->setStretchLastSection(false);
@@ -413,8 +414,14 @@ MaterialDatasetDialog::MaterialDatasetDialog(const CommandContext& model, const 
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel);
   m_create = buttons->addButton(tr("Create"), QDialogButtonBox::AcceptRole);
   m_create->setObjectName(QStringLiteral("materialDatasetCreate"));
-  m_create->setToolTip(tr("Make a material of your own with these values"));
+  m_create->setToolTip(tr("Make a material of your own of each one picked, with its values"));
   m_create->setEnabled(false);
+  // Every material the search shows picked (mitcad#1706); never the
+  // default, so that Enter still creates.
+  m_selectAll = buttons->addButton(tr("Select All"), QDialogButtonBox::ActionRole);
+  m_selectAll->setObjectName(QStringLiteral("materialDatasetSelectAll"));
+  m_selectAll->setToolTip(tr("Pick every material the search shows"));
+  m_selectAll->setAutoDefault(false);
   layout->addWidget(buttons);
   // Made the default once the box is in the dialog: before it, the dialog
   // does not record it and makes Cancel, the first button, its default on
@@ -425,8 +432,13 @@ MaterialDatasetDialog::MaterialDatasetDialog(const CommandContext& model, const 
   connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
   connect(m_search, &QLineEdit::textChanged, this, &MaterialDatasetDialog::search);
   connect(m_list, &QTreeWidget::currentItemChanged, this, [this] { showSelected(); });
+  connect(m_list, &QTreeWidget::itemSelectionChanged, this, [this] { picked(); });
+  connect(m_selectAll, &QPushButton::clicked, this, [this] {
+    m_list->selectAll();
+    m_list->setFocus(Qt::OtherFocusReason);
+  });
   connect(m_list, &QTreeWidget::itemDoubleClicked, this, [this] {
-    if (!chosenId().isEmpty()) {
+    if (!chosenIds().isEmpty()) {
       accept();
     }
   });
@@ -454,14 +466,43 @@ MaterialDatasetDialog::MaterialDatasetDialog(const CommandContext& model, const 
   qDebug().noquote() << QStringLiteral("Material dataset sources: %1").arg(logged.join(QStringLiteral(" | ")));
 }
 
-QString MaterialDatasetDialog::chosenId() const {
-  const QTreeWidgetItem* row = m_list->currentItem();
-  return row != nullptr ? row->data(0, Qt::UserRole).toString() : QString();
+QList<QTreeWidgetItem*> MaterialDatasetDialog::pickedRows() const {
+  // In the list's order, not the order they were picked in.
+  QList<QTreeWidgetItem*> rows;
+  for (int i = 0; i < m_list->topLevelItemCount(); ++i) {
+    QTreeWidgetItem* row = m_list->topLevelItem(i);
+    if (row->isSelected()) {
+      rows << row;
+    }
+  }
+  return rows;
 }
 
-QString MaterialDatasetDialog::chosenName() const {
-  const QTreeWidgetItem* row = m_list->currentItem();
-  return row != nullptr ? row->text(0) : QString();
+QStringList MaterialDatasetDialog::chosenIds() const {
+  QStringList ids;
+  for (const QTreeWidgetItem* row : pickedRows()) {
+    ids << row->data(0, Qt::UserRole).toString();
+  }
+  return ids;
+}
+
+QStringList MaterialDatasetDialog::chosenNames() const {
+  QStringList names;
+  for (const QTreeWidgetItem* row : pickedRows()) {
+    names << row->text(0);
+  }
+  return names;
+}
+
+void MaterialDatasetDialog::picked() {
+  const QStringList names = chosenNames();
+  m_create->setEnabled(!names.isEmpty());
+  const QString logged =
+      QStringLiteral("Material dataset picked: %1: %2").arg(names.size()).arg(names.join(QStringLiteral(" | ")));
+  if (logged != m_loggedPicked) {
+    m_loggedPicked = logged;
+    qDebug().noquote() << logged;
+  }
 }
 
 void MaterialDatasetDialog::search(const QString& wanted) {
@@ -473,20 +514,33 @@ void MaterialDatasetDialog::search(const QString& wanted) {
     m_entries = QJsonArray();
     m_details->setText(mitcad::modelMessage(e.what()));
   }
-  const QString selected = chosenId();
+  // The picked ones the search still shows stay picked, the current one
+  // current.
+  const QStringList selected = chosenIds();
+  const QTreeWidgetItem* currentRow = m_list->currentItem();
+  const QString current = currentRow != nullptr ? currentRow->data(0, Qt::UserRole).toString() : QString();
   m_list->clear();
   QTreeWidgetItem* keep = nullptr;
+  QList<QTreeWidgetItem*> kept;
   for (const QJsonValue& value : std::as_const(m_entries)) {
     const QJsonObject entry = value.toObject();
     auto* row = new QTreeWidgetItem(m_list, {text(entry, "name"), classTitle(text(entry, "class"))});
     row->setData(0, Qt::UserRole, text(entry, "id"));
     row->setToolTip(0, text(entry, "name"));
-    if (text(entry, "id") == selected) {
+    if (text(entry, "id") == current) {
       keep = row;
+    }
+    if (selected.contains(text(entry, "id"))) {
+      kept << row;
     }
   }
   m_list->setCurrentItem(keep);
+  m_list->clearSelection();
+  for (QTreeWidgetItem* row : std::as_const(kept)) {
+    row->setSelected(true);
+  }
   showSelected();
+  picked();
   if (!wanted.isEmpty()) {
     qDebug().noquote() << QStringLiteral("Material dataset search: %1, %2 shown").arg(wanted).arg(m_entries.size());
     // Each row found with its class as the list shows it (mitcad#1552).
@@ -499,8 +553,9 @@ void MaterialDatasetDialog::search(const QString& wanted) {
 }
 
 void MaterialDatasetDialog::showSelected() {
-  const QString id = chosenId();
-  m_create->setEnabled(!id.isEmpty());
+  // The current one's values; Create follows what is picked (picked()).
+  const QTreeWidgetItem* row = m_list->currentItem();
+  const QString id = row != nullptr ? row->data(0, Qt::UserRole).toString() : QString();
   QJsonObject entry;
   for (const QJsonValue& value : std::as_const(m_entries)) {
     if (text(value.toObject(), "id") == id) {
@@ -564,6 +619,7 @@ void MaterialDatasetDialog::logPlaces() {
   QStringList lines;
   lines << QStringLiteral("Material dataset search at %1").arg(at(m_search, m_search->rect().center()));
   lines << QStringLiteral("Material dataset create at %1").arg(at(m_create, m_create->rect().center()));
+  lines << QStringLiteral("Material dataset select all at %1").arg(at(m_selectAll, m_selectAll->rect().center()));
   for (QTreeWidgetItemIterator it(m_list); *it != nullptr; ++it) {
     const QRect rect = m_list->visualItemRect(*it);
     if (rect.isValid() && m_list->viewport()->rect().contains(rect.center())) {

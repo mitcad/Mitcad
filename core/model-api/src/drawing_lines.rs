@@ -266,7 +266,10 @@ impl<K: Kernel> DrawingLinesOps<K> for Document<K> {
     ) -> (LinePens, Vec<String>) {
         let mut pens = LinePens {
             tolerance: if polygonal {
-                spec.deflection.max(LINE_TOLERANCE)
+                // As far as the quick path's lines may lie (mitcad#1671).
+                spec.quick_deviation()
+                    .unwrap_or(spec.deflection)
+                    .max(LINE_TOLERANCE)
             } else {
                 LINE_TOLERANCE
             },

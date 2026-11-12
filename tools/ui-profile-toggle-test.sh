@@ -64,12 +64,10 @@ EOF
 
 ui_start_display
 ui_start_app --open "$FILE"
-# A design opens with the root active (mitcad#426): Part, which the file
-# had active, is activated here.
+# A design opens with the component it was saved with active (mitcad#1678):
+# Part.
 ui_expect_log "Browser radio Root/Part:1 at" "Part in the browser"
-ui_mark
-ui_step "activate Part (radio)"          ui_click_logged "Browser radio Root/Part:1"
-ui_expect_new "Activated Part" "Part is active"
+ui_expect_log "Opened with C1 active, as saved (unmodified)" "Part is active"
 ui_step "top view (search)"              ui_command "Top View"
 ui_step "fit (F6)"                       ui_key F6
 ui_expect_log "Bodies shown: F2.b0 in O1" "Part's block shown"

@@ -55,7 +55,7 @@ key Return
 focus-dialog '^Parameters$'
 expect-dialog-appearance '${MITCAD_TEST_COLOR_SCHEME}'
 expect-parameter-cell d1 2 '^60 mm$' visible
-button '^User Parameter$'
+button '^Add User Parameter$'
 focus-dialog '^Add User Parameter$'
 focus-widget parameterName
 type width

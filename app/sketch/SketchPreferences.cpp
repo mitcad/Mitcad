@@ -54,4 +54,15 @@ bool escLeavesUnchangedSketch() { return QSettings().value(QLatin1String(kEscLea
 
 void saveEscLeavesUnchangedSketch(bool on) { QSettings().setValue(QLatin1String(kEscLeavesSetting), on); }
 
+// Show profiles when a sketch opens (mitcad#1670).
+namespace {
+
+const char* const kShowProfilesSetting = "sketch/showProfilesOnOpen";
+
+} // namespace
+
+bool showProfilesOnOpen() { return QSettings().value(QLatin1String(kShowProfilesSetting), true).toBool(); }
+
+void saveShowProfilesOnOpen(bool on) { QSettings().setValue(QLatin1String(kShowProfilesSetting), on); }
+
 } // namespace mitcad::sketch

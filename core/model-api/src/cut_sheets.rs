@@ -494,6 +494,7 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
             quick: false,
             section: None,
             deflection: 0.01,
+            scale: None,
         };
         let shown = vec![first.clone()];
         let projection = self.projected(&shown, &spec)?;

@@ -11,7 +11,8 @@
 # catalogue translated ("Untranslated: <context>: <text>") or that was found
 # only without its context ("Fallback: ..."; docs/translations.md,
 # "Contexts"). Qt's own texts that Qt's Finnish catalogue lacks (its file
-# dialog's, its key names) are not MitCad's and are left out.
+# dialog's, its key names) are not MitCad's and are left out; the labels of
+# its file dialog that Qt's catalogue has must be Finnish (mitcad#1674).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-language-walk-test.sh
@@ -50,5 +51,12 @@ if [ -n "$found" ]; then
   ui_fail "$(printf '%s\n' "$found" | wc -l) text(s) of MitCad not translated or found without their context"
 fi
 echo "ok   every text the walk showed is translated in its context"
+
+# Qt's file dialog (Open, Save As) takes its labels from Qt's own catalogue
+# (qtbase_fi.qm), which has them: one of them left English means that
+# catalogue was not there or not loaded (mitcad#1674).
+qt_dialog=$(grep -E '^Untranslated: QFileDialog: (Look in:|Files of type:|File &name:)' "$UI_LOG" | sort -u)
+[ -z "$qt_dialog" ] || ui_fail "Qt's file dialog is not in Finnish (qtbase_fi.qm): $qt_dialog"
+echo "ok   no label of Qt's file dialog left English"
 
 ui_finish 'UI language walk test'

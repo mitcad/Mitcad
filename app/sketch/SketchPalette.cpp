@@ -213,6 +213,11 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
     optionLayout->addLayout(row);
   }
   m_constraints = check(tr("Show constraints"), QStringLiteral("paletteConstraints"), QString());
+  // Off, the points are drawn only under the pointer and when selected
+  // (mitcad#1705); remembered for the next sketches.
+  m_points = check(tr("Show points"), QStringLiteral("palettePoints"),
+                   tr("Draw the end, center and sketch points; hidden points still snap and show under the "
+                      "pointer"));
   m_profiles = check(tr("Show profiles"), QStringLiteral("paletteProfiles"),
                      tr("Shade the closed regions, which Extrude and Revolve take"));
   m_hideAbove = check(tr("Hide Above Sketch"), QStringLiteral("paletteHideAbove"),
@@ -241,7 +246,18 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
     lookAt->setFocusPolicy(Qt::NoFocus);
   }
   lookAt->setToolTip(tr("Look straight at the sketch plane"));
-  optionLayout->addWidget(lookAt);
+  // Look At on the 3D Sketch box's row, at its right: the settings take
+  // no taller a section for Show points (mitcad#1705), so that the Create
+  // buttons below stay in sight in a 1024x768 window.
+  {
+    auto* row = new QHBoxLayout;
+    row->setContentsMargins(0, 0, 0, 0);
+    optionLayout->removeWidget(m_spatial);
+    row->addWidget(m_spatial);
+    row->addStretch(1);
+    row->addWidget(lookAt);
+    optionLayout->addLayout(row);
+  }
   m_lookAt = lookAt;
   layout->addWidget(options.box);
 
@@ -250,6 +266,7 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   connect(m_grid, &QCheckBox::toggled, &m_c, &SketchController::setGridSnap);
   connect(m_dimensions, &QCheckBox::toggled, &m_c, &SketchController::setShowDimensions);
   connect(m_constraints, &QCheckBox::toggled, &m_c, &SketchController::setShowConstraints);
+  connect(m_points, &QCheckBox::toggled, &m_c, &SketchController::setShowPoints);
   connect(m_profiles, &QCheckBox::toggled, &m_c, &SketchController::setShowProfiles);
   connect(m_hideAbove, &QCheckBox::toggled, &m_c, &SketchController::setHideAbove);
   connect(m_dimensionText, qOverload<int>(&QComboBox::currentIndexChanged), &m_c, [this](int index) {
@@ -675,6 +692,7 @@ void SketchPalette::refresh() {
   set(m_grid, m_c.gridSnap());
   set(m_dimensions, m_c.showDimensions());
   set(m_constraints, m_c.showConstraints());
+  set(m_points, m_c.showPoints());
   set(m_profiles, m_c.showProfiles());
   set(m_hideAbove, m_c.hideAbove());
   {
@@ -786,7 +804,7 @@ bool SketchPalette::eventFilter(QObject* watched, QEvent* event) {
 
 void SketchPalette::logLayout() const {
   for (const QCheckBox* box :
-       {m_construction, m_signed, m_grid, m_dimensions, m_constraints, m_profiles, m_hideAbove, m_spatial}) {
+       {m_construction, m_signed, m_grid, m_dimensions, m_constraints, m_points, m_profiles, m_hideAbove, m_spatial}) {
     // The box's indicator: a click there toggles it whatever the width of
     // the label, which a click on the widget's middle may miss.
     QStyleOptionButton option;
@@ -811,7 +829,7 @@ void SketchPalette::logLayout() const {
   // palette's against its own: a row laid out below its hint overlaps the
   // next one (mitcad#470).
   for (const QWidget* row : std::initializer_list<const QWidget*>{
-           m_construction, m_signed, m_grid, m_dimensions, m_constraints, m_profiles, m_hideAbove, m_spatial,
+           m_construction, m_signed, m_grid, m_dimensions, m_constraints, m_points, m_profiles, m_hideAbove, m_spatial,
            m_dimensionText, m_finish}) {
     if (row == nullptr) {
       continue;

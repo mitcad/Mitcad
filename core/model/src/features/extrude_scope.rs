@@ -6,6 +6,9 @@
 //! in its own definition, as its other features are, and every occurrence
 //! shows the result.
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -13,7 +16,7 @@ use super::{
 };
 use crate::assembly::{Assembly, inverse};
 use crate::fingerprint::Fingerprint;
-use crate::ids::{BodyUid, ComponentUid};
+use crate::ids::{BodyUid, ComponentUid, OccurrenceUid};
 use crate::kernel::{BooleanOp, BooleanOutput, Kernel, KernelError};
 use crate::recompute::Read;
 use crate::transform::Transform;
@@ -150,6 +153,10 @@ pub struct CutTargets {
     pub selected_components: usize,
     pub selected_bodies: usize,
     pub can_commit: bool,
+    /// The cut reaches no body, but would with its direction flipped
+    /// (mitcad#1676): the panel suggests Flip. Left out when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flip_would_cut: bool,
 }
 
 impl CutScope {
@@ -475,6 +482,157 @@ impl CutScope {
             selected_components: 0,
             selected_bodies: 0,
             can_commit: false,
+            flip_would_cut: false,
+        }
+    }
+}
+
+/// What an automatic scope leaves alone that moves against the cut's own
+/// occurrence through joints (mitcad#1667), as its row's reason.
+pub(crate) const MOVES_THROUGH_JOINTS: &str =
+    "Moves relative to this component through joints; use Select none, then check it to cut it.";
+
+/// Which occurrences the design's joints let move against each other
+/// (mitcad#1667). A unit is what the joint solver moves as one: an
+/// occurrence placed in a joint's component with those that rigid joints
+/// and rigid groups join to it. A unit moves when a joint with free motions
+/// (any kind but rigid) connects it and nothing holds it: no member is
+/// grounded or joined rigidly to its component's own geometry. Occurrences
+/// no joint names are units of their own that do not move. Every joint,
+/// as-built joint and rigid group of the design that is not suppressed
+/// counts, wherever it is in the timeline: they say how the design moves,
+/// not what it looks like at one point. Assembly constraint sets are left
+/// out (how much they hold is the solver's to say).
+pub(crate) struct JointMotion {
+    /// Each named occurrence's unit (an occurrence standing for it).
+    unit: BTreeMap<OccurrenceUid, OccurrenceUid>,
+    /// The units that move.
+    moving: BTreeSet<OccurrenceUid>,
+}
+
+impl JointMotion {
+    pub(crate) fn of(features: &[Arc<FeatureEntry>], assembly: &Assembly) -> Self {
+        use crate::features::FeatureDef;
+        use crate::joints::JointKind;
+        // Union-find over the occurrences the joints name.
+        let mut parent: BTreeMap<OccurrenceUid, OccurrenceUid> = BTreeMap::new();
+        fn root(
+            parent: &mut BTreeMap<OccurrenceUid, OccurrenceUid>,
+            o: OccurrenceUid,
+        ) -> OccurrenceUid {
+            let mut r = *parent.entry(o).or_insert(o);
+            while parent[&r] != r {
+                r = parent[&r];
+            }
+            parent.insert(o, r);
+            r
+        }
+        fn join(
+            parent: &mut BTreeMap<OccurrenceUid, OccurrenceUid>,
+            a: OccurrenceUid,
+            b: OccurrenceUid,
+        ) {
+            let (ra, rb) = (root(parent, a), root(parent, b));
+            if ra != rb {
+                parent.insert(ra.max(rb), ra.min(rb));
+            }
+        }
+        // The occurrences connected by joints with free motions, and those
+        // held by their component's own geometry.
+        let mut connected = Vec::new();
+        let mut held = Vec::new();
+        for f in features.iter().filter(|f| !f.suppressed) {
+            // The solver's body of a side: the path's first occurrence (in
+            // the joint's component); none is the component's own geometry.
+            let (kind, a, b) = match &f.def {
+                FeatureDef::Joint(j) => (
+                    j.kind,
+                    j.a.occurrence.0.first().copied(),
+                    j.b.occurrence.0.first().copied(),
+                ),
+                FeatureDef::AsBuiltJoint(j) => {
+                    (j.kind, j.a.0.first().copied(), j.b.0.first().copied())
+                }
+                FeatureDef::RigidGroup(g) => {
+                    for pair in g.occurrences.windows(2) {
+                        join(&mut parent, pair[0], pair[1]);
+                    }
+                    if let Some(first) = g.occurrences.first() {
+                        root(&mut parent, *first);
+                    }
+                    continue;
+                }
+                _ => continue,
+            };
+            match (kind, a, b) {
+                (JointKind::Rigid, Some(a), Some(b)) => join(&mut parent, a, b),
+                (JointKind::Rigid, Some(o), None) | (JointKind::Rigid, None, Some(o)) => {
+                    root(&mut parent, o);
+                    held.push(o);
+                }
+                (JointKind::Rigid, None, None) => {}
+                (_, a, b) => {
+                    for o in [a, b].into_iter().flatten() {
+                        root(&mut parent, o);
+                        connected.push(o);
+                    }
+                }
+            }
+        }
+        let named: Vec<_> = parent.keys().copied().collect();
+        for o in &named {
+            if assembly.occurrence(*o).is_some_and(|o| o.grounded) {
+                held.push(*o);
+            }
+        }
+        let held: BTreeSet<_> = held.into_iter().map(|o| root(&mut parent, o)).collect();
+        let moving = connected
+            .into_iter()
+            .map(|o| root(&mut parent, o))
+            .filter(|r| !held.contains(r))
+            .collect();
+        let unit = named
+            .into_iter()
+            .map(|o| (o, root(&mut parent, o)))
+            .collect();
+        Self { unit, moving }
+    }
+
+    fn unit(&self, o: OccurrenceUid) -> OccurrenceUid {
+        self.unit.get(&o).copied().unwrap_or(o)
+    }
+
+    fn moves(&self, o: OccurrenceUid) -> bool {
+        self.moving.contains(&self.unit(o))
+    }
+
+    /// Whether the bodies at absolute path `a` move against those at `b`
+    /// as the joints turn and slide: below the occurrences the paths share,
+    /// the first occurrences of each are different units of which one
+    /// moves, or an occurrence deeper in either path moves inside it.
+    pub(crate) fn between(&self, a: &[OccurrenceUid], b: &[OccurrenceUid]) -> bool {
+        let shared = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+        let (a, b) = (&a[shared..], &b[shared..]);
+        let top = match (a.first(), b.first()) {
+            (Some(x), Some(y)) => {
+                self.unit(*x) != self.unit(*y) && (self.moves(*x) || self.moves(*y))
+            }
+            (Some(x), None) | (None, Some(x)) => self.moves(*x),
+            (None, None) => false,
+        };
+        // (The first occurrence of each tail is weighed above.)
+        top || a
+            .iter()
+            .skip(1)
+            .chain(b.iter().skip(1))
+            .any(|o| self.moves(*o))
+    }
+
+    /// Writes what decides [`Self::between`] to a cache key.
+    fn fingerprint(&self, key: &mut Fingerprint) {
+        key.u64(self.unit.len() as u64);
+        for (o, unit) in &self.unit {
+            key.u32(o.0).u32(unit.0).bool(self.moving.contains(unit));
         }
     }
 }
@@ -483,7 +641,7 @@ impl CutScope {
 /// cannot detect (for example a hidden second occurrence or a new linked flag).
 pub(crate) fn assembly_key<S>(env: &Env<'_, S>) -> u128 {
     let a = env.assembly;
-    let mut key = Fingerprint::new("extrude-cut-assembly-v1");
+    let mut key = Fingerprint::new("extrude-cut-assembly-v2");
     key.str(&a.root_name).u64(a.components.len() as u64);
     for c in &a.components {
         key.u32(c.uid.0)
@@ -501,6 +659,8 @@ pub(crate) fn assembly_key<S>(env: &Env<'_, S>) -> u128 {
             .u32(o.number)
             .bool(env.placements.contains_key(&o.uid));
     }
+    // What moves against what through joints (mitcad#1667).
+    JointMotion::of(env.features, a).fingerprint(&mut key);
     key.finish()
 }
 
@@ -624,6 +784,11 @@ impl CutScope {
         let components: Vec<_> = std::iter::once(ComponentUid::ROOT)
             .chain(effective.components.iter().map(|c| c.uid))
             .collect();
+        // An automatic scope leaves alone what moves against the context
+        // through joints (mitcad#1667): its bodies would change with the
+        // mechanism's pose. An explicit scope cuts what the user chose.
+        let automatic = matches!(self.targets, TargetScope::Automatic { .. });
+        let motion = automatic.then(|| JointMotion::of(ctx.env.features, ctx.env.assembly));
         let mut candidates = Vec::new();
         for component in components {
             let shapes = ctx.bodies_in(component);
@@ -662,6 +827,12 @@ impl CutScope {
                     )
                 } else if paths.len() != 1 {
                     Some("Shared component definition has multiple occurrences; occurrence-specific cuts are not supported.".to_owned())
+                } else if !own
+                    && motion
+                        .as_ref()
+                        .is_some_and(|m| m.between(path, &self.context.occurrence.0))
+                {
+                    Some(MOVES_THROUGH_JOINTS.to_owned())
                 } else {
                     None
                 };
@@ -892,7 +1063,7 @@ impl CutScope {
         if report.selected_bodies == 0 {
             failed.get_or_insert_with(|| if matches!(&self.targets, TargetScope::Explicit { included, .. } if included.is_empty()) {
                 "No components selected".to_owned()
-            } else { "No eligible components intersect the cut".to_owned() });
+            } else { NO_INTERSECTION.to_owned() });
         }
         report.can_commit = failed.is_none();
         ctx.cut_targets = Some(report);
@@ -901,4 +1072,71 @@ impl CutScope {
             None => Ok(output),
         }
     }
+
+    /// Whether `tool` would cut a body this cut may take (mitcad#1676): a
+    /// body of a checked, eligible component that is neither excluded nor
+    /// a mesh. Nothing is reported or changed; a body whose intersection
+    /// fails counts as not cut.
+    pub(crate) fn would_cut<K: Kernel>(
+        &self,
+        ctx: &EvalContext<'_, K>,
+        discovery: &Discovery<K::Shape>,
+        tool: &K::Shape,
+    ) -> Result<bool, String> {
+        for candidate in &discovery.candidates {
+            if !(self.checked(&candidate.target) && candidate.row.eligible) {
+                continue;
+            }
+            let local_tool = ctx
+                .kernel
+                .transform_shape(
+                    tool,
+                    &inverse(&candidate.world).after(&discovery.source_world),
+                    None,
+                )
+                .map_err(|e| e.to_string())?;
+            let tool_bounds = ctx
+                .kernel
+                .bounding_box(&local_tool)
+                .map_err(|e| e.to_string())?;
+            for (uid, shape) in &candidate.shapes {
+                if ctx.is_mesh(shape)
+                    || self
+                        .excluded_bodies()
+                        .iter()
+                        .any(|b| b.body == *uid && b.target() == candidate.target)
+                {
+                    continue;
+                }
+                let bounds = ctx.kernel.bounding_box(shape).map_err(|e| e.to_string())?;
+                if let (Some(a), Some(b)) = (&tool_bounds, &bounds)
+                    && !a.overlaps(b, 1e-7)
+                {
+                    continue;
+                }
+                match ctx.kernel.boolean(BooleanOp::Cut, &[shape], &local_tool) {
+                    Ok(result) if result.touched.first() == Some(&true) => return Ok(true),
+                    Ok(_) => {}
+                    Err(error) => {
+                        let detail = error.to_string();
+                        if KernelError::is_out_of_memory(&detail)
+                            || detail.contains("cancelled")
+                            || detail.contains("canceled")
+                        {
+                            return Err(detail);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
 }
+
+/// The failure of a cut that reaches no body it may take.
+pub(crate) const NO_INTERSECTION: &str = "No eligible components intersect the cut";
+
+/// [`NO_INTERSECTION`] when the cut flipped would reach one (mitcad#1676):
+/// a cut drawn away from the body is the usual beginner's miss.
+pub(crate) const NO_INTERSECTION_TRY_FLIP: &str =
+    "No eligible components intersect the cut. Try Flip: the other direction cuts a component";

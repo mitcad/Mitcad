@@ -85,6 +85,7 @@ mod insert;
 // Motion studies and contact sets (mitcad#454).
 mod motion;
 pub use joints::Driven;
+pub use joints::JointPose;
 pub(crate) use motion::joint_motions;
 pub use motion::{JointValues, MotionOutcome};
 // Motion links between joints (mitcad#466).
@@ -1723,6 +1724,10 @@ pub struct Document<K: Kernel> {
     /// so that undo leaves them; a save over that file clears them
     /// through a shared reference ([`Document::save_file`]).
     unknown_fields: RwLock<crate::file::UnknownFields>,
+    /// The preview the design file carries (mitcad#1539): beside the
+    /// state, like the statistics; a save given a new one changes it
+    /// through a shared reference ([`Document::save_file_previewed`]).
+    design_preview: RwLock<Option<crate::file::DesignPreview>>,
 }
 
 /// A `sketch` query's answer with what it was made from (mitcad#679): the
@@ -1786,6 +1791,7 @@ impl<K: Kernel> Document<K> {
             configuration_moves: (0, Vec::new()),
             statistics: RwLock::new(crate::file::KeptStatistics::new_design()),
             unknown_fields: RwLock::new(Default::default()),
+            design_preview: RwLock::new(None),
         }
     }
 
@@ -1842,6 +1848,26 @@ impl<K: Kernel> Document<K> {
             .unknown_fields
             .write()
             .unwrap_or_else(|e| e.into_inner()) = unknown;
+    }
+
+    /// The preview a design file gave (mitcad#1539).
+    pub(crate) fn with_design_preview(self, preview: Option<crate::file::DesignPreview>) -> Self {
+        self.set_kept_design_preview(preview);
+        self
+    }
+
+    pub(crate) fn kept_design_preview(&self) -> Option<crate::file::DesignPreview> {
+        self.design_preview
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub(crate) fn set_kept_design_preview(&self, preview: Option<crate::file::DesignPreview>) {
+        *self
+            .design_preview
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = preview;
     }
 
     pub(crate) fn source_directory(&self) -> Option<PathBuf> {
@@ -2121,6 +2147,7 @@ impl<K: Kernel> Document<K> {
             configuration_moves: (0, Vec::new()),
             statistics: RwLock::new(self.kept_statistics()),
             unknown_fields: RwLock::new(self.kept_unknown_fields()),
+            design_preview: RwLock::new(self.kept_design_preview()),
         })
     }
 
@@ -2428,6 +2455,29 @@ impl<K: Kernel> Document<K> {
         self.result.bodies.get(&uid).map(|b| b.version)
     }
 
+    /// The last feature before the marker that set each body at the marker
+    /// (mitcad#1704: the timeline marks it while the body or a face, edge
+    /// or vertex of it is selected). One pass over the results' change
+    /// heads, which leaves results read from the store packed (mitcad#858).
+    pub fn body_last_features(&self) -> BTreeMap<BodyUid, FeatureUid> {
+        let mut last = BTreeMap::new();
+        for result in &self.result.results {
+            if !result.status.is_ok() {
+                continue;
+            }
+            let Some(output) = result.output.as_ref() else {
+                continue;
+            };
+            for head in output.changes.heads() {
+                if let crate::recompute::ChangeHead::Set(body, _) = head {
+                    last.insert(*body, result.uid);
+                }
+            }
+        }
+        last.retain(|body, _| self.result.bodies.contains_key(body));
+        last
+    }
+
     /// The display name of a body (stored, or the default it would get).
     pub fn body_name(&self, uid: BodyUid) -> String {
         display_names(&self.state, &self.result)
@@ -2667,6 +2717,15 @@ impl<K: Kernel> Document<K> {
     ) -> Result<T, ModelError> {
         let mut next = self.state.clone();
         let (label, value, mut recompute) = edit(&mut next)?;
+        // Every placement the edit stores is a rotation and a translation
+        // (mitcad#1664): one a little off (solver rounding) is straightened,
+        // one far off refuses the edit, so no design is kept or saved that
+        // would not open again.
+        if next.assembly.occurrences != self.state.assembly.occurrences {
+            next.assembly
+                .straighten_placements(&self.state.assembly)
+                .map_err(invalid)?;
+        }
         // A library source goes with its last derived part (mitcad#375).
         next.prune_library_sources(&self.state);
         // Configurations follow renames, also those a value slot's
@@ -4682,6 +4741,17 @@ impl<K: Kernel> Document<K> {
         state: &DocState,
         result: &Recomputed<K::Shape>,
     ) -> Vec<(Vec<OccurrenceUid>, crate::transform::Transform)> {
+        self.moved_placements(state, &result.placements)
+    }
+
+    /// As [`Self::moved_occurrences`], for the occurrences' placements in
+    /// their parents (`placements`, else their own) without a recompute
+    /// (Animate Joint's frames, mitcad#1701).
+    fn moved_placements(
+        &self,
+        state: &DocState,
+        placements: &BTreeMap<OccurrenceUid, crate::transform::Transform>,
+    ) -> Vec<(Vec<OccurrenceUid>, crate::transform::Transform)> {
         use crate::transform::Transform;
         struct Walk<'a, K: Kernel> {
             doc: &'a Document<K>,
@@ -4722,7 +4792,7 @@ impl<K: Kernel> Document<K> {
         let mut walk = Walk {
             doc: self,
             state,
-            placements: &result.placements,
+            placements,
             path: Vec::new(),
             out: Vec::new(),
         };
@@ -4869,7 +4939,7 @@ pub use print_plates::PlateChange;
 // Materials imported from JSON and CSV files, into the design or a library
 // (mitcad#1213).
 mod material_import;
-pub use material_import::{MaterialImport, NameConflict};
+pub use material_import::{DatasetMaterials, MaterialImport, NameConflict};
 // Auto Fix: the references a warning found again written into the
 // definitions (mitcad#1223).
 mod auto_fix;
@@ -4910,3 +4980,6 @@ pub(crate) use filament_changes::PrintColors;
 // diameter: Auto Fix and the Thread panel (mitcad#1632).
 mod thread_fit;
 pub use thread_fit::{AutoFixFit, NoFit, SharedChoice};
+// A sheet-metal flange's profile sketch made on its wall, or moved back
+// onto it (mitcad#1648).
+mod flange_profile;

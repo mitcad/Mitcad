@@ -116,6 +116,17 @@ ui_cleanup() {
     UI_PID=""
   fi
   ui_gui_unlock
+  # The crash handler writes into the private data root. Keep its reports
+  # with the test's logs before removing that root, including on failure.
+  # A failed copy leaves the originals in place for diagnosis.
+  if [ -n "$UI_ROOT" ] && [ -d "$UI_ROOT/crashes" ]; then
+    mkdir -p "$UI_OUT/crashes" || return
+    local crash
+    for crash in "$UI_ROOT"/crashes/*.crash; do
+      [ -f "$crash" ] && [ ! -L "$crash" ] || continue
+      cp -p "$crash" "$UI_OUT/crashes/" || return
+    done
+  fi
   [ -n "$UI_ROOT" ] && rm -rf "$UI_ROOT"
 }
 
@@ -227,6 +238,9 @@ JSON
   # An empty design at the start, not the Start tab (mitcad#1258), as in
   # ui-test-lib.sh.
   export MITCAD_START_PAGE=0
+  # A new design in the isometric view with its origin hidden, not at Top
+  # with the origin shown (mitcad#1683), as in ui-test-lib.sh.
+  export MITCAD_NEW_DESIGN_VIEW=0
   # The interface in English whatever the Mac's language (mitcad#1460), as
   # in ui-test-lib.sh.
   export MITCAD_LANGUAGE=en

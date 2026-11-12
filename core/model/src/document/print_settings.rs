@@ -242,6 +242,45 @@ impl DocState {
         self.print_profiles.iter().find(|p| p.id == id)
     }
 
+    /// The layer height the design prints with (mitcad#1516: print-bridged
+    /// holes): its own Print Process `layer_height`, else that of the
+    /// process profile it uses; None without one, or for one that is not a
+    /// sensible height (above 0, at most 10 mm, as `print_changes::Layers`).
+    pub(crate) fn design_layer_height(&self) -> Option<f64> {
+        let root = PropertyOwner::Component(ComponentUid::ROOT);
+        let kind = ProfileKind::Process;
+        let set = kind.set().property_set();
+        let def = print_keys::key("layer_height").filter(|d| d.set == kind.set())?;
+        let own = self
+            .properties
+            .get(root, set, def.key)
+            .and_then(|property| from_property(def, &property.value).ok());
+        let value = own.or_else(|| {
+            let property = self.properties.get(root, set, PROFILE_KEY)?;
+            let PropertyValue::Text(id) = &property.value else {
+                return None;
+            };
+            self.print_profile(id.trim())
+                .filter(|p| p.kind == kind)?
+                .value(def.key)
+        })?;
+        let height = match value {
+            print_keys::Value::Number(x) => x,
+            print_keys::Value::Integer(i) => i as f64,
+            _ => return None,
+        };
+        (height.is_finite() && height > 0.0 && height <= 10.0).then_some(height)
+    }
+
+    /// Whether a hole of the design bridges a recess for printing
+    /// (mitcad#1516): those read the design's layer height.
+    pub(crate) fn has_print_bridging(&self) -> bool {
+        self.features.iter().any(|entry| {
+            matches!(&entry.def, crate::features::FeatureDef::Hole(hole)
+                if !hole.print_bridging.is_none())
+        })
+    }
+
     /// Puts an own type of the print settings (a choice's, a profile
     /// choice's) in the place of one of the same name.
     pub(crate) fn put_print_type(&mut self, ty: PropertyType) {
@@ -710,11 +749,16 @@ impl<K: Kernel> Document<K> {
         let stored = property.clone();
         let set = set.to_owned();
         self.apply_with(|state| {
+            // Print-bridged holes take their layers from the design's layer
+            // height (mitcad#1516): they are evaluated again when it
+            // changes, the rest stays.
+            let layer = state.design_layer_height();
             if let Some(ty) = own_type {
                 state.put_print_type(ty);
             }
             state.properties.put(owner, &set, property);
-            Ok((label, (), false))
+            let recompute = state.design_layer_height() != layer && state.has_print_bridging();
+            Ok((label, (), recompute))
         })?;
         Ok(stored)
     }

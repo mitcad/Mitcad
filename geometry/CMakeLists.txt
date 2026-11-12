@@ -327,6 +327,12 @@ target_sources(mitcad_geometry PRIVATE
 # detail on a last line the model splits off (mitcad#1612).
 target_sources(mitcad_geometry PRIVATE
   include/mitcad/geometry/user_error.hpp)
+
+# Pipes and sweeps that pass through themselves, built in pieces and fused
+# (mitcad#1697).
+target_sources(mitcad_geometry PRIVATE
+  src/pipe_folds.cpp
+  src/pipe_folds.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -1196,4 +1202,17 @@ if(BUILD_TESTING)
   target_link_libraries(test_user_text_scan PRIVATE mitcad_warnings)
   add_test(NAME geometry.user-text-scan COMMAND test_user_text_scan "${CMAKE_CURRENT_SOURCE_DIR}/src")
   add_test(NAME geometry.user-text-scan-self-test COMMAND test_user_text_scan --self-test)
+endif()
+
+if(BUILD_TESTING)
+  # Pipes and sweeps that pass through themselves (mitcad#1697): a circle
+  # along an arc tighter than its radius (alone, round a whole circle,
+  # between two legs, hollow), a square along a chamfer too short for its
+  # miters and a circle along a path that crosses itself, each one valid
+  # solid without crossing faces whose volume is the union of its pieces
+  # built from OCCT's primitives, within 1e-6; a corner that turns back
+  # refused in words.
+  add_executable(test_pipe_folds tests/test_pipe_folds.cpp)
+  target_link_libraries(test_pipe_folds PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.pipe_folds COMMAND test_pipe_folds)
 endif()

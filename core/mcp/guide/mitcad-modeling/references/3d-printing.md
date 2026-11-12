@@ -63,14 +63,22 @@ expressions. Use
 `hole_sizes` for standard screw clearances and recesses; those dimensions
 are not a calibration result for the printer.
 
+For a heat-set insert, `hole_sizes` gives the series' `insert` (hole
+diameter and depth per screw size, M2 to M6): make a `hole` with those
+values and `insert` `{"size": "M3"}`; use the supplier's values for another
+insert, and leave enough wall round it. For a captive nut, `hole_sizes`
+gives `nut_pocket` (ISO 4032's nut plus a clearance, `nut_clearance` to
+change it): give the `hole` on the face where the screw comes out a
+`kind` `nut_pocket` with them; a `slot` lets the nut slide in from the side
+and an `offset` buries the pocket below the face. Keep material against
+pull-out.
+
 Where a dedicated feature is absent, keep the recipe editable:
 
 | Need | MitCad construction |
 |---|---|
 | Adjustable mounting | Constrain a closed slot in a sketch; cut it with `extrude`. Dimension travel and end radii separately. |
 | Press fit | Sketch a hexagonal bore, or add small sacrificial inward ribs to a round bore. Constrain the contact size and rib interference independently, then cut or join with `extrude`. Validate insertion on a coupon. |
-| Heat-set insert | Sketch and cut a bore using the insert supplier's dimensions, with a lead-in and enough surrounding material. Keep bore diameter, depth and wall thickness as parameters. |
-| Captive nut | Sketch a constrained hexagon by its across-flats size plus clearance, then cut with `extrude`. Add a side-entry slot only when insertion needs it, and retain material against pull-out. |
 
 Use the longest screw that fits without bottoming or colliding. For a
 tapped printed hole, represent the intended thread with `hole` and its
@@ -90,12 +98,14 @@ limit. Keep bridges short and accessible; reorient or split the design
 when that avoids a difficult supported surface.
 
 For a counterbore opening toward the bed, an ordinary circular recess
-may leave an unsupported ceiling. Make the recess as separate sketch
-cuts: leave a removable membrane about one layer thick, or use short,
-successive orthogonal bridge openings before the final bore. Parameterize
-the layer and bridge dimensions; inspect the section and plan how to
-remove the membrane. This is a sketch-and-`extrude` recipe, not a field
-of `hole`.
+leaves an unsupported ceiling. Give the `hole` a `print_bridging`:
+`sacrificial` (a membrane one layer thick over the bore, drilled out
+after printing) or `stepped` (two layers of orthogonal bridges before the
+bore). It also bridges a nut pocket at the hole's start. The layers are the
+design's layer height (its print process, else 0.2 mm), and only holes
+whose recess opens toward the body's print bed face (with the design's
+−Z down without one) are bridged, so set the bed face first. Plan how to
+remove the membrane.
 
 For corners that tend to lift, removable mouse ears can be thin discs
 joined at the bed with `cylinder` and `combine`, or a constrained sketch
@@ -111,8 +121,10 @@ Distinguish modeled ears from a slicer's brim when estimating plate space.
   strength or validate fatigue; check which feature fields actually use it.
 - For print-in-place motion, begin with around 0.3 mm between moving
   surfaces and keep them as separate bodies. `print_min_gap` lists the
-  pairs that are apart but closer than the gap (the design's
-  `print_in_place_gap`, else 0.3 mm); check unintended overlaps with
+  pairs closer than the gap (the design's `print_in_place_gap`, else
+  0.3 mm) where they do not touch, also beside a contact (a peg in its
+  hole, `touches: true`); a nonzero `unmeasured` means touching pairs it
+  could not check. Check unintended overlaps with
   `interference`. A gap above the threshold still needs the slicer
   preview to prove it prints open.
 - Use `printable_bearing` for its supported bearing geometry and explicit

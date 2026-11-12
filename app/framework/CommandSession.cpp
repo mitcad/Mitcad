@@ -444,68 +444,9 @@ void CommandSession::considerKeptSettings(const QSet<QString>& changed) {
                               .arg(m_def.name, kept->key.text(), kind, now);
     return;
   }
-  // In the inputs' order, so that a choice's options follow the ones
-  // before it (Thread's sizes follow its Thread Type).
   QStringList restored;
   QStringList left;
-  for (const InputDef& input : m_def.inputs) {
-    const QString& id = input.id;
-    switch (input.type) {
-    case InputDef::Type::Value: {
-      const QString text = kept->values.value(id).trimmed();
-      if (text.isEmpty() || text == m_state.text(id).trimmed()) {
-        break;
-      }
-      if (changed.contains(id)) {
-        left << id;
-      } else if (!evaluatesHere(text, input)) {
-        qDebug().noquote() << QStringLiteral("Panel %1 %2: kept %3 does not evaluate here").arg(m_def.name, id, text);
-      } else {
-        m_state.setText(id, text);
-        // (Before the panel is there, setPresenter evaluates every value.)
-        if (m_presenter) {
-          evaluate(id);
-        } else {
-          m_state.setValue(id, std::numeric_limits<double>::quiet_NaN());
-        }
-        restored << QStringLiteral("%1=%2").arg(id, text);
-      }
-      break;
-    }
-    case InputDef::Type::Choice: {
-      if (!kept->choices.contains(id) || kept->choices.value(id) == m_state.choice(id)) {
-        break;
-      }
-      const QString value = kept->choices.value(id);
-      const QVector<QPair<QString, QString>> options = input.choicesIn(m_state);
-      if (changed.contains(id)) {
-        left << id;
-      } else if (options.isEmpty() || std::any_of(options.cbegin(), options.cend(), [&value](const auto& option) {
-                   return option.first == value;
-                 })) {
-        m_state.setChoice(id, value);
-        restored << QStringLiteral("%1=%2").arg(id, value);
-      }
-      break;
-    }
-    case InputDef::Type::Check:
-    case InputDef::Type::Flip: {
-      if (!kept->checks.contains(id) || kept->checks.value(id) == m_state.checked(id)) {
-        break;
-      }
-      if (changed.contains(id)) {
-        left << id;
-      } else {
-        const bool on = kept->checks.value(id);
-        m_state.setChecked(id, on);
-        restored << QStringLiteral("%1=%2").arg(id, on ? QStringLiteral("on") : QStringLiteral("off"));
-      }
-      break;
-    }
-    default:
-      break;
-    }
-  }
+  restoreSettings(*kept, changed, false, QStringLiteral("kept"), restored, left);
   qDebug().noquote() << QStringLiteral("Panel %1: settings of the last %2 %3 restored").arg(m_def.name, now, kind);
   if (!restored.isEmpty()) {
     qDebug().noquote() << QStringLiteral("Panel %1 restored: %2").arg(m_def.name, restored.join(QStringLiteral(", ")));
@@ -516,6 +457,102 @@ void CommandSession::considerKeptSettings(const QSet<QString>& changed) {
   if (m_presenter) {
     m_presenter->refresh(m_state);
   }
+}
+
+void CommandSession::restoreSettings(const PanelSettings& settings, const QSet<QString>& changed, bool react,
+                                     const QString& source, QStringList& restored, QStringList& left) {
+  // In the inputs' order, so that a choice's options follow the ones
+  // before it (Thread's sizes follow its Thread Type), and what an input's
+  // own reaction sets in those after it is set again from `settings`.
+  for (const InputDef& input : m_def.inputs) {
+    const QString& id = input.id;
+    bool set = false;
+    switch (input.type) {
+    case InputDef::Type::Value: {
+      const QString text = settings.values.value(id).trimmed();
+      if (text.isEmpty() || text == m_state.text(id).trimmed()) {
+        break;
+      }
+      if (changed.contains(id)) {
+        left << id;
+      } else if (!evaluatesHere(text, input)) {
+        qDebug().noquote()
+            << QStringLiteral("Panel %1 %2: %3 %4 does not evaluate here").arg(m_def.name, id, source, text);
+      } else {
+        m_state.setText(id, text);
+        // (Before the panel is there, setPresenter evaluates every value.)
+        if (m_presenter) {
+          evaluate(id);
+        } else {
+          m_state.setValue(id, std::numeric_limits<double>::quiet_NaN());
+        }
+        restored << QStringLiteral("%1=%2").arg(id, text);
+        set = true;
+      }
+      break;
+    }
+    case InputDef::Type::Choice: {
+      if (!settings.choices.contains(id) || settings.choices.value(id) == m_state.choice(id)) {
+        break;
+      }
+      const QString value = settings.choices.value(id);
+      const QVector<QPair<QString, QString>> options = input.choicesIn(m_state);
+      if (changed.contains(id)) {
+        left << id;
+      } else if (options.isEmpty() || std::any_of(options.cbegin(), options.cend(), [&value](const auto& option) {
+                   return option.first == value;
+                 })) {
+        m_state.setChoice(id, value);
+        restored << QStringLiteral("%1=%2").arg(id, value);
+        set = true;
+      }
+      break;
+    }
+    case InputDef::Type::Check:
+    case InputDef::Type::Flip: {
+      if (!settings.checks.contains(id) || settings.checks.value(id) == m_state.checked(id)) {
+        break;
+      }
+      if (changed.contains(id)) {
+        left << id;
+      } else {
+        const bool on = settings.checks.value(id);
+        m_state.setChecked(id, on);
+        restored << QStringLiteral("%1=%2").arg(id, on ? QStringLiteral("on") : QStringLiteral("off"));
+        set = true;
+      }
+      break;
+    }
+    default:
+      break;
+    }
+    // As when the user sets it in the panel: its own reaction (a choice's
+    // table, an fx's rows) follows.
+    if (set && react && input.onChange) {
+      input.onChange(m_state, m_host);
+    }
+  }
+}
+
+void CommandSession::applyRepeatSettings() {
+  // Repeat (mitcad#1686): a new feature's panel starts from the settings
+  // of the command's last OK; its selections stay empty.
+  if (!m_repeatSettings || isEditing() || !m_analysis.isEmpty()) {
+    return;
+  }
+  const PanelSettings settings = *std::exchange(m_repeatSettings, std::nullopt);
+  // An operation kept was chosen by hand (finish): the model's own choice
+  // does not replace it (startAutoOperation).
+  m_operationRepeated = settings.choices.contains(QStringLiteral("operation"));
+  QStringList restored;
+  QStringList left;
+  restoreSettings(settings, {}, true, QStringLiteral("repeated"), restored, left);
+  qDebug().noquote() << QStringLiteral("Panel %1 repeated: %2")
+                            .arg(m_def.name, restored.isEmpty() ? QStringLiteral("as it starts")
+                                                                : restored.join(QStringLiteral(", ")));
+  // Where the panel starts now: what the user changes later is told from
+  // it (mitcad#1298, changedSinceStart).
+  m_startSettings = panelSettings(false);
 }
 
 bool CommandSession::start(const Selection& preselection, QString& error) {
@@ -663,6 +700,7 @@ bool CommandSession::start(const Selection& preselection, QString& error) {
     }
     setRowDefaults();
   }
+  applyRepeatSettings(); // started by Repeat (mitcad#1686)
   canonicalizeSelections();
   startAutoOperation();
   return true;
@@ -2284,7 +2322,7 @@ void CommandSession::toggleElement(const QString& key, int element) {
 
 void CommandSession::schedulePreview(int delay) {
   m_refineTimer.stop();
-  if (!m_done && !m_cancelRequested && !m_committing) {
+  if (!m_done && !m_cancelRequested && !m_committing && !m_suspended) {
     // Throttle from the first change; continuous input must not postpone
     // the timer forever. A completed job drains its latest input at once.
     if (!m_previewTimer.isActive() || m_previewTimer.remainingTime() > delay) {
@@ -2483,7 +2521,7 @@ void CommandSession::measureInspection(const Inspection& result) {
 
 void CommandSession::runPreview() {
   m_previewTimer.stop();
-  if (m_done || !m_presenter) {
+  if (m_done || !m_presenter || m_suspended) {
     return;
   }
   if (motionDeferred()) {
@@ -4729,7 +4767,7 @@ bool CommandSession::cycleChoice() {
 }
 
 bool CommandSession::eventFilter(QObject* watched, QEvent* event) {
-  if (m_done) {
+  if (m_done || m_suspended) {
     return QObject::eventFilter(watched, event);
   }
   if (m_valueBox && watched == m_valueBox) {
@@ -4947,6 +4985,7 @@ void CommandSession::cancel() {
   }
   m_cancelRequested = true;
   settleVisibility(); // they stay as the user set them (mitcad#295)
+  takeBackInserted();
   if (!rollForward()) {
     // Its computation was cancelled (or failed): the panel closes all the
     // same, and the roll-back is the last undo step.
@@ -5131,6 +5170,17 @@ void CommandSession::finish(bool committed) {
     keepPanelSettings(m_def.id, settings, committed, isEditing());
     qDebug().noquote() << QStringLiteral("Panel %1: settings kept with %2").arg(m_def.name, settings.key.text());
   }
+  // And for Repeat (mitcad#1686), in this window only: a new feature's
+  // panel as its OK left it, the values as they are kept (without a
+  // parameter's name). An operation the model still chose itself is left
+  // for the model to choose again.
+  if (committed && !isEditing() && m_analysis.isEmpty()) {
+    PanelSettings settings = panelSettings(true);
+    if (m_autoOperation.active()) {
+      settings.choices.remove(QStringLiteral("operation"));
+    }
+    m_committedSettings = settings;
+  }
   m_pendingNumbers.clear();
   m_previewTimer.stop();
   if (auto* application = QCoreApplication::instance()) {
@@ -5190,6 +5240,71 @@ void CommandSession::previewAgain() {
   if (m_done || m_presenter == nullptr) {
     return;
   }
+  schedulePreview(0);
+}
+
+// What a panel's button added before the feature goes with Cancel
+// (mitcad#1648: Flange's profile sketch and its edits): undone back to the
+// depth before it, the edit's roll-back then where it was.
+void CommandSession::takeBackInserted() {
+  if (m_insertedDepth < 0) {
+    return;
+  }
+  for (int guard = undoDepth() - m_insertedDepth + 8; undoDepth() > m_insertedDepth && guard > 0; --guard) {
+    if (!m_host.runCommand({{QStringLiteral("cmd"), QStringLiteral("undo")}})) {
+      break;
+    }
+  }
+  if (m_markerMoved) {
+    m_markerPosition -= m_insertedCount;
+    m_originalMarker -= m_insertedCount;
+  }
+  qDebug().noquote() << QStringLiteral("%1: %2 feature(s) added before it taken back").arg(m_def.name).arg(m_insertedCount);
+  m_insertedDepth = -1;
+  m_insertedCount = 0;
+}
+
+void CommandSession::featuresInserted(int count, int depth) {
+  if (count == 0) {
+    return;
+  }
+  if (m_insertedDepth < 0 && count > 0) {
+    m_insertedDepth = depth;
+  }
+  m_insertedCount += count;
+  if (m_markerMoved) {
+    // The edited feature and the marker before it moved on by them (back,
+    // for a negative count: an undo in the sketch took them back).
+    m_markerPosition += count;
+    m_originalMarker += count;
+  }
+  if (m_insertedCount <= 0) {
+    m_insertedDepth = -1;
+    m_insertedCount = 0;
+  }
+  qDebug().noquote() << QStringLiteral("%1: %2 feature(s) added before it").arg(m_def.name).arg(count);
+}
+
+void CommandSession::suspend() {
+  if (m_done || m_suspended) {
+    return;
+  }
+  m_suspended = true;
+  m_previewTimer.stop();
+  m_refineTimer.stop();
+  ++m_generation;
+  clearPreview();
+  qDebug().noquote() << QStringLiteral("%1 set aside while a sketch is edited").arg(m_def.name);
+}
+
+void CommandSession::resume() {
+  if (m_done || !m_suspended) {
+    return;
+  }
+  m_suspended = false;
+  qDebug().noquote() << QStringLiteral("%1 resumed").arg(m_def.name);
+  refreshInputs();
+  updateHighlights();
   schedulePreview(0);
 }
 

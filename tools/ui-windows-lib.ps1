@@ -477,6 +477,10 @@ function Ui-StartApp([string]$Name, [string[]]$Arguments = @(), [switch]$Recover
   # MitCad starts on an empty design, not on the Start tab (mitcad#1258), as
   # in the Linux tests; a test of the Start page sets it to 1 first.
   if (-not $env:MITCAD_START_PAGE) { $env:MITCAD_START_PAGE = '0' }
+  # A new design opens in the isometric view with its origin hidden, not
+  # looking at Top with the origin shown (mitcad#1683), as in the Linux
+  # tests; a test of the new design's start sets it to 1 first.
+  if (-not $env:MITCAD_NEW_DESIGN_VIEW) { $env:MITCAD_NEW_DESIGN_VIEW = '0' }
   # The interface in English whatever the VM's language (mitcad#1460), as in
   # the Linux tests: the tests read English texts. A test of the language
   # passes --language, which comes first.

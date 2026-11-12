@@ -225,6 +225,10 @@ public:
   // name): the text they belong to, for a letter and its counter alike
   // (the `sketch` query's regions with a `text`, mitcad#1369).
   QHash<QString, QString> regionTexts;
+  // The points, curves, constraints and dimensions in the order they were
+  // made (the `sketch` query's `order`, mitcad#1492): sketch mode's list
+  // of them in the timeline's place.
+  QStringList order;
 
   const PointData* point(const QString& id) const;
   const CurveData* curve(const QString& id) const;

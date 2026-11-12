@@ -126,7 +126,7 @@ ui_step "the arrow on the right"           ui_click_logged "Orientation cube arr
 expect_camera "-1 0 0 up 0 0 1 (orthographic)" "turned to the right face"
 ui_mark
 ui_step "click home"                       ui_click_logged "View home"
-expect_camera "-0.577 0.577 -0.577" "home: isometric again"
+expect_camera "-0.568 0.654 -0.5 up" "home: the default view, a few degrees off the isometric one (mitcad#1698)"
 ui_expect_new "Orientation cube front-top at" "the edge between front and top can be clicked"
 ui_mark
 ui_step "click the front-top edge"         ui_click_logged "Orientation cube front-top"

@@ -57,6 +57,41 @@ int SketchController::selectEntities(const QStringList& ids, bool reveal, bool f
   return static_cast<int>(items.size());
 }
 
+bool SketchController::selectItem(const QString& id, Qt::KeyboardModifiers modifiers) {
+  SelectionItem item;
+  item.owner = m_uid;
+  item.name = id;
+  if (m_model.point(id) != nullptr) {
+    item.kind = SelectKind::SketchPoint;
+    item.geometry = QStringLiteral("point");
+    item.occurrence = m_host.sketchOccurrence(m_uid);
+  } else if (const CurveData* curve = m_model.curve(id)) {
+    item.kind = SelectKind::SketchCurve;
+    item.geometry = curve->type;
+    item.occurrence = m_host.sketchOccurrence(m_uid);
+  } else if (m_model.constraint(id) != nullptr) {
+    item.kind = SelectKind::SketchConstraint;
+  } else if (m_model.dimension(id) != nullptr) {
+    item.kind = SelectKind::SketchDimension;
+  } else {
+    return false;
+  }
+  Selection next;
+  if (modifiers & (Qt::ControlModifier | Qt::ShiftModifier)) {
+    next = m_host.selection();
+    if (next.contains(item)) {
+      next.removeAll(item);
+    } else {
+      next.append(item);
+    }
+  } else {
+    next.append(item);
+  }
+  // The view draws it (refreshView) and the list marks its row.
+  m_host.setSelection(next);
+  return true;
+}
+
 bool SketchController::selectChainAt(const QPointF& screen, Qt::KeyboardModifiers modifiers) {
   const QString id = entityAt(screen, PickCurves);
   const CurveData* picked = m_model.curve(id);

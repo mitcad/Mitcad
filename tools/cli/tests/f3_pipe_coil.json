@@ -83,5 +83,17 @@
   {"expect": {"body": "F12.b0", "volume": 5092.530964914873, "tolerance": 1e-4, "has_face": "F12:side3"}},
   {"cmd": "edit_feature", "uid": "F12", "def": {"type": "pipe", "path": {"sketch": "F11", "curves": ["c1"], "chain": true},
     "section": "square", "size": 8, "operation": "new_body"}},
-  {"expect": {"body": "F12.b0", "volume": 5120, "tolerance": 1e-4}}
+  {"expect": {"body": "F12.b0", "volume": 5120, "tolerance": 1e-4}},
+
+  {"comment": "Passing through itself (mitcad#1697): an L (Sketch6 F13), (0,200)-(40,200) and on to (40,240), its corner filleted with radius 3, under a 10 mm pipe (Pipe5 F14) that reaches 5 mm from it. The pipe is built in pieces fused into one solid: the two 37 mm legs and the circle's halves on either side of the arc's axis each turned a quarter turn about it, 6178.14244 (geometry.pipe_folds' bent pipe less 3 mm of each leg); the bend a note, not a warning."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_line", "sketch": "F13", "start": [0, 200], "end": [40, 200]},
+  {"cmd": "sketch.add_line", "sketch": "F13", "start": [40, 200], "end": [40, 240]},
+  {"cmd": "sketch.fillet", "sketch": "F13", "a": "c1", "b": "c4", "radius": 3},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"sketch": "F13", "curves": ["c1"], "chain": true},
+    "size": 10, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe5", "status": "ok", "body": "F14.b0", "volume": 6178.142440417, "tolerance": 1e-6,
+    "has_face": "F14:start"}},
+  {"expect": {"query": {"query": "feature", "uid": "F14"}, "result": {"status": "ok", "level": "info",
+    "infos": ["the path bends with radius 3 mm at a curve of Sketch6, tighter than the 5 mm the pipe reaches; the pipe was built in pieces there, joined into one solid"]}}}
 ]

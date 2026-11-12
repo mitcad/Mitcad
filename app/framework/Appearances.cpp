@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iterator>
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -336,24 +338,118 @@ QImage appearanceSwatch(const Appearance& a, int size, qreal devicePixelRatio) {
   return image;
 }
 
+namespace {
+
+// A material of MitCad's own by its id and its English name, as the model
+// and the library store it.
+struct OwnMaterialName {
+  const char* id;
+  const char* name;
+};
+
+// The built-in materials (core/model-base/src/analysis.rs, MATERIALS), in
+// their order, steel first as the default. Their names are translated in
+// the context MaterialName (mitcad#1689).
+constexpr OwnMaterialName kBuiltInMaterials[] = {
+    {"steel", QT_TRANSLATE_NOOP("MaterialName", "Steel")},
+    {"stainless_steel", QT_TRANSLATE_NOOP("MaterialName", "Stainless Steel")},
+    {"cast_iron", QT_TRANSLATE_NOOP("MaterialName", "Cast Iron")},
+    {"aluminum", QT_TRANSLATE_NOOP("MaterialName", "Aluminum")},
+    {"copper", QT_TRANSLATE_NOOP("MaterialName", "Copper")},
+    {"brass", QT_TRANSLATE_NOOP("MaterialName", "Brass")},
+    {"titanium", QT_TRANSLATE_NOOP("MaterialName", "Titanium")},
+    {"abs", QT_TRANSLATE_NOOP("MaterialName", "ABS Plastic")},
+    {"pla", QT_TRANSLATE_NOOP("MaterialName", "PLA Plastic")},
+    {"nylon", QT_TRANSLATE_NOOP("MaterialName", "Nylon")},
+    {"polycarbonate", QT_TRANSLATE_NOOP("MaterialName", "Polycarbonate")},
+    {"glass", QT_TRANSLATE_NOOP("MaterialName", "Glass")},
+    {"water", QT_TRANSLATE_NOOP("MaterialName", "Water")},
+    {"resin_standard", QT_TRANSLATE_NOOP("MaterialName", "Resin - Standard")},
+};
+
+// The built-in woods and panels after them (mitcad#1706,
+// core/model/src/material.rs, BUILT_IN_WOODS): not printed, so not among
+// the print analysis' materials.
+constexpr OwnMaterialName kBuiltInWoods[] = {
+    {"wood_pine", QT_TRANSLATE_NOOP("MaterialName", "Wood - Pine")},
+    {"wood_oak", QT_TRANSLATE_NOOP("MaterialName", "Wood - Oak")},
+    {"wood_birch", QT_TRANSLATE_NOOP("MaterialName", "Wood - Birch")},
+    {"plywood_birch", QT_TRANSLATE_NOOP("MaterialName", "Plywood - birch")},
+    {"mdf_raw", QT_TRANSLATE_NOOP("MaterialName", "MDF - raw")},
+};
+
+// The base library's materials whose names have words to translate
+// (tools/libraries/print-library/materials); the others are named by their
+// filament types alone (ABS, ASA, PETG, PLA, TPU), the same in every
+// language.
+constexpr OwnMaterialName kBaseLibraryMaterials[] = {
+    {"nylon", QT_TRANSLATE_NOOP("MaterialName", "PA (Nylon)")},
+};
+
+QString translatedMaterialName(const char* name) { return QCoreApplication::translate("MaterialName", name); }
+
+} // namespace
+
 const QVector<QPair<QString, QString>>& physicalMaterials() {
-  // core/model-base/src/analysis.rs, MATERIALS.
-  static const QVector<QPair<QString, QString>> list = {
-      {QStringLiteral("steel"), QObject::tr("Steel")},
-      {QStringLiteral("stainless_steel"), QObject::tr("Stainless Steel")},
-      {QStringLiteral("cast_iron"), QObject::tr("Cast Iron")},
-      {QStringLiteral("aluminum"), QObject::tr("Aluminum")},
-      {QStringLiteral("copper"), QObject::tr("Copper")},
-      {QStringLiteral("brass"), QObject::tr("Brass")},
-      {QStringLiteral("titanium"), QObject::tr("Titanium")},
-      {QStringLiteral("abs"), QObject::tr("ABS Plastic")},
-      {QStringLiteral("pla"), QObject::tr("PLA Plastic")},
-      {QStringLiteral("nylon"), QObject::tr("Nylon")},
-      {QStringLiteral("polycarbonate"), QObject::tr("Polycarbonate")},
-      {QStringLiteral("glass"), QObject::tr("Glass")},
-      {QStringLiteral("water"), QObject::tr("Water")},
-  };
+  static const QVector<QPair<QString, QString>> list = [] {
+    QVector<QPair<QString, QString>> made;
+    for (const OwnMaterialName& material : kBuiltInMaterials) {
+      made.append({QString::fromLatin1(material.id), translatedMaterialName(material.name)});
+    }
+    for (const OwnMaterialName& material : kBuiltInWoods) {
+      made.append({QString::fromLatin1(material.id), translatedMaterialName(material.name)});
+    }
+    return made;
+  }();
   return list;
+}
+
+bool isBuiltInWood(const QString& id) {
+  return std::any_of(std::begin(kBuiltInWoods), std::end(kBuiltInWoods),
+                     [&id](const OwnMaterialName& material) { return id == QLatin1String(material.id); });
+}
+
+namespace {
+
+// The English name of MitCad's own material `name` (with the id `id`, when
+// one is given) as the language shows it; null when it is none of them.
+const char* ownMaterialName(const QString* id, const QString& name) {
+  for (const OwnMaterialName& material : kBuiltInMaterials) {
+    if ((id == nullptr || *id == QLatin1String(material.id)) && name == QLatin1String(material.name)) {
+      return material.name;
+    }
+  }
+  for (const OwnMaterialName& material : kBuiltInWoods) {
+    if ((id == nullptr || *id == QLatin1String(material.id)) && name == QLatin1String(material.name)) {
+      return material.name;
+    }
+  }
+  for (const OwnMaterialName& material : kBaseLibraryMaterials) {
+    if ((id == nullptr || *id == QLatin1String(material.id)) && name == QLatin1String(material.name)) {
+      return material.name;
+    }
+  }
+  return nullptr;
+}
+
+} // namespace
+
+QString shownMaterialName(const QString& id, const QString& name) {
+  const char* own = ownMaterialName(&id, name);
+  return own != nullptr ? translatedMaterialName(own) : name;
+}
+
+QString shownOwnMaterialName(const QString& name) {
+  const char* own = ownMaterialName(nullptr, name);
+  return own != nullptr ? translatedMaterialName(own) : name;
+}
+
+QString shownLibraryMaterialName(const QString& place, const QString& sourcePlace, const QString& id,
+                                 const QString& name) {
+  if (place == QLatin1String("mitcad") || sourcePlace == QLatin1String("mitcad")) {
+    return shownOwnMaterialName(name);
+  }
+  return place == QLatin1String("design") ? shownMaterialName(id, name) : name;
 }
 
 } // namespace mitcad

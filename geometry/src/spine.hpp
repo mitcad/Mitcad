@@ -19,6 +19,7 @@
 #include <TopoDS_Wire.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Ax3.hxx>
+#include <gp_Circ.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
@@ -68,6 +69,31 @@ public:
   // The part between arc lengths `from` < `to`; on a closed wire `from`
   // may be negative and the part runs on through the wire's start.
   TopoDS_Wire part(double from, double to) const;
+
+  // The wire's edges in order (mitcad#1697), `i` from 0 to edge_count():
+  // the arc length where each starts and its length; its point and unit
+  // tangent (along the wire) at `local` along it from its start; its
+  // curvature there with the unit normal towards the centre of the
+  // curvature, none where it runs straight; and its circle when it is a
+  // circular arc, the circle's axis turned so that the wire runs round it
+  // counter-clockwise.
+  double edge_start(int i) const { return m_pieces.at(static_cast<std::size_t>(i)).start; }
+  double edge_length(int i) const { return m_pieces.at(static_cast<std::size_t>(i)).length; }
+  gp_Pnt edge_point(int i, double local) const;
+  gp_Dir edge_tangent(int i, double local) const;
+  std::optional<std::pair<double, gp_Dir>> edge_bend(int i, double local) const;
+  std::optional<gp_Circ> edge_circle(int i) const;
+  bool edge_straight(int i) const;
+
+  // (mitcad#1709) The edge's curve and its parameter range, and whether
+  // the wire runs along it the way its parameter grows.
+  struct EdgeCurve {
+    occ::handle<Geom_Curve> curve;
+    double first = 0.0;
+    double last = 0.0;
+    bool forward = true;
+  };
+  EdgeCurve edge_curve(int i) const;
 
 private:
   struct Piece {

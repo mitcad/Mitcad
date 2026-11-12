@@ -280,6 +280,14 @@ fn snap_new<K: Kernel>(
     annotate::placed_at(&mut placed, &seen, &frame, to);
     let mut value = answer("at", to, &placed, &seen, &frame, snap.zip(from));
     made(&mut value, &placed, &seen, &frame);
+    // What it writes there (mitcad#1691): the preview shows the value the
+    // placed dimension gets, in the same words and precision.
+    if let Some((measured, label)) = doc.placed_label(drawing, si, &view, &placed) {
+        value["label"] = json!(label);
+        if let Some(measured) = measured {
+            value["value"] = json!(measured);
+        }
+    }
     Ok(value)
 }
 

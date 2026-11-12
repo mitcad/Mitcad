@@ -165,9 +165,21 @@ QString gapBodies(const QJsonObject& pair, const BodyNames& name, const QString&
 void describeGaps(const QJsonObject& answer, const BodyNames& name, QStringList& lines) {
   const QString gap = plain(answer.value(QStringLiteral("gap")).toDouble());
   const QJsonArray pairs = answer.value(QStringLiteral("pairs")).toArray();
+  // Pairs of bodies that touch whose faces could not be measured beside the
+  // contact (mitcad#1672): the panel must not say they have no gap.
+  const int unmeasured = answer.value(QStringLiteral("unmeasured")).toInt();
+  const auto notChecked = [unmeasured, &lines] {
+    if (unmeasured == 1) {
+      lines << QObject::tr("One pair of touching bodies could not be checked.");
+    } else if (unmeasured > 1) {
+      lines << QObject::tr("%1 pairs of touching bodies could not be checked.").arg(unmeasured);
+    }
+  };
   lines << QObject::tr("<b>Narrow gaps</b> (under %1 mm)").arg(gap);
   if (pairs.isEmpty()) {
-    lines << QObject::tr("None: the bodies are apart by the gap or touch.");
+    lines << (unmeasured > 0 ? QObject::tr("None found.")
+                             : QObject::tr("None: no bodies are closer than the gap where they do not touch."));
+    notChecked();
     return;
   }
   for (const QJsonValue& value : pairs) {
@@ -181,6 +193,7 @@ void describeGaps(const QJsonObject& answer, const BodyNames& name, QStringList&
     }
     lines << QObject::tr("%1: %2").arg(gapBodies(pair, name, QObject::tr(" and ")).toHtmlEscaped(), distance);
   }
+  notChecked();
 }
 
 } // namespace
@@ -422,7 +435,7 @@ QString printAnalysisText(const PrintAnswers& answers, const BodyNames& name) {
     parts << lines.join(QStringLiteral("<br>"));
   }
   if (parts.isEmpty()) {
-    return QObject::tr("Nothing to check: turn on Overhangs, Thin Walls, Narrow Gaps or Estimate.");
+    return QObject::tr("Nothing to check: turn on Overhangs, Thin walls, Narrow gaps or Estimate.");
   }
   return parts.join(QStringLiteral("<br><br>"));
 }
@@ -469,9 +482,13 @@ QString printAnalysisLog(const PrintAnswers& answers, const BodyNames& name) {
                    .arg(gapBodies(pair, name, QStringLiteral("-")),
                         fixed(pair.value(QStringLiteral("distance")).toDouble(), 2));
     }
-    const QString gaps = QStringLiteral("narrow gaps under %1 mm: %2")
-                             .arg(plain(answers.minGap.value(QStringLiteral("gap")).toDouble()),
-                                  pairs.isEmpty() ? QStringLiteral("none") : pairs.join(QStringLiteral(", ")));
+    QString gaps = QStringLiteral("narrow gaps under %1 mm: %2")
+                       .arg(plain(answers.minGap.value(QStringLiteral("gap")).toDouble()),
+                            pairs.isEmpty() ? QStringLiteral("none") : pairs.join(QStringLiteral(", ")));
+    // Touching pairs whose faces were not measured (mitcad#1672).
+    if (const int unmeasured = answers.minGap.value(QStringLiteral("unmeasured")).toInt(); unmeasured > 0) {
+      gaps += QStringLiteral(" (%1 touching not checked)").arg(unmeasured);
+    }
     line = line.isEmpty() ? gaps : line + QStringLiteral("; ") + gaps;
   }
   return line.isEmpty() ? QStringLiteral("nothing checked") : line;

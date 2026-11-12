@@ -1049,7 +1049,9 @@ void PropertySetsDialog::addPrintSettings(const QJsonArray& levels, const QSet<Q
       return std::make_pair(QStringLiteral("settings"), text(value, "profile_name"));
     }
     if (from == QStringLiteral("material")) {
-      return std::make_pair(QStringLiteral("material"), text(value, "material_name"));
+      // A built-in material's name as the language shows it (mitcad#1689).
+      return std::make_pair(QStringLiteral("material"),
+                            shownMaterialName(text(value, "material"), text(value, "material_name")));
     }
     // The print plate the body prints on (mitcad#1050).
     if (from == QStringLiteral("plate")) {
@@ -1109,7 +1111,8 @@ void PropertySetsDialog::addPrintSettings(const QJsonArray& levels, const QSet<Q
     if (filament) {
       // The material, plain; a click on it or Edit opens Materials.
       const QJsonObject material = block.value(QStringLiteral("material")).toObject();
-      group->setText(kValue, text(material, "name"));
+      // A built-in material's name as the language shows it (mitcad#1689).
+      group->setText(kValue, shownMaterialName(text(material, "id"), text(material, "name")));
       group->setToolTip(kValue, group->text(kValue)); // whole where elided (mitcad#827)
       // Its name once, in the value (mitcad#655): the Source column does
       // not repeat it. Its appearance names an unset filament colour.

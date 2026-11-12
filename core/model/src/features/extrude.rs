@@ -974,7 +974,20 @@ impl<K: Kernel> Evaluate<K> for ExtrudeDef {
             uid,
         )?;
         match (self.active_cut_scope(), discovery) {
-            (Some(scope), Some(discovery)) => scope.apply(ctx, discovery, tool),
+            (Some(scope), Some(discovery)) => match scope.apply(ctx, discovery, tool) {
+                // A cut that misses suggests Flip when the other direction
+                // would cut (mitcad#1676).
+                Err(message)
+                    if message == super::extrude_scope::NO_INTERSECTION
+                        && self.flipped_cut_hits(ctx, scope, &sketch, &regions, through_all)? =>
+                {
+                    if let Some(report) = &mut ctx.cut_targets {
+                        report.flip_would_cut = true;
+                    }
+                    Err(super::extrude_scope::NO_INTERSECTION_TRY_FLIP.to_owned())
+                }
+                result => result,
+            },
             _ => apply_operation(ctx, self.operation, participants, tool, "extrusion"),
         }
     }
@@ -1042,6 +1055,85 @@ impl<K: Kernel> Evaluate<K> for ExtrudeDef {
 }
 
 impl ExtrudeDef {
+    /// Whether this scoped cut, which reached no body, would cut one with
+    /// its direction flipped (mitcad#1676). Only a kernel's out of memory
+    /// or cancellation is an error; a flipped tool that cannot be built
+    /// says no. The cut's report, warnings and notes stay as the cut left
+    /// them.
+    fn flipped_cut_hits<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        scope: &super::extrude_scope::CutScope,
+        sketch: &SketchOutput,
+        regions: &[ProfileRegion],
+        through_all: bool,
+    ) -> Result<bool, String> {
+        // Flip changes nothing of an extrusion even to both sides.
+        if matches!(
+            self.extent,
+            Extent::Symmetric { .. }
+                | Extent::ThroughAll {
+                    both_sides: true,
+                    ..
+                }
+        ) {
+            return Ok(false);
+        }
+        let flipped = ExtrudeDef {
+            flip: !self.flip,
+            ..self.clone()
+        };
+        let report = ctx.cut_targets.take();
+        let notes = (
+            ctx.warnings.len(),
+            ctx.infos.len(),
+            ctx.warning_places.len(),
+        );
+        let hits = flipped.cut_hits(ctx, scope, sketch, regions, through_all);
+        ctx.cut_targets = report;
+        ctx.warnings.truncate(notes.0);
+        ctx.infos.truncate(notes.1);
+        ctx.warning_places.truncate(notes.2);
+        match hits {
+            Err(detail)
+                if crate::kernel::KernelError::is_out_of_memory(&detail)
+                    || detail.contains("cancelled")
+                    || detail.contains("canceled") =>
+            {
+                Err(detail)
+            }
+            Err(_) => Ok(false),
+            Ok(hits) => Ok(hits),
+        }
+    }
+
+    /// Whether this cut's tool would cut a body its scope may take.
+    fn cut_hits<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        scope: &super::extrude_scope::CutScope,
+        sketch: &SketchOutput,
+        regions: &[ProfileRegion],
+        through_all: bool,
+    ) -> Result<bool, String> {
+        let discovery = scope.discover(ctx)?;
+        let participants = if through_all {
+            discovery.in_source_frame(ctx)?
+        } else {
+            Vec::new()
+        };
+        let uid = ctx.uid;
+        let tool = self.tool(
+            ctx,
+            sketch,
+            regions,
+            &participants,
+            &Transform::IDENTITY,
+            uid,
+        )?;
+        scope.would_cut(ctx, &discovery, &tool)
+    }
+
     /// The evaluated sketch and the regions the profiles select (none for
     /// walls along curves).
     fn sketch_regions<K: Kernel>(

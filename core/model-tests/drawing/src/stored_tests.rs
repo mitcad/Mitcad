@@ -716,6 +716,61 @@ fn a_projection_says_whether_it_came_from_a_triangulation() {
 }
 
 #[test]
+fn the_quick_path_follows_the_view_s_scale() {
+    // mitcad#1671: the kernel is told each view's scale on the sheet, so
+    // that lines from a triangulation lie within 0.02 mm of the edges on
+    // paper: 0.1 mm in the model at 1:5, 0.05 mm in a detail of it at 2:5.
+    // An exact projection serves any scale; one from a triangulation is
+    // made again when the scale changes.
+    for polygonal in [false, true] {
+        let mut doc = blocks();
+        doc.kernel().projects_polygonal.set(polygonal);
+        command(&mut doc, json!({"cmd": "add_drawing", "size": "A3"}));
+        command(
+            &mut doc,
+            json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "front",
+                   "at": [100, 120], "scale": "1:5"}),
+        );
+        let detail = command(
+            &mut doc,
+            json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "detail",
+                   "parent": 1, "center": [100, 120], "radius": 5, "at": [300, 120]}),
+        )["view"]
+            .as_u64()
+            .unwrap();
+        let d = doc.find_drawing("D1").unwrap();
+        let sheet = &d.sheets[0];
+        let spec = sheet.spec(1).unwrap();
+        assert!(near(spec.scale.unwrap(), 0.2), "{spec:?}");
+        assert!(near(spec.quick_deviation().unwrap(), 0.1), "{spec:?}");
+        let enlarged = sheet.spec(detail as u32).unwrap();
+        assert!(near(enlarged.scale.unwrap(), 0.4), "{enlarged:?}");
+        assert!(
+            near(enlarged.quick_deviation().unwrap(), 0.05),
+            "{enlarged:?}"
+        );
+
+        let calls = |doc: &Document<MockKernel>| doc.kernel().projected.borrow().len();
+        let before = calls(&doc);
+        command(
+            &mut doc,
+            json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 1, "scale": "1:10"}),
+        );
+        drawing(&doc, "D1");
+        let d = doc.find_drawing("D1").unwrap();
+        assert!(near(
+            d.sheets[0].spec(1).unwrap().quick_deviation().unwrap(),
+            0.2
+        ));
+        if polygonal {
+            assert!(calls(&doc) > before, "a new scale, a new triangulation");
+        } else {
+            assert_eq!(calls(&doc), before, "an exact projection at any scale");
+        }
+    }
+}
+
+#[test]
 fn breaks_take_bands_out_of_a_view() {
     let mut doc = drawn();
     // 30 mm of the 70 mm front view out, 6 mm of paper left between.

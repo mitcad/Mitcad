@@ -563,7 +563,10 @@ design in a project.
   method of their own; the results are kept in memory by the bodies'
   shape versions and the settings. Their narrow gaps between bodies
   printed in place (mitcad#1519, `print_min_gap`) are a box test in Rust
-  and the kernel's exact `measure_between` for the pairs left.
+  and the kernel's exact `measure_between` for the pairs left; for bodies
+  that touch, the kernel's `face_separations` (the faces within the gap,
+  pair by pair, with their normals, mitcad#1672) and Rust's choice of the
+  faces that face each other across air.
 - **Image references** (mitcad#782;
   `core/model/src/document/image_references.rs`,
   `core/model-base/src/image_header.rs`, `api/image_references.rs`):
@@ -1071,13 +1074,27 @@ design in a project.
 - **Design properties** (mitcad#1088, `document/design_summary.rs`,
   `file/statistics.rs`): the design's summary is the root's property set
   `Summary` (no state of its own); its statistics (created, last saved,
-  by whom, with which MitCad) are the one part of the design file kept
-  beside the definition state, not in it (`Document::statistics`, read
+  by whom, with which MitCad) are kept beside the definition state, not
+  in it (as the preview, below) (`Document::statistics`, read
   apart from the definition in `file::load_parts`): undo, design
   comparisons and plain saves leave them, and only a stamped save
   (`Document::save_file_stamped`, the application's Save) that changes
   the file sets them ([commands.md](../core/model-api/src/commands.md),
   "Design properties").
+- **The design's preview** (mitcad#1539, `model-base/src/design_preview.rs`):
+  the application's Save puts the 3D view's picture (a PNG, 256 px at
+  most a side) into the file's top-level `preview`, kept beside the
+  definition like the statistics and changed with them
+  (`Document::save_file_previewed`: only when the file changes otherwise
+  too). The file managers' thumbnailer `mitcad-thumbnailer`
+  (`core/thumbnailer`: model-base and the PNG writer of `core/preview`,
+  no model, Qt or OCCT) reads only that field and scales it to the size
+  asked for ([app/COMMANDS.md](../app/COMMANDS.md), "The preview in the
+  design's file"). Windows Explorer's thumbnail handler
+  `mitcad-thumbnails.dll` (mitcad#1695, `app/thumbnails`, a C++ COM DLL)
+  reads it through the same crate's C ABI (`thumbnailer/src/capi.rs`,
+  linked as the static library `mitcad_thumbnailer_capi` of
+  `core/thumbnailer-capi`, Windows only).
 - **Reorient Design** (mitcad#502, `core/model/src/reorient.rs`,
   `document/reorient.rs`): the whole design turned by quarter turns as a
   rewrite of its definition, every component but linked ones in its own
@@ -3055,7 +3072,9 @@ not recompute.
   dialogs, menus, sizes, colors, folders), whose `kComponentBrowserAbi`
   both sides check. CEF runs windowless, its loop pumped from Qt's, each
   page painted from its software buffer into a widget (`CefView`) that
-  forwards input. `ComponentBrowser` is a window of its own with
+  forwards input; CEF is given the view in physical pixels at a scale of 1
+  and the page's zoom is the display's scale, as CEF paints windowless
+  frames at 1 whatever it is told (mitcad#1657, app/COMMANDS.md). `ComponentBrowser` is a window of its own with
   one browsing profile for the application; its downloads go into
   temporary folders (`WebDownloadFolders`, one locked folder per run) and
   pass the format filter (`ComponentWebFiles`, plain Qt Core, by name and

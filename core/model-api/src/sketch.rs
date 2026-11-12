@@ -1824,6 +1824,14 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
             result[key] = value[key].clone();
         }
         result["degenerate"] = degenerate_ids(&status);
+        // The points, curves, constraints and dimensions in the order they
+        // were made (mitcad#1492): sketch mode's list of them.
+        let order: Vec<String> = def
+            .creation_order()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        result["order"] = json!(order);
         // The inactive constraints and dimensions the geometry does not
         // meet (mitcad#721).
         if !status.unmet_inactive.is_empty() {

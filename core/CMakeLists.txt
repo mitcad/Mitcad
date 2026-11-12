@@ -2,12 +2,29 @@
 # The bridge, the release tool mitcad-release of the automatic updates
 # (mitcad#9, docs/updates.md) and the test runner mitcad-testrun
 # (tools/testrun, mitcad#790; with the build's programs: build\dev\ on
-# Windows, build/dev/core/ on Linux and macOS).
-corrosion_import_crate(MANIFEST_PATH Cargo.toml CRATES mitcad-ffi mitcad-update mitcad-testrun)
+# Windows, build/dev/core/ on Linux and macOS) and the file managers'
+# thumbnailer mitcad-thumbnailer (thumbnailer/, mitcad#1539; the Linux
+# AppImage carries it, cmake/AppImage.cmake). On Windows also the static
+# library mitcad_thumbnailer_capi (thumbnailer-capi/, mitcad#1695): the
+# thumbnailer's C ABI, which Explorer's thumbnail handler links
+# (app/thumbnails).
+set(mitcad_rust_crates mitcad-ffi mitcad-update mitcad-testrun mitcad-thumbnailer)
+if(WIN32)
+  list(APPEND mitcad_rust_crates mitcad-thumbnailer-capi)
+endif()
+corrosion_import_crate(MANIFEST_PATH Cargo.toml CRATES ${mitcad_rust_crates})
 if(MITCAD_RUST_CACHE_ENVIRONMENT)
   corrosion_set_env_vars(mitcad_ffi ${MITCAD_RUST_CACHE_ENVIRONMENT})
   corrosion_set_env_vars(mitcad-release ${MITCAD_RUST_CACHE_ENVIRONMENT})
   corrosion_set_env_vars(mitcad-testrun ${MITCAD_RUST_CACHE_ENVIRONMENT})
+  corrosion_set_env_vars(mitcad-thumbnailer ${MITCAD_RUST_CACHE_ENVIRONMENT})
+  if(WIN32)
+    corrosion_set_env_vars(mitcad_thumbnailer_capi ${MITCAD_RUST_CACHE_ENVIRONMENT})
+  endif()
+endif()
+if(WIN32)
+  target_include_directories(mitcad_thumbnailer_capi INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}/thumbnailer-capi/include")
 endif()
 # Live updates (mitcad#89): TLS in the bridge (rustls with ring) takes
 # random numbers from the system (bcrypt on Windows) and reads the system's
@@ -123,7 +140,9 @@ corrosion_add_cxxbridge(mitcad_bridge CRATE mitcad_ffi_bridges_sources FILES
   # Repeated parts: bodies equal up to a rigid motion (mitcad#1277).
   kernel/repeated_parts.rs
   # Intersection curves: two sketches' curves swept and crossed (mitcad#1405).
-  kernel/intersection_curve.rs)
+  kernel/intersection_curve.rs
+  # Narrow gaps between bodies that touch: face pairs measured (mitcad#1672).
+  kernel/print_gaps.rs)
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/boolean.cpp
   cpp/bridge/boolean.hpp
@@ -312,6 +331,10 @@ target_sources(mitcad_bridge PRIVATE
 # model_render's ray-traced picture through mitcad-cli (mitcad#1489).
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/mcp_raytrace.hpp)
+# Narrow gaps between bodies that touch: face pairs measured (mitcad#1672).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/print_gaps.cpp
+  cpp/bridge/print_gaps.hpp)
 target_include_directories(mitcad_bridge PUBLIC cpp)
 # What corrosion_add_cxxbridge links for a CRATE that Corrosion imported
 # (mitcad#792): the bridge with the Rust library, both ways.
@@ -644,6 +667,9 @@ if(BUILD_TESTING)
   # model_render's camera, software rasterizer and PNG writer (mitcad#1486;
   # no OCCT).
   mitcad_cargo_test(core.preview mitcad-preview)
+  # The file managers' thumbnailer of designs (mitcad#1539; no OCCT, no
+  # Qt): the preview of a design saved with one, at the sizes asked for.
+  mitcad_cargo_test(core.thumbnailer mitcad-thumbnailer)
 
   # The fixtures that build the test binaries, and the documentation tests
   # (cargo with the fixture's packages, so that it builds nothing again).

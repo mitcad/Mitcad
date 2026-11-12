@@ -433,6 +433,7 @@ private:
   int m_hoverView = -1;
   QPointF m_hoverAt;
   QString m_loggedHover;
+  QString m_loggedOutline; // the hover's body, mitcad#1691
   // The hover's question waits for the job that computes the model
   // (mitcad#753).
   bool m_hoverWaits = false;

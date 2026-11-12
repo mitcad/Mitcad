@@ -653,3 +653,91 @@ fn as_built_joints_turn_about_their_origin() {
         "{values}"
     );
 }
+
+/// Whether every occurrence's own placement and its solved placement are
+/// rotations and translations, within rounding (mitcad#1664).
+fn assert_rigid_placements(doc: &Document<MockKernel>, step: usize) {
+    use mitcad_model::assembly::{is_rigid, orthonormality_error};
+    for o in &doc.assembly().occurrences {
+        let own = o.transform;
+        assert!(
+            own.is_finite() && is_rigid(&own) && orthonormality_error(&own.linear) <= 1e-9,
+            "step {step}: {} stored {own:?}",
+            doc.assembly().occurrence_name(o.uid)
+        );
+        let placed = doc.placement(o.uid).unwrap();
+        assert!(
+            is_rigid(&placed) && orthonormality_error(&placed.linear) <= 1e-9,
+            "step {step}: {} placed {placed:?}",
+            doc.assembly().occurrence_name(o.uid)
+        );
+    }
+}
+
+#[test]
+fn many_drags_to_the_limits_keep_placements_rigid_and_the_design_opens() {
+    // A two-joint arm: an upper link hinged to the ground with ±60°, a lower
+    // link hinged to its end with ±90°, each placed askew to begin with.
+    let mut doc = Document::new(MockKernel::default());
+    let upper = link(&mut doc, "Upper", shift(5.0, 40.0, 0.0).after(&turn(0.3)));
+    let lower = link(
+        &mut doc,
+        "Lower",
+        shift(70.0, -20.0, 0.0).after(&turn(-1.1)),
+    );
+    for (a, b, limit) in [
+        (pin("Upper:1", [0.0; 3]), ground([0.0; 3]), "60 deg"),
+        (
+            pin("Lower:1", [0.0; 3]),
+            pin("Upper:1", [50.0, 0.0, 0.0]),
+            "90 deg",
+        ),
+    ] {
+        let added = run(
+            &mut doc,
+            json!({"cmd": "add_joint", "kind": "revolute", "a": a, "b": b,
+                   "limits": {"rz": {"min": format!("-{limit}"), "max": limit}}}),
+        );
+        assert_eq!(added["error"], Value::Null, "{added}");
+    }
+    assert_rigid_placements(&doc, 0);
+    // Hundreds of drags of the lower link's tip: around and out of reach
+    // (the arm stretches to its limits), then back near the hinge.
+    let mut kept = 0;
+    for step in 1..=400_usize {
+        let grab = world(&doc, lower, [40.0, 0.0, 0.0]);
+        let angle = step as f64 * 0.37;
+        let radius = if step.is_multiple_of(3) { 30.0 } else { 160.0 };
+        let target = [radius * angle.cos(), radius * angle.sin(), 0.0];
+        let command = json!({"cmd": "drag_occurrence", "occurrence": "Lower:1",
+                             "point": grab, "target": target});
+        if doc.command(&command.to_string()).is_ok() {
+            kept += 1;
+        }
+        assert_rigid_placements(&doc, step);
+    }
+    assert!(kept >= 100, "only {kept} of 400 drags were kept");
+    // The joints still hold.
+    assert_near(world(&doc, upper, [0.0; 3]), [0.0; 3]);
+    assert_near(
+        world(&doc, upper, [50.0, 0.0, 0.0]),
+        world(&doc, lower, [0.0; 3]),
+    );
+    // Saved and opened again: no warning, the same placements.
+    let saved = doc.to_json();
+    let back = Document::from_json(&saved, MockKernel::default()).unwrap();
+    assert!(
+        back.load_warnings().is_empty(),
+        "{:?}",
+        back.load_warnings()
+    );
+    let placements = |d: &Document<MockKernel>| {
+        d.assembly()
+            .occurrences
+            .iter()
+            .map(|o| (o.uid, o.transform))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(placements(&back), placements(&doc));
+    assert_rigid_placements(&back, 401);
+}

@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: MIT
+# The built-in materials' names in Finnish (mitcad#1689), MitCad started
+# with --language fi on material-names-fi.json (one box of the default
+# material, steel), through the real Qt controls; shared by
+# tools/ui-material-names-fi-test.sh (Linux, Xvfb) and
+# tools/ui-windows-material-names-fi-test.ps1. The runners check the saved
+# design afterwards: the body's material by its id, no Finnish name stored.
+#   1. Body1 picked, the Material tool: its tile names the default
+#      "Oletus (Teräs)" (Default (Steel)).
+#   2. The picker opens on Oletus (Teräs); the stored English name still
+#      finds the built-in one ("Steel": Teräs first); "Alum" finds
+#      Alumiini, which OK gives Body1 (its id, aluminum).
+#   3. The Materials window lists Teräs: "Steel" in its search shows the
+#      row named Teräs.
+#   4. Saved.
+# The letter a-umlaut is matched by ".". The root component's name is
+# shown translated (Juuri), so the Browser's places are matched by any root.
+expect-ever '^Language: fi [(]--language[)]$' 30
+wait-idle
+window-resize 1280 860
+focus-main
+mark
+
+# 1. The Material tool on Body1: the default named in Finnish.
+click-logged '^Browser [^/ ]+/.+/Body1 at '
+expect-log '^Browser selected: .+/Body1$'
+mark
+command solid.material
+expect-log '^Panel [^ ]+ tile material: Oletus [(]Ter.s[)]'
+wait-idle
+
+# 2. The picker: the built-in materials in Finnish, found by either name.
+mark
+click-logged '^Panel [^ ]+ input material at '
+expect-log '^Material picker opened: [0-9]+ entries, current Oletus [(]Ter.s[)]$'
+focus-dialog '^Materiaalin valitsin$'
+type 'Steel'
+expect-log '^Material picker search: Steel, first Ter.s$'
+key ctrl+a
+type 'Alum'
+expect-log '^Material picker search: Alum, first Alumiini$'
+mark
+key Return
+expect-log '^Material picker chose: Alumiini$'
+expect-log '^Panel [^ ]+ tile material: Alumiini'
+focus-main
+wait-idle
+mark
+key Return
+expect-log 'Material aluminum set for 1 body[(]ies[)]'
+wait-idle
+
+# 3. The Materials window: Teräs listed, found by its stored name.
+mark
+command solid.materials
+focus-dialog '^Materiaalit$'
+wait-idle
+focus-widget printManagerSearch
+type 'Steel'
+expect-log '^Materials (mitcad |design )?item Ter.s at ' 20
+expect-no-log 'item Steel at'
+wait-idle
+button '^Sulje$'
+focus-main
+wait-idle
+
+# 4. Saved: the runners read the file.
+mark
+key ctrl+s
+wait-log '^Saved ' 30

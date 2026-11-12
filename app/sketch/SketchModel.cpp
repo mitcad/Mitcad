@@ -162,6 +162,10 @@ bool SketchModel::load(const QJsonObject& sketch) {
   for (const QJsonValue& id : sketch.value(QStringLiteral("unmet_inactive")).toArray()) {
     unmetInactive << id.toString();
   }
+  order.clear();
+  for (const QJsonValue& id : sketch.value(QStringLiteral("order")).toArray()) {
+    order << id.toString();
+  }
   const bool framed = sketchFrame(sketch, frame);
 
   for (const QJsonValue& value : sketch.value(QStringLiteral("entities")).toArray()) {

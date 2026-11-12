@@ -10,6 +10,9 @@
 #include <utility>
 #include <vector>
 
+#include <BRepAlgoAPI_BooleanOperation.hxx>
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -169,6 +172,8 @@ std::vector<Corner> section(const HoleSpec& spec, double depth, bool drill_point
   std::vector<Corner> corners{{0.0, 0.0, "top"}};
   switch (spec.type) {
   case HoleType::Simple:
+  case HoleType::NutPocket:
+    // (A nut pocket's hexagon is fused to the round hole, nut_pocketed.)
     corners.push_back({r, 0.0, "wall"});
     break;
   case HoleType::Counterbore:
@@ -500,6 +505,300 @@ ShapePtr print_shaped(const HoleSpec& spec, int index, const gp_Ax1& at, double 
   return namer.shape();
 }
 
+// A prism of the closed polygon through `corners` swept by `sweep`: the face
+// each side sweeps named <feature>:hole<index>.<part> by the part of the
+// corner it starts at (none where it is empty), the polygon's face `first`
+// and the face it is swept to `last` (none where empty).
+ShapePtr named_prism(const HoleSpec& spec, int index, const std::vector<std::pair<gp_Pnt, std::string>>& corners,
+                     const gp_Vec& sweep, const std::string& first, const std::string& last) {
+  const std::string prefix = "hole" + std::to_string(index) + ".";
+  BRepBuilderAPI_MakeWire wire;
+  std::vector<std::pair<TopoDS_Edge, std::string>> named;
+  for (std::size_t i = 0; i < corners.size(); ++i) {
+    BRepBuilderAPI_MakeEdge edge(corners[i].first, corners[(i + 1) % corners.size()].first);
+    if (!edge.IsDone()) {
+      throw std::runtime_error("the nut pocket could not be built");
+    }
+    wire.Add(edge.Edge());
+    if (!wire.IsDone()) {
+      throw std::runtime_error("the nut pocket could not be built");
+    }
+    if (!corners[i].second.empty()) {
+      named.emplace_back(wire.Edge(), face_name(spec.feature, prefix + corners[i].second));
+    }
+  }
+  BRepBuilderAPI_MakeFace face(wire.Wire(), true);
+  if (!face.IsDone()) {
+    throw std::runtime_error("the nut pocket could not be built");
+  }
+  BRepPrimAPI_MakePrism prism(face.Face(), sweep);
+  prism.Build();
+  if (!prism.IsDone()) {
+    throw std::runtime_error("the nut pocket could not be built");
+  }
+  detail::FaceNamer namer(prism.Shape());
+  for (const auto& [edge, name] : named) {
+    namer.generated(prism, edge, name);
+  }
+  if (!first.empty()) {
+    namer.add(prism.FirstShape(), face_name(spec.feature, prefix + first));
+  }
+  if (!last.empty()) {
+    namer.add(prism.LastShape(), face_name(spec.feature, prefix + last));
+  }
+  namer.finish();
+  return namer.shape();
+}
+
+// A round hole with a nut pocket (mitcad#1518): the hexagon's prism from the
+// pocket's offset below the start, `pocket_depth` deep, and a side slot's
+// prism along its first flat out to `pocket_slot` from the axis, fused with
+// the round hole, each face named as it was in them (the faces they share
+// merged: the slot's sides are the first and the fourth flat carried on).
+ShapePtr nut_pocketed(const HoleSpec& spec, int index, const gp_Ax1& at, double depth, bool drill_point) {
+  const double flats = spec.pocket_across_flats;
+  detail::require_positive("nut pocket width across the flats", flats);
+  detail::require_positive("nut pocket depth", spec.pocket_depth);
+  detail::require_finite("nut pocket angle", spec.pocket_angle);
+  if (!std::isfinite(spec.pocket_offset) || !(spec.pocket_offset >= 0.0)) {
+    throw std::invalid_argument("the nut pocket's offset from the hole's start must not be negative");
+  }
+  if (!(flats > spec.diameter)) {
+    throw std::invalid_argument("the nut pocket must be wider than the hole");
+  }
+  if (!(spec.pocket_offset + spec.pocket_depth < depth)) {
+    throw std::invalid_argument("the nut pocket must be shallower than the hole");
+  }
+  // The corners lie on the circumscribed circle.
+  const double corner = flats / std::sqrt(3.0);
+  if (spec.pocket_slot && !(*spec.pocket_slot > corner)) {
+    throw std::invalid_argument("the nut pocket's slot must reach out of the pocket");
+  }
+  const ShapePtr plain = one_hole(spec, index, at, depth, drill_point);
+  // The turn is measured from the x axis on the start plane (y for a hole
+  // along x), counterclockwise about the hole's direction, as a press fit's.
+  const gp_Dir along = at.Direction();
+  const auto onto = [&along](const gp_Vec& axis) { return axis - gp_Vec(along) * axis.Dot(gp_Vec(along)); };
+  gp_Vec from = onto(gp_Vec(1, 0, 0));
+  if (from.Magnitude() < 0.5) {
+    from = onto(gp_Vec(0, 1, 0));
+  }
+  const gp_Dir ref(from);
+  const gp_Dir side = along.Crossed(ref);
+  const gp_Pnt origin = at.Location().Translated(gp_Vec(along) * spec.pocket_offset);
+  const auto point = [&](double r, double angle) {
+    return origin.Translated(gp_Vec(ref) * (r * std::cos(angle)) + gp_Vec(side) * (r * std::sin(angle)));
+  };
+  const std::string roof = spec.pocket_offset > 0.0 ? "pocket_roof" : "top";
+  const gp_Vec sweep = gp_Vec(along) * spec.pocket_depth;
+  const double step = kPi / 3.0;
+  std::vector<std::pair<gp_Pnt, std::string>> hexagon;
+  for (int k = 0; k < 6; ++k) {
+    hexagon.emplace_back(point(corner, spec.pocket_angle + k * step - step / 2.0), "pocket" + std::to_string(k));
+  }
+  std::vector<ShapePtr> pockets{named_prism(spec, index, hexagon, sweep, roof, "pocket_floor")};
+  if (spec.pocket_slot) {
+    // Along the first flat: a quarter turn on from its normal, between the
+    // planes of the first and the fourth flat.
+    const gp_Vec normal = gp_Vec(ref) * std::cos(spec.pocket_angle) + gp_Vec(side) * std::sin(spec.pocket_angle);
+    const gp_Vec way = gp_Vec(along).Crossed(normal);
+    const double half = flats / 2.0;
+    const double reach = *spec.pocket_slot;
+    const auto at_slot = [&](double t, double u) { return origin.Translated(way * t + normal * u); };
+    // (The side across the axis lies inside the hexagon: it has no name.)
+    const std::vector<std::pair<gp_Pnt, std::string>> slot{{at_slot(0.0, -half), "pocket3"},
+                                                           {at_slot(reach, -half), "slot_end"},
+                                                           {at_slot(reach, half), "pocket0"},
+                                                           {at_slot(0.0, half), ""}};
+    pockets.push_back(named_prism(spec, index, slot, sweep, roof, "pocket_floor"));
+  }
+  NCollection_List<TopoDS_Shape> arguments;
+  arguments.Append(plain->occt());
+  NCollection_List<TopoDS_Shape> tools;
+  for (const ShapePtr& pocket : pockets) {
+    tools.Append(pocket->occt());
+  }
+  BRepAlgoAPI_Fuse fuse;
+  fuse.SetArguments(arguments);
+  fuse.SetTools(tools);
+  detail::build(fuse);
+  if (!fuse.IsDone() || fuse.HasErrors()) {
+    throw std::runtime_error("the nut pocket could not be built");
+  }
+  // The faces they share (the start, the floor, a slot's sides on the
+  // flats) merged into one each; the history includes it.
+  fuse.SimplifyResult();
+  TopoDS_Shape solid;
+  int solids = 0;
+  for (TopExp_Explorer it(fuse.Shape(), TopAbs_SOLID); it.More(); it.Next()) {
+    solid = it.Current();
+    ++solids;
+  }
+  if (solids != 1) {
+    throw std::runtime_error("the nut pocket came apart from its hole");
+  }
+  detail::FaceNamer namer(solid);
+  namer.carry(fuse, *plain);
+  for (const ShapePtr& pocket : pockets) {
+    namer.carry(fuse, *pocket);
+  }
+  namer.finish();
+  return namer.shape();
+}
+
+// A layer of a recess's outline (mitcad#1516), `layer` thick above its floor
+// `floor_at` deep: a counterbore's circle or a nut pocket's hexagon, its sides
+// `bridge0.end` (where the first step's strip ends against the recess's
+// wall), its face on the floor `floor_name`, the other `bridge0`.
+ShapePtr recess_layer(const HoleSpec& spec, int index, const gp_Ax1& at, const gp_Dir& ref, double floor_at,
+                      double layer, const std::string& floor_name) {
+  const gp_Dir along = at.Direction();
+  const gp_Dir side = along.Crossed(ref);
+  const gp_Pnt base = at.Location().Translated(gp_Vec(along) * floor_at);
+  const gp_Vec sweep = gp_Vec(along) * layer;
+  if (spec.type == HoleType::NutPocket) {
+    const double corner = spec.pocket_across_flats / std::sqrt(3.0);
+    const double step = kPi / 3.0;
+    std::vector<std::pair<gp_Pnt, std::string>> hexagon;
+    for (int k = 0; k < 6; ++k) {
+      const double angle = spec.pocket_angle + k * step - step / 2.0;
+      hexagon.emplace_back(
+          base.Translated(gp_Vec(ref) * (corner * std::cos(angle)) + gp_Vec(side) * (corner * std::sin(angle))),
+          "bridge0.end");
+    }
+    return named_prism(spec, index, hexagon, sweep, floor_name, "bridge0");
+  }
+  const std::string prefix = "hole" + std::to_string(index) + ".";
+  const gp_Circ circle(gp_Ax2(base, along, ref), spec.counterbore_diameter / 2.0);
+  BRepBuilderAPI_MakeEdge edge(circle);
+  if (!edge.IsDone()) {
+    throw std::runtime_error("the hole's bridging could not be built");
+  }
+  BRepBuilderAPI_MakeWire wire(edge.Edge());
+  BRepBuilderAPI_MakeFace face(wire.Wire(), true);
+  if (!wire.IsDone() || !face.IsDone()) {
+    throw std::runtime_error("the hole's bridging could not be built");
+  }
+  BRepPrimAPI_MakePrism prism(face.Face(), sweep);
+  prism.Build();
+  if (!prism.IsDone()) {
+    throw std::runtime_error("the hole's bridging could not be built");
+  }
+  detail::FaceNamer namer(prism.Shape());
+  namer.generated(prism, wire.Edge(), face_name(spec.feature, prefix + "bridge0.end"));
+  namer.add(prism.FirstShape(), face_name(spec.feature, prefix + floor_name));
+  namer.add(prism.LastShape(), face_name(spec.feature, prefix + "bridge0"));
+  namer.finish();
+  return namer.shape();
+}
+
+// A list of one shape, for a boolean's arguments or tools.
+NCollection_List<TopoDS_Shape> one_of(const ShapePtr& shape) {
+  NCollection_List<TopoDS_Shape> list;
+  list.Append(shape->occt());
+  return list;
+}
+
+// The names a boolean's result carries from its inputs, its faces that
+// share a surface merged first.
+ShapePtr named_result(BRepAlgoAPI_BooleanOperation& operation, const std::vector<const Shape*>& inputs,
+                      const char* what) {
+  detail::build(operation);
+  if (!operation.IsDone() || operation.HasErrors()) {
+    throw std::runtime_error(std::string("the hole's ") + what + " could not be built");
+  }
+  operation.SimplifyResult();
+  detail::FaceNamer namer(operation.Shape());
+  for (const Shape* input : inputs) {
+    namer.carry(operation, *input);
+  }
+  namer.finish();
+  return namer.shape();
+}
+
+// A hole whose recess opens toward the print bed, bridged for printing
+// (mitcad#1516): `plain` is the hole with its counterbore or nut pocket,
+// `depth` where its bore ends.
+ShapePtr bridged(const HoleSpec& spec, int index, const gp_Ax1& at, double depth, const ShapePtr& plain) {
+  const bool pocket = spec.type == HoleType::NutPocket;
+  if (!pocket && spec.type != HoleType::Counterbore) {
+    throw std::invalid_argument("only a counterbore or a nut pocket is bridged for printing");
+  }
+  if (pocket && (spec.pocket_offset != 0.0 || spec.pocket_slot)) {
+    throw std::invalid_argument("only a nut pocket at the hole's start without a slot is bridged for printing");
+  }
+  detail::require_positive("bridge layer height", spec.bridge_layer);
+  const double floor_at = pocket ? spec.pocket_depth : spec.counterbore_depth;
+  const double layers = spec.bridging == Bridging::Stepped ? 2.0 : 1.0;
+  if (!(floor_at + layers * spec.bridge_layer < depth)) {
+    throw std::invalid_argument("the bridge layers must end before the hole's depth");
+  }
+  const std::string floor_name = pocket ? "pocket_floor" : "cbore_floor";
+  // The strip runs along the direction a press fit's angle is measured
+  // from, turned with a nut pocket.
+  const gp_Dir along = at.Direction();
+  const auto onto = [&along](const gp_Vec& axis) { return axis - gp_Vec(along) * axis.Dot(gp_Vec(along)); };
+  gp_Vec from = onto(gp_Vec(1, 0, 0));
+  if (from.Magnitude() < 0.5) {
+    from = onto(gp_Vec(0, 1, 0));
+  }
+  const gp_Dir ref(from);
+  const ShapePtr layer = recess_layer(spec, index, at, ref, floor_at, spec.bridge_layer, floor_name);
+  if (spec.bridging == Bridging::Sacrificial) {
+    // The layer over the floor taken out of the bore: a membrane.
+    BRepAlgoAPI_Cut cut;
+    cut.SetArguments(one_of(plain));
+    cut.SetTools(one_of(layer));
+    return named_result(cut, {plain.get(), layer.get()}, "sacrificial layer");
+  }
+  const double angle = pocket ? spec.pocket_angle : 0.0;
+  const gp_Dir side = along.Crossed(ref);
+  const gp_Vec u = gp_Vec(ref) * std::cos(angle) + gp_Vec(side) * std::sin(angle);
+  const gp_Vec v = gp_Vec(along).Crossed(u);
+  const double half = spec.diameter / 2.0;
+  const double outer = (pocket ? spec.pocket_across_flats : spec.counterbore_diameter) + 1.0;
+  const auto at_layer = [&](double height, double a, double b) {
+    return at.Location().Translated(gp_Vec(along) * height + u * a + v * b);
+  };
+  // The first layer's open strip: a box as wide as the hole along u, past
+  // the recess's outline and its layer, cut down to the layer's outline.
+  const std::vector<std::pair<gp_Pnt, std::string>> strip{
+      {at_layer(floor_at - spec.bridge_layer, -outer, -half), "bridge0.side0"},
+      {at_layer(floor_at - spec.bridge_layer, outer, -half), ""},
+      {at_layer(floor_at - spec.bridge_layer, outer, half), "bridge0.side1"},
+      {at_layer(floor_at - spec.bridge_layer, -outer, half), ""}};
+  const ShapePtr box = named_prism(spec, index, strip, gp_Vec(along) * (3.0 * spec.bridge_layer), "", "");
+  BRepAlgoAPI_Common common;
+  common.SetArguments(one_of(layer));
+  common.SetTools(one_of(box));
+  const ShapePtr first = named_result(common, {layer.get(), box.get()}, "bridging");
+  // The second layer's open square of the hole's diameter on the strip.
+  const double above = floor_at + spec.bridge_layer;
+  const std::vector<std::pair<gp_Pnt, std::string>> square{{at_layer(above, -half, -half), "bridge1.side0"},
+                                                           {at_layer(above, half, -half), "bridge1.side1"},
+                                                           {at_layer(above, half, half), "bridge1.side2"},
+                                                           {at_layer(above, -half, half), "bridge1.side3"}};
+  const ShapePtr second = named_prism(spec, index, square, gp_Vec(along) * spec.bridge_layer, "", "bridge1");
+  // The bore taken out of both layers first: it lies inside the strip and
+  // the square, touching their sides, and a bore through them would split
+  // those sides along the lines it touches (each side's name then numbered
+  // per piece). The bore goes on from the second layer's top.
+  const ShapePtr both = recess_layer(spec, index, at, ref, floor_at, 2.0 * spec.bridge_layer, floor_name);
+  BRepAlgoAPI_Cut cut;
+  cut.SetArguments(one_of(plain));
+  cut.SetTools(one_of(both));
+  const ShapePtr apart = named_result(cut, {plain.get(), both.get()}, "bridging");
+  NCollection_List<TopoDS_Shape> arguments;
+  arguments.Append(apart->occt());
+  NCollection_List<TopoDS_Shape> tools;
+  tools.Append(first->occt());
+  tools.Append(second->occt());
+  BRepAlgoAPI_Fuse fuse;
+  fuse.SetArguments(arguments);
+  fuse.SetTools(tools);
+  return named_result(fuse, {apart.get(), first.get(), second.get()}, "bridging");
+}
+
 } // namespace
 
 ShapePtr hole_tool(const HoleSpec& spec) {
@@ -522,6 +821,20 @@ ShapePtr hole_tool(const HoleSpec& spec) {
       throw std::invalid_argument("a press-fit or tapered hole has no print shape");
     }
   }
+  // A nut pocket (mitcad#1518) about a round, straight hole.
+  if (spec.type == HoleType::NutPocket &&
+      (spec.press_fit != PressFit::None || spec.taper != 0.0 || !spec.roofs.empty())) {
+    throw std::invalid_argument("a nut pocket's hole has no press fit, taper or print shape");
+  }
+  // Print bridging (mitcad#1516): a flag per position.
+  if (spec.bridging != Bridging::None) {
+    if (spec.bridged.size() != spec.positions.size()) {
+      throw std::invalid_argument("the print bridging does not say for every hole whether it is bridged");
+    }
+    if (spec.press_fit != PressFit::None || spec.taper != 0.0 || !spec.roofs.empty()) {
+      throw std::invalid_argument("a bridged hole has no press fit, taper or print shape");
+    }
+  }
   return detail::run("hole", [&] {
     BRep_Builder builder;
     TopoDS_Compound compound;
@@ -539,9 +852,13 @@ ShapePtr hole_tool(const HoleSpec& spec) {
       }
       const int index = static_cast<int>(i);
       const bool roofed = !spec.roofs.empty() && spec.roofs[i].has_value();
-      const ShapePtr hole = spec.press_fit != PressFit::None ? press_fit_hole(spec, index, at, depth)
+      ShapePtr hole = spec.press_fit != PressFit::None ? press_fit_hole(spec, index, at, depth)
                             : roofed ? print_shaped(spec, index, at, depth, drill_point, *spec.roofs[i])
-                                     : one_hole(spec, index, at, depth, drill_point);
+                            : spec.type == HoleType::NutPocket ? nut_pocketed(spec, index, at, depth, drill_point)
+                                                               : one_hole(spec, index, at, depth, drill_point);
+      if (spec.bridging != Bridging::None && spec.bridged[i]) {
+        hole = bridged(spec, index, at, depth, hole);
+      }
       builder.Add(compound, hole->occt());
       for (int f = 0; f < hole->face_count(); ++f) {
         names.push_back({hole->face(f), hole->face_names(f)});

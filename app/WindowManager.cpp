@@ -4,6 +4,7 @@
 #include "framework/AppSettings.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/InterfaceSize.hpp"
+#include "framework/WindowPlace.hpp"
 #include "platform/MacChrome.hpp"
 
 #include <QAction>
@@ -37,6 +38,13 @@ QString fileKey(const QString& path) {
 WindowManager::WindowManager(bool nativeUi, QObject* parent) : QObject(parent), m_nativeUi(nativeUi) {
   Q_ASSERT(manager == nullptr);
   manager = this;
+  // The application ends with windows open (the system's quit, a test's
+  // end): the active window's place is kept for the next start (mitcad#1710).
+  if (QCoreApplication::instance() != nullptr) {
+    connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this] {
+      if (!m_quitting) saveActiveWindowPlace();
+    });
+  }
 }
 
 WindowManager::~WindowManager() {
@@ -91,9 +99,38 @@ MainWindow* WindowManager::createWindow(bool demo, MainWindow* source, bool sepa
   });
   installWindowMenu(window);
   emit windowAdded(window, sourceGuard, separate);
+  // Its size and place (mitcad#1710), once its top-level window is known
+  // (a document frame or the window itself).
+  if (!m_nativeUi) placeNewWindow(window, sourceGuard);
   emit windowsChanged();
   qInfo().noquote() << QStringLiteral("Document window created: %1 (%2 open)").arg(handle(window)).arg(m_windows.size());
   return window;
+}
+
+void WindowManager::placeNewWindow(MainWindow* window, MainWindow* source) {
+  QWidget* top = window->window();
+  // A tab of a frame already shown keeps that frame's place.
+  if (top->isVisible()) return;
+  const auto shown = [top](MainWindow* other) -> const QWidget* {
+    if (other == nullptr) return nullptr;
+    const QWidget* candidate = other->window();
+    return candidate != top && candidate->isVisible() ? candidate : nullptr;
+  };
+  const QWidget* from = shown(source);
+  if (from == nullptr) from = shown(m_active.data());
+  for (MainWindow* other : windows()) {
+    if (from != nullptr) break;
+    from = shown(other);
+  }
+  // The first window: where it was when MitCad last closed. Another: the
+  // last size, cascaded from the window it opens from.
+  if (from != nullptr) cascadeWindowPlace(top, from);
+  else restoreWindowPlace(top);
+}
+
+void WindowManager::saveActiveWindowPlace() const {
+  MainWindow* active = activeWindow();
+  if (active != nullptr && !active->usesNativeUi()) saveWindowPlace(active->window());
 }
 
 void WindowManager::setPresenter(std::function<void(MainWindow*)> presenter) { m_presenter = std::move(presenter); }
@@ -265,6 +302,9 @@ void WindowManager::windowClosed(MainWindow* window) {
   if (!found) return;
   const bool wasActive = m_active == window;
   if (wasActive) m_active.clear();
+  // The window that closes has the last place (mitcad#1710); Quit kept the
+  // active window's before it closed them all.
+  if (!m_quitting && window != nullptr && !window->usesNativeUi()) saveWindowPlace(window->window());
   emit windowRemoved(window);
   emit windowsChanged();
   if (window != nullptr) window->deleteLater();
@@ -283,6 +323,9 @@ void WindowManager::quit() {
   // after this invocation has returned.
   if (m_quitRunning) return;
   const QScopedValueRollback<bool> running(m_quitRunning, true);
+  // The window worked in has the place kept for the next start
+  // (mitcad#1710), not the one that happens to close last.
+  if (!m_quitting) saveActiveWindowPlace();
   m_quitting = true;
   QList<QPointer<MainWindow>> guarded;
   for (MainWindow* window : windows()) guarded.append(window);

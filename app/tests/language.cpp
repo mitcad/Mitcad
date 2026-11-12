@@ -83,13 +83,22 @@ int languageTests() {
         {"ProjectBrowser", "Editing"},      {"IamImport", "%1 parametric"},
         {"CloudAddress", "Shared folder"},  {"ProjectPicker", "Local project"},
         {"LiveDialogs", "Live Updates"},    {"ProjectsPanel", "Not recorded"},
-        {"ParameterSuggest", "An angle"}};
+        {"ParameterSuggest", "An angle"},
+        // The standard views' commands as whole texts (mitcad#1687) and the
+        // orientation cube's faces (mitcad#1674).
+        {"View", "Top View"},               {"View", "Looks at the design from the top"},
+        {"View", "Isometric View"},         {"ViewCube", "TOP"},
+        {"ViewCube", "FRONT"}};
     for (const auto& message : own) {
       if (plain.translate(message[0], message[1]).isEmpty()) {
         std::fprintf(stderr, "language.cpp: no translation of '%s' in the context %s\n", message[1], message[0]);
         ++failures;
       }
     }
+    // Not a view's name put into "%1 View" (mitcad#1687: a hyphenated
+    // compound in Finnish).
+    CHECK(plain.translate("mitcad::ViewController", "%1 View").isEmpty());
+    CHECK(!plain.translate("View", "Top View").contains(QLatin1Char('-')));
   }
   const QString pseudo = folder.filePath(QStringLiteral("mitcad_xx.qm"));
   CHECK(QFileInfo::exists(pseudo));

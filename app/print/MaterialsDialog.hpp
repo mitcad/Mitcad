@@ -96,13 +96,18 @@ class SlicerImportBar;
 // Density and the mechanical, thermal and, for an FDM plastic, printing
 // values in the design's units (the `material_units` query; temperatures
 // in the preferred unit), each saved as Name is; its source and a line
-// that the values are typical. New ▾ › Browse Material Dataset… picks a
-// material of the bundled dataset (MaterialDatasetDialog), then where it
-// goes: `create_material` with `dataset`. Import… reads a JSON or CSV
-// file into the place chosen (`import_materials`; a name there already is
-// asked once: Keep Existing, Replace Values, Keep Both) and says on the
-// message line what it did and each row it did not import, with the
-// reason; Export… writes the selected one's place's materials (none
+// that the values are typical. New ▾ › Browse Material Dataset… picks
+// materials of the bundled dataset (MaterialDatasetDialog, several at once
+// since mitcad#1706), then where they go: `create_dataset_materials`, one
+// undo step; the message line says how many were made and how many were
+// skipped, a name there already ("Materials from the dataset into <place>:
+// <n> made, <n> skipped (<names>) of <names>", "Materials message: <text>",
+// "Material created from the dataset: <name> (<entry>) as <id> in <place>"
+// for each one made).
+// Import… reads a JSON or CSV file into the place chosen
+// (`import_materials`; a name there already is asked once: Keep Existing,
+// Replace Values, Keep Both) and says on the message line what it did and
+// each row it did not import, with the reason; Export… writes the selected one's place's materials (none
 // selected: the design's) in the design's units. The settings' Search
 // finds General's fields by name too and shows only those it finds there
 // (mitcad#1228), so the print settings it finds stay in sight below them.

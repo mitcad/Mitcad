@@ -715,6 +715,63 @@ void test_g2_fillets() {
   (void)centroid;
 }
 
+double largest_kink(const Shape& shape, int face);
+
+// mitcad#1711 (GitHub #285): a 30 x 20 x 10 box whose vertical edges are
+// rounded G2 (chord 3), then its top loop, which runs over those
+// roundings, G2 (chord 1.25) and G1 over the G2 corners.
+void test_g2_fillet_over_g2_fillets() {
+  const ShapePtr box = extrude("F2", {rectangle(1, 0, 0, 30, 20)}, 0, 10);
+  for (const double weight : {1.0, 1.1}) {
+    FilletSet corners;
+    corners.edges = {corner_edge(0), corner_edge(1), corner_edge(2), corner_edge(3)};
+    corners.size = FilletSize::ChordLength;
+    corners.chord = 3;
+    corners.curvature = true;
+    corners.weight = weight;
+    const ShapePtr outline = fillet("F3", *box, {corners});
+    const double before = accurate_volume(*outline);
+    FilletSet top;
+    top.edges = {top_front()};
+    top.size = FilletSize::ChordLength;
+    top.chord = 1.25;
+    for (const bool curvature : {true, false}) {
+      top.curvature = curvature;
+      try {
+        const ShapePtr smooth = fillet("F4", *outline, {top});
+        CHECK(mitcad::geometry::detail::is_valid(smooth->occt()));
+        // The top loop's eight bevels become roundings.
+        CHECK(smooth->face_count() == outline->face_count() + 8);
+        const double removed = before - accurate_volume(*smooth);
+        // Less than a G1 rounding's loss of a 0.884 mm contact distance
+        // along the loop, more than nothing.
+        CHECK(removed > 0 && removed < fillet_loss(1.25 / std::sqrt(2.0)) * 100);
+        CHECK(edge_names_unique(*smooth));
+        // Tangent to the faces and to each other all round, the earlier
+        // roundings included.
+        int roundings = 0;
+        for (int f = 0; f < smooth->face_count(); ++f) {
+          for (const std::string& name : smooth->face_names(f)) {
+            if (name.rfind("F4:fillet(", 0) == 0) {
+              ++roundings;
+              const double kink = largest_kink(*smooth, f);
+              if (kink > 1e-3) {
+                std::fprintf(stderr, "G2 over G2: a kink of %g at %s\n", kink, name.c_str());
+              }
+              CHECK(kink < 1e-3);
+              break;
+            }
+          }
+        }
+        CHECK(roundings == 8);
+      } catch (const std::exception& e) {
+        std::fprintf(stderr, "G2 over G2 (weight %g, %s): %s\n", weight, curvature ? "G2" : "G1", e.what());
+        CHECK(false);
+      }
+    }
+  }
+}
+
 // The largest angle between the normals of a face and its neighbours along
 // their common edges, at the edges' middles.
 double largest_kink(const Shape& shape, int face) {
@@ -1657,6 +1714,7 @@ void dressup_tests() {
   guarded("test_chamfer_miter_corners", test_chamfer_miter_corners);
   guarded("test_asymmetric_fillets", test_asymmetric_fillets);
   guarded("test_g2_fillets", test_g2_fillets);
+  guarded("test_g2_fillet_over_g2_fillets", test_g2_fillet_over_g2_fillets);
   guarded("test_fillet_corner_types", test_fillet_corner_types);
   guarded("test_chamfer_sets_and_reference_faces", test_chamfer_sets_and_reference_faces);
   guarded("test_angle_chamfer_measures_one_face_along_a_chain", test_angle_chamfer_measures_one_face_along_a_chain);

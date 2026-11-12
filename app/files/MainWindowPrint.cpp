@@ -7,7 +7,7 @@
 // without a slicer, or when it does not start, the folder opens. With 3MF
 // the panel shows the design's Printer and Process (mitcad#655: chosen at
 // once, each an undo step; Edit… opens the profile editor; one another
-// design changed asked about once), and Import from slicer… with its line
+// design changed asked about once), and Import from Slicer… with its line
 // and Details…. Bed Face shows the face the bodies lie on (their print bed
 // face, else the automatic orientation's), drawn in the bed face's green;
 // a face picked there becomes the body's print bed face; Center on Plate
@@ -489,7 +489,7 @@ CommandDef MainWindow::print3dCommand() {
   const auto custom = [](const CommandState& state) {
     return state.choice(QStringLiteral("refinement")) == QStringLiteral("custom");
   };
-  // The Printer and Process rows, Import from slicer… and its line: only
+  // The Printer and Process rows, Import from Slicer… and its line: only
   // with 3MF, which carries print settings (mitcad#655).
   const auto threeMf = [](const CommandState& state) {
     return state.choice(QStringLiteral("format")) == QStringLiteral("3mf");
@@ -1067,7 +1067,8 @@ CommandDef MainWindow::print3dCommand() {
         const QJsonObject material =
             queryObject({{QStringLiteral("query"), QStringLiteral("body_material")}, {QStringLiteral("body"), uid}});
         row.id = material.value(QStringLiteral("id")).toString();
-        row.name = material.value(QStringLiteral("name")).toString();
+        // Shown: a built-in one translated (mitcad#1689).
+        row.name = shownMaterialName(row.id, material.value(QStringLiteral("name")).toString());
         // A component's material is the body's as it is (mitcad#1052); only
         // the design's default is no material.
         row.chosen = material.value(QStringLiteral("source")).toString() != QStringLiteral("default");
@@ -1324,7 +1325,7 @@ CommandDef MainWindow::print3dCommand() {
             settings.save();
             sentChanged(state, context);
           }),
-      // Import from slicer… first (mitcad#655): it fills Printer, Process and
+      // Import from Slicer… first (mitcad#655): it fills Printer, Process and
       // Materials; with the import's one short line
       // and Details… until the panel closes.
       noteInput(
@@ -1333,9 +1334,9 @@ CommandDef MainWindow::print3dCommand() {
             // One button; the import's line is the link to Details (mitcad#655).
             const QString line = panel->imported->summary.line;
             if (line.isEmpty()) {
-              return InputNote{QString(), {tr("Import from slicer…")}, {}};
+              return InputNote{QString(), {tr("Import from Slicer…")}, {}};
             }
-            return InputNote{QString(), {tr("Import from slicer…"), line}, {QString(), linkActionIcon()}};
+            return InputNote{QString(), {tr("Import from Slicer…"), line}, {QString(), linkActionIcon()}};
           },
           [this, panel](int action, const CommandState&, const CommandContext&) {
             if (action == 0) {

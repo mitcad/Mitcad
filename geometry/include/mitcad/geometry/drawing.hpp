@@ -60,13 +60,24 @@ struct DrawingViewSpec {
   // shapes with free-form faces (mitcad#962) or with many edges on curves
   // other than lines and conics against many faces (mitcad#1033: their
   // faces times those edges past a limit): the polygonal algorithm on a
-  // triangulation within a 2000th of the shapes' size, its lines joined
-  // and drawn as lines and arcs where they follow them within that
-  // deviation, as polylines elsewhere (DrawnView::polygonal).
+  // triangulation within a 2000th of the shapes' size (the diagonal of
+  // their box) and within two thirds of quick_deviation, its lines joined
+  // and drawn as lines and arcs where they follow them within one and a
+  // half times that, as polylines elsewhere (DrawnView::polygonal). It takes only the
+  // shapes that need it (mitcad#1671): those slow alone, and with them
+  // every shape whose outline in the view overlaps theirs (so hidden
+  // lines between them stay right); the others keep the exact algorithm
+  // when it is not slow on them together.
   bool quick = false;
   std::optional<DrawingSection> section;
   // The largest distance of a polyline from the curve it stands for.
   double deflection = 0.01;
+  // How far the polygonal algorithm's drawn lines may lie from the edges
+  // they stand for, in model millimetres, from the view's scale on its
+  // sheet (mitcad#1671); 0 when the view has none (its triangulation then
+  // follows the shapes' size alone). The triangulation never deviates less
+  // than `deflection`.
+  double quick_deviation = 0.0;
 };
 
 enum class DrawnKind { Sharp, Smooth, Outline };

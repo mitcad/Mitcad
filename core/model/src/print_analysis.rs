@@ -1193,6 +1193,50 @@ pub fn gap_key(a: (BodyUid, u128, &Transform), b: (BodyUid, u128, &Transform)) -
     fp.finish()
 }
 
+/// Faces face each other across a gap when each one's outward normal at
+/// its closest point lies within 30° of the line to the other face
+/// (mitcad#1672): the cosine.
+pub const FACING_COS: f64 = 0.866;
+
+/// The narrowest gap between two bodies that touch (mitcad#1672), from
+/// their faces' separations ([`crate::kernel::Kernel::face_separations`]):
+/// a pair of faces that touch or cross is a contact and left out; of the
+/// others, a pair narrow by [`gap_kind`] whose faces face each other
+/// across air ([`faces_across_a_gap`]). None: no narrow gap beside the
+/// contact.
+pub fn face_gap(
+    separations: &[crate::kernel::FaceSeparation],
+    gap: f64,
+) -> Option<&crate::kernel::FaceSeparation> {
+    separations
+        .iter()
+        .filter(|s| gap_kind(s.distance, false, gap) == GapKind::Narrow && faces_across_a_gap(s))
+        .min_by(|x, y| x.distance.total_cmp(&y.distance))
+}
+
+/// Whether the two faces face each other across air at their closest
+/// points: the first's outward normal points to the second, the second's
+/// back to the first, each within the angle of [`FACING_COS`]. Faces that
+/// meet the contact at its edge only (a side face above a face the body
+/// stands on) do not, and faces of bodies that overlap face away from
+/// each other, so neither is a gap. A face without a normal there faces
+/// nothing.
+pub fn faces_across_a_gap(separation: &crate::kernel::FaceSeparation) -> bool {
+    let Some(across) = unit(sub(separation.on_b, separation.on_a)) else {
+        return false;
+    };
+    dot(separation.normal_a, across) >= FACING_COS
+        && dot(separation.normal_b, across) <= -FACING_COS
+}
+
+/// The [`PrintCache`] key of the narrowest gap between the faces of two
+/// bodies that touch, by the pair's [`gap_key`] and the gap asked for.
+pub fn face_gap_key(pair: u128, gap: f64) -> u128 {
+    let mut fp = Fingerprint::new("print-face-gap-v1");
+    fp.u128(pair).f64(gap);
+    fp.finish()
+}
+
 /// The mesh tolerance's part of a cache key.
 fn tolerance_key(fp: &mut Fingerprint, tolerance: &MeshTolerance) {
     fp.f64(tolerance.deviation)

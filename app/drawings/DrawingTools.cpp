@@ -487,7 +487,7 @@ void addAnnotationTools(QVector<DrawingToolDef>& tools) {
                                                {QStringLiteral("vertical"), Text::tr("Vertical")}};
   tools.append({QStringLiteral("drawing.dimension"), Text::tr("Dimension"), QStringLiteral("dimension"),
                 Text::tr("Dimensions edges, circles and corners of a view"), SheetPick::Picks,
-                Text::tr("Click the edges, circles or corners to dimension on a view"),
+                Text::tr("Click a straight edge for its length, or the edges, circles or corners to dimension"),
                 // Auto: the picks choose (mitcad#1272); the others
                 // override it.
                 {choice(QStringLiteral("type"), Text::tr("Type"),

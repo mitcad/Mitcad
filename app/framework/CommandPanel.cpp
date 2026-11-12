@@ -52,6 +52,7 @@
 #include "GlassCard.hpp"
 #include "Icons.hpp"
 #include "Language.hpp"
+#include "ModelMessages.hpp"
 #include "NoteRow.hpp"
 #include "PanelTree.hpp"
 #include "ParameterField.hpp"
@@ -978,7 +979,7 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       connect(row.edit, &QLineEdit::editingFinished, this, [this, key] { emit valueCommitted(key); });
       row.edit->installEventFilter(this); // its keyboard focus (mitcad#250)
       // Parameter suggestions while typing, the fx browser, name = value and
-      // Create User Parameter (mitcad#567, mitcad#568).
+      // Add User Parameter (mitcad#567, mitcad#568).
       ParameterFieldOptions suggest;
       suggest.kind = input.valueKind == ValueKind::Angle      ? ParameterKind::Angle
                      : input.valueKind == ValueKind::Unitless ? ParameterKind::Unitless
@@ -1894,13 +1895,18 @@ void CommandPanel::setMessage(const QString& message, NoticeLevel level) {
   }
   m_messageText = message;
   m_messageLevel = level;
+  // The model's messages in the interface language (mitcad#1284), before
+  // the box's markup goes round it: in the box the whole text matched no
+  // template and an error stayed English after the translated word
+  // (mitcad#1674).
+  const QString shown = modelMessage(message);
   if (boxed) {
     // The icon, then the level's word and the message, lines kept.
-    QString text = message.toHtmlEscaped();
+    QString text = shown.toHtmlEscaped();
     text.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
     m_message->setMessage(QStringLiteral("%1&nbsp;<b>%2:</b> %3").arg(noticeIconHtml(level), noticeLevelWord(level), text));
   } else {
-    m_message->setMessage(message);
+    m_message->setMessage(shown);
   }
   m_message->setProperty("noticeLevel", noticeLevelName(level));
   // Where it is now, for the UI tests' hover (mitcad#1327).

@@ -432,7 +432,7 @@ kept in the document's projection cache by the bodies' versions and
 placements and the view's direction, style and section
 (`model-api/src/drawings.rs`, `view_key`), so a view whose bodies and
 direction did not change is taken from the cache when the sheet is drawn
-again, moved or rescaled. The views of a sheet are worked out one after
+again, moved or (when exact) rescaled. The views of a sheet are worked out one after
 another; `add_drawing_view` runs as a job off the UI thread, and the
 `drawing` query that redraws the sheet after it runs on the UI thread and
 finds the new view in the cache.
@@ -500,8 +500,27 @@ its faces meshed in parallel. The algorithm's segments are joined end
 to end where exactly two meet, and fitted within 1.5 times that
 deviation (`geometry::fit_segments`): lines where they run straight,
 arcs where at least three follow a circle (least squares, each
-segment's sagitta within the tolerance too, so a hexagon stays six
-lines), polylines elsewhere, broken at corners sharper than 0.6 rad.
+segment's ends' distance from the circle and the arc's sagitta over it
+within the tolerance together, so a hexagon stays six lines and a short
+line is not taken into the arc after it), polylines elsewhere, broken
+at corners sharper than 0.6 rad.
+
+The drawn lines also follow the view's scale (mitcad#1671): the model
+passes it (`ViewSpec::scale`), and the triangulation's deviation is at
+most two thirds of 0.02 mm on the sheet (`SHEET_DEVIATION`,
+`ViewSpec::quick_deviation`, `DrawingViewSpec::quick_deviation`), so
+that the fitted lines lie within 0.02 mm of the edges on paper: 0.1 mm
+in the model at 1:5. A 2000th of a 6 m frame, 3 mm, had made an enlarged
+end view of it crooked, its tubes' rounded corners square. And the
+quick path takes only the bodies that need it: those slow alone (free-
+form faces, or the edge work below past its limit), and with them every
+body whose box in the view overlaps one of theirs by more than 0.001 mm
+(transitively), since only those can hide each other's lines; the rest
+keep the exact algorithm when it is not slow on them together, and the
+two algorithms' lines are put together (`result=split exact-parts=…
+quick-parts=…` in the trace). A projection that came from a
+triangulation is kept in the cache by the view's scale too, so a new
+scale or a detail projects it again; an exact one serves every scale.
 A circle's chords end on the edge itself, so its arc has the edge's
 centre and radius to the numerics. The view is `polygonal`. Cut sheets
 keep the exact edges (they write the curves as they are, mitcad#853),

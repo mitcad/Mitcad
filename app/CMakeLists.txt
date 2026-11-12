@@ -29,6 +29,9 @@ qt_add_executable(mitcad
   # The Browser's background in the Floating layout (mitcad#419).
   browser/BrowserBackground.cpp
   browser/BrowserBackground.hpp
+  # Show used sketches under their features (mitcad#1699).
+  browser/BrowserPreferences.cpp
+  browser/BrowserPreferences.hpp
   browser/DocumentHost.hpp
   browser/DocumentSnapshot.cpp
   browser/DocumentSnapshot.hpp
@@ -1386,6 +1389,11 @@ if(BUILD_TESTING AND TARGET mitcad-release)
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()
 add_subdirectory(webbrowser)
+# Windows Explorer's thumbnails of designs (mitcad#1695): the thumbnail
+# handler mitcad-thumbnails.dll; Windows only.
+if(WIN32)
+  add_subdirectory(thumbnails)
+endif()
 
 if(APPLE)
   # Configure the bundle after its render worker exists, so its
@@ -1815,7 +1823,7 @@ if(BUILD_TESTING)
 endif()
 
 # Expression fields' parameter suggestions while typing, the fx browser,
-# name = value and Create User Parameter (mitcad#567, mitcad#568): feature
+# name = value and Add User Parameter (mitcad#567, mitcad#568): feature
 # panels, sketch dimensions and tool values, the parameter table.
 target_sources(mitcad PRIVATE
   framework/ParameterSuggest.cpp
@@ -2515,7 +2523,8 @@ target_sources(mitcad PRIVATE browser/BrowserMaterialMenu.cpp print/MaterialMenu
 if(BUILD_TESTING)
   # The design's and the recent rows, the check mark, the recent list's
   # order and length, read back from the settings, and when Replace
-  # Appearance asks (mitcad#1067): plain Qt Core.
+  # Appearance asks (mitcad#1067); the Appearance tool's recent appearances
+  # (mitcad#1685): plain Qt Core.
   target_sources(test_app PRIVATE tests/material_menu.cpp print/MaterialMenuChoices.cpp
                  print/MaterialMenuChoices.hpp)
 endif()
@@ -3133,4 +3142,56 @@ if(BUILD_TESTING)
   # corners, the view's gradient around it: plain Qt Gui, painted into
   # images.
   target_sources(test_app PRIVATE tests/start_backdrop.cpp files/StartBackdrop.cpp files/StartBackdrop.hpp)
+endif()
+
+# The command search's ranking (mitcad#1681, framework/CommandSearchRank):
+# a sketch tool that matches best outside a sketch brings a row saying how
+# to open one, and no weaker match is selected.
+target_sources(mitcad PRIVATE framework/CommandSearchRank.cpp framework/CommandSearchRank.hpp)
+if(BUILD_TESTING)
+  # The list's order, its hint and the row selected: plain Qt Core.
+  target_sources(test_app PRIVATE tests/command_search.cpp framework/CommandSearchRank.cpp
+                 framework/CommandSearchRank.hpp)
+endif()
+
+# Sketch mode's list of the sketch's points, curves, constraints and
+# dimensions in creation order, in the timeline's place (mitcad#1492).
+target_sources(mitcad PRIVATE
+  sketch/SketchItemList.cpp
+  sketch/SketchItemList.hpp)
+# The default 3D view (mitcad#1698, app/COMMANDS.md "A new design looks at
+# Top"): Home, a design read into a new design's Top and the first
+# sketch's plane pick look a few degrees off the isometric view, so that
+# the origin planes' edges do not lie on top of each other.
+target_sources(mitcad PRIVATE view/DefaultView.hpp)
+if(BUILD_TESTING)
+  # The planes' projected edges apart, View › Isometric exact: OCCT's camera.
+  target_sources(test_app PRIVATE tests/default_view.cpp view/DefaultView.hpp)
+  target_link_libraries(test_app PRIVATE TKService)
+endif()
+
+# The 3D view's pick list (mitcad#1703, app/COMMANDS.md "Selection"): a
+# press held still lists everything under the pointer, nearest first.
+target_sources(mitcad PRIVATE view/PickList.cpp view/PickList.hpp view/PickListView.cpp)
+# The design window's size, place and state kept between starts (mitcad#1710,
+# GitHub mitcad/Mitcad#283, app/COMMANDS.md "The window's size and place"):
+# saved when a design window closes and at quit, restored for the first
+# window, fitted to the connected screens; a new window at the last size,
+# cascaded (WindowManager::createWindow); the test steps expect-window-place
+# and expect-window-on-screen (TestDriverWindowFit.cpp).
+target_sources(mitcad PRIVATE framework/WindowPlace.cpp framework/WindowPlace.hpp)
+if(BUILD_TESTING)
+  # A kept frame fitted to the screens (a removed monitor, half
+  # off-screen, larger than the screen, the title bar above the top), the
+  # cascade, and the place in the settings: plain Qt Core and Gui.
+  target_sources(test_app PRIVATE tests/window_place.cpp framework/WindowPlace.cpp framework/WindowPlace.hpp)
+endif()
+# The same through the shared input scripts on macOS (Linux:
+# tools/ui-window-place-test.sh, Windows: app.ui-windows-window-place).
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-window-place
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-window-place-test.sh"
+            "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-macos-window-place")
+  set_tests_properties(app.ui-macos-window-place PROPERTIES
+    TIMEOUT 600 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
 endif()

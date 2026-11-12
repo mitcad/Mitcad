@@ -114,6 +114,37 @@ void wholeMessagesHaveNoEnglishWord(const mitcad::ModelMessageCatalogue& all, co
       "the curve is an elliptical arc, not a circle or an arc",
       "the curve is a spline, not a circle or an arc",
       "the curve is a fitted spline, not a circle or an arc",
+      // mitcad#1674: a cut that meets no component (the panel's error), and
+      // references a change renamed, each kind and count a whole message
+      // (no kind's word put in as a value).
+      "No eligible components intersect the cut",
+      "No components selected",
+      "a face found again after a change in Extrude3",
+      "an edge found again after a change in Extrude3",
+      "a vertex found again after a change in Extrude3",
+      "a region found again after a change in Extrude3",
+      "2 faces found again after a change in Extrude3",
+      "2 edges found again after a change in Extrude3",
+      "2 vertices found again after a change in Extrude3",
+      "2 regions found again after a change in Extrude3",
+      "a face found as 2 faces after a change in Extrude3",
+      "an edge found as 3 edges after a change in Extrude3",
+      "a vertex found as 2 vertices after a change in Extrude3",
+      "a region found as 2 regions after a change in Extrude3",
+      // mitcad#1688: a loft's section before the reference, a whole message
+      // with it ("section 2" was left English by "%1: %2").
+      "section 2: a face found again after a change in Extrude3",
+      "section 2: an edge found again after a change in Extrude3",
+      "section 2: a vertex found again after a change in Extrude3",
+      "section 2: a region found again after a change in Extrude3",
+      "section 2: 2 faces found again after a change in Extrude3",
+      "section 2: 2 edges found again after a change in Extrude3",
+      "section 2: 2 vertices found again after a change in Extrude3",
+      "section 2: 2 regions found again after a change in Extrude3",
+      "section 2: a face found as 2 faces after a change in Extrude3",
+      "section 2: an edge found as 3 edges after a change in Extrude3",
+      "section 2: a vertex found as 2 vertices after a change in Extrude3",
+      "section 2: a region found as 2 regions after a change in Extrude3",
   };
   // The English words of these messages (the values kept as they are,
   // Extrude2 and 0.005, are no words of these).
@@ -143,6 +174,14 @@ void wholeMessagesHaveNoEnglishWord(const mitcad::ModelMessageCatalogue& all, co
       QStringLiteral("sketch"),     QStringLiteral("spacing"),      QStringLiteral("spline"),
       QStringLiteral("suppressed"), QStringLiteral("the"),          QStringLiteral("their"),
       QStringLiteral("turned"),     QStringLiteral("two"),          QStringLiteral("vertex"),
+      // mitcad#1674.
+      QStringLiteral("again"),      QStringLiteral("change"),       QStringLiteral("components"),
+      QStringLiteral("cut"),        QStringLiteral("edges"),        QStringLiteral("eligible"),
+      QStringLiteral("faces"),      QStringLiteral("found"),        QStringLiteral("intersect"),
+      QStringLiteral("region"),     QStringLiteral("regions"),      QStringLiteral("selected"),
+      QStringLiteral("vertices"),
+      // mitcad#1688.
+      QStringLiteral("section"),
   };
   const QRegularExpression notLetters(QStringLiteral("[^\\p{L}]+"));
   for (const char* message : messages) {
@@ -285,6 +324,36 @@ int modelMessageTests() {
     CHECK(!seen.contains(QStringLiteral(
         "the projection of a face does not follow it with %1: nothing like it is in it now, so it keeps its last "
         "geometry")));
+    // mitcad#1674: a reference a change renamed, one whole message per kind
+    // and count, not the kind's word as a value ("2 regions" was "%1 %2").
+    for (const char* kind : {"faces", "edges", "vertices", "regions"}) {
+      CHECK(seen.contains(QStringLiteral("%1 %2 found again after a change in %3").arg(QStringLiteral("%1"),
+                                                                                       QLatin1String(kind),
+                                                                                       QStringLiteral("%2"))));
+    }
+    for (const char* one : {"a face", "an edge", "a vertex", "a region"}) {
+      CHECK(seen.contains(QStringLiteral("%1 found again after a change in %2")
+                              .arg(QLatin1String(one), QStringLiteral("%1"))));
+    }
+    CHECK(seen.contains(QStringLiteral("a region found as %1 regions after a change in %2")));
+    CHECK(!seen.contains(QStringLiteral("%1 %2 found again after a change in %3")));
+    CHECK(!seen.contains(QStringLiteral("%1%2 %3 found again after a change in %4")));
+    CHECK(!seen.contains(QStringLiteral("%1 %2 found as %3 %4 after a change in %5")));
+    // mitcad#1688: the same with a loft's section before it, the prefix part
+    // of each whole message.
+    for (const char* kind : {"faces", "edges", "vertices", "regions"}) {
+      CHECK(seen.contains(QStringLiteral("section %1: %2 %3 found again after a change in %4")
+                              .arg(QStringLiteral("%1"), QStringLiteral("%2"), QLatin1String(kind),
+                                   QStringLiteral("%3"))));
+    }
+    for (const char* one : {"a face", "an edge", "a vertex", "a region"}) {
+      CHECK(seen.contains(QStringLiteral("section %1: %2 found again after a change in %3")
+                              .arg(QStringLiteral("%1"), QLatin1String(one), QStringLiteral("%2"))));
+    }
+    CHECK(seen.contains(QStringLiteral("section %1: a face found as %2 faces after a change in %3")));
+    CHECK(seen.contains(QStringLiteral("section %1: an edge found as %2 edges after a change in %3")));
+    CHECK(seen.contains(QStringLiteral("section %1: a vertex found as %2 vertices after a change in %3")));
+    CHECK(seen.contains(QStringLiteral("section %1: a region found as %2 regions after a change in %3")));
   }
   {
     // A cleaned message is matched to its cleaned template, not to a
@@ -328,6 +397,27 @@ int modelMessageTests() {
     found = all.match(QString::fromLatin1(unfollowed));
     CHECK(found.found() && std::strcmp(all.source(found.index), unfollowed) == 0);
     CHECK(found.values.isEmpty());
+    // mitcad#1674: the warning of regions a sketch change renamed, matched
+    // to its kind's whole message; only the count and the sketch are values.
+    found = all.match(QStringLiteral("2 regions found again after a change in Sketch4"));
+    CHECK(found.found() &&
+          std::strcmp(all.source(found.index), "%1 regions found again after a change in %2") == 0);
+    CHECK(found.values == (QStringList{QStringLiteral("2"), QStringLiteral("Sketch4")}));
+    found = all.match(QStringLiteral("No eligible components intersect the cut"));
+    CHECK(found.found() && std::strcmp(all.source(found.index), "No eligible components intersect the cut") == 0);
+    // mitcad#1688: a loft's prefixed notice matched to its own template,
+    // not to "%1: %2" with "section 2" as an English value.
+    found = all.match(QStringLiteral("section 2: an edge found again after a change in Sketch4"));
+    CHECK(found.found() &&
+          std::strcmp(all.source(found.index), "section %1: an edge found again after a change in %2") == 0);
+    CHECK(found.values == (QStringList{QStringLiteral("2"), QStringLiteral("Sketch4")}));
+    found = all.match(QStringLiteral("section 3: 2 regions found again after a change in Sketch4"));
+    CHECK(found.found() &&
+          std::strcmp(all.source(found.index), "section %1: %2 regions found again after a change in %3") == 0);
+    CHECK(found.values == (QStringList{QStringLiteral("3"), QStringLiteral("2"), QStringLiteral("Sketch4")}));
+    found = all.match(QStringLiteral("section 2: a region found as 2 regions after a change in Sketch4"));
+    CHECK(found.found() && std::strcmp(all.source(found.index),
+                                       "section %1: a region found as %2 regions after a change in %3") == 0);
   }
 
 #ifdef MITCAD_TEST_TRANSLATIONS_DIR

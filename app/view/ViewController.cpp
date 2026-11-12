@@ -2,6 +2,7 @@
 #include "ViewController.hpp"
 #include "NavigationPreferences.hpp"
 #include "GridSpacing.hpp"
+#include "DefaultView.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -111,6 +112,8 @@
 #include "Comments.hpp"
 // General: ask to activate the component of a picked face (mitcad#960).
 #include "../browser/ActivateQuestion.hpp"
+// Preferences › General › Show used sketches under their features (mitcad#1699).
+#include "../browser/BrowserPreferences.hpp"
 // General: show the version in the view (mitcad#1209).
 #include "VersionWatermark.hpp"
 #include "SmallCirclesPreference.hpp"
@@ -137,22 +140,49 @@ const StyleEntry kStyles[] = {
      QT_TRANSLATE_NOOP("View", "Wireframe with Hidden Edges")},
 };
 
+// The command's name and tooltip are whole texts, not a view's name put
+// into "%1 View": a language words each as it reads naturally (mitcad#1687;
+// a name with a case ending would otherwise be needed).
 struct StandardView {
   const char* key;
-  const char* name;
+  const char* command;
+  const char* tooltip;
   gp_Dir direction; // from the eye to the model
   gp_Dir up;
+  Qt::Key shortcut; // its default key (mitcad#1684)
 };
 
+// The default keys 1 to 7 in this order (mitcad#1684), and Home for the
+// home view; the 3D view's keys only (ViewController::eventFilter).
 const StandardView kStandardViews[] = {
-    {"front", QT_TRANSLATE_NOOP("View", "Front"), gp_Dir(0, 1, 0), gp_Dir(0, 0, 1)},
-    {"back", QT_TRANSLATE_NOOP("View", "Back"), gp_Dir(0, -1, 0), gp_Dir(0, 0, 1)},
-    {"left", QT_TRANSLATE_NOOP("View", "Left"), gp_Dir(1, 0, 0), gp_Dir(0, 0, 1)},
-    {"right", QT_TRANSLATE_NOOP("View", "Right"), gp_Dir(-1, 0, 0), gp_Dir(0, 0, 1)},
-    {"top", QT_TRANSLATE_NOOP("View", "Top"), gp_Dir(0, 0, -1), gp_Dir(0, 1, 0)},
-    {"bottom", QT_TRANSLATE_NOOP("View", "Bottom"), gp_Dir(0, 0, 1), gp_Dir(0, -1, 0)},
-    {"iso", QT_TRANSLATE_NOOP("View", "Isometric"), gp_Dir(-1, 1, -1), gp_Dir(0, 0, 1)},
+    {"front", QT_TRANSLATE_NOOP("View", "Front View"), QT_TRANSLATE_NOOP("View", "Looks at the design from the front"),
+     gp_Dir(0, 1, 0), gp_Dir(0, 0, 1), Qt::Key_1},
+    {"back", QT_TRANSLATE_NOOP("View", "Back View"), QT_TRANSLATE_NOOP("View", "Looks at the design from the back"),
+     gp_Dir(0, -1, 0), gp_Dir(0, 0, 1), Qt::Key_2},
+    {"left", QT_TRANSLATE_NOOP("View", "Left View"), QT_TRANSLATE_NOOP("View", "Looks at the design from the left"),
+     gp_Dir(1, 0, 0), gp_Dir(0, 0, 1), Qt::Key_3},
+    {"right", QT_TRANSLATE_NOOP("View", "Right View"), QT_TRANSLATE_NOOP("View", "Looks at the design from the right"),
+     gp_Dir(-1, 0, 0), gp_Dir(0, 0, 1), Qt::Key_4},
+    {"top", QT_TRANSLATE_NOOP("View", "Top View"), QT_TRANSLATE_NOOP("View", "Looks at the design from the top"),
+     gp_Dir(0, 0, -1), gp_Dir(0, 1, 0), Qt::Key_5},
+    {"bottom", QT_TRANSLATE_NOOP("View", "Bottom View"),
+     QT_TRANSLATE_NOOP("View", "Looks at the design from the bottom"), gp_Dir(0, 0, 1), gp_Dir(0, -1, 0), Qt::Key_6},
+    {"iso", QT_TRANSLATE_NOOP("View", "Isometric View"),
+     QT_TRANSLATE_NOOP("View", "Looks at the design from an isometric corner"),
+     isometricViewDirection(), gp_Dir(0, 0, 1), Qt::Key_7}, // exact, not the default view (mitcad#1698)
 };
+
+// The commands whose keys are the 3D view's only (mitcad#1211, mitcad#1684):
+// any other widget with the keyboard keeps them (ViewController::eventFilter).
+QStringList viewKeyCommands() {
+  QStringList ids = {QStringLiteral("view.turn_left"), QStringLiteral("view.turn_right"),
+                     QStringLiteral("view.turn_up"), QStringLiteral("view.turn_down"),
+                     QStringLiteral("view.home")};
+  for (const StandardView& view : kStandardViews) {
+    ids.append(QStringLiteral("view.") + QLatin1String(view.key));
+  }
+  return ids;
+}
 
 struct BackgroundEntry {
   ViewSettings::Background background;
@@ -246,7 +276,8 @@ struct PreferencePage {
 
 const PreferencePage kPreferencePages[] = {
     {"general", QT_TRANSLATE_NOOP("View", "General"),
-     "autosave recovery activate component ask picked face units inch new design"},
+     "autosave recovery activate component ask picked face units inch new design "
+     "browser features used sketches consumed"},
     {"navigation", QT_TRANSLATE_NOOP("View", "Navigation"), "mouse orbit pan zoom scheme"},
     {"display", QT_TRANSLATE_NOOP("View", "Display"),
      "camera perspective orthographic orientation view cube projection follow background environment render device gpu cuda worker optix ghost inactive components pick priority layout docked floating browser background rows card "
@@ -269,9 +300,10 @@ const PreferencePage kPreferencePages[] = {
     // The first dimension scales the sketch (mitcad#860).
     // Click adds to the selection in sketches (mitcad#1403).
     // Esc leaves an unchanged sketch (mitcad#1623).
+    // Show profiles when a sketch opens (mitcad#1670).
     {"sketch", QT_TRANSLATE_NOOP("View", "Sketch"),
      "sketch dimension first scale proportion drawn size click select selection add ctrl multiple "
-     "esc escape leave exit finish unchanged"},
+     "esc escape leave exit finish unchanged profile profiles shade shading"},
     // The suppliers' shops: the region of the product links and the shops
     // the Supplier filters start with (mitcad#950).
     {"suppliers", QT_TRANSLATE_NOOP("View", "Suppliers"),
@@ -533,8 +565,10 @@ ViewController::ViewController(OcctViewer& viewer, CommandRegistry& registry, Do
 void ViewController::registerCommands() {
   const auto add = [this](const char* id, const QString& name, const char* icon, std::function<void()> run,
                           const QStringList& keywords = {}, const QString& tooltip = QString(),
-                          const char* ribbonGroup = nullptr, const char* ribbonTab = "SOLID") {
+                          const char* ribbonGroup = nullptr, const char* ribbonTab = "SOLID",
+                          const QKeySequence& shortcut = QKeySequence()) {
     CommandDef def;
+    def.shortcut = shortcut;
     def.id = QString::fromLatin1(id);
     def.name = name;
     def.icon = QString::fromLatin1(icon);
@@ -563,16 +597,18 @@ void ViewController::registerCommands() {
     }
     m_registry.add(def);
   };
+  // Home and 1 to 7 while a 3D view has the keyboard (mitcad#1684), as the
+  // arrow keys below; changeable in Keyboard Shortcuts.
   add("view.home", tr("Home"), "home", [this] {
     qDebug() << "View home";
     m_viewer.goHome();
-  }, {QStringLiteral("home view")}, tr("The home view of the whole design"));
+  }, {QStringLiteral("home view")}, tr("The home view of the whole design"), nullptr, "SOLID",
+      QKeySequence(Qt::Key_Home));
   for (const StandardView& view : kStandardViews) {
     const QString key = QString::fromLatin1(view.key);
-    const QString name = QCoreApplication::translate("View", view.name);
-    add(qPrintable(QStringLiteral("view.%1").arg(key)), tr("%1 View").arg(name), "orientation-cube",
-        [this, key] { showStandardView(key); }, {QStringLiteral("standard view"), key},
-        tr("Looks at the design from the %1").arg(name.toLower()));
+    add(qPrintable(QStringLiteral("view.%1").arg(key)), QCoreApplication::translate("View", view.command),
+        "orientation-cube", [this, key] { showStandardView(key); }, {QStringLiteral("standard view"), key},
+        QCoreApplication::translate("View", view.tooltip), nullptr, "SOLID", QKeySequence(view.shortcut));
   }
   add("view.look_at", tr("Look At"), "look-at", [this] { m_lookAt(); }, {QStringLiteral("normal to")},
       tr("Looks straight at the selected plane, planar face or sketch"));
@@ -1158,19 +1194,41 @@ void ViewController::turnView(int right, int up) {
 
 bool ViewController::eventFilter(QObject* watched, QEvent* event) {
   // Before a key is a shortcut, the widget with the keyboard may keep it
-  // (ShortcutOverride): a turn command's key is kept by every widget but a
-  // 3D view, so a field, the Browser, a list or a dialog moves with it as
-  // before and the view stays.
+  // (ShortcutOverride): the key of a turn command, Home or a standard view
+  // (mitcad#1211, mitcad#1684) is kept by every widget but a 3D view, so a
+  // field, the Browser, a list or a dialog moves or types with it as before
+  // and the view stays. Only a key such a widget uses is kept: one that
+  // types or moves (the arrows, Home, End, Page Up and Down); another key
+  // given to these commands in Keyboard Shortcuts (a function key) works
+  // from a field too, as any command's key.
   if (event->type() == QEvent::ShortcutOverride) {
     const auto* key = static_cast<const QKeyEvent*>(event);
     const QKeySequence pressed(
         QKeyCombination(key->modifiers() & ~Qt::KeypadModifier, static_cast<Qt::Key>(key->key())));
-    bool turnKey = false;
-    for (const char* id : {"view.turn_left", "view.turn_right", "view.turn_up", "view.turn_down"}) {
-      const QAction* action = m_registry.action(QString::fromLatin1(id));
-      turnKey = turnKey || (action != nullptr && action->shortcuts().contains(pressed));
+    const bool types = !key->text().isEmpty() && key->text().at(0).isPrint();
+    bool moves = false;
+    for (const int navigation :
+         {Qt::Key_Left, Qt::Key_Right, Qt::Key_Up, Qt::Key_Down, Qt::Key_Home, Qt::Key_End, Qt::Key_PageUp,
+          Qt::Key_PageDown}) {
+      moves = moves || key->key() == navigation;
     }
-    if (turnKey && qobject_cast<OcctViewer*>(QApplication::focusWidget()) == nullptr) {
+    static const QStringList ids = viewKeyCommands();
+    bool viewKey = false;
+    for (const QString& id : ids) {
+      const QAction* action = m_registry.action(id);
+      viewKey = viewKey || (action != nullptr && action->shortcuts().contains(pressed));
+    }
+    viewKey = viewKey && (types || moves);
+    const auto* viewer = qobject_cast<const OcctViewer*>(QApplication::focusWidget());
+    // A key that types (a digit) is kept by the 3D view too while a value
+    // box shows in it: typed over the view it goes into the box at the
+    // cursor (CommandSession::eventFilter), not to a standard view.
+    bool typing = false;
+    if (viewKey && viewer != nullptr && types) {
+      const QList<QLineEdit*> boxes = viewer->findChildren<QLineEdit*>();
+      typing = std::any_of(boxes.cbegin(), boxes.cend(), [](const QLineEdit* box) { return box->isVisible(); });
+    }
+    if (viewKey && (viewer == nullptr || typing)) {
       event->accept();
       return true;
     }
@@ -1478,6 +1536,27 @@ void ViewController::showPreferences(const QString& page) {
   } else {
     connect(dialog.get(), &QDialog::accepted, showVersion, applyShowVersion);
   }
+  // The Browser's Features folder with the sketches each feature uses under
+  // it (mitcad#1699), off by default. Saved when the dialog is accepted, at
+  // once in the Settings window; every window's Browser follows at once.
+  auto* consumeSketches = new QCheckBox(tr("Show used s&ketches under their features"));
+  consumeSketches->setObjectName(QStringLiteral("browserConsumeSketches"));
+  consumeSketches->setChecked(browserConsumeSketches());
+  consumeSketches->setToolTip(tr("The Browser lists each component's features with the sketches they use"));
+  control(generalForm, consumeSketches);
+  const auto applyConsumeSketches = [consumeSketches] {
+    const bool on = consumeSketches->isChecked();
+    if (on == browserConsumeSketches()) {
+      return;
+    }
+    setBrowserConsumeSketches(on);
+    qDebug().noquote() << QStringLiteral("Preferences: show used sketches under their features %1").arg(onOff(on));
+  };
+  if (window != nullptr) {
+    connect(consumeSketches, &QCheckBox::toggled, host, saving(applyConsumeSketches));
+  } else {
+    connect(dialog.get(), &QDialog::accepted, consumeSketches, applyConsumeSketches);
+  }
 #ifdef MITCAD_MACOS_NATIVE_UI
   // The native macOS interface (mitcad#1056): Qt is the default; the AppKit
   // frontend is an opt-in for the next starts (--ui overrides it for a
@@ -1671,6 +1750,27 @@ void ViewController::showPreferences(const QString& page) {
     connect(escLeaves, &QCheckBox::toggled, host, saving(applyEscLeaves));
   } else {
     connect(dialog.get(), &QDialog::accepted, escLeaves, applyEscLeaves);
+  }
+  // Show profiles when a sketch opens (mitcad#1670), on by default: each
+  // sketch opens with the palette's Show profiles as this says.
+  auto* profilesOnOpen = new QCheckBox(tr("Show &profiles when a sketch opens"));
+  profilesOnOpen->setObjectName(QStringLiteral("showProfilesOnOpen"));
+  profilesOnOpen->setChecked(sketch::showProfilesOnOpen());
+  profilesOnOpen->setToolTip(
+      tr("Sketches open with their closed regions shaded, as the palette's Show profiles does"));
+  control(sketchForm, profilesOnOpen);
+  const auto applyShowProfilesOnOpen = [profilesOnOpen] {
+    const bool on = profilesOnOpen->isChecked();
+    if (on == sketch::showProfilesOnOpen()) {
+      return;
+    }
+    sketch::saveShowProfilesOnOpen(on);
+    qDebug().noquote() << QStringLiteral("Preferences: show profiles when a sketch opens %1").arg(onOff(on));
+  };
+  if (window != nullptr) {
+    connect(profilesOnOpen, &QCheckBox::toggled, host, saving(applyShowProfilesOnOpen));
+  } else {
+    connect(dialog.get(), &QDialog::accepted, profilesOnOpen, applyShowProfilesOnOpen);
   }
   groups.insert(QStringLiteral("sketch"), sketchBox);
   // Suppliers (mitcad#950): the region of the product links and the shops

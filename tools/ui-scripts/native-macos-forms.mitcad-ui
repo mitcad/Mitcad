@@ -74,23 +74,23 @@ expect-native-layout
 screenshot '${MITCAD_TEST_WORK}/extrude-narrow-${MITCAD_FORMS_APPEARANCE}.png'
 native-resize 1280 820
 
-# fx: Create User Parameter through the shared editor puts the new
+# fx: Add User Parameter through the shared editor puts the new
 # parameter into the field.
 mark
 native-click input_distance
 # Focusing the value can publish a preview and its display refinement;
 # the parameter menu must read the model after that work has settled.
 wait-idle 30
-native-popup fx_distance 'Create User Parameter…'
-expect-log 'Create User Parameter opened for Extrude Distance'
-focus-dialog '^Create User Parameter$'
+native-popup fx_distance 'Add User Parameter…'
+expect-log 'Add User Parameter opened for Extrude Distance'
+focus-dialog '^Add User Parameter$'
 native-type createParameterName 'ui_depth'
 native-type createParameterExpression '12'
 wait-idle 30
 button '^Create$'
 expect-log 'Created user parameter ui_depth = 12 mm' 10
 expect-log 'Parameter created inserted ui_depth into Extrude Distance: ui_depth' 10
-expect-native-dialog-gone '^Create User Parameter$'
+expect-native-dialog-gone '^Add User Parameter$'
 focus-main
 expect-native-text input_distance '^ui_depth$'
 wait-idle 30

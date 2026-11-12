@@ -38,7 +38,8 @@ struct DrawingTarget {
 // `selectedBodies`: how many bodies the selection stands for;
 // `analyses`: the document's Section Analyses by name; `drawings`: the
 // root's drawings it can write as they are, `last` the one it laid out
-// last (chosen first; else New Drawing, whose layout the settings make);
+// last (chosen first; else the only drawing when there is one, else New
+// Drawing, whose layout the settings make);
 // `designUnit`: the design's length unit, a DXF file's first (mitcad#1408).
 std::optional<DrawingChoice> askDrawing(QWidget* parent, const QString& path, int selectedBodies,
                                         const QStringList& analyses, const QList<DrawingTarget>& drawings = {},

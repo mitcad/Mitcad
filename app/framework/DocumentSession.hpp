@@ -10,6 +10,7 @@
 #include <string>
 
 #include <QElapsedTimer>
+#include <QHash>
 #include <QJsonObject>
 #include <QObject>
 #include <QPointer>
@@ -30,8 +31,20 @@ class CommandSession;
 // units for new designs (Preferences > General, GeneralSettings, mitcad#1036):
 // the untitled design at the start, and New and Close
 // (MainWindow::installEmptyDocument). Its unit is its initial state: no undo
-// step, not modified.
+// step, not modified. Its origin is shown when newDesignAtTop() (mitcad#1683).
 rust::Box<Document> newDesignDocument();
+
+// Whether a new design opens looking at Top with its origin shown, the
+// origin in the middle of the view (mitcad#1683): yes, unless
+// MITCAD_NEW_DESIGN_VIEW=0, the start the UI tests were written for (the
+// isometric view, the origin hidden; the UI test libraries set it). A design
+// read from a file keeps the origin it saved either way.
+bool newDesignAtTop();
+
+// Shows a new design's origin as it opens, when newDesignAtTop(): the
+// Origin folder's light bulb on, with no undo step and no new revision, so
+// the design stays unmodified (set_origin_visible with `opening`).
+void showNewDesignOrigin(Document& document);
 
 // One document and its computation, independent of the window toolkit.
 // Both the Qt presentation and the AppKit presentation use this owner;
@@ -70,6 +83,9 @@ public:
     QPointer<CommandSession> activeCommand;
     bool commandInSketch = false;
     QString lastCommand;
+    // By command id: the panel's settings of its last new feature's OK,
+    // which Repeat starts from (mitcad#1686).
+    QHash<QString, PanelSettings> repeatSettings;
     std::function<void(bool committed)> commandFinished;
     bool sketchExisting = false;
     int sketchEnterDepth = 0;

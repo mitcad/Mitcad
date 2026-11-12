@@ -163,7 +163,9 @@ public:
   void setPickMarks(const QJsonArray& items);
   // What an annotation tool's click would pick where the pointer is
   // (mitcad#725), drawn lighter; empty: nothing. A point (a corner, a
-  // centre) is a filled marker of kCornerMarkerRadius (mitcad#1338).
+  // centre) is a filled marker of kCornerMarkerRadius (mitcad#1338); an
+  // `outline` item (a list of sheet points) a line of the body the pick
+  // is on, drawn narrower under the pick's mark (mitcad#1691).
   void setHoverMarks(const QJsonArray& items);
   // That marker's radius, logical pixels (which follow the display's
   // scale): larger than the largest corner dot, so that it shows over them.
@@ -177,6 +179,9 @@ public:
   static constexpr double kHoverMarkWidth = 2.0;
   static constexpr double kPickMarkWidth = 2.5;
   static constexpr double kMarkMargin = 2.0;
+  // The width of the hovered pick's body's lines (an `outline` item of the
+  // hover's marks, mitcad#1691), logical pixels.
+  static constexpr double kOutlineMarkWidth = 1.5;
   // Logical pixels per sheet millimetre.
   double zoom() const { return m_zoom; }
   // The corners the views show (sheet mm), each drawn as a filled dot of
@@ -199,6 +204,16 @@ public:
   // whichever its points lie further apart along.
   void setPlacingPreview(const QString& kind, const QVector<QPointF>& points,
                          const QPointF& direction = QPointF());
+  // What the placed annotation writes, as the model's `drawing_snap` says
+  // (mitcad#1691: a dimension's value, in its own words and precision),
+  // written on the preview; empty: nothing. Logged "Drawing preview value:
+  // 1449.2".
+  void setPlacingLabel(const QString& label);
+  QString placingLabel() const { return m_previewLabel; }
+  // What is under the pointer in words ("Corner of Tube 2", mitcad#1691),
+  // in a pill at the foot of the sheet (the tool's hint is at its top);
+  // empty: none. Logged "Drawing hover words: …" when it changes.
+  void setHoverWords(const QString& words);
   // While a placing click is awaited a click may still pick (the
   // Dimension tool's Auto with one pick, mitcad#1272): the pointer asks
   // what a click there would pick (`hoverRequested`) meanwhile.
@@ -441,6 +456,8 @@ private:
   QString m_previewKind;
   QVector<QPointF> m_previewPoints;
   QPointF m_previewDirection; // a dimension's, mitcad#1272; null: H or V
+  QString m_previewLabel;     // what it writes, mitcad#1691
+  QString m_hoverWords;       // what is under the pointer, mitcad#1691
   bool m_picksWhilePlacing = false;
   std::function<std::optional<QPointF>(int, const QPointF&)> m_pointSnap;
   QString m_loggedPreview;

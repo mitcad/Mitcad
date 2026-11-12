@@ -164,7 +164,7 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const S
 
   if (const CommandDef* last = m_registry->find(m_lastCommand); last && isAvailable(*last)) {
     const QString id = last->id;
-    addCall(last->icon, tr("Repeat %1").arg(last->name), [this, id] { trigger(id); });
+    addCall(last->icon, tr("Repeat %1").arg(last->name), [this, id] { repeatCommand(id); });
     menu.addSeparator();
   }
   if (m_selection.isEmpty()) {

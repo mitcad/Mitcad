@@ -329,6 +329,18 @@ public:
     }
   }
 
+  // The features that made what is selected in the view (mitcad#1704),
+  // marked; false when they are the same as before.
+  bool setMarked(QSet<QString> marked) {
+    if (marked == m_marked) {
+      return false;
+    }
+    m_marked = std::move(marked);
+    update();
+    return true;
+  }
+  bool isMarked(const QString& uid) const { return m_marked.contains(uid); }
+
   QString selected() const { return m_selected; }
   void select(const QString& uid) {
     m_hasExternalSelection = false;
@@ -464,6 +476,10 @@ public:
     if (!isHead(i) && feature.projectAgain > 0) {
       state += tr("<br>Project Again (right-click) projects them again, keeping their constraints and "
                   "dimensions");
+    }
+    // A warning Auto Fix can fix (mitcad#1677): its context menu has it.
+    if (!isHead(i) && feature.autoFix > 0) {
+      state += QStringLiteral("<br>%1").arg(autoFixHint(feature.autoFix).toHtmlEscaped());
     }
     const QString tip = isHead(i) ? state : details + state;
     if (tip != m_loggedTip) {
@@ -617,6 +633,8 @@ protected:
         off = off && (member.suppressed || k >= m_marker);
         // A match of the search (mitcad#179).
         state.found = state.found || m_found.contains(member.uid);
+        // The owner's mark (mitcad#1704).
+        state.marked = state.marked || m_marked.contains(member.uid);
       }
       state.selected = run.contains(feature.uid);
       state.hovered = i == m_hover;
@@ -988,6 +1006,7 @@ private:
   QSet<QString> m_externalSelected; // exact selection mirrored by another presentation
   bool m_hasExternalSelection = false;
   QSet<QString> m_found; // the search's matches (mitcad#179)
+  QSet<QString> m_marked; // the owners' marks (mitcad#1704)
   int m_hover = -1;
   int m_pressGroup = -1; // a press on a group's band or folded cell
   bool m_shift = false;
@@ -1516,6 +1535,44 @@ void TimelineWidget::setSelectedFeatures(const QStringList& uids) {
   }
 }
 
+void TimelineWidget::setMarkedFeatures(const QStringList& uids) {
+  if (!m_strip->setMarked(QSet<QString>(uids.cbegin(), uids.cend()))) {
+    return;
+  }
+  // Logged in timeline order, each "uid name".
+  QStringList logged;
+  int last = -1; // the last marked cell shown
+  bool inSight = false;
+  const int left = m_scroll->horizontalScrollBar()->value();
+  const int right = left + m_scroll->viewport()->width();
+  for (int i = 0; i < m_strip->count(); ++i) {
+    const DocumentSnapshot::Feature& feature = m_strip->item(i)->feature;
+    if (!m_strip->isMarked(feature.uid)) {
+      continue;
+    }
+    logged << QStringLiteral("%1 %2").arg(feature.uid, feature.name);
+    // A folded group's member shows on its first cell; a feature the
+    // filter hides has none.
+    int shown = i;
+    if (m_strip->hidden(i) && !m_strip->filtered(i)) {
+      shown = m_strip->groups()[m_strip->item(i)->group].first;
+    }
+    if (m_strip->hidden(shown)) {
+      continue;
+    }
+    last = shown;
+    const int middle = m_strip->cell(shown).center().x();
+    inSight = inSight || (middle >= left && middle < right);
+  }
+  qDebug().noquote() << QStringLiteral("Timeline owner marks: %1")
+                            .arg(logged.isEmpty() ? QStringLiteral("none") : logged.join(QStringLiteral(", ")));
+  // None in sight: the last one scrolled to.
+  if (!inSight && last >= 0) {
+    const QRect cell = m_strip->cell(last);
+    m_scroll->ensureVisible(cell.center().x(), cell.center().y(), itemSide() * 2, 0);
+  }
+}
+
 void TimelineWidget::selectFeature(const QString& uid) {
   // A feature the filter hides shows everything again (mitcad#98).
   if (const int at = m_strip->indexOf(uid); at >= 0 && m_strip->filtered(at)) {
@@ -2009,10 +2066,11 @@ void TimelineWidget::showSearchMenu(const QPoint& globalPosition) {
   };
   add(tr("Failed"), timelineStatusToken(TimelineQuery::Failed));
   add(tr("Warnings"), timelineStatusToken(TimelineQuery::Warning));
-  // Import notes are information (mitcad#1040).
-  add(tr("Import Notes"), timelineStatusToken(TimelineQuery::Info));
+  // Import notes are information (mitcad#1040). The states read as the
+  // tooltips and the browser name them, in sentence case (mitcad#1675).
+  add(tr("Import notes"), timelineStatusToken(TimelineQuery::Info));
   add(tr("Suppressed"), timelineStatusToken(TimelineQuery::Suppressed));
-  add(tr("Rolled Back"), timelineStatusToken(TimelineQuery::RolledBack));
+  add(tr("Rolled back"), timelineStatusToken(TimelineQuery::RolledBack));
   menu.addSeparator();
   for (const DocumentSnapshot::Component& component : std::as_const(m_snapshot.components)) {
     add(component.name, timelineComponentToken(component.name));

@@ -446,3 +446,12 @@ pub struct HelixSpec<'a, S> {
     /// faces about the axis can be retried (see `geometry::HelixSweepSpec`).
     pub piece_shift: f64,
 }
+
+// Sweeps and pipes that pass through themselves (mitcad#1697).
+
+/// The information ([`crate::Kernel::infos`]) a sweep's or a pipe's solid
+/// carries when its profile passes through itself along the path (a bend
+/// tighter than the profile reaches, a straight piece too short for its
+/// miters, a path that comes back near itself) and the geometry built it
+/// in pieces fused into one solid; the geometry's `kFoldsResolved`.
+pub const FOLDS_RESOLVED: &str = "the swept profile passes through itself along the path; it was built in pieces joined into one solid";

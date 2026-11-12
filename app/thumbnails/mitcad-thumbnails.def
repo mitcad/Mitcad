@@ -1,0 +1,7 @@
+; SPDX-License-Identifier: MIT
+; The exports of the thumbnail handler mitcad-thumbnails.dll (mitcad#1695):
+; COM's entry points of an in-process server, private (not in an import
+; library).
+EXPORTS
+  DllGetClassObject PRIVATE
+  DllCanUnloadNow PRIVATE

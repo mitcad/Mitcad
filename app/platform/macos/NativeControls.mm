@@ -390,7 +390,7 @@ NSMenu* NativeExpressionField::menu() {
     [result addItem:naming];
   }
   if (options.create && source != nullptr && source->addParameter) {
-    NSMenuItem* create = [[NSMenuItem alloc] initWithTitle:nativeText(QObject::tr("Create User Parameter…"))
+    NSMenuItem* create = [[NSMenuItem alloc] initWithTitle:nativeText(QObject::tr("Add User Parameter…"))
                                                     action:@selector(createParameter:)
                                              keyEquivalent:@""];
     create.target = m_target;

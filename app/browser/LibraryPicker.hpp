@@ -23,7 +23,7 @@ inline constexpr int PickerTagRole = Qt::UserRole + 2;
 inline constexpr int PickerLineRole = Qt::UserRole + 3;
 
 // One entry of a picker: what choosing it gives, its name, the heading it
-// is listed under ("This Design", "Built-in", "My library") and its
+// is listed under ("This design", "Built-in", "My library") and its
 // swatch. A choice's picker (mitcad#1108, InputDef::choicePicker) adds a
 // small tag at the right (where it comes from), more text its search
 // matches, a check on the current choice and a line above the entry

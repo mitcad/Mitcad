@@ -205,7 +205,8 @@ cat > "$WORK/placed.json" << EOF
   {"cmd": "sketch.add_rectangle", "sketch": "F4", "corner": [5, 5], "width": 10, "height": 10},
   {"cmd": "add_feature", "name": "Board boss", "def": {"type": "extrude",
     "profiles": [{"sketch": "F4", "region": "$R"}],
-    "extent": {"type": "distance", "distance": 5}, "operation": "join", "participants": ["F2.b0"]}}
+    "extent": {"type": "distance", "distance": 5}, "operation": "join", "participants": ["F2.b0"]}},
+  {"cmd": "activate_component", "component": "Root"}
 ]
 EOF
 for design in holes box reach placed; do

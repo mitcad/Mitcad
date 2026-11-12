@@ -4,8 +4,10 @@
 # tools/ui-view-arrow-keys-test.sh on Linux: the shared steps
 # tools/ui-scripts/view-arrow-keys.mitcad-ui on the block that mitcad-cli
 # makes (tools/ui-scripts/view-arrow-keys.json): with the keyboard in the
-# 3D view the keys turn the camera by 15 degrees, the zoom kept; with the
-# keyboard in Extrude's value field they leave the view as it is.
+# 3D view the keys turn the camera by 15 degrees, the zoom kept, and 7,
+# 1 and Home show the isometric, front and home views (mitcad#1684); with
+# the keyboard in Extrude's value field they leave the view as it is and 7
+# types the digit.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-view-arrow-keys-test.ps1 -App build\dev\mitcad.exe -Cli build\dev\tools\cli\mitcad-cli.exe [-Out dir] [-QtBin dir]
 param(
@@ -30,6 +32,6 @@ $exitCode = $script:UiProcess.ExitCode
 if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "arrow keys driver failed (exit code $exitCode)"
 }
-Ui-ExpectLog 'TestDriver: done' 'the arrow keys turn the view, not from a value field'
+Ui-ExpectLog 'TestDriver: done' 'the arrow keys, Home and 1 to 7 move the view, not from a value field'
 Ui-StopApp
 Write-Host 'PASS: arrow keys turn the view'

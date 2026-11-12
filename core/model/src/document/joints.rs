@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{Added, Document, ModelError, invalid};
-use crate::assembly::inverse;
+use crate::assembly::{inverse, solved_placement};
 use crate::contact::{ContactHit, ContactPairs, sweep};
 use crate::datum::Vec3;
 use crate::features::{AsBuiltJointDef, FeatureDef, ValueInput};
@@ -35,6 +35,17 @@ pub struct Driven {
     /// The contact that stopped the joint short of the values (mitcad#454)
     /// and how far it went toward them, 0 to 1.
     pub contact: Option<(ContactHit, f64)>,
+}
+
+/// One frame of [`Document::joint_poses`] (mitcad#1701).
+#[derive(Debug, Clone, PartialEq)]
+pub struct JointPose {
+    /// The occurrences placed elsewhere in the design than the document
+    /// places them: each path from the root with its placement in the
+    /// design (an occurrence inside a moved one too).
+    pub placements: Vec<(Vec<OccurrenceUid>, crate::transform::Transform)>,
+    /// Per joint of the component, its motions' values.
+    pub values: BTreeMap<FeatureUid, BTreeMap<Motion, f64>>,
 }
 
 impl<K: Kernel> Document<K> {
@@ -260,17 +271,94 @@ impl<K: Kernel> Document<K> {
         Ok(dragged)
     }
 
+    /// Animate Joint's frames (mitcad#1701): where `motion` of `joint`
+    /// driven to each of `values` in turn puts the occurrences, as a drag
+    /// puts them (the joint solver on the placements at the marker, each
+    /// frame from the one before; no recompute, the shapes as they are).
+    /// Per frame the occurrences placed elsewhere in the design than the
+    /// document places them (paths from the root and placements in the
+    /// design, as a preview's `placements`) and the joints' values.
+    /// Refused where only a recompute shows the motion: with contact sets
+    /// (their checks need the bodies), and when joints of other components
+    /// hold occurrences inside the ones that move. Changes nothing.
+    pub fn joint_poses(
+        &self,
+        joint: FeatureUid,
+        motion: Motion,
+        values: &[f64],
+    ) -> Result<Vec<JointPose>, ModelError> {
+        super::motion::joint_def(&self.state, joint)?;
+        if self.has_contact_pairs() {
+            return Err(invalid(
+                "contact sets apply: only a recompute checks where the bodies touch",
+            ));
+        }
+        let component = self
+            .result
+            .joints
+            .active
+            .iter()
+            .find(|j| j.uid == joint && j.row.is_none())
+            .map(|j| j.component)
+            .ok_or_else(|| invalid("the joint is not in effect at the marker"))?;
+        // Joints of other components that hold occurrences inside this
+        // component's are solved by a recompute only.
+        let inside = |path: &[OccurrenceUid]| {
+            path.iter().skip(1).any(|o| {
+                self.state
+                    .assembly
+                    .occurrence(*o)
+                    .is_some_and(|o| o.parent == component)
+            })
+        };
+        if self
+            .result
+            .joints
+            .active
+            .iter()
+            .any(|j| j.component != component && (inside(&j.a) || inside(&j.b)))
+        {
+            return Err(invalid(
+                "joints of other components hold occurrences that move: only a recompute \
+                 solves them",
+            ));
+        }
+        let frames = crate::joints::poses(
+            &self.state.assembly,
+            &self.result.joints,
+            &self.result.placements,
+            joint,
+            motion,
+            values,
+        )
+        .map_err(invalid)?;
+        Ok(frames
+            .into_iter()
+            .map(|frame| {
+                let placements: BTreeMap<OccurrenceUid, crate::transform::Transform> =
+                    frame.placements.into_iter().collect();
+                JointPose {
+                    placements: self.moved_placements(&self.state, &placements),
+                    values: frame.values,
+                }
+            })
+            .collect())
+    }
+
     /// Drags `occurrence` (see [`Document::joint_drag`]) and keeps the
     /// result: the moved occurrences' own placements become where the drag
-    /// put them, and the joints' driven motions are driven to their new
-    /// values. One undo step.
+    /// put them, each made a rotation and a translation, and the joints'
+    /// driven motions are driven to their new values. One undo step; a
+    /// placement with no rotation near it moves nothing, and so does a
+    /// drag after which a joint that held would fail in the timeline
+    /// (mitcad#1666).
     pub fn drag_occurrence(
         &mut self,
         occurrence: OccurrenceUid,
         grab: Option<Vec3>,
         target: Vec3,
     ) -> Result<Dragged, ModelError> {
-        let dragged = self.joint_drag(occurrence, grab, target)?;
+        let mut dragged = self.joint_drag(occurrence, grab, target)?;
         let mut edits = Vec::new();
         for joint in &self.result.joints.active {
             let Some(values) = dragged.values.get(&joint.uid) else {
@@ -301,26 +389,90 @@ impl<K: Kernel> Document<K> {
             edits.push((joint.uid, def));
         }
         let name = self.state.assembly.occurrence_name(occurrence);
-        let placements = dragged.placements.clone();
-        self.apply(|state| {
-            for (o, transform) in &placements {
-                let by = state.positioning_features(*o);
-                if !by.is_empty() {
-                    return Err(invalid(format!(
-                        "{} is placed by {} in the timeline; capture the position instead",
-                        state.assembly.occurrence_name(*o),
-                        by.join(", ")
-                    )));
+        // Kept as rotations and translations to rounding (mitcad#1664,
+        // mitcad#1666): rounding that piled up over many drags once made
+        // designs that no longer opened, and links that came apart.
+        let mut placements = Vec::with_capacity(dragged.placements.len());
+        for (o, transform) in &dragged.placements {
+            let rigid = solved_placement(transform).ok_or_else(|| {
+                invalid(format!(
+                    "the joints would place {} by a transform that is not a rotation and a \
+                     translation; nothing was moved",
+                    self.state.assembly.occurrence_name(*o)
+                ))
+            })?;
+            placements.push((*o, rigid));
+        }
+        // The joints that hold now (mitcad#1666): the recompute in timeline
+        // order must keep them holding where the drag leaves the
+        // occurrences, else the drag is refused and nothing moves.
+        let held: BTreeSet<FeatureUid> = self
+            .result
+            .results
+            .iter()
+            .filter(|r| r.status.is_ok())
+            .map(|r| r.uid)
+            .collect();
+        self.apply_checked(
+            |state| {
+                for (o, transform) in &placements {
+                    let by = state.positioning_features(*o);
+                    if !by.is_empty() {
+                        return Err(invalid(format!(
+                            "{} is placed by {} in the timeline; capture the position instead",
+                            state.assembly.occurrence_name(*o),
+                            by.join(", ")
+                        )));
+                    }
+                    state.assembly.occurrence_mut(*o).expect("exists").transform = *transform;
                 }
-                state.assembly.occurrence_mut(*o).expect("exists").transform = *transform;
-            }
-            for (uid, def) in &edits {
-                state.edit_feature(*uid, def)?;
-            }
-            Ok((format!("Drag {name}"), ()))
-        })?;
+                for (uid, def) in &edits {
+                    state.edit_feature(*uid, def)?;
+                }
+                Ok((format!("Drag {name}"), ()))
+            },
+            |state, result| joints_still_hold(state, result, &held, &name),
+        )?;
+        dragged.placements = placements;
         Ok(dragged)
     }
+}
+
+/// Refuses a drag after which a joint, as-built joint, rigid group,
+/// constraint set or motion link that held before fails when the design
+/// is recomputed in timeline order (mitcad#1666), naming them and why the
+/// first fails.
+fn joints_still_hold<S>(
+    state: &super::DocState,
+    result: &crate::recompute::Recomputed<S>,
+    held: &BTreeSet<FeatureUid>,
+    dragged: &str,
+) -> Result<(), ModelError> {
+    let mut failed = Vec::new();
+    for r in &result.results {
+        let Some(error) = r.status.failure() else {
+            continue;
+        };
+        let Some(entry) = state.entry(r.uid) else {
+            continue;
+        };
+        if held.contains(&r.uid) && crate::joints::applies(&entry.def) {
+            failed.push((entry.name.clone(), error.message.clone()));
+        }
+    }
+    let Some((first, why)) = failed.first() else {
+        return Ok(());
+    };
+    let names: Vec<&str> = failed.iter().map(|(n, _)| n.as_str()).collect();
+    let list = match names.as_slice() {
+        [one] => (*one).to_owned(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+        [] => unreachable!("one at least"),
+    };
+    Err(invalid(format!(
+        "{dragged} was not moved: where the drag would leave it, {list} would no longer hold \
+         ({first}: {why})"
+    )))
 }
 
 // Joint origins and constraint rows before they are added (mitcad#778: the

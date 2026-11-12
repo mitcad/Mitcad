@@ -600,6 +600,27 @@ void DrawingSheetView::setPlacingPreview(const QString& kind, const QVector<QPoi
   update();
 }
 
+void DrawingSheetView::setPlacingLabel(const QString& label) {
+  if (label == m_previewLabel) {
+    return;
+  }
+  m_previewLabel = label;
+  if (!label.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Drawing preview value: %1").arg(label);
+  }
+  update();
+}
+
+void DrawingSheetView::setHoverWords(const QString& words) {
+  if (words == m_hoverWords) {
+    return;
+  }
+  m_hoverWords = words;
+  qDebug().noquote() << QStringLiteral("Drawing hover words: %1")
+                            .arg(words.isEmpty() ? QStringLiteral("none") : words);
+  update();
+}
+
 void DrawingSheetView::setPicksWhilePlacing(bool on) { m_picksWhilePlacing = on; }
 
 void DrawingSheetView::setPointSnap(std::function<std::optional<QPointF>(int view, const QPointF& at)> snap) {
@@ -751,10 +772,29 @@ void DrawingSheetView::paintPreview(QPainter& painter) const {
       line.setCosmetic(true);
       painter.setPen(line);
       painter.drawLine(toWidget(a2), toWidget(b2));
+      // Its value over the middle of its line (mitcad#1691), as the
+      // model writes it.
+      if (!m_previewLabel.isEmpty()) {
+        const QFontMetricsF metrics(painter.font());
+        const QPointF middle = (toWidget(a2) + toWidget(b2)) / 2.0;
+        const double w = metrics.horizontalAdvance(m_previewLabel) + 8.0;
+        const double h = metrics.height() + 2.0;
+        const QRectF box(middle.x() - w / 2.0, middle.y() - h - 3.0, w, h);
+        painter.fillRect(box, QColor(255, 255, 255, 200));
+        painter.drawText(box, Qt::AlignCenter, m_previewLabel);
+      }
     } else {
-      // A leader from the pick to where its text or symbol goes.
+      // A leader from the pick to where its text or symbol goes, its
+      // value in the box where the model says it (mitcad#1691).
       painter.drawLine(toWidget(m_previewPoints.last()), now);
-      painter.drawRect(QRectF(now.x() - 18.0, now.y() - 9.0, 36.0, 18.0));
+      const QFontMetricsF metrics(painter.font());
+      const double w =
+          m_previewLabel.isEmpty() ? 36.0 : std::max(36.0, metrics.horizontalAdvance(m_previewLabel) + 10.0);
+      const QRectF box(now.x() - w / 2.0, now.y() - 9.0, w, 18.0);
+      painter.drawRect(box);
+      if (!m_previewLabel.isEmpty()) {
+        painter.drawText(box, Qt::AlignCenter, m_previewLabel);
+      }
     }
     if (snapped) {
       paintSnapHint(painter, now, m_snapHint);
@@ -954,6 +994,8 @@ void DrawingSheetView::resetPicks() {
   m_previewKind.clear();
   m_previewPoints.clear();
   m_previewDirection = QPointF();
+  m_previewLabel.clear();
+  m_hoverWords.clear();
   m_picksWhilePlacing = false;
   m_loggedPreview.clear();
   m_snapped = false;
@@ -1136,6 +1178,20 @@ void DrawingSheetView::paintEvent(QPaintEvent* /*event*/) {
     painter.setPen(Qt::white);
     painter.drawText(pill, Qt::AlignCenter, m_hint);
   }
+  // What a click would pick under the pointer, in words (mitcad#1691), at
+  // the foot of the sheet: the status of the pointer, never kept in the
+  // message history.
+  if (!m_hoverWords.isEmpty()) {
+    const QFontMetrics metrics(font());
+    const int w = metrics.horizontalAdvance(m_hoverWords) + 24;
+    const int h = metrics.height() + 10;
+    const QRectF pill((width() - w) / 2.0, height() - h - 8.0, w, h);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(0, 0, 0, 160));
+    painter.drawRoundedRect(pill, h / 2.0, h / 2.0);
+    painter.setPen(Qt::white);
+    painter.drawText(pill, Qt::AlignCenter, m_hoverWords);
+  }
 }
 
 void DrawingSheetView::paintAnnotations(QPainter& painter) const {
@@ -1203,7 +1259,18 @@ void DrawingSheetView::paintAnnotations(QPainter& painter) const {
     mark.setColor(picked ? pickMark : hoverMark);
     mark.setWidthF(markWidth(item, picked));
     painter.setPen(mark);
-    if (item.contains(QStringLiteral("line"))) {
+    if (item.contains(QStringLiteral("outline"))) {
+      // A line of the body the hover's pick is on (mitcad#1691), under
+      // the pick's own mark and narrower.
+      QPen outline(hoverMark, kOutlineMarkWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+      outline.setCosmetic(true);
+      painter.setPen(outline);
+      QPolygonF points;
+      for (const QJsonValue& p : item.value(QStringLiteral("outline")).toArray()) {
+        points.append(toWidget(pointOf(p)));
+      }
+      painter.drawPolyline(points);
+    } else if (item.contains(QStringLiteral("line"))) {
       const QJsonArray line = item.value(QStringLiteral("line")).toArray();
       painter.drawLine(toWidget(pointOf(line.at(0))), toWidget(pointOf(line.at(1))));
     } else if (item.contains(QStringLiteral("circle"))) {

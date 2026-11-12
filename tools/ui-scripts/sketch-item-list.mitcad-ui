@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: MIT
+# Sketch mode's list of the sketch's items in the timeline's place
+# (mitcad#1492), on sketch-item-list.json (Sketch1, empty):
+#   1. Editing Sketch1 puts the item list in the timeline's place.
+#   2. A 40 x 20 rectangle drawn with its width and height typed: the list
+#      shows its lines and corners with their horizontal and vertical
+#      constraints, then the two length dimensions, in the order they were
+#      made.
+#   3. A click on the first line's row selects that line in the view; a
+#      click on the right side in the view marks that side's row.
+#   4. A click on a horizontal constraint's row selects it alone, Delete
+#      deletes it: its row is gone and the sketch has one more degree of
+#      freedom (3).
+#   5. A double-click on the width's row opens its value editor; 50 makes
+#      the width 50 mm, and its row shows it.
+#   6. Finish Sketch brings the timeline back.
+# Run by tools/ui-sketch-item-list-test.sh (Linux) and
+# tools/ui-windows-sketch-item-list-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+
+# 1. The list in the timeline's place.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+wait-log "^Sketch item list in the timeline's place$"
+wait-log '^Sketch items: none$'
+wait-idle
+
+# 2. A rectangle with its width and height typed.
+mark
+command sketch.rectangle
+sketch-click 10 10
+type 40
+key Tab
+type 20
+key Return
+wait-log '^Added rectangle 40 x 20 mm at '
+capture line '^Added rectangle 40 x 20 mm at .*\[(c[0-9]+), '
+capture side '^Added rectangle 40 x 20 mm at .*\[c[0-9]+, (c[0-9]+), '
+key Escape
+wait-idle
+# Each line with its new corners and its constraint, the dimensions last.
+wait-log '^Sketch items: ([pc][0-9]+ (point|line), |k[0-9]+ (horizontal|vertical), )+k[0-9]+ length (fx: )?40[.]00, k[0-9]+ length (fx: )?20[.]00$'
+expect-log "^Sketch items: ${line} line, "
+capture constraint '^Sketch items: .*?(k[0-9]+) horizontal'
+capture width '^Sketch items: .* (k[0-9]+) length (fx: )?40[.]00'
+wait-log "^Sketch item ${line} at "
+wait-log "^Sketch item ${constraint} at "
+wait-log "^Sketch item ${width} at "
+
+# 3. The line selected from its row; the view's selection marks a row.
+mark
+click-logged "^Sketch item ${line} at "
+wait-log "^Sketch item ${line} clicked$"
+wait-log "^Selected: .*${line} of F1"
+wait-log "^Sketch item rows selected: ${line}$"
+mark
+sketch-click 50 14
+wait-log "^Sketch item rows selected: (.*, )?${side}(, .*)?$"
+
+# 4. A horizontal constraint selected alone from its row and deleted.
+mark
+click-logged "^Sketch item ${constraint} at "
+wait-log "^Sketch item rows selected: ${constraint}$"
+key Delete
+wait-log "^Deleted ${constraint}$"
+wait-log '^Sketch items: '
+expect-no-log "^Sketch items: (.*, )?${constraint} "
+wait-idle
+capture-model-number dof '{"query":"sketch","uid":"F1"}' dof
+expect-near ${dof} 3
+
+# 5. The width edited from its row.
+mark
+dblclick-logged "^Sketch item ${width} at "
+wait-log "^Editing dimension ${width} "
+wait-log '^Sketch value editor at '
+key ctrl+a
+type 50
+key Return
+wait-log "^Dimension ${width} = 50"
+wait-log "^Sketch items: .*${width} length (fx: )?50[.]00"
+wait-idle
+
+# 6. The timeline back when the sketch is finished.
+mark
+command sketch.finish
+wait-log '^Timeline back in its place$'
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

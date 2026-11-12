@@ -1975,7 +1975,7 @@ private:
         [textLine addArrangedSubview:image != nil ? iconButton(image, text, kind) : button(text, kind)];
         icons = true;
       } else {
-        // Elided rather than wider than the card (Import from slicer…).
+        // Elided rather than wider than the card (Import from Slicer…).
         NSButton* control = button(text, kind);
         [control setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                           forOrientation:NSLayoutConstraintOrientationHorizontal];

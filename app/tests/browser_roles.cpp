@@ -145,9 +145,208 @@ void rowLookTests() {
   CHECK(look(tree, occurrence).bulb == QStringLiteral("eye-off"));
 }
 
+DocumentSnapshot::Feature timelineFeature(const QString& uid, const QString& name, const QString& type, int index,
+                                   const QStringList& sketches = {}) {
+  DocumentSnapshot::Feature made;
+  made.uid = uid;
+  made.name = name;
+  made.type = type;
+  made.status = QStringLiteral("ok");
+  made.component = QStringLiteral("C0");
+  made.index = index;
+  made.sketches = sketches;
+  return made;
+}
+
+// Show used sketches under their features (mitcad#1699): Sketch1 (F1) used
+// by Extrude1 (F2) and Extrude2 (F3), Sketch2 (F4) by none, Sketch3 (F5) by
+// Extrude3 (F6) alone; the bodies F2.b0, F3.b0, F6.b0 in the root.
+DocumentSnapshot usedSketchesDesign() {
+  DocumentSnapshot snapshot;
+  DocumentSnapshot::Component root = component(QStringLiteral("C0"), QStringLiteral("Root"), QStringLiteral("F2.b0"));
+  root.bodies << QStringLiteral("F3.b0") << QStringLiteral("F6.b0");
+  snapshot.components.append(root);
+  for (const char* uid : {"F2.b0", "F3.b0", "F6.b0"}) {
+    const QString made = QString::fromLatin1(uid);
+    snapshot.bodies.insert(made, body(made, QStringLiteral("Body ") + made, QStringLiteral("C0"), false));
+  }
+  const QString f1 = QStringLiteral("F1");
+  const QString f5 = QStringLiteral("F5");
+  const QString sketch = QStringLiteral("sketch");
+  const QString extrude = QStringLiteral("extrude");
+  snapshot.features.append(timelineFeature(f1, QStringLiteral("Sketch1"), sketch, 0));
+  snapshot.features.append(timelineFeature(QStringLiteral("F2"), QStringLiteral("Extrude1"), extrude, 1, {f1}));
+  snapshot.features.append(timelineFeature(QStringLiteral("F3"), QStringLiteral("Extrude2"), extrude, 2, {f1}));
+  snapshot.features.append(timelineFeature(QStringLiteral("F4"), QStringLiteral("Sketch2"), sketch, 3));
+  snapshot.features.append(timelineFeature(f5, QStringLiteral("Sketch3"), sketch, 4));
+  snapshot.features.append(timelineFeature(QStringLiteral("F6"), QStringLiteral("Extrude3"), extrude, 5, {f5}));
+  snapshot.marker = 6;
+  snapshot.activeComponent = QStringLiteral("C0");
+  return snapshot;
+}
+
+// The rows' paths ("Root/Features/Extrude1/Sketch1"), from the panel's
+// presentation rows, and the rows by path.
+QHash<QString, BrowserPanel::PresentationRow> rowsByPath(const BrowserPanel& panel) {
+  QHash<QString, BrowserPanel::PresentationRow> rows;
+  for (const BrowserPanel::PresentationRow& row : panel.presentationRows()) {
+    rows.insert(row.node.path, row);
+  }
+  return rows;
+}
+
+void usedSketchesTests() {
+  const DocumentSnapshot snapshot = usedSketchesDesign();
+  BrowserPanel panel;
+
+  // Off (the default): every sketch in Sketches, the features under them
+  // (mitcad#177), no Features folder.
+  CHECK(!panel.consumeSketches());
+  panel.rebuild(snapshot, false);
+  QHash<QString, BrowserPanel::PresentationRow> rows = rowsByPath(panel);
+  CHECK(rows.contains(QStringLiteral("Root/Sketches/Sketch1")));
+  CHECK(rows.contains(QStringLiteral("Root/Sketches/Sketch2")));
+  CHECK(rows.contains(QStringLiteral("Root/Sketches/Sketch3")));
+  CHECK(rows.contains(QStringLiteral("Root/Sketches/Sketch1/Extrude2")));
+  CHECK(!rows.contains(QStringLiteral("Root/Features")));
+
+  // The users of each sketch: Sketch1 two, Sketch3 one, Sketch2 none.
+  const QHash<QString, int> users = BrowserPanel::sketchUsers(snapshot, QStringLiteral("C0"));
+  CHECK(users.value(QStringLiteral("F1")) == 2);
+  CHECK(users.value(QStringLiteral("F5")) == 1);
+  CHECK(!users.contains(QStringLiteral("F4")));
+
+  // On: the Features folder; Sketch1 under Extrude1 and Extrude2, Sketch3
+  // under Extrude3; Sketch2 alone left in Sketches.
+  panel.setConsumeSketches(true);
+  CHECK(panel.consumeSketches());
+  panel.rebuild(snapshot, false);
+  rows = rowsByPath(panel);
+  CHECK(rows.contains(QStringLiteral("Root/Features")));
+  CHECK(rows.value(QStringLiteral("Root/Features")).node.type == BrowserNode::Type::Features);
+  for (const char* path : {"Root/Features/Extrude1", "Root/Features/Extrude2", "Root/Features/Extrude3"}) {
+    CHECK(rows.value(QString::fromLatin1(path)).node.type == BrowserNode::Type::Feature);
+  }
+  const BrowserPanel::PresentationRow first = rows.value(QStringLiteral("Root/Features/Extrude1/Sketch1"));
+  const BrowserPanel::PresentationRow second = rows.value(QStringLiteral("Root/Features/Extrude2/Sketch1"));
+  const BrowserPanel::PresentationRow only = rows.value(QStringLiteral("Root/Features/Extrude3/Sketch3"));
+  CHECK(first.node.type == BrowserNode::Type::Sketch && first.node.uid == QStringLiteral("F1"));
+  CHECK(second.node.type == BrowserNode::Type::Sketch && second.node.uid == QStringLiteral("F1"));
+  CHECK(first.node.feature == QStringLiteral("F2"));
+  CHECK(second.node.feature == QStringLiteral("F3"));
+  // Two rows of one sketch, told apart by their keys; the same item.
+  CHECK(!first.key.isEmpty() && first.key != second.key);
+  CHECK(first.node.item() == second.node.item());
+  CHECK(only.node.type == BrowserNode::Type::Sketch && only.node.feature == QStringLiteral("F6"));
+  // The shared mark's tooltip on both of Sketch1's rows, none on Sketch3's.
+  CHECK(first.tooltip.contains(QStringLiteral("Used by 2 features")));
+  CHECK(second.tooltip.contains(QStringLiteral("Used by 2 features")));
+  CHECK(!only.tooltip.contains(QStringLiteral("Used by")));
+  CHECK(rows.contains(QStringLiteral("Root/Sketches/Sketch2")));
+  CHECK(!rows.contains(QStringLiteral("Root/Sketches/Sketch1")));
+  CHECK(!rows.contains(QStringLiteral("Root/Sketches/Sketch3")));
+  // No feature rows under the sketches while on.
+  CHECK(!rows.contains(QStringLiteral("Root/Sketches/Sketch2/Extrude1")));
+
+  // Off again: as before.
+  panel.setConsumeSketches(false);
+  panel.rebuild(snapshot, false);
+  rows = rowsByPath(panel);
+  CHECK(rows.contains(QStringLiteral("Root/Sketches/Sketch1")));
+  CHECK(rows.contains(QStringLiteral("Root/Sketches/Sketch3")));
+  CHECK(!rows.contains(QStringLiteral("Root/Features")));
+}
+
+// Isolate (mitcad#1700): the eyes show what the view shows. Bracket:1
+// shown and isolated, Glass in the root left out: Glass's eye and its
+// Bodies folder's are the dimmed closed eye (only the isolation hides them),
+// Bracket:1 and its Block keep the open eye. Glass hidden by its own light
+// bulb as well: the plain closed eye. A body isolated inside Bracket:1:
+// Bracket:1 holds it and keeps its eye.
+void isolationEyeTests() {
+  DocumentSnapshot snapshot = design();
+  snapshot.occurrences[0].visible = true;
+  snapshot.bodies[QStringLiteral("F1.b0")].transparent = false;
+  SelectionItem isolated;
+  isolated.kind = SelectKind::Component;
+  isolated.occurrence = QStringLiteral("O1");
+  snapshot.isolation << isolated;
+
+  CHECK(!DocumentSnapshot::isolationShows(snapshot.isolation, QStringLiteral("F1.b0"), QString()));
+  CHECK(DocumentSnapshot::isolationShows(snapshot.isolation, QStringLiteral("F2.b0"), QStringLiteral("O1")));
+  CHECK(DocumentSnapshot::isolationShows(snapshot.isolation, QStringLiteral("F2.b0"), QStringLiteral("O1/O2")));
+  CHECK(!DocumentSnapshot::isolationShows(snapshot.isolation, QStringLiteral("F2.b0"), QStringLiteral("O10")));
+  CHECK(DocumentSnapshot::isolationReaches(snapshot.isolation, QStringLiteral("O1")));
+  CHECK(!DocumentSnapshot::isolationReaches(snapshot.isolation, QStringLiteral("O2")));
+  CHECK(DocumentSnapshot::isolationShows(Selection(), QStringLiteral("F1.b0"), QString()));
+
+  {
+    BrowserPanel panel;
+    panel.rebuild(snapshot, false);
+    auto* tree = panel.findChild<QTreeWidget*>();
+    CHECK(tree != nullptr);
+    if (tree == nullptr) {
+      return;
+    }
+    const QColor plain = tree->palette().color(QPalette::Text);
+    const Look glass = look(tree, rowNamed(tree, QStringLiteral("Glass")));
+    CHECK(glass.bulb == QStringLiteral("eye-isolated"));
+    CHECK(glass.text != plain);
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Bracket:1"))).bulb == QStringLiteral("eye"));
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Block"))).bulb == QStringLiteral("eye"));
+    // The root's Bodies folder is the first row named Bodies.
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Bodies"))).bulb == QStringLiteral("eye-isolated"));
+    // Other presentations get the eye as shown (the AppKit rows).
+    for (const BrowserPanel::PresentationRow& row : panel.presentationRows()) {
+      if (row.node.name == QStringLiteral("Glass")) {
+        CHECK(row.node.isolatedOut);
+        CHECK(row.node.visible);
+        CHECK(!row.eyeOn);
+      } else if (row.node.name == QStringLiteral("Block")) {
+        CHECK(!row.node.isolatedOut);
+        CHECK(row.eyeOn);
+      }
+    }
+  }
+
+  {
+    DocumentSnapshot hidden = snapshot;
+    hidden.bodies[QStringLiteral("F1.b0")].visible = false;
+    BrowserPanel panel;
+    panel.rebuild(hidden, false);
+    auto* tree = panel.findChild<QTreeWidget*>();
+    CHECK(tree != nullptr);
+    if (tree != nullptr) {
+      CHECK(look(tree, rowNamed(tree, QStringLiteral("Glass"))).bulb == QStringLiteral("eye-off"));
+    }
+  }
+
+  {
+    DocumentSnapshot inner = snapshot;
+    SelectionItem block;
+    block.kind = SelectKind::Body;
+    block.owner = QStringLiteral("F2.b0");
+    block.occurrence = QStringLiteral("O1");
+    inner.isolation = {block};
+    CHECK(DocumentSnapshot::isolationReaches(inner.isolation, QStringLiteral("O1")));
+    CHECK(!DocumentSnapshot::isolationShows(inner.isolation, QStringLiteral("F1.b0"), QString()));
+    BrowserPanel panel;
+    panel.rebuild(inner, false);
+    auto* tree = panel.findChild<QTreeWidget*>();
+    CHECK(tree != nullptr);
+    if (tree != nullptr) {
+      CHECK(look(tree, rowNamed(tree, QStringLiteral("Bracket:1"))).bulb == QStringLiteral("eye"));
+      CHECK(look(tree, rowNamed(tree, QStringLiteral("Block"))).bulb == QStringLiteral("eye"));
+      CHECK(look(tree, rowNamed(tree, QStringLiteral("Glass"))).bulb == QStringLiteral("eye-isolated"));
+    }
+  }
+}
+
 } // namespace
 
 int browserRolesTests() {
   rowLookTests();
+  usedSketchesTests();
+  isolationEyeTests();
   return failures;
 }

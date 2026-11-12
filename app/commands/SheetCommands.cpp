@@ -10,9 +10,11 @@
 #include <cmath>
 #include "framework/ModelMessages.hpp"
 
+#include <QDebug>
 #include <QJsonArray>
 #include <QJsonDocument>
 
+#include "../browser/DocumentHost.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
@@ -193,6 +195,24 @@ bool isHem(const CommandState& state) {
 bool isCornerJoint(const CommandState& state) {
   const QString corner = state.choice(QStringLiteral("corner"));
   return !corner.isEmpty() && corner != QStringLiteral("none");
+}
+
+// Whether a flange's wall is drawn by a profile sketch (mitcad#1648): the
+// hidden input `profile` names the sketch.
+bool hasProfile(const CommandState& state) { return !state.text(QStringLiteral("profile")).isEmpty(); }
+
+// The Flange panel's Profile row (mitcad#1648): what draws the wall, with
+// Edit Profile (and Remove Profile once there is one).
+InputNote flangeProfileNote(const CommandState& state) {
+  InputNote note;
+  if (hasProfile(state)) {
+    note.text = QObject::tr("The wall is the outline of its profile sketch.");
+    note.actions = {QObject::tr("Edit Profile"), QObject::tr("Remove Profile")};
+  } else {
+    note.text = QObject::tr("The wall is a rectangle of the length and width.");
+    note.actions = {QObject::tr("Edit Profile")};
+  }
+  return note;
 }
 
 // A hem's angle: only its side counts (the bends follow from its sizes),
@@ -492,15 +512,26 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
   def.pinned = true;
   def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("wall"), QStringLiteral("bend"), QStringLiteral("hem")};
   def.featureType = QStringLiteral("sheet_flange");
-  const auto plain = [](const CommandState& s) { return !isHem(s); };
-  const auto measured = [](const CommandState& s) { return !isHem(s) && !isCornerJoint(s); };
-  const auto noCorner = [](const CommandState& s) { return !isCornerJoint(s); };
-  const auto hemShown = [](const CommandState& s) { return isHem(s); };
-  const auto doubleHem = [](const CommandState& s) { return s.choice(QStringLiteral("hem")) == QStringLiteral("double"); };
-  const auto offsets = [](const CommandState& s) { return s.choice(QStringLiteral("width_type")) == QStringLiteral("offsets"); };
-  const auto middle = [](const CommandState& s) { return s.choice(QStringLiteral("width_type")) == QStringLiteral("middle"); };
+  // A profile sketch draws the wall (mitcad#1648): its length, width, hem
+  // and corner are the sketch's, and their inputs are hidden.
+  const auto rectangular = [](const CommandState& s) { return !hasProfile(s); };
+  const auto plain = [](const CommandState& s) { return hasProfile(s) || !isHem(s); };
+  const auto measured = [](const CommandState& s) { return !hasProfile(s) && !isHem(s) && !isCornerJoint(s); };
+  const auto noCorner = [](const CommandState& s) { return !hasProfile(s) && !isCornerJoint(s); };
+  const auto cornerShown = [](const CommandState& s) { return !hasProfile(s) && !isHem(s); };
+  const auto hemShown = [](const CommandState& s) { return !hasProfile(s) && isHem(s); };
+  const auto doubleHem = [](const CommandState& s) {
+    return !hasProfile(s) && s.choice(QStringLiteral("hem")) == QStringLiteral("double");
+  };
+  const auto offsets = [](const CommandState& s) {
+    return !hasProfile(s) && s.choice(QStringLiteral("width_type")) == QStringLiteral("offsets");
+  };
+  const auto middle = [](const CommandState& s) {
+    return !hasProfile(s) && s.choice(QStringLiteral("width_type")) == QStringLiteral("middle");
+  };
   const auto ownRoot = [](const CommandState& s) {
-    return s.choice(QStringLiteral("width_type")) == QStringLiteral("middle") && s.checked(QStringLiteral("custom_root"));
+    return !hasProfile(s) && s.choice(QStringLiteral("width_type")) == QStringLiteral("middle") &&
+           s.checked(QStringLiteral("custom_root"));
   };
   def.inputs = {
       selectionInput(QStringLiteral("edge"), QObject::tr("Edge"), SelectKind::Edge | SelectKind::Face, 1, 1)
@@ -510,7 +541,8 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
       flipInput(QStringLiteral("flip"), QObject::tr("Flip")),
       valueInput(QStringLiteral("length"), QObject::tr("Length"), ValueKind::Length, QStringLiteral("10 mm"))
           .withStepMinimum(0.0)
-          .withTooltip(QObject::tr("0 with no hem: the bend alone, without a wall (a rolled hem)")),
+          .withTooltip(QObject::tr("0 with no hem: the bend alone, without a wall (a rolled hem)"))
+          .withVisible(rectangular),
       choiceInput(QStringLiteral("length_mode"), QObject::tr("Measured"), kLengthModes, QStringLiteral("tangent"))
           .withTooltip(QObject::tr("Where the length is measured from: tangent line, virtual sharp or outer surface"))
           .withVisible(measured),
@@ -518,7 +550,7 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("Where the edge ends up: bend line, a virtual sharp, bend start or outer surface")),
       choiceInput(QStringLiteral("corner"), QObject::tr("Corner"), kFlangeCorners, QStringLiteral("none"))
           .withTooltip(QObject::tr("Closing joint on another wall; Half Open laps half the thickness with a 0.00001 mm seam"))
-          .withVisible(plain),
+          .withVisible(cornerShown),
       choiceInput(QStringLiteral("hem"), QObject::tr("Hem"), kHemForms, QStringLiteral("none"))
           .withTooltip(QObject::tr("A hem whose bends follow from its gap and length; Flip turns it to the other side"))
           .withVisible(noCorner),
@@ -532,7 +564,8 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
           .withVisible(doubleHem),
       choiceInput(QStringLiteral("width_type"), QObject::tr("Width"), kFlangeWidths, QStringLiteral("whole"))
           .withTooltip(QObject::tr("How much of the edge the flange covers; from the middle it may pass the "
-                                   "edge's ends")),
+                                   "edge's ends"))
+          .withVisible(rectangular),
       valueInput(QStringLiteral("start"), QObject::tr("Start Offset"), ValueKind::Length, QStringLiteral("0 mm")).withStepMinimum(0.0)
           .withVisible(offsets),
       valueInput(QStringLiteral("end"), QObject::tr("End Offset"), ValueKind::Length, QStringLiteral("0 mm")).withStepMinimum(0.0)
@@ -550,6 +583,11 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
           .withStepMinimum(0.0)
           .withTooltip(QObject::tr("How far the wall past the edge's ends is cut back; 0: from the bend's end"))
           .withVisible(ownRoot),
+      // The profile sketch (mitcad#1648): its uid, set by Edit Profile.
+      textInput(QStringLiteral("profile"), QObject::tr("Profile")).withVisible([](const CommandState&) {
+        return false;
+      }),
+      noteInput(QStringLiteral("profile_note"), flangeProfileNote, nullptr, QObject::tr("Profile")),
   };
   def.inputs += overrideInputs(true);
   def.enabled = [&context] { return hasSheets(context); };
@@ -564,13 +602,16 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
     if (!boundary.isObject() || !pick.value(QStringLiteral("straight")).toBool()) {
       return Built::failure(QObject::tr("Select a straight edge of a flat face of the sheet."), QStringLiteral("edge"));
     }
-    const bool hem = isHem(state);
+    // A profile sketch draws the wall (mitcad#1648): no hem, corner joint
+    // or width then.
+    const bool profiled = hasProfile(state);
+    const bool hem = !profiled && isHem(state);
     // A hem's length is measured from the plane touching its first bend's
     // outer surface, and its angle gives only its side (commands.md, "Hem
     // forms of a flange").
     // A corner joint's length is the closed section's inside dimension
     // (commands.md, "Corner joints of a closing flange").
-    const bool corner = !hem && isCornerJoint(state);
+    const bool corner = !profiled && !hem && isCornerJoint(state);
     const QString mode = hem      ? QStringLiteral("outer_tangent")
                          : corner ? QStringLiteral("inner")
                                   : state.choice(QStringLiteral("length_mode"));
@@ -593,7 +634,10 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
     if (corner) {
       result.def.insert(QStringLiteral("corner"), state.choice(QStringLiteral("corner")));
     }
-    const QString widthType = state.choice(QStringLiteral("width_type"));
+    if (profiled) {
+      result.def.insert(QStringLiteral("profile"), state.text(QStringLiteral("profile")));
+    }
+    const QString widthType = profiled ? QStringLiteral("whole") : state.choice(QStringLiteral("width_type"));
     if (widthType == QStringLiteral("offsets")) {
       result.def.insert(QStringLiteral("offsets"),
                         QJsonObject{{QStringLiteral("start"), state.expression(QStringLiteral("start"))},
@@ -640,10 +684,48 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
         loadValue(state, QStringLiteral("root"), width.value(QStringLiteral("root")), feature, model);
       }
     }
+    state.setText(QStringLiteral("profile"), feature.value(QStringLiteral("profile")).toString());
     loadOverrides(feature, state, model);
   };
+  // Edit Profile (mitcad#1648): the profile sketch made on the wall from
+  // the flange as the panel defines it (or the one it has, moved back onto
+  // the wall), opened without leaving the command; Remove Profile makes
+  // the wall a rectangle again (the sketch stays in the timeline).
+  for (InputDef& input : def.inputs) {
+    if (input.id != QStringLiteral("profile_note")) {
+      continue;
+    }
+    input.onNoteAction = [build = def.build](int action, const CommandState& state, const CommandContext& model) {
+      auto* host = const_cast<DocumentHost*>(dynamic_cast<const DocumentHost*>(&model));
+      if (host == nullptr) {
+        return;
+      }
+      if (action == 1) {
+        if (!host->chooseInCommand(QStringLiteral("sheet.flange"), QStringLiteral("profile"), QString())) {
+          qInfo().noquote() << QStringLiteral("Flange: the profile was not removed");
+        }
+        return;
+      }
+      const Built built = build(state, model);
+      if (!built.error.isEmpty() || built.def.isEmpty()) {
+        host->showStatus(built.error.isEmpty() ? QObject::tr("Select the edge of the flange first.") : built.error,
+                         NoticeLevel::Hint);
+        qInfo().noquote() << QStringLiteral("Flange: Edit Profile needs the flange: %1").arg(built.error);
+        return;
+      }
+      const QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("sheet_flange_profile")},
+                                {QStringLiteral("def"), built.def}};
+      if (!host->editSketchInCommand(QStringLiteral("sheet.flange"), QStringLiteral("profile"), command)) {
+        qInfo().noquote() << QStringLiteral("Flange: the profile sketch was not opened");
+      }
+    };
+  }
   def.describe = [](const CommandState& state, const CommandContext&) {
     const QString flipped = state.checked(QStringLiteral("flip")) ? QStringLiteral(" flipped") : QString();
+    if (hasProfile(state)) {
+      return QStringLiteral("Added flange with the profile %1, angle %2%3")
+          .arg(state.text(QStringLiteral("profile")), text(state, "angle"), flipped);
+    }
     if (isHem(state)) {
       const QString form = state.choice(QStringLiteral("hem"));
       const QString setback = form == QStringLiteral("double")

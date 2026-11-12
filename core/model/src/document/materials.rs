@@ -995,7 +995,11 @@ impl<K: Kernel> Document<K> {
                 m.id
             )));
         }
-        if self.state.material_name_taken(&m.name, &m.id, own) {
+        // A material keeps the name it has (mitcad#1706): a design's own
+        // `Wood - Oak`, made from the dataset before the built-in one of
+        // that name came, still changes.
+        let kept = own.is_some_and(|i| self.state.materials[i].name == m.name);
+        if !kept && self.state.material_name_taken(&m.name, &m.id, own) {
             return Err(invalid(format!("a material is named {}", m.name)));
         }
         Ok(())

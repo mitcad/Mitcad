@@ -250,9 +250,8 @@ ui_start_app --open "$FILE"
 ui_step "top view (search)"              ui_command "Top View"
 ui_step "fit (F6)"                       ui_key F6
 ui_expect_log "Body F2.b0 in O1 at " "frame's block shown"
-ui_mark
-ui_step "activate crank (radio)"         ui_click_logged "Browser radio Root/crank:1"
-ui_expect_new "Activated crank" "crank is active"
+# Saved with crank active, it opens so (mitcad#1678).
+ui_expect_log "Opened with C2 active, as saved (unmodified)" "crank is active"
 ui_mark
 ui_step "extrude (E)"                    ui_key e
 ui_expect_new "Extrude Profiles: 1 profile [profile $R of F3" "crank's rectangle taken"
@@ -320,7 +319,8 @@ cat > "$WORK/crank-twice.json" << EOF
   {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F3", "region": "$R"}],
     "extent": {"type": "to_object", "object": {"type": "face", "body": "F2.b0", "face": "F2:end($R)"}},
     "object_links": {"F2.b0": {"source": "O1", "target": "O3"}}, "operation": "new_body"}},
-  {"expect": {"feature": "Extrude2", "status": "ok", "volume": 3500, "tolerance": 1e-6}}
+  {"expect": {"feature": "Extrude2", "status": "ok", "volume": 3500, "tolerance": 1e-6}},
+  {"cmd": "activate_component", "component": "Root"}
 ]
 EOF
 "$CLI" run "$WORK/crank-twice.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
@@ -368,9 +368,8 @@ EOF
 ui_start_app --open "$FILE"
 ui_step "top view (search)"              ui_command "Top View"
 ui_step "fit (F6)"                       ui_key F6
-ui_mark
-ui_step "activate crank (radio)"         ui_click_logged "Browser radio Root/crank:1"
-ui_expect_new "Activated crank" "crank is active"
+# Saved with crank active, it opens so (mitcad#1678).
+ui_expect_log "Opened with C2 active, as saved (unmodified)" "crank is active"
 ui_mark
 ui_step "extrude (E)"                    ui_key e
 ui_expect_new "Extrude Profiles: 1 profile [profile $R of F2" "crank's rectangle taken"

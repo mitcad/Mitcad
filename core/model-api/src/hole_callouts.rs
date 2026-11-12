@@ -210,7 +210,9 @@ impl<K: Kernel> HoleCalloutsLocal<K> for Document<K> {
             countersink: None,
         };
         match &def.kind {
-            HoleKind::Simple => {}
+            // A nut pocket (mitcad#1518) is not round: the callout gives
+            // the bore, the pocket is dimensioned across its flats.
+            HoleKind::Simple | HoleKind::NutPocket { .. } => {}
             HoleKind::Counterbore { diameter, depth }
             | HoleKind::Counterdrill {
                 diameter, depth, ..

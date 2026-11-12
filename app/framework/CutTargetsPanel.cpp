@@ -339,8 +339,20 @@ void CutTargetsPanel::rebuild() {
   m_all->setEnabled(m_current);
   m_none->setEnabled(m_current);
   const int selected = m_report.value(QStringLiteral("selected_components")).toInt();
+  const int selectedBodies = m_report.value(QStringLiteral("selected_bodies")).toInt();
+  // One whole sentence per count (mitcad#1675): English has no catalogue, so
+  // a %n text would read "1 component(s)"; each sentence is translated.
+  const QString selection = selected == 1
+      ? (selectedBodies == 1 ? tr("1 component selected (1 body)")
+                             : tr("1 component selected (%1 bodies)").arg(selectedBodies))
+      : (selectedBodies == 1 ? tr("%1 components selected (1 body)").arg(selected)
+                             : tr("%1 components selected (%2 bodies)").arg(selected).arg(selectedBodies));
   m_status->setText(!m_current ? tr("Update the inputs to preview affected components.")
-      : selected > 0 ? tr("%1 components selected (%2 bodies)").arg(selected).arg(m_report.value(QStringLiteral("selected_bodies")).toInt())
+      : selected > 0 ? selection
+      // A cut drawn away from the body (mitcad#1676): the model found that
+      // the other direction would cut.
+      : m_report.value(QStringLiteral("flip_would_cut")).toBool()
+          ? tr("No eligible components intersect the cut. Try Flip: the other direction cuts a component.")
       : rows.isEmpty() ? tr("No eligible components intersect the cut.") : tr("No components selected."));
   m_refreshing = false;
   // Where each row is in the window once laid out, for UI tests: "Cut

@@ -9,8 +9,10 @@
 //     body shows the move cursor and a hint; a drag on a body that does
 //     not drag says why in the status bar (mitcad#150, dragAnswer).
 //   - Animate Joint: a joint's free motion shown through its range, frame
-//     by frame, each the preview of the joint driven there (the preview's
-//     `placements`); the document stays as it is.
+//     by frame on the clock, each frame's placements the joint solver's
+//     (`joint_poses`, mitcad#1701: the shown bodies moved, nothing
+//     recomputed), or with contact sets the preview of the joint driven
+//     there (the preview's `placements`); the document stays as it is.
 #include "MainWindow.hpp"
 
 #include <algorithm>
@@ -460,10 +462,39 @@ void MainWindow::animateJoint(const QString& uid) {
   }
   animation.bodies = m_viewer->shownBodies();
   animation.start = start;
-  qDebug().noquote() << QStringLiteral("Animating %1 %2: %3 frames from %4 to %5")
+  // Every frame's placements at once, from the joint solver as a drag
+  // (mitcad#1701): nothing recomputed or meshed per frame. Where only a
+  // recompute shows the motion (contact sets), each frame is a preview.
+  QString previewsWhy;
+  try {
+    QJsonArray values;
+    for (const double value : animation.frames) {
+      values.append(value);
+    }
+    const QJsonArray frames = queryObject({{QStringLiteral("query"), QStringLiteral("joint_poses")},
+                                           {QStringLiteral("joint"), uid},
+                                           {QStringLiteral("motion"), motion},
+                                           {QStringLiteral("values"), values}})
+                                  .value(QStringLiteral("frames"))
+                                  .toArray();
+    if (frames.size() == animation.frames.size()) {
+      for (const QJsonValue& frame : frames) {
+        animation.poses.append(frame.toObject().value(QStringLiteral("placements")).toArray());
+      }
+    } else {
+      previewsWhy = QStringLiteral("%1 frames answered").arg(frames.size());
+    }
+  } catch (const std::exception& e) {
+    previewsWhy = errorText(e);
+  }
+  qDebug().noquote() << QStringLiteral("Animating %1 %2: %3 frames from %4 to %5 in %6 ms, %7")
                             .arg(animation.name, motion)
                             .arg(animation.frames.size())
-                            .arg(motionValue(motion, start), motionValue(motion, animation.frames.last()));
+                            .arg(motionValue(motion, start), motionValue(motion, animation.frames.last()))
+                            .arg(animation.frames.size() * kFrameMs)
+                            .arg(previewsWhy.isEmpty() ? QStringLiteral("frames by the joint solver")
+                                                       : QStringLiteral("frames as previews: %1").arg(previewsWhy));
+  animation.clock.start();
   m_animation = std::move(animation);
   TestSync::singleShot(kFrameMs, this, [this] { animationFrame(); });
 }
@@ -476,30 +507,51 @@ void MainWindow::animationFrame() {
     stopAnimation(tr("the design is busy"));
     return;
   }
-  // The joint driven to the frame's value from the frame before, previewed:
-  // a contact set stops it where the bodies touch (mitcad#454).
-  const double from = m_animation->next == 0 ? m_animation->start : m_animation->frames.at(m_animation->next - 1);
+  // Frame i is due kFrameMs after frame i - 1, the first kFrameMs after the
+  // start (mitcad#1701): the one due now is shown, those behind it skipped,
+  // so the animation takes its time on any machine.
+  const int count = static_cast<int>(m_animation->frames.size());
+  const qint64 elapsed = m_animation->clock.elapsed();
+  const int due = static_cast<int>(std::min<qint64>(count - 1, elapsed / kFrameMs - 1));
+  if (due < m_animation->next) {
+    const qint64 wait = static_cast<qint64>(m_animation->next + 1) * kFrameMs - elapsed;
+    TestSync::singleShot(static_cast<int>(std::max<qint64>(1, wait)), this, [this] { animationFrame(); });
+    return;
+  }
+  const int index = due;
   QJsonObject report;
-  try {
-    report = modelPreview(
-        compactJson({{QStringLiteral("cmd"), QStringLiteral("drive_joint")},
-                     {QStringLiteral("joint"), m_animation->uid},
-                     {QStringLiteral("values"),
-                      QJsonObject{{m_animation->motion, m_animation->frames.at(m_animation->next)}}},
-                     {QStringLiteral("from"), QJsonObject{{m_animation->motion, from}}}}),
-        tr("Animate %1").arg(m_animation->name));
-  } catch (const std::exception& e) {
-    stopAnimation(errorText(e));
-    return;
-  }
-  if (!m_animation) {
-    return; // stopped while the preview computed
-  }
-  if (report.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
-    stopAnimation(userText(report.value(QStringLiteral("error")).toString()));
-    return;
+  if (!m_animation->poses.isEmpty()) {
+    // The joint solver's placements, worked out when it began: the shown
+    // meshes moved, nothing computed.
+    report.insert(QStringLiteral("placements"), m_animation->poses.at(index));
+  } else {
+    // The joint driven to the frame's value from the frame shown before,
+    // previewed: a contact set stops it where the bodies touch (mitcad#454).
+    const double from = m_animation->last < 0 ? m_animation->start : m_animation->frames.at(m_animation->last);
+    try {
+      report = modelPreview(compactJson({{QStringLiteral("cmd"), QStringLiteral("drive_joint")},
+                                         {QStringLiteral("joint"), m_animation->uid},
+                                         {QStringLiteral("values"),
+                                          QJsonObject{{m_animation->motion, m_animation->frames.at(index)}}},
+                                         {QStringLiteral("from"), QJsonObject{{m_animation->motion, from}}}}),
+                            tr("Animate %1").arg(m_animation->name));
+    } catch (const std::exception& e) {
+      stopAnimation(errorText(e));
+      return;
+    }
+    if (!m_animation) {
+      return; // stopped while the preview computed
+    }
+    ++m_animation->previews;
+    if (report.value(QStringLiteral("status")).toString() != QStringLiteral("ok")) {
+      stopAnimation(userText(report.value(QStringLiteral("error")).toString()));
+      return;
+    }
   }
   showPreviewPlacements(report, m_animation->bodies);
+  ++m_animation->shown;
+  m_animation->last = index;
+  m_animation->next = index + 1;
   const QJsonObject contact = report.value(QStringLiteral("contact")).toObject();
   if (!contact.isEmpty()) {
     // Shown where it touches; the animation ends there.
@@ -527,8 +579,10 @@ void MainWindow::animationFrame() {
     });
     return;
   }
-  if (++m_animation->next < m_animation->frames.size()) {
-    TestSync::singleShot(kFrameMs, this, [this] { animationFrame(); });
+  if (m_animation->next < count) {
+    // The next frame when its time comes.
+    const qint64 wait = static_cast<qint64>(m_animation->next + 1) * kFrameMs - m_animation->clock.elapsed();
+    TestSync::singleShot(static_cast<int>(std::max<qint64>(1, wait)), this, [this] { animationFrame(); });
   } else {
     stopAnimation(QString());
   }
@@ -539,7 +593,15 @@ void MainWindow::stopAnimation(const QString& why) {
     return;
   }
   const QString name = m_animation->name;
-  const int shown = m_animation->next;
+  // Each animation's frames and time (mitcad#1701): the frames it has, how
+  // long it took against the time it is meant to take, the frames shown
+  // (those behind the clock skipped) and those computed as previews.
+  const QString done = QStringLiteral("%1 frames in %2 ms (intended %3 ms): %4 shown, %5 previews")
+                           .arg(m_animation->frames.size())
+                           .arg(m_animation->clock.elapsed())
+                           .arg(m_animation->frames.size() * kFrameMs)
+                           .arg(m_animation->shown)
+                           .arg(m_animation->previews);
   m_animation.reset();
   if (!modelBusy()) {
     clearModelPreview();
@@ -547,8 +609,8 @@ void MainWindow::stopAnimation(const QString& why) {
       m_viewer->setBodies(modelBodies()); // the design as it is
     }
   }
-  qDebug().noquote() << (why.isEmpty() ? QStringLiteral("Animated %1: %2 frames").arg(name).arg(shown)
-                                       : QStringLiteral("Animation of %1 stopped: %2").arg(name, why));
+  qDebug().noquote() << (why.isEmpty() ? QStringLiteral("Animated %1: %2").arg(name, done)
+                                       : QStringLiteral("Animation of %1 stopped: %2 (%3)").arg(name, why, done));
 }
 
 } // namespace mitcad

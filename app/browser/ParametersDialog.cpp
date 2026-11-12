@@ -402,7 +402,7 @@ ParametersDialog::ParametersDialog(DocumentHost& host, QWidget* parent)
   layout->setContentsMargins(0, 6, 0, 0);
 
   auto* top = new QHBoxLayout;
-  m_add = new QPushButton(themeIcon(QStringLiteral("add")), tr("User Parameter"));
+  m_add = new QPushButton(themeIcon(QStringLiteral("add")), tr("Add User Parameter…"));
   m_add->setToolTip(tr("Add a user parameter"));
   m_delete = new QPushButton(themeIcon(QStringLiteral("delete")), tr("Delete"));
   m_delete->setToolTip(tr("Delete the selected user parameter (when nothing uses it)"));

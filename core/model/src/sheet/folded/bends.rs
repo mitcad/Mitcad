@@ -767,6 +767,299 @@ fn flange_span(d: &SheetFlangeDef<f64>, edge: f64) -> Result<(f64, f64), String>
     Ok((clean(start), clean(end)))
 }
 
+/// A flange's wall drawn by its profile sketch (mitcad#1648), read in the
+/// sketch's own coordinates ([`flange_profile_frame`]): `x` along the bend
+/// line from the middle of the boundary (against the boundary's canonical
+/// axial direction), `y` along the wall from its root.
+struct ProfileWall {
+    /// The distances the bend leaves free at the boundary's start and end
+    /// (as [`flange_span`] gives them; never negative).
+    start: f64,
+    end: f64,
+    /// How far the wall passes the boundary's start and end beside the bend.
+    overhang: (f64, f64),
+    /// The wall's length: how far its outline reaches from the bend.
+    length: f64,
+    /// Half the boundary's length: the sketch's origin along it.
+    half: f64,
+    /// The outline in the sketch's coordinates, its side on the bend line
+    /// the feature's generated curve 53 (the bend's moving port, as the
+    /// rectangular wall's root), its other curves the sketch's own.
+    region: SheetRegion,
+}
+
+impl ProfileWall {
+    /// The wall in its chart, whose `x` runs along the wall from its root
+    /// and whose `y` starts `start` along the boundary.
+    fn chart(&self, start: f64) -> Result<MaterialRegion, String> {
+        let region = MaterialRegion::from_legacy(&self.region)?;
+        // Sketch (x, y) is chart (y, half - start - x): a quarter turn.
+        let map = Isometry2 {
+            origin: [0.0, self.half - start],
+            x_axis: [0.0, -1.0],
+            y_axis: [1.0, 0.0],
+        };
+        mapped_regions(&[region], map)
+            .pop()
+            .ok_or_else(|| "The flange's profile has no outline.".to_owned())
+    }
+}
+
+/// The wall a flange's profile sketch draws (mitcad#1648): the one closed
+/// region of the sketch with a straight side on the bend line (the
+/// sketch's `x` axis) and its material above it. That side is the bend's
+/// span, within the boundary; the rest of the outline may slant, curve or
+/// pass the boundary's ends beside the bend. A region on both sides of the
+/// bend line, none or more than one on it, or a side on the line past the
+/// boundary's ends is refused in words.
+fn profile_wall<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    d: &SheetFlangeDef<f64>,
+    sketch: FeatureUid,
+    edge: f64,
+) -> Result<ProfileWall, String> {
+    if d.offsets.is_some() || d.width.is_some() || d.hem.is_some() || d.corner.is_some() {
+        return Err(
+            "A flange with a profile makes one bend and the wall its profile draws; it takes no \
+             offsets, width, hem or corner joint."
+                .into(),
+        );
+    }
+    let output = ctx.sketch(sketch)?;
+    let on_line = |g: &SegmentGeometry| match g {
+        SegmentGeometry::Line { start, end } => {
+            start[1].abs() <= TOLERANCE
+                && end[1].abs() <= TOLERANCE
+                && (end[0] - start[0]).abs() > TOLERANCE
+        }
+        _ => false,
+    };
+    let mut resting = Vec::new();
+    for region in &output.regions {
+        let (min, max) = region.bounds();
+        if min[1] < -TOLERANCE && max[1] > TOLERANCE {
+            return Err(
+                "The flange's profile crosses the bend line; the wall's outline must stay on the \
+                 wall's side of it."
+                    .into(),
+            );
+        }
+        let on = region
+            .loops
+            .first()
+            .is_some_and(|l| l.segments.iter().any(|s| on_line(&s.geometry)));
+        if on && max[1] > TOLERANCE {
+            resting.push(region);
+        }
+    }
+    let region = match resting.as_slice() {
+        [] => {
+            return Err(
+                "The flange's profile sketch has no closed outline with a side on the bend line."
+                    .into(),
+            );
+        }
+        [one] => *one,
+        _ => {
+            return Err(
+                "More than one outline of the flange's profile sketch rests on the bend line; the \
+                 wall is one closed outline."
+                    .into(),
+            );
+        }
+    };
+    let outer = &region.loops[0];
+    // The side on the bend line: one stretch, however many curves draw it.
+    let mut stretches: Vec<[f64; 2]> = outer
+        .segments
+        .iter()
+        .filter_map(|s| match &s.geometry {
+            SegmentGeometry::Line { start, end } if on_line(&s.geometry) => {
+                Some([start[0].min(end[0]), start[0].max(end[0])])
+            }
+            _ => None,
+        })
+        .collect();
+    stretches.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    let mut merged: Vec<[f64; 2]> = Vec::new();
+    for stretch in stretches {
+        let joins = merged
+            .last()
+            .is_some_and(|last| stretch[0] <= last[1] + TOLERANCE);
+        if joins {
+            let last = merged.last_mut().expect("a stretch before");
+            last[1] = last[1].max(stretch[1]);
+        } else {
+            merged.push(stretch);
+        }
+    }
+    let [[x0, x1]] = merged.as_slice() else {
+        return Err(
+            "The flange's profile meets the bend line in more than one place; its side on the \
+             bend line is one straight line."
+                .into(),
+        );
+    };
+    let (x0, x1) = (*x0, *x1);
+    let half = edge / 2.0;
+    // Along the boundary from its start: s = half - x.
+    let clean = |v: f64| if v.abs() <= TOLERANCE { 0.0 } else { v };
+    let (start, end) = (clean(half - x1), clean(half + x0));
+    if start < 0.0 || end < 0.0 {
+        return Err(
+            "The flange's profile runs along the bend line past the ends of its edge; the bend \
+             covers only the edge, and only the wall above it may pass the edge's ends."
+                .into(),
+        );
+    }
+    let (min, max) = region.bounds();
+    let overhang = (
+        clean((max[0] - half).max(0.0)),
+        clean((-min[0] - half).max(0.0)),
+    );
+    let uid = ctx.uid;
+    let mut loops = Vec::with_capacity(region.loops.len());
+    for (index, profile_loop) in region.loops.iter().enumerate() {
+        let mut segments = Vec::with_capacity(profile_loop.segments.len());
+        let mut root = false;
+        for s in &profile_loop.segments {
+            if index == 0 && on_line(&s.geometry) {
+                // The curves on the bend line make one root edge, where the
+                // first of them is in the loop.
+                if !root {
+                    segments.push(SheetSegment {
+                        id: SheetCurveId::Generated {
+                            feature: uid,
+                            slot: 53,
+                        },
+                        geometry: SegmentGeometry::Line {
+                            start: [x0, 0.0],
+                            end: [x1, 0.0],
+                        },
+                    });
+                    root = true;
+                }
+                continue;
+            }
+            segments.push(SheetSegment {
+                id: SheetCurveId::Sketch {
+                    sketch,
+                    segment: s.key.clone(),
+                },
+                geometry: s.geometry.clone(),
+            });
+        }
+        loops.push(SheetLoop { segments });
+    }
+    Ok(ProfileWall {
+        start,
+        end,
+        overhang,
+        length: max[1],
+        half,
+        region: SheetRegion { loops },
+    })
+}
+
+/// The frame of a flange's profile sketch (mitcad#1648), and the length of
+/// its boundary: on the wall's front surface where the flange's angle,
+/// radius and position put it, the origin on the wall's root line (the
+/// bend's moving tangent line) at the middle of the boundary, `x` along
+/// that line against the boundary's canonical axial direction and `y`
+/// along the wall away from the bend. The normal is the wall's chart
+/// normal, so the sketch's coordinates map to the wall's chart by a
+/// quarter turn ([`ProfileWall::chart`]).
+pub(crate) fn flange_profile_frame(
+    state: &SheetState,
+    rules: &SheetRulesDef<f64>,
+    d: &SheetFlangeDef<f64>,
+) -> Result<(SketchFrame, f64), String> {
+    let frame = port_frame(state, &d.boundary)?;
+    let metrics = BendMetrics::past_half_turn(d.angle, d.radius, rules)?;
+    let tangent = metrics.offset(d.position)?;
+    let constructed = construction(&frame, tangent, 0.0, &metrics);
+    let SheetEmbedding::Plane { front_frame, .. } = constructed.moving else {
+        return Err("a flange's wall is not planar".into());
+    };
+    Ok((
+        SketchFrame {
+            origin: add(front_frame.origin, scale(frame.e, frame.width / 2.0)),
+            x_axis: scale(frame.e, -1.0),
+            y_axis: front_frame.x_axis,
+        },
+        frame.width,
+    ))
+}
+
+/// Where a new profile sketch of a flange goes and the rectangle it starts
+/// with (mitcad#1648): the frame of [`flange_profile_frame`], and the
+/// corners of the wall the flange's length and width make now, in the
+/// sketch's coordinates (`min` on the bend line). Overhangs past the
+/// edge's ends are left to the sketch; a flange without a wall (a length
+/// of 0) starts with a wall 10 mm long.
+pub(crate) struct FlangeProfileLayout {
+    pub(crate) frame: SketchFrame,
+    pub(crate) min: [f64; 2],
+    pub(crate) max: [f64; 2],
+}
+
+pub(crate) fn flange_profile_layout(
+    state: &SheetState,
+    rules: &SheetRulesDef<f64>,
+    d: &SheetFlangeDef<f64>,
+) -> Result<FlangeProfileLayout, String> {
+    let (frame, edge) = flange_profile_frame(state, rules, d)?;
+    let half = edge / 2.0;
+    let (lo, hi) = if d.offsets.is_none() && d.width.is_none() {
+        (0.0, 0.0)
+    } else {
+        flange_span(d, edge)?
+    };
+    let (start, end) = (lo.max(0.0), hi.max(0.0));
+    let wall = flange_steps(d, rules)
+        .ok()
+        .and_then(|steps| steps.first().map(|s| s.wall))
+        .filter(|w| *w > TOLERANCE)
+        .unwrap_or(10.0);
+    Ok(FlangeProfileLayout {
+        frame,
+        min: [end - half, 0.0],
+        max: [half - start, wall],
+    })
+}
+
+/// Warns when a flange's profile sketch no longer lies on the wall
+/// (mitcad#1648): its plane was placed for an earlier angle, radius or
+/// position, or moved. The wall still follows the profile's outline; the
+/// Flange panel's Edit Profile puts the sketch back on the wall.
+pub(crate) fn warn_moved_profile<K: Kernel>(
+    d: &SheetFlangeDef<f64>,
+    ctx: &mut EvalContext<'_, K>,
+) -> Result<(), String> {
+    let Some(sketch) = d.profile else {
+        return Ok(());
+    };
+    // What the flange cannot read it says itself.
+    let Ok((state, rules)) = read(ctx, d.body) else {
+        return Ok(());
+    };
+    let Ok((expected, _)) = flange_profile_frame(&state, &rules, d) else {
+        return Ok(());
+    };
+    let actual = ctx.sketch(sketch)?.frame;
+    let on_wall = distance(actual.origin, expected.origin) <= 1e-6
+        && distance(actual.x_axis, expected.x_axis) <= 1e-7
+        && distance(actual.y_axis, expected.y_axis) <= 1e-7;
+    if !on_wall {
+        ctx.warn(
+            "The flange's profile sketch no longer lies on its wall; Edit Profile in the Flange \
+             panel puts it back there."
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
 /// A flange's wall in its own chart: `length` along the wall from its
 /// tangent line, the bend's axial width `width`, and the overhangs past
 /// the boundary's start and end, each cut back at the root by `root`. The
@@ -992,15 +1285,37 @@ pub(crate) fn flange<K: Kernel>(
 ) -> Result<FeatureOutput<K::Shape>, String> {
     let (mut state, rules) = read(ctx, d.body)?;
     free(&state, &d.boundary)?;
-    let steps = flange_steps(d, &rules)?;
+    let frame = port_frame(&state, &d.boundary)?;
+    // A wall drawn by a profile sketch (mitcad#1648): one bend, its span
+    // and overhangs where the profile's outline puts them.
+    let profile = d
+        .profile
+        .map(|sketch| profile_wall(ctx, d, sketch, frame.width))
+        .transpose()?;
+    let steps = match &profile {
+        Some(wall) => {
+            let metrics = BendMetrics::past_half_turn(d.angle, d.radius, &rules)?;
+            vec![FlangeStep {
+                angle: metrics.angle,
+                radius: metrics.radius,
+                wall: wall.length,
+            }]
+        }
+        None => flange_steps(d, &rules)?,
+    };
     let first = steps[0];
     let mut metrics = BendMetrics::past_half_turn(first.angle, Some(first.radius), &rules)?;
-    let frame = port_frame(&state, &d.boundary)?;
     // The bend covers the boundary between the flange's ends; a wall wider
     // than the boundary overhangs past them (mitcad#242).
-    let (lo, hi) = flange_span(d, frame.width)?;
+    let (lo, hi) = match &profile {
+        Some(wall) => (wall.start, wall.end),
+        None => flange_span(d, frame.width)?,
+    };
     let (start, end) = (lo.max(0.0), hi.max(0.0));
-    let overhang = (-lo.min(0.0), -hi.min(0.0));
+    let overhang = match &profile {
+        Some(wall) => wall.overhang,
+        None => (-lo.min(0.0), -hi.min(0.0)),
+    };
     if (overhang.0 > 0.0 || overhang.1 > 0.0) && (steps.len() > 1 || first.wall <= 0.0) {
         return Err(
             "a sheet flange's width passes its boundary only with one bend and a wall".into(),
@@ -1012,9 +1327,11 @@ pub(crate) fn flange<K: Kernel>(
     // (mitcad#1576): the cut takes the material beside the bend's end where
     // the side meets the boundary at more than 90 degrees, and the bend and
     // its wall span the panel's new boundary along the line.
+    // (A profile's side on the bend line is the bend's whole span: its
+    // ends stay where the profile puts them.)
     let whole = (
-        start <= TOLERANCE && overhang.0 <= 0.0,
-        end <= TOLERANCE && overhang.1 <= 0.0,
+        profile.is_none() && start <= TOLERANCE && overhang.0 <= 0.0,
+        profile.is_none() && end <= TOLERANCE && overhang.1 <= 0.0,
     );
     let reach = if d.position == SheetPosition::Edge {
         (0.0, 0.0)
@@ -1115,10 +1432,10 @@ pub(crate) fn flange<K: Kernel>(
             )?;
             continue;
         }
-        let region = if k == 0 {
-            wall_region(ctx.uid, step.wall, width, overhang, root)?
-        } else {
-            rectangle(ctx.uid, 50 + 100 * slot, [0.0, 0.0], [step.wall, width])?
+        let region = match (&profile, k) {
+            (Some(wall), 0) => wall.chart(start)?,
+            (None, 0) => wall_region(ctx.uid, step.wall, width, overhang, root)?,
+            _ => rectangle(ctx.uid, 50 + 100 * slot, [0.0, 0.0], [step.wall, width])?,
         };
         let moving = SheetPatch {
             domain: SheetDomainRef::Panel(PanelId {
@@ -1133,11 +1450,17 @@ pub(crate) fn flange<K: Kernel>(
             &generated(ctx.uid, 53 + 100 * slot),
             Isometry2::IDENTITY,
         )?;
-        let far = side(
-            &moving,
-            &generated(ctx.uid, 51 + 100 * slot),
-            Isometry2::IDENTITY,
-        )?;
+        // The next bend starts at the wall's far end (a hem's); the last
+        // wall's far end is free (a profile's outline has no such curve).
+        let far = if k + 1 < steps.len() {
+            vec![side(
+                &moving,
+                &generated(ctx.uid, 51 + 100 * slot),
+                Isometry2::IDENTITY,
+            )?]
+        } else {
+            Vec::new()
+        };
         add_bend_strip(
             ctx,
             &mut state,
@@ -1150,7 +1473,7 @@ pub(crate) fn flange<K: Kernel>(
             slot,
         )?;
         state.charts.push(moving);
-        stationary = vec![far];
+        stationary = far;
     }
     if d.corner == Some(SheetFlangeCorner::HalfOpen) {
         half_open_seam(ctx, &mut state, rules.thickness)?;

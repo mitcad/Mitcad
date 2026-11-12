@@ -121,6 +121,41 @@ void recentListTests() {
   QSettings().remove(QStringLiteral("materials"));
 }
 
+// The Appearance tool's recent appearances (mitcad#1685): the latest
+// first, each once, at most five, kept in the settings; the picker lists
+// those it knows.
+void recentAppearanceTests() {
+  CHECK(mitcad::recentAppearances().isEmpty());
+  mitcad::rememberRecentAppearance(QStringLiteral("filament_black"));
+  mitcad::rememberRecentAppearance(QStringLiteral("paint_red"));
+  CHECK(mitcad::recentAppearances() ==
+        (QStringList{QStringLiteral("paint_red"), QStringLiteral("filament_black")}));
+  // Chosen again: first again, not twice; nothing for an empty id.
+  mitcad::rememberRecentAppearance(QStringLiteral("filament_black"));
+  mitcad::rememberRecentAppearance(QString());
+  CHECK(mitcad::recentAppearances() ==
+        (QStringList{QStringLiteral("filament_black"), QStringLiteral("paint_red")}));
+  for (int i = 0; i < 7; ++i) {
+    mitcad::rememberRecentAppearance(QStringLiteral("look%1").arg(i));
+  }
+  CHECK(mitcad::recentAppearances().size() == mitcad::kRecentAppearances);
+  CHECK(mitcad::recentAppearances().first() == QStringLiteral("look6"));
+  CHECK(mitcad::recentAppearances().last() == QStringLiteral("look2"));
+  // Kept apart from the recent materials.
+  CHECK(mitcad::recentMaterials().isEmpty());
+
+  // The picker's rows: only the appearances it lists (a design's own of
+  // another design, a deleted one: left out), in the recent order.
+  const QStringList known{QStringLiteral("chrome"), QStringLiteral("paint_red"), QStringLiteral("filament_black")};
+  const QStringList recent{QStringLiteral("filament_black"), QStringLiteral("custom1"), QStringLiteral("paint_red")};
+  CHECK(mitcad::recentAppearanceRows(known, recent) ==
+        (QStringList{QStringLiteral("filament_black"), QStringLiteral("paint_red")}));
+  CHECK(mitcad::recentAppearanceRows(known, recent, 1) == QStringList{QStringLiteral("filament_black")});
+  CHECK(mitcad::recentAppearanceRows(known, QStringList()).isEmpty());
+  QSettings().remove(QStringLiteral("appearances/recent"));
+  CHECK(mitcad::recentAppearances().isEmpty());
+}
+
 QJsonObject bodyRow(const char* appearance, bool byHand) {
   QJsonObject row{{QStringLiteral("uid"), QStringLiteral("b1")}, {QStringLiteral("name"), QStringLiteral("Body1")}};
   if (appearance != nullptr) {
@@ -182,6 +217,7 @@ int materialMenuTests() {
   QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, directory.path());
   CHECK(QSettings().fileName().startsWith(directory.path()));
   recentListTests();
+  recentAppearanceTests();
   QSettings::setDefaultFormat(format);
   QCoreApplication::setOrganizationName(organization);
   QCoreApplication::setApplicationName(application);

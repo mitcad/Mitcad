@@ -740,11 +740,9 @@ $made = & $cli run $toggleScript --save $toggle
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $toggle)) { Ui-Fail "mitcad-cli: $($made -join ' / ')" }
 Ui-StartApp 'toggle' @('--open', $toggle)
 Ui-ExpectLog "Opened $workLogged/toggle.mitcad" 'the design opened'
-# A design opens with the root active (mitcad#426): Part, which the file
-# had active, is activated here.
-Ui-Mark
-Ui-Step 'activate Part (radio)'          { Ui-ClickLogged 'Browser radio Root/Part:1' }
-Ui-ExpectNew 'Activated Part' 'Part is active'
+# A design opens with the component it was saved with active (mitcad#1678):
+# Part.
+Ui-ExpectLog 'Opened with C1 active, as saved (unmodified)' 'Part is active'
 Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
 Ui-Mark
 Ui-Step 'extrude (E)'                    { Ui-Key 'e' }

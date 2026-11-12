@@ -102,13 +102,19 @@ std::optional<DrawingChoice> askDrawing(QWidget* parent, const QString& path, in
   // Which drawing of the design it writes (mitcad#725): the one it laid out
   // last first; another of the root's drawings, written as it is (it
   // follows the model; what was made on it by hand stays); or a new one,
-  // laid out from the settings below.
+  // laid out from the settings below. With none laid out last, the design's
+  // only drawing (one made in the drawing workspace, mitcad#1680) comes
+  // first; with several, New Drawing (a guess could write the wrong one).
   auto* target = new QComboBox;
   for (const DrawingTarget& d : drawings) {
     target->addItem(d.uid == last ? QObject::tr("%1 (laid out last)").arg(d.name) : d.name, d.uid);
   }
   target->addItem(QObject::tr("New Drawing"), QString());
-  target->setCurrentIndex(last.isEmpty() || target->findData(last) < 0 ? target->count() - 1 : target->findData(last));
+  int preselected = last.isEmpty() ? -1 : target->findData(last);
+  if (preselected < 0 && drawings.size() == 1) {
+    preselected = 0;
+  }
+  target->setCurrentIndex(preselected < 0 ? target->count() - 1 : preselected);
   target->setToolTip(QObject::tr("The drawing of the design written, or a new one laid out with these settings"));
   form->addRow(QObject::tr("Dra&wing:"), target);
   auto* asItIs = new QLabel(QObject::tr("Exported as it is; change it in its own workspace."));
@@ -324,6 +330,7 @@ std::optional<DrawingChoice> askDrawing(QWidget* parent, const QString& path, in
     qDebug().noquote() << QStringLiteral("Drawing dialog: %1 %2 to %3").arg(c.format, c.sheet, choice.path);
     return choice;
   }
+  qDebug().noquote() << QStringLiteral("Drawing dialog cancelled");
   return std::nullopt;
 }
 

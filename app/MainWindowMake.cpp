@@ -762,7 +762,8 @@ void MainWindow::updateMakeCard() {
     QJsonObject materialQuery = target;
     materialQuery.insert(QStringLiteral("query"), QStringLiteral("body_material"));
     const QJsonObject material = query(materialQuery).toObject();
-    card.material = text(material, "name");
+    // Shown: a built-in one translated (mitcad#1689).
+    card.material = shownMaterialName(text(material, "id"), text(material, "name"));
     card.materialId = text(material, "id");
     card.materialLevel = text(material, "source");
     // The materials as Send to Slicer's material rows list them

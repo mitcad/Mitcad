@@ -63,7 +63,7 @@ def _run_locked(app, cli, out, gui_options):
                             ("MITCAD_CRASH_DIR", "crashes"), ("MITCAD_MCP_DISCOVERY_DIR", "discovery"),
                             ("MITCAD_LIBRARIES_DIR", "libraries")):
             env[key] = str(work / folder)
-        env.update(MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_LANGUAGE="en", MITCAD_NO_UPDATE_CHECK="1",
+        env.update(MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_NEW_DESIGN_VIEW="0", MITCAD_LANGUAGE="en", MITCAD_NO_UPDATE_CHECK="1",
                    QT_FORCE_STDERR_LOGGING="1",
                    MITCAD_TIMBER_WORK=str(work), GIT_CONFIG_NOSYSTEM="1")
         config = work / "gitconfig"

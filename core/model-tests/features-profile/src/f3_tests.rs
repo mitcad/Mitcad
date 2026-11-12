@@ -1503,3 +1503,25 @@ fn a_path_with_a_curve_twice_takes_it_once() {
         "pipe F5 path c1,c4,c7 extents 1 0 Square size 8 thickness Some(1.0)"
     );
 }
+
+#[test]
+fn a_sweep_built_in_pieces_where_it_passes_through_itself_says_so() {
+    // (mitcad#1697) The geometry builds a profile that passes through
+    // itself along the path in pieces fused into one solid and says so in
+    // the solid's information: the sweep shows it as a note, no warning.
+    let (mut b, _) = with_path();
+    b.doc
+        .kernel()
+        .infos
+        .borrow_mut()
+        .insert("sweep", mitcad_model::sweeps::FOLDS_RESOLVED.to_owned());
+    let uid = add(&mut b.doc, sweep(&["c1", "c4", "c7"], json!({}))).unwrap();
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    assert!(b.doc.warnings(uid).is_empty(), "{:?}", b.doc.warnings(uid));
+    assert_eq!(
+        b.doc.infos(uid),
+        [
+            "the swept profile passes through itself along the path; it was built in pieces joined into one solid"
+        ]
+    );
+}

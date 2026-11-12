@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-thumbnailer-capi"
+description = "The static library of MitCad's thumbnail C ABI, linked by Windows Explorer's thumbnail handler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Corrosion imports this package on Windows only (core/CMakeLists.txt) as
+# the target `mitcad_thumbnailer_capi`, which the thumbnail handler
+# mitcad-thumbnails.dll links (app/thumbnails, mitcad#1695). The functions
+# are in the rlib `mitcad-thumbnailer` (src/capi.rs), tested there.
+[lib]
+name = "mitcad_thumbnailer_capi"
+crate-type = ["staticlib"]
+test = false
+doctest = false
+
+[dependencies]
+mitcad-thumbnailer = { path = "../thumbnailer" }

@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# The file managers' thumbnailer of MitCad designs (mitcad#1539): reads the
+# preview a design file carries, without the model, Qt or OCCT, and writes
+# it as a PNG of the size asked for. The Linux AppImage carries it with its
+# freedesktop entry (packaging/linux/mitcad.thumbnailer).
+[package]
+name = "mitcad-thumbnailer"
+description = "Thumbnails of MitCad designs for file managers: the preview a design file carries"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mitcad_thumbnailer"
+
+[[bin]]
+name = "mitcad-thumbnailer"
+path = "src/main.rs"
+
+[dependencies]
+# The design file's `preview` and Base64.
+mitcad-model-base = { path = "../model-base" }
+# The PNG writer of a thumbnail smaller than the preview.
+mitcad-preview = { path = "../preview" }
+# Inflating the preview's pixels, pure Rust (as the PNG writer's).
+miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"] }
+
+[dev-dependencies]
+# A design saved with its preview, as the application's Save writes it.
+mitcad-model = { workspace = true, features = ["testing"] }
+serde_json.workspace = true

@@ -1997,11 +1997,89 @@ if(BUILD_TESTING)
   endif()
 endif()
 
+# A Flange whose wall is its profile sketch (mitcad#1648): the sketch made
+# on the wall, the same volume as the rectangular flange, and a tapered
+# profile's volume.
+if(BUILD_TESTING)
+  add_test(NAME cli.sheet_flange_profile
+    COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/sheet_flange_profile.json")
+  if(WIN32)
+    # After the shared PATH block above: Qt's DLLs for mitcad-cli.
+    set_property(TEST cli.sheet_flange_profile APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
 # The body geometry in sketch planes (mitcad#1656): two sketches'
 # plane_geometry answers, in the plane and out of it, over bodies of many
 # kinds, as the listing before mitcad#1656 gave them (enclosing boxes first,
-# edges by index: the same answers).
+# edges by index: the same answers). The spline where two cylinders cross
+# is compared by where it runs, not by the kernel's approximation, which
+# differs by platform (mitcad#1669).
 if(BUILD_TESTING)
   add_test(NAME cli.plane_geometry_bodies
     COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/plane_geometry_bodies.json")
+  if(WIN32)
+    # After the shared PATH block above: Qt's DLLs for mitcad-cli.
+    set_property(TEST cli.plane_geometry_bodies APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Occurrence placements kept rigid (mitcad#1664) on the reported jointed
+# mechanism of GitHub #253 under MITCAD_MITCAD_REPORTED (two archives,
+# unpacked into the build folder): as sent first it opens with every
+# placement a rotation and a translation; the design older builds' drift
+# made unopenable opens with six placements straightened; saved, each opens
+# again without one to straighten (skipped without the report's archives).
+if(BUILD_TESTING)
+  add_test(NAME cli.placements_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/placements-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/placements-reported-test.cmake")
+  set_tests_properties(cli.placements_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "placements reported: skipped" TIMEOUT 900)
+  if(WIN32)
+    set_property(TEST cli.placements_reported APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Automatic assembly cuts leave alone what moves against them through
+# joints (mitcad#1667), on the reported jointed mechanism of GitHub #253
+# under MITCAD_MITCAD_REPORTED (an archive, unpacked into the build folder):
+# Joint12 and Joint13 resolve and the link bodies keep their volume and
+# faces through drags (skipped without the report's archive).
+if(BUILD_TESTING)
+  add_test(NAME cli.assembly_context_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/assembly-context-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/assembly-context-reported-test.cmake")
+  set_tests_properties(cli.assembly_context_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "assembly context reported: skipped" TIMEOUT 900)
+  if(WIN32)
+    set_property(TEST cli.assembly_context_reported APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Isolate leaves the components it hides out of a sketch's body geometry
+# (mitcad#1702), on the reported design of GitHub #254 under
+# MITCAD_MITCAD_REPORTED (an archive, unpacked into the build folder): the
+# plane_geometry answer of a sketch in the isolated component lists none of
+# the other components' edges, and lists them again after Unisolate
+# (skipped without the report's archive).
+if(BUILD_TESTING)
+  add_test(NAME cli.isolated_sketch_geometry_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/isolated-sketch-geometry-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/isolated-sketch-geometry-reported-test.cmake")
+  set_tests_properties(cli.isolated_sketch_geometry_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "isolated sketch geometry reported: skipped" TIMEOUT 900)
+  if(WIN32)
+    set_property(TEST cli.isolated_sketch_geometry_reported APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
 endif()

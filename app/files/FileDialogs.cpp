@@ -14,6 +14,7 @@
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QDialogButtonBox>
+#include <QDir>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -39,6 +40,7 @@
 #include "../framework/PanelTree.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
+#include "../print/PrintKeys.hpp"
 #include "IamImport.hpp"
 
 #include "../platform/MacDialogs.hpp"
@@ -150,6 +152,40 @@ QDialogButtonBox* okCancel(QDialog& dialog) {
   return buttons;
 }
 
+// The files of a 3MF file per plate that exist already (mitcad#1679): each
+// plate's `<name> - <plate name>.3mf` beside `path`, its characters that a
+// file name cannot have on every system as `_`, as the model's export
+// (`exchange/plates.rs`) names them.
+QStringList existingPlateFiles(const QString& path, const QVector<QPair<QString, QString>>& plates) {
+  const QFileInfo info(path);
+  QStringList existing;
+  for (const auto& entry : plates) {
+    QString part;
+    for (const QChar c : entry.second.trimmed()) {
+      const bool kept = c.isLetterOrNumber() || c == QLatin1Char(' ') || c == QLatin1Char('-') ||
+                        c == QLatin1Char('_') || c == QLatin1Char('(') || c == QLatin1Char(')') ||
+                        c == QLatin1Char('.');
+      part += kept ? c : QChar(u'_');
+    }
+    while (part.startsWith(QLatin1Char('.'))) {
+      part.remove(0, 1);
+    }
+    while (part.endsWith(QLatin1Char('.'))) {
+      part.chop(1);
+    }
+    part = part.trimmed();
+    if (part.isEmpty()) {
+      part = QStringLiteral("Plate");
+    }
+    const QString file = info.dir().filePath(info.completeBaseName() + QStringLiteral(" - ") + part +
+                                             QStringLiteral(".3mf"));
+    if (QFileInfo::exists(file)) {
+      existing << QFileInfo(file).fileName();
+    }
+  }
+  return existing;
+}
+
 } // namespace
 
 QString exportTypeKey(int index) {
@@ -162,6 +198,23 @@ QString exportTypeKey(int index) {
     key += QLatin1Char('-') + QLatin1String(entry.schema);
   }
   return key;
+}
+
+QStringList exportDialects() {
+  return {QString(),
+          QStringLiteral("bambu_studio"),
+          QStringLiteral("orcaslicer"),
+          QStringLiteral("qidi_studio"),
+          QStringLiteral("prusaslicer"),
+          QStringLiteral("cura")};
+}
+
+QString exportStartPlates(bool hasPlates, const QString& dialect) {
+  if (!hasPlates) {
+    return QString();
+  }
+  // Cura has one build plate: the model refuses every plate in one file.
+  return dialect == QStringLiteral("cura") ? QStringLiteral("file_per_plate") : QStringLiteral("one_file");
 }
 
 int exportStartType(const QString& remembered, bool sketch, bool sketches) {
@@ -183,7 +236,8 @@ int exportStartType(const QString& remembered, bool sketch, bool sketches) {
 
 std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int selectedBodies,
                                       const QVector<QPair<QString, QString>>& sketches,
-                                      const QString& sketch, bool occurrences, const QString& designUnit) {
+                                      const QString& sketch, bool occurrences, const QString& designUnit,
+                                      const ExportPlates& plates) {
   // The last export's choices (mitcad#1164).
   QSettings settings;
   settings.beginGroup(QLatin1String(kExportGroup));
@@ -263,6 +317,47 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
   construction->setToolTip(
       QObject::tr("Also write the sketch's construction curves and center lines, on the layer construction"));
   form->addRow(QString(), construction);
+  // A 3MF file of the design's print plates (mitcad#1679), as Send to
+  // Slicer writes them (mitcad#1050): every plate in one file, a file per
+  // plate, one plate, or the bodies without plates.
+  const bool hasPlates = !plates.plates.isEmpty();
+  const QString startPlates = exportStartPlates(hasPlates, plates.dialect);
+  auto* plateBox = new QComboBox;
+  plateBox->setObjectName(QStringLiteral("exportPlates"));
+  plateBox->addItem(QObject::tr("The bodies, without plates"), QString());
+  plateBox->addItem(QObject::tr("All plates in one file"), QStringLiteral("one_file"));
+  plateBox->addItem(QObject::tr("A file per plate"), QStringLiteral("file_per_plate"));
+  for (const auto& [plateId, plateName] : plates.plates) {
+    plateBox->addItem(QObject::tr("Only %1").arg(plateName), QStringLiteral("plate:") + plateId);
+  }
+  plateBox->setCurrentIndex(std::max(0, plateBox->findData(startPlates)));
+  plateBox->setToolTip(QObject::tr("The design's print plates, laid out on the bed as Send to Slicer writes them"));
+  form->addRow(QObject::tr("&Plates:"), plateBox);
+  // The slicer whose print settings go with the bodies (the model's
+  // `dialect`): the design's when it has plates, else none.
+  auto* slicerBox = new QComboBox;
+  slicerBox->setObjectName(QStringLiteral("exportSlicer"));
+  for (const QString& dialect : exportDialects()) {
+    slicerBox->addItem(dialect.isEmpty() ? QObject::tr("None") : slicerTitle(dialect), dialect);
+  }
+  slicerBox->setCurrentIndex(std::max(0, slicerBox->findData(plates.dialect)));
+  slicerBox->setToolTip(QObject::tr("The slicer whose print settings go with the bodies"));
+  form->addRow(QObject::tr("S&licer:"), slicerBox);
+  // On the print bed (the model's `on_bed`); the plates always lie on it.
+  auto* onBed = new QCheckBox(QObject::tr("On the print bed"));
+  onBed->setObjectName(QStringLiteral("exportOnBed"));
+  onBed->setToolTip(QObject::tr("Each piece on its print bed face, else on the face it lies best on"));
+  form->addRow(QString(), onBed);
+  auto* centerBox = new QCheckBox(QObject::tr("Center on Plate"));
+  centerBox->setObjectName(QStringLiteral("exportCenter"));
+  centerBox->setChecked(true);
+  centerBox->setToolTip(QObject::tr("The middle of each piece over the middle of the plate"));
+  form->addRow(QString(), centerBox);
+  auto* dropBox = new QCheckBox(QObject::tr("Drop to Bed"));
+  dropBox->setObjectName(QStringLiteral("exportDrop"));
+  dropBox->setChecked(true);
+  dropBox->setToolTip(QObject::tr("The lowest point of each piece onto the bed"));
+  form->addRow(QString(), dropBox);
   auto* message = new QLabel;
   setErrorStyleSheet(message);
   layout->addWidget(message);
@@ -276,8 +371,21 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
     // A web page shows the design as the view does: every visible body
     // where the design places it.
     const bool page = format == QStringLiteral("html");
-    form->setRowVisible(bodies, format != QStringLiteral("dxf") && !page);
-    form->setRowVisible(coordinates, occurrences && format != QStringLiteral("dxf") && !page);
+    // A 3MF file of the plates prints the whole design on the bed
+    // (mitcad#1679); on the bed the bodies are where the design shows them.
+    const bool threeMf = format == QStringLiteral("3mf");
+    const bool platesChosen = threeMf && hasPlates && !plateBox->currentData().toString().isEmpty();
+    const bool bed = platesChosen || (threeMf && onBed->isChecked());
+    form->setRowVisible(bodies, format != QStringLiteral("dxf") && !page && !platesChosen);
+    form->setRowVisible(coordinates, occurrences && format != QStringLiteral("dxf") && !page && !bed);
+    form->setRowVisible(plateBox, threeMf && hasPlates);
+    form->setRowVisible(slicerBox, threeMf);
+    form->setRowVisible(onBed, threeMf && !platesChosen);
+    form->setRowVisible(centerBox, threeMf);
+    form->setRowVisible(dropBox, threeMf);
+    // Centred with a slicer too (mitcad#1596); dropped on the bed only.
+    centerBox->setEnabled(bed || !slicerBox->currentData().toString().isEmpty());
+    dropBox->setEnabled(bed);
     form->setRowVisible(unit, format == QStringLiteral("step") || format == QStringLiteral("iges"));
     form->setRowVisible(refinement, mesh);
     form->setRowVisible(stlFormat, format == QStringLiteral("stl"));
@@ -302,6 +410,16 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
       showRows();
     }
   });
+  QObject::connect(plateBox, &QComboBox::currentIndexChanged, &dialog, [=](int) { showRows(); });
+  QObject::connect(onBed, &QCheckBox::toggled, &dialog, [=](bool) { showRows(); });
+  QObject::connect(slicerBox, &QComboBox::currentIndexChanged, &dialog, [=](int) {
+    // Cura has one build plate: a file per plate instead of one file.
+    if (slicerBox->currentData().toString() == QStringLiteral("cura") &&
+        plateBox->currentData().toString() == QStringLiteral("one_file")) {
+      plateBox->setCurrentIndex(plateBox->findData(QStringLiteral("file_per_plate")));
+    }
+    showRows();
+  });
   QObject::connect(browse, &QPushButton::clicked, &dialog, [&dialog, file] {
     const QString chosen = dialogSaveFileName(&dialog, QObject::tr("Export"), file->text());
     if (!chosen.isEmpty()) {
@@ -315,11 +433,14 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
   dialog.resize(480, dialog.sizeHint().height());
   qDebug().noquote() << QStringLiteral(
                             "Export dialog opened: unit %1%2, type %3, refinement %4, file %5, dxf unit %6, "
-                            "dxf construction %7")
+                            "dxf construction %7, plates %8, slicer %9")
                             .arg(unitOffer(unit),
                                  occurrences ? QStringLiteral(", coordinates design (design | component)") : QString(),
                                  exportTypeKey(start), kRefinements[refined], path, unitOffer(dxfUnit),
-                                 dxfConstruction ? QStringLiteral("on") : QStringLiteral("off"));
+                                 dxfConstruction ? QStringLiteral("on") : QStringLiteral("off"),
+                                 hasPlates ? QStringLiteral("%1 (%2)").arg(startPlates).arg(plates.plates.size())
+                                           : QStringLiteral("none"),
+                                 plates.dialect.isEmpty() ? QStringLiteral("none") : plates.dialect);
 
   prepareModal(&dialog);
   while (execDialog(&dialog) == QDialog::Accepted) {
@@ -338,6 +459,31 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
     if (occurrences) {
       choice.coordinates = coordinates->currentData().toString();
     }
+    if (choice.format == QStringLiteral("3mf")) {
+      // The design's print plates and the bed (mitcad#1679).
+      const QString mode = hasPlates ? plateBox->currentData().toString() : QString();
+      if (mode.startsWith(QStringLiteral("plate:"))) {
+        choice.plates = QStringLiteral("plate");
+        choice.plate = mode.mid(6);
+      } else {
+        choice.plates = mode;
+      }
+      choice.dialect = slicerBox->currentData().toString();
+      choice.onBed = !choice.plates.isEmpty() || onBed->isChecked();
+      choice.center = centerBox->isChecked();
+      choice.drop = dropBox->isChecked();
+      if (!choice.plates.isEmpty()) {
+        choice.selectedOnly = false;
+      }
+      if (choice.onBed) {
+        // On the bed the bodies are where the design shows them.
+        choice.coordinates.clear();
+      }
+      if (choice.plates == QStringLiteral("one_file") && choice.dialect == QStringLiteral("cura")) {
+        message->setText(QObject::tr("UltiMaker Cura has one build plate: choose a file per plate."));
+        continue;
+      }
+    }
     if (choice.path.isEmpty()) {
       message->setText(QObject::tr("Give the file to write."));
       continue;
@@ -349,17 +495,37 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
       message->setText(QObject::tr("The design has no sketch to export."));
       continue;
     }
-    if (QFileInfo::exists(choice.path) &&
-        sheetQuestion(&dialog, QObject::tr("Export"),
-                              QObject::tr("%1 exists. Replace it?").arg(QFileInfo(choice.path).fileName())) !=
-            QMessageBox::Yes) {
+    if (choice.plates == QStringLiteral("file_per_plate")) {
+      // The plates' files beside the path (mitcad#1679), named as the
+      // export names them.
+      const QStringList existing = existingPlateFiles(choice.path, plates.plates);
+      if (!existing.isEmpty() &&
+          sheetQuestion(&dialog, QObject::tr("Export"),
+                        QObject::tr("%1 exist. Replace them?").arg(existing.join(QStringLiteral(", ")))) !=
+              QMessageBox::Yes) {
+        continue;
+      }
+    } else if (QFileInfo::exists(choice.path) &&
+               sheetQuestion(&dialog, QObject::tr("Export"),
+                             QObject::tr("%1 exists. Replace it?").arg(QFileInfo(choice.path).fileName())) !=
+                   QMessageBox::Yes) {
       continue;
     }
     qDebug().noquote() << QStringLiteral("Export dialog: %1 to %2%3")
                               .arg(QCoreApplication::translate("Export", chosen.label), choice.path,
-                                   isMeshType(choice.format)
-                                       ? QStringLiteral(", refinement %1").arg(choice.refinement)
-                                       : QString());
+                                   (isMeshType(choice.format)
+                                        ? QStringLiteral(", refinement %1").arg(choice.refinement)
+                                        : QString()) +
+                                       (choice.format == QStringLiteral("3mf")
+                                            ? QStringLiteral(", plates %1, slicer %2%3")
+                                                  .arg(choice.plates.isEmpty() ? QStringLiteral("none")
+                                                       : choice.plates == QStringLiteral("plate")
+                                                           ? QStringLiteral("plate ") + choice.plate
+                                                           : choice.plates,
+                                                       choice.dialect.isEmpty() ? QStringLiteral("none")
+                                                                                : choice.dialect,
+                                                       choice.onBed ? QStringLiteral(", on the bed") : QString())
+                                            : QString()));
     // Remembered for the next export (mitcad#1164); a sketch's DXF keeps
     // the type the bodies were exported as.
     settings.beginGroup(QLatin1String(kExportGroup));

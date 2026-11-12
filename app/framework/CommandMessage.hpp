@@ -27,7 +27,8 @@ public:
   explicit CommandMessage(QWidget* parent = nullptr);
 
   // Shows the text (plain, or rich text as a label would take it) from its
-  // first line; empty hides it. The same text again changes nothing (its
+  // first line, as given: the panel translates a model's message before
+  // (CommandPanel::setMessage). Empty hides it. The same text again changes nothing (its
   // scroll position and selection stay).
   void setMessage(const QString& text);
   QString message() const { return m_text; }

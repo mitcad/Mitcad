@@ -21,7 +21,7 @@ wait-idle
 mark
 command solid.parameters
 focus-dialog '^Parameters$'
-button '^User Parameter$'
+button '^Add User Parameter$'
 wait-log '^Add User Parameter dialog opened: unit in$'
 focus-dialog '^Add User Parameter$'
 focus-widget parameterName

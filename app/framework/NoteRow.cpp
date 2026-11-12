@@ -227,7 +227,7 @@ bool NoteRow::setNote(const QString& text, const QStringList& actions, const QSt
       connect(button, &QPushButton::clicked, this, [this, i] { emit actionClicked(i); });
       if (icon == linkActionIcon()) {
         // A link on a row of its own under the buttons, the note's width
-        // (mitcad#655: 3D Print's import line under Import from slicer…,
+        // (mitcad#655: 3D Print's import line under Import from Slicer…,
         // opening Details; Assign materials…).
         button->setText(actions.at(i));
         m_links->addWidget(button);

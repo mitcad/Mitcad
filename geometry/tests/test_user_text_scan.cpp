@@ -206,6 +206,7 @@ const Allowed kAllowed[] = {
     {"face_join.cpp", "joined->add_info(", "an information's text (the model makes its message plain)"},
     {"cutouts.cpp", "std::snprintf(touch, sizeof touch,",
      "the touch point for the detail of the chamfer reaching a far edge, placed_error() below"},
+    {"drawing.cpp", "\"deflection=%.4g\"", "a drawing view's trace note for the log (mitcad#1671), not a point"},
 };
 
 bool allowed(const std::string& file, const std::string& text) {

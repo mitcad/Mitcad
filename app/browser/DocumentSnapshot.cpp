@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -131,7 +132,10 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
   const QJsonObject timeline = model.queryObject({{QStringLiteral("query"), QStringLiteral("timeline")}});
   const QJsonObject components =
       model.queryObject({{QStringLiteral("query"), QStringLiteral("components")}});
-  const QJsonArray bodies = model.queryArray(QStringLiteral("bodies"));
+  // With each body's last feature (mitcad#1704: the timeline marks it).
+  const QJsonArray bodies =
+      model.query({{QStringLiteral("query"), QStringLiteral("bodies")}, {QStringLiteral("last_features"), true}})
+          .toArray();
   const QJsonArray profiles = model.queryArray(QStringLiteral("profiles"));
   const QJsonObject document = model.queryObject({{QStringLiteral("query"), QStringLiteral("document")}});
   const QJsonObject units = document.value(QStringLiteral("units")).toObject();
@@ -292,6 +296,7 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     body.visible = b.value(QStringLiteral("visible")).toBool(true);
     body.transparent = b.value(QStringLiteral("transparent")).toBool();
     body.mesh = b.value(QStringLiteral("mesh")).toBool();
+    body.lastFeature = b.value(QStringLiteral("last_feature")).toString(); // mitcad#1704
     // The print bed face (mitcad#731).
     const QJsonObject bed = b.value(QStringLiteral("print_bed_face")).toObject();
     body.printBedFace = bed.value(QStringLiteral("face")).toString();
@@ -328,6 +333,40 @@ const DocumentSnapshot::Feature* DocumentSnapshot::feature(const QString& uid) c
     }
   }
   return nullptr;
+}
+
+namespace {
+
+// An occurrence path in another one or that one itself ("O1/O4" in "O1").
+bool inOccurrence(const QString& path, const QString& outer) {
+  return !outer.isEmpty() && (path == outer || path.startsWith(outer + QLatin1Char('/')));
+}
+
+} // namespace
+
+bool DocumentSnapshot::isolationShows(const Selection& isolation, const QString& body, const QString& occurrence) {
+  if (isolation.isEmpty()) {
+    return true;
+  }
+  return std::any_of(isolation.begin(), isolation.end(), [&](const SelectionItem& item) {
+    if (item.kind == SelectKind::Body) {
+      return item.owner == body && item.occurrence == occurrence;
+    }
+    return item.kind == SelectKind::Component && inOccurrence(occurrence, item.occurrence);
+  });
+}
+
+bool DocumentSnapshot::isolationReaches(const Selection& isolation, const QString& occurrence) {
+  if (isolation.isEmpty()) {
+    return true;
+  }
+  return std::any_of(isolation.begin(), isolation.end(), [&](const SelectionItem& item) {
+    if (item.kind != SelectKind::Body && item.kind != SelectKind::Component) {
+      return false;
+    }
+    return inOccurrence(item.occurrence, occurrence) ||
+           (item.kind == SelectKind::Component && inOccurrence(occurrence, item.occurrence));
+  });
 }
 
 bool DocumentSnapshot::kindHidden(const Feature& feature) const {
@@ -377,7 +416,16 @@ const DocumentSnapshot::Component* DocumentSnapshot::component(const QString& ui
 
 QString DocumentSnapshot::componentName(const QString& uid) const {
   const Component* found = component(uid);
-  return found != nullptr ? found->name : uid;
+  return found != nullptr ? shownComponentName(found->uid, found->name) : uid;
+}
+
+QString shownComponentName(const QString& uid, const QString& name) {
+  // The model's default (ROOT_NAME, core/model/src/assembly.rs); a root
+  // the user or an import named otherwise keeps its name.
+  if (uid == kRoot && name == QLatin1String("Root")) {
+    return QCoreApplication::translate("mitcad::BrowserPanel", "Root");
+  }
+  return name;
 }
 
 QString DocumentSnapshot::firstOccurrence(const QString& component) const {

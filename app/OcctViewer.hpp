@@ -88,6 +88,7 @@ class ViewCubeHomeButton;
 class ViewEdges;
 class PrintOverlayLabels;
 class MeasurementOverlay;
+class PickList;
 struct PrintOverlay;
 struct ProxyMesh;
 
@@ -481,7 +482,9 @@ public:
   // fitted, smoothly when the navigation settings say so (standard views,
   // the orientation cube's home).
   void turnTo(const gp_Dir& direction, const gp_Dir& up);
-  // The home view: the document's (setHome) or the isometric one, fitted.
+  // The home view: the document's (setHome) or the default view, a few
+  // degrees off the isometric one (view/DefaultView.hpp, mitcad#1698),
+  // fitted.
   void goHome();
   void setHome(const std::optional<CameraState>& home) { m_home = home; }
   // The orientation cube's corner of the view (widget pixels): the square
@@ -698,6 +701,11 @@ public:
   void removeSketchProfiles(const QString& sketch);
   std::size_t profileCount() const { return m_profiles.size(); }
   void setSketchEntities(const std::vector<SketchEntityDisplay>& entities);
+  // The Sketch Palette's Show points off (mitcad#1705): this sketch's points
+  // are drawn without their markers, while they stay pickable, so that the
+  // hover, snaps, drags and selection work as before (the sketch overlay
+  // paints the hovered and selected ones). Empty: every point drawn.
+  void setHiddenSketchPoints(const QString& sketch);
   void setDatums(const std::vector<DatumDisplay>& datums);
   // The shapes the shown sketch profiles, sketch entities and datums are
   // drawn from, for UI tests (mitcad#1586): the view's own, built on the
@@ -881,6 +889,10 @@ public:
   // area centre at x,y" ("on the view's middle", "on the sketch's face"),
   // in window coordinates.
   void lookAtSketchPlane(bool saveCamera = true, const TopoDS_Shape& face = TopoDS_Shape());
+  // The first sketch of a new design whose saved view still looks at the
+  // new design's Top (frameNewDesign) returns to the default view
+  // instead (mitcad#1698), fitted (mitcad#1683), logged "View: after the
+  // first sketch, the default view instead of the new design's Top".
   void restoreCamera();
   // Drops the view lookAtSketchPlane saved: the camera stays where it is,
   // an animation ended at its end (mitcad#1592: a 3D sketch, also one
@@ -894,11 +906,27 @@ public:
   // Fits what the view shows, on the next frame; with nothing to fit (an
   // empty design's origin is hidden), frames the origin (setOriginBox).
   void fitAll();
-  // A new, empty design (mitcad#1000): on the next frame, the isometric
-  // view of the origin planes' box at the same share of the view's height
-  // whatever the view's size, logged "View: new design framed, scale <mm>
-  // mm per view height at <w>x<h>". A resize keeps the visible height.
-  void frameNewDesign();
+  // A new, empty design (mitcad#1000): on the next frame, the view of the
+  // origin planes' box at the same share of the view's height whatever the
+  // view's size, logged "View: new design framed, scale <mm> mm per view
+  // height at <w>x<h>". A resize keeps the visible height. `top`: looking
+  // at Top (along -Z, Y up) with the origin in the middle of the free area
+  // (mitcad#1683), logged "View: new design looks along <x>,<y>,<z>, up
+  // <x>,<y>,<z>; the origin at <x>,<y>, the free area's centre at <x>,<y>"
+  // (window coordinates); otherwise the isometric view from the front right.
+  void frameNewDesign(bool top);
+  // A design read from a file into a view that still looks at a new
+  // design's Top (frameNewDesign): to the default view from the front
+  // right and above (mitcad#1683, mitcad#1698), at once; a view the user
+  // turned keeps its direction. The fit that follows frames it. The first
+  // sketch or design read decides: after it a view at Top stays.
+  void leaveNewDesignTop();
+  // Create Sketch's plane pick in a new design that still looks at its Top
+  // (mitcad#1698): turned to the default view at once and fitted on the
+  // next frame, so that XZ and YZ, edge-on from Top, can be picked too;
+  // logged "View: Create Sketch turns a new design's Top to the default
+  // view". A view the user turned, or any later pick, stays as it is.
+  void turnForPlanePick();
   // The box the origin planes take when shown: what a fit frames when the
   // view shows nothing to fit (mitcad#1000).
   void setOriginBox(const Bnd_Box& box) { m_originBox = box; }
@@ -1008,6 +1036,18 @@ public:
   // A popup or native control can consume the pointer's release. End its
   // interaction without turning the interrupted drag into a selection.
   void cancelPointerInteraction();
+
+  // The pick list (mitcad#1703, view/PickListView.cpp): a left press held
+  // still for about half a second opens a list beside the pointer of
+  // every item under it that the filter takes, nearest first, named by
+  // `names` (the main window's words, pickListText; without it the kind
+  // alone). Hovering a row highlights its item; a click on a row reports it
+  // as a click on it would (clickedAt, picked) with the keys held then.
+  // Logged as "Pick list at x,y: n items: <item> [<words>]; ...", one
+  // "Pick list row <n> <item> [<words>] at x,y" a row, "Pick list hover
+  // <item>", "Pick list chose <item> [<words>]" and "Pick list closed: <why>".
+  void setPickListNames(std::function<QString(const SelectionItem&)> names);
+  bool pickListOpen() const;
 
 signals:
   void documentVisibilityChanged(bool visible);
@@ -1229,6 +1269,13 @@ private:
   // visible height that does not depend on the view's size or the cards
   // (mitcad#1000), moved to the middle of the free area.
   void frameOrigin(const occ::handle<Graphic3d_Camera>& camera) const;
+  // "View: new design looks along …" (frameNewDesign, mitcad#1683).
+  void logNewDesignTop() const;
+  // Once after frameNewDesign(true) (mitcad#1683): the view turned to the
+  // default view (mitcad#1698), at once, when it still looks at the new
+  // design's Top;
+  // true when it turned. Later calls do nothing.
+  bool turnFromNewDesignTop();
   // The pending fit (m_fitPending) on a camera: a new design's framing or
   // fitCamera; and made on the view's camera, as the next frame does.
   void fitPending(const occ::handle<Graphic3d_Camera>& camera) const;
@@ -1273,6 +1320,7 @@ private:
     bool constrained = false;
     bool reference = false;
     bool temporary = false; // shown only for a command (mitcad#546)
+    bool hidden = false;    // a point without its marker (Show points off, mitcad#1705)
   };
   void styleSketchEntity(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look) const;
   // Whether the entity is drawn over a halo (mitcad#302): fully constrained
@@ -1296,6 +1344,12 @@ private:
   // highlights; …" when it changed: the order the sketch layers are drawn
   // in, read from the viewer (for UI tests, mitcad#897).
   void logSketchLayers();
+  // Logs "Sketch point markers: <n> drawn, <m> hidden" when it changed (for
+  // UI tests, mitcad#1705).
+  void logSketchPointMarkers();
+  // Whether a shown sketch entity is a point of the sketch whose points are
+  // hidden (setHiddenSketchPoints).
+  bool sketchPointHidden(const AIS_InteractiveObject* object, const SketchEntityLook& look) const;
   // Recolours the sketch entities shown after the background turned dark
   // or light.
   void restyleSketchEntities();
@@ -1448,6 +1502,10 @@ private:
   // The shown sketches' colours as last logged ("Sketch colours:", for UI
   // tests; mitcad#286).
   QString m_loggedSketchColours;
+  // The sketch whose points are drawn without markers (mitcad#1705), and
+  // the point markers as last logged ("Sketch point markers:").
+  QString m_hiddenPointsSketch;
+  QString m_loggedPointMarkers;
   std::vector<occ::handle<AIS_Shape>> m_datums;
   std::vector<occ::handle<AIS_Shape>> m_highlights;
   // The selection highlights of profiles among them (mitcad#1222), whose
@@ -1558,6 +1616,10 @@ private:
   // a fit was made (the start-up size then keeps it); the origin planes'
   // box (setOriginBox); a resize to log once the view rests.
   bool m_framingNewDesign = false;
+  // mitcad#1683: the new design's framing looks at Top; the view was turned
+  // to Top for a new design (leaveNewDesignTop).
+  bool m_framingNewDesignTop = false;
+  bool m_newDesignTop = false;
   bool m_fitMade = false;
   Bnd_Box m_originBox;
   bool m_resizeToLog = false;
@@ -1829,6 +1891,30 @@ private:
   occ::handle<AIS_Shape> m_centerOfMass;
   bool m_centerOfMassFollowsTone = false;
   QString m_loggedCenterOfMass = QStringLiteral("Center of Mass drawn: none");
+  // The pick list (setPickListNames, mitcad#1703, view/PickListView.cpp):
+  // a left press arms it, the timer opens it unless the press moved, went
+  // up or was cancelled first; while it is open after a press, that
+  // press's moves and release are the list's (no orbit, window or click).
+  struct PickListEntry {
+    SelectionItem item;
+    occ::handle<SelectMgr_EntityOwner> owner;
+    double depth = 0.0;
+  };
+  std::vector<PickListEntry> pickListAt(const QPointF& position);
+  void armPickList(Qt::MouseButton button, Qt::MouseButtons buttons);
+  void disarmPickList();
+  void openPickList();
+  void closePickList(const QString& why);
+  void hoverPickListRow(int row);
+  void choosePickListRow(int row, Qt::KeyboardModifiers modifiers);
+  QString pickListWords(const SelectionItem& item) const;
+  std::function<QString(const SelectionItem&)> m_pickListNames;
+  QTimer* m_pickListTimer = nullptr;
+  PickList* m_pickList = nullptr;
+  std::vector<PickListEntry> m_pickListEntries;
+  QPointF m_pickListPosition;
+  bool m_pickListArmed = false;
+  bool m_pickListHeld = false;
 };
 
 } // namespace mitcad

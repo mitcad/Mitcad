@@ -40,9 +40,9 @@ native-pointer-click sketchField_width
 native-key-event Ctrl+a
 type '15 mm'
 expect-native-text sketchField_width '^15 mm$'
-native-pointer-popup sketchField_widthFx 'Create User Parameter…' '${MITCAD_TEST_WORK}/native-inline-fx-menu.png'
+native-pointer-popup sketchField_widthFx 'Add User Parameter…' '${MITCAD_TEST_WORK}/native-inline-fx-menu.png'
 expect-log '^Parameter browser opened for sketch width$'
-focus-dialog '^Create User Parameter$'
+focus-dialog '^Add User Parameter$'
 native-pointer-click createParameterName
 native-key-event Ctrl+a
 type ui_cancelled_inline
@@ -50,7 +50,7 @@ native-pointer-click createParameterExpression
 native-key-event Ctrl+a
 type 8
 native-key-event Escape
-expect-native-dialog-gone '^Create User Parameter$'
+expect-native-dialog-gone '^Add User Parameter$'
 expect-model-parameter ui_cancelled_inline absent
 expect-native-text sketchField_width '^15 mm$'
 expect-native-control-focus sketchField_width
@@ -60,9 +60,9 @@ expect-undo-depth ${inlineFxBaseline} 0
 # field. The shared parameter is a separate undo step, not drawing input.
 mark
 native-key-event Ctrl+a
-native-pointer-popup sketchField_widthFx 'Create User Parameter…'
-expect-log '^Create User Parameter opened for sketch width'
-focus-dialog '^Create User Parameter$'
+native-pointer-popup sketchField_widthFx 'Add User Parameter…'
+expect-log '^Add User Parameter opened for sketch width'
+focus-dialog '^Add User Parameter$'
 native-pointer-click createParameterName
 native-key-event Ctrl+a
 type ui_inline_width
@@ -74,7 +74,7 @@ screenshot-screen '${MITCAD_TEST_WORK}/native-inline-fx-create.png'
 native-pointer-button '^Create$'
 expect-log '^Created user parameter ui_inline_width = 15 mm [(]mm[)] for sketch width$'
 expect-log '^Parameter created inserted ui_inline_width into sketch width: ui_inline_width$'
-expect-native-dialog-gone '^Create User Parameter$'
+expect-native-dialog-gone '^Add User Parameter$'
 expect-native-text sketchField_width '^ui_inline_width$'
 expect-native-control-focus sketchField_width
 expect-model-parameter ui_inline_width 15

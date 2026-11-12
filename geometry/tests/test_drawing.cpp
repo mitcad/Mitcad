@@ -29,6 +29,7 @@
 #include <HLRBRep_Algo.hxx>
 #include <HLRBRep_HLRToShape.hxx>
 #include <NCollection_IndexedDataMap.hxx>
+#include <NCollection_IndexedMap.hxx>
 #include <NCollection_List.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
@@ -431,6 +432,49 @@ double deviation(const DrawnView& from, const DrawnView& to, bool visible) {
   return worst;
 }
 
+// A short line, then a quarter of a small circle on from it (mitcad#1671:
+// where a hidden line was cut off at a tube's inside corner): drawn within
+// the tolerance of them, not as an arc twice that from the line.
+void test_fit_a_line_into_an_arc() {
+  std::vector<Point2> hook{{-2.0, 4.0}};
+  for (const Point2& p : on_circle(0.0, 0.0, 4.0, test::kPi / 2.0, 0.0, 8, false)) {
+    hook.push_back(p);
+  }
+  Segments chords;
+  add_chords(chords, hook, false);
+  constexpr double kTolerance = 0.1;
+  const std::vector<DrawnCurve> drawn = fit_segments(chords, kTolerance);
+  CHECK(count_of(drawn, DrawnCurve::Type::Polyline) == 0);
+  // The line and the arc themselves.
+  DrawnCurve line;
+  line.type = DrawnCurve::Type::Line;
+  line.points = {{-2.0, 4.0}, {0.0, 4.0}};
+  DrawnCurve arc;
+  arc.type = DrawnCurve::Type::Arc;
+  arc.radius = 4.0;
+  arc.start = 0.0;
+  arc.end = test::kPi / 2.0;
+  double worst = 0.0;
+  for (const DrawnCurve& c : drawn) {
+    for (const Point2& p : samples(c)) {
+      worst = std::max(worst, std::min(distance_to(line, p), distance_to(arc, p)));
+    }
+  }
+  for (const DrawnCurve& truth : {line, arc}) {
+    for (const Point2& p : samples(truth)) {
+      double nearest = 1e300;
+      for (const DrawnCurve& c : drawn) {
+        nearest = std::min(nearest, distance_to(c, p));
+      }
+      worst = std::max(worst, nearest);
+    }
+  }
+  if (!(worst <= kTolerance)) {
+    std::fprintf(stderr, "a line into an arc: drawn %.4f mm from them\n", worst);
+    ++test::failures;
+  }
+}
+
 bool has_arc_near(const DrawnView& drawn, double cx, double cy, double radius) {
   for (const DrawnCurve& c : drawn.curves) {
     if (c.type == DrawnCurve::Type::Arc && c.visible && std::abs(c.center[0] - cx) < 1e-4 &&
@@ -577,6 +621,152 @@ void test_quick_path_for_curved_edges() {
   if (!(there <= kTolerance && back <= kTolerance)) {
     std::fprintf(stderr, "posts: the quick view %.4f mm from the exact lines, they %.4f mm from it\n", there, back);
     ++test::failures;
+  }
+}
+
+// --- The quick path at the view's scale, body by body (mitcad#1671) -----------
+
+// A bar of the box from `corner` with `size`, its four edges along `axis`
+// (0 X, 1 Y, 2 Z) rounded to `radius`.
+TopoDS_Shape rounded_bar(const gp_Pnt& corner, const gp_Vec& size, int axis, double radius) {
+  const TopoDS_Shape box = BRepPrimAPI_MakeBox(corner, size.X(), size.Y(), size.Z()).Shape();
+  BRepFilletAPI_MakeFillet fillet(box);
+  const gp_Dir along(axis == 0 ? 1.0 : 0.0, axis == 1 ? 1.0 : 0.0, axis == 2 ? 1.0 : 0.0);
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+  TopExp::MapShapes(box, TopAbs_EDGE, edges);
+  for (int i = 1; i <= edges.Extent(); ++i) {
+    const BRepAdaptor_Curve curve(TopoDS::Edge(edges(i)));
+    if (curve.GetType() == GeomAbs_Line && curve.Line().Direction().IsParallel(along, 1e-9)) {
+      fillet.Add(radius, TopoDS::Edge(edges(i)));
+    }
+  }
+  return fillet.Shape();
+}
+
+// A rounded rectangular tube along `axis` filling the box from `corner`
+// with `size`: walls 4 mm thick, outside corners of radius 8, inside 4.
+ShapePtr rounded_tube(const gp_Pnt& corner, const gp_Vec& size, int axis) {
+  constexpr double kWall = 4.0;
+  gp_Vec inset(kWall, kWall, kWall);
+  gp_Vec inner = size - 2.0 * inset;
+  inset.SetCoord(axis + 1, -1.0);
+  inner.SetCoord(axis + 1, size.Coord(axis + 1) + 2.0);
+  const TopoDS_Shape outside = rounded_bar(corner, size, axis, 8.0);
+  const TopoDS_Shape inside = rounded_bar(corner.Translated(inset), inner, axis, 4.0);
+  return std::make_shared<Shape>(BRepAlgoAPI_Cut(outside, inside).Shape());
+}
+
+// A 6 m frame of 80 x 80 tubes, 802 wide and 500 high: four tubes along X
+// at its corners and at each end two posts and two cross tubes between
+// them.
+std::vector<ShapePtr> tube_frame() {
+  std::vector<ShapePtr> tubes;
+  for (const double y : {0.0, 722.0}) {
+    for (const double z : {0.0, 420.0}) {
+      tubes.push_back(rounded_tube(gp_Pnt(0.0, y, z), gp_Vec(6000.0, 80.0, 80.0), 0));
+    }
+  }
+  for (const double x : {0.0, 5920.0}) {
+    for (const double y : {0.0, 722.0}) {
+      tubes.push_back(rounded_tube(gp_Pnt(x, y, 80.0), gp_Vec(80.0, 80.0, 340.0), 2));
+    }
+    for (const double z : {0.0, 420.0}) {
+      tubes.push_back(rounded_tube(gp_Pnt(x, 80.0, z), gp_Vec(80.0, 642.0, 80.0), 1));
+    }
+  }
+  return tubes;
+}
+
+// A wheel along Y with its faces as B-splines (free-form).
+ShapePtr bspline_wheel(const gp_Pnt& center, double radius, double width) {
+  const TopoDS_Shape wheel =
+      BRepPrimAPI_MakeCylinder(gp_Ax2(center.Translated(gp_Vec(0.0, -width / 2.0, 0.0)), gp_Dir(0.0, 1.0, 0.0)),
+                               radius, width)
+          .Shape();
+  return std::make_shared<Shape>(BRepBuilderAPI_NurbsConvert(wheel, true).Shape());
+}
+
+// The curves of the view whose source is from `first` to below `end`.
+DrawnView sources_in(const DrawnView& drawn, int first, int end) {
+  DrawnView out;
+  for (const DrawnCurve& c : drawn.curves) {
+    if (c.source >= first && c.source < end) {
+      out.curves.push_back(c);
+    }
+  }
+  return out;
+}
+
+// The end view of a 6 m frame of rounded tubes with one small free-form
+// body, at 1:5 (mitcad#1671): its quick path deviates within 0.02 mm on
+// the sheet, 0.1 mm in the model, not a 2000th of the frame's 6 m (3 mm);
+// the tubes' corners come out as arcs and their sides as lines, hidden
+// lines as the exact algorithm draws them. A wheel apart from the tubes in
+// the view leaves them to the exact algorithm; one in front of a corner
+// takes the tubes it overlaps to the quick path with it. Without the wheel
+// the view is the exact one, quick path or not.
+void test_quick_path_at_the_view_scale() {
+  const std::vector<ShapePtr> frame = tube_frame();
+  const int tubes = static_cast<int>(frame.size());
+  // Along the frame's length from its end at x 6000: x along Y, up along Z.
+  DrawingViewSpec spec = view(gp_Dir(1, 0, 0), gp_Dir(0, 1, 0), true);
+  spec.quick = true;
+  spec.quick_deviation = 0.1; // 0.02 mm on the sheet at 1:5
+  DrawingViewSpec exact_spec = spec;
+  exact_spec.quick = false;
+
+  const DrawnView alone = project_view(frame, spec);
+  const DrawnView alone_exact = project_view(frame, exact_spec);
+  CHECK(!alone.polygonal);
+  CHECK(alone.curves.size() == alone_exact.curves.size());
+  CHECK(deviation(alone, alone_exact, true) < 1e-9 && deviation(alone_exact, alone, true) < 1e-9);
+  CHECK(deviation(alone, alone_exact, false) < 1e-9 && deviation(alone_exact, alone, false) < 1e-9);
+
+  struct Case {
+    ShapePtr wheel;
+    const char* name;
+    // The tube in front of whose corner it is: then on the quick path.
+    bool in_front;
+  };
+  const Case cases[] = {
+      {bspline_wheel(gp_Pnt(5950.0, 760.0, -120.0), 50.0, 40.0), "a wheel apart", false},
+      {bspline_wheel(gp_Pnt(6100.0, 50.0, 60.0), 30.0, 40.0), "a wheel in front of a corner", true},
+  };
+  // The tube at the corner (722, 420), not overlapped by either wheel.
+  constexpr int kFarTube = 3;
+  constexpr double kWanted = 0.1;
+  for (const Case& c : cases) {
+    std::vector<ShapePtr> shapes = frame;
+    shapes.push_back(c.wheel);
+    const DrawnView quick = project_view(shapes, spec);
+    const DrawnView exact = project_view(shapes, exact_spec);
+    CHECK(quick.polygonal);
+    CHECK(!exact.polygonal);
+    for (const bool visible : {true, false}) {
+      // All lines, the wheel's too, within the wanted deviation of the
+      // exact ones, both ways.
+      const double there = deviation(quick, exact, visible);
+      const double back = deviation(exact, quick, visible);
+      std::fprintf(stderr, "%s, %s lines: the quick view %.4f mm from the exact one, the exact %.4f mm from it\n",
+                   c.name, visible ? "seen" : "hidden", there, back);
+      CHECK(there <= kWanted && back <= kWanted);
+      // The far tube's exact lines in either case.
+      const DrawnView quick_far = sources_in(quick, kFarTube, kFarTube + 1);
+      const DrawnView exact_far = sources_in(exact, kFarTube, kFarTube + 1);
+      CHECK(quick_far.curves.size() == exact_far.curves.size());
+      CHECK(deviation(quick_far, exact_far, visible) < 1e-9 && deviation(exact_far, quick_far, visible) < 1e-9);
+    }
+    // The tubes' ends: their corners as arcs, outside and inside (one
+    // centre); the corner tube's in front of which the wheel is too.
+    CHECK(has_arc_near(quick, 730.0, 428.0, 8.0));
+    CHECK(has_arc_near(quick, 730.0, 428.0, 4.0));
+    CHECK(has_arc_near(quick, 794.0, 492.0, 8.0));
+    CHECK(has_arc_near(quick, 8.0, 8.0, 8.0));
+    CHECK(has_arc_near(quick, 8.0, 8.0, 4.0));
+    // Apart, all tubes keep the exact lines.
+    if (!c.in_front) {
+      CHECK(sources_in(quick, 0, tubes).curves.size() == alone_exact.curves.size());
+    }
   }
 }
 
@@ -995,8 +1185,10 @@ int main(int argc, char* argv[]) {
   test::guarded("a section view", test_section_view);
   test::guarded("round holes", test_round_holes);
   test::guarded("lines and arcs from segments", test_fit_segments);
+  test::guarded("a line into an arc", test_fit_a_line_into_an_arc);
   test::guarded("the quick path", test_quick_path);
   test::guarded("the quick path for curved edges", test_quick_path_for_curved_edges);
+  test::guarded("the quick path at the view's scale", test_quick_path_at_the_view_scale);
   test::guarded("the tangent edges of a filleted block", test_tangent_edges_of_a_filleted_block);
   if (test::failures == 0) {
     std::puts("test_drawing: all checks passed");

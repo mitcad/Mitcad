@@ -430,9 +430,89 @@ std::optional<double> measure(const DimensionData& d, const SketchModel& model) 
   return std::nullopt;
 }
 
-V2 defaultTextPosition(const DimensionData& d, const SketchModel& model, double pixel) {
+namespace {
+
+// A dimension's value as most values draw in the view ("fx: Ø12.50"),
+// in view pixels: the default places of circles' values keep this far
+// apart (mitcad#1673).
+constexpr double kValueWidth = 84.0;
+constexpr double kValueHeight = 22.0;
+
+// The full circle a radius or diameter dimension measures, if it does.
+const CurveData* dimensionedCircle(const DimensionData& d, const Resolver& r) {
+  if (d.type != QStringLiteral("radius") && d.type != QStringLiteral("diameter")) {
+    return nullptr;
+  }
+  const CurveData* c = r.curve(d.json, "curve");
+  return c != nullptr && c->isCircular() && !c->isArc() ? c : nullptr;
+}
+
+// The default place of a full circle's radius or diameter value
+// (mitcad#1673): outside the circle at 45 degrees, unless another value
+// already lies there in the view, a placed one's or the default one of a
+// dimension of a circle with the same centre that comes before it (a
+// concentric circle dimensioned before, a concentric distance). Then the
+// first free place of 225, 135 and 315 degrees, and of the four further
+// out; the first place when none is free.
+V2 circleTextPosition(const DimensionData& d, const SketchModel& model, const Projection& projection) {
+  const Resolver r{model};
+  const CurveData* circle = dimensionedCircle(d, r);
+  const double px = projection.pixel;
+  const auto place = [px](const CurveData& c, int i) {
+    static constexpr double kAngles[] = {kPi / 4.0, 5.0 * kPi / 4.0, 3.0 * kPi / 4.0, 7.0 * kPi / 4.0};
+    return c.curve.center + polar(kAngles[i % 4], c.curve.radius + (26.0 + 30.0 * (i / 4)) * px);
+  };
+  if (circle == nullptr || !projection.toScreen) {
+    return circle != nullptr ? place(*circle, 0) : V2{};
+  }
+  const V2 centre = circle->curve.center;
+  const auto here = [&](const V2& p) { return dist(p, centre) <= 2.0 * px; };
+  std::vector<QPointF> taken;
+  for (const DimensionData& other : model.dimensions) {
+    if (other.text && other.id != d.id) {
+      taken.push_back(projection.toScreen(*other.text));
+    }
+  }
+  const auto isFree = [&](const V2& p) {
+    const QPointF at = projection.toScreen(p);
+    return std::none_of(taken.begin(), taken.end(), [&at](const QPointF& value) {
+      return std::abs(value.x() - at.x()) < kValueWidth && std::abs(value.y() - at.y()) < kValueHeight;
+    });
+  };
+  const auto placed = [&](const CurveData& c) {
+    for (int i = 0; i < 16; ++i) {
+      if (const V2 p = place(c, i); isFree(p)) {
+        return p;
+      }
+    }
+    return place(c, 0);
+  };
+  // The dimensions before it, in order, each placed as it is drawn.
+  for (const DimensionData& other : model.dimensions) {
+    if (!d.id.isEmpty() && other.id == d.id) {
+      break;
+    }
+    if (other.text) {
+      continue;
+    }
+    if (other.type == QStringLiteral("concentric_distance")) {
+      const CurveData* a = r.curve(other.json, "a");
+      if (a != nullptr && a->isCircular() && here(a->curve.center)) {
+        taken.push_back(projection.toScreen(defaultTextPosition(other, model, projection)));
+      }
+    } else if (const CurveData* c = dimensionedCircle(other, r); c != nullptr && here(c->curve.center)) {
+      taken.push_back(projection.toScreen(placed(*c)));
+    }
+  }
+  return placed(*circle);
+}
+
+} // namespace
+
+V2 defaultTextPosition(const DimensionData& d, const SketchModel& model, const Projection& projection) {
   const Resolver r{model};
   const QString& t = d.type;
+  const double pixel = projection.pixel;
   const double off = 26.0 * pixel;
   if (t == QStringLiteral("concentric_distance")) {
     // On the radius at 45 degrees, between the rims.
@@ -487,6 +567,9 @@ V2 defaultTextPosition(const DimensionData& d, const SketchModel& model, double 
       const double length = t == QStringLiteral("minor_radius") ? c->curve.minor : c->curve.radius;
       return c->curve.center + polar(angle, length / 2.0) + perp(polar(angle)) * (14.0 * pixel);
     }
+    if (dimensionedCircle(d, r) != nullptr) {
+      return circleTextPosition(d, model, projection);
+    }
     return c->curve.center + polar(kPi / 4.0, c->curve.radius + off);
   }
   return {};
@@ -497,7 +580,7 @@ DimensionShape dimensionShape(const DimensionData& d, const SketchModel& model,
   DimensionShape shape;
   shape.text = text;
   const double px = projection.pixel;
-  const V2 at = d.text ? *d.text : defaultTextPosition(d, model, px);
+  const V2 at = d.text ? *d.text : defaultTextPosition(d, model, projection);
   const auto& S = projection.toScreen;
   shape.textAt = S(at);
   const Resolver r{model};
@@ -1324,10 +1407,12 @@ HighlightLayers SketchOverlay::highlightLayers(const std::vector<std::pair<QStri
   // The highlighted curves' end, centre, fit and control points as the view
   // shows them (ModelShapes' sketchEntities: not an axis line's far end, of
   // a derived offset's spline only its ends), each once, unless highlighted
-  // itself.
+  // itself. None while Show points is off (mitcad#1705): the view draws no
+  // marker under them either.
   const bool dark = m_c.viewer().backgroundDark();
   QSet<QString> marked;
-  for (const QString& id : curves) {
+  const QStringList none;
+  for (const QString& id : m_c.showPoints() ? curves : none) {
     const CurveData* c = model.curve(id);
     if (c == nullptr) {
       continue;

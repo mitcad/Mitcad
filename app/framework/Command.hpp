@@ -147,13 +147,17 @@ struct Manipulator {
   bool boxAtTip = false;
   // Arrow and Ring: its color in the view while neither hovered nor
   // dragged (then the selection's blue); Free Move's arrows and rings take
-  // their axis' color (AxisX, AxisY, AxisZ; mitcad#1581).
+  // their axis' color (AxisX, AxisY, AxisZ; mitcad#1581), and hovered or
+  // dragged HandleActive, none of the axis colors (mitcad#1707).
   ColorRole color = ColorRole::Handle;
   // Arrow and Ring: about 1.5 times the usual size, its reach too (Free
-  // Move's, mitcad#1581: 50 px arrows, 100 px rings, 12 px reach); the
+  // Move's, mitcad#1581: 100 px rings, 12 px reach), the arrows 130 px
+  // long, so that their heads lie outside the rings (mitcad#1707); the
   // other commands' handles keep 34 px, 70 px and 9 px, so that they take
   // no click they did not take before (a BUILD side click flush with a
-  // part's end).
+  // part's end). A large arrow seen end-on (within about 15 degrees of the
+  // view direction) takes no press and is drawn fainter
+  // (ManipulatorOverlay::seenEdgeOn).
   bool large = false;
 };
 
@@ -202,7 +206,7 @@ inline QString linkActionIcon() { return QStringLiteral("__link"); }
 
 // What a note row shows (InputDef::Type::Note, mitcad#655): a short text,
 // wrapped, never clipped, and the buttons under it by their texts (3D
-// Print's "[Import from slicer…] plate.3mf imported", its link beside the
+// Print's "[Import from Slicer…] plate.3mf imported", its link beside the
 // button). A row with neither is hidden.
 struct InputNote {
   QString text;

@@ -8,6 +8,7 @@
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QList>
 #include <QPoint>
 #include <QString>
 #include <QStringList>
@@ -18,6 +19,7 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QTreeWidget;
+class QTreeWidgetItem;
 
 namespace mitcad {
 
@@ -148,22 +150,26 @@ private:
 
 // Browse Material Dataset… (mitcad#1213, New ▾ of the Materials window):
 // the bundled material dataset searched offline (the `material_dataset`
-// query), a material and grade picked, its values shown in the design's
-// units; Create makes the user's own material of it. Says where the values
-// come from and that they are typical. Logs "Material dataset opened: <n>
-// materials", "Material dataset search: <text>, <n> shown", "Material
-// dataset selected: <name>: <values>" and the places "Material dataset
-// search at x,y", "Material dataset item <name> at x,y", "Material dataset
-// create at x,y" in the main window's coordinates.
+// query), materials and grades picked, the current one's values shown in
+// the design's units; Create makes the user's own material of each one
+// picked (mitcad#1706: Ctrl and Shift pick several, Select All every one
+// the search shows). Says where the values come from and that they are
+// typical. Logs "Material dataset opened: <n> materials", "Material
+// dataset search: <text>, <n> shown", "Material dataset selected: <name>:
+// <values>", "Material dataset picked: <n>: <name> | <name>" and the
+// places "Material dataset search at x,y", "Material dataset item <name>
+// at x,y", "Material dataset create at x,y", "Material dataset select all
+// at x,y" in the main window's coordinates.
 class MaterialDatasetDialog : public QDialog {
   Q_OBJECT
 
 public:
   MaterialDatasetDialog(const CommandContext& model, const MaterialUnits& units, QWidget* parent = nullptr);
 
-  // The chosen entry's id (`aluminum/6061/t6`) and name; empty when none.
-  QString chosenId() const;
-  QString chosenName() const;
+  // The picked entries' ids (`aluminum/6061/t6`) and names, in the list's
+  // order; empty when none.
+  QStringList chosenIds() const;
+  QStringList chosenNames() const;
 
 protected:
   void showEvent(QShowEvent* event) override;
@@ -171,7 +177,9 @@ protected:
 private:
   void search(const QString& text);
   void showSelected();
+  void picked();
   void logPlaces();
+  QList<QTreeWidgetItem*> pickedRows() const;
 
   const CommandContext& m_model;
   MaterialUnits m_units;
@@ -181,7 +189,9 @@ private:
   QTreeWidget* m_list = nullptr;
   QLabel* m_details = nullptr;
   QPushButton* m_create = nullptr;
+  QPushButton* m_selectAll = nullptr;
   QString m_loggedSelected;
+  QString m_loggedPicked;
   QString m_loggedPlaces;
 };
 

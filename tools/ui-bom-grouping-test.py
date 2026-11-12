@@ -147,7 +147,7 @@ def run(app, cli, directory, qt_bin=None):
         for variable in ("SETTINGS", "AUTOSAVE", "PROJECTS", "THUMBNAIL", "CRASH"):
             environment["MITCAD_" + variable + "_DIR"] = str(Path(temporary) / variable.lower())
         environment.update(MITCAD_TEST_INPUT=str(directory / "bom.mitcad-ui"), MITCAD_RESULT_STORE="off",
-                           MITCAD_START_PAGE="0", MITCAD_LANGUAGE="en", MITCAD_NO_UPDATE_CHECK="1",
+                           MITCAD_START_PAGE="0", MITCAD_NEW_DESIGN_VIEW="0", MITCAD_LANGUAGE="en", MITCAD_NO_UPDATE_CHECK="1",
                            QT_FORCE_STDERR_LOGGING="1")
         environment["MITCAD_TEST_WEB_FILE"] = str(directory / WEB_FILE)
         for name, script in (("bom", "bom.mitcad-ui"), ("remembered", "remembered.mitcad-ui"),

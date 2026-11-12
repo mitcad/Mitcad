@@ -14,14 +14,14 @@
 #     Parameter; the first gives `width = `, then 30 mm: the width's
 #     parameter is width (the existing form, mitcad#231).
 #   - The height: `wid` lists width; Enter, Enter: the height uses width.
-#   - The height again: `gap`, Down to Create User Parameter, Enter: the
+#   - The height again: `gap`, Down to Add User Parameter, Enter: the
 #     editor proposes gap; 15 deg in mm is refused with the model's reason,
 #     12 is taken: gap (12 mm) is a user parameter and the height uses it.
-#   - The height again: `gap2`, Create User Parameter: width (taken) and
+#   - The height again: `gap2`, Add User Parameter: width (taken) and
 #     1x (invalid) are refused, Cancel leaves gap2 in the field.
 #   - Undo and Redo in the sketch: the height's change, then Add Parameter
 #     gap; Redo both.
-#   - Extrude1: `2 * depth`, Create User Parameter, 6: depth is put in, the
+#   - Extrude1: `2 * depth`, Add User Parameter, 6: depth is put in, the
 #     distance is 2 * depth (12 mm), OK (30 x 12 x 12 mm).
 #   - Edit Parameters lists depth and gap; d3's editor offers depth.
 #
@@ -106,7 +106,7 @@ ui_expect_new "Parameter suggestion inserted width into dimension d2: width" "wi
 ui_step "Enter"                          ui_key Return
 ui_expect_new "Dimension k6 = width (width)" "the height uses width"
 
-echo "--- Create User Parameter from a dimension"
+echo "--- Add User Parameter from a dimension"
 edit_height
 ui_key ctrl+a
 ui_step "type gap"                       xdotool type --delay 60 "gap"
@@ -114,12 +114,12 @@ ui_expect_new 'Parameter suggestions for dimension width "gap": none; actions: n
 ui_step "Down"                           ui_key Down
 ui_mark
 ui_step "Enter (create)"                 ui_key Return
-ui_expect_new "Create User Parameter opened for dimension width: name gap, unit mm" "the editor proposes gap"
-ui_focus_dialog '^Create User Parameter$'
+ui_expect_new "Add User Parameter opened for dimension width: name gap, unit mm" "the editor proposes gap"
+ui_focus_dialog '^Add User Parameter$'
 ui_mark
 ui_step "expression 15 deg"              ui_type_text "15 deg"
 ui_key Return
-ui_expect_new "Create User Parameter gap refused: " "an angle in millimetres is refused"
+ui_expect_new "Add User Parameter gap refused: " "an angle in millimetres is refused"
 since_mark "Created user parameter" && ui_fail "a refused parameter was made"
 ui_mark
 ui_step "expression 12"                  ui_type_text "12"
@@ -139,20 +139,20 @@ ui_expect_new 'Parameter suggestions for dimension gap "gap2": none; actions: na
 ui_step "Down"                           ui_key Down
 ui_mark
 ui_step "Enter (create)"                 ui_key Return
-ui_expect_new "Create User Parameter opened for dimension gap: name gap2" "the editor proposes gap2"
-ui_focus_dialog '^Create User Parameter$'
+ui_expect_new "Add User Parameter opened for dimension gap: name gap2" "the editor proposes gap2"
+ui_focus_dialog '^Add User Parameter$'
 ui_step "to the name"                    ui_key shift+Tab
 ui_mark
 ui_step "name width"                     ui_type_text "width"
 ui_key Return
-ui_expect_new "Create User Parameter width refused: width exists already" "a taken name is refused"
+ui_expect_new "Add User Parameter width refused: width exists already" "a taken name is refused"
 ui_mark
 ui_step "name 1x"                        ui_type_text "1x"
 ui_key Return
-ui_expect_new "Create User Parameter 1x refused: 1x is not a valid name" "an invalid name is refused"
+ui_expect_new "Add User Parameter 1x refused: 1x is not a valid name" "an invalid name is refused"
 ui_mark
 ui_step "Cancel (Esc)"                   ui_key Escape
-ui_expect_new "Create User Parameter cancelled for dimension gap: gap2" "cancelled, gap2 still in the field"
+ui_expect_new "Add User Parameter cancelled for dimension gap: gap2" "cancelled, gap2 still in the field"
 since_mark "Created user parameter" && ui_fail "a parameter was made"
 ui_focus_main
 ui_step "close the editor (Esc)"         ui_key Escape
@@ -175,7 +175,7 @@ ui_mark
 ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
 ui_expect_new "Sketch finished" "Sketch1 finished" 30
 
-echo "--- Create User Parameter from a feature field"
+echo "--- Add User Parameter from a feature field"
 ui_mark
 ui_step "edit Extrude1 (double-click)"   ui_double_click_logged "Timeline Extrude1"
 ui_expect_new "Editing F2 with Extrude" "Extrude1 opens for editing" 30
@@ -184,8 +184,8 @@ ui_expect_new 'Parameter suggestions for Extrude Distance "depth": none; actions
   "depth names nothing; not the field's leading name, so only a new parameter"
 ui_mark
 ui_step "Enter (create)"                 ui_key Return
-ui_expect_new "Create User Parameter opened for Extrude Distance: name depth, unit mm" "the editor proposes depth"
-ui_focus_dialog '^Create User Parameter$'
+ui_expect_new "Add User Parameter opened for Extrude Distance: name depth, unit mm" "the editor proposes depth"
+ui_focus_dialog '^Add User Parameter$'
 ui_step "expression 6"                   ui_type_text "6"
 ui_key Return
 ui_expect_new "Created user parameter depth = 6 mm (mm) for Extrude Distance" "depth made"

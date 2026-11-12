@@ -136,6 +136,9 @@ struct DocumentSnapshot {
     bool visible = true;
     bool transparent = false; // drawn see-through (mitcad#1093)
     bool mesh = false; // triangles without surfaces (mitcad#399)
+    // The last feature before the marker that made or changed it (the
+    // `bodies` query's `last_feature`, mitcad#1704); empty when unknown.
+    QString lastFeature;
     // The face that lies on the print bed (mitcad#731): its name as
     // assigned (empty: none), the faces it finds at the marker, and why it
     // cannot lie on the bed when it cannot.
@@ -213,6 +216,13 @@ struct DocumentSnapshot {
   // the view is isolated to (bodies and occurrences; none: everything).
   bool originShown = false;
   Selection isolation;
+  // Isolate as the view decides it (MainWindow::isIsolated; mitcad#1700):
+  // whether `isolation` shows a body of an occurrence ("" the root's), and
+  // whether it shows anything of an occurrence (the occurrence lies in an
+  // isolated one, or holds an isolated body or occurrence). Both are true
+  // while nothing is isolated.
+  static bool isolationShows(const Selection& isolation, const QString& body, const QString& occurrence);
+  static bool isolationReaches(const Selection& isolation, const QString& occurrence);
   // View › Show of the whole design (mitcad#1287): the kinds shown, from the
   // `document` query's display.show (everything while it has none). The
   // light bulbs (featureShown, originShown) stay as they are.
@@ -293,5 +303,10 @@ QString featureIcon(const QString& type);
 // only with MITCAD_LOG_VOLUMES (framework/Diagnostics.hpp), else empty.
 QJsonObject bodyVolumes(const CommandContext& model);
 void logVolumeChanges(const CommandContext& model, const QJsonObject& before);
+
+// A component's name as the user sees it (mitcad#1475): the root
+// component's default name, the model's "Root", in the interface's
+// language; every other name as the model has it.
+QString shownComponentName(const QString& uid, const QString& name);
 
 } // namespace mitcad

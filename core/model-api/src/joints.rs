@@ -199,6 +199,17 @@ pub(crate) struct JointDragQuery {
     target: Vec3,
 }
 
+/// The `joint_poses` query (mitcad#1701): where a joint's motion driven to
+/// each value in turn puts the occurrences, without a recompute.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct JointPosesQuery {
+    joint: String,
+    motion: Motion,
+    /// mm for a slide, radians for a turn.
+    values: Vec<f64>,
+}
+
 /// The `joint_frame` query: the frame a joint origin gives at the marker,
 /// for a panel to show where an origin snaps before the joint exists.
 #[derive(Debug, Deserialize)]
@@ -289,6 +300,9 @@ pub(crate) trait JointsCrateOps<K: Kernel> {
     /// The `joint_dof` query: an occurrence's free motions in its parent
     /// component.
     fn joint_dof_json(&self, query: &JointDofQuery) -> Result<Value, ApiError>;
+
+    /// The `joint_poses` query (mitcad#1701): Animate Joint's frames.
+    fn joint_poses_json(&self, query: &JointPosesQuery) -> Result<Value, ApiError>;
 }
 
 impl<K: Kernel> JointsCrateOps<K> for Document<K> {
@@ -682,6 +696,32 @@ impl<K: Kernel> JointsCrateOps<K> for Document<K> {
             "motions": motions,
             "joints": joints,
         }))
+    }
+
+    fn joint_poses_json(&self, query: &JointPosesQuery) -> Result<Value, ApiError> {
+        let uid = self.joint_ref(&query.joint)?;
+        let poses = self.joint_poses(uid, query.motion, &query.values)?;
+        let frames: Vec<Value> = poses
+            .iter()
+            .map(|pose| {
+                let placements: Vec<Value> = pose
+                    .placements
+                    .iter()
+                    .map(|(path, t)| {
+                        let path: Vec<String> = path.iter().map(ToString::to_string).collect();
+                        json!({"path": path.join("/"),
+                               "transform": mitcad_model::assembly::matrix4(t)})
+                    })
+                    .collect();
+                let values: Map<String, Value> = pose
+                    .values
+                    .iter()
+                    .map(|(joint, v)| (joint.to_string(), values_json(Some(v))))
+                    .collect();
+                json!({"placements": placements, "values": values})
+            })
+            .collect();
+        Ok(json!({"frames": frames}))
     }
 }
 

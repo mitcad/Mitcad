@@ -6,8 +6,10 @@
 //! this crate (core/model-tests/README.md).
 #![cfg(test)]
 
+mod joint_poses_tests;
 mod joint_solver_tests;
 mod joint_tests;
+mod loop_drag_tests;
 mod motion_link_tests;
 mod motion_tests;
 mod mount_tests;

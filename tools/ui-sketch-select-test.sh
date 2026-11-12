@@ -151,7 +151,7 @@ ui_expect_log "Selection filter button at" "the Selection Filter control is in t
 
 echo "--- 2. A window over the isometric view"
 ui_mark
-ui_step "home (isometric)"                   ui_command "Home"
+ui_step "isometric view (search)"          ui_command "Isometric View"
 ui_expect_new "Camera direction -0.577 0.577 -0.577" "seen from the front, right and above"
 ui_expect_new "Sketch pick edge F1.b0/" "where the clicks hit Box1's edges is logged"
 ui_sync # the whole list

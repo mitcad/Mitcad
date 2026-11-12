@@ -66,4 +66,16 @@ QStringList materialAppearances(const QJsonObject& fields);
 // material does not offer (mitcad#1067); one it offers stays the body's.
 bool asksToReplaceAppearance(const QJsonObject& body, const QStringList& offered);
 
+// The appearances last given by the Appearance tool (mitcad#1685,
+// app/COMMANDS.md "Material and Appearance tools"), which its picker lists
+// first under Recent: kept in the local settings ("appearances/recent",
+// the appearances' ids, the newest first), per user.
+constexpr int kRecentAppearances = 5;
+QStringList recentAppearances();
+void rememberRecentAppearance(const QString& id);
+// The picker's Recent rows: the recent ids that are among `known` (the
+// appearances it lists), in the recent list's order, at most `limit`.
+QStringList recentAppearanceRows(const QStringList& known, const QStringList& recent,
+                                 int limit = kRecentAppearances);
+
 } // namespace mitcad

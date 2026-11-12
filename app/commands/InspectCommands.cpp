@@ -1155,10 +1155,15 @@ bool printable(const std::shared_ptr<geometry::Shape>& shape) {
 }
 
 // The Material row: the bodies' own (PLA for a body without one), or one
-// of the physical materials.
+// of the physical materials, the woods and panels left out (mitcad#1706:
+// not printed).
 QVector<QPair<QString, QString>> printMaterials() {
   QVector<QPair<QString, QString>> choices{{QStringLiteral("bodies"), QObject::tr("The bodies' material (else PLA)")}};
-  choices += physicalMaterials();
+  for (const auto& material : physicalMaterials()) {
+    if (!isBuiltInWood(material.first)) {
+      choices.append(material);
+    }
+  }
   return choices;
 }
 
@@ -1389,13 +1394,13 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
       valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("45 deg"))
           .withVisible(overhang)
           .withTooltip(QObject::tr("The steepest overhang the printer makes without support, from the vertical")),
-      checkInput(QStringLiteral("thin_wall"), QObject::tr("Thin Walls"), true)
+      checkInput(QStringLiteral("thin_wall"), QObject::tr("Thin walls"), true)
           .withTooltip(QObject::tr("Walls thinner than the printer can make")),
       valueInput(QStringLiteral("minimum"), QObject::tr("Minimum wall"), ValueKind::Length, QStringLiteral("0.8 mm")).withStepMinimum(0.0, true)
           .withExactDefault()
           .withVisible(thin)
           .withTooltip(QObject::tr("The thinnest wall the printer makes: about twice the line width")),
-      checkInput(QStringLiteral("min_gap"), QObject::tr("Narrow Gaps"), true)
+      checkInput(QStringLiteral("min_gap"), QObject::tr("Narrow gaps"), true)
           .withTooltip(QObject::tr("Bodies printed in place closer than the gap may fuse")),
       valueInput(QStringLiteral("gap"), QObject::tr("Minimum gap"), ValueKind::Length, QStringLiteral("0.3 mm"))
           .withStepMinimum(0.0, true)
@@ -1565,8 +1570,16 @@ Inspection propertiesInspection(const QJsonObject& answer) {
     const QString name = occurrence.isEmpty() ? bodyName : QObject::tr("%1 in %2").arg(bodyName, occurrence);
     const QString prefix = QStringLiteral("propertiesBody%1_").arg(index++);
     heading(prefix + QStringLiteral("heading"), name);
-    row(prefix + QStringLiteral("material"), QObject::tr("Material"),
-        body.value(QStringLiteral("material")).toString(QStringLiteral("steel")));
+    // A built-in material by its name as the language shows it, not its id
+    // (mitcad#1689); another by its id as before.
+    QString madeOf = body.value(QStringLiteral("material")).toString(QStringLiteral("steel"));
+    for (const auto& [id, shown] : physicalMaterials()) {
+      if (id == madeOf) {
+        madeOf = shown;
+        break;
+      }
+    }
+    row(prefix + QStringLiteral("material"), QObject::tr("Material"), madeOf);
     row(prefix + QStringLiteral("density"), QObject::tr("Density"),
         QStringLiteral("%1 g/cm³").arg(n(body.value(QStringLiteral("density")).toDouble(), 4)));
     // Its material's mechanical, thermal and printing values, in the design's

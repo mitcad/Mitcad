@@ -31,6 +31,11 @@ install(TARGETS mitcad mitcad-cli
 # The automatic updates' installer step (mitcad#9); system DLLs only.
 install(TARGETS mitcad-updater RUNTIME DESTINATION bin)
 install(TARGETS mitcad-mcp-launcher RUNTIME DESTINATION bin)
+# Explorer's thumbnails of designs (mitcad#1695, app/thumbnails): the
+# thumbnail handler, which the installer registers for .mitcad
+# (packaging/windows/filetype.nsh). A module: system DLLs and the C++
+# runtime only, which bin has.
+install(TARGETS mitcad-thumbnails LIBRARY DESTINATION bin RUNTIME DESTINATION bin)
 # The render worker (docs/rendering.md) next to mitcad, where the
 # application looks for it, with its libraries: vcpkg's and Open Image
 # Denoise's through the runtime dependencies below, and Open Image
@@ -167,6 +172,9 @@ string(REPLACE "/" "\\\\" mitcad_nsis_icon "${PROJECT_SOURCE_DIR}/app/branding/m
 set(CPACK_NSIS_MUI_ICON "${mitcad_nsis_icon}")
 set(CPACK_NSIS_MUI_UNIICON "${mitcad_nsis_icon}")
 set(CPACK_NSIS_DEFINES "!include '${mitcad_nsis_filetype}'")
+# A thumbnail handler Explorer still holds is moved aside before the files
+# are put in place (mitcad#1695, filetype.nsh).
+set(CPACK_NSIS_EXTRA_PREINSTALL_COMMANDS "!insertmacro MitcadThumbnailsMoveAside")
 set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS "!insertmacro MitcadFileTypeRegister")
 set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS "!insertmacro MitcadFileTypeUnregister")
 

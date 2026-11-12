@@ -4,6 +4,8 @@
 mod bends;
 mod corners;
 pub(crate) use bends::{bend, flange, fold};
+// A flange's profile sketch (mitcad#1648).
+pub(crate) use bends::{flange_profile_layout, warn_moved_profile};
 pub(crate) use corners::{corner_chamfer, corner_round};
 // Unfold, Refold, graph development and the minimal Cut (mitcad#208).
 pub(crate) mod cut;

@@ -1,0 +1,4 @@
+[
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [-15, -10],
+    "length": 30, "width": 20, "height": 20, "operation": "new_body"}}
+]

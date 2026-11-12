@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+# The values of two concentric circles' diameters keep apart (mitcad#1673),
+# on sketch-concentric-dimensions.json's Sketch1 (two fixed points that
+# frame the view). The circles are dimensioned in turn as the report had
+# them: Circle at (5, 3) typed 5.2, then Circle at the same centre typed 5.
+# Both values were drawn at the same place, the inner one over the outer
+# one at every zoom.
+#   1. After the fit, neither value's box overlaps the other's.
+#   2. Zoomed in on the circles, still apart.
+#   3. Zoomed out far, the circles a few pixels wide, still apart.
+# Run by tools/ui-sketch-concentric-dimensions-test.sh (Linux) and
+# tools/ui-windows-sketch-concentric-dimensions-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+expect-ever '^Timeline Sketch1 at '
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)' 30
+key F6
+wait-idle
+
+# The outer circle, then the inner one round the same centre.
+command sketch.circle
+sketch-click 5 3
+type 5.2
+key Return
+wait-log '^Added circle, diameter 5[.]2 mm at [(]5, 3[)]' 10
+sketch-click 5 3
+type 5
+key Return
+wait-log '^Added circle, diameter 5 mm at [(]5, 3[)]' 10
+key Escape
+wait-idle
+
+# 1. After the fit.
+expect-sketch-dimensions-apart '5'
+screenshot '${MITCAD_TEST_WORK}/sketch-concentric-dimensions.png'
+
+# 2. Zoomed in.
+wheel 50 50 15
+wait-idle
+expect-sketch-dimensions-apart '5'
+screenshot '${MITCAD_TEST_WORK}/sketch-concentric-dimensions-in.png'
+
+# 3. Zoomed out far.
+wheel 50 50 -40
+wait-idle
+expect-sketch-dimensions-apart '5'
+screenshot '${MITCAD_TEST_WORK}/sketch-concentric-dimensions-out.png'

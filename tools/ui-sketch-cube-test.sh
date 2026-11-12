@@ -90,7 +90,7 @@ arrows_and_home() {
   turn left "0 0 -1 up 0 1 0" "left: back to the sketch"
   ui_mark
   ui_step "Home"                            ui_click_logged "View home"
-  expect_camera "-0.577 0.577 -0.577" "Home: the home view"
+  expect_camera "-0.568 0.654 -0.5 up" "Home: the home view (the default view, mitcad#1698)"
   still_alive "Home"
   tail -n +$((from + 1)) "$UI_LOG" | grep -q "Sketch finished" && ui_fail "the sketch was finished by a view turn"
   echo "ok   $1 selected: every arrow and Home turned the view, the sketch still edited"

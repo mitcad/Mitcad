@@ -10,6 +10,12 @@
 //! plain values, and a clearance hole names its size and fit
 //! ([`HoleClearance`](super::hole::HoleClearance)) so that the panel can
 //! show them again.
+//!
+//! For printed parts (mitcad#1518) the table also has ISO 4032's nuts,
+//! whose hex pockets ([`ScrewSize::nut_pocket`]) are the nut with a
+//! clearance, and a series of heat-set threaded inserts: the hole diameter
+//! and depth per screw size ([`ScrewSize::insert`]) from an insert's
+//! published dimensions, the source named in the data file.
 
 use std::sync::OnceLock;
 
@@ -64,6 +70,22 @@ pub struct ScrewSize {
     pub iso_10642_head: Option<f64>,
     /// ISO 15065's countersink diameter d2, when it has the size.
     pub iso_15065: Option<f64>,
+    /// ISO 4032's nut (mitcad#1518): its width across flats s and its
+    /// height m (max).
+    pub nut: (f64, f64),
+    /// The heat-set insert of the size (mitcad#1518), when the series has
+    /// one.
+    pub insert: Option<InsertHole>,
+}
+
+/// A heat-set insert's hole (mitcad#1518), in millimetres: the published
+/// hole diameter, the insert's length, and the hole's depth (the length
+/// with the table's allowance).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InsertHole {
+    pub diameter: f64,
+    pub length: f64,
+    pub depth: f64,
 }
 
 impl ScrewSize {
@@ -75,6 +97,15 @@ impl ScrewSize {
             ClearanceFit::Coarse => self.clearance[2],
         }
     }
+
+    /// The hex pocket of the size's ISO 4032 nut (mitcad#1518): its width
+    /// across flats and its depth, the nut's across flats and height each
+    /// with `clearance` (rounded to a micrometre: 5.5 + 0.3 is 5.8).
+    pub fn nut_pocket(&self, clearance: f64) -> (f64, f64) {
+        let round = |v: f64| (v * 1e6).round() / 1e6;
+        let (across_flats, height) = self.nut;
+        (round(across_flats + clearance), round(height + clearance))
+    }
 }
 
 #[derive(Deserialize)]
@@ -85,6 +116,35 @@ struct Table {
     iso_10642: Section<HeadRow>,
     iso_15065: Section<CountersinkRow>,
     tapped_countersink: TappedCountersink,
+    iso_4032: Section<NutRow>,
+    nut_pocket: NutPocket,
+    heat_set_insert: InsertSection,
+}
+
+#[derive(Deserialize)]
+struct NutRow {
+    size: String,
+    across_flats: f64,
+    height: f64,
+}
+
+#[derive(Deserialize)]
+struct NutPocket {
+    clearance: f64,
+}
+
+#[derive(Deserialize)]
+struct InsertSection {
+    title: String,
+    allowance: f64,
+    rows: Vec<InsertRow>,
+}
+
+#[derive(Deserialize)]
+struct InsertRow {
+    size: String,
+    diameter: f64,
+    length: f64,
 }
 
 #[derive(Deserialize)]
@@ -130,6 +190,9 @@ struct Sizes {
     sizes: Vec<ScrewSize>,
     titles: [String; 4],
     tapped_factor: f64,
+    /// The titles of ISO 4032 and of the insert series (mitcad#1518).
+    printed_titles: [String; 2],
+    nut_clearance: f64,
 }
 
 fn table() -> &'static Sizes {
@@ -169,6 +232,22 @@ fn table() -> &'static Sizes {
                     (Some(a), Some(b)) => Some(a.max(b)),
                     (a, b) => a.or(b),
                 };
+                let nut = table
+                    .iso_4032
+                    .rows
+                    .iter()
+                    .find(|row| &row.size == size)
+                    .expect("every size has an ISO 4032 nut");
+                let insert = table
+                    .heat_set_insert
+                    .rows
+                    .iter()
+                    .find(|row| &row.size == size)
+                    .map(|row| InsertHole {
+                        diameter: row.diameter,
+                        length: row.length,
+                        depth: ((row.length + table.heat_set_insert.allowance) * 1e6).round() / 1e6,
+                    });
                 ScrewSize {
                     size: size.clone(),
                     diameter: clearance.d,
@@ -177,6 +256,8 @@ fn table() -> &'static Sizes {
                     countersink,
                     iso_10642_head: head,
                     iso_15065: sink,
+                    nut: (nut.across_flats, nut.height),
+                    insert,
                 }
             })
             .collect();
@@ -189,6 +270,8 @@ fn table() -> &'static Sizes {
                 table.iso_15065.title,
             ],
             tapped_factor: table.tapped_countersink.factor,
+            printed_titles: [table.iso_4032.title, table.heat_set_insert.title],
+            nut_clearance: table.nut_pocket.clearance,
         }
     })
 }
@@ -220,6 +303,35 @@ pub fn lookup(size: &str) -> Result<&'static ScrewSize, String> {
 /// the counterbores, the ISO 10642 heads and the ISO 15065 countersinks.
 pub fn sources() -> &'static [String; 4] {
     &table().titles
+}
+
+/// The titles of the printed parts' sections (mitcad#1518): ISO 4032's
+/// nuts and the heat-set insert series (naming its source).
+pub fn printed_sources() -> &'static [String; 2] {
+    &table().printed_titles
+}
+
+/// The clearance a nut pocket has over its nut when none is given
+/// (mitcad#1518), on the width across flats and on the depth.
+pub fn nut_clearance() -> f64 {
+    table().nut_clearance
+}
+
+/// The heat-set insert hole of a size (`M3`), or why there is none
+/// (mitcad#1518).
+pub fn insert(size: &str) -> Result<InsertHole, String> {
+    let wanted = size.trim();
+    lookup(wanted)?.insert.ok_or_else(|| {
+        format!(
+            "no heat-set insert for the screw size {wanted}: the sizes are {}",
+            sizes()
+                .iter()
+                .filter(|s| s.insert.is_some())
+                .map(|s| s.size.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
 }
 
 /// A tapped hole's countersink diameter for a thread's major diameter:
@@ -319,5 +431,49 @@ mod tests {
         let bore = thread_bore(metric, "M6x1").unwrap();
         assert!((bore - (6.0 - 1.082532)).abs() < 1e-4, "{bore}");
         assert_eq!(thread_bore(metric, "M7x3"), None);
+    }
+
+    #[test]
+    fn nut_pockets_are_iso_4032_nuts_with_the_clearance() {
+        // mitcad#1518: every size has its nut, wider across the flats than
+        // the counterbore's screw and lower than wide.
+        for size in sizes() {
+            let (s, m) = size.nut;
+            assert!(s > size.diameter && m > 0.0 && m < s, "{size:?}");
+        }
+        let m3 = lookup("M3").unwrap();
+        assert_eq!(m3.nut, (5.5, 2.4));
+        assert_eq!(nut_clearance(), 0.3);
+        assert_eq!(m3.nut_pocket(nut_clearance()), (5.8, 2.7));
+        assert_eq!(m3.nut_pocket(0.0), (5.5, 2.4));
+        assert_eq!(lookup("M10").unwrap().nut, (16.0, 8.4));
+        assert!(printed_sources()[0].contains("ISO 4032"));
+    }
+
+    #[test]
+    fn insert_holes_come_from_the_series() {
+        // mitcad#1518: the published hole diameter, the insert's length and
+        // the depth 1 mm over it.
+        let m3 = insert(" m3 ").unwrap();
+        assert_eq!(
+            m3,
+            InsertHole {
+                diameter: 4.0,
+                length: 5.7,
+                depth: 6.7
+            }
+        );
+        assert_eq!(insert("M6").unwrap().depth, 13.7);
+        for (screw, hole) in sizes().iter().filter_map(|s| s.insert.map(|i| (s, i))) {
+            assert!(hole.diameter > screw.diameter && hole.depth > hole.length);
+        }
+        let error = insert("M8").unwrap_err();
+        assert!(
+            error.contains("no heat-set insert for the screw size M8")
+                && error.contains("M2, M2.5, M3, M4, M5, M6"),
+            "{error}"
+        );
+        assert!(insert("M7").unwrap_err().contains("no clearance hole"));
+        assert!(printed_sources()[1].contains("ruthex"));
     }
 }

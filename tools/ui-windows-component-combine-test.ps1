@@ -280,9 +280,8 @@ Ui-StartApp 'component-extrude' @('--open', $crank)
 Ui-Step 'top view (F7)'                  { Ui-Key 'F7' }
 Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
 Ui-ExpectLog 'Body F2.b0 in O1 at ' "frame's block shown"
-Ui-Mark
-Ui-Step 'activate crank'                 { Ui-ClickLogged 'Browser radio Root/crank:1' }
-Ui-ExpectNew 'Activated crank' 'crank is active'
+# Saved with crank active, it opens so (mitcad#1678).
+Ui-ExpectLog 'Opened with C2 active, as saved (unmodified)' 'crank is active'
 Ui-Mark
 Ui-Step 'extrude (E)'                    { Ui-Key 'e' }
 Ui-ExpectNew "Extrude Profiles: 1 profile [profile $r of F3" "crank's rectangle taken"
@@ -361,7 +360,8 @@ Set-Content -Encoding ascii $twiceJson (@'
   {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F3", "region": "RECT"}],
     "extent": {"type": "to_object", "object": {"type": "face", "body": "F2.b0", "face": "F2:end(RECT)"}},
     "object_links": {"F2.b0": {"source": "O1", "target": "O3"}}, "operation": "new_body"}},
-  {"expect": {"feature": "Extrude2", "status": "ok", "volume": 3500, "tolerance": 1e-6}}
+  {"expect": {"feature": "Extrude2", "status": "ok", "volume": 3500, "tolerance": 1e-6}},
+  {"cmd": "activate_component", "component": "Root"}
 ]
 '@).Replace('RECT', $r)
 $twice = Join-Path $work 'crank-twice.mitcad'
@@ -411,9 +411,8 @@ if ($LASTEXITCODE -ne 0) { Ui-Fail "mitcad-cli: $($output -join ' / ')" }
 Ui-StartApp 'component-extrude-plane' @('--open', $crankPlane)
 Ui-Step 'top view (F7)'                  { Ui-Key 'F7' }
 Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
-Ui-Mark
-Ui-Step 'activate crank'                 { Ui-ClickLogged 'Browser radio Root/crank:1' }
-Ui-ExpectNew 'Activated crank' 'crank is active'
+# Saved with crank active, it opens so (mitcad#1678).
+Ui-ExpectLog 'Opened with C2 active, as saved (unmodified)' 'crank is active'
 Ui-Mark
 Ui-Step 'extrude (E)'                    { Ui-Key 'e' }
 Ui-ExpectNew "Extrude Profiles: 1 profile [profile $r of F2" "crank's rectangle taken"

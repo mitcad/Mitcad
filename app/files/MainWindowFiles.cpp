@@ -650,7 +650,11 @@ bool MainWindow::startImportedDocument(const QString& path, QString& error) {
     }
     return document;
   };
-  if (!installDocument(name, QString(), read, error)) {
+  // With its root active (mitcad#426).
+  m_openingImport = true;
+  const bool installed = installDocument(name, QString(), read, error);
+  m_openingImport = false;
+  if (!installed) {
     return false;
   }
   m_documentName = QFileInfo(path).completeBaseName();
@@ -1235,7 +1239,11 @@ void MainWindow::startF3dImport(const QString& path, const QJsonObject& rerun, b
               job.setStage(tr("Reading the imported %1").arg(name));
               return load_document(rustStr(project));
             };
-            if (!installDocument(name, QString(), read, reason, handedOver)) {
+            // With its root active (mitcad#426).
+            m_openingImport = true;
+            const bool installed = installDocument(name, QString(), read, reason, handedOver);
+            m_openingImport = false;
+            if (!installed) {
               if (reason.isEmpty()) {
                 qInfo().noquote() << QStringLiteral("Opening the imported %1 cancelled").arg(name);
                 showHint(tr("Import of %1 canceled.").arg(name));
@@ -1409,8 +1417,27 @@ void MainWindow::exportFile() {
   // the selected component, else the design; askExport adds the extension
   // of the type it starts with (the last export's, or DXF for a sketch).
   const QString suggested = QDir(dialogFolder(DialogGroup::Export)).filePath(safeFileName(exportName(m_selection)));
+  // The design's print plates a 3MF file can carry (mitcad#1679), and the
+  // slicer Send to Slicer would write them for: the design's.
+  ExportPlates plates;
+  if (printPlateCount() > 0) {
+    try {
+      const QJsonObject answer = queryObject({{QStringLiteral("query"), QStringLiteral("print_plates")}});
+      for (const QJsonValue& value : answer.value(QStringLiteral("plates")).toArray()) {
+        const QJsonObject plate = value.toObject();
+        plates.plates.append(
+            {plate.value(QStringLiteral("id")).toString(), plate.value(QStringLiteral("name")).toString()});
+      }
+    } catch (const std::exception& e) {
+      qWarning().noquote()
+          << QStringLiteral("Export: the print plates could not be read: %1").arg(QString::fromUtf8(e.what()));
+    }
+    if (!plates.plates.isEmpty()) {
+      plates.dialect = designDialect();
+    }
+  }
   const std::optional<ExportChoice> choice = askExport(this, suggested, static_cast<int>(selected.size()), sketches,
-                                                       sketch, !m_snapshot.occurrences.isEmpty(), lengthUnit());
+                                                       sketch, !m_snapshot.occurrences.isEmpty(), lengthUnit(), plates);
   if (!choice) {
     return;
   }
@@ -1480,6 +1507,26 @@ void MainWindow::exportFile() {
     if (choice->format == QStringLiteral("3mf")) {
       // The parts in the colours the view shows (mitcad#13).
       command.insert(QStringLiteral("colors"), appearanceColors(choice->selectedOnly ? selected : QStringList()));
+      // The design's print plates (mitcad#1679), as Send to Slicer writes
+      // them (mitcad#1050): on the bed, each plate's pieces on their faces.
+      if (choice->plates == QStringLiteral("plate")) {
+        command.insert(QStringLiteral("plate"), choice->plate);
+      } else if (!choice->plates.isEmpty()) {
+        command.insert(QStringLiteral("plates"), choice->plates);
+      } else if (choice->onBed) {
+        command.insert(QStringLiteral("on_bed"), true);
+      }
+      if (!choice->dialect.isEmpty()) {
+        command.insert(QStringLiteral("dialect"), choice->dialect);
+      }
+      // Center on Plate with the bed or a slicer (mitcad#1596), Drop to
+      // Bed with the bed only (mitcad#1109).
+      if (choice->onBed || !choice->dialect.isEmpty()) {
+        command.insert(QStringLiteral("center"), choice->center);
+      }
+      if (choice->onBed) {
+        command.insert(QStringLiteral("drop"), choice->drop);
+      }
     }
     if (choice->format == QStringLiteral("stl")) {
       command.insert(QStringLiteral("ascii"), choice->ascii);
@@ -1516,9 +1563,28 @@ void MainWindow::exportFile() {
     // The materials, and textures written in their base colour.
     what += tr(", %1 material(s)").arg(result.value(QStringLiteral("materials")).toArray().size());
   }
+  // The print plates written (mitcad#1679): a file per plate names the
+  // folder of its files.
+  QString shown = choice->path;
+  if (!choice->plates.isEmpty()) {
+    QStringList files;
+    for (const QJsonValue& value : result.value(QStringLiteral("files")).toArray()) {
+      files << value.toString();
+    }
+    const qsizetype plateCount = result.value(QStringLiteral("plates")).toArray().size();
+    what = files.size() > 1 ? tr("%1 plate(s) in %2 files").arg(plateCount).arg(files.size())
+                            : tr("%1 plate(s)").arg(plateCount);
+    if (choice->plates == QStringLiteral("file_per_plate")) {
+      shown = QFileInfo(choice->path).absolutePath();
+    }
+    qInfo().noquote() << QStringLiteral("Exported plates %1 for %2: %3")
+                             .arg(choice->plates == QStringLiteral("plate") ? choice->plate : choice->plates,
+                                  choice->dialect.isEmpty() ? QStringLiteral("no slicer") : choice->dialect,
+                                  files.join(QStringLiteral(", ")));
+  }
   qInfo().noquote() << QStringLiteral("Exported %1: %2, %3").arg(choice->path, choice->format, what);
   // Its warnings as every export's (mitcad#1040).
-  showDone(*this, tr("Exported %1 (%2).").arg(QDir::toNativeSeparators(choice->path), what), resultWarnings(result),
+  showDone(*this, tr("Exported %1 (%2).").arg(QDir::toNativeSeparators(shown), what), resultWarnings(result),
            QStringLiteral("Export"));
 }
 

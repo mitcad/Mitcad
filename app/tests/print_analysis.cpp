@@ -336,6 +336,20 @@ void gapTests() {
   PrintAnswers clear;
   clear.minGap = gapAnswer(false);
   CHECK(mitcad::printAnalysisLog(clear, name) == QStringLiteral("narrow gaps under 0.3 mm: none"));
+  CHECK(mitcad::printAnalysisText(clear, name)
+            .contains(QStringLiteral("None: no bodies are closer than the gap where they do not touch.")));
+  // A touching pair whose faces could not be measured (mitcad#1672): no
+  // claim that the bodies have no gap.
+  PrintAnswers unchecked;
+  unchecked.minGap = gapAnswer(false);
+  unchecked.minGap.insert(QStringLiteral("touching"), 1);
+  unchecked.minGap.insert(QStringLiteral("unmeasured"), 1);
+  const QString uncheckedText = mitcad::printAnalysisText(unchecked, name);
+  CHECK(uncheckedText.contains(QStringLiteral("None found.")));
+  CHECK(uncheckedText.contains(QStringLiteral("One pair of touching bodies could not be checked.")));
+  CHECK(!uncheckedText.contains(QStringLiteral("None: no bodies")));
+  CHECK(mitcad::printAnalysisLog(unchecked, name) ==
+        QStringLiteral("narrow gaps under 0.3 mm: none (1 touching not checked)"));
 
   // The view: the closest points, the smallest gap's marker, the legend.
   const QColor overhang(0x7e, 0x3f, 0xd0);

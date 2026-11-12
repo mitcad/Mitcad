@@ -606,6 +606,7 @@ SketchController::SketchController(SketchHost& host, OcctViewer& viewer, Command
   m_dimensionText = dimensionText == QStringLiteral("name")         ? DimensionText::Name
                     : dimensionText == QStringLiteral("name_value") ? DimensionText::NameValue
                                                                     : DimensionText::Value;
+  m_showPoints = QSettings().value(QStringLiteral("sketch/showPoints"), true).toBool();
   viewer.installEventFilter(this);
   // After the frame, which may have moved the camera.
   connect(
@@ -674,7 +675,17 @@ void SketchController::enter(const QString& uid) {
   m_loggedGlyphs.clear();
   m_loggedSpacings.clear();
   m_loggedPointer.clear();
+  // Each sketch opens with Show profiles as Preferences › Sketch says
+  // (mitcad#1670); the palette's checkbox changes it for this sketch only.
+  // Set before reload(), whose `changed` refreshes the palette.
+  m_showProfiles = showProfilesOnOpen();
+  // Its points drawn as the palette's Show points says (mitcad#1705).
+  m_viewer.setHiddenSketchPoints(m_showPoints ? QString() : uid);
   reload();
+  qDebug().noquote() << QStringLiteral("Sketch %1 opens with Show profiles %2")
+                            .arg(m_model.name, m_showProfiles ? QStringLiteral("on") : QStringLiteral("off"));
+  qDebug().noquote() << QStringLiteral("Sketch %1 opens with Show points %2")
+                            .arg(m_model.name, m_showPoints ? QStringLiteral("on") : QStringLiteral("off"));
   // Where the sketch lies in the design, which the overlay shows (mitcad#254).
   const gp_Pnt& origin = m_model.frame.origin;
   const V2 designOrigin = toSketch(m_model.frame, gp_Pnt(0.0, 0.0, 0.0));
@@ -707,6 +718,8 @@ void SketchController::leave() {
   m_movedPointer.clear();
   m_cursorValid = false;
   m_overlay->hide();
+  // Its points drawn again wherever it is shown (mitcad#1705).
+  m_viewer.setHiddenSketchPoints(QString());
   m_uid.clear();
   m_model = SketchModel();
   ++m_modelRevision;
@@ -1695,8 +1708,30 @@ void SketchController::setShowConstraints(bool on) {
   m_overlay->update();
 }
 
+void SketchController::setShowPoints(bool on) {
+  if (on == m_showPoints) {
+    return;
+  }
+  m_showPoints = on;
+  QSettings().setValue(QStringLiteral("sketch/showPoints"), on);
+  // For UI tests (mitcad#1705).
+  qDebug().noquote() << QStringLiteral("Show points %1").arg(on ? QStringLiteral("on") : QStringLiteral("off"));
+  if (isActive()) {
+    m_viewer.setHiddenSketchPoints(on ? QString() : m_uid);
+  }
+  emit optionsChanged();
+  m_overlay->update();
+  // The markers over a selected curve's highlight come and go with them.
+  m_overlay->logHighlights();
+}
+
 void SketchController::setShowProfiles(bool on) {
+  if (on == m_showProfiles) {
+    return;
+  }
   m_showProfiles = on;
+  // For UI tests (mitcad#1670): the palette's choice for this sketch.
+  qDebug().noquote() << QStringLiteral("Show profiles %1").arg(on ? QStringLiteral("on") : QStringLiteral("off"));
   emit optionsChanged();
   m_host.refreshScene();
 }
@@ -2488,6 +2523,7 @@ void SketchController::conflictChanged() {
     qDebug().noquote() << QStringLiteral("Sketch conflict painted: %1").arg(logged);
   }
   m_overlay->update();
+  emit viewRefreshed(); // the item list marks them (mitcad#1492)
 }
 
 void SketchController::setPaused(bool paused) {
@@ -2635,6 +2671,8 @@ void SketchController::refreshView() {
   // paints (Windows session 0).
   m_overlay->logHighlights();
   updateConvertAction();
+  // The item list in the timeline's place marks the selection (mitcad#1492).
+  emit viewRefreshed();
 }
 
 void SketchController::hint(const QString& message) {

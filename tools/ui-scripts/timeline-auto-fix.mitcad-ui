@@ -2,16 +2,27 @@
 # Auto Fix in the timeline's context menu (mitcad#1223) on
 # timeline-auto-fix.json: Extrude1's region was found as two pieces after
 # a change in Sketch1, and the extrusion warns.
+#   0. The tooltips point to Auto Fix (mitcad#1677): the timeline cell's
+#      and the warnings badge's.
 #   1. Its menu offers Auto Fix after Edit Feature; Auto Fix writes the
 #      pieces into the definition as one undo step, and the bodies keep
 #      their volume.
 #   2. The warning is gone: the menu no longer offers Auto Fix.
 #   3. One undo brings the warning back, and Auto Fix with it.
+#   4. The warnings badge's menu offers Auto Fix too (mitcad#1677), and it
+#      fixes the warning as the timeline's did.
 # Run by tools/ui-timeline-auto-fix-test.sh (Linux) and
 # tools/ui-windows-timeline-auto-fix-test.ps1 (Windows).
 wait-idle
 capture-undo-depth baseline
 capture-model-number volumeBefore '{"query":"properties"}' total.volume
+
+# 0. The tooltips name Auto Fix.
+expect-ever '^Warnings badge: Extrude1: .*; Click for Auto Fix, which can fix 1 of these warnings$' 30
+hover-logged '^Timeline Extrude1 at '
+expect-timeline-tooltip '(?s)Warning: .*Auto Fix [(]right-click[)] can fix this warning'
+expect-ever '^Timeline tooltip: Extrude1: Warning: .*: Auto Fix [(]right-click[)] can fix this warning$'
+timeline-leave
 
 # 1. Auto Fix from the timeline's menu.
 mark
@@ -34,4 +45,13 @@ expect-undo-depth ${baseline} 0
 mark
 context-menu-logged '^Timeline Extrude1 at ' cancel
 wait-log '^Context menu: Edit Feature [|] Auto Fix [|] Rename'
+
+# 4. Auto Fix from the warnings badge.
+mark
+click-logged '^Warnings button at '
+wait-log '^Context menu: Extrude1: .* [|] Auto Fix$'
+popup 'Auto Fix'
+wait-log '^Auto Fix: 1 of 1 warning fixed$'
+expect-undo-depth ${baseline} 1
+wait-log '^Warnings badge: none$'
 expect-never 'TestDriver: FAIL'

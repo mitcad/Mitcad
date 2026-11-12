@@ -89,6 +89,18 @@ named_enum! {
             #[serde(default)]
             project: Option<String>,
         },
+        // A material of each of several entries of the bundled dataset
+        // (mitcad#1706), as one undo step; a name there already skipped.
+        "create_dataset_materials" => CreateDatasetMaterials {
+            /// The entries' ids (`wood/walnut`, `panel/plywood_pine`).
+            entries: Vec<String>,
+            /// `user` or `project`: into that library; left out: the
+            /// design.
+            #[serde(default)]
+            library: Option<String>,
+            #[serde(default)]
+            project: Option<String>,
+        },
     }
 }
 
@@ -273,6 +285,19 @@ impl<K: Kernel> MaterialsCrateOps<K> for Document<K> {
                     .collect();
                 json!({"added": outcome.added, "replaced": outcome.replaced,
                        "kept": outcome.kept, "conflicts": outcome.conflicts, "errors": errors})
+            }
+            MaterialCommand::CreateDatasetMaterials {
+                entries,
+                library,
+                project,
+            } => {
+                let library = library.as_deref().map(writable_library).transpose()?;
+                let made = self.create_dataset_materials(
+                    &entries,
+                    library,
+                    project.as_deref().map(Path::new),
+                )?;
+                json!({"added": made.added, "skipped": made.skipped})
             }
         })
     }

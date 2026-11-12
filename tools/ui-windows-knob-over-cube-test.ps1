@@ -99,7 +99,7 @@ function Knob-Onto-Cube {
 Ui-StartApp 'knob' @('--open', $design)
 Ui-ExpectLog 'cube.mitcad' 'the design opened'
 Ui-Step 'the home view'                  { Ui-ClickLogged 'View home' }
-Ui-ExpectLog 'Camera direction -0.577 0.577 -0.577' 'seen from the front, the right and above'
+Ui-ExpectLog 'Camera direction -0.568 0.654 -0.5 up' 'seen from the front, the right and above (the default view)'
 Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
 Settle
 

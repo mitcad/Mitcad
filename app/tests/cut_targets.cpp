@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <QJsonArray>
+#include <QLabel>
 #include <QPushButton>
 #include <QTreeWidget>
 
@@ -175,6 +176,15 @@ int cutTargetsTests() {
   scope = mitcad::setCutTargetChecked(scope, b, QString(), true);
   check(scope.value(QStringLiteral("targets")).toObject().value(QStringLiteral("excluded_bodies")).toArray().isEmpty(),
         "explicitly enabling the whole component clears its finer exclusions");
+  // A cut that misses but would cut flipped suggests Flip (mitcad#1676).
+  auto* status = panel.findChild<QLabel*>(QStringLiteral("cut_targets_status"));
+  panel.setPreview({{QStringLiteral("rows"), QJsonArray{}}, {QStringLiteral("selected_components"), 0},
+                    {QStringLiteral("selected_bodies"), 0}, {QStringLiteral("can_commit"), false},
+                    {QStringLiteral("flip_would_cut"), true}});
+  check(status && status->text().contains(QStringLiteral("Try Flip")), "a miss that would cut flipped suggests Flip");
+  preview({}, 0);
+  check(status && status->text() == QStringLiteral("No eligible components intersect the cut."),
+        "a miss both ways does not suggest Flip");
   failures += hiddenTargetsTests();
   return failures;
 }

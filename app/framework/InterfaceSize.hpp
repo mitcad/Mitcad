@@ -63,7 +63,8 @@ struct InterfaceScale {
 InterfaceScale applyInterfaceSize(int percent);
 InterfaceScale applyInterfaceSize();
 
-// The size a new design window starts at: 1280 x 800 logical pixels, or the
+// The size a new design window starts at with no place kept
+// (framework/WindowPlace.hpp, mitcad#1710): 1280 x 800 logical pixels, or the
 // primary screen's available area where that is smaller (a larger
 // Interface size or the system's scaling leaves fewer logical pixels).
 QSize startWindowSize();

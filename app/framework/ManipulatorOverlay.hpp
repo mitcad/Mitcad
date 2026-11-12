@@ -25,7 +25,8 @@ class OcctViewer;
 // pixels; the mouse goes through to the view except on a handle, which a
 // left drag moves. A press that starts on a handle stays with it: without
 // a drag it does nothing, and it never reaches the view or the
-// orientation cube as a click (mitcad#1105). The values come from the
+// orientation cube as a click (mitcad#1105). A handle seen edge-on yields
+// to the arrows (seenEdgeOn, mitcad#1707). The values come from the
 // command's value inputs and go
 // back to them as numbers rounded to a step that fits the zoom, or the
 // size of the geometry a handle works on when that is finer (mitcad#1431,
@@ -135,6 +136,13 @@ private:
   };
   ArrowStep arrowStep(const Handle& handle) const;
   double pixelSize(const gp_Pnt& at) const; // mm per pixel near a point
+  // Whether the view sees a handle too obliquely to drag it well
+  // (mitcad#1707): a ring whose plane is within about 15 degrees of the
+  // view direction (drawn as a line or a thin ellipse), which takes no
+  // press within an arrow's reach; a large arrow (Free Move's) within
+  // about 15 degrees of the view direction, which takes no press at all.
+  // Both are drawn fainter while not hovered or dragged.
+  bool seenEdgeOn(const Manipulator& m) const;
   void logPlaces();
   void logDragFeedback() const;
 

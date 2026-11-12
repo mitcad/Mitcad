@@ -498,7 +498,8 @@ QString combineNote(const CommandState& state, const CommandContext& context) {
 }
 
 // A free move's handles: an arrow along a model axis or a ring about it,
-// in the axis' color (mitcad#1581). All of them meet at the moved middle
+// in the axis' color (mitcad#1581), the arrows reaching beyond the rings
+// (mitcad#1707, Manipulator::large). All of them meet at the moved middle
 // (mitcad#1580): the rings turn about it, and each arrow starts from it
 // without its own distance, so that its knob is there too and the arrows
 // of the other axes go along with what moves; none while a distance is no

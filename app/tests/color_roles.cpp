@@ -224,6 +224,16 @@ void reservedHueTests() {
   }
   // The warning is yellow, apart from the handles' orange (C2).
   CHECK(hueDistance(yellow, themeColor(ColorRole::Handle, false)) >= 15.0);
+  // An axis-colored handle hovered or dragged takes none of the axis
+  // colors, nor a status hue (mitcad#1707): grey enough, or far in hue.
+  for (const bool dark : {false, true}) {
+    const QColor active = themeColor(ColorRole::HandleActive, dark);
+    const bool grey = active.hsvSaturationF() < 0.35;
+    for (const ColorRole axis : {ColorRole::AxisX, ColorRole::AxisY, ColorRole::AxisZ, ColorRole::Select}) {
+      CHECK_ROLE(grey || hueDistance(active, themeColor(axis, dark)) >= 30.0, axis);
+    }
+    CHECK(grey || (hueDistance(active, red) >= 12.0 && hueDistance(active, yellow) >= 12.0));
+  }
   // The rule blocks' actions and literals off the status hues (C5): not
   // the success's green either.
   const QColor green = themeColor(ColorRole::SuccessBadge, false);

@@ -30,6 +30,7 @@
 #include <QWidget>
 #include <QtLogging>
 
+#include "BrowserPreferences.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/GlassCard.hpp"
 #include "../framework/Icons.hpp"
@@ -184,6 +185,40 @@ int occurrencesOf(const QVector<DocumentSnapshot::Occurrence>& level, const QStr
   return count;
 }
 
+// The model's set_isolation of a list, as MainWindow::setIsolation writes
+// it (mitcad#1700).
+QJsonObject isolationCommand(const Selection& items) {
+  QJsonArray isolated;
+  for (const SelectionItem& item : items) {
+    QJsonObject entry;
+    if (item.kind == SelectKind::Body) {
+      entry.insert(QStringLiteral("body"), item.owner);
+    }
+    if (!item.occurrence.isEmpty()) {
+      entry.insert(QStringLiteral("occurrence"), item.occurrence);
+    }
+    isolated.append(entry);
+  }
+  return cmd("set_isolation", {{QStringLiteral("items"), isolated}});
+}
+
+// Whether an entry of the isolation is a body's or an occurrence's row's
+// own item.
+bool isolationEntryOf(const SelectionItem& entry, const BrowserNode& node) {
+  if (node.type == BrowserNode::Type::Body) {
+    return entry.kind == SelectKind::Body && entry.owner == node.uid && entry.occurrence == node.occurrence;
+  }
+  return node.type == BrowserNode::Type::Component && !node.occurrence.isEmpty() &&
+         entry.kind == SelectKind::Component && entry.occurrence == node.occurrence;
+}
+
+// Whether an isolation shows a body's or an occurrence's row.
+bool isolationShowsRow(const Selection& isolation, const BrowserNode& node) {
+  return node.type == BrowserNode::Type::Body
+             ? DocumentSnapshot::isolationShows(isolation, node.uid, node.occurrence)
+             : DocumentSnapshot::isolationReaches(isolation, node.occurrence);
+}
+
 } // namespace
 
 template <typename Sender, typename... Args>
@@ -210,6 +245,16 @@ BrowserController::BrowserController(DocumentHost& host, QWidget* window)
   // presents it natively) it is a hidden child of the browser, never a
   // window of its own.
   m_configurationBar = new ConfigurationBar(host, m_browser);
+  // Show used sketches under their features (mitcad#1699): as Preferences
+  // has it, and every window's rows rebuilt at once when it changes.
+  m_browser->setConsumeSketches(browserConsumeSketches());
+  connect(&BrowserPreferencesNotifier::instance(), &BrowserPreferencesNotifier::consumeSketchesChanged, this,
+          [this](bool on) {
+            m_browser->setConsumeSketches(on);
+            if (m_shown) {
+              m_browser->rebuild(m_snapshot, m_originShown);
+            }
+          });
   m_timeline = new TimelineWidget(host.model(), window);
   m_failures = new QToolButton(window);
   m_failures->setObjectName(QStringLiteral("failuresBadge"));
@@ -310,7 +355,17 @@ BrowserController::BrowserController(DocumentHost& host, QWidget* window)
 void BrowserController::showIssues(bool warnings, const QPoint& globalPosition) {
   const auto features = warnings ? m_snapshot.warnings() : m_snapshot.failures();
   if (features.isEmpty()) return;
-  if (features.size() == 1) {
+  // The warned features Auto Fix can fix (mitcad#1677): the badge's menu
+  // offers it for them all, also when there is one.
+  QStringList fixing;
+  if (warnings) {
+    for (const DocumentSnapshot::Feature* feature : features) {
+      if (feature->autoFix > 0) {
+        fixing << feature->uid;
+      }
+    }
+  }
+  if (features.size() == 1 && fixing.isEmpty()) {
     reveal(features.first()->uid);
     return;
   }
@@ -319,6 +374,10 @@ void BrowserController::showIssues(bool warnings, const QPoint& globalPosition) 
     const QString uid = feature->uid;
     menu.add(featureIcon(feature->type), QStringLiteral("%1: %2").arg(feature->name, feature->error),
              [this, uid] { reveal(uid); });
+  }
+  if (!fixing.isEmpty()) {
+    menu.separator();
+    menu.add(QStringLiteral("ok"), tr("Auto Fix"), [this, fixing] { autoFix(fixing); });
   }
   menu.exec(globalPosition);
 }
@@ -386,8 +445,10 @@ void BrowserController::showSelection(const Selection& items) {
   // view) does not.
   if (m_picking) {
     m_shownFeatures = m_pickedFeatures;
+    m_shownFromRows = true;
   } else if (items != m_shownItems) {
     m_shownFeatures.clear();
+    m_shownFromRows = false;
   }
   m_shownItems = items;
   // Rows picked in the tree stay where they are: scrolling would jump to
@@ -404,6 +465,86 @@ void BrowserController::showSelection(const Selection& items) {
   // or a pending plane pick clears it.
   const bool fromTree = m_picking && m_fromTree;
   m_browser->showSelection(items, m_shownFeatures, !fromTree, fromTree && m_host.canChangeModel(true));
+  showOwners(m_shownFromRows ? Selection() : items, !fromTree);
+}
+
+void BrowserController::showOwners(const Selection& items, bool scroll) {
+  // Where what is selected in the view is (mitcad#1704): the rows of the
+  // body, sketch and occurrences each item is in, and the feature that made
+  // it in the timeline, get a secondary mark. Not selected: Delete and the
+  // row menus act on the selection alone. A selection picked in the
+  // browser's rows or the timeline is shown by its own rows and cells.
+  // The occurrences first, the bodies and sketches after them: the
+  // browser scrolls to the newest body's or sketch's row.
+  Selection occurrences;
+  Selection owners;
+  QSet<SelectionItem> ownersListed;
+  const auto addOwner = [&occurrences, &owners, &ownersListed](const SelectionItem& owner) {
+    if (!owner.owner.isEmpty() && !ownersListed.contains(owner)) {
+      ownersListed.insert(owner);
+      (owner.kind == SelectKind::Component ? occurrences : owners).append(owner);
+    }
+  };
+  QStringList features;
+  QSet<QString> featuresListed;
+  const auto addFeature = [this, &features, &featuresListed](const QString& uid) {
+    if (!uid.isEmpty() && !featuresListed.contains(uid) && m_snapshot.feature(uid) != nullptr) {
+      featuresListed.insert(uid);
+      features.append(uid);
+    }
+  };
+  // A body's last feature (the `bodies` query's `last_feature`), else the
+  // feature that made it.
+  const auto bodyFeature = [this](const QString& body) {
+    const auto found = m_snapshot.bodies.constFind(body);
+    if (found != m_snapshot.bodies.cend() && !found->lastFeature.isEmpty()) {
+      return found->lastFeature;
+    }
+    return SelectionItem{SelectKind::Body, body, QString(), QString()}.creatingFeature();
+  };
+  for (const SelectionItem& item : items) {
+    switch (item.kind) {
+    case SelectKind::Face:
+    case SelectKind::Edge:
+    case SelectKind::Vertex: {
+      addOwner(SelectionItem{SelectKind::Body, item.owner, QString(), QString(), item.occurrence});
+      // A face's own feature (F3 of F3:side(c1)) where the timeline has
+      // it; an edge, a vertex or a face of an import the body's last.
+      const QString made = item.creatingFeature();
+      addFeature(m_snapshot.feature(made) != nullptr ? made : bodyFeature(item.owner));
+      break;
+    }
+    case SelectKind::Profile:
+    case SelectKind::SketchCurve:
+    case SelectKind::SketchPoint:
+    case SelectKind::SketchConstraint:
+    case SelectKind::SketchDimension:
+      addOwner(SelectionItem{SelectKind::Sketch, item.owner, QString(), QString(), item.occurrence});
+      addFeature(item.owner);
+      break;
+    case SelectKind::Body:
+      addFeature(bodyFeature(item.owner));
+      break;
+    case SelectKind::Component:
+      break;
+    default:
+      // A sketch, a construction feature or a feature: itself.
+      addFeature(item.creatingFeature());
+      break;
+    }
+    // The occurrences the item is in, from the root (a picked occurrence's
+    // own row is selected).
+    const QStringList path = item.occurrence.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    const int depth = static_cast<int>(path.size());
+    const int last = item.kind == SelectKind::Component ? depth - 1 : depth;
+    for (int at = 1; at <= last; ++at) {
+      const QString occurrence = path.mid(0, at).join(QLatin1Char('/'));
+      addOwner(SelectionItem{SelectKind::Component, m_snapshot.occurrenceComponent(occurrence), QString(), QString(),
+                             occurrence});
+    }
+  }
+  m_browser->setOwnerMarks(occurrences + owners, scroll);
+  m_timeline->setMarkedFeatures(features);
 }
 
 bool BrowserController::cancelEditing() {
@@ -448,8 +589,14 @@ void BrowserController::updateFailures() {
   // import left a note on (a placeholder of a skipped item is suppressed).
   const QVector<const DocumentSnapshot::Feature*> noted = m_snapshot.warnings();
   QStringList badge;
+  int fixable = 0;
   for (const DocumentSnapshot::Feature* feature : noted) {
     badge << QStringLiteral("%1: %2").arg(feature->name, feature->error);
+    fixable += std::max(feature->autoFix, 0);
+  }
+  // Those Auto Fix can fix: a click on the badge offers it (mitcad#1677).
+  if (fixable > 0) {
+    badge << autoFixBadgeHint(fixable);
   }
   m_warnings->setVisible(!noted.isEmpty());
   const int warnedCount = static_cast<int>(noted.size());
@@ -605,6 +752,9 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
   if (!visibilityInEveryMode(node) && !canChange(true)) {
     return;
   }
+  if (toggleIsolated(node)) {
+    return;
+  }
   bool done = false;
   // The light bulbs of every mode: one undo step, outside a command's.
   QJsonArray commands;
@@ -662,9 +812,14 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
   case BrowserNode::Type::Sketches:
   case BrowserNode::Type::Construction: {
     const bool sketches = node.type == BrowserNode::Type::Sketches;
+    // The sketches the folder holds: not those shown under their features
+    // (mitcad#1699).
+    const QHash<QString, int> used = sketches && m_browser->consumeSketches()
+                                         ? BrowserPanel::sketchUsers(m_snapshot, node.component)
+                                         : QHash<QString, int>();
     for (const DocumentSnapshot::Feature& feature : m_snapshot.features) {
       if (feature.component == node.component && feature.isActive() &&
-          (sketches ? feature.isAnySketch() : feature.isConstruction())) {
+          (sketches ? feature.isAnySketch() && !used.contains(feature.uid) : feature.isConstruction())) {
         commands.append(cmd("set_feature_visible", {{QStringLiteral("uid"), feature.uid},
                                                     {QStringLiteral("visible"), show}}));
       }
@@ -701,8 +856,20 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
   } else if (node.type == BrowserNode::Type::Component && !node.occurrence.isEmpty()) {
     condition = occurrenceCondition(node.occurrence);
   }
+  // Hidden by its light bulb and left out by Isolate (mitcad#1700): shown
+  // and added to the isolation, one undo step.
+  const bool joins = show && node.isolatedOut && !m_snapshot.isolation.isEmpty() && !commands.isEmpty();
+  if (joins) {
+    commands.append(isolationCommand(isolationWith(node)));
+    if (label.isEmpty()) {
+      label = tr("Show %1").arg(node.name);
+    }
+  }
   if (!commands.isEmpty()) {
     done = m_host.runVisibilityCommands(commands, label);
+    if (done && joins) {
+      qDebug().noquote() << QStringLiteral("Isolation: added %1").arg(node.path);
+    }
   }
   if (done) {
     const QString during = m_host.activeCommandName();
@@ -713,6 +880,65 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
       conditionRemoved(node.name);
     }
   }
+}
+
+bool BrowserController::toggleIsolated(const BrowserNode& node) {
+  const Selection& isolation = m_snapshot.isolation;
+  if (isolation.isEmpty() || !node.visible ||
+      (node.type != BrowserNode::Type::Body && node.type != BrowserNode::Type::Bodies &&
+       (node.type != BrowserNode::Type::Component || node.occurrence.isEmpty()))) {
+    return false;
+  }
+  Selection items;
+  QString verb;
+  if (node.isolatedOut) {
+    // Shown by its light bulb, hidden by the isolation alone: it joins it.
+    items = isolationWith(node);
+    verb = QStringLiteral("added");
+  } else if (node.type != BrowserNode::Type::Bodies) {
+    // Isolated on its own beside other items: it leaves the isolation,
+    // unless that would leave nothing isolated (all shown again) or
+    // something else still isolates it; then its light bulb hides it.
+    for (const SelectionItem& entry : isolation) {
+      if (!isolationEntryOf(entry, node)) {
+        items << entry;
+      }
+    }
+    if (items.size() == isolation.size() || items.isEmpty() || isolationShowsRow(items, node)) {
+      return false;
+    }
+    verb = QStringLiteral("removed");
+  } else {
+    return false;
+  }
+  QJsonArray commands;
+  commands.append(isolationCommand(items));
+  if (m_host.runVisibilityCommands(commands, QString())) {
+    qDebug().noquote() << QStringLiteral("Isolation: %1 %2").arg(verb, node.path);
+  }
+  return true;
+}
+
+Selection BrowserController::isolationWith(const BrowserNode& node) const {
+  Selection items = m_snapshot.isolation;
+  SelectionItem added;
+  added.occurrence = node.occurrence;
+  if (node.type == BrowserNode::Type::Body) {
+    added.kind = SelectKind::Body;
+    added.owner = node.uid;
+    items << added;
+  } else if (node.type == BrowserNode::Type::Component) {
+    added.kind = SelectKind::Component;
+    items << added;
+  } else if (node.type == BrowserNode::Type::Bodies) {
+    const DocumentSnapshot::Component* component = m_snapshot.component(node.component);
+    for (const QString& uid : component != nullptr ? component->bodies : QStringList()) {
+      added.kind = SelectKind::Body;
+      added.owner = uid;
+      items << added;
+    }
+  }
+  return items;
 }
 
 QString BrowserController::occurrenceCondition(const QString& path) const {
@@ -924,7 +1150,7 @@ void BrowserController::deleteNode(const BrowserNode& node) {
   const QVector<BrowserNode> selected = m_browser->selectedNodes();
   const bool inSelection = std::any_of(selected.begin(), selected.end(), [&node](const BrowserNode& other) {
     return other.type == node.type && other.uid == node.uid && other.occurrence == node.occurrence &&
-           other.sketch == node.sketch;
+           other.sketch == node.sketch && other.feature == node.feature;
   });
   deleteNodes(inSelection ? selected : QVector<BrowserNode>{node});
 }
@@ -1267,8 +1493,10 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
   const bool isolated = !m_host.isolation().isEmpty();
   const auto visibility = [&] {
     if (node.hasEye) {
-      menu.add(node.visible ? QStringLiteral("eye-off") : QStringLiteral("eye"),
-               node.visible ? tr("Hide") : tr("Show"), [this, node] { toggleVisibility(node); });
+      // As the eye shows it: a row Isolate leaves out is hidden (mitcad#1700).
+      const bool eyeOn = node.visible && !node.isolatedOut;
+      menu.add(eyeOn ? QStringLiteral("eye-off") : QStringLiteral("eye"), eyeOn ? tr("Hide") : tr("Show"),
+               [this, node] { toggleVisibility(node); });
     }
   };
   // Transparent (mitcad#1093) on a body's or a component's row: for the
@@ -1406,7 +1634,9 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       moveEntry();
       const DocumentSnapshot::Occurrence* placed = occurrence(node.occurrence);
       const bool grounded = placed != nullptr && placed->grounded;
-      menu.add(QStringLiteral("ground"), grounded ? tr("Unground") : tr("Ground"), [this, node, grounded] {
+      // "Ground" told apart from the render environment's ground (mitcad#1475).
+      const QString groundText = grounded ? tr("Unground") : tr("Ground", "assembly: fix an occurrence in place");
+      menu.add(QStringLiteral("ground"), groundText, [this, node, grounded] {
         if (canChange() &&
             m_host.runModelCommand(cmd("ground_occurrence", {{QStringLiteral("occurrence"), node.occurrence},
                                                              {QStringLiteral("grounded"), !grounded}}))) {

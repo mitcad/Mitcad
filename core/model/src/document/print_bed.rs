@@ -5,7 +5,8 @@
 //! appearance's face is, so it follows the body's edits, and it applies to
 //! every occurrence of the body. Setting and clearing it is an undo step
 //! that recomputes nothing but print-shaped holes, whose roofs point away
-//! from it (mitcad#1515).
+//! from it (mitcad#1515), and print-bridged holes, whose recesses that open
+//! toward it are bridged (mitcad#1516).
 //!
 //! The 3D print export turns the bodies onto it (`exchange/bed.rs`), and
 //! Print Analysis starts from it. A face that is gone or no longer planar
@@ -137,10 +138,12 @@ impl<K: Kernel> Document<K> {
         let mut attributes = self.body_attributes(uid);
         attributes.print_bed_face = assigned;
         // Print-shaped holes take their roofs' direction from the bed
-        // (mitcad#1515): they are evaluated again, the rest stays.
-        let print_shaped = self.state.features.iter().any(
-            |entry| matches!(&entry.def, FeatureDef::Hole(hole) if !hole.print_shape.is_round()),
-        );
+        // (mitcad#1515), print-bridged holes whether their recesses open toward it
+        // (mitcad#1516): they are evaluated again, the rest stays.
+        let print_shaped = self.state.features.iter().any(|entry| {
+            matches!(&entry.def, FeatureDef::Hole(hole)
+                if !hole.print_shape.is_round() || !hole.print_bridging.is_none())
+        });
         self.set_attributes_with(uid, verb, attributes, print_shaped)
     }
 

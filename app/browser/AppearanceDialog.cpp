@@ -468,7 +468,7 @@ void AppearanceDialog::loadSources() {
   m_sources = makeTextureSources(m_textureSettings);
   m_building = true;
   m_source->clear();
-  m_source->addItem(themeIcon(QStringLiteral("appearance")), tr("Appearances: Library and This Design"));
+  m_source->addItem(themeIcon(QStringLiteral("appearance")), tr("Appearances: library and this design"));
   int index = 0;
   for (std::size_t i = 0; i < m_sources.size(); ++i) {
     m_source->addItem(m_sources[i]->name(), m_sources[i]->id());
@@ -536,7 +536,7 @@ void AppearanceDialog::showCategories() {
   };
   TextureSource* source = currentSource();
   if (source == nullptr) {
-    fill({tr("Library"), tr("This Design")});
+    fill({tr("Library"), tr("This design")});
     return;
   }
   fill({});
@@ -884,7 +884,7 @@ void AppearanceDialog::refresh() {
     item->setFont(font);
   };
   const qreal ratio = devicePixelRatioF();
-  const QVector<AppearanceSection> groups = appearanceSections(m_appearances, QString(), tr("This Design"));
+  const QVector<AppearanceSection> groups = appearanceSections(m_appearances, QString(), tr("This design"));
   QStringList members;
   for (const AppearanceSection& group : groups) {
     header(group);

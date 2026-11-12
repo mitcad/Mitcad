@@ -271,6 +271,14 @@ let a = s.analyze();                           // a.dof, a.body_dof, a.redundant
   translation, one turn from the rotation, turns about z, y and x as
   angles in that order). Between two free sides `a` moves. Only joints
   that close loops are iterated.
+- **Rigid poses.** Every motion folded into a body's pose (placing, a
+  run's result, turning over) leaves it a rotation to rounding
+  (`Pose::rigid`: the orthogonal polar factor when it is off by at most
+  1e-3, by the iteration `X ← X·(3I − XᵀX)/2`), and `Pose::inverse` is
+  the inverse of that rigid pose (mitcad#1668). Frames a little off a
+  rotation (`RᵀR = S`) then no longer double their error with each
+  placing (`S²`): poses stay within about 1e-15 of a rotation however
+  often they are placed (`tests/rigid.rs`).
 - **Half turns.** The skew part of a rotation also vanishes at half a
   turn; a run that ends more than a quarter turn off turns the joint's
   body over about the error's axis and iterates again (up to four runs).

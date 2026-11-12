@@ -694,3 +694,131 @@ fn a_chain_places_each_link_in_order() {
     assert!(r.iterations <= 1, "{r:?}");
     assert_holds(&s, &joints);
 }
+
+/// The largest entry of `|RᵀR − I|` of the pose's rotation.
+fn orthonormality_error(p: &Pose) -> f64 {
+    let m = &p.rotation;
+    let mut worst: f64 = 0.0;
+    for r in 0..3 {
+        for c in 0..3 {
+            let product: f64 = (0..3).map(|k| m[k][r] * m[k][c]).sum();
+            worst = worst.max((product - if r == c { 1.0 } else { 0.0 }).abs());
+        }
+    }
+    worst
+}
+
+/// `p` with its rotation bent off a rotation by about `off`.
+fn bent(p: Pose, off: f64) -> Pose {
+    let mut q = p;
+    q.rotation[0][0] += off;
+    q.rotation[1][2] -= off;
+    q.rotation[2][1] += 0.5 * off;
+    q
+}
+
+#[test]
+fn a_pose_a_little_off_is_straightened_and_inverted_rigidly() {
+    // mitcad#1668: the rigid pose nearest to one a little off, and the
+    // inverse of that, not of the bent rotation's transpose.
+    let exact = skew_turn(0.9).after(&at([40.0, -15.0, 5.0]));
+    assert_eq!(exact.rigid(), exact, "a rotation is kept bit for bit");
+    for off in [1e-12, 1e-9, 1e-6] {
+        let p = bent(exact, off);
+        assert!(orthonormality_error(&p) > 0.5 * off);
+        let rigid = p.rigid();
+        assert!(orthonormality_error(&rigid) <= 1e-14, "{off}: {rigid:?}");
+        assert_eq!(rigid.translation, p.translation);
+        let (_, turn) = rigid.distance(&exact);
+        assert!(turn < 10.0 * off, "{off}: {turn}");
+        let inverse = p.inverse();
+        assert!(
+            orthonormality_error(&inverse) <= 1e-14,
+            "{off}: {inverse:?}"
+        );
+        let (d, turn) = inverse.after(&rigid).distance(&Pose::IDENTITY);
+        assert!(d < 1e-12 && turn < 1e-14, "{off}: {d} mm, {turn}");
+    }
+    // A matrix far from any rotation is not a rotation rounding moved.
+    let scaled = Pose {
+        rotation: [[2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        translation: [1.0, 2.0, 3.0],
+    };
+    assert_eq!(scaled.rigid(), scaled);
+}
+
+#[test]
+fn placing_from_frames_a_little_off_keeps_the_poses_rigid() {
+    // mitcad#1668: a chain of six links whose frames are 1e-12 off a
+    // rotation, placed again and again (each solve places every link from
+    // the one before it) and dragged: the links' poses stay rotations to
+    // rounding instead of doubling the frames' error with each placing.
+    let mut s = RigidSystem::new();
+    let base = s.add_body(true);
+    let links: Vec<BodyId> = (0..6).map(|_| s.add_body(false)).collect();
+    let mut previous = base;
+    let mut joints = Vec::new();
+    for (i, link) in links.iter().enumerate() {
+        let k = i as f64;
+        let frame_a = bent(
+            Pose::rotation([k, -2.0, 3.0], [0.3, -0.5, 0.8], 0.4 + 0.1 * k).after(&at([
+                20.0 * k,
+                5.0,
+                -3.0,
+            ])),
+            1e-12,
+        );
+        let frame_b = bent(
+            Pose::rotation([0.0, k, 1.0], [-0.6, 0.2, 0.7], 1.1 - 0.2 * k).after(&at([
+                40.0,
+                10.0 * k,
+                2.0,
+            ])),
+            1e-12,
+        );
+        assert!(orthonormality_error(&frame_a) > 5e-13);
+        assert!(orthonormality_error(&frame_b) > 5e-13);
+        let j = s
+            .add_joint(RigidJoint {
+                motions: vec![JointMotion {
+                    target: Some(0.3),
+                    ..JointMotion::free(Rz)
+                }],
+                ..joint(Some(*link), frame_a, Some(previous), frame_b, &[])
+            })
+            .unwrap();
+        joints.push(j);
+        previous = *link;
+    }
+    let assert_rigid = |s: &RigidSystem, when: &str| {
+        for link in &links {
+            let e = orthonormality_error(&s.body_pose(*link));
+            assert!(e <= 1e-14, "{when}: link {link:?} is {e} off a rotation");
+        }
+    };
+    for round in 0..40 {
+        for (i, j) in joints.iter().enumerate() {
+            let target = 0.3 + 0.05 * (round + i) as f64;
+            s.set_motion(
+                *j,
+                JointMotion {
+                    target: Some(target),
+                    ..JointMotion::free(Rz)
+                },
+            )
+            .unwrap();
+        }
+        let r = s.solve(&opts());
+        assert!(r.is_ok(), "round {round}: {r:?}");
+        assert_holds(&s, &joints);
+        assert_rigid(&s, &format!("solve {round}"));
+    }
+    // Drags fold many iterations' motions into the poses.
+    let last = *links.last().unwrap();
+    for step in 0..10 {
+        let grab = moved(&s, last, [100.0, 30.0, 0.0]);
+        let target = [grab[0] + 1.0, grab[1] - 0.5, grab[2] + 0.25 * step as f64];
+        s.drag(last, grab, target, &opts());
+        assert_rigid(&s, &format!("drag {step}"));
+    }
+}

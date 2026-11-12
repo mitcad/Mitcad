@@ -52,7 +52,9 @@ QVector<FindResult> findInDesign(const DocumentSnapshot& snapshot, const FindOpt
     return options.visibility == FindOptions::Visibility::Any ||
            (options.visibility == FindOptions::Visibility::Visible) == visible;
   };
-  const QString rootName = snapshot.components.isEmpty() ? QStringLiteral("Root") : snapshot.components.first().name;
+  const QString rootName = snapshot.components.isEmpty()
+                               ? shownComponentName(QStringLiteral("C0"), QStringLiteral("Root"))
+                               : shownComponentName(snapshot.components.first().uid, snapshot.components.first().name);
 
   // The bodies of a component at one place.
   const auto bodiesOf = [&](const QString& component, const QString& occurrence, const QString& where, bool shown) {

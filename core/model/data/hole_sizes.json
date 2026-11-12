@@ -1,5 +1,5 @@
 {
-  "about": "Clearance holes and screw head recesses for ISO metric screws, for the Hole feature's Clearance holes (mitcad#903). Mitcad's own data (MIT licence): the dimensions tabulated from the standards each section names, in millimetres and degrees. The sizes are those of MitCad's fastener tables (tools/libraries/make-fastener-library.py), M1.6 to M24; a section without a size has no row for it. The commands store the values the panel fills in as plain values: this table is only where they come from.",
+  "about": "Clearance holes and screw head recesses for ISO metric screws, for the Hole feature's Clearance holes (mitcad#903), and nut pockets and heat-set insert holes for printed parts (mitcad#1518). Mitcad's own data (MIT licence): the dimensions tabulated from the standards each section names, in millimetres and degrees. The sizes are those of MitCad's fastener tables (tools/libraries/make-fastener-library.py), M1.6 to M24; a section without a size has no row for it. The commands store the values the panel fills in as plain values: this table is only where they come from.",
   "sizes": ["M1.6", "M2", "M2.5", "M3", "M4", "M5", "M6", "M8", "M10", "M12", "M14", "M16", "M20", "M24"],
   "iso_273": {
     "title": "ISO 273 (ISO 20273): clearance holes for bolts and screws",
@@ -80,5 +80,42 @@
     "about": "A tapped hole's countersink: just over the thread's major diameter, factor times it rounded to 0.1 mm (at least 0.1 mm over it), at 90 degrees, so that the first thread does not raise a burr.",
     "factor": 1.1,
     "angle": 90
+  },
+  "iso_4032": {
+    "title": "ISO 4032: hexagon regular nuts (style 1)",
+    "about": "The nut's width across flats s and its height m (max) for the nominal thread diameter d, the same values as MitCad's nut library (tools/libraries/make-fastener-library.py). A nut pocket (mitcad#1518) is the nut with the clearance of nut_pocket.",
+    "rows": [
+      {"size": "M1.6", "across_flats": 3.2, "height": 1.3},
+      {"size": "M2", "across_flats": 4, "height": 1.6},
+      {"size": "M2.5", "across_flats": 5, "height": 2},
+      {"size": "M3", "across_flats": 5.5, "height": 2.4},
+      {"size": "M4", "across_flats": 7, "height": 3.2},
+      {"size": "M5", "across_flats": 8, "height": 4.7},
+      {"size": "M6", "across_flats": 10, "height": 5.2},
+      {"size": "M8", "across_flats": 13, "height": 6.8},
+      {"size": "M10", "across_flats": 16, "height": 8.4},
+      {"size": "M12", "across_flats": 18, "height": 10.8},
+      {"size": "M14", "across_flats": 21, "height": 12.8},
+      {"size": "M16", "across_flats": 24, "height": 14.8},
+      {"size": "M20", "across_flats": 30, "height": 18},
+      {"size": "M24", "across_flats": 36, "height": 21.5}
+    ]
+  },
+  "nut_pocket": {
+    "about": "A printed part's hex pocket for an ISO 4032 nut (mitcad#1518): the nut's width across flats plus the clearance, and its height plus the clearance as the pocket's depth (M3: 5.5 + 0.3 = 5.8 across the flats, 2.4 + 0.3 = 2.7 deep). The clearance is MitCad's own default for printed pockets, which the hole_sizes query's nut_clearance replaces.",
+    "clearance": 0.3
+  },
+  "heat_set_insert": {
+    "title": "Heat-set threaded inserts for printed parts: ruthex's published hole diameters and insert lengths",
+    "about": "The hole for a heat-set threaded insert (mitcad#1518): the hole diameter is the drill size ruthex publishes for its threaded inserts of each thread size (its drill bit set for threaded inserts: M2 3.2 mm, M2.5 and M3 4 mm, M4 5.6 mm, M5 6.4 mm, M6 8 mm), the length that of its standard insert of the size (RX-M2x4, RX-M2.5x5.7, RX-M3x5.7, RX-M4x8.1, RX-M5x9.5, RX-M6x12.7). The hole's depth is the insert's length plus MitCad's own allowance of 1 mm, room for the plastic the insert displaces. The diameters and lengths are dimensions of commercial products, facts tabulated here as MitCad's own data (MIT licence); no text or drawing of the source is copied. The other sizes have no insert in the series.",
+    "allowance": 1.0,
+    "rows": [
+      {"size": "M2", "diameter": 3.2, "length": 4.0},
+      {"size": "M2.5", "diameter": 4.0, "length": 5.7},
+      {"size": "M3", "diameter": 4.0, "length": 5.7},
+      {"size": "M4", "diameter": 5.6, "length": 8.1},
+      {"size": "M5", "diameter": 6.4, "length": 9.5},
+      {"size": "M6", "diameter": 8.0, "length": 12.7}
+    ]
   }
 }

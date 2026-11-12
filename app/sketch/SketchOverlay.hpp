@@ -52,8 +52,10 @@ struct Projection {
 // Lays out a dimension of a sketch (a placed one, or one being placed).
 DimensionShape dimensionShape(const DimensionData& dimension, const SketchModel& model,
                               const Projection& projection, const QString& text);
-// The default place of a dimension's value.
-V2 defaultTextPosition(const DimensionData& dimension, const SketchModel& model, double pixel);
+// The default place of a dimension's value; a full circle's radius or
+// diameter keeps clear of the values already near it in the view
+// (mitcad#1673).
+V2 defaultTextPosition(const DimensionData& dimension, const SketchModel& model, const Projection& projection);
 // What a dimension measures on the current geometry (mm or radians), when
 // it can be measured.
 std::optional<double> measure(const DimensionData& dimension, const SketchModel& model);

@@ -889,7 +889,18 @@ impl<K: Kernel> Evaluate<K> for SweepDef {
                 };
                 ctx.kernel.face_sweep(spec, &profile).map_err(kernel_error)
             } else if surfaces.is_empty() {
-                ctx.kernel.sweep(spec).map_err(|e| e.to_string())
+                let tool = ctx.kernel.sweep(spec).map_err(|e| e.to_string())?;
+                // (mitcad#1697) A profile that passes through itself along
+                // the path is built in pieces fused into one solid: a note.
+                if ctx
+                    .kernel
+                    .infos(&tool)
+                    .iter()
+                    .any(|info| info == crate::sweeps::FOLDS_RESOLVED)
+                {
+                    ctx.inform(crate::sweeps::FOLDS_RESOLVED);
+                }
+                Ok(tool)
             } else {
                 let guide: Vec<GuideSurface<'_, K::Shape>> = surfaces
                     .iter()

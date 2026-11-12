@@ -126,6 +126,7 @@ private:
   QCheckBox* m_grid = nullptr;
   QCheckBox* m_dimensions = nullptr;
   QCheckBox* m_constraints = nullptr;
+  QCheckBox* m_points = nullptr; // Show points (mitcad#1705)
   QCheckBox* m_profiles = nullptr;
   QCheckBox* m_hideAbove = nullptr;
   QCheckBox* m_spatial = nullptr; // 3D Sketch: converts the sketch (mitcad#1544)

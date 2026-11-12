@@ -511,7 +511,7 @@ private:
     const std::string key = std::string(m_dark ? "dark/" : "light/") + label.ToCString();
     auto found = m_textures.find(key);
     if (found == m_textures.end()) {
-      const QImage image = faceImage(QString::fromLatin1(label.ToCString()), glassFor(m_dark));
+      const QImage image = faceImage(QString::fromUtf8(label.ToCString()), glassFor(m_dark));
       found = m_textures.emplace(key, textureOf(image)).first;
     }
     occ::handle<Graphic3d_AspectFillArea3d> aspect =

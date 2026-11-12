@@ -4,6 +4,8 @@
 // Extrude's automatic operation; CommandDef::autoOperation); an edit keeps
 // its stored operation (mitcad#868, AutoOperationPolicy). The rest of the
 // session is in CommandSession.cpp.
+#include <utility>
+
 #include <QDebug>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -30,6 +32,12 @@ QStringList ownersOf(const Selection& items) {
 void CommandSession::startAutoOperation() {
   const bool enabled = m_def.autoOperation && m_analysis.isEmpty() && slotOf(kOperation).has_value();
   m_autoOperation.start(enabled, isEditing());
+  // Repeat (mitcad#1686) gave the operation the last OK had chosen by
+  // hand: it stays, as the user's own choice.
+  if (std::exchange(m_operationRepeated, false) && m_autoOperation.active()) {
+    m_autoOperation.disable();
+    qDebug().noquote() << QStringLiteral("%1: operation repeated as chosen by hand").arg(m_def.name);
+  }
   if (enabled && isEditing()) {
     // An edit keeps the operation stored with the feature (mitcad#868):
     // only the user changes it.

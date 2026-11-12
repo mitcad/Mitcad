@@ -58,7 +58,7 @@ def run(app, cli, output, binary_path=None):
         work = Path(temporary)
         discovery = work / "discovery"
         env = dict(os.environ, MITCAD_MCP_DISCOVERY_DIR=str(discovery),
-                   MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_LANGUAGE="en", MITCAD_NO_UPDATE_CHECK="1",
+                   MITCAD_RESULT_STORE="off", MITCAD_START_PAGE="0", MITCAD_NEW_DESIGN_VIEW="0", MITCAD_LANGUAGE="en", MITCAD_NO_UPDATE_CHECK="1",
                    QT_FORCE_STDERR_LOGGING="1")
 
         if binary_path:

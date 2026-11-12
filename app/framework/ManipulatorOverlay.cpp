@@ -25,7 +25,10 @@ namespace mitcad {
 namespace {
 
 // The handles' orange and the selection's blue for the one dragged or
-// hovered; the ink of the boxes over the view (mitcad#1041).
+// hovered; the ink of the boxes over the view (mitcad#1041). An
+// axis-colored handle (Free Move's) dragged or hovered takes HandleActive
+// instead, none of the axis colors (mitcad#1707: the selection's blue is
+// close to the Z axis').
 const QColor kHandleColor = viewColor(ColorRole::Handle, false);
 const QColor kActiveColor = viewColor(ColorRole::Select, false);
 const QColor kInk = viewColor(ColorRole::ViewInk, false);
@@ -41,9 +44,12 @@ const QColor kHalo = [] {
 // device-independent ones: scaled by the screen's device pixel ratio): its
 // length or radius, how far from it a press takes it, a ring's knob, and
 // its strokes. Free Move's handles (Manipulator::large, mitcad#1581) are
-// about 1.5 times larger; the other commands' keep the sizes they had, so
-// that their handles take no click they did not take before (a BUILD side
-// click flush with a part's end, beside a Profile's tilt ring).
+// about 1.5 times larger, and their arrows 1.3 times as long as their
+// rings' radius, so that each arrow's head lies outside the rings, where
+// no ring's line covers it in a front or a top view (mitcad#1707); the
+// other commands' keep the sizes they had, so that their handles take no
+// click they did not take before (a BUILD side click flush with a part's
+// end, beside a Profile's tilt ring).
 struct HandleSize {
   double arrow;
   double ring;
@@ -54,16 +60,34 @@ struct HandleSize {
   double scale; // an arrow's head and knob
 };
 HandleSize sizeOf(const Manipulator& m) {
-  return m.large ? HandleSize{50.0, 100.0, 12.0, 8.0, 4.5, 2.6, 1.5} : HandleSize{34.0, 70.0, 9.0, 6.0, 3.0, 1.8, 1.0};
+  return m.large ? HandleSize{130.0, 100.0, 12.0, 8.0, 4.5, 2.6, 1.5} : HandleSize{34.0, 70.0, 9.0, 6.0, 3.0, 1.8, 1.0};
 }
 constexpr double kToggleReach = 13.0; // a pattern's instance (P9)
 constexpr double kHaloExtra = 2.5;    // the halo's width beyond a stroke
 constexpr double kPi = 3.14159265358979323846;
+// Seen edge-on (mitcad#1707): within 15 degrees of the view direction.
+const double kEdgeOnSine = std::sin(15.0 * kPi / 180.0);
+const double kEdgeOnCosine = std::cos(15.0 * kPi / 180.0);
+constexpr double kFaintOpacity = 0.4; // a handle seen edge-on, not hovered
 
 // An arrow's or a ring's color while neither hovered nor dragged: its
 // role's (Manipulator::color; Free Move's by its axis, mitcad#1581).
 QColor handleColor(const Manipulator& manipulator) {
   return manipulator.color == ColorRole::Handle ? kHandleColor : viewColor(manipulator.color, false);
+}
+
+// The role of a handle hovered or dragged: the selection's blue, or for an
+// axis-colored one (Free Move's) HandleActive, none of the axis colors
+// (mitcad#1707).
+ColorRole activeRole(const Manipulator& manipulator) {
+  const bool axis = manipulator.color == ColorRole::AxisX || manipulator.color == ColorRole::AxisY ||
+                    manipulator.color == ColorRole::AxisZ;
+  return axis ? ColorRole::HandleActive : ColorRole::Select;
+}
+
+QColor activeColor(const Manipulator& manipulator) {
+  const ColorRole role = activeRole(manipulator);
+  return role == ColorRole::Select ? kActiveColor : viewColor(role, false);
 }
 
 // A stroke drawn over its halo (mitcad#1581).
@@ -219,6 +243,9 @@ void ManipulatorOverlay::publishBoxes() {
     if (handle.manipulator.kind == Manipulator::Kind::Marker) {
       continue;
     }
+    if (handle.manipulator.kind == Manipulator::Kind::Arrow && seenEdgeOn(handle.manipulator)) {
+      continue; // a large arrow seen end-on takes no press (mitcad#1707)
+    }
     Drawn drawn;
     try {
       drawn = draw(handle);
@@ -342,6 +369,17 @@ double ManipulatorOverlay::pixelSize(const gp_Pnt& at) const {
   return pixels > 1e-9 ? 1.0 / pixels : 1.0;
 }
 
+bool ManipulatorOverlay::seenEdgeOn(const Manipulator& m) const {
+  // How far the handle's axis (a ring's) or direction (an arrow's) lies
+  // along the view direction: a ring whose axis is nearly across it lies
+  // nearly in it, an arrow nearly along it points at the viewer.
+  const double along = std::abs(gp_Vec(m.direction).Dot(gp_Vec(m_viewer.viewDirection())));
+  if (m.kind == Manipulator::Kind::Ring) {
+    return along < kEdgeOnSine;
+  }
+  return m.kind == Manipulator::Kind::Arrow && m.large && along > kEdgeOnCosine;
+}
+
 ManipulatorOverlay::Drawn ManipulatorOverlay::draw(const Handle& handle) const {
   Drawn drawn;
   const Manipulator& m = handle.manipulator;
@@ -428,23 +466,42 @@ int ManipulatorOverlay::boxAt(const QPointF& position) const {
 
 int ManipulatorOverlay::handleAt(const QPointF& position) const {
   // The handle the position is the most within the reach of (sizeOf: a
-  // larger handle reaches further, mitcad#1581).
+  // larger handle reaches further, mitcad#1581). Seen edge-on
+  // (seenEdgeOn, mitcad#1707), a large arrow takes no press, and a ring
+  // none within an arrow's reach: seen head-on, a ring about an axis in
+  // the view's plane is drawn as a line over the arrows, which win.
+  bool nearArrow = false;
+  for (const Handle& handle : m_handles) {
+    const Manipulator& m = handle.manipulator;
+    if (m.kind != Manipulator::Kind::Arrow || seenEdgeOn(m)) {
+      continue;
+    }
+    const Drawn drawn = draw(handle);
+    if (drawn.valid && distanceToSegment(position, drawn.handle, drawn.tip) < sizeOf(m).grab) {
+      nearArrow = true;
+      break;
+    }
+  }
   int best = -1;
   double nearest = 0.0; // how far within its reach; none outside it
   for (std::size_t i = 0; i < m_handles.size(); ++i) {
-    if (m_handles[i].manipulator.kind == Manipulator::Kind::Marker) {
+    const Manipulator& m = m_handles[i].manipulator;
+    if (m.kind == Manipulator::Kind::Marker) {
       continue; // annotations never intercept point selection or dragging
+    }
+    if ((m.kind == Manipulator::Kind::Arrow || (m.kind == Manipulator::Kind::Ring && nearArrow)) && seenEdgeOn(m)) {
+      continue;
     }
     const Drawn drawn = draw(m_handles[i]);
     if (!drawn.valid) {
       continue;
     }
-    const HandleSize size = sizeOf(m_handles[i].manipulator);
+    const HandleSize size = sizeOf(m);
     double beyond = 0.0; // the distance less the reach
-    if (m_handles[i].manipulator.kind == Manipulator::Kind::Toggle) {
+    if (m.kind == Manipulator::Kind::Toggle) {
       const QPointF d = position - drawn.handle;
       beyond = std::hypot(d.x(), d.y()) - kToggleReach;
-    } else if (m_handles[i].manipulator.kind == Manipulator::Kind::Arrow) {
+    } else if (m.kind == Manipulator::Kind::Arrow) {
       beyond = distanceToSegment(position, drawn.handle, drawn.tip) - size.grab;
     } else {
       const QPointF d = position - drawn.handle;
@@ -651,6 +708,9 @@ bool ManipulatorOverlay::viewerEvent(QEvent* event) {
       m_turned = 0.0;
       m_visualValue = handle.value;
       m_dragStep = 0.0;
+      // For UI tests: the color it is drawn in while dragged (mitcad#1707).
+      qDebug().noquote() << QStringLiteral("Handle drag %1 %2: color %3")
+                                .arg(m_command, handle.key, colorRoleName(activeRole(handle.manipulator)));
       if (handle.manipulator.kind == Manipulator::Kind::Arrow) {
         // One step for the whole drag (mitcad#1431), logged for the UI
         // tests with the zoom's step it may be finer than.
@@ -680,6 +740,17 @@ bool ManipulatorOverlay::viewerEvent(QEvent* event) {
     const int hover = handleAt(e->position());
     const int boxHover = boxAt(e->position());
     if (hover != m_hover || boxHover != m_boxHover) {
+      if (hover != m_hover) {
+        // For UI tests: the handle under the mouse and the color it is
+        // drawn in now (mitcad#1707).
+        if (hover >= 0) {
+          const Handle& handle = m_handles[static_cast<std::size_t>(hover)];
+          qDebug().noquote() << QStringLiteral("Handle hover %1 %2: color %3")
+                                    .arg(m_command, handle.key, colorRoleName(activeRole(handle.manipulator)));
+        } else {
+          qDebug().noquote() << QStringLiteral("Handle hover %1: none").arg(m_command);
+        }
+      }
       // A box shown only while its handle or itself is under the mouse
       // comes or goes (Manipulator::boxAtZero).
       m_hover = hover;
@@ -781,7 +852,12 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
       continue;
     }
     const bool active = static_cast<int>(i) == m_drag || static_cast<int>(i) == m_hover;
-    const QColor color = active ? kActiveColor : handleColor(m_handles[i].manipulator);
+    const QColor highlight = activeColor(m_handles[i].manipulator);
+    const QColor color = active ? highlight : handleColor(m_handles[i].manipulator);
+    // Seen edge-on and not under the mouse: fainter (mitcad#1707), Free
+    // Move's; the other commands' handles are drawn as they were.
+    const bool faint = !active && m_handles[i].manipulator.large && seenEdgeOn(m_handles[i].manipulator);
+    painter.setOpacity(faint ? kFaintOpacity : 1.0);
     if (m_handles[i].manipulator.kind == Manipulator::Kind::Marker) {
       const QPointF at = drawn.handle;
       painter.setPen(QPen(kInk, 2.0));
@@ -799,7 +875,7 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
     } else if (m_handles[i].manipulator.kind == Manipulator::Kind::Toggle) {
       // A pattern's instance (P9): filled while it is made, hollow when
       // suppressed.
-      painter.setPen(QPen(active ? kActiveColor : kInk, 1.5));
+      painter.setPen(QPen(active ? highlight : kInk, 1.5));
       painter.setBrush(m_handles[i].manipulator.on ? color : QColor(Qt::white));
       painter.drawEllipse(drawn.handle, 6.0, 6.0);
     } else if (m_handles[i].manipulator.kind == Manipulator::Kind::Arrow) {
@@ -874,14 +950,15 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
     if (static_cast<int>(i) == m_drag && m_visualValue && snapped.valid) {
       // The moving arrow/knob follows the pointer continuously. This
       // separate tick and the numeric field identify what will be kept.
-      painter.setPen(QPen(kActiveColor, 1.0, Qt::DotLine));
+      painter.setPen(QPen(highlight, 1.0, Qt::DotLine));
       painter.drawLine(drawn.handle, snapped.handle);
-      painter.setPen(QPen(kActiveColor, 1.0));
+      painter.setPen(QPen(highlight, 1.0));
       painter.setBrush(kHandleColor);
       painter.drawEllipse(snapped.handle, 2.5, 2.5);
       painter.drawText(snapped.handle + QPointF(10, 18), tr("Snapped"));
     }
   }
+  painter.setOpacity(1.0);
   if (!m_hint.isEmpty()) {
     // A pill at the top of the view, over the model.
     const QRectF text = painter.fontMetrics().boundingRect(m_hint).adjusted(-14, -7, 14, 7);
@@ -971,6 +1048,20 @@ void ManipulatorOverlay::logPlaces() {
                          point(m.origin.Translated(gp_Vec(m.direction) * ((handle.value - m.base) * m.factor))))
               : QStringLiteral("center %1").arg(point(m.origin));
       lines << QStringLiteral("Handle world %1 %2: %3, color %4").arg(m_command, key, place, colorRoleName(m.color));
+      if (m.kind == Manipulator::Kind::Arrow) {
+        // Where its head is on the screen, for UI tests (mitcad#1707:
+        // Free Move's beyond the rings).
+        const QPoint head = mapTo(window(), drawn.tip.toPoint());
+        lines << QStringLiteral("Arrow head %1 %2 at %3,%4").arg(m_command, key).arg(head.x()).arg(head.y());
+      }
+      if (seenEdgeOn(m)) {
+        // Seen edge-on (mitcad#1707): a ring yields to the arrows, a large
+        // arrow takes no press.
+        lines << QStringLiteral("Handle seen edge-on %1 %2: %3")
+                     .arg(m_command, key,
+                          m.kind == Manipulator::Kind::Ring ? QStringLiteral("no press within an arrow's reach")
+                                                            : QStringLiteral("no press"));
+      }
     }
     if (index < m_boxes.size() && !m_boxes[index].isEmpty()) {
       // Where a click edits the value (mitcad#656).

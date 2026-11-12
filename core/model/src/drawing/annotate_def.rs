@@ -156,11 +156,29 @@ impl AnnotationType {
     pub fn wants(self) -> Want {
         match self {
             Self::Ordinate | Self::HoleTable => Want::Point,
-            Self::Angle | Self::EdgeExtension => Want::Line,
-            Self::Radius | Self::Diameter | Self::CenterMark | Self::CenterPattern => Want::Circle,
+            Self::Angle => Want::Straight,
+            Self::EdgeExtension => Want::Line,
+            Self::Radius | Self::Diameter => Want::Round,
+            Self::CenterMark | Self::CenterPattern => Want::Circle,
             Self::Datum => Want::Datum,
             _ => Want::Any,
         }
+    }
+
+    /// Whether its picks may be a centre line or a centre pattern's
+    /// circle the view draws ([`ViewPick::drawn`], mitcad#1693): not for
+    /// what draws centre lines itself, an edge extension or a table.
+    pub fn takes_drawn(self) -> bool {
+        !matches!(
+            self,
+            Self::CenterMark
+                | Self::Centerline
+                | Self::CenterPattern
+                | Self::EdgeExtension
+                | Self::HoleTable
+                | Self::PartsList
+                | Self::Balloon
+        )
     }
 }
 
@@ -188,6 +206,75 @@ pub enum Want {
     /// A model edge, whole, whatever its curve (mitcad#1546: the edge whose
     /// line Edit Line changes): no point and no face.
     Edge,
+    /// What a dimension whose picks choose its type picks (mitcad#1693):
+    /// as `Any`, and a centre pattern's circle.
+    Dimension,
+    /// What a radius or a diameter measures (mitcad#1693): a circle or a
+    /// round face, or a centre pattern's circle.
+    Round,
+    /// What an angle is between (mitcad#1693): a straight edge, or a
+    /// centre line the view draws (a centre mark's line, a centre
+    /// pattern's radial line, a centreline).
+    Straight,
+}
+
+/// A centre line or a centre pattern's circle that an annotation of the
+/// view (or the view's automatic centre marks) draws, picked as a line or
+/// a circle of its own (mitcad#1693): what a pick with it stands for in
+/// place of its edge or face, which names the circle it is drawn for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Drawn {
+    /// The circle (an arc over them where they stand on a part of it)
+    /// through the centres of the circles of the centre pattern
+    /// annotation `pattern` of the same view; the pick one of them.
+    PatternCircle { pattern: u32 },
+    /// The radial line of the centre pattern annotation `pattern` through
+    /// the centre of the pick's circle, one of the pattern's: from the
+    /// pattern's centre out past that circle.
+    PatternLine { pattern: u32 },
+    /// One line of the centre mark of the pick's circle, from its centre
+    /// toward `arm` on the sheet, past its rim.
+    CenterMark { arm: MarkArm },
+    /// The line of the centreline annotation `centerline` of the same
+    /// view; the pick its first.
+    Centerline { centerline: u32 },
+}
+
+/// Which line of a centre mark, from the circle's centre: toward the
+/// sheet's right, top, left or bottom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkArm {
+    Right,
+    Up,
+    Left,
+    Down,
+}
+
+impl MarkArm {
+    pub const ALL: [Self; 4] = [Self::Right, Self::Up, Self::Left, Self::Down];
+
+    /// Its direction on the sheet (unit).
+    pub fn direction(self) -> [f64; 2] {
+        match self {
+            Self::Right => [1.0, 0.0],
+            Self::Up => [0.0, 1.0],
+            Self::Left => [-1.0, 0.0],
+            Self::Down => [0.0, -1.0],
+        }
+    }
+
+    /// The one nearest a direction on the sheet.
+    pub fn nearest(d: [f64; 2]) -> Self {
+        Self::ALL
+            .into_iter()
+            .max_by(|a, b| {
+                let (da, db) = (a.direction(), b.direction());
+                (da[0] * d[0] + da[1] * d[1]).total_cmp(&(db[0] * d[0] + db[1] * d[1]))
+            })
+            .unwrap_or(Self::Right)
+    }
 }
 
 /// The direction a linear or an ordinate dimension measures along: the
@@ -239,6 +326,19 @@ pub struct ViewPick {
     /// `point` that piece's start, end or middle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_cut: Option<[f64; 2]>,
+    /// A centre line or a centre pattern's circle the view draws for this
+    /// pick's circle, picked as a line or a circle of its own
+    /// (mitcad#1693): the pick then stands for that, found again on every
+    /// draw from the circle (or the centreline's first pick) and the
+    /// annotation drawing it, so it follows the model as they do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawn: Option<Drawn>,
+    /// Which side of a torus face's axis it is picked on (mitcad#1694: a
+    /// fillet round a turned part seen from the side, whose outline is an
+    /// arc of its tube either side of the axis): a direction from the axis
+    /// that way, in its body's coordinates. The pick is then that arc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side: Option<[f64; 3]>,
 }
 
 impl ViewPick {
@@ -248,6 +348,25 @@ impl ViewPick {
     }
 
     fn check(&self) -> Result<(), String> {
+        if self.drawn.is_some()
+            && (self.point.is_some() || self.on_face.is_some() || self.on_cut.is_some())
+        {
+            return Err(
+                "a center line or a center pattern's circle is picked whole: no point".to_owned(),
+            );
+        }
+        if let Some(side) = self.side {
+            if self.face.is_none()
+                || self.edge.is_some()
+                || self.on_face.is_some()
+                || self.on_cut.is_some()
+            {
+                return Err("a side of an axis is a pick of a round face alone".to_owned());
+            }
+            if side.iter().any(|v| !v.is_finite()) {
+                return Err("a side of an axis is three numbers".to_owned());
+            }
+        }
         if let Some(on) = self.on_face {
             if self.face.is_none() || self.edge.is_some() || self.point.is_some() {
                 return Err("a point on a face is a pick of the face alone".to_owned());
@@ -509,6 +628,12 @@ impl ViewAnnotation {
         }
         for pick in &self.picks {
             pick.check()?;
+        }
+        if !kind.takes_drawn() && self.picks.iter().any(|p| p.drawn.is_some()) {
+            return Err(format!(
+                "a {name} is of the model's edges and faces, not of a center line or a center \
+                 pattern's circle"
+            ));
         }
         match (kind, self.along) {
             (AnnotationType::Linear, None) => {

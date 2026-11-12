@@ -442,3 +442,42 @@ fn links_are_saved_and_refused_when_they_do_not_fit() {
     assert!(rig.doc.features().all(|f| f.name != "MotionLink1"));
     assert!(rig.doc.features().count() < before);
 }
+
+/// Animate Joint's frames without a recompute (mitcad#1701): the rack
+/// follows its pinion frame by frame, its own position let go as Drive
+/// Joint lets it go, and the document stays as it is.
+#[test]
+fn animate_frames_take_the_linked_motion_along() {
+    let mut rig = rig();
+    rig.rack();
+    let pin_path = rig.pin.to_string();
+    let answer = query(
+        &rig.doc,
+        json!({"query": "joint_poses", "joint": "Joint2", "motion": "rz",
+               "values": [FRAC_PI_4, FRAC_PI_2]}),
+    );
+    let frames = answer["frames"].as_array().unwrap();
+    assert_eq!(frames.len(), 2, "{answer}");
+    for (frame, turn) in frames.iter().zip([FRAC_PI_4, FRAC_PI_2]) {
+        let rz = frame["values"][rig.knob.to_string()]["rz"]
+            .as_f64()
+            .unwrap();
+        let tx = frame["values"][rig.slider.to_string()]["tx"]
+            .as_f64()
+            .unwrap();
+        assert!(near(rz, turn, 1e-9), "{frame}");
+        assert!(near(tx, 2.0 * turn, 1e-6), "{frame}");
+        // The pin's placement in the design: x is where the rack put it.
+        let pin = frame["placements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["path"] == pin_path)
+            .unwrap_or_else(|| panic!("the pin moved: {frame}"));
+        let x = pin["transform"][0][3].as_f64().unwrap();
+        assert!(near(x, 2.0 * turn, 1e-6), "{frame}");
+    }
+    // Nothing changed.
+    assert!(near(rig.pin_x(), 0.0, 1e-9), "{}", rig.pin_x());
+    assert_eq!(rig.doc.undo_label(), Some("Add MotionLink1"));
+}

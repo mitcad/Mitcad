@@ -1,0 +1,10 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/sketch-show-points.mitcad-ui (mitcad#1705): Sketch1 (F1) on XY with two lines, (-20, -15) to (20, -15) and (-20, 15) to (20, 15), a lone point at (-10, 5) and two free points that frame the view's fit at (-40, -30) and (40, 30)."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_point", "sketch": "F1", "at": [-40, -30]},
+  {"cmd": "sketch.add_point", "sketch": "F1", "at": [40, 30]},
+  {"cmd": "sketch.add_line", "sketch": "F1", "start": [-20, -15], "end": [20, -15]},
+  {"cmd": "sketch.add_line", "sketch": "F1", "start": [-20, 15], "end": [20, 15]},
+  {"cmd": "sketch.add_point", "sketch": "F1", "at": [-10, 5]}
+]

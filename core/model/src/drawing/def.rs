@@ -1390,6 +1390,8 @@ impl DrawingSheet {
             quick: true,
             section,
             deflection: 0.01,
+            // The quick path's lines follow the view's scale (mitcad#1671).
+            scale: Some(self.scale(id)),
         })
     }
 

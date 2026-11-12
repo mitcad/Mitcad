@@ -97,6 +97,8 @@ pub mod file_structure;
 pub mod repeated_parts;
 // Intersection curves: two sketches' curves swept and crossed (mitcad#1405).
 pub mod intersection_curve;
+// Narrow gaps between bodies that touch: face pairs measured (mitcad#1672).
+pub mod print_gaps;
 
 use std::sync::Arc;
 
@@ -2811,6 +2813,31 @@ impl Kernel for OcctKernel {
                     e.name.parse::<TopoName>().ok()?,
                     sketch_ref::curve(&e.curve),
                 ))
+            })
+            .collect())
+    }
+
+    // Narrow gaps between bodies that touch: their faces measured pair by
+    // pair (mitcad#1672; print_gaps.rs).
+
+    fn face_separations(
+        &self,
+        a: &Self::Shape,
+        b: &Self::Shape,
+        within: f64,
+    ) -> Result<Vec<mitcad_model::kernel::FaceSeparation>, KernelError> {
+        let found =
+            print_gaps::ffi::face_separations(occt(a)?, occt(b)?, within).map_err(failed)?;
+        Ok(found
+            .iter()
+            .map(|s| mitcad_model::kernel::FaceSeparation {
+                face_a: s.face_a,
+                face_b: s.face_b,
+                distance: s.distance,
+                on_a: s.on_a,
+                on_b: s.on_b,
+                normal_a: s.normal_a,
+                normal_b: s.normal_b,
             })
             .collect())
     }

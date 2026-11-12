@@ -2,7 +2,9 @@
 # The English interface (mitcad#1460): MitCad started as the UI tests start
 # it (MITCAD_LANGUAGE=en from the test library) or with --language en, the
 # reason in ${MITCAD_TEST_LANGUAGE_REASON}; the tabs in English and the
-# command search by the English name.
+# command search by the English name; outside a sketch, a search the sketch
+# tools match best shows how to open a sketch and selects nothing
+# (mitcad#1681).
 # Run by tools/ui-language-test.sh (Linux) and
 # tools/ui-windows-language-test.ps1 (Windows).
 expect-ever '^Language: en [(]${MITCAD_TEST_LANGUAGE_REASON}[)]$' 30
@@ -12,6 +14,21 @@ command tools.search
 focus-widget commandSearchInput
 type preferences
 expect-command-search preferences tools.preferences
+key Escape
+focus-main
+
+# Outside a sketch (mitcad#1681), "center" matches the sketch tools best
+# (Center Rectangle, Center Diameter Circle, ...), which wait for a sketch:
+# a row above them says how to open one, nothing is selected, and Return
+# starts no weaker match (Point at Center of Circle/Sphere/Torus).
+command tools.search
+focus-widget commandSearchInput
+mark
+type center
+expect-command-search center - hint
+expect-log '^Command search hint: Open a sketch first: Create Sketch [(]'
+key Return
+expect-no-log '^Command search chose '
 key Escape
 focus-main
 

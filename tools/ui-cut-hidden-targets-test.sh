@@ -72,10 +72,9 @@ ui_step "a high window"                  xdotool windowsize "$UI_WINDOW" 1400 99
 eval "$(xdotool getwindowgeometry --shell "$UI_WINDOW")"
 ui_step "fit (F6)"                       ui_key F6
 ui_expect_log "Bodies shown: " "the design is shown"
-# A design opens with the root active (mitcad#426); the cut is Part A's.
-ui_mark
-ui_step "activate Part A (radio)"        ui_click_logged "Browser radio Root/Part A:1"
-ui_expect_new "Activated Part A" "Part A is active"
+# A design opens with the component it was saved with active (mitcad#1678):
+# Part A, whose cut this is.
+ui_expect_log "Opened with C1 active, as saved (unmodified)" "Part A is active"
 
 echo "--- A new cut through a shown and a hidden component"
 ui_mark

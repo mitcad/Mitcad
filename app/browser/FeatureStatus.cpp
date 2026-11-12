@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "FeatureStatus.hpp"
 
+#include <QObject>
 #include <QPainter>
 #include <QPen>
 #include <QStringList>
@@ -71,10 +72,14 @@ CellLook cellLook(const CellState& state, const CellColors& colors) {
   } else {
     if (state.found) {
       look.outerRing = colors.found;
+    } else if (state.marked) {
+      // The owner's mark (mitcad#1704): the selection's colour, dashed.
+      look.outerRing = colors.selectedBorder;
+      look.outerDashed = true;
     }
     if (state.hovered && ok) {
       look.fill = colors.hoverFill;
-    } else if (state.hovered && !state.found) {
+    } else if (state.hovered && !state.found && !state.marked) {
       // A failed or warned cell keeps its fill: a faint ring outside its
       // status ring shows the pointer on it.
       look.outerRing = colors.hoverRing;
@@ -94,7 +99,11 @@ void paintCellFrame(QPainter& painter, const QRectF& bounds, const CellLook& loo
   const bool outer = shown(look.outerRing);
   if (outer) {
     const double inset = kOuterRing / 2;
-    painter.setPen(QPen(look.outerRing, kOuterRing));
+    QPen pen(look.outerRing, kOuterRing);
+    if (look.outerDashed) {
+      pen.setDashPattern({2.0, 1.5}); // in pen widths: 4 px dashes, 3 px gaps
+    }
+    painter.setPen(pen);
     painter.drawRoundedRect(bounds.adjusted(inset, inset, -inset, -inset), 4, 4);
   }
   if (shown(look.statusRing)) {
@@ -142,6 +151,9 @@ QString describeCell(const CellState& state, const CellLook& look) {
   if (state.found) {
     words << QStringLiteral("found");
   }
+  if (state.marked) {
+    words << QStringLiteral("marked");
+  }
   if (state.hovered) {
     words << QStringLiteral("hovered");
   }
@@ -152,7 +164,7 @@ QString describeCell(const CellState& state, const CellLook& look) {
     words << QStringLiteral("status ring");
   }
   if (shown(look.outerRing)) {
-    words << QStringLiteral("outer ring");
+    words << (look.outerDashed ? QStringLiteral("dashed outer ring") : QStringLiteral("outer ring"));
   }
   if (look.badge) {
     words << QStringLiteral("badge");
@@ -198,6 +210,25 @@ QString featureStatusLine(const QString& status, const QString& message, const Q
       .arg(noticeIconHtml(level),
            (state == FeatureState::Failed ? errorColor : warningColor).name(),
            noticeLevelText(level, message).toHtmlEscaped());
+}
+
+QString autoFixHint(int fixable) {
+  if (fixable <= 0) {
+    return QString();
+  }
+  // Its context menu has Auto Fix (mitcad#1223); a warning after a sketch
+  // edit otherwise gave no hint of it (mitcad#1677).
+  return fixable == 1 ? QObject::tr("Auto Fix (right-click) can fix this warning")
+                      : QObject::tr("Auto Fix (right-click) can fix %1 of its warnings").arg(fixable);
+}
+
+QString autoFixBadgeHint(int fixable) {
+  if (fixable <= 0) {
+    return QString();
+  }
+  // A click on the badge offers Auto Fix of them (mitcad#1677).
+  return fixable == 1 ? QObject::tr("Click for Auto Fix, which can fix 1 of these warnings")
+                      : QObject::tr("Click for Auto Fix, which can fix %1 of these warnings").arg(fixable);
 }
 
 } // namespace mitcad

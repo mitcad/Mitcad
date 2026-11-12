@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: MIT
+# File managers' thumbnails of MitCad designs (mitcad#1539): the preview a
+# design file carries, written at the size asked for by mitcad-thumbnailer.
+# MitCad started as an AppImage puts a copy into the user's data folder
+# with Exec running its own copy of the program (app/framework/DesktopEntry.cpp).
+[Thumbnailer Entry]
+TryExec=mitcad-thumbnailer
+Exec=mitcad-thumbnailer %i %o %s
+MimeType=application/x-mitcad;

@@ -22,7 +22,7 @@ namespace mitcad {
 // A note row (mitcad#655, InputDef::Type::Note): a short text, wrapped and
 // never clipped, and its buttons under it (or as icons or links on its
 // line). 3D Print's own settings, Materials summary and import line
-// ("[Import from slicer…] plate.3mf imported", the link beside the
+// ("[Import from Slicer…] plate.3mf imported", the link beside the
 // button).
 class NoteRow : public QWidget {
   Q_OBJECT

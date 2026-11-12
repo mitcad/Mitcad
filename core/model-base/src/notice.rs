@@ -1385,31 +1385,156 @@ fn found_again(text: &str) -> Option<(String, Vec<NoticePlace>)> {
         return None;
     }
     let (sketch, sketch_places) = plain_message(sketch);
-    let (one, many) = kind.words();
-    let an = match (article(one), word.starts_with(|c: char| c.is_uppercase())) {
-        ("an", true) => "An",
-        ("a", true) => "A",
-        (an, _) => an,
-    };
-    let said = if found.len() == 1 {
-        format!("{an} {one} found again after a change in {sketch}")
-    } else {
-        format!(
-            "{an} {one} found as {} {many} after a change in {sketch}",
-            found.len()
-        )
-    };
-    let (message, mut places) = match prefix {
+    let capital = word.starts_with(|c: char| c.is_uppercase());
+    let (prefix, mut places) = match prefix {
         Some(prefix) => {
             let (prefix, places) = plain_message(prefix);
-            (format!("{prefix} {said}"), places)
+            (Some(prefix), places)
         }
-        None => (said, Vec::new()),
+        None => (None, Vec::new()),
+    };
+    // A loft's section before it ("section 2: "), part of the whole message
+    // (mitcad#1688).
+    let section = prefix
+        .as_deref()
+        .and_then(section_number)
+        .filter(|_| !capital);
+    let said = if found.len() == 1 {
+        found_again_text(kind, 1, &sketch, section)?
+    } else {
+        found_as_text(kind, found.len(), &sketch, section)?
+    };
+    let said = if capital {
+        let mut chars = said.chars();
+        chars
+            .next()
+            .map(|c| c.to_ascii_uppercase())
+            .into_iter()
+            .chain(chars)
+            .collect()
+    } else {
+        said
+    };
+    let message = match (&prefix, section) {
+        (Some(prefix), None) => format!("{prefix} {said}"),
+        _ => said,
     };
     places.extend(kind.place(stored));
     places.extend(found.iter().filter_map(|name| kind.place(name)));
     places.extend(sketch_places);
     Some((message, unique(places)))
+}
+
+/// The number of a loft's section in a prefix before a reference
+/// (`section 2:`, with or without the space after it); None for any other
+/// prefix.
+fn section_number(prefix: &str) -> Option<&str> {
+    let number = prefix
+        .trim_end()
+        .strip_prefix("section ")?
+        .strip_suffix(':')?;
+    (!number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())).then_some(number)
+}
+
+/// `count` references of a kind found again after a change in `sketch`
+/// ("an edge found again after a change in Sketch1", "2 edges found again
+/// after a change in Sketch1"), in a loft's `section` when given ("section
+/// 2: an edge found again after a change in Sketch1"): one whole message
+/// per kind, count and prefix, so that its translation gets no English
+/// word as a value (mitcad#1674, mitcad#1688, docs/translations.md "The
+/// model's messages"). None for a kind no reference of a sketch change is.
+fn found_again_text(
+    kind: NamedKind,
+    count: usize,
+    sketch: &str,
+    section: Option<&str>,
+) -> Option<String> {
+    Some(match (kind, count == 1, section) {
+        (NamedKind::Face, true, None) => format!("a face found again after a change in {sketch}"),
+        (NamedKind::Face, false, None) => {
+            format!("{count} faces found again after a change in {sketch}")
+        }
+        (NamedKind::Edge, true, None) => format!("an edge found again after a change in {sketch}"),
+        (NamedKind::Edge, false, None) => {
+            format!("{count} edges found again after a change in {sketch}")
+        }
+        (NamedKind::Vertex, true, None) => {
+            format!("a vertex found again after a change in {sketch}")
+        }
+        (NamedKind::Vertex, false, None) => {
+            format!("{count} vertices found again after a change in {sketch}")
+        }
+        (NamedKind::Region, true, None) => {
+            format!("a region found again after a change in {sketch}")
+        }
+        (NamedKind::Region, false, None) => {
+            format!("{count} regions found again after a change in {sketch}")
+        }
+        (NamedKind::Face, true, Some(n)) => {
+            format!("section {n}: a face found again after a change in {sketch}")
+        }
+        (NamedKind::Face, false, Some(n)) => {
+            format!("section {n}: {count} faces found again after a change in {sketch}")
+        }
+        (NamedKind::Edge, true, Some(n)) => {
+            format!("section {n}: an edge found again after a change in {sketch}")
+        }
+        (NamedKind::Edge, false, Some(n)) => {
+            format!("section {n}: {count} edges found again after a change in {sketch}")
+        }
+        (NamedKind::Vertex, true, Some(n)) => {
+            format!("section {n}: a vertex found again after a change in {sketch}")
+        }
+        (NamedKind::Vertex, false, Some(n)) => {
+            format!("section {n}: {count} vertices found again after a change in {sketch}")
+        }
+        (NamedKind::Region, true, Some(n)) => {
+            format!("section {n}: a region found again after a change in {sketch}")
+        }
+        (NamedKind::Region, false, Some(n)) => {
+            format!("section {n}: {count} regions found again after a change in {sketch}")
+        }
+        _ => return None,
+    })
+}
+
+/// A reference of a kind found as `found` references after a change in
+/// `sketch` ("a region found as 2 regions after a change in Sketch1"), in a
+/// loft's `section` when given, one whole message per kind and prefix as
+/// [`found_again_text`].
+fn found_as_text(
+    kind: NamedKind,
+    found: usize,
+    sketch: &str,
+    section: Option<&str>,
+) -> Option<String> {
+    Some(match (kind, section) {
+        (NamedKind::Face, None) => {
+            format!("a face found as {found} faces after a change in {sketch}")
+        }
+        (NamedKind::Edge, None) => {
+            format!("an edge found as {found} edges after a change in {sketch}")
+        }
+        (NamedKind::Vertex, None) => {
+            format!("a vertex found as {found} vertices after a change in {sketch}")
+        }
+        (NamedKind::Region, None) => {
+            format!("a region found as {found} regions after a change in {sketch}")
+        }
+        (NamedKind::Face, Some(n)) => {
+            format!("section {n}: a face found as {found} faces after a change in {sketch}")
+        }
+        (NamedKind::Edge, Some(n)) => {
+            format!("section {n}: an edge found as {found} edges after a change in {sketch}")
+        }
+        (NamedKind::Vertex, Some(n)) => {
+            format!("section {n}: a vertex found as {found} vertices after a change in {sketch}")
+        }
+        (NamedKind::Region, Some(n)) => {
+            format!("section {n}: a region found as {found} regions after a change in {sketch}")
+        }
+        _ => return None,
+    })
 }
 
 /// The parts of a message [`found_again`] made for one reference: the
@@ -1459,11 +1584,13 @@ pub fn merge_found_again(notices: Vec<Notice>) -> Vec<Notice> {
         .map(|(mut notice, count)| {
             if count > 1
                 && let Some((prefix, kind, sketch)) = found_again_parts(&notice.message)
+                && let Some(said) = found_again_text(kind, count, sketch, section_number(prefix))
             {
-                notice.message = format!(
-                    "{prefix}{count} {} found again after a change in {sketch}",
-                    kind.words().1
-                );
+                notice.message = if section_number(prefix).is_some() {
+                    said
+                } else {
+                    format!("{prefix}{said}")
+                };
             }
             notice
         })
@@ -2023,6 +2150,73 @@ mod tests {
             notices[0].message,
             "section 2: 2 vertices found again after a change in Sketch1"
         );
+        // Regions and faces likewise, each kind's words whole in the
+        // message (mitcad#1674: no kind's word put in as a value).
+        let region = |stored: &str| {
+            Notice::warning(format!(
+                "region r{{{stored}}} found as r{{x}} after a change in Sketch4"
+            ))
+            .with_target("F5")
+        };
+        let notices = merge_found_again(vec![region("a"), region("b")]);
+        assert_eq!(
+            notices[0].message,
+            "2 regions found again after a change in Sketch4"
+        );
+        let face = |stored: &str| {
+            Notice::warning(format!(
+                "face F2:side({stored}) found as F2:side(x) after a change in Sketch4"
+            ))
+            .with_target("F5")
+        };
+        let notices = merge_found_again(vec![face("a"), face("b"), face("c")]);
+        assert_eq!(
+            notices[0].message,
+            "3 faces found again after a change in Sketch4"
+        );
+        let (text, _) =
+            plain_message("edge E{a|b} found as E{a|c} + E{a|d} after a change in Sketch4");
+        assert_eq!(text, "an edge found as 2 edges after a change in Sketch4");
+        // A loft's section before the reference is part of the whole
+        // message (mitcad#1688): the same English, one literal per kind,
+        // count and prefix, so the prefix is translated with it.
+        let (text, places) = plain_message(
+            "section 3: face F2:side(a) found as F2:side(b) after a change in Sketch4",
+        );
+        assert_eq!(
+            text,
+            "section 3: a face found again after a change in Sketch4"
+        );
+        assert_eq!(places.len(), 2);
+        let (text, _) = plain_message(
+            "section 12: edge E{a|b} found as E{a|c} + E{a|d} after a change in Sketch4",
+        );
+        assert_eq!(
+            text,
+            "section 12: an edge found as 2 edges after a change in Sketch4"
+        );
+        let section_region = |stored: &str| {
+            Notice::warning(format!(
+                "section 2: region r{{{stored}}} found as r{{x}} after a change in Sketch4"
+            ))
+            .with_target("F5")
+        };
+        let notices = merge_found_again(vec![section_region("a"), section_region("b")]);
+        assert_eq!(
+            notices[0].message,
+            "section 2: 2 regions found again after a change in Sketch4"
+        );
+        // Another prefix stays before the sentence as it was.
+        let (text, _) =
+            plain_message("rail 1: edge E{a|b} found as E{a|c} after a change in Sketch4");
+        assert_eq!(
+            text,
+            "rail 1: an edge found again after a change in Sketch4"
+        );
+        assert_eq!(section_number("section 2:"), Some("2"));
+        assert_eq!(section_number("section 2: "), Some("2"));
+        assert_eq!(section_number("section x:"), None);
+        assert_eq!(section_number("rail 1:"), None);
     }
 
     /// The cleaned form of a model message template (`%1`, `%2`, ...) as

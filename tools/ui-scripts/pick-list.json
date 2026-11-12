@@ -1,0 +1,8 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A block 40 x 40 x 20 mm below the XY plane (z from -30 to -10) and Sketch1 on XY with a 10 mm square over its middle: seen from the top, the square's profile lies in front of the block's top face (mitcad#1703, the pick list)."},
+  {"cmd":"add_feature","def":{"type":"box","plane":{"origin":[0,0,-30],"normal":[0,0,1]},"corner":[-20,-20],"length":40,"width":40,"height":20,"operation":"new_body"}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F2","corner":[-5,-5],"width":10,"height":10},
+  {"expect":{"instances":1,"world_volume":32000}}
+]

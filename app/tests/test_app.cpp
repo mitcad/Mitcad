@@ -1168,6 +1168,34 @@ void desktopEntryTests() {
   CHECK(mitcad::integrateAppImage(QStringLiteral("/apps/Mitcad.AppImage"), appDir, data).written.isEmpty());
   result = mitcad::integrateAppImage(QStringLiteral("/opt/Mitcad.AppImage"), appDir, data);
   CHECK(result.written == QStringList{data + QStringLiteral("/applications/mitcad.desktop")});
+
+  // File managers' thumbnails (mitcad#1539): the entry runs the copy of
+  // the thumbnailer, quoted; TryExec names it; the arguments stay.
+  const QString entry =
+      QStringLiteral("[Thumbnailer Entry]\nTryExec=mitcad-thumbnailer\nExec=mitcad-thumbnailer %i %o %s\n"
+                     "MimeType=application/x-mitcad;\n");
+  CHECK(mitcad::thumbnailerEntryFor(entry, QStringLiteral("/home/a b/.local/share/mitcad/bin/mitcad-thumbnailer")) ==
+        QStringLiteral("[Thumbnailer Entry]\nTryExec=/home/a b/.local/share/mitcad/bin/mitcad-thumbnailer\n"
+                       "Exec=\"/home/a b/.local/share/mitcad/bin/mitcad-thumbnailer\" %i %o %s\n"
+                       "MimeType=application/x-mitcad;\n"));
+  // An AppImage with them: the program copied out and executable, the MIME
+  // type, and the entry running the copy; the desktop file as it was.
+  CHECK(write(appDir + QStringLiteral("/usr/bin/mitcad-thumbnailer"), "program"));
+  CHECK(write(appDir + QStringLiteral("/usr/share/thumbnailers/mitcad.thumbnailer"), entry.toUtf8()));
+  CHECK(write(appDir + QStringLiteral("/usr/share/mime/packages/mitcad.xml"), "<mime-info/>"));
+  result = mitcad::integrateAppImage(QStringLiteral("/opt/Mitcad.AppImage"), appDir, data);
+  const QString copy = data + QStringLiteral("/mitcad/bin/mitcad-thumbnailer");
+  CHECK(result.error.isEmpty());
+  CHECK(result.written == (QStringList{copy, data + QStringLiteral("/mime/packages/mitcad.xml"),
+                                       data + QStringLiteral("/thumbnailers/mitcad.thumbnailer")}));
+  CHECK(read(copy) == "program");
+#ifdef Q_OS_UNIX
+  CHECK(QFileInfo(copy).isExecutable());
+#endif
+  CHECK(read(data + QStringLiteral("/mime/packages/mitcad.xml")) == "<mime-info/>");
+  CHECK(read(data + QStringLiteral("/thumbnailers/mitcad.thumbnailer"))
+            .contains(QStringLiteral("\nExec=\"%1\" %i %o %s\n").arg(copy).toUtf8()));
+  CHECK(mitcad::integrateAppImage(QStringLiteral("/opt/Mitcad.AppImage"), appDir, data).written.isEmpty());
   // No AppDir: an error, nothing written.
   result = mitcad::integrateAppImage(QStringLiteral("/a"), temp.filePath(QStringLiteral("none")), data);
   CHECK(!result.error.isEmpty() && result.written.isEmpty());
@@ -2488,6 +2516,33 @@ void selectionEntryTests() {
     item.owner = QStringLiteral("F9.b0");
     item.occurrence.clear();
     CHECK(selectionOwnerText(item, snapshot) == QStringLiteral("Body: F9.b0"));
+    // The pick list's words (mitcad#1703): names, never uids or
+    // topological names.
+    item = SelectionItem{SelectKind::Edge, body.uid, QStringLiteral("E{F2:top|F2:side0}"), QString()};
+    item.occurrence = QStringLiteral("O1/O4");
+    CHECK(pickListText(item, snapshot) == QStringLiteral("Bench:1 › Screw <M8>:3: Screw & washer: Edge"));
+    item.occurrence.clear();
+    item.kind = SelectKind::Body;
+    CHECK(pickListText(item, snapshot) == QStringLiteral("Screw & washer"));
+    item.kind = SelectKind::Face;
+    item.owner = QStringLiteral("F9.b0");
+    CHECK(pickListText(item, snapshot) == QStringLiteral("Face"));
+    DocumentSnapshot::Feature sketch;
+    sketch.uid = QStringLiteral("F2");
+    sketch.name = QStringLiteral("Sketch2");
+    sketch.type = QStringLiteral("sketch");
+    snapshot.features.append(sketch);
+    item = SelectionItem{SelectKind::Profile, QStringLiteral("F2"), QStringLiteral("r{c1[c2],c2[c1]}"), QString()};
+    CHECK(pickListText(item, snapshot) == QStringLiteral("Sketch2: Profile"));
+    item.owner = QStringLiteral("F7");
+    CHECK(pickListText(item, snapshot) == QStringLiteral("Profile"));
+    item = SelectionItem{SelectKind::Plane, QStringLiteral("xy"), QString(), QString()};
+    CHECK(pickListText(item, snapshot) == QStringLiteral("Origin: XY"));
+    item.occurrence = QStringLiteral("O1");
+    CHECK(pickListText(item, snapshot) == QStringLiteral("Bench:1: Origin: XY"));
+    item = SelectionItem{SelectKind::Component, QStringLiteral("C1"), QString(), QString()};
+    item.occurrence = QStringLiteral("O1/O4");
+    CHECK(pickListText(item, snapshot) == QStringLiteral("Bench:1 › Screw <M8>:3"));
   }
   const QString line = mitcad::selectionMeasurementText(QJsonObject{{QStringLiteral("length"), 12.5}});
   CHECK(line.contains(QStringLiteral("12.5 mm")));
@@ -2900,6 +2955,9 @@ int menuBarTests();
 int listTablesTests();
 int pickerNewFolderTests();
 int startBackdropTests();
+int commandSearchTests();
+int defaultViewTests();
+int windowPlaceTests();
 
 int main(int argc, char* argv[]) {
   // The application's own class: its notify() is tested (busy_input.cpp).
@@ -3075,6 +3133,9 @@ int main(int argc, char* argv[]) {
     failures += listTablesTests();
     failures += pickerNewFolderTests();
     failures += startBackdropTests();
+    failures += commandSearchTests();
+    failures += defaultViewTests();
+    failures += windowPlaceTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

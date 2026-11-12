@@ -70,6 +70,10 @@ const BALLOON_RADIUS: f64 = 3.5;
 /// than an edge to win over it.
 pub const PICK_REACH: f64 = 3.0;
 pub const POINT_REACH: f64 = 2.0;
+/// How far a radius's leader runs out radially from an arc's end before it
+/// bends to a text beyond the arc's sweep, paper mm (mitcad#1694): its
+/// arrow points along it.
+pub const RADIAL_LEADER: f64 = 5.0;
 /// How far an edge extension of one edge reaches beyond each end when it
 /// has no length of its own, paper mm (mitcad#729).
 pub const EXTENSION_LENGTH: f64 = 10.0;
@@ -170,6 +174,22 @@ pub struct BodyGeometry {
     pub edges: Vec<(EdgeName, CurveGeometry)>,
     pub cylinders: Vec<RoundFace>,
     pub planes: Vec<FlatFace>,
+    /// Its torus faces (mitcad#1694: a fillet round a turned part, seen
+    /// from the side, picked on its outline).
+    pub tori: Vec<TorusFace>,
+}
+
+/// A torus face: its name (and its others), its centre, its unit axis and
+/// its radii (the tube's centre circle's, `major`, and the tube's,
+/// `minor`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TorusFace {
+    pub face: FaceName,
+    pub names: Vec<FaceName>,
+    pub center: Vec3,
+    pub axis: Vec3,
+    pub major: f64,
+    pub minor: f64,
 }
 
 /// A cylinder's face: its name (and the others the kernel gives it), a
@@ -1367,7 +1387,10 @@ fn round(
             let text_at = add2(c, shift);
             let mut u = vec2::unit(shift).unwrap_or([1.0, 0.0]);
             // The arrow on the arc where it is: its nearer end when the
-            // text lies beyond it.
+            // text lies beyond it, the leader then run out radially from
+            // there before it bends to the text, so that the arrow points
+            // along the line it ends (mitcad#1694).
+            let mut elbow = None;
             if let Some((start, end)) = arc
                 && !in_sweep(u[1].atan2(u[0]), start, end)
             {
@@ -1378,6 +1401,7 @@ fn round(
                 };
                 let a = if off(start) <= off(end) { start } else { end };
                 u = [a.cos(), a.sin()];
+                elbow = Some(add2(c, mul2(u, r + RADIAL_LEADER)));
             }
             let rim = add2(c, mul2(u, r));
             if diameter {
@@ -1391,7 +1415,13 @@ fn round(
             let side = if shift[0] >= 0.0 { 1.0 } else { -1.0 };
             let width = words.width(frame.text) + 1.0;
             if len2(shift) > r {
-                g.line(Pen::Thin, rim, text_at);
+                match elbow {
+                    Some(elbow) => {
+                        g.line(Pen::Thin, rim, elbow);
+                        g.line(Pen::Thin, elbow, text_at);
+                    }
+                    None => g.line(Pen::Thin, rim, text_at),
+                }
                 g.line(Pen::Thin, text_at, add2(text_at, [side * width, 0.0]));
             }
             let (x, anchor) = if side > 0.0 {
@@ -1646,6 +1676,141 @@ fn circle_through(a: P2, b: P2, c: P2) -> Option<(P2, f64)> {
     Some((add2(a, o), len2(o)))
 }
 
+/// The circle a centre pattern draws through its circles' centres
+/// (mitcad#729, #1693): about one centre, each centre within `tolerance`
+/// of it (or a millionth of their spread, whichever is more); its centre
+/// and radius. None for fewer than three, centres in a row, or on no one
+/// circle. In any coordinates (a view's, the sheet's): the same ones out.
+pub fn pattern_circle(centres: &[P2], tolerance: f64) -> Option<(P2, f64)> {
+    // The two farthest apart, and the one farthest off their line.
+    let (mut i, mut j, mut far) = (0, 0, 0.0);
+    for (a, pa) in centres.iter().enumerate() {
+        for (b, pb) in centres.iter().enumerate().skip(a + 1) {
+            let d = len2(sub2(*pb, *pa));
+            if d > far {
+                (i, j, far) = (a, b, d);
+            }
+        }
+    }
+    if centres.len() < 3 || far < 1e-9 {
+        return None;
+    }
+    let tolerance = tolerance.max(1e-6 * far);
+    let (a, b) = (centres[i], centres[j]);
+    let d = unit2(sub2(b, a));
+    let off_line = |p: P2| vec2::cross(d, sub2(p, a)).abs();
+    let third = centres
+        .iter()
+        .copied()
+        .max_by(|p, q| off_line(*p).total_cmp(&off_line(*q)))
+        .filter(|p| off_line(*p) > tolerance)?;
+    circle_through(a, b, third).filter(|(o, r)| {
+        centres
+            .iter()
+            .all(|p| (len2(sub2(*p, *o)) - r).abs() <= tolerance)
+    })
+}
+
+/// Where a centre pattern's circles stand on its circle about `center`
+/// (mitcad#729, #1693): None where it draws the whole circle, else the
+/// arc over them, its angles counter-clockwise from the circle after the
+/// widest gap round to the one before it (the end above the start), when
+/// they leave a gap wider than one and a half of their pitch.
+pub fn pattern_span(centres: &[P2], center: P2) -> Option<(f64, f64)> {
+    let mut angles: Vec<f64> = centres
+        .iter()
+        .map(|p| {
+            let v = sub2(*p, center);
+            v[1].atan2(v[0]).rem_euclid(TAU)
+        })
+        .collect();
+    angles.sort_by(f64::total_cmp);
+    let n = angles.len();
+    if n == 0 {
+        return None;
+    }
+    let (gap, after) = (0..n)
+        .map(|k| {
+            let next = if k + 1 < n {
+                angles[k + 1]
+            } else {
+                angles[0] + TAU
+            };
+            (next - angles[k], k)
+        })
+        .fold(
+            (0.0, 0),
+            |best, step| if step.0 > best.0 { step } else { best },
+        );
+    (gap > 1.5 * TAU / n as f64).then(|| {
+        let start = angles[(after + 1) % n];
+        (start, start + (TAU - gap))
+    })
+}
+
+/// The line a centreline annotation draws (mitcad#1693), in the
+/// coordinates of its picks as the view sees them (view mm): a round
+/// face's axis; halfway between two parallel straight edges, over both;
+/// through two centres, run on beyond each by a circle's radius there and
+/// `beyond` more. None where it draws no straight line (a curved slot's
+/// arc, picks it refuses).
+pub fn centerline_ends(seen: &[Seen], beyond: f64) -> Option<(P2, P2)> {
+    let rim = |s: &Seen| match *s {
+        Seen::Circle {
+            radius,
+            end_on: true,
+            ..
+        } => radius,
+        _ => 0.0,
+    };
+    let run_on = |a: P2, b: P2, ra: f64, rb: f64| {
+        let d = vec2::unit(sub2(b, a))?;
+        Some((sub2(a, mul2(d, ra + beyond)), add2(b, mul2(d, rb + beyond))))
+    };
+    match seen {
+        [Seen::Axis { a, b, .. }] => run_on(*a, *b, 0.0, 0.0),
+        [Seen::Line(a1, b1), Seen::Line(a2, b2)] => {
+            let d = vec2::unit(sub2(*b1, *a1))?;
+            let d2 = vec2::unit(sub2(*b2, *a2))?;
+            if vec2::cross(d, d2).abs() > 1e-6 {
+                return None;
+            }
+            let o = mid(mid(*a1, *b1), mid(*a2, *b2));
+            let ts: Vec<f64> = [a1, b1, a2, b2]
+                .iter()
+                .map(|p| dot2(sub2(**p, o), d))
+                .collect();
+            let low = ts.iter().copied().fold(f64::INFINITY, f64::min);
+            let high = ts.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            run_on(add2(o, mul2(d, low)), add2(o, mul2(d, high)), 0.0, 0.0)
+        }
+        [
+            Seen::Circle {
+                center,
+                radius: ra,
+                end_on: true,
+                arc: arc_a,
+                ..
+            },
+            Seen::Circle {
+                center: other,
+                radius: rb,
+                end_on: true,
+                arc: arc_b,
+                ..
+            },
+        ] if len2(sub2(*center, *other)) <= 1e-9 * ra.max(*rb).max(1.0)
+            && (ra - rb).abs() > 1e-9
+            && (arc_a.is_some() || arc_b.is_some()) =>
+        {
+            // A curved slot's centre arc: no line.
+            None
+        }
+        [p, q] => run_on(p.point(), q.point(), rim(p), rim(q)),
+        _ => None,
+    }
+}
+
 /// A centre pattern (mitcad#729): on circles about one centre, the circle
 /// through their centres (long-dash dotted; an arc over them when they
 /// stand on a part of it), a radial line through each, and a small cross
@@ -1678,12 +1843,8 @@ fn center_pattern(g: &mut Group, seen: &[Seen], frame: &Frame<'_>) -> Result<(),
     let (a, b) = (marks[i].0, marks[j].0);
     let d = unit2(sub2(b, a));
     let off_line = |p: P2| vec2::cross(d, sub2(p, a)).abs();
-    let third = marks
-        .iter()
-        .map(|(p, _)| *p)
-        .max_by(|p, q| off_line(*p).total_cmp(&off_line(*q)))
-        .filter(|p| off_line(*p) > tolerance);
-    let Some(third) = third else {
+    let in_row = marks.iter().all(|(p, _)| off_line(*p) <= tolerance);
+    if in_row {
         // In a row: the line through them, beyond the outer ones.
         let ts: Vec<f64> = marks.iter().map(|(p, _)| dot2(sub2(*p, a), d)).collect();
         let (lo, hi) = ts.iter().enumerate().fold(
@@ -1708,48 +1869,21 @@ fn center_pattern(g: &mut Group, seen: &[Seen], frame: &Frame<'_>) -> Result<(),
             g.line(pen(*r), add2(*c, mul2(n, reach)), sub2(*c, mul2(n, reach)));
         }
         return Ok(());
-    };
-    let Some((o, radius)) = circle_through(a, b, third).filter(|(o, r)| {
-        marks
-            .iter()
-            .all(|(p, _)| (len2(sub2(*p, *o)) - r).abs() <= tolerance)
-    }) else {
+    }
+    let centres: Vec<P2> = marks.iter().map(|(p, _)| *p).collect();
+    let Some((o, radius)) = pattern_circle(&centres, 0.01) else {
         for (c, r) in &marks {
             center_mark(g, *c, *r);
         }
         return Ok(());
     };
-    // Each hole's angle about the centre; the circle whole unless they
-    // leave a gap wider than one and a half of their pitch.
-    let mut angles: Vec<f64> = marks
-        .iter()
-        .map(|(p, _)| {
-            let v = sub2(*p, o);
-            v[1].atan2(v[0]).rem_euclid(TAU)
-        })
-        .collect();
-    angles.sort_by(f64::total_cmp);
-    let n = angles.len();
-    let (gap, after) = (0..n)
-        .map(|k| {
-            let next = if k + 1 < n {
-                angles[k + 1]
-            } else {
-                angles[0] + TAU
-            };
-            (next - angles[k], k)
-        })
-        .fold(
-            (0.0, 0),
-            |best, step| if step.0 > best.0 { step } else { best },
-        );
     let widest = marks.iter().map(|(_, r)| *r).fold(0.0, f64::max);
-    if gap > 1.5 * TAU / n as f64 {
+    if let Some((start, end)) = pattern_span(&centres, o) {
         // An arc from the hole after the gap round to the one before it,
         // a little beyond each.
         let beyond = (widest + CENTER_BEYOND) / radius.max(1e-9);
-        let start = angles[(after + 1) % n] - beyond;
-        let end = start + (TAU - gap) + 2.0 * beyond;
+        let start = start - beyond;
+        let end = end + beyond;
         g.items.push(Item::Arc {
             pen: Pen::Chain,
             center: o,
@@ -2870,6 +3004,72 @@ mod tests {
         assert_eq!(measure(&o, &points).unwrap(), Some(5.0));
     }
 
+    #[test]
+    fn a_radius_arrow_points_along_the_leader_it_ends_beyond_the_arcs_sweep() {
+        let map = map();
+        let frame = Frame {
+            map: &map,
+            view_box: view_box(),
+            text: DIMENSION_TEXT,
+        };
+        // A quarter arc of 1.5 (a fillet seen from the side), from 0 to 90
+        // degrees, its text up and to the left: beyond its sweep.
+        let fillet = Seen::Circle {
+            center: [10.0, 10.0],
+            radius: 1.5,
+            end_on: true,
+            across: [1.0, 0.0],
+            arc: Some((0.0, PI / 2.0)),
+        };
+        let mut r = ViewAnnotation::new(1, AnnotationType::Radius, Vec::new());
+        for shift in [[-12.0, 10.0], [-20.0, -4.0], [15.0, -12.0]] {
+            r.text_offset = Some(shift);
+            let laid = lay_out(&r, &[fillet], &frame, Some(&words("R1.5")), &[]).unwrap();
+            // The arrow: its tip on the arc, its direction from the middle
+            // of its base to its tip.
+            let (tip, along) = laid
+                .group
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Fill { points } if points.len() == 3 => {
+                        let base = mid(points[1], points[2]);
+                        Some((points[0], unit2(sub2(points[0], base))))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no arrow: {:?}", laid.group.items));
+            // Every line that ends at the arrow's tip runs along it.
+            let ending: Vec<(P2, P2)> = laid
+                .group
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Line { a, b, .. }
+                        if len2(sub2(*a, tip)) < 1e-9 || len2(sub2(*b, tip)) < 1e-9 =>
+                    {
+                        Some((*a, *b))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(!ending.is_empty(), "{shift:?}: no line ends at the arrow");
+            for (a, b) in ending {
+                let d = unit2(sub2(b, a));
+                assert!(
+                    vec2::cross(d, along).abs() < 1e-9,
+                    "{shift:?}: the line {a:?}-{b:?} is not along the arrow {along:?}"
+                );
+            }
+            // Its tip on the arc's nearer end.
+            let c = frame.at([10.0, 10.0]);
+            assert!(
+                (len2(sub2(tip, c)) - 1.5 * map.scale).abs() < 1e-9,
+                "{shift:?}: {tip:?}"
+            );
+        }
+    }
+
     /// The nearest a text item's box (its width along its baseline, its
     /// height above it) comes to `p`: 0 inside it.
     fn text_box_distance(item: &Item, p: P2) -> f64 {
@@ -3027,6 +3227,8 @@ mod tests {
             point: None,
             on_face: None,
             on_cut: None,
+            drawn: None,
+            side: None,
         };
         let mut d = ViewAnnotation::new(1, AnnotationType::Linear, vec![pick.clone()]);
         assert!(d.check().unwrap_err().contains("takes 2 picks"));
@@ -3187,6 +3389,69 @@ mod tests {
     }
 
     #[test]
+    fn a_centre_patterns_circle_and_a_centrelines_line_are_found_for_picks() {
+        // Six centres on a circle of 30 about (50, 50): that circle, whole.
+        let ring: Vec<P2> = (0..6)
+            .map(|k| {
+                let a = f64::from(k) * TAU / 6.0;
+                [50.0 + 30.0 * a.cos(), 50.0 + 30.0 * a.sin()]
+            })
+            .collect();
+        let (o, r) = pattern_circle(&ring, 0.01).unwrap();
+        assert!(
+            (o[0] - 50.0).abs() < 1e-9 && (o[1] - 50.0).abs() < 1e-9,
+            "{o:?}"
+        );
+        assert!((r - 30.0).abs() < 1e-9, "{r}");
+        assert_eq!(pattern_span(&ring, o), None);
+        // Three on a quarter: the arc over them, from the first to the last.
+        let quarter: Vec<P2> = (0..3)
+            .map(|k| {
+                let a = f64::from(k) * TAU / 8.0;
+                [20.0 * a.cos(), 20.0 * a.sin()]
+            })
+            .collect();
+        let (o, _) = pattern_circle(&quarter, 0.01).unwrap();
+        let (start, end) = pattern_span(&quarter, o).unwrap();
+        let from = start.rem_euclid(TAU);
+        assert!(from < 1e-9 || TAU - from < 1e-9, "{start} {end}");
+        assert!((end - start - TAU / 4.0).abs() < 1e-9, "{start} {end}");
+        // In a row, or two: no circle.
+        assert!(pattern_circle(&[[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]], 0.01).is_none());
+        assert!(pattern_circle(&ring[..2], 0.01).is_none());
+        // A centreline through two circles' centres, run on past their rims.
+        let line = centerline_ends(&[circle([0.0, 0.0], 2.0), circle([10.0, 0.0], 3.0)], 2.5);
+        assert_eq!(line, Some(([-4.5, 0.0], [15.5, 0.0])));
+        // A round face's axis; between two parallel edges, over both.
+        let axis = Seen::Axis {
+            a: [0.0, 0.0],
+            b: [0.0, 5.0],
+            radius: 1.0,
+        };
+        assert_eq!(
+            centerline_ends(&[axis], 1.0),
+            Some(([0.0, -1.0], [0.0, 6.0]))
+        );
+        let between = centerline_ends(
+            &[
+                Seen::Line([0.0, 0.0], [10.0, 0.0]),
+                Seen::Line([2.0, 4.0], [12.0, 4.0]),
+            ],
+            0.0,
+        );
+        assert_eq!(between, Some(([0.0, 2.0], [12.0, 2.0])));
+        // A curved slot's two sides make an arc, no line.
+        let side = |radius: f64| Seen::Circle {
+            center: [0.0, 0.0],
+            radius,
+            end_on: true,
+            across: [1.0, 0.0],
+            arc: Some((0.0, 1.0)),
+        };
+        assert_eq!(centerline_ends(&[side(8.0), side(12.0)], 2.5), None);
+    }
+
+    #[test]
     fn edge_extensions_run_edges_on_to_their_corner() {
         let map = map();
         let frame = Frame {
@@ -3282,6 +3547,8 @@ mod tests {
             point: None,
             on_face: None,
             on_cut: None,
+            drawn: None,
+            side: None,
         };
         let mut d = ViewAnnotation::new(1, AnnotationType::Linear, Vec::new());
         d.along = Some(Along::Horizontal);
@@ -3920,6 +4187,8 @@ mod tests {
             point: None,
             on_face: None,
             on_cut: None,
+            drawn: None,
+            side: None,
         };
         let picked = |a: &ViewAnnotation| {
             let mut a = a.clone();
@@ -4059,6 +4328,8 @@ mod tests {
             point: None,
             on_face: None,
             on_cut: None,
+            drawn: None,
+            side: None,
         };
         let mut d = ViewAnnotation::new(1, AnnotationType::Datum, vec![pick.clone()]);
         d.letter = Some("A".to_owned());
@@ -4143,6 +4414,8 @@ mod tests {
             point: None,
             on_face: Some([12.0, 5.0]),
             on_cut: None,
+            drawn: None,
+            side: None,
         };
         let mut d = ViewAnnotation::new(1, AnnotationType::Datum, vec![face.clone()]);
         d.letter = Some("B".to_owned());

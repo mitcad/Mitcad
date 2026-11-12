@@ -84,7 +84,24 @@ struct DocumentSession::BackgroundEvaluation {
 
 rust::Box<Document> newDesignDocument() {
   const QString units = GeneralSettings::load().newDesignUnits;
-  return new_design_document_in(rustStr(units.toUtf8()));
+  rust::Box<Document> document = new_design_document_in(rustStr(units.toUtf8()));
+  showNewDesignOrigin(*document);
+  return document;
+}
+
+bool newDesignAtTop() { return qEnvironmentVariable("MITCAD_NEW_DESIGN_VIEW").trimmed() != QLatin1String("0"); }
+
+void showNewDesignOrigin(Document& document) {
+  if (!newDesignAtTop()) {
+    return;
+  }
+  try {
+    document.command(rustStr(compactJson({{QStringLiteral("cmd"), QStringLiteral("set_origin_visible")},
+                                          {QStringLiteral("visible"), true},
+                                          {QStringLiteral("opening"), true}})));
+  } catch (const std::exception& e) {
+    qWarning().noquote() << QStringLiteral("The new design's origin was not shown: %1").arg(errorText(e));
+  }
 }
 
 DocumentSession::State::State(bool demo) : document(demo ? new_demo_document() : newDesignDocument()) {}

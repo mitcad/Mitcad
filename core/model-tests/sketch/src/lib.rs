@@ -76,3 +76,5 @@ mod sketch_move_hold_1645_tests;
 // Sketch refusals as whole messages, no English word put in as a value
 // (mitcad#1626).
 mod sketch_whole_messages_1626_tests;
+// The sketch query's creation order of a sketch's items (mitcad#1492).
+mod sketch_order_1492_tests;

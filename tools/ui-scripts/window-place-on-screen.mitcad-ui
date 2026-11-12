@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# The design window's kept place (mitcad#1710, GitHub mitcad/Mitcad#283),
+# a start with a kept place that is not on the screens now (the test writes
+# it into the settings: on a monitor no longer connected, half off the
+# screen with its title bar above the top, or larger than the screen): the
+# window is moved, and made smaller where needed, wholly into the primary
+# screen's available area.
+# Run by tools/ui-window-place-test.sh and
+# tools/ui-windows-window-place-test.ps1.
+expect-ever '^Window place restored: .*, moved onto the screen from ' 10
+wait-idle
+expect-window-state normal
+expect-window-on-screen

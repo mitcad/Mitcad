@@ -78,8 +78,10 @@
 #     with the parts list; the placement
 #     deleted from the browser: the list counts one Component1 and the
 #     balloon is broken; Undo brings them back.
-#   - File › Export Drawing twice: a new drawing, a note added to it by
-#     hand, then the same drawing written as it is, the note kept (mitcad#725).
+#   - File › Export Drawing twice: the design's only drawing, made in the
+#     workspace, offered first (mitcad#1680), New Drawing chosen; a note
+#     added to the new drawing by hand, then the same drawing written as
+#     it is, the note kept (mitcad#725).
 #   - A cut sheet (mitcad#853) on a plate and a disk mitcad-cli makes:
 #     Create Drawing's Kind Cut Sheet (600 x 300) on its CUT SHEET tab
 #     (mitcad#1008), Add Components… with both
@@ -87,7 +89,9 @@
 #   - Create Drawing opens with the last choice (mitcad#1218): the last
 #     drawing's ISO, A3, first angle (a cut sheet is not kept); ANSI chosen
 #     (B, third angle) and a drawing created; the next Create Drawing opens
-#     with ANSI, B, third angle (logged), cancelled.
+#     with ANSI, B, third angle (logged), cancelled. File › Export Drawing
+#     then offers New Drawing first: two drawings, none laid out by it
+#     (mitcad#1680).
 #   - Model Items (mitcad#1406) on a block mitcad-cli makes with the
 #     model's annotations (its height, datum A on its top, a hole's
 #     callout): a sheet of three views, Model Items with nothing selected
@@ -508,7 +512,7 @@ echo "--- Dimensions, a centre mark and a note on the views (phase 2)"
 ui_mark
 ui_step "Dimension"                        ui_click_logged "Drawing tool Dimension"
 ui_expect_new "Drawing tool: Dimension" "the dimension tool is on"
-ui_expect_new "Drawing hint: Click the edges, circles or corners to dimension on a view" "its hint"
+ui_expect_new "Drawing hint: Click a straight edge for its length, or the edges, circles or corners to dimension" "its hint"
 # A click that picks nothing is a hint, not an error (mitcad#1174): off the
 # views, and on the front view away from its edges.
 ui_mark
@@ -1122,8 +1126,15 @@ ui_focus_main
 ui_mark
 ui_step "Export Drawing (search)"          ui_command "Export Drawing"
 ui_expect_new "Drawing dialog opened: " "its dialog"
-ui_expect_new ", drawing new" "a new drawing first: none laid out yet"
-ui_step "type the path, Enter"             ui_type_path "Export Drawing" "$WORK/first.pdf"
+# The design's only drawing, made in the drawing workspace and never laid
+# out by this dialog, comes first (mitcad#1680).
+ui_expect_new ", drawing D1" "the design's only drawing first: none laid out yet"
+ui_focus_dialog "$(ui_title_regex "Export Drawing")"
+ui_step "type the path"                    ui_type_field "Export Drawing" "$WORK/first.pdf"
+ui_mark
+ui_step "Drawing: New Drawing (Alt+W, End)" ui_key alt+w End
+ui_expect_new "Drawing dialog: drawing = new" "New Drawing chosen"
+ui_step "OK (Enter)"                       ui_key Return
 ui_focus_main
 ui_expect_new "Drawing kept: D2 Drawing2" "a drawing laid out and kept"
 ui_expect_new "Exported $WORK/first.pdf: drawing" "the PDF written" 30
@@ -1284,6 +1295,18 @@ ui_focus_dialog '^Create Drawing$'
 ui_step "Cancel (Esc)"                     ui_key Escape
 ui_focus_main
 ui_expect_new "Create Drawing cancelled" "nothing made"
+
+echo "--- File › Export Drawing with two drawings, none laid out by it: New Drawing first (mitcad#1680)"
+# The cut sheet and the ANSI drawing, both made in the drawing workspace:
+# no guess between them.
+ui_mark
+ui_step "Export Drawing (search)"          ui_command "Export Drawing"
+ui_expect_new "Drawing dialog opened: " "its dialog"
+ui_expect_new ", drawing new" "New Drawing first: two drawings, none laid out last"
+ui_focus_dialog "$(ui_title_regex "Export Drawing")"
+ui_step "Cancel (Esc)"                     ui_key Escape
+ui_focus_main
+ui_expect_new "Drawing dialog cancelled" "nothing written"
 
 echo "--- Model Items on a sheet of three views (mitcad#1406)"
 # A 40 x 30 x 20 block with a 6.6 mm hole from its top at (20, 15), and the

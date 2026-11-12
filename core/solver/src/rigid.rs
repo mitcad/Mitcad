@@ -36,6 +36,11 @@
 //! where the bodies are); between two free sides `a`'s side moves. Only
 //! joints that close a loop are left to the iteration.
 //!
+//! Every motion folded into a body's pose leaves it a rotation to rounding
+//! ([`Pose::rigid`]), and [`Pose::inverse`] inverts that rigid pose
+//! (mitcad#1668): frames a little off a rotation would otherwise double
+//! their error with each placing.
+//!
 //! The skew part of a rotation also vanishes at half a turn; a solve that
 //! ends there turns the joint's body over and iterates again.
 //!
@@ -92,6 +97,61 @@ fn mat_mul_t<T: Scalar>(a: &M3<T>, b: &M3<T>) -> M3<T> {
 
 fn transpose(m: &M3<f64>) -> M3<f64> {
     std::array::from_fn(|r| std::array::from_fn(|c| m[c][r]))
+}
+
+/// What [`nearest_rotation`] keeps as it is: the rounding of a few
+/// products of rotations.
+const ROUNDING: f64 = 1e-15;
+/// The orthonormality error up to which [`nearest_rotation`] straightens a
+/// matrix; one further off is not a rotation that rounding moved.
+const STRAIGHTENED: f64 = 1e-3;
+
+/// The largest entry of `|MᵀM − I|`: 0 for an exact rotation or mirror;
+/// NaN or infinite for a matrix with a non-finite entry.
+fn orthonormality_error(m: &M3<f64>) -> f64 {
+    let mut worst = 0.0_f64;
+    for r in 0..3 {
+        for c in 0..3 {
+            let product = m[0][r] * m[0][c] + m[1][r] * m[1][c] + m[2][r] * m[2][c];
+            let deviation = (product - if r == c { 1.0 } else { 0.0 }).abs();
+            if deviation.is_nan() {
+                return f64::NAN;
+            }
+            worst = worst.max(deviation);
+        }
+    }
+    worst
+}
+
+/// The rotation nearest to `m` (mitcad#1668): `m` itself when it is
+/// orthonormal within [`ROUNDING`] or off by more than [`STRAIGHTENED`],
+/// else the orthogonal factor of its polar decomposition. The iteration
+/// `X ← X·(3I − XᵀX)/2` converges quadratically to it while `XᵀX` is near
+/// the identity (from 1e-12 off one step reaches rounding, from 1e-3 four)
+/// and keeps the sign of the determinant, so a rotation stays one.
+fn nearest_rotation(m: &M3<f64>) -> M3<f64> {
+    let error = orthonormality_error(m);
+    // A matrix with a non-finite entry is kept as it is.
+    if error.is_nan() || error <= ROUNDING || error > STRAIGHTENED {
+        return *m;
+    }
+    let mut x = *m;
+    for _ in 0..6 {
+        let xtx: M3<f64> = std::array::from_fn(|r| {
+            std::array::from_fn(|c| x[0][r] * x[0][c] + x[1][r] * x[1][c] + x[2][r] * x[2][c])
+        });
+        let half: M3<f64> = std::array::from_fn(|r| {
+            std::array::from_fn(|c| {
+                let three = if r == c { 3.0 } else { 0.0 };
+                (three - xtx[r][c]) / 2.0
+            })
+        });
+        x = mat_mul(&x, &half);
+        if orthonormality_error(&x) <= ROUNDING {
+            break;
+        }
+    }
+    x
 }
 
 /// The rotation by the rotation vector `w` (Rodrigues' formula; its
@@ -164,11 +224,28 @@ impl Pose {
         }
     }
 
+    /// The inverse of the rigid pose nearest to `self` ([`Pose::rigid`]):
+    /// the transpose of its rotation made orthonormal (mitcad#1668). The
+    /// plain transpose of a rotation a little off (`RᵀR = S`) would carry
+    /// that error into every pose composed with it, so each placing would
+    /// double it.
     pub fn inverse(&self) -> Pose {
-        let r = transpose(&self.rotation);
+        let r = transpose(&nearest_rotation(&self.rotation));
         Pose {
             rotation: r,
             translation: mat_vec(&r, self.translation).map(|v| -v),
+        }
+    }
+
+    /// The rigid pose nearest to `self`, its translation kept: `self` when
+    /// its rotation is orthonormal within rounding, else the nearest
+    /// rotation (the orthogonal factor of its polar decomposition) when it
+    /// is off by at most 1e-3 (the largest entry of `|RᵀR − I|`); a
+    /// rotation further off is kept as it is.
+    pub fn rigid(&self) -> Pose {
+        Pose {
+            rotation: nearest_rotation(&self.rotation),
+            translation: self.translation,
         }
     }
 
@@ -637,6 +714,15 @@ pub struct RigidAnalysis {
 struct BodyRec {
     fixed: bool,
     pose: Pose,
+}
+
+impl BodyRec {
+    /// Moves the body by `motion` (after where it is), its pose kept rigid
+    /// (mitcad#1668): the motions come from frames that may be a little
+    /// off a rotation, and each solve composes many of them.
+    fn move_by(&mut self, motion: &Pose) {
+        self.pose = motion.after(&self.pose).rigid();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1819,7 +1905,7 @@ impl RigidSystem {
             let motion = Pose::translation(add(c, [x[0], x[1], x[2]]))
                 .after(&turn)
                 .after(&Pose::translation(c.map(|v| -v)));
-            body.pose = motion.after(&body.pose);
+            body.move_by(&motion);
         }
         for (j, joint) in self.joints.iter_mut().enumerate() {
             let first = layout.value_col[j];
@@ -1948,7 +2034,7 @@ impl RigidSystem {
                 let root = root.expect("a free side is a body");
                 for b in 0..n {
                     if find(&cluster, b) == root {
-                        self.bodies[b].pose = delta.after(&self.bodies[b].pose);
+                        self.bodies[b].move_by(&delta);
                     }
                 }
                 continue;
@@ -1968,7 +2054,7 @@ impl RigidSystem {
                 let root = root.expect("a free side is a body");
                 for b in 0..n {
                     if find(&cluster, b) == root {
-                        self.bodies[b].pose = delta.after(&self.bodies[b].pose);
+                        self.bodies[b].move_by(&delta);
                     }
                 }
             }
@@ -2098,8 +2184,7 @@ impl RigidSystem {
                 (None, Some(b)) => (b, Pose::rotation(fa.translation, axis, angle)),
                 (None, None) => continue,
             };
-            let pose = &mut self.bodies[body.0 as usize].pose;
-            *pose = turn.after(pose);
+            self.bodies[body.0 as usize].move_by(&turn);
             return true;
         }
         false
@@ -2139,8 +2224,7 @@ impl RigidSystem {
             return false;
         };
         let turn = Pose::rotation(fa.translation, axis, std::f64::consts::PI);
-        let pose = &mut self.bodies[body.0 as usize].pose;
-        *pose = turn.after(pose);
+        self.bodies[body.0 as usize].move_by(&turn);
         true
     }
 

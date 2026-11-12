@@ -323,6 +323,151 @@ void test_print_shapes() {
   CHECK(throws_with([&] { hole_tool(wrong); }, "no print shape"));
 }
 
+// An M3 nut pocket (mitcad#1518): an ISO 4032 nut, 5.5 across the flats and
+// 2.4 high, with 0.3 mm of clearance, about a 3.4 mm clearance hole through
+// the block from its top.
+HoleSpec nut_pocket() {
+  HoleSpec spec = at_top(3.4);
+  spec.type = HoleType::NutPocket;
+  spec.extent = HoleExtent::ThroughAll;
+  spec.pocket_across_flats = 5.8;
+  spec.pocket_depth = 2.7;
+  return spec;
+}
+
+void test_nut_pockets() {
+  const ShapePtr body = block();
+  const double hexagon = std::sqrt(3.0) / 2.0 * 5.8 * 5.8;
+  const double bore = kPi * 1.7 * 1.7 * (20 - 2.7);
+  HoleSpec spec = nut_pocket();
+  spec.bodies = {body};
+  const ShapePtr tool = hole_tool(spec);
+  for (int k = 0; k < 6; ++k) {
+    CHECK(faces_named(*tool, "F3:hole0.pocket" + std::to_string(k)) == 1);
+  }
+  CHECK(faces_named(*tool, "F3:hole0.pocket_floor") == 1 && faces_named(*tool, "F3:hole0.top") == 1);
+  CHECK(faces_named(*tool, "F3:hole0.wall") == 1 && faces_named(*tool, "F3:hole0.pocket_roof") == 0);
+  CHECK_NEAR(cut_volume(body, spec), 48000 - hexagon * 2.7 - bore);
+  const BooleanResult cut = boolean(BooleanOp::Cut, {body.get()}, *tool);
+  CHECK(cut.pieces.size() == 1);
+  if (cut.pieces.size() == 1) {
+    const Shape& drilled = *cut.pieces.front().shape;
+    CHECK(faces_named(drilled, "F3:hole0.pocket0") == 1 && faces_named(drilled, "F3:hole0.pocket_floor") == 1);
+    CHECK(edge_names_unique(drilled));
+  }
+
+  // A side slot along the first flat (its normal +x, the slot towards -y
+  // from the axis at y = 20) out past the block's side: half the hexagon and
+  // the slot 5.8 wide, 20 long inside the block.
+  spec.pocket_slot = 25;
+  const ShapePtr slotted = hole_tool(spec);
+  CHECK(faces_named(*slotted, "F3:hole0.slot_end") == 1);
+  CHECK(faces_named(*slotted, "F3:hole0.pocket1") == 0 && faces_named(*slotted, "F3:hole0.pocket2") == 0);
+  CHECK(faces_named(*slotted, "F3:hole0.pocket0") == 1 && faces_named(*slotted, "F3:hole0.pocket3") == 1);
+  CHECK(faces_named(*slotted, "F3:hole0.pocket_floor") == 1);
+  const double slotted_area = hexagon / 2.0 + 20 * 5.8;
+  CHECK_NEAR(cut_volume(body, spec), 48000 - slotted_area * 2.7 - bore);
+
+  // The same 5 mm below the top: a cavity with a roof the slot opens.
+  spec.pocket_offset = 5;
+  const ShapePtr buried = hole_tool(spec);
+  CHECK(faces_named(*buried, "F3:hole0.pocket_roof") == 1 && faces_named(*buried, "F3:hole0.top") == 1);
+  CHECK_NEAR(cut_volume(body, spec), 48000 - slotted_area * 2.7 - bore);
+
+  // A pocket no wider than the hole, a slot inside it, a pocket as deep as
+  // the hole.
+  HoleSpec wrong = nut_pocket();
+  wrong.bodies = {body};
+  wrong.pocket_across_flats = 3.4;
+  CHECK(throws_with([&] { hole_tool(wrong); }, "wider than the hole"));
+  wrong = nut_pocket();
+  wrong.bodies = {body};
+  wrong.pocket_slot = 3;
+  CHECK(throws_with([&] { hole_tool(wrong); }, "reach out of the pocket"));
+  wrong = nut_pocket();
+  wrong.extent = HoleExtent::Distance;
+  wrong.depth = 2;
+  CHECK(throws_with([&] { hole_tool(wrong); }, "shallower than the hole"));
+}
+
+// An M3 counterbore, 6.5 wide and 3.4 deep, about a 3.4 mm hole through the
+// block from its bottom, opening toward the print bed (mitcad#1516).
+HoleSpec from_bed() {
+  HoleSpec spec;
+  spec.feature = "F3";
+  spec.positions = {gp_Ax1(gp_Pnt(30, 20, 0), gp_Dir(0, 0, 1))};
+  spec.diameter = 3.4;
+  spec.type = HoleType::Counterbore;
+  spec.counterbore_diameter = 6.5;
+  spec.counterbore_depth = 3.4;
+  spec.extent = HoleExtent::ThroughAll;
+  spec.bridged = {true};
+  spec.bridge_layer = 0.2;
+  return spec;
+}
+
+void test_print_bridging() {
+  const ShapePtr body = block();
+  const double counterbore = kPi * 3.25 * 3.25 * 3.4;
+  const double bore = kPi * 1.7 * 1.7;
+  // A sacrificial layer: the bore starts one layer above the floor.
+  HoleSpec spec = from_bed();
+  spec.bodies = {body};
+  spec.bridging = Bridging::Sacrificial;
+  const ShapePtr membrane = hole_tool(spec);
+  CHECK(faces_named(*membrane, "F3:hole0.bridge0") == 1);
+  CHECK_NEAR(cut_volume(body, spec), 48000 - counterbore - bore * (20 - 3.6));
+  // Its thickness follows the layer height.
+  spec.bridge_layer = 0.3;
+  CHECK_NEAR(cut_volume(body, spec), 48000 - counterbore - bore * (20 - 3.7));
+
+  // Stepped: the first layer opens a strip as wide as the hole across the
+  // counterbore, the second the square of the hole's diameter.
+  spec.bridging = Bridging::Stepped;
+  spec.bridge_layer = 0.2;
+  const ShapePtr steps = hole_tool(spec);
+  // The square's top is four corners round the bore it touches, numbered;
+  // the first step's top two pieces beside the square.
+  for (int k = 0; k < 4; ++k) {
+    CHECK(faces_named(*steps, "F3:hole0.bridge1#" + std::to_string(k)) == 1);
+  }
+  CHECK(faces_named(*steps, "F3:hole0.bridge0#0") == 1 && faces_named(*steps, "F3:hole0.bridge0#1") == 1);
+  CHECK(faces_named(*steps, "F3:hole0.bridge0.side0") == 1 && faces_named(*steps, "F3:hole0.bridge0.side1") == 1);
+  CHECK(faces_named(*steps, "F3:hole0.bridge1.side0") == 1 && faces_named(*steps, "F3:hole0.bridge1.side1") == 1);
+  const double strip = 2 * (1.7 * std::sqrt(3.25 * 3.25 - 1.7 * 1.7) + 3.25 * 3.25 * std::asin(1.7 / 3.25));
+  CHECK_NEAR(cut_volume(body, spec), 48000 - counterbore - strip * 0.2 - 3.4 * 3.4 * 0.2 - bore * (20 - 3.8));
+
+  // A nut pocket at the start bridged the same way, and a hole not bridged.
+  HoleSpec pocket = from_bed();
+  pocket.bodies = {body};
+  pocket.type = HoleType::NutPocket;
+  pocket.pocket_across_flats = 5.8;
+  pocket.pocket_depth = 2.7;
+  pocket.bridging = Bridging::Sacrificial;
+  const double hexagon = std::sqrt(3.0) / 2.0 * 5.8 * 5.8;
+  CHECK_NEAR(cut_volume(body, pocket), 48000 - hexagon * 2.7 - bore * (20 - 2.9));
+  pocket.bridged = {false};
+  CHECK_NEAR(cut_volume(body, pocket), 48000 - hexagon * 2.7 - bore * (20 - 2.7));
+
+  // Layers past the hole's depth, a countersink, a pocket with a slot.
+  HoleSpec wrong = from_bed();
+  wrong.bridging = Bridging::Stepped;
+  wrong.extent = HoleExtent::Distance;
+  wrong.depth = 3.6;
+  CHECK(throws_with([&] { hole_tool(wrong); }, "end before the hole's depth"));
+  wrong = from_bed();
+  wrong.bodies = {body};
+  wrong.bridging = Bridging::Sacrificial;
+  wrong.type = HoleType::Countersink;
+  wrong.countersink_diameter = 6.5;
+  wrong.countersink_angle = 90 * kDegree;
+  CHECK(throws_with([&] { hole_tool(wrong); }, "only a counterbore or a nut pocket"));
+  wrong = from_bed();
+  wrong.bridging = Bridging::Sacrificial;
+  wrong.bridged = {true, true};
+  CHECK(throws_with([&] { hole_tool(wrong); }, "for every hole"));
+}
+
 } // namespace
 
 void hole_tests() {
@@ -332,6 +477,8 @@ void hole_tests() {
   guarded("test_queries", test_queries);
   guarded("test_press_fits", test_press_fits);
   guarded("test_print_shapes", test_print_shapes);
+  guarded("test_nut_pockets", test_nut_pockets);
+  guarded("test_print_bridging", test_print_bridging);
 }
 
 } // namespace test

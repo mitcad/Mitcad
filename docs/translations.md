@@ -133,7 +133,20 @@ Language ([user guide](user-guide.md#language)).
   file-format keys, settings keys, file names, formulas, parameter names,
   names users give, the test driver's texts, and texts written with
   `QStringLiteral` for these reasons. A user-facing text found without
-  `tr()` is wrapped in it.
+  `tr()` is wrapped in it. Names stored in a design are its data and keep
+  the language they were made in: the default names of new items (Body1,
+  Sketch1, Component1:1) and the names of materials and appearances, which
+  the built-in library gives in English and a design keeps as it got them
+  (mitcad#1674). The built-in materials' names are the exception
+  (mitcad#1689): they are stored in English, in the design, its files,
+  exports and the MCP results, and shown translated (the glossary's
+  *built-in materials*), in the context `MaterialName`
+  (`shownMaterialName` in `app/framework/Appearances.cpp`): in the
+  material lists, the Material and Appearance tools' pickers, `Default
+  (%1)`, the Browser's Material menu and Send to Slicer's material rows. A
+  name the user gave, in the design or a library of the user's or the
+  project's, is shown as it is, also when it reads as a built-in one's;
+  appearances' names stay as stored.
 - **Texts an agent reads** stay English in every language
   (`QStringLiteral`, mitcad#1471): the MCP tools' refusals, busy answers
   and errors (`MainWindowMcp.cpp`, `MainWindowMcpUi.cpp`, the path checks
@@ -260,7 +273,12 @@ translates what it shows the user, as it shows it (mitcad#1284).
   which matches only a general template such as `%1 is not %2`: `core/`
   writes one whole message per case, with only names, numbers and
   messages of their own as values (`format!("{what} is not a plane")`,
-  one literal per curve kind; mitcad#1626).
+  one literal per curve kind; mitcad#1626). A lead-in of one word and a
+  value (`format!("section {}: {e}", …)`) is no template of its own (a
+  template has two words side by side), so it would stay English before a
+  translated rest; where such a message is common, its lead-in is part of
+  each whole message (`section %1: an edge found again after a change in
+  %2`, a loft's renamed references; mitcad#1688).
 - **Tests.** `test_app`'s model message tests check the matching, the
   values and the English fallback, and that every template has its Finnish
   and its pseudo-language translation. The pseudo-language marks the
@@ -311,7 +329,10 @@ would and closed again, its dialogs and windows closed and its panel
 cancelled (`walk-commands`), then the sketch's commands in a sketch and a
 drawing's in a drawing. It fails on each `Untranslated:` or `Fallback:`
 line of a text of MitCad's, naming the step that showed it; Qt's own texts
-that Qt's catalogue lacks (its file dialog's, its key names) are left out.
+that Qt's catalogue lacks (its key names) are left out, but not the labels of
+Qt's file dialog (Look in, Files of type, File name), which Qt's Finnish
+catalogue has: one left English means `qtbase_fi.qm` was not loaded
+(mitcad#1674).
 A text it reports is marked for `lupdate` in its context and translated
 (above), or, a text for logs or agents, taken out of `tr()`. The walk
 reaches what an empty design with a body, a sketch and a drawing shows;
@@ -330,6 +351,13 @@ below is the reference for its translators too.
 One term per concept; a column per language. Finnish follows established
 Finnish CAD and engineering usage.
 
+Finnish style (mitcad#1475): a "Click to …" text (and "Double-click to",
+"Press … to", "Drag … to", "Hold … to") says the result first and the
+action as *-malla*, not with *-kseen* or *-ksesi*: "Click the first point
+to close" is "sulje napsauttamalla ensimmäistä pistettä". What *napsauta*
+clicks is in the partitive: "napsauta keskipistettä", "napsauta toista
+päätä", never "napsauta keskipiste".
+
 | English | Finnish (fi) | Note |
 |---|---|---|
 | design | malli | the document; a new design: uusi malli |
@@ -343,6 +371,7 @@ Finnish CAD and engineering usage.
 | component | komponentti | |
 | occurrence | esiintymä | |
 | body | kappale | solid body: solidi; surface body: pintakappale; mesh body: verkkokappale |
+| mesh | verkko | never verkkomalli (malli is a design); Convert Mesh: Muunna verkko; Save as Mesh: Tallenna verkkona |
 | feature | piirre | |
 | sketch | luonnos | Create Sketch: Luo luonnos; Finish Sketch: Lopeta luonnos |
 | 3D sketch | 3D-luonnos | Create 3D Sketch: Luo 3D-luonnos; Convert to 3D Sketch: Muunna 3D-luonnokseksi; 3D Sketch Palette: 3D-luonnospaletti; route (a 3D sketch's path): reitti |
@@ -370,7 +399,7 @@ Finnish CAD and engineering usage.
 | constraint | rajoite | |
 | dimension | mitta | Sketch Dimension: Luonnosmitta |
 | parameter | parametri | user parameter: käyttäjäparametri |
-| configuration | konfiguraatio | option: vaihtoehto; row: rivi; rule: sääntö; binding: sidonta |
+| configuration | konfiguraatio | option: vaihtoehto; row: rivi; rule: sääntö; binding: sidonta (a configuration's only; input bindings are näppäinmääritykset) |
 | table | taulukko | key column: avainsarake; parameter column: parametrisarake |
 | extrude | pursotus (pursottaa) | |
 | revolve | pyöräytys (pyöräyttää) | |
@@ -380,7 +409,7 @@ Finnish CAD and engineering usage.
 | chamfer | viiste (viistää) | |
 | shell | kuorinta | |
 | draft | päästö | taper angle: päästökulma |
-| hole | reikä | |
+| hole | reikä | clearance hole: välysreikä; tapped: kierteitetty; press fit: puristussovite |
 | thread | kierre | |
 | pattern | kuvio | rectangular: suorakulmainen kuvio; circular: ympyräkuvio |
 | mirror | peilaus | |
@@ -389,15 +418,18 @@ Finnish CAD and engineering usage.
 | combine | yhdistä | join: liitä; cut: leikkaa |
 | assembly | kokoonpano | Assemble group: Kokoonpano |
 | joint | liitos | |
+| ground, unground (an occurrence) | kiinnittää, vapauttaa kiinnitys | Ground: Kiinnitä; Unground: Vapauta kiinnitys; grounded: kiinnitetty; never maadoittaa (electrical earthing); the render environment's ground: maa |
 | sheet metal | ohutlevy | flat pattern: levitys; bend: taivutus |
 | drawing | piirustus | |
 | view (a drawing's) | kuvanto | base view: peruskuvanto; projected: projektiokuvanto; section: leikkauskuvanto; detail: detaljikuvanto; break: katkaisu; parent view: emokuvanto; the 3D view: näkymä |
+| orientation cube | suuntakuutio | its faces, in capitals: ETU, TAKA, VASEN, OIKEA, YLÄ, ALA (FRONT, BACK, LEFT, RIGHT, TOP, BOTTOM) |
+| standard view | näkymä + direction | Front View: Näkymä edestä; Back View: Näkymä takaa; Left View, Right View: Näkymä vasemmalta, Näkymä oikealta; Top View, Bottom View: Näkymä ylhäältä, Näkymä alhaalta; Isometric View: Isometrinen näkymä; each a whole text, never a name put into "%1 View" (mitcad#1687) |
 | sheet (a drawing's) | arkki | template: pohja; title block: nimiö; scale: mittakaava; first/third angle: ensimmäinen/kolmas kulma |
 | drawing symbols | symbolit | balloon: osanumero; center mark: keskiömerkki; centerline: keskiviiva; datum label: perustemerkki; feature control frame: toleranssikehys; surface finish: pinnanlaatu; hatching: viivoitus; hole table: reikätaulukko |
 | drawing dimensions | mitoitus | ordinate: koordinaattimitoitus; baseline: rinnakkaismitoitus; chain: ketjumitoitus; aligned: suuntainen |
 | annotation | merkintä | |
 | note | huomautus | |
-| geometric tolerance | geometrinen toleranssi | straightness: suoruus; flatness: tasomaisuus; circularity: ympyrämäisyys; cylindricity: lieriömäisyys; profile of a line, of a surface: viivan muoto, pinnan muoto; parallelism: yhdensuuntaisuus; perpendicularity: kohtisuoruus; angularity: kaltevuus; concentricity: samankeskisyys; runout: heitto; datum: peruste; fit: sovite; deviation: poikkeama; leader: viiteviiva |
+| geometric tolerance | geometrinen toleranssi | straightness: suoruus; flatness: tasomaisuus; circularity: ympyrämäisyys; cylindricity: lieriömäisyys; profile of a line, of a surface: viivan muoto, pinnan muoto; parallelism: yhdensuuntaisuus; perpendicularity: kohtisuoruus; angularity: kaltevuus; concentricity: samankeskisyys; runout: heitto; datum: peruste; fit: sovite; deviation: poikkeama; leader: viiteviiva; characteristic (GD&T): toleranssityyppi |
 | comment | kommentti | open: avoin; addressed (by an agent): käsitelty; resolved: ratkaistu; resolution: ratkaisu; retarget: siirtää; pin: nasta |
 | bill of materials | osaluettelo | |
 | cut list | leikkuuluettelo | cut sheet: leikkuuarkki |
@@ -405,6 +437,7 @@ Finnish CAD and engineering usage.
 | opening (Build) | aukko | sill: alareuna; partition: väliseinä; rough opening: karkea aukko; top plate, bottom plate: yläjuoksu, alajuoksu |
 | material | materiaali | classes: Metal: metalli; Resin: hartsi; Wood: puu |
 | material properties | materiaaliominaisuudet | material dataset: materiaaliaineisto; Young's modulus: kimmokerroin; Poisson's ratio: Poissonin luku; yield strength: myötöraja; a material's variant: muunnelma |
+| built-in materials (their names) | sisäänrakennetut materiaalit | Steel: Teräs; Stainless Steel: Ruostumaton teräs; Cast Iron: Valurauta; Aluminum: Alumiini; Copper: Kupari; Brass: Messinki; Titanium: Titaani; ABS Plastic: ABS-muovi; PLA Plastic: PLA-muovi; Nylon: Nailon; Polycarbonate: Polykarbonaatti; Glass: Lasi; Water: Vesi; Resin - Standard: Hartsi - vakio; the base library's PA (Nylon): PA (nailon); ABS, ASA, PETG, PLA and TPU as they are; shown translated, stored in English (mitcad#1689) |
 | appearance | ulkoasu | |
 | texture | tekstuuri | base color: perusväri; roughness: karheus; opacity: peittävyys; emission: hehku |
 | property set | ominaisuusjoukko | property type: ominaisuustyyppi |
@@ -424,7 +457,7 @@ Finnish CAD and engineering usage.
 | extension (an assistant's) | laajennus | |
 | listener | kuuntelija | MitCad's listener for assistants |
 | cache | välimuisti | memory cache: muistivälimuisti; disk cache: levyvälimuisti |
-| formula | kaava | Formula Editor: Kaavaeditori; formula template: kaavamalli |
+| formula | kaava | Formula Editor: Kaavaeditori; formula template: kaavapohja (malli is a design) |
 | expression | lauseke | |
 | parent (component) | yläkomponentti | |
 | body transfer | kappalesiirto | |
@@ -433,8 +466,15 @@ Finnish CAD and engineering usage.
 | preview | esikatselu | |
 | pick | poimia | |
 | select | valita | selection: valinta |
-| navigation | navigointi | pan: panorointi; orbit: kierto; zoom: zoomaus; left, middle, right drag: vasen veto, keskiveto, oikea veto; snapshot: tilannekuva |
-| render environment | renderöintiympäristö | light: valo; point, spot, area light: pistevalo, kohdevalo, pintavalo; sun: aurinko; ground: maa; exposure: valotus; samples: näytteet; denoise: kohinanpoisto; scene: kohtaus; render worker: renderöintityöprosessi |
+| navigation | navigointi | pan: panorointi; orbit: kierto; zoom: zoomaus; left, middle, right drag: vasen veto, keskiveto, oikea veto; middle button: keskipainike; trackpad: ohjauslevy; snapshot: tilannekuva |
+| input bindings | näppäinmääritykset | navigation bindings: navigoinnin näppäinmääritykset; modifier keys: muokkausnäppäimet; a configuration's binding: sidonta |
+| typed (a value) | syötetty | a typed value: syötetty arvo; the verb stays: type the radius: kirjoita säde |
+| exit code, exit status | paluukoodi | |
+| web viewer (a project's) | verkkokatselin | Update Web Viewer: Päivitä verkkokatselin |
+| layer (DXF, DWG, 3D print) | kerros | never taso, which is a plane; layer height: kerroskorkeus |
+| view cube, orientation cube | suuntakuutio | its faces: ETU, TAKA, VASEN, OIKEA, YLÄ, ALA |
+| root component | pääkomponentti | the root's default name, Root: Juuri |
+| render environment | renderöintiympäristö | light: valo; point, spot, area light: pistevalo, kohdevalo, pintavalo; sun: aurinko; ground: maa; exposure: valotus; samples: näytteet; denoise: kohinanpoisto; scene: kohtaus; render worker: renderöintiprosessi |
 | motion study | liiketutkimus | key: avainkohta; step: askel |
 | update | päivitys | release: julkaisu; pre-release: esijulkaisu; release notes: julkaisutiedot; channel: kanava |
 | report (to the developers) | raportti | feedback: palaute; bug report: virheraportti; issue form: ilmoituslomake; debug log: vianetsintäloki |
@@ -459,7 +499,8 @@ Finnish CAD and engineering usage.
 | frame (coordinates) | kehys | mount frame: kiinnityskehys |
 | joint motion | kierto, liuku | Turn Z: Kierto Z; Slide Z: Liuku Z; rest: lepoarvo |
 | driver, follower | käyttävä, seuraaja | |
-| gear | hammaspyörä | module: moduuli; pressure angle: rynnökulma; backlash: hammasvälys; profile shift: profiilinsiirto |
+| Machine Elements | Koneenosat | the Create menu's group of gears, pulleys and bearings; plainer than koneenelimet (mitcad#1687) |
+| gear | hammaspyörä | module: moduuli; pressure angle: ryntökulma; mesh (gears): ryntö; backlash: hammasvälys; profile shift: profiilinsiirto |
 | pulley | hihnapyörä | belt: hihna; travel: liikevara |
 | bearing | laakeri | rolling element: vierintäelin |
 | bore, hub, keyway | akselireikä, napa, kiilaura | |
@@ -480,6 +521,9 @@ Finnish CAD and engineering usage.
 | helix, coil | kierukka | |
 | replay (an import's history) | toisto | translated (an imported item): muunnettu; not translated: ei muunneta; decoded: purettu |
 | counterbore, countersink, counterdrill | lieriöupotus, kartioupotus, porausupotus | |
+| heat-set insert | lämpöupotettava kierreholkki | its hole: holkin reikä |
+| nut pocket | mutteritasku | width across flats: avainväli |
+| print bridging (of a hole) | tulostussiltaus | bridged: siltattu |
 | stair run, riser, tread | syöksy, nousu, askelma | landing: tasanne |
 | prime tower (3D print) | esitäyttötorni | brim: reunus; skirt: helma; raft: lautta; ironing: silitys; retraction: takaisinveto |
 | key names | Shift, Ctrl, Alt, Enter | as on the keyboard, never translated (not Vaihto) |

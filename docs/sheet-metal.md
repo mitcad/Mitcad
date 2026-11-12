@@ -1396,6 +1396,54 @@ the joint sets the wall's end from the thickness `t`:
   [API section](../core/model-api/src/commands.md#mirrors-and-patterns-of-sheet-metal-bodies-mitcad1450));
   the bend charts' maps in `body_copy.rs`'s unit tests.
 
+### A flange's profile sketch (mitcad#1648)
+
+A Flange may draw its wall with a sketch instead of the rectangle of its
+length and width (GitHub mitcad/Mitcad#237): `profile` names a sketch
+before the flange whose closed region on the bend line is the wall's
+outline (commands.md, "A flange's profile sketch").
+
+- **The sketch's frame.** The wall's chart has `x` along the wall from the
+  bend's moving tangent line and `y` along the boundary from where the
+  bend starts. The profile is read in a frame of its own, independent of
+  the bend's span: origin on the moving tangent line at the middle of the
+  boundary, `x` along the line against the canonical axial direction `e`,
+  `y` along the wall (`flange_profile_frame`). Its normal is the chart's,
+  so sketch `(x, y)` is chart `(y, L/2 - start - x)`, a quarter turn, for
+  a boundary `L` long and a bend starting `start` along it
+  (`ProfileWall::chart`). The 2D outline is what counts: a sketch whose
+  plane no longer lies on the wall (an angle edited since) still gives the
+  same wall, and the flange warns.
+- **The wall.** The region with a straight side on the sketch's `x` axis
+  and material above it; that side (one or more lines in a row) becomes
+  the generated curve 53, the bend's moving port, as the rectangular
+  wall's root, and the rest keeps the sketch's curve names. The side's
+  ends give the bend's span and so the offsets (`start = L/2 - x1`, `end =
+  L/2 + x0`) with their reliefs; the outline's reach past the boundary's
+  ends is an overhang beside the bend (one bend and its wall). The ends of
+  a whole boundary keep the profile's span: the outline's following of
+  oblique panel sides (mitcad#1576) is left to the profile. A region across
+  the line, none or several on it, a side in pieces or past the boundary's
+  ends are refused in words.
+- **Making it.** `sheet_flange_profile` reads the flange's definition on a
+  copy of the document (its values may be expressions), computes the frame
+  against the sheet at the marker, and adds a hidden fixed construction
+  plane and a sketch on it with the rectangle of the current length and
+  width, its corners on the bend line fixed (one undo step); for a
+  definition with a profile it moves that profile's plane back onto the
+  wall. The Flange panel's Edit Profile runs it and opens the sketch while
+  the panel waits (app/COMMANDS.md, "Flange").
+- **Tests.** `sheet_profile_tests.rs` (the mock kernel, which trims no
+  sheet domains: the sketch made on the wall with its rectangle, one undo
+  step, a side slanted 10 degrees by an angle dimension to the bend line,
+  the flange naming its profile, saved and reopened, a profile across the
+  bend line refused without ids, offsets refused, the plane moved back for
+  another angle and refused for a sketch on no fixed plane of its own);
+  CLI `cli.sheet_flange_profile` (volumes and Flat Pattern areas of the
+  rectangular and the tapered wall, the warning at another angle and the
+  plane moved back); `tools/ui-sheet-flange-profile-test.sh`
+  and the ctest `app.ui-windows-sheet-flange-profile`.
+
 ## Kernel seam
 
 Add one sheet-metal family to `core/model-base/src/kernel.rs`, using default

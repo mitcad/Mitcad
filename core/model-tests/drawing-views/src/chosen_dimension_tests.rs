@@ -802,3 +802,167 @@ fn a_sections_cut_edge_alone_is_the_length_of_the_piece_under_the_click() {
     );
     assert!(error.contains("lies on no piece"), "{error}");
 }
+
+/// A 40 x 30 x 20 block (F2.b0) standing for a square tube seen from the
+/// side (mitcad#1691), 40 long along x, its front top corner rounded: the
+/// round face `side(c1…)` of radius 3 about the axis at y 3, z 17 along x,
+/// bounded by its own quarter circles at x 0 and 40, beside the straight
+/// edge where the round meets the top, from (0, 3, 20) to (40, 3, 20) (the
+/// name returned). A drawing with its front view at 1:1 (view 1: the
+/// model's x and z), whose top line, z 20, is both that edge and the round
+/// face's outline.
+fn rounded_tube() -> (Document<MockKernel>, String) {
+    let mut doc = Document::new(MockKernel::default());
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": R}],
+              "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+        ]),
+    );
+    doc.kernel().lists_geometry.set(true);
+    let body: BodyUid = "F2.b0".parse().unwrap();
+    let names: Vec<String> = doc
+        .kernel()
+        .edges(doc.body_shape(body).unwrap())
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| e.name)
+        .collect();
+    let side = "F2:side(c1[c4,c2])".to_owned();
+    let find = |with: &str| {
+        names
+            .iter()
+            .find(|n| n.contains(&side) && n.contains(with))
+            .cloned()
+            .unwrap_or_else(|| panic!("no edge of {side} and {with}: {names:?}"))
+    };
+    let (first, last) = (find(":start("), find(":end("));
+    let straight = names
+        .iter()
+        .find(|n| !n.contains("side(c1["))
+        .cloned()
+        .expect("an edge away from the round face");
+    let quarter = |x: f64| CurveGeometry::Circle {
+        center: [x, 3.0, 17.0],
+        normal: [1.0, 0.0, 0.0],
+        radius: 3.0,
+        start: [x, 3.0, 20.0],
+        end: [x, 0.0, 17.0],
+    };
+    {
+        let mut curves = doc.kernel().edge_curves.borrow_mut();
+        curves.insert(first, quarter(0.0));
+        curves.insert(last, quarter(40.0));
+        curves.insert(
+            straight.clone(),
+            CurveGeometry::Line {
+                start: [0.0, 3.0, 20.0],
+                end: [40.0, 3.0, 20.0],
+            },
+        );
+    }
+    doc.kernel().surfaces.borrow_mut().insert(
+        side,
+        SurfaceGeometry::Cylinder {
+            origin: [0.0, 3.0, 17.0],
+            axis: [1.0, 0.0, 0.0],
+            radius: 3.0,
+        },
+    );
+    command(&mut doc, json!({"cmd": "add_drawing", "size": "A3"}));
+    command(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "front",
+               "at": [100, 120], "scale": "1:1"}),
+    );
+    (doc, straight)
+}
+
+/// Where a point of the tube's front (the model's x and z) is on the
+/// sheet.
+fn on_front(doc: &Document<MockKernel>, x: f64, z: f64) -> [f64; 2] {
+    let view = sheet(doc)["views"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["id"] == 1)
+        .cloned()
+        .expect("the front view");
+    let place = point(&view["place"]);
+    [place[0] + x, place[1] + z]
+}
+
+#[test]
+fn a_click_on_a_rounded_tubes_long_line_dimensions_its_length() {
+    let (mut doc, straight) = rounded_tube();
+    let pick = |doc: &Document<MockKernel>, at: [f64; 2], extra: Value| {
+        let mut asked = json!({"query": "drawing_pick", "drawing": "D1", "view": 1, "at": at});
+        if let (Some(asked), Some(extra)) = (asked.as_object_mut(), extra.as_object()) {
+            asked.extend(extra.clone());
+        }
+        query(doc, asked)
+    };
+    // On the top line, a fifth of a millimetre below it: the straight edge
+    // along it, not the round face whose outline the line is too; alone,
+    // its length.
+    let on_line = on_front(&doc, 20.0, 19.8);
+    let picked = pick(&doc, on_line, json!({}));
+    assert_eq!(picked["seen"], "line", "{picked}");
+    assert_eq!(picked["pick"]["edge"], straight.as_str(), "{picked}");
+    assert_eq!(picked["alone"], true, "{picked}");
+    // On the round face's axis (z 17): the round face.
+    let axis = pick(&doc, on_front(&doc, 20.0, 17.2), json!({}));
+    assert_eq!(axis["seen"], "axis", "{axis}");
+    assert_eq!(axis["pick"]["face"], "F2:side(c1[c4,c2])", "{axis}");
+    // A radius wants the round face, on its outline too.
+    let radius = pick(&doc, on_line, json!({"type": "radius"}));
+    assert_eq!(radius["pick"]["face"], "F2:side(c1[c4,c2])", "{radius}");
+    // The placing click's preview says what the dimension writes: the
+    // value it gets.
+    let placed = on_front(&doc, 20.0, 30.0);
+    let snap = query(
+        &doc,
+        json!({"query": "drawing_snap", "free": true,
+               "command": {"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1,
+                           "type": "dimension", "picks": [on_line], "at": placed}}),
+    );
+    assert_eq!(snap["type"], "linear", "{snap}");
+    assert!(near(snap["value"].as_f64().unwrap(), 40.0), "{snap}");
+    // Auto: the tube's length, as the preview said.
+    let added = command(
+        &mut doc,
+        json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1, "type": "dimension",
+               "picks": [on_line], "at": placed}),
+    );
+    let entry = annotation(&doc, &added["annotation"]);
+    assert_eq!(entry["broken"], false, "{entry}");
+    assert_eq!(entry["type"], "linear", "{entry}");
+    assert!(near(value(&entry), 40.0), "{entry}");
+    assert_eq!(snap["label"], entry["label"], "{snap} {entry}");
+    // The hover's outline (mitcad#1691): the visible lines the view draws
+    // of the picked body, on the sheet, and its name.
+    let outlined = pick(&doc, on_line, json!({"outline": true}));
+    let outline = &outlined["outline"];
+    assert!(
+        outline["body"].as_str().is_some_and(|b| !b.is_empty()),
+        "{outlined}"
+    );
+    let lines = outline["lines"].as_array().expect("the body's lines");
+    assert!(!lines.is_empty(), "{outlined}");
+    let (low, high) = (on_front(&doc, 0.0, 0.0), on_front(&doc, 40.0, 20.0));
+    for p in lines.iter().flat_map(|l| l.as_array().unwrap()) {
+        let p = point(p);
+        assert!(
+            p[0] >= low[0] - 1e-6
+                && p[0] <= high[0] + 1e-6
+                && p[1] >= low[1] - 1e-6
+                && p[1] <= high[1] + 1e-6,
+            "{p:?} is off the tube's front: {outlined}"
+        );
+    }
+    // Without `outline`, none.
+    assert!(picked.get("outline").is_none(), "{picked}");
+}

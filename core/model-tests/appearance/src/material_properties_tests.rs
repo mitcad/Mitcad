@@ -312,7 +312,7 @@ fn a_dataset_material_is_chosen_and_saved_as_the_users_own() {
 /// mitcad#1552: the dataset's woods and panels, read through the
 /// `material_dataset` query: 17 of the class Wood, each with its density
 /// and, for the solid woods, its Young's modulus (none for the panels);
-/// `create_material` from `wood/oak` makes a Wood material with its look
+/// `create_material` from `wood/walnut` makes a Wood material with its look
 /// and its source; a new Wood material starts with the class's look.
 #[test]
 fn the_woods_and_panels_of_the_dataset_are_wood_materials() {
@@ -374,24 +374,25 @@ fn the_woods_and_panels_of_the_dataset_are_wood_materials() {
     assert_eq!(found.len(), 1);
     assert_eq!(found[0]["name"], "Wood - Oak");
 
+    // A wood that is not built in (the oak is since mitcad#1706).
     let id = command(
         &mut doc,
-        json!({"cmd": "create_material", "dataset": "wood/oak"}),
+        json!({"cmd": "create_material", "dataset": "wood/walnut"}),
     )["id"]
         .as_str()
         .unwrap()
         .to_owned();
-    let oak = material(&doc, &id);
-    assert_eq!(oak["name"], "Wood - Oak");
-    assert_eq!(oak["class"], "wood");
-    assert_eq!(oak["appearance"], "wood_oak");
-    assert!(close(&oak["density"], 0.755));
-    assert!(close(&oak["properties"]["youngs_modulus"], 12_150.0));
+    let walnut = material(&doc, &id);
+    assert_eq!(walnut["name"], "Wood - Walnut");
+    assert_eq!(walnut["class"], "wood");
+    assert_eq!(walnut["appearance"], "wood_walnut");
+    assert!(close(&walnut["density"], 0.61));
+    assert!(close(&walnut["properties"]["youngs_modulus"], 11_590.0));
     assert_eq!(
-        oak["reference"],
-        json!({"source": "The Wood Database", "material": "American white oak (Quercus alba)"})
+        walnut["reference"],
+        json!({"source": "The Wood Database", "material": "Black walnut (Juglans nigra)"})
     );
-    assert_eq!(undo_label(&doc), "Create Material Wood - Oak");
+    assert_eq!(undo_label(&doc), "Create Material Wood - Walnut");
     // A panel: its own look, no modulus.
     let osb = command(
         &mut doc,
@@ -630,4 +631,218 @@ fn keep_both_numbers_a_name_that_differs_only_in_case() {
     assert!(close(&added["density"], 7.9), "{added}");
     assert!(named(&doc, "steel").is_null());
     assert_eq!(material(&doc, "steel")["name"], "Steel");
+}
+
+/// mitcad#1706: common woods and panels are built in, of the class Wood,
+/// with the dataset's values and looks; a body of the oak gets its mass
+/// from the oak's density; a design's own material of a built-in wood's
+/// name (made from the dataset before) still opens and changes.
+#[test]
+fn common_woods_and_panels_are_built_in() {
+    let mut doc = block();
+    // (id, g/cm³, MPa)
+    let expected: [(&str, f64, Option<f64>); 5] = [
+        ("wood_pine", 0.55, Some(10_080.0)),
+        ("wood_oak", 0.755, Some(12_150.0)),
+        ("wood_birch", 0.69, Some(13_860.0)),
+        ("plywood_birch", 0.68, None),
+        ("mdf_raw", 0.736, None),
+    ];
+    let names = [
+        "Wood - Pine",
+        "Wood - Oak",
+        "Wood - Birch",
+        "Plywood - birch",
+        "MDF - raw",
+    ];
+    let looks = [
+        "wood_pine",
+        "wood_oak",
+        "wood_birch",
+        "plywood_birch",
+        "panel_mdf",
+    ];
+    let all = query(&doc, json!({"query": "materials"}));
+    let woods: Vec<&Value> = all
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["class"] == "wood")
+        .collect();
+    assert_eq!(woods.len(), expected.len(), "{all}");
+    for (i, wood) in woods.into_iter().enumerate() {
+        let (id, density, modulus) = expected[i];
+        assert_eq!(wood["id"], id, "{wood}");
+        assert_eq!(wood["name"], names[i], "{wood}");
+        assert_eq!(wood["built_in"], true, "{wood}");
+        assert!(close(&wood["density"], density), "{wood}");
+        // A panel's is not given (no key).
+        let given = &wood["properties"]["youngs_modulus"];
+        match modulus {
+            Some(mpa) => assert!(close(given, mpa), "{wood}"),
+            None => assert!(given.is_null(), "{wood}"),
+        }
+        assert_eq!(wood["appearance"], looks[i], "{wood}");
+        assert!(wood["reference"]["source"].is_string(), "{wood}");
+    }
+
+    // A body of the oak: the oak's density, its mass from it (the mock
+    // kernel measures the box).
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_material", "uid": "F2.b0", "material": "wood_oak"}),
+    );
+    doc.kernel().measures.set(true);
+    doc.kernel().physical.set(true);
+    let properties = query(&doc, json!({"query": "properties"}));
+    let body = &properties["bodies"][0];
+    assert_eq!(body["material"], "wood_oak", "{properties}");
+    assert!(close(&body["density"], 0.755), "{properties}");
+    let volume = body["volume"].as_f64().unwrap();
+    assert!(volume > 0.0, "{properties}");
+    assert!(close(&body["mass"], volume / 1e6 * 0.755), "{properties}");
+    // Saved and opened again, it is still the oak.
+    let saved = doc.to_json();
+    let loaded = Document::from_json(&saved, MockKernel::default()).unwrap();
+    assert_eq!(loaded.to_json(), saved);
+
+    // A design's own `Wood - Oak` from before (as a design file of an
+    // earlier version holds it) opens unchanged and still changes; a new
+    // one of a built-in's name is refused as before.
+    let mut own = block();
+    let id = command(
+        &mut own,
+        json!({"cmd": "create_material", "name": "Oak of before", "density": 0.75,
+               "class": "wood"}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let before = own.to_json().replace("Oak of before", "Wood - Oak");
+    let mut opened = Document::from_json(&before, MockKernel::default()).unwrap();
+    assert_eq!(opened.to_json(), before);
+    assert_eq!(material(&opened, &id)["name"], "Wood - Oak");
+    assert_eq!(material(&opened, "wood_oak")["name"], "Wood - Oak");
+    command(
+        &mut opened,
+        json!({"cmd": "edit_material", "id": id, "density": 0.76}),
+    );
+    assert!(close(&material(&opened, &id)["density"], 0.76));
+    let error = refused(
+        &mut opened,
+        json!({"cmd": "create_material", "name": "Wood - Pine", "density": 0.5}),
+    );
+    assert!(error.contains("a material is named Wood - Pine"), "{error}");
+}
+
+/// mitcad#1706: several materials of the dataset made at once, as one undo
+/// step; a name there already (a built-in wood's, a design's own, one
+/// named twice) is skipped and said; an entry the dataset lacks refuses
+/// the whole; into a library likewise, one undo step for its files.
+#[test]
+fn dataset_materials_are_made_at_once_and_names_there_skipped() {
+    let mut doc = block();
+    let depth = doc.undo_depth();
+    let made = command(
+        &mut doc,
+        json!({"cmd": "create_dataset_materials",
+               "entries": ["panel/plywood_eucalyptus", "panel/plywood_pine",
+                           "panel/plywood_spruce"]}),
+    );
+    assert_eq!(made["skipped"], json!([]), "{made}");
+    let added: Vec<String> = made["added"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(added.len(), 3, "{made}");
+    for (id, name, look) in [
+        (&added[0], "Plywood - eucalyptus", "plywood_eucalyptus"),
+        (&added[1], "Plywood - pine", "plywood_pine"),
+        (&added[2], "Plywood - spruce", "plywood_spruce"),
+    ] {
+        let wood = material(&doc, id);
+        assert_eq!(wood["name"], name, "{wood}");
+        assert_eq!(wood["class"], "wood", "{wood}");
+        assert_eq!(wood["appearance"], look, "{wood}");
+        assert_eq!(wood["built_in"], false, "{wood}");
+        // Each with its own source.
+        assert!(wood["reference"]["source"].is_string(), "{wood}");
+    }
+    assert_eq!(doc.undo_depth(), depth + 1);
+    assert_eq!(undo_label(&doc), "Create Materials");
+
+    // The built-in birch plywood and oak, a pine plywood made above and a
+    // walnut named twice: only the first walnut is made.
+    let again = command(
+        &mut doc,
+        json!({"cmd": "create_dataset_materials",
+               "entries": ["panel/plywood_birch", "wood/oak", "panel/plywood_pine",
+                           "wood/walnut", "wood/walnut"]}),
+    );
+    assert_eq!(again["added"].as_array().unwrap().len(), 1, "{again}");
+    assert_eq!(
+        again["skipped"],
+        json!([
+            "Plywood - birch",
+            "Wood - Oak",
+            "Plywood - pine",
+            "Wood - Walnut"
+        ])
+    );
+    assert_eq!(undo_label(&doc), "Create Material Wood - Walnut");
+    // All of them there already: nothing made, no undo step.
+    let none = command(
+        &mut doc,
+        json!({"cmd": "create_dataset_materials", "entries": ["wood/walnut"]}),
+    );
+    assert_eq!(none["added"], json!([]));
+    assert_eq!(none["skipped"], json!(["Wood - Walnut"]));
+    assert_eq!(doc.undo_depth(), depth + 2);
+    // One undo takes the three plywoods away together.
+    command(&mut doc, json!({"cmd": "undo"}));
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(doc.undo_depth(), depth);
+    assert!(named(&doc, "Plywood - pine").is_null());
+
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "create_dataset_materials",
+               "entries": ["wood/walnut", "nothing/at/all"]}),
+    );
+    assert!(error.contains("no material nothing/at/all"), "{error}");
+    assert!(named(&doc, "Wood - Walnut").is_null());
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "create_dataset_materials", "entries": []}),
+    );
+    assert!(error.contains("at least one"), "{error}");
+
+    // Into the project's library: a file each, one undo step, the built-in
+    // name skipped there too.
+    let root = mitcad_model::testing::unique_temp_path("dataset-materials");
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let folder = mitcad_model::print_library::project_library(&project);
+    let path = project.to_string_lossy().to_string();
+    let depth = doc.undo_depth();
+    let made = command(
+        &mut doc,
+        json!({"cmd": "create_dataset_materials", "library": "project", "project": path,
+               "entries": ["panel/plywood_birch", "wood/cedar", "wood/teak"]}),
+    );
+    assert_eq!(made["skipped"], json!(["Plywood - birch"]), "{made}");
+    let files: Vec<std::path::PathBuf> = made["added"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| folder.join(format!("materials/{}.json", id.as_str().unwrap())))
+        .collect();
+    assert_eq!(files.len(), 2, "{made}");
+    assert!(files.iter().all(|file| file.exists()), "{files:?}");
+    assert_eq!(doc.undo_depth(), depth + 1);
+    assert_eq!(undo_label(&doc), "Create Materials");
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert!(files.iter().all(|file| !file.exists()), "{files:?}");
 }

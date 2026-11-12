@@ -189,7 +189,7 @@ mod piece_ids_tests;
 pub mod contact;
 pub mod motion;
 pub use contact::{ContactBody, ContactHit};
-pub use document::{Driven, JointValues, MotionOutcome};
+pub use document::{Driven, JointPose, JointValues, MotionOutcome};
 pub use kernel::PlacedPair;
 pub use motion::{ContactSet, MotionStudy, StudyKey};
 // Motion links between joints: gears, racks, screws and cams (mitcad#466).
@@ -348,7 +348,7 @@ pub use document::PlateChange;
 pub mod material_dataset;
 pub mod material_exchange;
 pub mod material_units;
-pub use document::{MaterialImport, NameConflict};
+pub use document::{DatasetMaterials, MaterialImport, NameConflict};
 // Auto Fix of references a warning found again (mitcad#1223).
 pub use document::{AutoFix, AutoFixLeft, Repair};
 // The rolled-back features evaluated in the background (mitcad#1267).

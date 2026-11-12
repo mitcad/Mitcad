@@ -492,7 +492,7 @@ mod tests {
             ),
             "{error}"
         );
-        assert!(error.ends_with("`set_print_bed_face`"), "{error}");
+        assert!(error.ends_with("`sheet_flange_profile`"), "{error}");
         let error = doc
             .command(r#"{"cmd": "sketch.fly"}"#)
             .unwrap_err()

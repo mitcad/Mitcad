@@ -1088,8 +1088,9 @@ void MainWindow::refreshNativeWindow() {
       // kept analyses and image references too (mitcad#1263).
       item.canToggleVisibility =
           row.node.hasEye && (canToggleVisibility || BrowserController::visibilityInEveryMode(row.node));
-      item.visible = row.node.visible;
-      item.checked = row.node.visible;
+      // What the view shows: off while Isolate leaves the row out (mitcad#1700).
+      item.visible = row.node.hasEye ? row.eyeOn : row.node.visible;
+      item.checked = item.visible;
       item.bindings = row.bindings;
       item.tone = row.tone; // mitcad#1079
       item.eyeTip = row.eyeTip;

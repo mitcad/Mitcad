@@ -322,6 +322,14 @@ private:
   void projectAgain(const QString& sketch);
   void browserDoubleClicked(const BrowserNode& node);
   void toggleVisibility(const BrowserNode& node);
+  // An eye while Isolate is on (mitcad#1700): a row left out by the
+  // isolation alone joins it, a row isolated on its own (with other items
+  // isolated too) leaves it, one undo step that changes no light bulb.
+  // False when the click is the light bulb's as before.
+  bool toggleIsolated(const BrowserNode& node);
+  // The isolation with a row's items added: the body, the occurrence, or
+  // a Bodies folder's bodies.
+  Selection isolationWith(const BrowserNode& node) const;
   // The names of a component's bodies that follow a Show When condition,
   // which the Bodies folder's light bulb and Show All / Hide All leave as
   // they are (mitcad#863), and what the folder says when they are all it
@@ -427,6 +435,11 @@ private:
   // The selection shown in the browser, and the features whose rows show it.
   Selection m_shownItems;
   QStringList m_shownFeatures;
+  // The owners' marks (mitcad#1704): the selection shown came from the
+  // browser's rows or the timeline (no marks), as decided when it was
+  // first shown; and the marks for a selection.
+  bool m_shownFromRows = false;
+  void showOwners(const Selection& items, bool scroll);
   // What was selected when the timeline's search began (mitcad#179).
   Selection m_searchItems;
   QStringList m_searchFeatures;

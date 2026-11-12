@@ -5,7 +5,8 @@
 # folder is given). For each it installs the NSIS installer of a build
 # directory silently into a folder of its own and checks the registration
 # of that scope (the uninstall entry, installation.ini, the .mitcad file
-# type, the Start menu shortcut) and none in the other scope.
+# type and its thumbnail handler, mitcad#1695, the Start menu shortcut)
+# and none in the other scope.
 #   0. the installer runs as the user: its manifest asks for no elevation
 #      (asInvoker), so a per-user installation and its updates have no UAC
 #      prompt; only /AllUsers elevates (which session 0 cannot show: the
@@ -208,6 +209,41 @@ function Test-Registered([string]$In, [string]$Install, [string]$When) {
   }
   $shortcut = Join-Path $startMenu[$In] 'MitCad\MitCad.lnk'
   if (Test-Path $shortcut) { Pass "${When}: Start menu shortcut $shortcut" } else { Fail "${When}: no $shortcut" }
+  Test-ThumbnailHandler $In $Install $When
+}
+
+# Explorer's thumbnails of designs (mitcad#1695): the thumbnail handler
+# bin\mitcad-thumbnails.dll registered for .mitcad in the scope's
+# Software\Classes (.mitcad\ShellEx\<IThumbnailProvider> names its CLSID,
+# whose InprocServer32 is the DLL, Apartment), and the build's
+# test_thumbnail_handler.exe --registered gets thumbnails through that
+# registration as the shell does (CoCreateInstance; its checks:
+# app/tests/thumbnail_handler_windows.cpp).
+$thumbnailProvider = '{e357fccd-a995-4576-b01f-234630154e96}'
+function Test-ThumbnailHandler([string]$In, [string]$Install, [string]$When) {
+  $classes = "$($hive[$In])\Software\Classes"
+  $dll = "$Install\bin\mitcad-thumbnails.dll"
+  $clsid = Get-Default "$classes\.mitcad\ShellEx\$thumbnailProvider"
+  $server = if ($clsid) { Get-ItemProperty "$classes\CLSID\$clsid\InprocServer32" -ErrorAction SilentlyContinue } else { $null }
+  if ($clsid -and $server -and $server.'(default)' -eq $dll -and $server.ThreadingModel -eq 'Apartment' -and (Test-Path $dll)) {
+    Pass "${When}: .mitcad's thumbnail handler $clsid is $dll ($($hive[$In]))"
+  } else {
+    Fail "${When}: the thumbnail handler in $classes is '$clsid', '$($server.'(default)')', '$($server.ThreadingModel)' (expected $dll)"
+  }
+  if ($In -eq 'user' -and $clsid) {
+    $allServer = Get-Default "HKLM:\Software\Classes\CLSID\$clsid\InprocServer32"
+    if ($allServer -and $allServer -eq $dll) { Fail "${When}: the thumbnail handler registered for all users too" }
+  }
+  $tester = Find-Built 'test_thumbnail_handler.exe', 'app\thumbnails\test_thumbnail_handler.exe'
+  if (-not $tester) {
+    Fail "${When}: no test_thumbnail_handler.exe in $Build"
+    return
+  }
+  $work = Join-Path $Out "thumbnails-$In"
+  $log = Join-Path $Out "thumbnails-$In.log"
+  & $tester --registered --work $work --expect-dll $dll *> $log
+  if ($LASTEXITCODE -eq 0) { Pass "${When}: the registered thumbnail handler makes thumbnails" }
+  else { Fail "${When}: test_thumbnail_handler --registered exit code $LASTEXITCODE (see $log)"; Get-Content $log | Write-Host }
 }
 
 # 6. After the uninstall: no files and none of the scope's keys.
@@ -215,7 +251,8 @@ function Test-Unregistered([string]$In, [string]$Install) {
   if (Test-Path (Join-Path $Install 'bin')) { Fail 'bin remains after the uninstall' } else { Pass 'bin removed' }
   if (Test-Path (Join-Path $Install 'installation.ini')) { Fail 'installation.ini remains' } else { Pass 'installation.ini removed' }
   $classes = "$($hive[$In])\Software\Classes"
-  $left = @($uninstallKeys[$In] + $vendorKeys[$In] + "$classes\.mitcad", "$classes\Mitcad.Project" |
+  $left = @($uninstallKeys[$In] + $vendorKeys[$In] + "$classes\.mitcad", "$classes\Mitcad.Project",
+            "$classes\CLSID\{3A94966B-4167-4E3A-81FA-E3F4B2233496}" |
     Where-Object { Test-Path $_ })
   if ($left.Count -eq 0) { Pass "no registry key of the installation left in $($hive[$In])" }
   else { Fail "left in the registry: $($left -join ', ')" }
@@ -230,7 +267,8 @@ function Test-Programs([string]$Install) {
   $required = @('mitcad.exe', 'mitcad-cli.exe', 'mitcad-updater.exe', 'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll',
                 'Qt6OpenGL.dll', 'Qt6OpenGLWidgets.dll', 'Qt6Svg.dll', 'Qt6Network.dll', 'Qt6PrintSupport.dll',
                 '..\plugins\platforms\qwindows.dll', '..\plugins\tls\qschannelbackend.dll',
-                'TKernel.dll', 'TKService.dll', 'TKOpenGl.dll', 'vcruntime140.dll', 'msvcp140.dll')
+                'TKernel.dll', 'TKService.dll', 'TKOpenGl.dll', 'vcruntime140.dll', 'msvcp140.dll',
+                'mitcad-thumbnails.dll')
   foreach ($file in $required) {
     if (Test-Path (Join-Path $bin $file)) { Pass "bin\$file" } else { Fail "bin\$file is missing" }
   }

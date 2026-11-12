@@ -266,7 +266,7 @@ void AppearancePopover::fill(const QString& current, const QStringList& marked, 
   // The material's class first (mitcad#1102), then the design's own (those
   // of its materials and imports), then the library's by class
   // (mitcad#1133).
-  const QVector<AppearanceSection> sections = appearanceSections(m_appearances, materialClass, tr("This Design"));
+  const QVector<AppearanceSection> sections = appearanceSections(m_appearances, materialClass, tr("This design"));
   for (const AppearanceSection& section : sections) {
     heading(section.title);
     for (const Appearance* a : section.appearances) {

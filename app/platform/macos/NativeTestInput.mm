@@ -2269,7 +2269,7 @@ bool pickerFallback(QString& error) {
     error = QStringLiteral("the unavailable-content key window was not established"); cleanup(); return false;
   }
   const QVector<PickerEntry> entries{{QStringLiteral("one"), QStringLiteral("Synthetic choice"),
-                                     QStringLiteral("This Design"), QImage(), QString()}};
+                                     QStringLiteral("This design"), QImage(), QString()}};
   picker = LibraryPicker::open(nullptr, QStringLiteral("Picker fallback regression"),
       QStringLiteral("Fallback picker"), entries, QStringLiteral("one"), QPoint(120, 140), {});
   QCoreApplication::processEvents(QEventLoop::AllEvents);

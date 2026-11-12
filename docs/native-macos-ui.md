@@ -1063,7 +1063,7 @@ action the Qt panel's `CommandMessage` calls, so the session and
 Each value field has the shared `fx` button beside it. Its menu lists the
 design's parameters by the shared suggestion rules, with those the field
 cannot take disabled and the reason in their tooltip, then Name This
-Value, Create User Parameter…, Edit Formula… and the functions. A chosen
+Value, Add User Parameter…, Edit Formula… and the functions. A chosen
 name goes into the field as typed text. Name This Value, Create User
 Parameter… and Edit Formula… run the shared `ParameterField` workflow and
 its dialogs on a hidden Qt proxy of the field, in a parentless window that

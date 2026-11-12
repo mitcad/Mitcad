@@ -23,7 +23,13 @@
 //!   in millimetres;
 //! - `"query": {...}` with `"result"`: the query's answer contains the
 //!   result (objects: the keys given; arrays: element by element; numbers
-//!   within the relative `"tolerance"`, default 1e-6);
+//!   within the relative `"tolerance"`, default 1e-6); with `"none"` or
+//!   `"some"` (mitcad#1702), no element or at least one element of the
+//!   answer (an array) contains the given value the same way; a spline in the
+//!   answer is compared by where it runs with `"runs": {"ends", "through",
+//!   "length", "tolerance"}` in its expected geometry (mitcad#1669: in
+//!   millimetres, default 1e-6), not by its control points, which the
+//!   kernel's approximation makes differ by platform;
 //! - `"sketch": "Sketch1"` (a name or uid) with `"regions"` (its profile
 //!   region keys, in any order) and `"dof"` (its degrees of freedom);
 //! - components (F6): `"occurrence"` (a path from the root like
@@ -43,6 +49,7 @@ use mitcad_model::features::FeatureDef;
 use mitcad_model::ids::OccurrenceUid;
 use mitcad_model::internal::document::{noted_message, noted_status};
 use mitcad_model::kernel::Kernel;
+use mitcad_model::sketch::geometry::{Curve2, Nurbs, P2};
 use mitcad_model::topo::{EdgeName, FaceName, RegionKey};
 
 #[derive(Debug, Default, Deserialize)]
@@ -85,6 +92,10 @@ struct Expectation {
     min_face_area: Option<f64>,
     // Envelopes (mitcad#1271): light bodies.
     max_triangles: Option<usize>,
+    // A query's answer, an array (mitcad#1702): no element / some element
+    // contains this.
+    none: Option<Value>,
+    some: Option<Value>,
 }
 
 /// A body's bounding box.
@@ -411,6 +422,30 @@ impl<K: Kernel> ScriptLocal<K> for Document<K> {
                 contains(&answer, expected, expect.tolerance.unwrap_or(1e-6), "")
                     .map_err(|e| ApiError(format!("expected {e} in the answer to {query}")))?;
             }
+            let tolerance = expect.tolerance.unwrap_or(1e-6);
+            let elements = answer.as_array().map(Vec::as_slice).unwrap_or_default();
+            let holds = |wanted: &Value| {
+                elements
+                    .iter()
+                    .filter(|element| contains(element, wanted, tolerance, "").is_ok())
+                    .count()
+            };
+            if let Some(wanted) = &expect.none {
+                let found = holds(wanted);
+                if found > 0 {
+                    return fail(format!(
+                        "no element with {wanted} in the answer to {query}, got {found}"
+                    ));
+                }
+            }
+            if let Some(wanted) = &expect.some
+                && holds(wanted) == 0
+            {
+                return fail(format!(
+                    "an element with {wanted} in the answer to {query}, got none of {}",
+                    elements.len()
+                ));
+            }
         }
         if let Some(name) = &expect.parameter {
             let parameters = self.parameters();
@@ -551,6 +586,10 @@ fn contains(actual: &Value, expected: &Value, tolerance: f64, path: &str) -> Res
         }
         (Value::Object(a), Value::Object(e)) => {
             for (key, value) in e {
+                if key == "runs" {
+                    runs(a, value, &at(key))?;
+                    continue;
+                }
                 let Some(found) = a.get(key) else {
                     return Err(format!("{} (missing)", at(key)));
                 };
@@ -569,5 +608,224 @@ fn contains(actual: &Value, expected: &Value, tolerance: f64, path: &str) -> Res
         }
         (a, e) if a == e => Ok(()),
         (a, e) => Err(format!("{here} = {e}, got {a}")),
+    }
+}
+
+/// Where a spline runs (`"runs"` in an expected spline geometry,
+/// mitcad#1669): its ends (in either order), points it passes through and
+/// its length, all within `"tolerance"` millimetres (default 1e-6).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Runs {
+    ends: Option<[P2; 2]>,
+    #[serde(default)]
+    through: Vec<P2>,
+    length: Option<f64>,
+    tolerance: Option<f64>,
+}
+
+/// Checks `"runs"` against a spline geometry as the `sketch` and
+/// `plane_geometry` queries answer it (`degree`, `control`, `weights`,
+/// `knots`): where the curve runs, not its control points, knots or
+/// weights. A spline the kernel approximated (an intersection of two
+/// surfaces) has other control points on another platform, on the same
+/// path.
+fn runs(
+    geometry: &serde_json::Map<String, Value>,
+    expected: &Value,
+    path: &str,
+) -> Result<(), String> {
+    let expected: Runs = serde_json::from_value(expected.clone())
+        .map_err(|e| format!("{path} as ends, through, length and tolerance ({e})"))?;
+    let Some(spline) = answered_spline(geometry) else {
+        return Err(format!(
+            "{path}: a spline's geometry (degree, control, weights, knots), got {}",
+            Value::Object(geometry.clone())
+        ));
+    };
+    let length = spline_length(&spline);
+    let curve = Curve2::Nurbs(spline);
+    let tolerance = expected.tolerance.unwrap_or(1e-6);
+    let distance = |a: P2, b: P2| (a[0] - b[0]).hypot(a[1] - b[1]);
+    if let Some([a, b]) = expected.ends {
+        let Some((start, end)) = curve.ends() else {
+            return Err(format!("{path}.ends = {a:?} and {b:?}, got a closed curve"));
+        };
+        let near = |p: P2, q: P2| distance(p, q) <= tolerance;
+        if !((near(start, a) && near(end, b)) || (near(start, b) && near(end, a))) {
+            return Err(format!(
+                "{path}.ends = {a:?} and {b:?} within {tolerance} mm, got {start:?} and {end:?}"
+            ));
+        }
+    }
+    for (i, point) in expected.through.iter().enumerate() {
+        let (_, off) = curve.closest(*point);
+        if off > tolerance {
+            return Err(format!(
+                "{path}.through[{i}] = {point:?} within {tolerance} mm, got {off} mm off the curve"
+            ));
+        }
+    }
+    if let Some(wanted) = expected.length
+        && (length - wanted).abs() > tolerance
+    {
+        return Err(format!(
+            "{path}.length = {wanted} within {tolerance} mm, got {length}"
+        ));
+    }
+    Ok(())
+}
+
+/// The spline of an answered geometry; None when it is not one, or its
+/// knots do not fit its control points.
+fn answered_spline(geometry: &serde_json::Map<String, Value>) -> Option<Nurbs> {
+    let degree = usize::try_from(geometry.get("degree")?.as_u64()?).ok()?;
+    let control: Vec<P2> = serde_json::from_value(geometry.get("control")?.clone()).ok()?;
+    let knots: Vec<f64> = serde_json::from_value(geometry.get("knots")?.clone()).ok()?;
+    let weights: Vec<f64> = match geometry.get("weights") {
+        Some(weights) => serde_json::from_value(weights.clone()).ok()?,
+        None => Vec::new(),
+    };
+    let fits = degree >= 1
+        && control.len() > degree
+        && knots.len() == control.len() + degree + 1
+        && (weights.is_empty() || weights.len() == control.len())
+        && knots.windows(2).all(|w| w[0] <= w[1]);
+    if !fits {
+        return None;
+    }
+    Some(Nurbs {
+        degree,
+        control,
+        weights,
+        knots,
+    })
+}
+
+/// A spline's length: Simpson's rule on its speed, 256 steps in each knot
+/// span (its polynomial pieces).
+fn spline_length(spline: &Nurbs) -> f64 {
+    const STEPS: usize = 256;
+    let (lo, hi) = spline.domain();
+    let speed = |t: f64| {
+        let d = spline.eval(t)[1];
+        d[0].hypot(d[1])
+    };
+    let mut cuts: Vec<f64> = spline
+        .knots
+        .iter()
+        .copied()
+        .filter(|k| *k > lo && *k < hi)
+        .collect();
+    cuts.dedup();
+    cuts.insert(0, lo);
+    cuts.push(hi);
+    cuts.windows(2)
+        .filter(|w| w[1] > w[0])
+        .map(|w| {
+            let h = (w[1] - w[0]) / STEPS as f64;
+            let inner: f64 = (1..STEPS)
+                .map(|i| {
+                    let factor = if i % 2 == 1 { 4.0 } else { 2.0 };
+                    factor * speed(w[0] + h * i as f64)
+                })
+                .sum();
+            (speed(w[0]) + inner + speed(w[1])) * h / 3.0
+        })
+        .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::contains;
+
+    /// An answer of one spline, as `plane_geometry` lists it.
+    fn answer(geometry: Value) -> Value {
+        json!([{"source": "E{F1:side0|F2:side0}", "kind": "spline", "geometry": geometry}])
+    }
+
+    fn expect_runs(runs: Value) -> Value {
+        json!([{"kind": "spline", "geometry": {"runs": runs}}])
+    }
+
+    /// The parabola from (0, 0) over (1, 1) to (2, 0) as one quadratic
+    /// piece, and the same path with a knot inserted: other control
+    /// points and knots.
+    fn parabolas() -> [Value; 2] {
+        [
+            json!({"degree": 2, "control": [[0.0, 0.0], [1.0, 2.0], [2.0, 0.0]],
+                   "weights": [], "knots": [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]}),
+            json!({"degree": 2, "control": [[0.0, 0.0], [0.5, 1.0], [1.5, 1.0], [2.0, 0.0]],
+                   "weights": [], "knots": [0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0]}),
+        ]
+    }
+
+    /// Its length: the integral of sqrt(1 + (2 - 2x)²) over [0, 2].
+    fn parabola_length() -> f64 {
+        5f64.sqrt() + 2f64.asinh() / 2.0
+    }
+
+    #[test]
+    fn runs_compares_where_a_spline_runs_not_its_control_points() {
+        // mitcad#1669: the same path from other control points passes.
+        let runs = expect_runs(json!({
+            "ends": [[0.0, 0.0], [2.0, 0.0]],
+            "through": [[1.0, 1.0], [0.5, 0.75], [1.5, 0.75]],
+            "length": parabola_length()
+        }));
+        for geometry in parabolas() {
+            contains(&answer(geometry), &runs, 1e-6, "").unwrap();
+        }
+        // The ends in either order.
+        let reversed = expect_runs(json!({"ends": [[2.0, 0.0], [0.0, 0.0]]}));
+        contains(&answer(parabolas()[1].clone()), &reversed, 1e-6, "").unwrap();
+        // Other keys of the geometry are still compared as given.
+        let with_degree = json!([{"geometry": {"degree": 2, "runs": {"through": [[1.0, 1.0]]}}}]);
+        contains(&answer(parabolas()[0].clone()), &with_degree, 1e-6, "").unwrap();
+    }
+
+    #[test]
+    fn runs_refuses_a_path_elsewhere() {
+        let [geometry, _] = parabolas();
+        let off = expect_runs(json!({"through": [[1.0, 1.001]]}));
+        let error = contains(&answer(geometry.clone()), &off, 1e-6, "").unwrap_err();
+        assert!(error.contains("[0].geometry.runs.through[0]"), "{error}");
+        // Within a looser tolerance of its own.
+        let loose = expect_runs(json!({"through": [[1.0, 1.001]], "tolerance": 0.01}));
+        contains(&answer(geometry.clone()), &loose, 1e-6, "").unwrap();
+        let ends = expect_runs(json!({"ends": [[0.0, 0.0], [2.0, 0.1]]}));
+        let error = contains(&answer(geometry.clone()), &ends, 1e-6, "").unwrap_err();
+        assert!(error.contains("runs.ends"), "{error}");
+        let length = expect_runs(json!({"length": parabola_length() + 1e-4}));
+        let error = contains(&answer(geometry), &length, 1e-6, "").unwrap_err();
+        assert!(error.contains("runs.length"), "{error}");
+    }
+
+    #[test]
+    fn runs_measures_a_rational_spline() {
+        // A quarter of a circle of radius 10 as a rational quadratic.
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let geometry = json!({"degree": 2, "control": [[10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
+                              "weights": [1.0, w, 1.0], "knots": [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]});
+        let (s, c) = std::f64::consts::FRAC_PI_6.sin_cos();
+        let runs = expect_runs(json!({
+            "ends": [[10.0, 0.0], [0.0, 10.0]],
+            "through": [[10.0 * c, 10.0 * s], [10.0 * s, 10.0 * c]],
+            "length": 5.0 * std::f64::consts::PI
+        }));
+        contains(&answer(geometry), &runs, 1e-6, "").unwrap();
+    }
+
+    #[test]
+    fn runs_needs_a_spline() {
+        let line = json!({"start": [0.0, 0.0], "end": [2.0, 0.0]});
+        let runs = expect_runs(json!({"ends": [[0.0, 0.0], [2.0, 0.0]]}));
+        let error = contains(&answer(line), &runs, 1e-6, "").unwrap_err();
+        assert!(error.contains("a spline's geometry"), "{error}");
+        let unknown = expect_runs(json!({"points": [[1.0, 1.0]]}));
+        let error = contains(&answer(parabolas()[0].clone()), &unknown, 1e-6, "").unwrap_err();
+        assert!(error.contains("runs as ends"), "{error}");
     }
 }

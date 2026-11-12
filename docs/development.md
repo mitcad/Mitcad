@@ -621,9 +621,11 @@ files as a `.zip`. The installer script is our own,
 (`RequestExecutionLevel user`) and installs either
 
 - **just for me** (the default): into `%LOCALAPPDATA%\Programs\Mitcad`,
-  with the Start menu shortcut, the `.mitcad` file type
-  ([filetype.nsh](../packaging/windows/filetype.nsh)) and the uninstall
-  entry under `HKCU`; no administrator rights, so no UAC prompt;
+  with the Start menu shortcut, the `.mitcad` file type with Explorer's
+  thumbnail handler `mitcad-thumbnails.dll` (mitcad#1695,
+  [filetype.nsh](../packaging/windows/filetype.nsh): its COM class in the
+  64-bit view) and the uninstall entry under `HKCU`; no administrator
+  rights, so no UAC prompt;
 - **for all users:** into `Program Files\Mitcad`, registered under `HKLM`
   (32-bit view, as earlier releases). Only this choice asks for elevation:
   the installer starts itself again elevated (`runas`) with `/AllUsers
@@ -704,8 +706,9 @@ and the licences of Cycles (with cuew's) and Open Image Denoise
 the installer exists) checks that the installer asks for no elevation,
 then in each scope (`-Scope both|user|all`) installs silently into a
 folder of the test's own and checks the scope's registration (uninstall
-entry, `installation.ini`, file type, Start menu shortcut, nothing in the
-other scope). Just for the current user it checks the files, runs
+entry, `installation.ini`, file type, the thumbnail handler's registration
+with `test_thumbnail_handler --registered` getting thumbnails through it,
+Start menu shortcut, nothing in the other scope). Just for the current user it checks the files, runs
 `mitcad-cli`, `mitcad.exe --version` and the render worker (a test render,
 `--list-devices`; the build's GPU kernels installed) with a system-only `PATH`,
 checks that the installed `mitcad-updater.exe` does not run an installer
@@ -814,7 +817,13 @@ it with `--appimage-extract-and-run`.
 
 At each start the AppImage writes its desktop file (`Exec` = the
 AppImage, `StartupWMClass=Mitcad`) and icons into `$XDG_DATA_HOME` if they
-differ, so docks show the icon
+differ, so docks show the icon, and with them the file managers'
+thumbnails of designs (mitcad#1539): the bundled `mitcad-thumbnailer`
+copied to `$XDG_DATA_HOME/mitcad/bin`, its entry
+(`thumbnailers/mitcad.thumbnailer`, from
+[packaging/linux/mitcad.thumbnailer](../packaging/linux/mitcad.thumbnailer))
+running that copy and the MIME type `application/x-mitcad`
+(`mime/packages/mitcad.xml`, then `update-mime-database`)
 ([app/framework/DesktopEntry.cpp](../app/framework/DesktopEntry.cpp)). No
 GTK is bundled, so it uses the `xdgdesktopportal` platform theme unless
 `QT_QPA_PLATFORMTHEME` is set.
@@ -1276,6 +1285,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_SKETCH_FIRST_DIMENSION_SCALE=0` | Preferences › Sketch › *Scale the sketch to its first dimension* is off until it is saved (mitcad#860); the UI test libraries set it, so that their drawn sketches keep their sizes. |
 | `MITCAD_REMEMBER_PANEL_VALUES=0` | Command panels start from their definitions' defaults and keep nothing on OK: no remembered Fillet Radius or Chamfer Distance (mitcad#1028, [app/COMMANDS.md](../app/COMMANDS.md#remembered-values)), and no Thread starting from the last thread's settings on a face of its size (mitcad#1298); the UI test libraries set it, so that a value one step gives never changes where a later step's panel starts. |
 | `MITCAD_START_PAGE=0`, `MITCAD_START_PAGE=1` | `0`: MitCad never starts on the Start tab (mitcad#1258, [app/COMMANDS.md](../app/COMMANDS.md#the-start-tab)); the UI test libraries set it, so that every test starts on an empty design. `1`: the Start tab at launch by its *Show start page at launch*, also in a UI test script's run (`MITCAD_TEST_INPUT`), which without the variable starts without it. |
+| `MITCAD_NEW_DESIGN_VIEW=0` | A new design opens as before mitcad#1683, in the exact isometric view with its origin hidden, not looking at Top with the origin shown and centred, and a design opened at the start stays in that view instead of the default view of mitcad#1698 ([app/COMMANDS.md](../app/COMMANDS.md)); the UI test libraries and the Python UI tests set it, as their tests were written for; `tools/ui-new-design-start-test.sh` sets `1`. |
 | `MITCAD_LANGUAGE=en\|fi\|xx` | The interface language, over Preferences › General › Language; `--language` comes first (mitcad#1460, [translations.md](translations.md)). The UI test libraries and the Python UI tests set `en`, so that every test reads English texts whatever the machine's language; `xx` is a test build's pseudo-language. |
 | `MITCAD_LOG_UNTRANSLATED=1` | Every text no catalogue translated is logged once, `Untranslated: <context>: <text>`, and every text found only without its context, `Fallback: <context>: <text>` (in a language other than English; [translations.md](translations.md#the-pseudo-language)). |
 | `MITCAD_TEST_LOG_URLS=1` | Addresses the app would open in the browser (a report's issue form) are logged, not opened; the UI test library sets it. |
@@ -1375,7 +1385,7 @@ open), through the test driver in the same session, for comparing the
 window's look before and after a change. Likewise
 `tools/ui-windows-print-settings-shots.ps1 -App <mitcad.exe> -Out <dir>`
 saves screenshots of the print settings UI (mitcad#655): 3D Print after
-Import from slicer…, Import Details, the profile editors, Materials,
+Import from Slicer…, Import Details, the profile editors, Materials,
 Property Sets' print settings and an update bar, on data it makes with
 mitcad-cli.
 
@@ -1686,6 +1696,28 @@ in the distro only:
   dimension stays 3 mm and no feature newly fails (mitcad#1632); skipped
   with a message without it. The mock kernel's model tests
   (`thread_autofix_tests`) cover the same case without the file.
+  ctest `cli.placements_reported` (`tools/cli/placements-reported-test.cmake`)
+  finds two archives in `github-253/` by their content ids, unpacks each
+  into the build folder and opens the jointed mechanism in it by its
+  content id (the second one's linked parts, which the archive renamed
+  with `_` for `#`, copied back to the names its links give): the first
+  opens with nothing to straighten, the second, which older builds' drift
+  had made unopenable, with six placements straightened and a warning
+  each; saved, each opens again without a placement to straighten
+  (mitcad#1664); skipped with a message without them. The mock kernel's
+  model tests (`occurrence_placement_tests`, the many-drags test in
+  `joint_solver_tests`) cover the same without the files.
+  ctest `cli.assembly_context_reported`
+  (`tools/cli/assembly-context-reported-test.cmake`) finds the archive in
+  `github-253/` by its content id, unpacks it into the build folder and
+  runs `assembly_context_reported.json` on the jointed mechanism in it:
+  the two links' joints on their hole edges resolve, and the link bodies
+  keep the volume and faces of their own design files through two drags of
+  the primary lever, since the other links' and rods' automatic cuts leave
+  alone what moves against them through joints (mitcad#1667); skipped with
+  a message without it. The mock kernel's model tests
+  (`joint_motion_cut_tests`, `inserted_cut_scope_tests`) cover the rule and
+  inserted cuts without the file.
 
 ### SolidCraft designs
 
@@ -1727,7 +1759,7 @@ project; projects named by their content id). The ctest `3mf.corpus`
 (`core/model-tests/print/src/print_files_corpus.rs`, a test ignored in
 `core.model.print` and run with `--ignored`) imports each project's print
 settings into a
-fresh design as Import from slicer... does (`import_print_profile`),
+fresh design as Import from Slicer... does (`import_print_profile`),
 checks the row's columns where it gives them: `bytes`, `dialect`,
 `printers`, `processes` and `materials` (how many came in), `printer`
 and `process` (their names) and `problems` (the values not read as the

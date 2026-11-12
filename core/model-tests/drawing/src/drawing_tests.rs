@@ -63,6 +63,7 @@ fn view(name: ViewName, edges: Vec<ViewEdge>) -> ViewInput {
             quick: false,
             section: None,
             deflection: 0.01,
+            scale: None,
         },
         projection: ViewProjection {
             edges,

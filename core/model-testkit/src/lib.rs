@@ -379,6 +379,14 @@ pub struct MockKernel {
     /// face, the shape's first), `boundary_distances` each point's distance
     /// from the bounds' surface; otherwise both are unsupported.
     pub copies_by_bounds: Cell<bool>,
+    /// Narrow gaps between bodies that touch (mitcad#1672): the face pairs
+    /// `face_separations` gives for any two shapes (those less than the
+    /// distance asked for apart); without them it is unsupported.
+    pub face_gaps: RefCell<Option<Vec<mitcad_model_base::kernel::FaceSeparation>>>,
+    /// Cuts by the bounds (mitcad#1676): a cut touches only the targets
+    /// whose bounds overlap the tool's by volume, as a tool that only meets
+    /// a target's face leaves it as it was; the others as without this.
+    pub cuts_by_bounds: Cell<bool>,
 }
 
 /// A whole round face of a mock body ([`MockKernel::round_faces`],
@@ -1265,7 +1273,7 @@ impl Kernel for MockKernel {
             }
             _ => false,
         };
-        if by_bounds {
+        if by_bounds || (op == BooleanOp::Cut && self.cuts_by_bounds.get()) {
             for (i, target) in targets.iter().enumerate() {
                 if let (Some(t), Some(b)) = (target.bounds, tool.bounds)
                     && !t.overlaps(&b, -1e-9)
@@ -2351,11 +2359,33 @@ impl Kernel for MockKernel {
                 None => text += " teardrop",
             }
         }
+        // Print bridging (mitcad#1516): its mode, its layer and the holes it
+        // bridges.
+        if let Some(bridging) = &spec.bridging {
+            text += &format!(
+                " bridging {:?} layer {:.6} holes {:?}",
+                bridging.mode, bridging.layer, bridging.holes
+            );
+        }
         self.specs.borrow_mut().push(text);
         let mut faces = Vec::new();
         let mut edges = Vec::new();
         for i in 0..spec.positions.len() {
             let face = |part: &str| FaceName::new(spec.feature, &format!("hole{i}.{part}"), None);
+            // A bridged recess's layers' faces.
+            if let Some(bridging) = &spec.bridging
+                && bridging.holes.get(i).copied().unwrap_or(false)
+            {
+                faces.push(face("bridge0"));
+                if bridging.mode == mitcad_model_base::kernel::BridgeMode::Stepped {
+                    faces.extend(
+                        ["bridge0.side0", "bridge0.side1", "bridge0.end", "bridge1"]
+                            .into_iter()
+                            .map(&face),
+                    );
+                    faces.extend((0..4).map(|k| face(&format!("bridge1.side{k}"))));
+                }
+            }
             // A roofed hole's roof sides and flat roof besides its wall.
             if let Some(print) = &spec.print_shape
                 && print.roofs.get(i).is_some_and(Option::is_some)
@@ -2372,6 +2402,23 @@ impl Kernel for MockKernel {
                 }
                 faces.push(face("tip"));
                 continue;
+            }
+            // A nut pocket's flats, floor and roof, and a slot's end
+            // (mitcad#1518): a slot takes the second and third flats away.
+            if let mitcad_model_base::kernel::HoleShape::NutPocket { offset, slot, .. } = spec.shape
+            {
+                for k in 0..6 {
+                    if slot.is_none() || !(1..=2).contains(&k) {
+                        faces.push(face(&format!("pocket{k}")));
+                    }
+                }
+                faces.push(face("pocket_floor"));
+                if offset > 0.0 {
+                    faces.push(face("pocket_roof"));
+                }
+                if slot.is_some() {
+                    faces.push(face("slot_end"));
+                }
             }
             if spec.taper == 0.0 {
                 self.hole_radii
@@ -3619,6 +3666,8 @@ impl Kernel for MockKernel {
             intersects_by_bounds: self.intersects_by_bounds.clone(),
             projected_faces: self.projected_faces.clone(),
             copies_by_bounds: self.copies_by_bounds.clone(),
+            face_gaps: self.face_gaps.clone(),
+            cuts_by_bounds: self.cuts_by_bounds.clone(),
             ..MockKernel::default()
         })
     }
@@ -5987,6 +6036,24 @@ impl Kernel for MockKernel {
                 _ => None,
             })
             .collect())
+    }
+
+    // Narrow gaps between bodies that touch (mitcad#1672, `face_gaps`).
+    fn face_separations(
+        &self,
+        _a: &MockShape,
+        _b: &MockShape,
+        within: f64,
+    ) -> Result<Vec<mitcad_model_base::kernel::FaceSeparation>, KernelError> {
+        self.call("face_separations")?;
+        match &*self.face_gaps.borrow() {
+            Some(gaps) => Ok(gaps
+                .iter()
+                .filter(|gap| gap.distance < within)
+                .copied()
+                .collect()),
+            None => Err(KernelError::Unsupported("face separations")),
+        }
     }
 }
 

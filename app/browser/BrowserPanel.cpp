@@ -91,12 +91,23 @@ constexpr int kEyeTransparentRole = Qt::UserRole + 11;
 // A row's name colour role (a ColorRole as an int, mitcad#1104; see
 // setNameRole).
 constexpr int kTextRole = Qt::UserRole + 12;
+// A sketch row under a feature's row (mitcad#1699) whose sketch several
+// features use: how many, drawn as the shared mark on its icon.
+constexpr int kSharedRole = Qt::UserRole + 13;
+// A row whose light bulb is on but which Isolate leaves out (mitcad#1700):
+// its bulb is the closed eye, dimmed, so that it differs from a row hidden
+// by its own light bulb.
+constexpr int kEyeIsolatedRole = Qt::UserRole + 14;
+// A row marked as the owner of what is selected in the view (mitcad#1704):
+// its body, sketch or occurrence; true, else none.
+constexpr int kOwnerMarkRole = Qt::UserRole + 15;
 // Every item data role of the rows, each a number of its own: two features
 // that once shared one (mitcad#1143) misread each other's values, a
 // transparent row's name painted red. A new role goes in this block and in
 // this list.
 constexpr int kRowRoles[] = {kEyeRole,      kRadioRole, kLinkedRole,         kBindingsRole, kEyeTipRole,
-                             kEyeBoundRole, kMakeRole,  kEyeTransparentRole, kTextRole};
+                             kEyeBoundRole, kMakeRole,  kEyeTransparentRole, kTextRole,     kSharedRole,
+                             kEyeIsolatedRole, kOwnerMarkRole};
 constexpr bool rowRolesDistinct() {
   for (std::size_t i = 0; i < std::size(kRowRoles); ++i) {
     for (std::size_t j = i + 1; j < std::size(kRowRoles); ++j) {
@@ -218,7 +229,11 @@ public:
   EyeIconEngine(QIcon eye, QIcon icon, QString bulb)
       : m_eye(std::move(eye)), m_icon(std::move(icon)), m_bulb(std::move(bulb)) {}
 
-  QString iconName() override { return m_bulb; }
+  // A dimmed bulb (mitcad#1700: a row that only Isolate hides) gives
+  // "eye-isolated" as its name.
+  QString iconName() override { return m_dimmed ? QStringLiteral("eye-isolated") : m_bulb; }
+
+  void setDimmed() { m_dimmed = true; }
 
   // The bulb of a row that follows a Show When condition (mitcad#863): the
   // whole plain bulb (open or closed eye) with a small fx badge in its lower
@@ -234,7 +249,14 @@ public:
   void paint(QPainter* painter, const QRect& rect, QIcon::Mode mode, QIcon::State state) override {
     const int side = rect.height();
     const QRect eye(rect.left(), rect.top(), side, side);
-    m_eye.paint(painter, eye, Qt::AlignCenter, mode, QIcon::Off);
+    if (m_dimmed) {
+      painter->save();
+      painter->setOpacity(painter->opacity() * 0.4);
+      m_eye.paint(painter, eye, Qt::AlignCenter, mode, QIcon::Off);
+      painter->restore();
+    } else {
+      m_eye.paint(painter, eye, Qt::AlignCenter, mode, QIcon::Off);
+    }
     if (m_badge) {
       paintBadge(painter, eye);
     }
@@ -255,6 +277,7 @@ public:
     if (m_badge) {
       copy->setBadge(m_accent, m_base, m_text);
     }
+    copy->m_dimmed = m_dimmed;
     return copy;
   }
 
@@ -290,6 +313,7 @@ private:
   QIcon m_eye;
   QIcon m_icon;
   QString m_bulb;
+  bool m_dimmed = false;
   bool m_badge = false;
   QColor m_accent;
   QColor m_base;
@@ -323,6 +347,75 @@ public:
 private:
   QIcon m_icon;
   QIcon m_badge;
+};
+
+// A row marked as the owner of what is selected in the view (mitcad#1704),
+// and not selected itself: the first column's index has the mark.
+bool ownerMarked(const QStyleOptionViewItem& option, const QModelIndex& index) {
+  return index.column() == kName && !option.state.testFlag(QStyle::State_Selected) &&
+         index.data(kOwnerMarkRole).toBool();
+}
+
+// The owner's mark (mitcad#1704) behind a row: an outline of the accent
+// colour over a faint tint of it, without the selection's filled band, so
+// that the two read apart. The outline is strong enough on a light and a
+// dark surface and on the Floating card's material.
+void paintOwnerMark(QPainter* painter, const QRectF& band, qreal radius, const QColor& accent) {
+  QColor fill = accent;
+  fill.setAlphaF(0.10f);
+  QColor line = accent;
+  line.setAlphaF(0.90f);
+  constexpr qreal width = 1.5;
+  painter->save();
+  painter->setRenderHint(QPainter::Antialiasing);
+  painter->setPen(QPen(line, width));
+  painter->setBrush(fill);
+  painter->drawRoundedRect(band.adjusted(width / 2, width / 2, -width / 2, -width / 2), radius, radius);
+  painter->restore();
+}
+// The icon of a sketch row under a feature's row whose sketch several
+// features use (mitcad#1699): the sketch's icon with the shared mark in its
+// lower right corner, a small round badge on the rows' base colour with two
+// linked rings in the accent colour, both the theme's (the delegate gives
+// them by the palette the row is painted on).
+class SharedIconEngine : public QIconEngine {
+public:
+  SharedIconEngine(QIcon icon, QColor accent, QColor base)
+      : m_icon(std::move(icon)), m_accent(std::move(accent)), m_base(std::move(base)) {}
+
+  void paint(QPainter* painter, const QRect& rect, QIcon::Mode mode, QIcon::State state) override {
+    m_icon.paint(painter, rect, Qt::AlignCenter, mode, state);
+    const qreal side = std::max(7, rect.height() * 11 / 20);
+    const QRectF badge(rect.right() + 1 - side, rect.bottom() + 1 - side, side, side);
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing);
+    painter->setPen(QPen(m_accent, 1.0));
+    painter->setBrush(m_base); // opaque: the icon does not show through
+    painter->drawEllipse(badge.adjusted(0.5, 0.5, -0.5, -0.5));
+    // Two rings, overlapping: the link.
+    const qreal ring = side * 0.22;
+    const QPointF middle = badge.center();
+    painter->setPen(QPen(m_accent, std::max(1.0, side / 10.0)));
+    painter->setBrush(Qt::NoBrush);
+    painter->drawEllipse(QPointF(middle.x() - ring * 0.6, middle.y()), ring, ring);
+    painter->drawEllipse(QPointF(middle.x() + ring * 0.6, middle.y()), ring, ring);
+    painter->restore();
+  }
+
+  QPixmap pixmap(const QSize& size, QIcon::Mode mode, QIcon::State state) override {
+    QPixmap pixmap(size);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    paint(&painter, QRect(QPoint(), size), mode, state);
+    return pixmap;
+  }
+
+  QIconEngine* clone() const override { return new SharedIconEngine(m_icon, m_accent, m_base); }
+
+private:
+  QIcon m_icon;
+  QColor m_accent;
+  QColor m_base;
 };
 
 // Draws a row: the style's item with the light bulb in its decoration,
@@ -416,7 +509,10 @@ public:
       QString tip;
       if (at.eye.contains(event->pos())) {
         // A conditioned row's bulb says what a click does to it (mitcad#863).
-        tip = index.data(kEyeTipRole).toString();
+        // Left out by Isolate alone (mitcad#1700): a click shows it too and
+        // changes no light bulb, conditioned or not.
+        tip = index.data(kEyeIsolatedRole).toBool() ? BrowserPanel::tr("Hidden by Isolate: click to show it too")
+                                                    : index.data(kEyeTipRole).toString();
         if (tip.isEmpty()) {
           tip = index.data(kEyeRole).toBool() ? BrowserPanel::tr("Hide") : BrowserPanel::tr("Show");
         }
@@ -449,6 +545,12 @@ protected:
     if (const QVariant role = index.data(kTextRole); role.isValid()) {
       option->palette.setBrush(QPalette::Text, nameColor(static_cast<ColorRole>(role.toInt()), option->widget));
     }
+    // A sketch several features use, under one of them (mitcad#1699): the
+    // shared mark, in the theme the row is painted in now.
+    if (index.data(kSharedRole).toInt() > 1) {
+      option->icon = QIcon(new SharedIconEngine(option->icon, accentColor(option->palette),
+                                                option->palette.color(QPalette::Base)));
+    }
     const QVariant eye = index.data(kEyeRole);
     if (eye.isValid()) {
       const int side = option->decorationSize.height();
@@ -458,6 +560,10 @@ protected:
                            : index.data(kEyeTransparentRole).toBool() ? QStringLiteral("eye-half")
                                                                        : QStringLiteral("eye");
       auto* engine = new EyeIconEngine(themeIcon(bulb), option->icon, bulb);
+      // Shown by its light bulb, left out by Isolate (mitcad#1700).
+      if (index.data(kEyeIsolatedRole).toBool()) {
+        engine->setDimmed();
+      }
       // A row that follows a condition: the fx corner badge (mitcad#863).
       if (index.data(kEyeBoundRole).toBool()) {
         const QColor accent = accentColor(option->palette);
@@ -542,6 +648,12 @@ public:
       painter->setBrush(fill);
       painter->drawRoundedRect(band, 7, 7);
       painter->restore();
+    } else if (!m_rows && ownerMarked(option, index)) {
+      // The owner's mark (mitcad#1704) where the band would be.
+      const QRect cell = option.rect;
+      const QRectF band(cell.left() + 2, cell.top() + 1, option.widget->width() - cell.left() - 4 - 2,
+                        cell.height() - 2);
+      paintOwnerMark(painter, band, 7, accentColor(option.palette));
     }
     BrowserDelegate::paint(painter, option, index);
   }
@@ -579,6 +691,17 @@ public:
 
   void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
     paintPanelRowBand(painter, option, index);
+    if (ownerMarked(option, index)) {
+      // The owner's mark (mitcad#1704) where the selection's band would be,
+      // in the same action blue.
+      int width = option.rect.right() + 1;
+      if (const auto* view = qobject_cast<const QAbstractItemView*>(option.widget)) {
+        width = view->viewport()->width();
+      }
+      const QRectF band(panel::kRowInset, option.rect.top() + 1, std::max(0, width - 2 * panel::kRowInset),
+                        option.rect.height() - 2);
+      paintOwnerMark(painter, band, panel::kRowRadius, actionColor());
+    }
     BrowserDelegate::paint(painter, panelRowOption(option), index);
   }
 
@@ -1019,9 +1142,18 @@ private:
     painter->setBrush(cardFillColor(colors));
     painter->drawRoundedRect(outline, radius, radius);
     QColor tint;
-    if (selectionModel() != nullptr && selectionModel()->isSelected(index)) {
+    const bool selected = selectionModel() != nullptr && selectionModel()->isSelected(index);
+    if (selected) {
       tint = accentColor(colors);
       tint.setAlphaF(option.state.testFlag(QStyle::State_Active) ? 0.30f : 0.16f);
+    } else if (index.data(kOwnerMarkRole).toBool()) {
+      // The owner's mark (mitcad#1704): the box outlined in the accent
+      // colour; the pointer's tint over it.
+      paintOwnerMark(painter, QRectF(box), radius, accentColor(colors));
+      if (m_hover == index) {
+        tint = colors.color(QPalette::Text);
+        tint.setAlphaF(0.08f);
+      }
     } else if (m_hover == index) {
       tint = colors.color(QPalette::Text);
       tint.setAlphaF(0.08f);
@@ -1417,9 +1549,11 @@ QVector<BrowserPanel::PresentationRow> BrowserPanel::presentationRows() const {
     rows.append({key, parent, node, item->toolTip(0), icon, item->isExpanded(),
                  item->data(kName, kRadioRole).isValid(), item->data(kName, kRadioRole).toBool(),
                  item->data(kName, kBindingsRole).toInt(), rowTone(item),
-                 item->data(kName, kEyeTipRole).toString(), item->data(kName, kEyeBoundRole).toBool(),
-                 item->data(kName, kMakeRole).toString(),
-                 item->data(kName, kEyeRole).toBool() && item->data(kName, kEyeTransparentRole).toBool()});
+                 item->data(kName, kEyeIsolatedRole).toBool() ? tr("Hidden by Isolate: click to show it too")
+                                                              : item->data(kName, kEyeTipRole).toString(),
+                 item->data(kName, kEyeBoundRole).toBool(), item->data(kName, kMakeRole).toString(),
+                 item->data(kName, kEyeRole).toBool() && item->data(kName, kEyeTransparentRole).toBool(),
+                 item->data(kName, kEyeRole).toBool()});
     for (int index = 0; index < item->childCount(); ++index) {
       self(self, item->child(index), key);
     }
@@ -1467,7 +1601,9 @@ QString BrowserPanel::keyOf(const BrowserNode& node) const {
   case BrowserNode::Type::Body:
     return QStringLiteral("body:") + node.uid + at;
   case BrowserNode::Type::Sketch:
-    return QStringLiteral("sketch:") + node.uid + at;
+    // Under a feature's row (mitcad#1699): one under each feature using it.
+    return node.feature.isEmpty() ? QStringLiteral("sketch:") + node.uid + at
+                                  : QStringLiteral("sketch:%1>%2").arg(node.uid, node.feature) + at;
   case BrowserNode::Type::Datum:
     return QStringLiteral("datum:") + node.uid + at;
   case BrowserNode::Type::Analyses:
@@ -1507,6 +1643,8 @@ QString BrowserPanel::keyOf(const BrowserNode& node) const {
     return QStringLiteral("image:") + node.uid;
   case BrowserNode::Type::CenterOfMass:
     return QStringLiteral("center-of-mass");
+  case BrowserNode::Type::Features:
+    return QStringLiteral("features") + at;
   case BrowserNode::Type::None:
     break;
   }
@@ -1589,7 +1727,12 @@ bool BrowserPanel::markLevel(QTreeWidgetItem* row, const DocumentSnapshot::Featu
   const NoticeLevel notice = featureStateLevel(state);
   setNameRole(row, noticeTextRole(notice));
   row->setIcon(kName, QIcon(new LinkedIconEngine(row->icon(kName), noticeIcon(notice))));
-  row->setToolTip(kName, QStringLiteral("%1: %2").arg(feature.name, noticeLevelText(notice, feature.error)));
+  // A warning Auto Fix can fix says where it is (mitcad#1677).
+  QString tip = QStringLiteral("%1: %2").arg(feature.name, noticeLevelText(notice, feature.error));
+  if (feature.autoFix > 0) {
+    tip += QLatin1Char('\n') + autoFixHint(feature.autoFix);
+  }
+  row->setToolTip(kName, tip);
   return true;
 }
 
@@ -1601,7 +1744,25 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
   item->setText(kName, node.name);
   item->setIcon(kName, themeIcon(icon));
   if (node.hasEye) {
-    item->setData(kName, kEyeRole, node.visible);
+    // What the view shows (mitcad#1700): off while Isolate leaves the row
+    // out, dimmed when its own light bulb is on.
+    item->setData(kName, kEyeRole, node.visible && !node.isolatedOut);
+    if (node.isolatedOut && node.visible) {
+      item->setData(kName, kEyeIsolatedRole, true);
+    }
+  }
+  // Logged when Isolate starts and stops leaving a body or component row
+  // out, for the UI tests ("Browser eye Root/Part:2: isolated out", "...:
+  // isolated in").
+  if (node.isolatedOut != m_loggedIsolatedOut.contains(stored.path)) {
+    if (node.isolatedOut) {
+      m_loggedIsolatedOut.insert(stored.path);
+    } else {
+      m_loggedIsolatedOut.remove(stored.path);
+    }
+    qDebug().noquote() << QStringLiteral("Browser eye %1: %2")
+                              .arg(stored.path, node.isolatedOut ? QStringLiteral("isolated out")
+                                                                 : QStringLiteral("isolated in"));
   }
   // A transparent body or component (mitcad#1093): the half-open eye while
   // shown; logged when it comes and goes for the UI tests ("Browser eye
@@ -1647,7 +1808,7 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
                     node.type == BrowserNode::Type::Joints || node.type == BrowserNode::Type::MotionStudies ||
                     node.type == BrowserNode::Type::ContactSets || node.type == BrowserNode::Type::MotionLinks ||
                     node.type == BrowserNode::Type::Measurements || node.type == BrowserNode::Type::Drawings ||
-                    node.type == BrowserNode::Type::ImageReferences;
+                    node.type == BrowserNode::Type::ImageReferences || node.type == BrowserNode::Type::Features;
   item->setExpanded(m_expanded.value(key, open));
   return item;
 }
@@ -1673,12 +1834,19 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
     // The folder's light bulb and Show All / Hide All change the bodies
     // without a Show When condition (mitcad#863): its state is theirs; it
     // is greyed only when no body is shown.
-    bool anyShown = false;
+    bool anyVisible = false;
     bool freeShown = false;
+    // Isolate (mitcad#1700): the folder is left out when the isolation
+    // leaves out every body in it; greyed when the view shows none of them.
+    bool anyIsolated = false;
+    bool anyShown = false;
     QStringList conditioned;
     for (const QString& uid : def->bodies) {
       const DocumentSnapshot::Body body = snapshot.bodies.value(uid);
-      anyShown = anyShown || body.visible;
+      const bool isolated = DocumentSnapshot::isolationShows(snapshot.isolation, uid, occurrence);
+      anyIsolated = anyIsolated || isolated;
+      anyVisible = anyVisible || body.visible;
+      anyShown = anyShown || (body.visible && isolated);
       if (body.visibleWhen.isEmpty()) {
         freeShown = freeShown || body.visible;
       } else {
@@ -1686,8 +1854,10 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
       }
     }
     const bool allConditioned = conditioned.size() == def->bodies.size();
-    folder.visible = allConditioned ? anyShown : freeShown;
+    folder.visible = allConditioned ? anyVisible : freeShown;
+    folder.isolatedOut = !anyIsolated;
     QTreeWidgetItem* bodies = addRow(parent, folder, QStringLiteral("folder"));
+    folder.isolatedOut = false; // the other folders follow no isolation
     gray(bodies, shown && anyShown);
     // The folder has no condition of its own: the plain bulb, whose
     // tooltip names the bodies it leaves as they are.
@@ -1713,6 +1883,9 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
       node.hasEye = true;
       node.transparent = body.transparent;
       node.mesh = body.mesh;
+      // Left out by Isolate (mitcad#1700): its eye off, its name greyed.
+      node.isolatedOut = !DocumentSnapshot::isolationShows(snapshot.isolation, uid, occurrence);
+      const bool drawn = shown && body.visible && !node.isolatedOut;
       const QString feature = uid.section(QLatin1Char('.'), 0, 0);
       const DocumentSnapshot::Feature* made = snapshot.feature(feature);
       QString tip = tr("%1 (%2), made by %3").arg(node.name, uid, made != nullptr ? made->name : feature);
@@ -1721,7 +1894,7 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
         tip += QLatin1Char('\n') + tr("Print bed face: %1").arg(printBedText(snapshot, body));
       }
       QTreeWidgetItem* row = addRow(bodies, node, QStringLiteral("body"), tip);
-      gray(row, shown && body.visible);
+      gray(row, drawn);
       // Bindings (mitcad#809).
       if (body.bound()) {
         QStringList lines;
@@ -1748,8 +1921,16 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
                                            snapshot.conditionParts(body.visibleWhen)),
                           true);
       }
-      addSheetRows(row, snapshot, node, shown && body.visible);
+      addSheetRows(row, snapshot, node, drawn);
     }
+  }
+
+  // The features with the sketches they use (mitcad#1699), while Show used
+  // sketches under their features is on; those sketches leave the Sketches
+  // folder.
+  const QHash<QString, int> users = m_consumeSketches ? sketchUsers(snapshot, component) : QHash<QString, int>();
+  if (m_consumeSketches) {
+    addFeaturesFolder(parent, snapshot, component, occurrence, shown, uses, users);
   }
 
   // Sketches and construction geometry: features of the component before
@@ -1758,7 +1939,7 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
     QVector<const DocumentSnapshot::Feature*> features;
     for (const DocumentSnapshot::Feature& feature : snapshot.features) {
       if (feature.component == component && feature.isActive() &&
-          (sketches ? feature.isAnySketch() : feature.isConstruction())) {
+          (sketches ? feature.isAnySketch() && !users.contains(feature.uid) : feature.isConstruction())) {
         features.append(&feature);
       }
     }
@@ -1777,32 +1958,7 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
     const bool kindShown = sketches ? snapshot.showSketches : snapshot.showConstruction;
     gray(rows, shown && folder.visible && kindShown);
     for (const DocumentSnapshot::Feature* feature : features) {
-      BrowserNode node;
-      node.type = sketches ? BrowserNode::Type::Sketch : BrowserNode::Type::Datum;
-      node.uid = feature->uid;
-      node.occurrence = occurrence;
-      node.component = component;
-      node.featureType = feature->type;
-      node.name = feature->name;
-      node.visible = snapshot.isShown(feature->uid);
-      node.hasEye = true;
-      const bool failed = feature->status == QStringLiteral("error");
-      // A sketch's degrees of freedom (P9): a fully constrained one has a
-      // lock on its icon; the tooltip tells how many remain.
-      QString icon = featureIcon(feature->type);
-      QString tip = failed ? QStringLiteral("%1: %2").arg(feature->name, feature->error) : QString();
-      if (sketches && !failed && feature->dof >= 0) {
-        // A 3D sketch's own lock (mitcad#1544).
-        const QString locked =
-            feature->isSpatialSketch() ? QStringLiteral("sketch-3d-locked") : QStringLiteral("sketch-locked");
-        icon = feature->dof == 0 ? locked : icon;
-        tip = feature->dof == 0 ? tr("%1: fully constrained").arg(feature->name)
-                                : tr("%1: %n degree(s) of freedom", nullptr, feature->dof).arg(feature->name);
-      }
-      QTreeWidgetItem* row = addRow(rows, node, icon, tip);
-      if (!markLevel(row, *feature)) {
-        gray(row, shown && node.visible && kindShown);
-      }
+      QTreeWidgetItem* row = addSketchRow(rows, snapshot, *feature, occurrence, component, sketches, shown, kindShown);
       if (sketches) {
         addFeatureRows(row, snapshot, *feature, occurrence, shown, uses);
       }
@@ -1922,6 +2078,174 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
   }
 }
 
+namespace {
+
+// A feature the Features folder lists (mitcad#1699): one without rows of its
+// own (sketches, construction geometry, joints and motion links have theirs).
+bool listedAsFeature(const DocumentSnapshot::Feature& feature) {
+  return !feature.isAnySketch() && !feature.isConstruction() && !feature.isJoint() && !feature.isMotionLink();
+}
+
+} // namespace
+
+void BrowserPanel::setConsumeSketches(bool on) {
+  if (on == m_consumeSketches) {
+    return;
+  }
+  m_consumeSketches = on;
+  qDebug().noquote() << QStringLiteral("Browser used sketches under their features: %1")
+                            .arg(on ? QStringLiteral("on") : QStringLiteral("off"));
+}
+
+QHash<QString, int> BrowserPanel::sketchUsers(const DocumentSnapshot& snapshot, const QString& component) {
+  QHash<QString, int> users;
+  for (const DocumentSnapshot::Feature& feature : snapshot.features) {
+    if (feature.component != component || !listedAsFeature(feature)) {
+      continue;
+    }
+    QSet<QString> counted; // a sketch it uses twice (a profile and a path) counts once
+    for (const QString& uid : feature.sketches) {
+      if (counted.contains(uid)) {
+        continue;
+      }
+      counted.insert(uid);
+      const DocumentSnapshot::Feature* sketch = snapshot.feature(uid);
+      if (sketch != nullptr && sketch->component == component && sketch->isAnySketch() && sketch->isActive()) {
+        ++users[uid];
+      }
+    }
+  }
+  return users;
+}
+
+QTreeWidgetItem* BrowserPanel::addSketchRow(QTreeWidgetItem* parent, const DocumentSnapshot& snapshot,
+                                            const DocumentSnapshot::Feature& feature, const QString& occurrence,
+                                            const QString& component, bool sketch, bool shown, bool kindShown,
+                                            const QString& under, int users) {
+  BrowserNode node;
+  node.type = sketch ? BrowserNode::Type::Sketch : BrowserNode::Type::Datum;
+  node.uid = feature.uid;
+  node.occurrence = occurrence;
+  node.component = component;
+  node.featureType = feature.type;
+  node.feature = under;
+  node.name = feature.name;
+  node.visible = snapshot.isShown(feature.uid);
+  node.hasEye = true;
+  const bool failed = feature.status == QStringLiteral("error");
+  // A sketch's degrees of freedom (P9): a fully constrained one has a
+  // lock on its icon; the tooltip tells how many remain.
+  QString icon = featureIcon(feature.type);
+  QString tip = failed ? QStringLiteral("%1: %2").arg(feature.name, feature.error) : QString();
+  if (sketch && !failed && feature.dof >= 0) {
+    // A 3D sketch's own lock (mitcad#1544).
+    const QString locked =
+        feature.isSpatialSketch() ? QStringLiteral("sketch-3d-locked") : QStringLiteral("sketch-locked");
+    icon = feature.dof == 0 ? locked : icon;
+    tip = feature.dof == 0 ? tr("%1: fully constrained").arg(feature.name)
+                           : tr("%1: %n degree(s) of freedom", nullptr, feature.dof).arg(feature.name);
+  }
+  QTreeWidgetItem* row = addRow(parent, node, icon, tip);
+  if (!markLevel(row, feature) && !(shown && node.visible && kindShown)) {
+    setNameRole(row, ColorRole::TextHidden);
+  }
+  // Shared by several features, under each of them (mitcad#1699): the mark
+  // on its icon (drawn by the delegate) and how many in its tooltip.
+  if (users > 1) {
+    row->setData(kName, kSharedRole, users);
+    // Only ever two or more: the plural's own text.
+    const QString used = tr("Used by %1 features").arg(users);
+    const QString before = row->toolTip(kName);
+    row->setToolTip(kName, before.isEmpty() ? used : before + QLatin1Char('\n') + used);
+  }
+  return row;
+}
+
+void BrowserPanel::markFeatureRow(QTreeWidgetItem* row, const DocumentSnapshot::Feature& feature,
+                                  const QStringList& linked, bool off, bool shown) {
+  if (!linked.isEmpty()) {
+    row->setIcon(kName, QIcon(new LinkedIconEngine(themeIcon(featureIcon(feature.type)),
+                                                   themeIcon(QStringLiteral("component")))));
+    row->setData(kName, kLinkedRole, linked.join(QStringLiteral(", ")));
+  }
+  if (!markLevel(row, feature) && (off || !shown)) {
+    setNameRole(row, ColorRole::TextHidden);
+  }
+  // Suppressed when a condition holds (mitcad#809).
+  if (!feature.suppressedWhen.isEmpty()) {
+    markBound(row, m_nodes.value(row).path, {tr("Suppressed when %1").arg(feature.suppressedWhen)}, 1);
+  }
+}
+
+void BrowserPanel::addFeaturesFolder(QTreeWidgetItem* parent, const DocumentSnapshot& snapshot,
+                                     const QString& component, const QString& occurrence, bool shown,
+                                     const SketchUses& uses, const QHash<QString, int>& users) {
+  QVector<const DocumentSnapshot::Feature*> features;
+  for (const DocumentSnapshot::Feature& feature : snapshot.features) {
+    if (feature.component == component && listedAsFeature(feature)) {
+      features.append(&feature);
+    }
+  }
+  if (features.isEmpty()) {
+    return;
+  }
+  BrowserNode folder;
+  folder.type = BrowserNode::Type::Features;
+  folder.occurrence = occurrence;
+  folder.component = component;
+  folder.name = tr("Features");
+  QTreeWidgetItem* rows = addRow(parent, folder, QStringLiteral("folder"));
+  if (!shown) {
+    setNameRole(rows, ColorRole::TextHidden);
+  }
+  for (const DocumentSnapshot::Feature* feature : features) {
+    // The sketches of its component it uses, each once, in its order.
+    QVector<const DocumentSnapshot::Feature*> sketches;
+    QStringList names;
+    for (const QString& uid : feature->sketches) {
+      const DocumentSnapshot::Feature* sketch = users.contains(uid) ? snapshot.feature(uid) : nullptr;
+      if (sketch != nullptr && !sketches.contains(sketch)) {
+        sketches.append(sketch);
+        names << sketch->name;
+      }
+    }
+    BrowserNode node;
+    node.type = BrowserNode::Type::Feature;
+    node.uid = feature->uid;
+    node.occurrence = occurrence;
+    node.component = component;
+    node.featureType = feature->type;
+    node.name = feature->name;
+    // A result in another component (a new component's bodies) is marked
+    // as linked there, as under a sketch (mitcad#177).
+    QSet<QString> elsewhere = uses.resultComponents.value(feature->uid);
+    elsewhere.remove(component);
+    QStringList linked;
+    for (const QString& other : std::as_const(elsewhere)) {
+      linked << snapshot.componentName(other);
+    }
+    linked.sort();
+    const bool failed = feature->status == QStringLiteral("error");
+    // Rolled back or suppressed: grey, as the timeline draws it faint.
+    const bool off = feature->suppressed || feature->index >= snapshot.marker;
+    QString tip = failed               ? QStringLiteral("%1: %2").arg(feature->name, feature->error)
+                  : feature->suppressed ? tr("%1: suppressed").arg(feature->name)
+                  : off                 ? tr("%1: rolled back").arg(feature->name)
+                  : names.isEmpty()     ? QString()
+                                        : tr("%1 uses %2").arg(feature->name, names.join(QStringLiteral(", ")));
+    if (!linked.isEmpty()) {
+      tip = (tip.isEmpty() ? feature->name : tip) +
+            tr("; its result is in %1").arg(linked.join(QStringLiteral(", ")));
+    }
+    QTreeWidgetItem* row = addRow(rows, node, featureIcon(feature->type), tip);
+    markFeatureRow(row, *feature, linked, off, shown);
+    for (const DocumentSnapshot::Feature* sketch : std::as_const(sketches)) {
+      addSketchRow(row, snapshot, *sketch, occurrence, component, true, shown, snapshot.showSketches, feature->uid,
+                   users.value(sketch->uid));
+    }
+  }
+}
+
 void BrowserPanel::addFeatureRows(QTreeWidgetItem* parent, const DocumentSnapshot& snapshot,
                                   const DocumentSnapshot::Feature& sketch, const QString& occurrence, bool shown,
                                   const SketchUses& uses) {
@@ -1955,18 +2279,7 @@ void BrowserPanel::addFeatureRows(QTreeWidgetItem* parent, const DocumentSnapsho
       tip += tr("; its result is in %1").arg(linked.join(QStringLiteral(", ")));
     }
     QTreeWidgetItem* row = addRow(parent, node, featureIcon(feature->type), tip);
-    if (!linked.isEmpty()) {
-      row->setIcon(kName, QIcon(new LinkedIconEngine(themeIcon(featureIcon(feature->type)),
-                                                     themeIcon(QStringLiteral("component")))));
-      row->setData(kName, kLinkedRole, linked.join(QStringLiteral(", ")));
-    }
-    if (!markLevel(row, *feature) && (off || !shown)) {
-      setNameRole(row, ColorRole::TextHidden);
-    }
-    // Suppressed when a condition holds (mitcad#809).
-    if (!feature->suppressedWhen.isEmpty()) {
-      markBound(row, m_nodes.value(row).path, {tr("Suppressed when %1").arg(feature->suppressedWhen)}, 1);
-    }
+    markFeatureRow(row, *feature, linked, off, shown);
   }
 }
 
@@ -2093,7 +2406,9 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
   m_nodes.clear();
 
   // The root component.
-  const QString root = snapshot.components.isEmpty() ? tr("Root") : snapshot.components.first().name;
+  const QString root = snapshot.components.isEmpty()
+                           ? tr("Root")
+                           : shownComponentName(snapshot.components.first().uid, snapshot.components.first().name);
   BrowserNode rootNode;
   rootNode.type = BrowserNode::Type::Component;
   rootNode.uid = QStringLiteral("C0");
@@ -2201,6 +2516,9 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
           row.visible = occurrence.visible;
           row.hasEye = true;
           row.transparent = occurrence.transparent;
+          // Left out by Isolate (mitcad#1700): neither in an isolated
+          // occurrence nor holding an isolated item.
+          row.isolatedOut = !DocumentSnapshot::isolationReaches(snapshot.isolation, occurrence.path);
           const DocumentSnapshot::Component* def = snapshot.component(occurrence.component);
           QString tip = tr("Occurrence %1 of %2").arg(occurrence.name, snapshot.componentName(occurrence.component));
           if (occurrence.grounded) {
@@ -2217,7 +2535,7 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
               addRow(parent, row,
                      occurrence.grounded ? QStringLiteral("component-grounded") : QStringLiteral("component"),
                      tip);
-          const bool visible = shown && occurrence.visible;
+          const bool visible = shown && occurrence.visible && !row.isolatedOut;
           if (!visible) {
             setNameRole(item, ColorRole::TextHidden);
           }
@@ -2397,6 +2715,7 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
   }
   m_building = false;
   applyMakeMarkers(); // the new rows' markers (mitcad#1049)
+  applyOwnerMarks();  // and the owners' marks (mitcad#1704)
   logRowColours();    // mitcad#1104
   m_tree->verticalScrollBar()->setValue(scroll);
   emit contentHeightChanged();
@@ -2781,6 +3100,94 @@ void BrowserPanel::logSelection() {
   }
 }
 
+void BrowserPanel::setOwnerMarks(const Selection& owners, bool scroll) {
+  const bool changed = owners != m_ownerMarks;
+  m_ownerMarks = owners;
+  QTreeWidgetItem* target = applyOwnerMarks();
+  if (!scroll || !changed || target == nullptr) {
+    return;
+  }
+  // None of the selected or marked rows in sight (as showSelection and
+  // logLayout tell it: the middle of the row in the view): the newest
+  // owner's row, its folded parents opened as the tree scrolls to it.
+  const QRect sight = m_tree->viewport()->rect();
+  for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
+    if (!(*it)->isSelected() && !(*it)->data(kName, kOwnerMarkRole).toBool()) {
+      continue;
+    }
+    bool open = !(*it)->isHidden();
+    for (const QTreeWidgetItem* parent = (*it)->parent(); open && parent != nullptr; parent = parent->parent()) {
+      open = parent->isExpanded() && !parent->isHidden();
+    }
+    const QRect row = m_tree->visualItemRect(*it);
+    if (open && !row.isEmpty() && sight.contains(row.center())) {
+      return;
+    }
+  }
+  m_tree->scrollToItem(target);
+  qDebug().noquote() << QStringLiteral("Browser scrolled to %1").arg(nodeOf(target).path);
+}
+
+QTreeWidgetItem* BrowserPanel::applyOwnerMarks() {
+  // The rows that can be marked, by their item's key, and a sketch's rows
+  // in every occurrence (a profile's occurrence is not part of it).
+  QHash<QString, QVector<QTreeWidgetItem*>> rows;
+  QHash<QString, QVector<QTreeWidgetItem*>> sketchRows;
+  for (auto it = m_nodes.cbegin(); it != m_nodes.cend(); ++it) {
+    const BrowserNode& node = it.value();
+    const bool body = node.type == BrowserNode::Type::Body;
+    const bool sketch = node.type == BrowserNode::Type::Sketch;
+    const bool occurrence = node.type == BrowserNode::Type::Component && !node.occurrence.isEmpty();
+    if (body || sketch || occurrence) {
+      rows[itemKey(node.item())].append(it.key());
+    }
+    if (sketch) {
+      sketchRows[node.uid].append(it.key());
+    }
+  }
+  QSet<QTreeWidgetItem*> marked;
+  QTreeWidgetItem* target = nullptr;
+  bool deep = false; // the target is a body's or a sketch's row
+  for (const SelectionItem& owner : std::as_const(m_ownerMarks)) {
+    QVector<QTreeWidgetItem*> found = rows.value(itemKey(owner));
+    if (found.isEmpty() && owner.kind == SelectKind::Sketch) {
+      found = sketchRows.value(owner.owner);
+    }
+    if (found.isEmpty()) {
+      continue;
+    }
+    for (QTreeWidgetItem* row : std::as_const(found)) {
+      marked.insert(row);
+    }
+    const bool own = owner.kind != SelectKind::Component;
+    if (own || !deep) {
+      target = found.first();
+      deep = own;
+    }
+  }
+  // Not a rename: the tree's itemChanged is the name's.
+  const QSignalBlocker blocker(m_tree);
+  QStringList paths;
+  for (auto it = m_nodes.cbegin(); it != m_nodes.cend(); ++it) {
+    const bool on = marked.contains(it.key());
+    if (it.key()->data(kName, kOwnerMarkRole).toBool() != on) {
+      it.key()->setData(kName, kOwnerMarkRole, on ? QVariant(true) : QVariant());
+    }
+    if (on) {
+      paths << it.value().path;
+    }
+  }
+  paths.sort();
+  const QString logged = paths.isEmpty() ? QStringLiteral("none") : paths.join(QStringLiteral(", "));
+  if (logged != m_loggedOwnerMarks) {
+    m_loggedOwnerMarks = logged;
+    qDebug().noquote() << QStringLiteral("Browser owner marks: %1").arg(logged);
+  }
+  // The band reaches over the branch's arrow (stylePanelTree).
+  m_tree->viewport()->update();
+  return target;
+}
+
 QVector<BrowserNode> BrowserPanel::nodesOfFeature(const QString& feature) const {
   QVector<BrowserNode> nodes;
   for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
@@ -3000,6 +3407,11 @@ void BrowserPanel::logLayout() {
     // A feature row whose result is in another component (mitcad#177).
     if (const QString linked = item->data(kName, kLinkedRole).toString(); !linked.isEmpty()) {
       lines << QStringLiteral("Browser linked %1 to %2").arg(node.path, linked);
+    }
+    // A sketch several features use, under one of them: its shared mark
+    // (mitcad#1699).
+    if (const int users = item->data(kName, kSharedRole).toInt(); users > 1) {
+      lines << QStringLiteral("Browser shared %1: used by %2 features").arg(node.path).arg(users);
     }
   }
   if (m_rows) {

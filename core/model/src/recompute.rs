@@ -450,6 +450,9 @@ pub enum Read {
     /// A body's print bed face as it was assigned, None without one
     /// (print-shaped holes, mitcad#1515).
     PrintBed(BodyUid, Option<String>),
+    /// The layer height the design prints with (as bits), None without one
+    /// (print-bridged holes, mitcad#1516).
+    PrintLayer(Option<u64>),
 }
 
 /// A body's print bed face as it was assigned (mitcad#731), for
@@ -518,6 +521,7 @@ impl Read {
                 env.split_pieces.get(uid),
             )),
             Self::PrintBed(uid, face) => print_bed_of(env.body_attributes, *uid) == face.as_ref(),
+            Self::PrintLayer(bits) => env.layer_height.map(f64::to_bits) == *bits,
         }
     }
 
@@ -598,6 +602,11 @@ impl Read {
                 body(fingerprint.u8(15), *uid);
                 fingerprint.option(face.as_deref(), |f, face| {
                     f.str(face);
+                });
+            }
+            Self::PrintLayer(bits) => {
+                fingerprint.u8(16).option(*bits, |f, b| {
+                    f.u64(b);
                 });
             }
         }
@@ -1831,6 +1840,7 @@ impl<'s, S> Walk<'s, S> {
             changed_pieces: &self.done.changed_pieces,
             gone_pieces: &self.done.gone_pieces,
             body_attributes: &state.body_attributes,
+            layer_height: state.design_layer_height(),
         }
     }
 }
@@ -2110,6 +2120,7 @@ fn resume_point<'b, S>(before: &'b Recomputed<S>, state: &DocState) -> Option<&'
             Read::PrintBed(uid, face) => {
                 print_bed_of(&state.body_attributes, *uid) == face.as_ref()
             }
+            Read::PrintLayer(bits) => state.design_layer_height().map(f64::to_bits) == *bits,
             // What earlier features made and the assembly: the same.
             _ => true,
         });

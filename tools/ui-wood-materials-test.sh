@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/print/MaterialProperties.cpp app/print/MaterialsDialog.cpp app/print/PrintLibrary.cpp app/framework/TestDriver.cpp tools/cli
-# check-all sources: core/model/src/material.rs core/model/src/material_dataset.rs core/model/data/wood_materials.json core/model/src/document/materials.rs
+# check-all sources: app/print/MaterialProperties.cpp app/print/MaterialsDialog.cpp app/print/PrintLibrary.cpp app/framework/TestDriver.cpp app/framework/Appearances.cpp tools/cli
+# check-all sources: core/model/src/material.rs core/model/src/material_dataset.rs core/model/data/wood_materials.json core/model/src/document/materials.rs core/model/src/document/material_import.rs
 # check-all sources: core/model-base/src/material_class.rs core/model-base/src/appearance.rs core/model-api/src/materials.rs
-# The bundled dataset's woods and panels in the class Wood (mitcad#1552),
-# on a private Xvfb display: the test driver's script
+# The woods and panels in the class Wood (mitcad#1552, mitcad#1706), on a
+# private Xvfb display: the test driver's script
 # tools/ui-scripts/wood-materials.mitcad-ui (shared with the Windows test;
-# it says what it does: the Materials window's New menu with Wood, Browse
+# it says what it does: the five built-in woods and panels in the Built-in
+# group's Wood class, the Materials window's New menu with Wood, Browse
 # Material Dataset… with its two sources, "oak" found in the class Wood
-# with its values and source, and Wood - Oak created into the design in
-# the Materials window's Wood group with its look) on a design mitcad-cli
+# with its values and source, three of the four plywoods picked and
+# created into the design's Wood group in one undo step, and Select All of
+# the plywoods skipping every name there already) on a design mitcad-cli
 # makes from tools/ui-scripts/wood-materials.json. The pictures of the
 # dataset and the Materials window stay in build/ui-wood-materials-pictures
 # (UI_PICTURES).
@@ -41,5 +43,5 @@ done
 kill -0 "$UI_RUNNER" 2>/dev/null && { ui_fail "wood materials driver timed out"; exit 1; }
 wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; exit 1; }
 UI_RUNNER=""
-ui_expect_log 'TestDriver: done' "oak found in the class Wood and created as a Wood material of the design"
+ui_expect_log 'TestDriver: done' "the built-in woods listed, three plywoods made at once and the names there skipped"
 echo "PASS: wood materials (pictures in $PICTURES)"

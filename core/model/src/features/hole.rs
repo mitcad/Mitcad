@@ -42,8 +42,8 @@ use super::{
 };
 use crate::ids::{BodyUid, EntityUid, FeatureUid};
 use crate::kernel::{
-    Axis, Bound, Cylinder, HoleEnd, HolePrintShape, HoleShape, HoleSpec, Kernel, ThreadSpec,
-    ThreadTaper,
+    Axis, Bound, BridgeMode, Cylinder, HoleBridging, HoleEnd, HolePrintShape, HoleShape, HoleSpec,
+    Kernel, ThreadSpec, ThreadTaper,
 };
 use crate::parameters::ParamId;
 use crate::sketch::geometry::Curve2;
@@ -142,9 +142,37 @@ pub enum SketchPoint {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HoleKind<P = ParamId> {
     Simple,
-    Counterbore { diameter: P, depth: P },
-    Countersink { diameter: P, angle: P },
-    Counterdrill { diameter: P, depth: P, angle: P },
+    Counterbore {
+        diameter: P,
+        depth: P,
+    },
+    Countersink {
+        diameter: P,
+        angle: P,
+    },
+    Counterdrill {
+        diameter: P,
+        depth: P,
+        angle: P,
+    },
+    /// A hex pocket for a nut about the hole (mitcad#1518), for printed
+    /// parts: `across_flats` wide (the `hole_sizes` query's `nut_pocket`,
+    /// ISO 4032's nut with a clearance), `depth` deep from `offset` below
+    /// the hole's start (0 when left out: open at the start, where the
+    /// screw comes out), turned by `angle` about the axis; `slot` runs it
+    /// out sideways along its first flat to that far from the axis, so
+    /// that the nut slides in from the side
+    /// ([`crate::kernel::HoleShape::NutPocket`]).
+    NutPocket {
+        across_flats: P,
+        depth: P,
+        #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+        angle: Option<P>,
+        #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+        offset: Option<P>,
+        #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+        slot: Option<P>,
+    },
 }
 
 // Not derived: that would need P: Default.
@@ -248,6 +276,17 @@ pub struct HoleClearance {
     pub fit: ClearanceFit,
 }
 
+/// A heat-set insert's hole (mitcad#1518): `{"size": "M3"}`, a size of the
+/// `hole_sizes` query's insert series. As a clearance hole's size, it names
+/// where the hole's values came from (the series' hole diameter and depth),
+/// so that the Hole panel shows them again; the hole is cut at its own
+/// `diameter` and `extent`, plain values as any hole's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HoleInsert {
+    pub size: String,
+}
+
 /// The shape of a press-fit hole (mitcad#1517).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -308,6 +347,30 @@ pub enum PrintShape {
 impl PrintShape {
     pub fn is_round(&self) -> bool {
         *self == Self::Round
+    }
+}
+
+/// How a counterbore, or a nut pocket at the hole's start, that opens
+/// toward the print bed is bridged for printing (mitcad#1516): its hole
+/// goes up away from the bed, so the bore's ring above the recess's floor
+/// would be printed in the air. The layers above the floor, the print's
+/// layer height each, bridge it ([`crate::kernel::HoleBridging`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrintBridging {
+    #[default]
+    None,
+    /// One layer closes the bore over the floor: a membrane drilled out
+    /// after printing.
+    Sacrificial,
+    /// Two layers: bridges across the recess beside a strip as wide as the
+    /// hole, then across the strip beside the hole's square.
+    Stepped,
+}
+
+impl PrintBridging {
+    pub fn is_none(&self) -> bool {
+        *self == Self::None
     }
 }
 
@@ -412,6 +475,58 @@ pub fn press_fit_section(
     })
 }
 
+/// The kernel's nut pocket (mitcad#1518) from a hole's values: across the
+/// flats and the depth greater than zero, the offset not negative (0 when
+/// left out), the angle finite (0 when left out), and a slot that reaches
+/// out of the pocket. Checks the values.
+pub fn nut_pocket(
+    across_flats: f64,
+    depth: f64,
+    angle: Option<f64>,
+    offset: Option<f64>,
+    slot: Option<f64>,
+) -> Result<HoleShape, String> {
+    if !(across_flats.is_finite() && across_flats > 0.0) {
+        return Err(format!(
+            "the nut pocket's width across the flats must be greater than zero, got {across_flats}"
+        ));
+    }
+    if !(depth.is_finite() && depth > 0.0) {
+        return Err(format!(
+            "the nut pocket's depth must be greater than zero, got {depth}"
+        ));
+    }
+    let offset = offset.unwrap_or(0.0);
+    if !(offset.is_finite() && offset >= 0.0) {
+        return Err(format!(
+            "the nut pocket's offset from the hole's start must not be negative, got {offset}"
+        ));
+    }
+    let angle = angle.unwrap_or(0.0);
+    if !angle.is_finite() {
+        return Err(format!(
+            "the nut pocket's angle must be finite, got {angle} rad"
+        ));
+    }
+    if let Some(slot) = slot {
+        // Past the pocket's corners along the slot: the nut must come out.
+        let corner = across_flats / 3f64.sqrt();
+        if !(slot.is_finite() && slot > corner) {
+            return Err(format!(
+                "the nut pocket's slot must reach out of the pocket, more than {corner:.3} from the \
+                 axis; got {slot}"
+            ));
+        }
+    }
+    Ok(HoleShape::NutPocket {
+        across_flats,
+        depth,
+        angle,
+        offset,
+        slot,
+    })
+}
+
 fn yes() -> bool {
     true
 }
@@ -498,6 +613,18 @@ pub struct HoleDef<P = ParamId> {
     /// when left out; only with `print_shape` `flat_roof`.
     #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
     pub roof_sag: Option<P>,
+    /// A heat-set insert's hole: the insert series' size its values came
+    /// from (mitcad#1518); a simple hole with no thread, clearance size or
+    /// press fit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub insert: Option<HoleInsert>,
+    /// Bridging for printing of a counterbore, or of a nut pocket at the
+    /// start without a slot, that opens toward the print bed (mitcad#1516):
+    /// none, a sacrificial layer or stepped bridges, the print's layer
+    /// height thick each. Holes that do not open toward the bed are cut as
+    /// they are.
+    #[serde(default, skip_serializing_if = "PrintBridging::is_none")]
+    pub print_bridging: PrintBridging,
 }
 
 type Mapper<'a, P, Q, E> = dyn FnMut(&str, &P) -> Result<Q, E> + 'a;
@@ -598,6 +725,19 @@ impl<P> HoleDef<P> {
                 depth: f("kind.depth", depth)?,
                 angle: f("kind.angle", angle)?,
             },
+            HoleKind::NutPocket {
+                across_flats,
+                depth,
+                angle,
+                offset,
+                slot,
+            } => HoleKind::NutPocket {
+                across_flats: f("kind.across_flats", across_flats)?,
+                depth: f("kind.depth", depth)?,
+                angle: map_option("kind.angle", angle, f)?,
+                offset: map_option("kind.offset", offset, f)?,
+                slot: map_option("kind.slot", slot, f)?,
+            },
         };
         let tip_angle = map_option("tip_angle", &self.tip_angle, f)?;
         let extent = match &self.extent {
@@ -662,6 +802,8 @@ impl<P> HoleDef<P> {
             press_fit,
             print_shape: self.print_shape,
             roof_sag: map_option("roof_sag", &self.roof_sag, f)?,
+            insert: self.insert.clone(),
+            print_bridging: self.print_bridging,
         })
     }
 
@@ -909,6 +1051,74 @@ impl FeatureInfo for HoleDef {
         if self.roof_sag.is_some() && self.print_shape != PrintShape::FlatRoof {
             return Err("only a flat roof has `roof_sag`".to_owned());
         }
+        // A nut pocket about a round bore (mitcad#1518): the nut carries the
+        // thread.
+        if matches!(self.kind, HoleKind::NutPocket { .. }) {
+            if self.thread.is_some() {
+                return Err(
+                    "a nut pocket's hole has no thread, the nut has it: leave out `thread`"
+                        .to_owned(),
+                );
+            }
+            if self.taper.is_some() {
+                return Err("a nut pocket's hole has no taper".to_owned());
+            }
+            if !self.print_shape.is_round() {
+                return Err(
+                    "a nut pocket's hole has no print shape: leave out `print_shape`".to_owned(),
+                );
+            }
+        }
+        // Print bridging of a recess's floor (mitcad#1516).
+        if !self.print_bridging.is_none() {
+            let recess = match &self.kind {
+                HoleKind::Counterbore { .. } => true,
+                HoleKind::NutPocket { offset, slot, .. } => offset.is_none() && slot.is_none(),
+                _ => false,
+            };
+            if !recess {
+                return Err(
+                    "print bridging bridges a counterbore, or a nut pocket at the hole's start \
+                     without a slot: leave out `print_bridging`"
+                        .to_owned(),
+                );
+            }
+            if self.taper.is_some() || !self.print_shape.is_round() {
+                return Err(
+                    "a bridged hole has no taper or print shape: leave out `print_bridging`"
+                        .to_owned(),
+                );
+            }
+            if self
+                .thread
+                .as_ref()
+                .is_some_and(|t| t.modeled || t.tapers())
+            {
+                return Err(
+                    "a modeled or tapering thread is not bridged: leave out `print_bridging` or \
+                     make the thread cosmetic"
+                        .to_owned(),
+                );
+            }
+        }
+        // A heat-set insert's hole names a size of the series (mitcad#1518).
+        if let Some(insert) = &self.insert {
+            if self.thread.is_some() || self.clearance.is_some() || self.press_fit.is_some() {
+                return Err(
+                    "a heat-set insert's hole has no thread, clearance size or press fit: \
+                     leave out `insert` or those"
+                        .to_owned(),
+                );
+            }
+            if !self.kind.is_simple() {
+                return Err(
+                    "a heat-set insert's hole is a simple hole: no counterbore, countersink, \
+                     counterdrill or nut pocket"
+                        .to_owned(),
+                );
+            }
+            super::hole_sizes::insert(&insert.size)?;
+        }
         check_participants(ctx, Operation::Cut, &self.participants)
     }
 
@@ -967,6 +1177,28 @@ impl FeatureInfo for HoleDef {
                 angle("counterdrill angle", *a)?;
                 if diameter.is_some_and(|hole| d <= hole) {
                     return Err("the counterdrill must be wider than the hole".to_owned());
+                }
+            }
+            HoleKind::NutPocket {
+                across_flats,
+                depth,
+                angle,
+                offset,
+                slot,
+            } => {
+                let (width, deep, below) = (
+                    value(*across_flats),
+                    value(*depth),
+                    offset.map(value).unwrap_or(0.0),
+                );
+                nut_pocket(width, deep, angle.map(value), Some(below), slot.map(value))?;
+                if diameter.is_some_and(|hole| hole >= width) {
+                    return Err("the nut pocket must be wider than the hole".to_owned());
+                }
+                if let HoleExtent::Distance { depth } = &self.extent
+                    && below + deep >= value(*depth)
+                {
+                    return Err("the nut pocket must be shallower than the hole".to_owned());
                 }
             }
         }
@@ -1281,7 +1513,7 @@ impl HoleDef {
                 None => DEFAULT_ROOF_SAG,
             }),
         };
-        let Some(up) = away_from_bed(ctx, participants) else {
+        let Some(up) = away_from_bed(ctx, participants, "the holes are round") else {
             return Ok(None);
         };
         let roofs: Vec<Option<[f64; 3]>> = positions
@@ -1305,15 +1537,53 @@ impl HoleDef {
     }
 }
 
+impl HoleDef {
+    /// The bridging of the holes whose recess opens toward the print bed
+    /// (mitcad#1516): those whose axis points straight away from the bed
+    /// (the participants' print bed face, as for print shapes), each bridge
+    /// layer the design's layer height thick. None without bridging, or
+    /// when no hole opens so (an information then) or the bed is not found
+    /// here (a warning).
+    fn bridging<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        participants: &[(BodyUid, K::Shape)],
+        positions: &[Axis],
+    ) -> Result<Option<HoleBridging>, String> {
+        let mode = match self.print_bridging {
+            PrintBridging::None => return Ok(None),
+            PrintBridging::Sacrificial => BridgeMode::Sacrificial,
+            PrintBridging::Stepped => BridgeMode::Stepped,
+        };
+        let layer = ctx.print_layer_height();
+        let Some(up) = away_from_bed(ctx, participants, "the holes are not bridged") else {
+            return Ok(None);
+        };
+        let holes: Vec<bool> = positions
+            .iter()
+            .map(|position| {
+                normalized(position.direction).is_some_and(|along| dot(up, along) > 1.0 - ALONG_BED)
+            })
+            .collect();
+        if !holes.contains(&true) {
+            ctx.inform("no hole's recess opens toward the print bed: nothing is bridged");
+            return Ok(None);
+        }
+        Ok(Some(HoleBridging { mode, layer, holes }))
+    }
+}
+
 /// The direction away from the print bed for a print-shaped hole
 /// (mitcad#1515): against the outward normal of the print bed face of the
 /// first participant that has one, found in its shape before the hole; up
 /// the design's Z when none has one (its −Z is down, as the 3D print export
 /// and Print Analysis take it). None, with a warning, when the bed faces the
-/// participants have are not found here.
+/// participants have are not found here, saying what that means:
+/// `consequence` (print-bridged holes take the same bed, mitcad#1516).
 fn away_from_bed<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     participants: &[(BodyUid, K::Shape)],
+    consequence: &str,
 ) -> Option<[f64; 3]> {
     let mut missing = Vec::new();
     for (body, _) in participants {
@@ -1335,7 +1605,7 @@ fn away_from_bed<K: Kernel>(
         return Some([0.0, 0.0, 1.0]);
     }
     ctx.warn(format!(
-        "the print bed face of {} is not found before the hole: the holes are round",
+        "the print bed face of {} is not found before the hole: {consequence}",
         missing.join(", ")
     ));
     None
@@ -1417,6 +1687,24 @@ impl<K: Kernel> Evaluate<K> for HoleDef {
                 depth: ctx.positive(*depth)?,
                 angle: ctx.positive(*angle)?,
             },
+            HoleKind::NutPocket {
+                across_flats,
+                depth,
+                angle,
+                offset,
+                slot,
+            } => {
+                let mut optional = |id: Option<ParamId>| id.map(|id| ctx.param(id)).transpose();
+                let (angle, offset, slot) =
+                    (optional(*angle)?, optional(*offset)?, optional(*slot)?);
+                nut_pocket(
+                    ctx.param(*across_flats)?,
+                    ctx.param(*depth)?,
+                    angle,
+                    offset,
+                    slot,
+                )?
+            }
         };
         let taper = match self.taper {
             Some(id) => {
@@ -1429,6 +1717,9 @@ impl<K: Kernel> Evaluate<K> for HoleDef {
         // A print shape's roofs over the holes printed lying (mitcad#1515);
         // the hole keeps its diameter.
         let print_shape = self.print_roofs(ctx, &participants, &positions)?;
+        // Bridging of the recesses that open toward the print bed
+        // (mitcad#1516), its layers the design's layer height.
+        let bridging = self.bridging(ctx, &participants, &positions)?;
         // A press fit's section (mitcad#1517), from the nominal diameter.
         let press_fit = match &self.press_fit {
             Some(fit) => {
@@ -1503,6 +1794,7 @@ impl<K: Kernel> Evaluate<K> for HoleDef {
             taper,
             press_fit,
             print_shape,
+            bridging,
         };
         let tool = ctx.kernel.hole_tool(&spec).map_err(|e| e.to_string())?;
         if let (Some(depth), Some(body)) = (sheet_depth, sheet_body)
@@ -1775,6 +2067,105 @@ mod tests {
         assert!(serde_json::from_value::<HoleDef<String>>(wrong).is_err());
         assert!(roof_sag_value(0.0).is_err() && roof_sag_value(f64::NAN).is_err());
         assert_eq!(roof_sag_value(0.4), Ok(0.4));
+    }
+
+    #[test]
+    fn nut_pockets_and_insert_holes_keep_their_values() {
+        // mitcad#1518: a nut pocket writes what it was given, its optional
+        // values left out; an insert hole its size.
+        let pocket = serde_json::json!({
+            "placement": {"type": "sketch_points", "sketch": "F3", "points": ["c5"]},
+            "diameter": "d4",
+            "kind": {"type": "nut_pocket", "across_flats": "d5", "depth": "d6", "slot": "d7"},
+            "extent": {"type": "through_all"}});
+        let def: HoleDef<String> = serde_json::from_value(pocket.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&def).unwrap(), pocket);
+        let mut slots = Vec::new();
+        let mapped = def
+            .map_params::<String, ()>(&mut |slot, p| {
+                slots.push(slot.to_owned());
+                Ok(p.clone())
+            })
+            .unwrap();
+        assert_eq!(mapped.kind, def.kind);
+        for slot in ["kind.across_flats", "kind.depth", "kind.slot"] {
+            assert!(slots.contains(&slot.to_owned()), "{slot}");
+        }
+        let mut wrong = pocket.clone();
+        wrong["kind"]["width"] = serde_json::json!("d8");
+        assert!(serde_json::from_value::<HoleDef<String>>(wrong).is_err());
+
+        let mut insert = pocket;
+        insert["kind"] = serde_json::json!({"type": "simple"});
+        insert["insert"] = serde_json::json!({"size": "M3"});
+        let def: HoleDef<String> = serde_json::from_value(insert.clone()).unwrap();
+        assert_eq!(
+            def.insert,
+            Some(HoleInsert {
+                size: "M3".to_owned()
+            })
+        );
+        insert.as_object_mut().unwrap().remove("kind");
+        assert_eq!(serde_json::to_value(&def).unwrap(), insert);
+
+        // The kernel's pocket from the values, and the values refused.
+        assert_eq!(
+            nut_pocket(5.8, 2.7, None, None, Some(10.0)),
+            Ok(HoleShape::NutPocket {
+                across_flats: 5.8,
+                depth: 2.7,
+                angle: 0.0,
+                offset: 0.0,
+                slot: Some(10.0)
+            })
+        );
+        for (result, expected) in [
+            (nut_pocket(0.0, 2.7, None, None, None), "across the flats"),
+            (nut_pocket(5.8, -1.0, None, None, None), "depth"),
+            (
+                nut_pocket(5.8, 2.7, None, Some(-0.5), None),
+                "must not be negative",
+            ),
+            (nut_pocket(5.8, 2.7, Some(f64::NAN), None, None), "angle"),
+            (nut_pocket(5.8, 2.7, None, None, Some(3.0)), "reach out"),
+        ] {
+            let error = result.unwrap_err();
+            assert!(error.contains(expected), "'{expected}' not in '{error}'");
+        }
+    }
+
+    #[test]
+    fn print_bridging_keeps_its_mode() {
+        // mitcad#1516: none (and a hole saved before) writes nothing; a
+        // sacrificial layer or stepped bridges write their mode.
+        let before = serde_json::json!({
+            "placement": {"type": "sketch_points", "sketch": "F3", "points": ["c5"]},
+            "diameter": "d4", "kind": {"type": "counterbore", "diameter": "d5", "depth": "d6"},
+            "extent": {"type": "through_all"}});
+        let def: HoleDef<String> = serde_json::from_value(before.clone()).unwrap();
+        assert_eq!(def.print_bridging, PrintBridging::None);
+        assert_eq!(serde_json::to_value(&def).unwrap(), before);
+        let mut none = before.clone();
+        none["print_bridging"] = serde_json::json!("none");
+        let def: HoleDef<String> = serde_json::from_value(none).unwrap();
+        assert_eq!(serde_json::to_value(&def).unwrap(), before);
+        for (text, mode) in [
+            ("sacrificial", PrintBridging::Sacrificial),
+            ("stepped", PrintBridging::Stepped),
+        ] {
+            let mut bridged = before.clone();
+            bridged["print_bridging"] = serde_json::json!(text);
+            let def: HoleDef<String> = serde_json::from_value(bridged.clone()).unwrap();
+            assert_eq!(def.print_bridging, mode);
+            assert_eq!(serde_json::to_value(&def).unwrap(), bridged);
+            let mapped = def
+                .map_params::<String, ()>(&mut |_, p| Ok(p.clone()))
+                .unwrap();
+            assert_eq!(mapped.print_bridging, mode);
+        }
+        let mut wrong = before;
+        wrong["print_bridging"] = serde_json::json!("arched");
+        assert!(serde_json::from_value::<HoleDef<String>>(wrong).is_err());
     }
 
     #[test]

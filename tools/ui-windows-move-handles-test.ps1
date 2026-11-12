@@ -2,7 +2,8 @@
 # check-all sources: app/commands/MoveCommands.cpp app/commands/MoveDragMotion.cpp app/commands/CommandSupport.cpp
 # check-all sources: app/framework/ManipulatorOverlay.cpp app/framework/CommandSession.cpp app/framework/Command.hpp
 # check-all sources: app/framework/TestDriver.cpp core/model/src/features/moves.rs tools/cli
-# Move/Copy's Free Move handles (mitcad#1580, mitcad#1581, mitcad#1583) on
+# Move/Copy's Free Move handles (mitcad#1580, mitcad#1581, mitcad#1583,
+# mitcad#1707) on
 # Windows, the shared input script tools/ui-scripts/move-handles.mitcad-ui
 # as tools/ui-move-handles-test.sh runs it on Linux: an edit's rings at the
 # middle of what it moves, where the feature moves it, for a body, a
@@ -10,7 +11,9 @@
 # OK without changes keeps the feature's matrix (the saved design checked
 # with tools/ui-scripts/move-handles-check.json); with X Distance set the
 # Y and Z arrows start at the moved middle, a drag of the Z arrow goes
-# along Z from there; the arrows and rings in the axis colors.
+# along Z from there; the arrows and rings in the axis colors; in the
+# front view the X and Z arrows grabbed over the rings seen edge-on, in
+# HandleActive while hovered and dragged (mitcad#1707).
 param(
   [string]$App,
   [string]$Cli,

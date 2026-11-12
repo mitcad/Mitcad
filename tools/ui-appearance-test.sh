@@ -191,7 +191,7 @@ ui_expect_new "Appearance tool: appearances read again, " "the tool read its app
 ui_expect_new ", new: Blue Chrome" "Blue Chrome is offered"
 ui_focus_main
 ui_step "the picker: Blue Chrome"       ui_picker_choose "Panel Appearance input value" "Appearance picker" "Blue Chrome"
-ui_expect_new "Panel Appearance tile value: Blue Chrome (This Design)" "the picker button shows Blue Chrome"
+ui_expect_new "Panel Appearance tile value: Blue Chrome (This design)" "the picker button shows Blue Chrome"
 ui_mark
 ui_step "OK (Enter)"                    ui_key Return
 ui_expect_new "Appearance $made for 1 body(ies)" "Body1, still picked, gets Blue Chrome"

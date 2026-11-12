@@ -534,8 +534,16 @@ mod ffi {
         fn save_design(self: &Document, path: &str, format: &str) -> Result<String>;
         /// `save_design` as the application's Save does it (mitcad#1088):
         /// the design's statistics stamped (now, the operating system's
-        /// user, this MitCad) when the file changes.
-        fn save_design_stamped(self: &Document, path: &str, format: &str) -> Result<String>;
+        /// user, this MitCad) when the file changes, and with them
+        /// `preview`, a PNG of the 3D view, as the preview the file carries
+        /// for file managers (mitcad#1539); empty: the design keeps the
+        /// one it has.
+        fn save_design_stamped(
+            self: &Document,
+            path: &str,
+            format: &str,
+            preview: &[u8],
+        ) -> Result<String>;
         /// What opening the file changed or could not find (missing B-rep
         /// data, renamed parameters).
         fn load_warnings(self: &Document) -> Vec<String>;
@@ -958,12 +966,21 @@ impl Document {
             .map_err(|e| ApiError(e.to_string()))
     }
 
-    fn save_design_stamped(&self, path: &str, format: &str) -> Result<String, ApiError> {
+    fn save_design_stamped(
+        &self,
+        path: &str,
+        format: &str,
+        preview: &[u8],
+    ) -> Result<String, ApiError> {
+        // A picture that is no preview (empty, no PNG, too large) leaves
+        // the design the one it has: the save itself goes on.
+        let preview = mitcad_model::file::DesignPreview::from_png(preview).ok();
         self.0
-            .save_file_stamped(
+            .save_file_previewed(
                 std::path::Path::new(path),
                 design_format(format)?,
                 &mitcad_model::SaveStamp::now(),
+                preview,
             )
             .map_err(|e| ApiError(e.to_string()))
     }

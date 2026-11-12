@@ -280,6 +280,7 @@ impl DocState {
                 occurrences: &occurrences,
                 uids: &uids,
                 same_document,
+                before: &self.features[..self.marker],
             };
             references.links(&mut def, &f.def, component)?;
             match &mut def {
@@ -751,9 +752,61 @@ struct CopyReferences<'a> {
     occurrences: &'a HashMap<OccurrenceUid, OccurrenceUid>,
     uids: &'a HashMap<FeatureUid, FeatureUid>,
     same_document: bool,
+    /// The destination's features before the one being copied.
+    before: &'a [Arc<FeatureEntry>],
 }
 
 impl CopyReferences<'_> {
+    /// The targets an automatic cut scope copied from another design keeps
+    /// (mitcad#1667): its context, then the other copied components it
+    /// could cut there, by path: those placed once, not linked, made
+    /// before the cut, and not in `excluded` (the scope's excluded
+    /// components, mapped).
+    fn copied_targets(
+        &self,
+        context: &crate::features::extrude_scope::ComponentTarget,
+        excluded: &[crate::features::extrude_scope::ComponentTarget],
+    ) -> Vec<crate::features::extrude_scope::ComponentTarget> {
+        use crate::features::extrude_scope::ComponentTarget;
+        let d = self.destination;
+        let mut copied: BTreeSet<ComponentUid> = self
+            .occurrences
+            .values()
+            .filter_map(|o| d.occurrence(*o).map(|o| o.component))
+            .collect();
+        if let Ok(into) = crate::joints::path_component(d, ComponentUid::ROOT, self.prefix) {
+            copied.insert(into);
+        }
+        let linked = |c: ComponentUid| d.component(c).is_some_and(|c| c.link.is_some());
+        let mut targets: Vec<ComponentTarget> = copied
+            .into_iter()
+            .filter(|c| *c != context.component && !linked(*c))
+            .filter(|c| {
+                d.component(*c)
+                    .and_then(|c| c.created_by)
+                    .is_none_or(|creator| self.before.iter().any(|f| f.uid == creator))
+            })
+            .filter_map(|c| {
+                let mut paths = d.paths_to(c);
+                (paths.len() == 1).then(|| ComponentTarget {
+                    component: c,
+                    occurrence: OccurrencePath(paths.remove(0)),
+                })
+            })
+            .filter(|t| {
+                !excluded.contains(t)
+                    && !t
+                        .occurrence
+                        .0
+                        .iter()
+                        .filter_map(|o| d.occurrence(*o))
+                        .any(|o| linked(o.component))
+            })
+            .collect();
+        targets.sort_by(|a, b| a.occurrence.0.cmp(&b.occurrence.0));
+        std::iter::once(context.clone()).chain(targets).collect()
+    }
+
     fn body(&self, body: BodyUid) -> BodyUid {
         BodyUid::new(
             self.uids
@@ -983,6 +1036,17 @@ impl CopyReferences<'_> {
                         .map(target)
                         .collect::<Result<Vec<_>, _>>()?;
                     scope.targets = match &original.targets {
+                        // An automatic scope found its targets in the
+                        // design it was made in (mitcad#1667): copied from
+                        // another design, it cuts the copied components it
+                        // could find there, by name, and none of this
+                        // design's, which it never saw.
+                        TargetScope::Automatic { .. } if !self.same_document => {
+                            TargetScope::Explicit {
+                                included: self.copied_targets(&scope.context, &targets),
+                                excluded_bodies: bodies,
+                            }
+                        }
                         TargetScope::Automatic { .. } => TargetScope::Automatic {
                             excluded: targets,
                             excluded_bodies: bodies,
@@ -1664,6 +1728,7 @@ mod tests {
             occurrences: &HashMap::new(),
             uids: &HashMap::new(),
             same_document: false,
+            before: &[],
         };
         let (link, internal) = references.link(&OccurrenceLink::default(), copy).unwrap();
         assert!(internal);

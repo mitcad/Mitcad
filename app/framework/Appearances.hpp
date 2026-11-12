@@ -147,7 +147,29 @@ void resolveTextureMaps(AppearanceTexture& texture, const QString& documentFolde
 QJsonArray colorJson(const QColor& color);
 QColor colorOf(const QJsonValue& value);
 
-// The model's physical materials (id, name), steel first as the default.
+// The model's physical materials (id, name), steel first as the default,
+// then the built-in woods and panels (mitcad#1706), their names as the
+// interface language shows them.
 const QVector<QPair<QString, QString>>& physicalMaterials();
+// Whether a built-in material is one of the woods and panels
+// (mitcad#1706), which are not printed.
+bool isBuiltInWood(const QString& id);
+
+// A material's name as the interface shows it (mitcad#1689): the name of
+// one of MitCad's own materials (a built-in one, or one of the base
+// library's) with that id, as the model stores it in English, translated;
+// any other name (one the user gave) as it is. The stored name stays the
+// one commands, files, exports and logs use.
+QString shownMaterialName(const QString& id, const QString& name);
+// The same by the name alone, for an item known to be MitCad's own (the
+// Built-in place of the libraries, or the design's copy of one).
+QString shownOwnMaterialName(const QString& name);
+// A material of the libraries' lists by where it lives (`place`: mitcad,
+// user, project or design; `sourcePlace`: where the design's copy came
+// from): Built-in, or the design's copy of a built-in item, by its name;
+// the design's own by its id and name (a built-in it replaces); a library
+// of the user's or the project's as stored, the names the user gave.
+QString shownLibraryMaterialName(const QString& place, const QString& sourcePlace, const QString& id,
+                                 const QString& name);
 
 } // namespace mitcad

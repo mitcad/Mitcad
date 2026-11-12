@@ -47,7 +47,8 @@ ui_expect_log '^TestDriver: done' \
 if grep -Eq '^TestDriver: FAIL' "$UI_LOG_FILE"; then
   ui_fail 'a step of the script failed'
 fi
-if grep -q 'Recompute failed' "$UI_LOG_FILE"; then
+# Match the application's diagnostic, not a traced expect-never command.
+if grep -q '^Recompute failed:' "$UI_LOG_FILE"; then
   ui_fail 'a recompute failed'
 fi
 if [ "$UI_FAILURES" -gt 0 ]; then

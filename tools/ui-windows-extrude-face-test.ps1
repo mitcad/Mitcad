@@ -76,7 +76,8 @@ Set-Content -Encoding ascii $turnedJson (@'
 [
   {"cmd": "create_component", "name": "Brace", "transform": [[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 30]]},
   {"cmd": "sketch.create"},
-  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 20}
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 20},
+  {"cmd": "activate_component", "component": "Root"}
 ]
 '@)
 $imported = Join-Path $work 'imported.mitcad'

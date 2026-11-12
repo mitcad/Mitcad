@@ -881,6 +881,11 @@ pub(crate) struct Env<'a, S> {
     /// holes read their bodies' print bed faces (mitcad#1515), through
     /// [`EvalContext::print_bed_face`].
     pub body_attributes: &'a BTreeMap<BodyUid, crate::document::BodyAttributes>,
+    /// The layer height the design prints with
+    /// (`DocState::design_layer_height`), None without one: print-bridged
+    /// holes read it (mitcad#1516), through
+    /// [`EvalContext::print_layer_height`].
+    pub layer_height: Option<f64>,
 }
 
 // (References only: an evaluation and its preview's extra see the same,
@@ -1089,6 +1094,19 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             self.reads.push(read);
         }
         face
+    }
+
+    /// The layer height the design prints with, its print process's
+    /// (mitcad#1516), else the 0.2 mm of the standard printer (mitcad#1498
+    /// D5); a read, so that a result that used it is evaluated again when
+    /// it changes (print-bridged holes).
+    pub(crate) fn print_layer_height(&mut self) -> f64 {
+        let height = self.env.layer_height;
+        let read = Read::PrintLayer(height.map(f64::to_bits));
+        if !self.reads.contains(&read) {
+            self.reads.push(read);
+        }
+        height.unwrap_or(crate::print_changes::DEFAULT_LAYER)
     }
 
     /// Information about the feature that needs no action (mitcad#1106).

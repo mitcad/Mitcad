@@ -1,0 +1,10 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"File > Export of a 3MF file with the design's print plates (mitcad#1679): Body1 (30 x 20 x 5 mm at x = -40) on no plate, so on Plate 1, and Body2 (40 x 30 x 10 mm at the origin) on Plate 2, which prints in vase mode."},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[-40,0],"length":30,"width":20,"height":5,"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[0,0],"length":40,"width":30,"height":10,"operation":"new_body"}},
+  {"cmd":"add_print_plate"},
+  {"cmd":"add_print_plate"},
+  {"cmd":"place_on_plate","plate":"Plate 2","items":[{"body":"F2.b0"}]},
+  {"cmd":"edit_print_plate","plate":"Plate 2","values":{"spiral_vase":true}}
+]

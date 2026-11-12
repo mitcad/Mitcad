@@ -16,11 +16,15 @@
 
 namespace mitcad::geometry {
 
-enum class HoleType { Simple, Counterbore, Countersink, Counterdrill };
+// NutPocket (mitcad#1518): a round hole with a hex pocket for a nut.
+enum class HoleType { Simple, Counterbore, Countersink, Counterdrill, NutPocket };
 enum class HoleExtent { Distance, ThroughAll, Target };
 // A press-fit hole's section for printed parts (mitcad#1517): a regular
 // polygon (a hex or square hole) or a round bore with crush ribs.
 enum class PressFit { None, Polygon, CrushRibs };
+// Print bridging of a recess that opens toward the print bed (mitcad#1516):
+// a sacrificial layer over the bore, or two stepped bridge layers.
+enum class Bridging { None, Sacrificial, Stepped };
 
 // Lengths in millimetres, angles in radians (full included angles).
 // Measured along the hole's direction from its start point:
@@ -81,6 +85,35 @@ struct HoleSpec {
   // with a taper or a press fit.
   std::vector<std::optional<gp_Dir>> roofs;
   double roof_sag = 0.0;
+  // A nut pocket (NutPocket, mitcad#1518) about the round hole: a regular
+  // hexagon `pocket_across_flats` wide, `pocket_depth` deep from
+  // `pocket_offset` below the start, turned by `pocket_angle` from where its
+  // first flat's normal lies along the x axis projected onto the start plane
+  // (the y axis for a hole along x), counterclockwise about the hole's
+  // direction. `pocket_slot` runs it out sideways to that distance from the
+  // axis, a quarter turn on from the first flat's normal (along the first
+  // flat), as wide and as deep as the pocket. Not with a taper, a press fit
+  // or a print shape.
+  double pocket_across_flats = 0.0;
+  double pocket_depth = 0.0;
+  double pocket_angle = 0.0;
+  double pocket_offset = 0.0;
+  std::optional<double> pocket_slot;
+  // Print bridging (mitcad#1516) of a counterbore, or of a nut pocket at the
+  // start without a slot, that opens toward the print bed: per position
+  // (none, or one per position) whether its recess is bridged. The layers
+  // lie above the recess's floor, `bridge_layer` thick each. Sacrificial:
+  // one layer closes the bore over the floor, a membrane drilled out after
+  // printing. Stepped: the first layer leaves open only a strip as wide as
+  // the hole across the recess, along the direction the press fit's angle
+  // is measured from (turned by `pocket_angle` for a nut pocket), so that
+  // bridges span the recess on both sides of it; the second leaves open
+  // only the square of the hole's diameter on the strip, bridged across
+  // it; the round hole goes on above. Not with a taper, a press fit or a
+  // print shape.
+  Bridging bridging = Bridging::None;
+  double bridge_layer = 0.0;
+  std::vector<bool> bridged;
 };
 
 // One solid per position, faces named <feature>:hole<i>.<part>, i the
@@ -97,7 +130,19 @@ struct HoleSpec {
 // hole's direction after the wall), `roof` (the flat roof) and `roof_end`
 // (the roof's end where the cylindrical part ends; on a flat bottom the
 // bottom, which is `tip` too), and a counterbore's or counterdrill's
-// `cbore_roof0`, `cbore_roof1`, `cbore_roof` and `cbore_roof_end`.
+// `cbore_roof0`, `cbore_roof1`, `cbore_roof` and `cbore_roof_end`. A nut
+// pocket's solid has the round hole's faces and `pocket<k>` (the hexagon's
+// flats, counterclockwise about the hole's direction from the first; a slot
+// takes the second and the third away and carries the first and the fourth
+// on as its sides), `pocket_floor`, `pocket_roof` (an offset pocket's top and
+// its slot's) and `slot_end`. A bridged recess's (mitcad#1516): `bridge0`
+// (the first layer's top: a sacrificial membrane's, where the bore starts
+// again; the stepped bridges' tops, two pieces beside the square, `#0` and
+// `#1`), `bridge0.side0` and `bridge0.side1` (the strip's sides),
+// `bridge0.end` (where the strip ends against the recess's wall), `bridge1`
+// (the square's top: four corners round the bore, `#0` to `#3`) and
+// `bridge1.side0` to `bridge1.side3` (the square's sides, counterclockwise
+// about the hole's direction from the strip's first side).
 ShapePtr hole_tool(const HoleSpec& spec);
 
 } // namespace mitcad::geometry

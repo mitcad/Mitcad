@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: MIT
+# The Sketch Palette's Show points (mitcad#1705, GitHub mitcad/Mitcad#262,
+# settings sketch/showPoints, on by default), on sketch-show-points.json
+# (Sketch1: two lines, a lone point at (-10, 5) and two free points that
+# frame the view's fit):
+#   1. On (the default): Edit Sketch1 opens with Show points checked and
+#      every point's marker drawn.
+#   2. Unchecked: logged and saved; the view draws no point marker.
+#   3. Hidden points still work: the pointer over the first line's end
+#      point (20, -15) shows it as the hover (its ball, painted by the
+#      overlay); a drag moves it, and the points drawn again after the drag
+#      are still without markers; a click on the lone point selects it and
+#      its ball is drawn.
+#   4. Remembered: Finish and Edit Sketch1 again opens with Show points off.
+#   5. Checked again: every marker drawn.
+# The pointer stays within x -30..30 mm, y -25..25 mm: the free part of the
+# view after the fit also in session 0's 1024x768 window on Windows.
+# Run by tools/ui-sketch-show-points-test.sh (Linux) and
+# tools/ui-windows-sketch-show-points-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+
+# 1. On (the default): every point drawn.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+expect-log '^Sketch Sketch1 opens with Show points on$'
+key F6
+wait-idle
+expect-widget-property palettePoints checked true
+expect-ever '^Sketch point markers: [1-9][0-9]* drawn, 0 hidden$'
+expect-no-log '^Sketch point markers: [0-9]+ drawn, [1-9][0-9]* hidden$'
+
+# 2. Unchecked: no point marker drawn.
+mark
+button '^Show points$' palettePoints
+wait-log '^Show points off$'
+wait-log '^Sketch point markers: 0 drawn, [1-9][0-9]* hidden$'
+wait-idle
+expect-widget-property palettePoints checked false
+expect-setting sketch/showPoints false
+
+# 3. The hover, a drag and a selection of hidden points.
+mark
+sketch-move 20 -15
+wait-log '^Sketch overlay: point markers over highlights; 0 curves, 1 point highlighted, 0 markers over them$' 10
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/sketch-show-points-hover.png'
+mark
+sketch-pointer press 20 -15
+sketch-pointer move 19 -12
+sketch-pointer move 17 -8
+sketch-pointer move 15 -5
+sketch-pointer release 15 -5
+wait-log '^Dragged p[0-9]+ to \(1[456]\.[0-9]{3}, -?[0-9]+\.[0-9]{3}\)$'
+wait-idle
+expect-no-log '^Sketch point markers: [1-9]'
+mark
+sketch-click -10 5
+wait-log '^Selected: 1 sketch point'
+wait-log '^Sketch highlights: 0 curves, 1 point'
+wait-idle
+expect-no-log '^Sketch point markers: [1-9]'
+screenshot '${MITCAD_TEST_WORK}/sketch-show-points-selected.png'
+mark
+# Off the axes, which a click selects (mitcad#899).
+sketch-click 25 5
+wait-log '^Selected: nothing'
+wait-idle
+
+# 4. Remembered: the sketch opens with Show points off again.
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+expect-log '^Sketch Sketch1 opens with Show points off$'
+wait-log '^Sketch point markers: 0 drawn, [1-9][0-9]* hidden$'
+wait-idle
+expect-widget-property palettePoints checked false
+
+# 5. Checked again: every point drawn.
+mark
+button '^Show points$' palettePoints
+wait-log '^Show points on$'
+wait-log '^Sketch point markers: [1-9][0-9]* drawn, 0 hidden$'
+wait-idle
+expect-widget-property palettePoints checked true
+expect-setting sketch/showPoints true
+screenshot '${MITCAD_TEST_WORK}/sketch-show-points-on.png'
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-idle
+expect-never 'Recompute failed|TestDriver: FAIL'

@@ -92,6 +92,30 @@ fn path_uids(path: &str) -> Result<Vec<OccurrenceUid>, String> {
         .collect()
 }
 
+/// Whether an isolation ([`Document::isolation`]) shows a body placed at
+/// an occurrence path (empty for the root's), as the view decides it
+/// (mitcad#1702): the body isolated at that path, or the path in an
+/// isolated occurrence. Everything while nothing is isolated.
+pub(crate) fn isolation_shows(
+    isolation: &[Isolated],
+    body: BodyUid,
+    path: &[OccurrenceUid],
+) -> bool {
+    isolation.is_empty()
+        || isolation.iter().any(|item| match item.body {
+            Some(isolated) => {
+                isolated == body
+                    && if item.occurrence.is_empty() {
+                        path.is_empty()
+                    } else {
+                        path_uids(&item.occurrence).is_ok_and(|uids| uids == path)
+                    }
+            }
+            None => path_uids(&item.occurrence)
+                .is_ok_and(|uids| !uids.is_empty() && path.starts_with(&uids)),
+        })
+}
+
 impl<K: Kernel> Document<K> {
     pub fn display(&self) -> &DisplayState {
         &self.state.display
@@ -137,6 +161,14 @@ impl<K: Kernel> Document<K> {
             state.display.origin = visible;
             Ok((label.to_owned(), (), false))
         })
+    }
+
+    /// Shows or hides the root's Origin folder as the design opens
+    /// (mitcad#1683: the application shows a new design's origin): no undo
+    /// step and no new revision, so the document stays as modified as it
+    /// was, as [`Document::activate_component_on_open`] activates.
+    pub fn set_origin_visible_on_open(&mut self, visible: bool) {
+        self.state.display.origin = visible;
     }
 
     /// Isolates the view to bodies and occurrences (none: Unisolate): an

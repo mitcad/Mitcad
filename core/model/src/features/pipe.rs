@@ -14,7 +14,7 @@ use super::{CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, Ref
 use crate::ids::BodyUid;
 use crate::kernel::{Curve3, Kernel};
 use crate::parameters::ParamId;
-use crate::sweeps::{PathCurve, PipeCorners, PipeSection, PipeSpec};
+use crate::sweeps::{FOLDS_RESOLVED, PathCurve, PipeCorners, PipeSection, PipeSpec};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -437,10 +437,85 @@ fn mm(value: f64) -> String {
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
+/// A place where the pipe folds through itself (mitcad#1497): a curve of
+/// the path that bends tighter than the section reaches from it, or a
+/// straight piece too short for the miters at its ends; the curve named
+/// (`place`) with the numbers.
+#[derive(Debug, Clone, PartialEq)]
+enum Fold {
+    Bend {
+        radius: f64,
+        place: String,
+        reach: f64,
+    },
+    Short {
+        place: String,
+        length: f64,
+        need: f64,
+    },
+}
+
+impl Fold {
+    /// The warning where the pipe was built folded or not at all.
+    fn warning(&self) -> String {
+        match self {
+            Fold::Bend {
+                radius,
+                place,
+                reach,
+            } => format!(
+                "the path bends with radius {} mm at {}; the pipe needs at least {} mm",
+                mm(*radius),
+                place,
+                mm(*reach)
+            ),
+            Fold::Short {
+                place,
+                length,
+                need,
+            } => format!(
+                "{} is {} mm long; the pipe's mitered corners need at least {} mm there",
+                place,
+                mm(*length),
+                mm(*need)
+            ),
+        }
+    }
+
+    /// The note where the geometry built the pipe in pieces there, fused
+    /// into one solid (mitcad#1697).
+    fn note(&self) -> String {
+        match self {
+            Fold::Bend {
+                radius,
+                place,
+                reach,
+            } => format!(
+                "the path bends with radius {} mm at {}, tighter than the {} mm the pipe reaches; \
+                 the pipe was built in pieces there, joined into one solid",
+                mm(*radius),
+                place,
+                mm(*reach)
+            ),
+            Fold::Short {
+                place,
+                length,
+                need,
+            } => format!(
+                "{} is {} mm long, shorter than the {} mm the pipe's mitered corners need; \
+                 the pipe was built in pieces there, joined into one solid",
+                place,
+                mm(*length),
+                mm(*need)
+            ),
+        }
+    }
+}
+
 /// Where the path bends tighter than the section reaches from it, or a
 /// straight piece is too short for the miters at its ends (mitcad#1497):
-/// the pipe there folds through itself. One message for each such curve of
-/// the path, naming it (`place`) and the numbers.
+/// the pipe there folds through itself. One fold for each such curve of
+/// the path, naming it (`place`) with the numbers.
 fn tight_bends(
     path: &[PathCurve],
     closed: bool,
@@ -448,7 +523,7 @@ fn tight_bends(
     size: f64,
     corners: PipeCorners,
     place: &dyn Fn(&PathCurve) -> String,
-) -> Vec<String> {
+) -> Vec<Fold> {
     let reach = section_reach(section, size, is_planar(path));
     // Rounding errors of a bend or a piece drawn to the limit.
     let slack = 1.0e-9 * reach.max(1.0);
@@ -457,24 +532,22 @@ fn tight_bends(
         if let Some(radius) = smallest_bend(&piece.curve)
             && radius < reach - slack
         {
-            problems.push(format!(
-                "the path bends with radius {} mm at {}; the pipe needs at least {} mm",
-                mm(radius),
-                place(piece),
-                mm(reach)
-            ));
+            problems.push(Fold::Bend {
+                radius,
+                place: place(piece),
+                reach,
+            });
         }
         // Rounded corners end the legs square at the corner: no miters.
         if corners == PipeCorners::Mitered
             && let Some((length, need)) = miter_need(path, i, closed, reach)
             && length < need - slack
         {
-            problems.push(format!(
-                "{} is {} mm long; the pipe's mitered corners need at least {} mm there",
-                place(piece),
-                mm(length),
-                mm(need)
-            ));
+            problems.push(Fold::Short {
+                place: place(piece),
+                length,
+                need,
+            });
         }
     }
     problems
@@ -569,10 +642,28 @@ impl<K: Kernel> Evaluate<K> for PipeDef {
             Ok(tool) => tool,
             Err(e) if bends.is_empty() => return Err(e.to_string()),
             // The likely cause with the failure.
-            Err(e) => return Err(format!("{e}: {}", bends.join("; "))),
+            Err(e) => {
+                let said: Vec<String> = bends.iter().map(Fold::warning).collect();
+                return Err(format!("{e}: {}", said.join("; ")));
+            }
         };
+        // (mitcad#1697) Where the pipe passes through itself, the geometry
+        // builds it in pieces fused into one solid and says so: the folds
+        // are notes then. Where it could not, they stay warnings.
+        let resolved = ctx
+            .kernel
+            .infos(&tool)
+            .iter()
+            .any(|info| info == FOLDS_RESOLVED);
+        if resolved && bends.is_empty() {
+            ctx.inform(FOLDS_RESOLVED);
+        }
         for bend in bends {
-            ctx.warn(bend);
+            if resolved {
+                ctx.inform(bend.note());
+            } else {
+                ctx.warn(bend.warning());
+            }
         }
         apply_operation(ctx, self.operation, participants, tool, "pipe")
     }
@@ -690,14 +781,17 @@ mod tests {
         let (_, need) = miter_need(&path, 0, false, 5.0).unwrap();
         assert!(close(need, 5.0 * tan, 1e-12), "{need}");
         let place = |piece: &PathCurve| piece.name.clone();
-        let said = tight_bends(
+        let said: Vec<String> = tight_bends(
             &path,
             false,
             PipeSection::Circular,
             10.0,
             PipeCorners::Mitered,
             &place,
-        );
+        )
+        .iter()
+        .map(Fold::warning)
+        .collect();
         assert_eq!(
             said,
             ["c3 is 2.828 mm long; the pipe's mitered corners need at least 4.142 mm there"]
@@ -729,7 +823,23 @@ mod tests {
             curve: conic(3.0, 3.0, 0.0, std::f64::consts::TAU, true),
         }];
         let place = |piece: &PathCurve| format!("Sketch1's {}", piece.name);
-        let said = tight_bends(
+        let said: Vec<String> = tight_bends(
+            &path,
+            true,
+            PipeSection::Circular,
+            10.0,
+            PipeCorners::Mitered,
+            &place,
+        )
+        .iter()
+        .map(Fold::warning)
+        .collect();
+        assert_eq!(
+            said,
+            ["the path bends with radius 3 mm at Sketch1's c1; the pipe needs at least 5 mm"]
+        );
+        // Built in pieces by the geometry (mitcad#1697): a note.
+        let fold = tight_bends(
             &path,
             true,
             PipeSection::Circular,
@@ -738,8 +848,9 @@ mod tests {
             &place,
         );
         assert_eq!(
-            said,
-            ["the path bends with radius 3 mm at Sketch1's c1; the pipe needs at least 5 mm"]
+            fold[0].note(),
+            "the path bends with radius 3 mm at Sketch1's c1, tighter than the 5 mm the pipe \
+             reaches; the pipe was built in pieces there, joined into one solid"
         );
         // A square of side 5 reaches 2.5 mm from a path in its plane.
         let said = tight_bends(

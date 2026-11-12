@@ -37,6 +37,9 @@ struct CellState {
   bool noted = false;
   bool selected = false;
   bool found = false;      // a match of the search (mitcad#179)
+  // The feature that made something selected in the view (mitcad#1704):
+  // the owner's mark, a dashed ring of the selection's colour.
+  bool marked = false;
   bool hovered = false;
   bool rolledBack = false; // after the marker or suppressed: the icon dimmed, the badge not
 };
@@ -58,6 +61,9 @@ struct CellLook {
   QColor fill;
   QColor statusRing;
   QColor outerRing;
+  // The outer ring dashed: the owner's mark (mitcad#1704), not the
+  // selection's ring.
+  bool outerDashed = false;
   bool badge = false;
   // The badge's level: error, warning or information (mitcad#1040).
   NoticeLevel badgeLevel = NoticeLevel::Hint;
@@ -109,5 +115,13 @@ QIcon featureStateIcon(FeatureState state);
 // mitcad#1040); empty for any other.
 QString featureStatusLine(const QString& status, const QString& message, const QColor& errorColor,
                           const QColor& warningColor);
+
+// Where Auto Fix is (mitcad#1677): the line a warned feature's tooltip (its
+// timeline cell, its Browser row) ends with when Auto Fix can fix `fixable`
+// of its warnings (the timeline's `auto_fix`), and the line the warnings
+// badge's tooltip ends with when it can fix `fixable` of the badge's
+// warnings. Plain text; empty when `fixable` is 0.
+QString autoFixHint(int fixable);
+QString autoFixBadgeHint(int fixable);
 
 } // namespace mitcad

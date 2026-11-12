@@ -887,6 +887,16 @@ a dialog, the arrow keys do what they always do there. To use other keys,
 change **Turn View Left**, **Turn View Right**, **Turn View Up** and
 **Turn View Down** in Tools › Keyboard Shortcuts.
 
+The **Home** key shows the home view and the keys **1** to **7** the
+standard views of View › Standard Views, while the view has the keyboard:
+1 Front, 2 Back, 3 Left, 4 Right, 5 Top, 6 Bottom and 7 Isometric. They
+work in a sketch and while a command's panel is open too. While the
+keyboard is in a value field, a digit is typed into the field and Home
+moves its text cursor; a number typed over the view while a value box
+shows at the cursor goes into that box. To use other keys, change
+**Home** and **Front View** to **Isometric View** in Tools › Keyboard
+Shortcuts.
+
 **Preferences › Display › Orientation cube** sets how the cube is drawn:
 
 - **Follow the View** (the default): as the camera draws the design. With
@@ -1094,6 +1104,16 @@ shading still shows. In a command, the highlight has the color of the
 command's input. An edge or a vertex shows in the same color. Geometry
 in front of it hides the highlight.
 
+To select something that lies behind other geometry, press the left
+mouse button over it and hold it still for about half a second. A list
+opens beside the pointer with everything under it that the filters let
+you select, nearest first, for example `Sketch1: Profile` and
+`Body1: Face`. Release the button, then point at a row to highlight its
+item in the view, and click the row to select it as a click on it would:
+Ctrl or Shift adds it, and in a command it goes into the command's
+input. Esc or a click outside the list closes it. If the pointer moves
+while you hold the button, the drag works as before.
+
 The right mouse button opens the commands that fit the selection.
 Refer to [The context menu](#the-context-menu).
 
@@ -1247,6 +1267,20 @@ Help › Keyboard and Mouse Overview lists all
 shortcuts. Commands without a shortcut are in command search (S) and in
 the menus of the groups.
 
+**Command search.** Type a few letters of a command's name, of its English
+name in another language, or of a keyword; Enter runs the selected command.
+The better matches come first, and among equally good ones the commands
+that can run now, then the commands you ran last (from a key, the toolbar,
+a menu or the search; MitCad remembers the last ten), then by name: after
+you have used Center Rectangle, "center" in a sketch selects it. Words separated by spaces are also matched one by one,
+in any order, after the matches of the whole text: "rectangle center"
+finds Center Rectangle, and in a language that writes the name as one
+word, its parts typed apart find it too. When the best matches are sketch tools and no sketch is
+open, a row above them says how to open one ("Open a sketch first: Create
+Sketch (Alt+S)") and nothing is selected, so Enter does not start a weaker
+match; in a sketch, the commands that need the sketch finished say so the
+same way.
+
 **Pinned commands.** A command you use often can be pinned to the
 toolbar, so that you need not look for it in a group's menu. In a group's
 menu (Create, Modify, …, also in their submenus) each command's row shows
@@ -1288,7 +1322,7 @@ still in the group's menu.
 | Undo, Redo | Ctrl+Z, Ctrl+Y | Undo or redo. This includes a dimension change and a drag of the timeline marker |
 | Fit | F6 | Fit the design to the view. If something is selected, Fit shows the selection. If some bodies are isolated, Fit shows only the isolated bodies |
 | OK, Cancel | Enter, Esc | Accept or cancel a command. Esc also clears the selection |
-| Repeat | Enter | With no command running and outside sketches, start the last command again, as Repeat in the context menu does. Not while you type in a field, rename a row or work in a list: there Enter keeps its own meaning |
+| Repeat | Enter | With no command running and outside sketches, start the last command again, as Repeat in the context menu does. Its panel starts with the settings of that command's last OK (the appearance, operation, distance and so on); only the selections are empty. Not while you type in a field, rename a row or work in a list: there Enter keeps its own meaning |
 | Hide the preview | Hold Ctrl (Cmd) | While a feature command's panel is open: hide its preview while you pick its inputs, and show it again on release ([Command panels](#command-panels)) |
 | Create Sketch | Alt+S (Option+S) | Select a plane or a planar face, or select it before the command. Available outside a sketch |
 | Finish Sketch | Ctrl+Enter | Go back to the 3D view. Esc never leaves a sketch unless you turn on Esc leaves an unchanged sketch in Preferences › Sketch: then Esc does the same as Finish Sketch when it has nothing else to cancel and you changed nothing in the sketch, and a new sketch that is still empty is removed |
@@ -1467,7 +1501,8 @@ Export Flat Pattern moved there.
 
 The right mouse button opens the context menu. The menu holds the
 commands that fit the selection, Edit (of a feature) and Repeat (the
-last command). The commands are in submenus by kind: **Solid**, **Build**
+last command, its panel with the settings of its last OK; the selections
+are what you selected before, or empty). The commands are in submenus by kind: **Solid**, **Build**
 (on Build components) and **Construct**.
 
 In a submenu, the first commands are the ones that the selection alone
@@ -1850,11 +1885,24 @@ A pipe folds through itself where its path bends more tightly than its
 section reaches from the path: a fillet in the sketch whose radius is
 less than half the pipe's size, for example. A short straight piece
 between two mitered corners, such as a small chamfer, folds the same way
-when the two miters overlap. **Pipe** then warns, naming the curve of the
-path and the numbers: the radius it bends with and the smallest that
-works, or the piece's length and the length its miters need. Make the
-fillet larger or the pipe smaller, lengthen the chamfer, or choose
-*Rounded* corners. Only a pipe along its whole path is checked.
+when the two miters overlap, and so does a short arc between two
+mitered corners. MitCad builds such a pipe in pieces, cut where it
+folds, and joins them into one solid, so that the material the pieces
+share counts once, as in a tube bent that tightly; a path that crosses
+itself or comes back close to itself is joined the same way. This works
+along a path in one plane, along a path of lines and arcs in no plane,
+and for a round pipe along any path; a round pipe along a tight bend of
+an ellipse or a spline in one plane, or of a helix between straight
+legs, is built from the tube its rim sweeps, up to where that tube meets
+itself. The pipe's details then note the curve and the numbers. Where it
+cannot do that (for example a tight bend of a curve that bends tightest
+at more than one point), **Pipe** warns instead,
+naming the curve of the path and the numbers: the radius it bends with
+and the smallest that works, or the piece's length and the length its
+miters need. Make the fillet larger or the pipe smaller, lengthen the
+chamfer, or choose *Rounded* corners. Only a pipe along its whole path
+is checked. **Sweep** builds a profile that passes through itself in
+pieces the same way.
 
 **Sweep** can obey a *Guide Rail* as well as the path. *Rail Point* says
 where the rail meets the profile. This is on the plane square to the
@@ -2917,6 +2965,16 @@ distance or turn on Flip to go towards the back. A sketch that you edit
 again keeps the orientation it was made with, also a sketch on XZ made
 in an earlier version, which opens from the back.
 
+While you edit a sketch, the timeline at the bottom shows the sketch's
+own items instead: its points, curves, constraints and dimensions in the
+order you made them, each with its icon. A curve says its kind and
+whether it is construction; a dimension shows its value. Click an item to
+select it in the view, press Delete to delete it, and double-click a
+dimension to change its value. An item in conflict, or one that the
+others already imply, has the same mark as in the Sketch Palette. The
+list has no marker: a sketch is solved as a whole, so you cannot roll
+it back. When you finish the sketch, the timeline comes back.
+
 On a planar face, the face's edges also bound the sketch's profiles.
 For example, draw an octagon inside a circular face: the area between
 the circle and the octagon is a profile that you can pick in Extrude or
@@ -2955,8 +3013,20 @@ The Sketch tab has three groups:
 The sketch palette is on the right of the view. It shows the degrees of
 freedom, the options, your most used sketch tools and the constraint
 buttons. The options are construction, signed distances, snap to grid,
-options to show dimensions, constraints and profiles, Hide Above Sketch
-and Look At.
+options to show dimensions, constraints, points and profiles, Hide
+Above Sketch and Look At.
+
+*Show points* draws the end points, center points and sketch points.
+Turn it off to read a dense sketch more easily: the points are then not
+drawn, but the point under the pointer still shows, the tools still snap
+to points, you can still drag and select them, and selected points are
+drawn. The setting is kept for the next sketches.
+
+*Show profiles* shades the closed regions of the sketch, which Extrude
+and Revolve take. Each sketch opens with it on. To have sketches open
+with it off, turn off **Show profiles when a sketch opens** in
+Preferences › Sketch. *Show profiles* in the palette still turns the
+shading on or off, for the sketch that is open only.
 
 The *Create* section of the palette, above *Constraints*, has two rows
 of buttons for the sketch tools that you use most, for drawing and for
@@ -2986,8 +3056,8 @@ sketch Fillet and others). The option stays on for the next sketch.
 
 The sketch's X and Y axes run across the view through the sketch's
 origin. The origin has a ring. The sketch always shows its origin and
-axes, also when the eye of the Origin folder is off, as it is in a new
-design. The sketch does not change the eye, so the Origin folder is as
+axes, also when the eye of the Origin folder is off. The sketch does not
+change the eye, so the Origin folder is as
 before when you finish the sketch. The same holds when you edit a sketch
 again. The tools snap to the sketch's origin and onto its axes, and
 Sketch Dimension and the constraints can use its origin and axes (refer to
@@ -3652,7 +3722,10 @@ same undo step. Afterwards MitCad uses it again. It never bounds a profile. It i
 drawn apart from the axes themselves.
 
 A double-click on a dimension edits its value. You can drag a
-dimension's text. If a dimension would over-constrain the sketch,
+dimension's text. Until you do, a circle's diameter or radius shows its
+value outside the circle at the upper right, or on another side when
+another value is already there, such as a concentric circle's
+diameter. If a dimension would over-constrain the sketch,
 MitCad adds it as driven, in parentheses. If a constraint would
 over-constrain the sketch, MitCad refuses it with a message.
 
@@ -4597,6 +4670,15 @@ it. The eye has priority over this automatic behavior. A 3D sketch
 stays shown when a Pipe or a Sweep uses it, so that you can see and edit
 the route.
 
+While **Isolate** is on, the eyes of bodies and components show what
+the view shows. A row that only Isolate hides has a dimmed, closed eye.
+Click it to show that body or component as well: it joins the isolated
+items. Click the eye of an item that you added this way to hide it
+again. Neither click changes the item's own visibility, and each is one
+undo step. Click the closed eye of an item that you hid yourself to
+show it and add it to the isolated items in one step. **Unisolate**
+shows every item again as its own visibility says.
+
 The eyes also work while a command's panel or a sketch is open: the eyes
 of bodies, components, sketches, construction geometry, a section
 analysis in the Analysis folder and an image reference. The command does
@@ -4614,9 +4696,24 @@ Interference is open still wait until the command ends.
 
 The eye of the Origin folder shows the design's origin in the view: its
 point, its X, Y and Z axes and the XY, XZ and YZ planes. The design
-saves the eye. A new design starts with it off. You do not need the
-origin to start a sketch: Create Sketch always shows the origin planes
-for the pick (refer to [Sketch mode](#sketch-mode)), and every sketch
+saves the eye. A new design starts with it on, and looks at the design
+from the top with the origin in the middle of the view, so you can find
+the origin for your first sketch. When Create Sketch then asks for a
+plane, the view first turns to the default view from the front, the
+right and above, so that you can click any of the XY, XZ and YZ planes.
+After the sketch you see what you make next from that side too. If you
+turned the view yourself before Create Sketch, it stays as you chose.
+Turn the view with the orientation cube when you want to see the design
+from another side. A design that you open keeps the eye as it was saved,
+and opens in the default view.
+
+The default view is also the home view of a design that has none of its
+own (Home). It is a few degrees off the exact isometric view, so that
+the edges of the origin planes do not lie on top of each other and the
+three planes are easy to tell apart. View › Standard Views › Isometric
+View (key 7) and the front right top corner of the orientation cube
+still give the exact isometric view. You do not need the origin to start a sketch: Create
+Sketch always shows the origin planes for the pick (refer to [Sketch mode](#sketch-mode)), and every sketch
 shows its own origin and axes, whatever the eye of the Origin folder
 says.
 
@@ -4668,6 +4765,28 @@ with.
 
 The radio button after the name of a component activates that
 component. Press F2 to rename a row.
+
+**Sketches under their features.** A sketch has a row in the Sketches
+folder, and the features that use it are rows under it. You can also see
+it the other way round: turn on **Show used sketches under their
+features** in Preferences › General. The Browser changes at once, in
+every window:
+
+- Each component has a **Features** folder after Bodies. It lists the
+  features of the component in the order of the timeline.
+- Under each feature are the sketches that it uses. Open the row of the
+  feature to see them.
+- A sketch that several features use is under each of these features.
+  Its icon then has a small mark with two rings, and its tooltip tells how
+  many features use it ("Used by 2 features").
+- The Sketches folder keeps only the sketches that no feature uses.
+
+The rows under the features are the sketches themselves. Their eye,
+selection, rename and context menu (Edit Sketch) are those of the sketch,
+so they work the same from each row. When you select one row of a
+sketch, all its rows are selected. The context menu of a feature row is
+the menu of the feature in the timeline. Turn the setting off to get the
+Browser as before. The timeline does not change.
 
 **Find a part from its row.** Move the pointer over the row of a body
 and the view highlights that body. Over the row of a component (below
@@ -4770,10 +4889,12 @@ setting in Preferences › Display selects between the Browser's card
 and **Rows**. Refer to [Layouts](#layouts).
 
 **When a design opens.** A design that opens from a file opens with
-its root active. The component that was active when the design was
-saved makes no difference. This also applies to a version, a copy, a recovered
-design and an import. This is not an Undo step, and it does not mark
-the design as modified. A new design starts with its Component1
+the component that was active when the design was saved. Thus, if you
+worked in a component and saved, that component is active again when
+you open the design, and a sketch on one of its faces does not ask you
+to activate it again. This also applies to a version, a copy and a
+recovered design. An import opens with its root active. This is not an
+Undo step, and it does not mark the design as modified. A new design starts with its Component1
 active, so its first sketch and feature go into Component1. This
 applies to the untitled design at the start, to New, to the empty
 design after Close, and to New Design in a project.
@@ -4922,7 +5043,9 @@ these entries:
   bodies stay the same. Select several features, or open the menu of a
   timeline group, to fix them all. One Undo takes it back. A reference
   that is gone or that matches several faces is not fixed: the status bar
-  tells you to pick it again.
+  tells you to pick it again. The tooltip of such a feature in the
+  timeline and in the Browser says that Auto Fix can fix its warning, and
+  a click on the warnings badge offers Auto Fix for all of them.
 - Rename
 - Suppress
 - Delete. MitCad asks you about the dependent features.
@@ -5336,7 +5459,7 @@ a parameter.
 **Name a value or make a parameter.** Type `name = value` to give the
 field's own parameter a name, for example `width = 30 mm`. When you type
 a name that no parameter has, the list offers this form. The list also
-offers **Create User Parameter**. It makes a new user parameter that is
+offers **Add User Parameter**. It makes a new user parameter that is
 independent of the field's own parameter. Give its value or expression
 and its unit. MitCad refuses a name that exists already, an invalid
 name, a wrong unit or an expression that the design refuses. The editor
@@ -6116,10 +6239,12 @@ nothing.
 face) opens a panel: click the picker button, whose swatch and name show
 the appearance chosen, and choose in the picker that opens: type part of
 a name in its search, then click an appearance or press Enter. It lists
-**Default** (no appearance of its own: its material's), then the
+**Default** (no appearance of its own: its material's), then under
+*Recent* the last five appearances you gave with the tool, the latest
+first (MitCad remembers them for you, also after a restart), then the
 appearances of the class of the body's material (for a PLA, the FDM
 Plastic ones, then the General Plastic ones), then the rest of the
-design's own appearances under *This Design*, then the rest of the
+design's own appearances under *This design*, then the rest of the
 library under the headings of their classes, in the order *Metal*,
 *General Plastic*, *FDM Plastic*, *Resin*, *Wood*, *Other*. Pick the **Bodies** and the **Faces** in
 the view or the Browser; what you selected before goes into them. **OK**
@@ -6138,7 +6263,7 @@ picked still picked. Reach it with the mouse, or with the keyboard as the
 other entries (Down, or type *Edit*, then Enter).
 
 The Appearances window lists the design's own appearances first, under
-*This Design*, then the library grouped by class under the headings
+*This design*, then the library grouped by class under the headings
 *Metal*, *General Plastic*, *FDM Plastic*, *Resin*, *Wood* and *Other*,
 each with the number of its appearances. Click a heading (or press Space on
 it) to collapse or expand its group; MitCad remembers which groups you
@@ -6218,8 +6343,10 @@ A material tells what a body is made of: its density, which gives the
 mass, its appearance, and its print settings for 3D printing (the
 filament type, the temperatures, the cooling, and so on). MitCad has
 built-in materials: Steel, Stainless Steel, Cast Iron, Aluminum, Copper,
-Brass, Titanium, ABS Plastic, PLA Plastic, Nylon, Polycarbonate, Glass
-and Water.
+Brass, Titanium, ABS Plastic, PLA Plastic, Nylon, Polycarbonate, Glass,
+Water and Resin - Standard, and in the class *Wood* common woods and
+panels: Wood - Pine, Wood - Oak, Wood - Birch, Plywood - birch and MDF -
+raw, with the values and looks of the bundled material dataset (below).
 
 A material is either built-in or your own. The materials that the
 design's bodies use are in bold, with a dot, and the editor says "Used
@@ -6405,11 +6532,17 @@ alloys, titanium and printing materials (PLA, ABS, PETG, ASA, nylon,
 polycarbonate, HIPS), and in the class *Wood* ten solid woods (birch,
 cedar, cherry, Douglas fir, eucalyptus, maple, oak, pine, teak, walnut)
 and seven panels (chipboard, MDF, OSB/3, birch, eucalyptus, pine and
-spruce plywood), each with a look of its own. It works offline. Type in its search to find a
-material and grade, for example *6061 T6*, select it to see its values
-in the design's units, and click **Create**; then choose where to make
-it. The new material is your own: its values are filled in and you can
-change them. It remembers the dataset's material and grade as its
+spruce plywood), each with a look of its own. It works offline. Type in
+its search to find a material and grade, for example *6061 T6*, select
+it to see its values in the design's units, and click **Create**; then
+choose where to make it. To make several at once, pick them with Ctrl
+and Shift, or click **Select All** to pick every material the search
+shows (for example all the plywoods after typing *plywood*): Create
+makes one material of each, as one Undo step. A material whose name is
+there already (a built-in wood, or one you made before) is skipped, and
+the line under the list says how many were made and how many were
+skipped. The new material is your own: its values are filled in and you
+can change them. It remembers the dataset's material and grade as its
 source, and a newer MitCad with an updated dataset never changes it.
 The dataset's values come from the material-properties dataset, under
 the Apache License 2.0 (refer to the About box and the third-party
@@ -6492,7 +6625,7 @@ press Enter for the first match) to add it. The appearances of the
 material's class come first, under its name (*FDM Plastic* for a
 filament, the design's and MitCad's together); for an FDM plastic or a
 resin then the *General Plastic* ones; then the design's other
-appearances, under *This Design*, and MitCad's, under the headings of
+appearances, under *This design*, and MitCad's, under the headings of
 their classes (*Metal*, *General Plastic*, *FDM Plastic*, *Resin*,
 *Wood*, *Other*); a search hides the headings with no match; **Edit
 Appearances…** at the end opens the Appearances window. Select a row and
@@ -6636,7 +6769,7 @@ read come in and the design uses them; the list shows the item of the
 manager's kind selected; **Details…** beside the line shows the whole
 report, and one Undo takes an import into the design back.
 
-**Import from a slicer.** **Import from slicer…**, the first print row
+**Import from a slicer.** **Import from Slicer…**, the first print row
 of Send to Slicer, above Printer and Process, reads a
 slicer's settings: a 3MF project of Bambu Studio, OrcaSlicer, QIDI
 Studio, PrusaSlicer or UltiMaker Cura, a preset or an exported bundle of
@@ -6819,7 +6952,7 @@ the same managers with This design first. Type "My library" in the
 command search to find them all.
 
 **Import from Slicer…** at the top of each manager reads a slicer's 3MF
-project or preset, as Import from slicer… in Send to Slicer does, into the
+project or preset, as Import from Slicer… in Send to Slicer does, into the
 place **Import into** beside it shows (This design with a design open,
 else My library; also This project in a project): its printer, its
 process and a material for each filament. A short line beside the
@@ -6901,7 +7034,7 @@ resolutions.
 
 The search field and the category narrow the list. Each texture folder
 is one category. The appearances have the categories Library and This
-Design. The materials show as thumbnails.
+design. The materials show as thumbnails.
 
 To use a material from a local folder:
 
@@ -9063,6 +9196,21 @@ back by a seam of 0.00001 mm under it, as walls that touch over a face
 cannot make one solid. Use Corner on the flange that closes the section,
 the last one.
 
+The **Profile** row draws the wall with a sketch instead of a rectangle,
+for a wall that is slanted, tapered, curved or wider than the edge.
+Click **Edit Profile**: a sketch opens on the wall where the flange puts
+it, with the rectangle of the Length and Width. Its bottom line lies on
+the bend line and is fixed there; that line is the bend. Change the other
+lines as in any sketch: slant or taper them, round them, take them past
+the ends of the edge, and constrain them to other geometry of the design.
+**Finish Sketch** brings you back to the Flange panel, and OK adds the
+flange. The sketch stays in the timeline before the flange: edit it later
+and the flange and its flat pattern follow. The wall cannot cross the bend
+line. With a profile the Length, Width, Hem and Corner rows are hidden.
+If you change the flange's Angle or Position later, Edit Profile puts the
+sketch back on the wall. **Remove Profile** makes the wall a rectangle
+again.
+
 **Bend** makes one bend between two edges. With the Bend Type *Double
 Bend*, it makes two opposite bends of the angle with a straight between
 them. A double bend joins parallel faces of two sheets.
@@ -10736,6 +10884,16 @@ the exports:
 - The design as a web page that opens in any browser ([Web
   viewer](#web-viewer)).
 
+A 3MF file can carry the design's print plates, as Send to Slicer writes
+them. When the design has plates, **Plates** offers all plates in one
+file, a file per plate (named *file - plate.3mf*, beside the file you
+give), one plate alone, or the bodies without plates. **Slicer** chooses
+whose print settings go with the file; it starts with the design's
+slicer when the design has plates. UltiMaker Cura has one build plate, so
+it takes a file per plate. Without plates, **On the print bed** puts each
+piece on its print bed face; **Center on Plate** and **Drop to Bed**
+place the pieces on the plate.
+
 The dialog starts with the type, the refinement, the STL format and
 Include construction geometry of your last export, so repeated exports
 for 3D printing keep 3MF and High.
@@ -11472,7 +11630,7 @@ The panel also has these options:
   plate as Center on Plate and Drop to Bed say (see [The print bed
   face](#the-print-bed-face)). 3MF is the reliable way to get one object of several parts in the
   slicer. UltiMaker Cura loads the parts as a group.
-- **Import from slicer…**, **Printer**, **Process**, **Own settings**
+- **Import from Slicer…**, **Printer**, **Process**, **Own settings**
   and **Materials** (3MF only, grayed out with STL): Import from
   slicer… first, above the design's printer and process, then the
   bodies' own process settings (whatever the process, Slicer default
@@ -11686,13 +11844,15 @@ body and mesh body. These are the options:
 - **Overhangs** and **Angle** (45 degrees from the vertical): faces that
   face down more steeply than the angle need support. Faces on the bed
   are not overhangs.
-- **Thin Walls** and **Minimum wall** (0.8 mm): walls thinner than the
+- **Thin walls** and **Minimum wall** (0.8 mm): walls thinner than the
   printer can make.
-- **Narrow Gaps** and **Minimum gap** (0.3 mm): bodies printed in place,
+- **Narrow gaps** and **Minimum gap** (0.3 mm): bodies printed in place,
   such as a hinge and its pin, fuse when they are closer than this. With
-  two bodies or more, the analysis lists each pair that is apart but
-  closer than the gap. Bodies that touch or overlap are not listed: use
-  Interference for them. If the design has the user parameter
+  two bodies or more, the analysis lists each pair that is closer than
+  the gap somewhere they do not touch. Bodies may touch elsewhere: a
+  wheel lying on a plate with its peg in the plate's hole is listed when
+  the peg is too close to the hole's wall. Where bodies touch or overlap
+  is not a gap: use Interference for it. If the design has the user parameter
   `print_in_place_gap`, the field shows its name and the analysis uses
   its value.
 - **Estimate:** the material (the material of the bodies, else PLA), the
@@ -12556,7 +12716,7 @@ guide that explains its settings.
 
 | Page | What it sets | Refer to |
 |---|---|---|
-| **General** | The **Language** of the interface. The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts) |
+| **General** | The **Language** of the interface. The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). **Show used sketches under their features** (off by default; see [Browser](#browser)). | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts) |
 | **Navigation** | The mouse scheme for orbit, pan and zoom | [View and navigation](#view-and-navigation) |
 | **Display** | **Camera**, **Orientation cube**, **Interface size**, **Text size**, **Icon size**, **Font**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Layout**, **Show the menu bar** (Windows and Linux), **Browser background**, **Ghost inactive components**, **Pick the active component first**, **Small circles** | [The window](#the-window), [View and navigation](#view-and-navigation), [Layouts](#layouts), [Components](#components) |
 | **Cache** | The cache of computed results: on or off, the size, the folder, **Clear**, the memory limit | [Cache of computed results](#cache-of-computed-results) |
@@ -12567,7 +12727,7 @@ guide that explains its settings.
 | **Textures** | The *Local Folders* of the texture sources. *Allow texture sources on the internet* | [Textures](#textures) |
 | **AI Assistants** | Connect AI Assistant…, and the folders that an AI assistant connected through MCP can save to and open from | [mcp.md](mcp.md) |
 | **Fonts** | The folders of font files that the font chooser of Edit Text lists | [Text, fonts and QR codes](#text-fonts-and-qr-codes) |
-| **Sketch** | **Scale the sketch to its first dimension**: on or off. **Click adds to the selection in sketches**: on or off (off by default). **Esc leaves an unchanged sketch**: on or off (off by default; see Finish Sketch in [Shortcuts](#shortcuts)) | [Dimensions](#dimensions), [Selection in sketch mode](#selection-in-sketch-mode) |
+| **Sketch** | **Scale the sketch to its first dimension**: on or off. **Click adds to the selection in sketches**: on or off (off by default). **Esc leaves an unchanged sketch**: on or off (off by default; see Finish Sketch in [Shortcuts](#shortcuts)). **Show profiles when a sketch opens**: on or off (on by default; see [Sketch mode](#sketch-mode)) | [Dimensions](#dimensions), [Selection in sketch mode](#selection-in-sketch-mode) |
 
 
 **Layout.** The **Layout** setting of the Display page selects how the

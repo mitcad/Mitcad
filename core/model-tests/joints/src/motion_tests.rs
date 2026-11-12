@@ -480,3 +480,24 @@ fn contact_sets_follow_their_occurrences() {
     rig.run(json!({"cmd": "delete_contact_set", "name": "Stop"}));
     assert_eq!(query(&rig.doc, json!({"query": "contact_sets"})), json!([]));
 }
+
+/// Animate Joint's frames without a recompute (mitcad#1701) are refused
+/// while a contact set applies: only a recompute checks where the bodies
+/// touch, so the animation keeps its previews there.
+#[test]
+fn animate_frames_without_a_recompute_leave_contact_sets_to_the_previews() {
+    let mut rig = rig();
+    let request = json!({"query": "joint_poses", "joint": rig.slider.to_string(),
+                         "motion": "tx", "values": [5, 15]});
+    let frames = query(&rig.doc, request.clone());
+    let x = frames["frames"][1]["placements"][0]["transform"][0][3]
+        .as_f64()
+        .unwrap();
+    assert!((x - 15.0).abs() < 1e-9, "{frames}");
+    rig.run(json!({"cmd": "add_contact_set", "occurrences": ["Pin:1", "Wall:1"]}));
+    let error = rig.doc.query(&request.to_string()).unwrap_err().to_string();
+    assert!(error.contains("contact sets apply"), "{error}");
+    // A suppressed set does not apply.
+    rig.run(json!({"cmd": "edit_contact_set", "name": "Contact1", "suppressed": true}));
+    assert!(rig.doc.query(&request.to_string()).is_ok());
+}

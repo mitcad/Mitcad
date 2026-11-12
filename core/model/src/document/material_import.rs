@@ -12,12 +12,18 @@
 //! file's); `keep_both` adds the file's as a new material, numbered
 //! (`Steel (2)`). A material the file gives that is not valid is reported
 //! with its place in the file and the reason, and the others are imported.
+//!
+//! Beside it, materials made from several entries of the bundled dataset
+//! at once (mitcad#1706, `create_dataset_materials`): each as
+//! `create_material` with `dataset` makes one, all as one undo step; an
+//! entry whose name is there already is skipped, as `keep` skips it.
 
 use std::path::Path;
 
 use super::{Document, ModelError, invalid};
 use crate::kernel::Kernel;
-use crate::material;
+use crate::material::{self, MaterialChange};
+use crate::material_dataset;
 use crate::material_exchange::{self, FileFormat, MaterialRow, RowError};
 use crate::print_library::{BasedOn, ItemKind, LibraryKind};
 
@@ -77,6 +83,18 @@ impl MaterialImport {
 
 /// The undo step of an import.
 const LABEL: &str = "Import Materials";
+
+/// What `create_dataset_materials` did (mitcad#1706): the materials made
+/// (their ids, in the entries' order) and the entries skipped because a
+/// material of their name is there already (their names).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DatasetMaterials {
+    pub added: Vec<String>,
+    pub skipped: Vec<String>,
+}
+
+/// The undo step of several materials made from the dataset at once.
+const DATASET_LABEL: &str = "Create Materials";
 
 impl<K: Kernel> Document<K> {
     /// Imports a materials file into the design (`library` none) or into
@@ -140,6 +158,86 @@ impl<K: Kernel> Document<K> {
         self.merge_undo(depth, LABEL);
         outcome.errors.sort_by_key(|e| e.row);
         Ok(outcome)
+    }
+
+    /// Makes a material of each entry of the bundled dataset (mitcad#1706),
+    /// as `create_material` with `dataset` makes one: in the design
+    /// (`library` none) or in the user's or the project's library
+    /// (`project`: the project's folder), all as one undo step (`Create
+    /// Materials`; one made keeps its own label). An entry whose name is
+    /// there already (any case: the design's own and the built-in ones it
+    /// shows, or the library's items and the built-in ones) is skipped, and
+    /// so is a second of the same name. An entry the dataset lacks is
+    /// refused, and nothing is made.
+    pub fn create_dataset_materials(
+        &mut self,
+        entries: &[String],
+        library: Option<LibraryKind>,
+        project: Option<&Path>,
+    ) -> Result<DatasetMaterials, ModelError> {
+        if library == Some(LibraryKind::Base) {
+            return Err(invalid("the base library cannot change"));
+        }
+        if entries.is_empty() {
+            return Err(invalid("name at least one material of the dataset"));
+        }
+        let mut rows = Vec::new();
+        for id in entries {
+            let row = material_dataset::entry(id)
+                .ok_or_else(|| invalid(format!("the material dataset has no material {id}")))?;
+            rows.push((id, row));
+        }
+        let depth = self.undo_depth();
+        let made = self.as_one_step(|doc| {
+            let mut outcome = DatasetMaterials::default();
+            for (id, row) in rows {
+                let name = row.name.trim();
+                if doc.dataset_name_taken(name, library, project) {
+                    outcome.skipped.push(name.to_owned());
+                    continue;
+                }
+                let change = MaterialChange {
+                    dataset: Some(id.clone()),
+                    ..MaterialChange::default()
+                };
+                let added = match library {
+                    None => doc.create_material(&change)?,
+                    Some(kind) => {
+                        let libraries = doc.print_libraries(project);
+                        let written = doc.create_library_material(&libraries, kind, &change)?;
+                        written.id
+                    }
+                };
+                outcome.added.push(added);
+            }
+            Ok(outcome)
+        })?;
+        if made.added.len() > 1 {
+            self.merge_undo(depth, DATASET_LABEL);
+        }
+        Ok(made)
+    }
+
+    /// Whether a material of the name (any case) is where a material of
+    /// the dataset would go: the design's own or a built-in one it shows;
+    /// in a library, its items or a built-in one.
+    fn dataset_name_taken(
+        &self,
+        name: &str,
+        library: Option<LibraryKind>,
+        project: Option<&Path>,
+    ) -> bool {
+        let Some(library) = library else {
+            return self.design_material_named(name).is_some();
+        };
+        let same = |other: &str| other.trim().eq_ignore_ascii_case(name.trim());
+        if material::built_in().iter().any(|m| same(&m.name)) {
+            return true;
+        }
+        let libraries = self.print_libraries(project);
+        libraries.items.iter().any(|i| {
+            i.library == library && i.data.kind() == ItemKind::Material && same(i.data.name())
+        })
     }
 
     /// One material into the design.

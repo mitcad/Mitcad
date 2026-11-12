@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/print app/framework/NoteRow.cpp app/framework/CommandPanel.cpp app/browser/BrowserController.cpp
 # check-all sources: app/browser/LibraryPicker.cpp app/files/MainWindowPrint.cpp core/print-keys core/model/src/print_files tools/cli
-# Input-driven Windows UI test of 3D Print's Import from slicer... and its
+# Input-driven Windows UI test of 3D Print's Import from Slicer... and its
 # Details... (mitcad#654, mitcad#655) in the build VM
 # (tools/ui-windows-lib.ps1 says how the input is posted), as the last part
 # of tools/ui-print-settings-test.sh does on Linux. mitcad-cli writes a
@@ -138,18 +138,18 @@ Ui-Mark
 Ui-Step 'cancel the panel (Esc)'         { Ui-Key 'Escape' }
 Ui-ExpectNew 'Command Send to Slicer cancelled' 'the panel closed'
 
-Write-Host '--- 1. Import from slicer... in 3D Print: the line under the button'
+Write-Host '--- 1. Import from Slicer... in 3D Print: the line under the button'
 Ui-Mark
 Ui-Step '3D Print (F8)'                  { Ui-Key 'F8' }
 Ui-ExpectNew '3D Print printer: Slicer default' 'the panel opened, the design has no printer'
 Ui-ExpectNew 'Panel Send to Slicer input format at ' 'the panel laid out'
 Ui-ExpectNew '; format 3mf, ' 'the panel starts with 3MF'
-Ui-ExpectNew 'Panel Send to Slicer action import.0 at ' 'Import from slicer... under the Process row'
+Ui-ExpectNew 'Panel Send to Slicer action import.0 at ' 'Import from Slicer... under the Process row'
 $asked = Ui-LogLines | Select-Object -Skip $script:UiMark | Where-Object { $_.Contains('changed elsewhere') }
 if ($asked) { Ui-Fail "asked again: $($asked -join ' / ')" }
 Write-Host 'ok   not asked again'
 Ui-Mark
-Ui-Step 'Import from slicer...'            { Ui-ClickLogged 'Panel Send to Slicer action import.0' }
+Ui-Step 'Import from Slicer...'            { Ui-ClickLogged 'Panel Send to Slicer action import.0' }
 Ui-FocusDialog '^Import from Slicer$'
 Ui-Step 'type the path'                  { Ui-Key 'ctrl+a'; Ui-Type $project; Start-Sleep -Milliseconds 300; Ui-Key 'Return' }
 Ui-FocusMain

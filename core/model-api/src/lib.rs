@@ -553,6 +553,10 @@ named_enum! {
         // The Origin folder and Isolate saved in the document (P9).
         "set_origin_visible" => SetOriginVisible {
             visible: bool,
+            /// As a new design opens (mitcad#1683): no undo step, no new
+            /// revision.
+            #[serde(default)]
+            opening: bool,
         },
         "set_isolation" => SetIsolation {
             #[serde(default)]
@@ -663,6 +667,11 @@ named_enum! {
             #[serde(default)]
             face: Option<String>,
         },
+        // A sheet-metal flange's profile sketch (mitcad#1648,
+        // `document/flange_profile.rs`).
+        "sheet_flange_profile" => SheetFlangeProfile {
+            def: FeatureDef<ValueInput>,
+        },
     }
 }
 
@@ -757,6 +766,10 @@ named_enum! {
             // results tell where the bodies a command changed are).
             #[serde(default)]
             bbox: bool,
+            // Each body's last feature before the marker (mitcad#1704: the
+            // timeline marks it while the body or a part of it is selected).
+            #[serde(default)]
+            last_features: bool,
         },
         "profiles" => Profiles {
             // A hash of each region's geometry and sketch frame (W1: the
@@ -1146,6 +1159,8 @@ named_enum! {
         "plane_geometry_key" => PlaneGeometryKey {
             sketch: FeatureUid,
         },
+        // Animate Joint's frames without a recompute (mitcad#1701, `joints.rs`).
+        "joint_poses" => JointPoses(joints::JointPosesQuery),
     }
 }
 
@@ -1327,6 +1342,7 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                 volumes,
                 versions,
                 bbox,
+                last_features,
             } => {
                 let mut bodies = self.bodies_json(properties, volumes)?;
                 if versions {
@@ -1334,6 +1350,18 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                 }
                 if bbox && !properties {
                     self.add_body_boxes(&mut bodies);
+                }
+                if last_features {
+                    let last = self.body_last_features();
+                    for body in bodies.as_array_mut().into_iter().flatten() {
+                        let feature = body["uid"]
+                            .as_str()
+                            .and_then(|uid| uid.parse::<BodyUid>().ok())
+                            .and_then(|uid| last.get(&uid));
+                        if let Some(feature) = feature {
+                            body["last_feature"] = json!(feature);
+                        }
+                    }
                 }
                 bodies
             }
@@ -1769,6 +1797,8 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::FilamentChangePreview(query) => filament_changes::preview(self, &query)?,
             // A key of a sketch's plane_geometry answer (mitcad#1646).
             Query::PlaneGeometryKey { sketch } => self.plane_geometry_key_json(sketch)?,
+            // Animate Joint's frames without a recompute (mitcad#1701).
+            Query::JointPoses(query) => self.joint_poses_json(&query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -2434,8 +2464,12 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 json!({})
             }
             // The Origin folder and Isolate (P9).
-            Command::SetOriginVisible { visible } => {
-                self.set_origin_visible(visible)?;
+            Command::SetOriginVisible { visible, opening } => {
+                if opening {
+                    self.set_origin_visible_on_open(visible);
+                } else {
+                    self.set_origin_visible(visible)?;
+                }
                 json!({})
             }
             Command::SetIsolation { items } => {
@@ -2563,6 +2597,10 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
             Command::SetPrintBedFace { uid, face } => {
                 self.set_print_bed_face(uid, face.as_deref())?;
                 json!({})
+            }
+            Command::SheetFlangeProfile { def } => {
+                let made = self.sheet_flange_profile(&def)?;
+                json!({"sketch": made.sketch, "plane": made.plane, "added": made.added})
             }
             Command::SetViewShow {
                 origins,

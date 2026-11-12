@@ -205,14 +205,29 @@ Ui-FocusDialog '^Save Component as Design$'
 # shortcut such as Alt+R only in the active window, and posted input never
 # activates one. Beside other tests the dialog was not active yet when the
 # key came: the app logged "R with alt", the box stayed unchecked, and
-# Enter (a key of the dialog itself) saved without the link.
-[UiInput]::Note = ''
-$active = [UiInput]::Activate($script:UiTarget)
-if ([UiInput]::Note) { Write-Host "note: activating the dialog: $([UiInput]::Note)" }
-if (-not $active) { Write-Host 'note: the dialog is not the active window' }
-Ui-SyncOr 300
+# Enter (a key of the dialog itself) saved without the link. Activation
+# alone still lost the key now and then (0.57.0 and 0.59.0-rc3), so the box
+# is checked before Enter: Alt+R again, after activating again, until the
+# app logs it checked.
+$checked = $false
+for ($try = 1; $try -le 4 -and -not $checked; $try++) {
+  [UiInput]::Note = ''
+  $active = [UiInput]::Activate($script:UiTarget)
+  if ([UiInput]::Note) { Write-Host "note: activating the dialog: $([UiInput]::Note)" }
+  if (-not $active) { Write-Host 'note: the dialog is not the active window' }
+  Ui-SyncOr 300
+  $before = Ui-CountLog 'replace with a link checked: yes'
+  Ui-Key 'alt+r'
+  $deadline = (Get-Date).AddSeconds(3)
+  while ((Get-Date) -lt $deadline -and (Ui-CountLog 'replace with a link checked: yes') -le $before) {
+    Start-Sleep -Milliseconds 100
+  }
+  $checked = (Ui-CountLog 'replace with a link checked: yes') -gt $before
+  if (-not $checked) { Write-Host "note: Alt+R did not check the box (try $try)" }
+}
+if (-not $checked) { Ui-Fail 'Alt+R never checked Replace with a link' }
 Ui-Mark
-Ui-Step 'Replace with a link (Alt+R), Save... (Enter)' { Ui-Key 'alt+r', 'Return' }
+Ui-Step 'Replace with a link (Alt+R), Save... (Enter)' { Ui-Key 'Return' }
 Ui-ExpectNew 'Save Component as Design dialog: replace with a link: yes' 'replaced'
 Ui-Step 'another file' {
   Ui-FocusDialog '^Save Design File$'

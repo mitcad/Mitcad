@@ -379,6 +379,13 @@ public:
   void setShowDimensions(bool on);
   bool showConstraints() const { return m_showConstraints; }
   void setShowConstraints(bool on);
+  // Show points (mitcad#1705): off, the sketch's end, centre and lone points
+  // are drawn without markers; the point under the pointer and selected
+  // ones still are, and snaps, drags and picks of points work as before. A
+  // UI preference (QSettings sketch/showPoints, on by default), not in the
+  // design.
+  bool showPoints() const { return m_showPoints; }
+  void setShowPoints(bool on);
   // Filled regions are rebuilt after a geometry drag, while curves stay live.
   bool draggingGeometry() const { return m_dragging && m_dragDimension.isEmpty(); }
   bool showProfiles() const { return m_showProfiles; }
@@ -609,6 +616,11 @@ public:
   // nothing, for no curve there, a text, a pattern's or an offset's curve
   // or a spline (their double-click is their own) and the axes.
   bool selectChainAt(const QPointF& screen, Qt::KeyboardModifiers modifiers);
+  // A row of the item list in the timeline's place clicked (mitcad#1492):
+  // the point, curve, constraint or dimension `id` of this sketch selected
+  // in the view in place of the selection, or with Ctrl or Shift added to
+  // it or taken out of it; false for an id the sketch lacks.
+  bool selectItem(const QString& id, Qt::KeyboardModifiers modifiers);
   // Body edges and vertices in the sketch plane (mitcad#256, mitcad#258), for
   // the tool that picks or snaps to them: the model's plane_geometry query,
   // read once per tool session and again after the bodies it reads changed
@@ -635,6 +647,9 @@ signals:
   void geometryDragStarted();
   // The auto constraint session changed: a new tool, a choice, an entity.
   void autoConstraintsChanged();
+  // The view was drawn again for a new selection or new conflicts
+  // (refreshView, setConflict): the item list marks its rows (mitcad#1492).
+  void viewRefreshed();
 
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
@@ -792,6 +807,7 @@ private:
   double m_gridStep = 0.0;
   bool m_showDimensions = true;
   bool m_showConstraints = true;
+  bool m_showPoints = true;
   bool m_showProfiles = true;
   bool m_hideAbove = false;
 

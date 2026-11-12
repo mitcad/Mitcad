@@ -32,6 +32,7 @@
 #include "mitcad/geometry/import.hpp"
 #include "view/CameraHeight.hpp"
 #include "view/CameraTurn.hpp"
+#include "view/DefaultView.hpp"
 #include "view/ViewCube.hpp"
 #include "view/ViewEdges.hpp"
 #include "view/ViewTessellation.hpp"
@@ -1720,10 +1721,19 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   m_orientationCube->SetTransformPersistence(cubePersistence(1.0, QMargins(), false));
   m_cubeBaseSize = viewCubeSize(*m_orientationCube); // the nominal size, not the face's (mitcad#1620)
   m_cubeBaseFont = m_orientationCube->FontHeight();
+  // The faces' names in the interface language (mitcad#1674), as UTF-8 (the
+  // faces' textures read them so, view/ViewCube.cpp).
   for (const auto& [side, label] :
-       {std::pair{V3d_Yneg, "FRONT"}, std::pair{V3d_Ypos, "BACK"}, std::pair{V3d_Xneg, "LEFT"},
-        std::pair{V3d_Xpos, "RIGHT"}, std::pair{V3d_Zpos, "TOP"}, std::pair{V3d_Zneg, "BOTTOM"}}) {
-    m_orientationCube->SetBoxSideLabel(side, label);
+       {std::pair{V3d_Yneg,
+                  //: A face of the view cube, in capitals; a short word that fits the face.
+                  QT_TRANSLATE_NOOP("ViewCube", "FRONT")},
+        std::pair{V3d_Ypos, QT_TRANSLATE_NOOP("ViewCube", "BACK")},
+        std::pair{V3d_Xneg, QT_TRANSLATE_NOOP("ViewCube", "LEFT")},
+        std::pair{V3d_Xpos, QT_TRANSLATE_NOOP("ViewCube", "RIGHT")},
+        std::pair{V3d_Zpos, QT_TRANSLATE_NOOP("ViewCube", "TOP")},
+        std::pair{V3d_Zneg, QT_TRANSLATE_NOOP("ViewCube", "BOTTOM")}}) {
+    const QByteArray shown = QCoreApplication::translate("ViewCube", label).toUtf8();
+    m_orientationCube->SetBoxSideLabel(side, TCollection_AsciiString(shown.constData()));
   }
 
   // The next slice of a large selection's highlights (setHighlights,
@@ -2020,6 +2030,7 @@ void OcctViewer::activateAllPicking() {
 }
 
 void OcctViewer::setBodies(const std::vector<BodyDisplay>& bodies) {
+  closePickList(QStringLiteral("bodies changed")); // its items may be gone (mitcad#1703)
   ScopedTiming timing("display");
   int shown = 0;
   // Bodies kept as they are drawn whose other parameters changed (what the
@@ -2900,6 +2911,8 @@ void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entit
     look.constrained = entity.constrained;
     look.reference = entity.reference;
     look.temporary = entity.temporary;
+    // Show points off for its sketch (mitcad#1705): no marker, still pickable.
+    look.hidden = isPoint && !m_hiddenPointsSketch.isEmpty() && entity.sketch == m_hiddenPointsSketch;
     PickInfo info;
     info.item = {isPoint ? SelectKind::SketchPoint : SelectKind::SketchCurve, entity.sketch,
                  entity.id, entity.geometry};
@@ -2948,6 +2961,7 @@ void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entit
   }
   logSketchHalos();
   logSketchLayers();
+  logSketchPointMarkers();
   // For UI tests (mitcad#286): per shown sketch (and the occurrence placing
   // it), how many of its entities take the fully constrained colour and how
   // many the unconstrained blue; construction, centre lines and projected
@@ -3001,6 +3015,16 @@ void OcctViewer::styleSketchEntity(const occ::handle<AIS_Shape>& object, const S
                                            : look.temporary ? sketch::fadedLook(plain, m_paper, kTemporaryFade)
                                                             : plain;
     const double ratio = devicePixelRatioF();
+    if (look.hidden) {
+      // Show points off (mitcad#1705): an image of the marker's size with
+      // nothing in it. The point stays in the scene, so that the view still
+      // detects it under the pointer (the overlay paints its hover ball) and
+      // picks it; a selected one gets its ball as before (setHighlights).
+      QImage blank = sketch::pointMarkerImage(plain, ratio);
+      blank.fill(Qt::transparent);
+      setPointImage(object, sketchMarkerImage(QStringLiteral("hidden %1").arg(ratio), blank));
+      return;
+    }
     setPointImage(object, sketchMarkerImage(sketch::pointMarkerKey(marker, ratio),
                                             sketch::pointMarkerImage(marker, ratio)));
     return;
@@ -3123,6 +3147,58 @@ void OcctViewer::logSketchLayers() {
   if (line != m_loggedSketchLayers) {
     m_loggedSketchLayers = line;
     qDebug().noquote() << QStringLiteral("Sketch layers: %1").arg(line);
+  }
+}
+
+void OcctViewer::logSketchPointMarkers() {
+  int drawn = 0;
+  int hidden = 0;
+  for (const occ::handle<AIS_Shape>& object : m_sketchEntities) {
+    const auto look = m_sketchEntityLooks.find(object.get());
+    if (look != m_sketchEntityLooks.end() && look->second.point) {
+      ++(look->second.hidden ? hidden : drawn);
+    }
+  }
+  const QString line = QStringLiteral("%1 drawn, %2 hidden").arg(drawn).arg(hidden);
+  if (line != m_loggedPointMarkers) {
+    m_loggedPointMarkers = line;
+    qDebug().noquote() << QStringLiteral("Sketch point markers: %1").arg(line);
+  }
+}
+
+bool OcctViewer::sketchPointHidden(const AIS_InteractiveObject* object, const SketchEntityLook& look) const {
+  if (!look.point || m_hiddenPointsSketch.isEmpty()) {
+    return false;
+  }
+  const auto info = m_pickInfo.find(object);
+  return info != m_pickInfo.end() && info->second.item.owner == m_hiddenPointsSketch;
+}
+
+void OcctViewer::setHiddenSketchPoints(const QString& sketch) {
+  if (sketch == m_hiddenPointsSketch) {
+    return;
+  }
+  m_hiddenPointsSketch = sketch;
+  // The points shown restyled in place: they keep their picks, and the
+  // hover and selection on them stay.
+  bool restyled = false;
+  for (const occ::handle<AIS_Shape>& object : m_sketchEntities) {
+    const auto look = m_sketchEntityLooks.find(object.get());
+    if (look == m_sketchEntityLooks.end() || !look->second.point) {
+      continue;
+    }
+    const bool hidden = sketchPointHidden(object.get(), look->second);
+    if (hidden == look->second.hidden) {
+      continue;
+    }
+    look->second.hidden = hidden;
+    styleSketchEntity(object, look->second);
+    m_context->Redisplay(object, false);
+    restyled = true;
+  }
+  logSketchPointMarkers();
+  if (restyled) {
+    sceneChanged();
   }
 }
 
@@ -4139,6 +4215,9 @@ void OcctViewer::setPickingSuspended(bool suspended) {
     return;
   }
   m_pickingSuspended = suspended;
+  if (suspended) {
+    closePickList(QStringLiteral("picking suspended")); // a job owns the design (mitcad#1703)
+  }
   m_context->ClearDetected(false);
   ResetPreviousMoveTo();
   requestFrame();
@@ -5338,6 +5417,19 @@ void OcctViewer::restoreCamera() {
     m_savedCamera.Nullify();
     // Anaglyph 3D switched in the sketch stays as it is (mitcad#1449).
     keepProjection(*m_view->Camera());
+    // The first sketch of a new design that still looks at its Top
+    // (mitcad#1683): the default view then (mitcad#1698), fitted on the
+    // next frame (or when Finish Sketch shows the sketch in the free area),
+    // so that what is made next is seen from the side; a view the user
+    // turned stays. A sketch started through Create Sketch's plane pick
+    // turned there already (turnForPlanePick).
+    if (turnFromNewDesignTop()) {
+      m_fitPending = true;
+      m_framingNewDesign = false;
+      requestFrame();
+      qDebug().noquote() << QStringLiteral("View: after the first sketch, the default view instead of the new "
+                                           "design's Top");
+    }
   }
   sceneChanged();
 }
@@ -5354,15 +5446,86 @@ void OcctViewer::fitAll() {
   requestFrame();
 }
 
-void OcctViewer::frameNewDesign() {
-  // The isometric view from the front right, Z up, as Home without a
-  // document's home view and the view at the start; the framing waits for
+namespace {
+
+// Looks along the default view's direction (view/DefaultView.hpp, Z up)
+// at the origin, from the eye's distance to it, the origin kept where it
+// was in the view: as V3d_View::SetProj turns to one of its orientations
+// (mitcad#1698). The fit that follows frames what is shown.
+void lookAlongDefaultView(V3d_View& view) {
+  const occ::handle<Graphic3d_Camera>& camera = view.Camera();
+  const gp_Pnt originInView = camera->ConvertWorld2View(gp::Origin());
+  double distance = camera->Eye().Distance(gp::Origin());
+  if (distance <= Precision::Confusion()) {
+    distance = camera->Distance();
+  }
+  const gp_Dir direction = defaultViewDirection();
+  camera->SetEyeAndCenter(gp::Origin().Translated(gp_Vec(direction) * -distance), gp::Origin());
+  camera->SetUp(defaultViewUp());
+  camera->OrthogonalizeUp();
+  view.Panning(originInView.X(), originInView.Y());
+}
+
+} // namespace
+
+void OcctViewer::frameNewDesign(bool top) {
+  // Looking at Top (along -Z, Y up, as View > Top) with the origin in the
+  // middle, so that a beginner finds the origin for the first sketch
+  // (mitcad#1683); otherwise the isometric view from the front right, Z up,
+  // as the view at the start (the start before mitcad#1683, which
+  // MITCAD_NEW_DESIGN_VIEW=0 keeps for the UI tests). The framing waits for
   // the next frame, so that it is made at the view's size then.
   AbortViewAnimation();
-  m_view->SetProj(V3d_TypeOfOrientation_Zup_AxoRight);
+  m_view->SetProj(top ? V3d_TypeOfOrientation_Zup_Top : V3d_TypeOfOrientation_Zup_AxoRight);
+  if (top) {
+    m_view->Camera()->SetUp(gp_Dir(0.0, 1.0, 0.0)); // Y up, as View > Top
+  }
+  m_newDesignTop = top;
+  m_framingNewDesignTop = top;
   m_fitPending = true;
   m_framingNewDesign = true;
   requestFrame();
+}
+
+bool OcctViewer::turnFromNewDesignTop() {
+  if (!m_newDesignTop) {
+    return false;
+  }
+  // Once: the first sketch or design read decides (mitcad#1683).
+  m_newDesignTop = false;
+  m_framingNewDesignTop = false;
+  const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
+  constexpr double kSameDirection = 1.0e-6; // radians
+  if (!camera->Direction().IsEqual(gp_Dir(0.0, 0.0, -1.0), kSameDirection) ||
+      !camera->Up().IsEqual(gp_Dir(0.0, 1.0, 0.0), kSameDirection)) {
+    return false; // turned since: the user's direction stays
+  }
+  AbortViewAnimation();
+  // The default view, a few degrees off the isometric one, so that the
+  // origin planes' edges do not lie on top of each other (mitcad#1698).
+  lookAlongDefaultView(*m_view);
+  m_view->Invalidate();
+  return true;
+}
+
+void OcctViewer::leaveNewDesignTop() {
+  if (turnFromNewDesignTop()) {
+    // For UI tests (mitcad#1683).
+    qDebug().noquote() << QStringLiteral("View: an opened design seen from the default view, not a new design's Top");
+  }
+}
+
+void OcctViewer::turnForPlanePick() {
+  // Seen from Top, XZ and YZ are edge-on: every origin plane can be picked
+  // from the default view (mitcad#1698). Fitted on the next frame, as after
+  // the first sketch.
+  if (turnFromNewDesignTop()) {
+    m_fitPending = true;
+    m_framingNewDesign = false;
+    requestFrame();
+    // For UI tests.
+    qDebug().noquote() << QStringLiteral("View: Create Sketch turns a new design's Top to the default view");
+  }
 }
 
 double OcctViewer::visibleHeight() const { return m_view->Camera()->ViewDimensions().Y(); }
@@ -5614,7 +5777,32 @@ void OcctViewer::applyPendingFit() {
     qInfo().noquote() << QStringLiteral("View: new design framed, scale %1 mm per view height at %2")
                              .arg(visibleHeight(), 0, 'f', 3)
                              .arg(viewSizeText(*this));
+    if (m_framingNewDesignTop) {
+      m_framingNewDesignTop = false;
+      logNewDesignTop();
+    }
   }
+}
+
+void OcctViewer::logNewDesignTop() const {
+  // For UI tests (mitcad#1683): where a new design looks and where its
+  // origin is, in window coordinates as the tests' other places.
+  const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
+  const auto direction = [](const gp_Dir& d) {
+    // Rounded, so that -0 and rounding noise read as 0.
+    const auto component = [](double value) { return QString::number(std::round(value * 1000.0) / 1000.0 + 0.0); };
+    return QStringLiteral("%1,%2,%3").arg(component(d.X()), component(d.Y()), component(d.Z()));
+  };
+  const QPointF corner = mapTo(window(), QPoint(0, 0));
+  const QPointF origin = toWidgetF(gp_Pnt(0.0, 0.0, 0.0)) + corner;
+  const QPointF centre = freeArea().center() + corner;
+  const auto place = [](const QPointF& at) {
+    return QStringLiteral("%1,%2").arg(qRound(at.x())).arg(qRound(at.y()));
+  };
+  qInfo().noquote() << QStringLiteral("View: new design looks along %1, up %2; the origin at %3, the free area's "
+                                      "centre at %4")
+                           .arg(direction(camera->Direction()), direction(camera->Up()), place(origin),
+                                place(centre));
 }
 
 double OcctViewer::fieldOfView() const { return m_view->Camera()->FOVy(); }
@@ -5828,8 +6016,10 @@ void OcctViewer::goHome() {
     setCamera(*m_home);
     return;
   }
-  // Isometric from the front right, Z up (V3d_TypeOfOrientation_Zup_AxoRight).
-  turnTo(gp_Dir(-1, 1, -1), gp::DZ());
+  // From the front right and above, a few degrees off the isometric view
+  // so that the origin planes' edges do not lie on top of each other
+  // (mitcad#1698, view/DefaultView.hpp); View › Isometric stays exact.
+  turnTo(defaultViewDirection(), defaultViewUp());
 }
 
 void OcctViewer::runViewOperation(const QString& operation, const std::function<void()>& run) {
@@ -7098,6 +7288,7 @@ void OcctViewer::setDocumentVisible(bool visible) {
   m_documentVisible = visible;
   if (!visible) {
     cancelPointerInteraction();
+    closePickList(QStringLiteral("view hidden"));
     m_navigationTimer->stop();
     m_scrollTimer->stop();
     m_restTimer->stop();
@@ -7580,6 +7771,7 @@ void OcctViewer::updateCursor(bool log) {
 }
 
 void OcctViewer::cancelPointerInteraction() {
+  disarmPickList(); // a press cut off opens no pick list (mitcad#1703)
   endScrollDrag();
   ResetViewInput();
   // ResetViewInput leaves pending pointer deltas and selection requests.
@@ -7717,6 +7909,7 @@ bool OcctViewer::event(QEvent* event) {
 
 void OcctViewer::mousePressEvent(QMouseEvent* event) {
   QOpenGLWidget::mousePressEvent(event);
+  disarmPickList(); // another button too: a held left press lists nothing
   if (event->buttons() == event->button()) {
     resetOrbitWrap(); // the first button: a new drag
   }
@@ -7765,6 +7958,10 @@ void OcctViewer::mousePressEvent(QMouseEvent* event) {
     }
     if (m_cubePress && !m_cubeClick) {
       m_cubeClick = true; // F4: an orbit, not a pick
+    }
+    // Held still, the press lists what lies under it (mitcad#1703).
+    if (!m_cubeClick) {
+      armPickList(event->button(), event->buttons());
     }
     // A press on a component the joints move may drag it (mitcad#55), or
     // on a body that cannot be dragged say why (mitcad#150): the button is
@@ -7868,6 +8065,17 @@ void OcctViewer::endOccurrenceDrag(const QPointF& position, bool cancelled) {
 
 void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
   QOpenGLWidget::mouseReleaseEvent(event);
+  disarmPickList();
+  if (m_pickListHeld && event->button() == Qt::LeftButton) {
+    // The press that opened the pick list (mitcad#1703): its release is the
+    // list's, no click and no window.
+    m_pickListHeld = false;
+    if (event->buttons() == Qt::NoButton) {
+      resetOrbitWrap();
+      m_buttonKeys.reset();
+    }
+    return;
+  }
   // Where the view has the release: after an orbit past the edge of the
   // screen, as far from the press as the whole drag went.
   const QPointF released = m_orbitWrap.position(event->position(), event->globalPosition());
@@ -7974,6 +8182,20 @@ void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
 
 void OcctViewer::mouseMoveEvent(QMouseEvent* event) {
   QOpenGLWidget::mouseMoveEvent(event);
+  // The pick list (mitcad#1703): a press that moves is a drag, not a hold;
+  // the moves of the press that opened the list are the list's.
+  if (m_pickListHeld) {
+    if (event->buttons() != Qt::NoButton) {
+      return;
+    }
+    m_pickListHeld = false; // a release this widget did not get
+  }
+  if (m_pickListArmed) {
+    const QPointF moved = event->position() - m_pickListPosition;
+    if (event->buttons() == Qt::NoButton || std::hypot(moved.x(), moved.y()) > kDragPixels) {
+      disarmPickList();
+    }
+  }
   m_hoverMoved = true; // the next frame says where the mouse is on the item
   if (m_scrollDragging) {
     endScrollDrag();
@@ -8081,6 +8303,7 @@ void OcctViewer::resetOrbitWrap() {
 
 void OcctViewer::wheelEvent(QWheelEvent* event) {
   QOpenGLWidget::wheelEvent(event);
+  closePickList(QStringLiteral("view moved")); // its items move (mitcad#1703)
   if ((m_navigation.scheme == NavigationScheme::Trackpad ||
        m_navigation.scheme == NavigationScheme::TrackpadShift ||
        m_navigation.scheme == NavigationScheme::Custom) && isTrackpadScroll(event)) {
