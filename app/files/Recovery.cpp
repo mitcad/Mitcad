@@ -26,6 +26,7 @@
 
 #include "../framework/Dialogs.hpp"
 #include "../framework/PanelTree.hpp"
+#include "../mcp/ModalGuard.hpp"
 #include "Autosave.hpp"
 
 namespace mitcad {
@@ -210,9 +211,13 @@ void discardSession(RecoverableSession& session) {
   qInfo().noquote() << QStringLiteral("Discarded recovery of %1").arg(session.document);
 }
 
-std::vector<std::size_t> askRecovery(QWidget* parent, std::vector<RecoverableSession>& sessions) {
+std::vector<std::size_t> askRecovery(QWidget* parent, std::vector<RecoverableSession>& sessions, bool atStart) {
   QDialog dialog(parent);
   dialog.setWindowTitle(QObject::tr("Recover Unsaved Work"));
+  // Live MCP names it to an agent, which cannot answer it; asked at
+  // start-up, the refusal points to --no-recovery (mitcad#1725).
+  dialog.setObjectName(QLatin1String(mcp::kRecoveryDialogName));
+  dialog.setProperty(mcp::kRecoveryAtStartProperty, atStart);
   auto* layout = new QVBoxLayout(&dialog);
   auto* text = new QLabel(QObject::tr("<b>MitCad ended without closing these designs.</b> Their changes that "
                                       "were not saved are kept."));

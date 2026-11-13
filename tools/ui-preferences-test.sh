@@ -10,7 +10,8 @@
 #   3. No git on PATH (git not installed): the Cloud page's long message,
 #      which once made the window wider than the screen, wraps.
 # Each time Preferences opens on its Cloud page: the size it asks for (its
-# largest page's) and its minimum size fit a 1366 x 768 screen with a title
+# largest page's; each page's own size logged, mitcad#1751)
+# and its minimum size fit a 1366 x 768 screen with a title
 # bar and a taskbar, it is resizable, its frame lies within the screen's
 # available area, and the page list is as wide as its entries; on its
 # General page (Home in the page list) the minimum is that page's, and it
@@ -74,6 +75,13 @@ preferences_fit() {
   ui_expect_new "Preferences page list " "Preferences shown"
   read -r width _ height <<< "$(since 's/^Preferences opened: Cloud, \([0-9]* x [0-9]*\)$/\1/p')"
   fits "the size asked for" "$width" "$height"
+  # Each page's own size is logged (mitcad#1751), so a failure of the
+  # check above names the page; the dialog itself sizes by its largest page.
+  local sizes
+  sizes=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" |
+    sed -n 's/^Preferences page size: \(.*\), \([0-9]*\) x \([0-9]*\)$/\2 \3 \1/p')
+  grep -qE '^[0-9]+ [0-9]+ Cloud$' <<< "$sizes" ||
+    ui_fail "the size Preferences asks for with its Cloud page is not logged"
   read -r width height state <<< "$(since 's/^Preferences minimum \([0-9]*\) x \([0-9]*\), \([a-z]*\)$/\1 \2 \3/p')"
   fits "the minimum size" "$width" "$height"
   [ "$state" = resizable ] || ui_fail "Preferences cannot be resized (${state:-not logged})"

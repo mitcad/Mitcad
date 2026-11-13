@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: MIT
+# Pictures of the origin's two styles and a construction plane's resize
+# handles (mitcad#1748), a one-off visual check. On a new design with a
+# block of 30 x 20 x 10 mm at the origin, saves in ${MITCAD_TEST_WORK}:
+#   origin-corner-screen.png    Size Screen, the Corner style (the defaults)
+#   origin-corner-zoomed.png    the same zoomed out: the planes keep their size
+#   origin-centred-screen.png   Size Screen, the Centered style
+#   origin-corner-model.png     Size Model 100 mm, the Corner style
+#   origin-plane-handles.png    a construction plane selected, its corner handles
+# Run by tools/ui-origin-styles-look.sh.
+wait-idle
+model-command '{"cmd":"sketch.create"}'
+model-command '{"cmd":"sketch.add_rectangle","sketch":"F1","corner":[0,0],"width":30,"height":20}'
+model-command '{"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],"extent":{"type":"distance","distance":10},"operation":"new_body"}}'
+wait-idle
+mark
+click-logged '^Browser eye Root/Origin at '
+wait-log '^View origin drawn: planes xy, xz, yz; axes x, y, z; point origin$'
+command view.fit
+wait-idle
+sleep 500
+screenshot-view '${MITCAD_TEST_WORK}/origin-corner-screen.png'
+mark
+wheel 50 50 -4
+wait-idle
+sleep 500
+screenshot-view '${MITCAD_TEST_WORK}/origin-corner-zoomed.png'
+command view.fit
+wait-idle
+
+mark
+command tools.preferences.display
+focus-dialog '^Preferences$'
+qt-choice originStyle Centered
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+wait-log '^View origin planes: screen size, centred style; XY '
+wait-idle
+sleep 500
+screenshot-view '${MITCAD_TEST_WORK}/origin-centred-screen.png'
+
+mark
+command tools.preferences.display
+focus-dialog '^Preferences$'
+qt-choice originSize Model
+qt-choice originStyle Corner
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+wait-log '^View origin planes: model size, corner style; XY '
+command view.fit
+wait-idle
+sleep 500
+screenshot-view '${MITCAD_TEST_WORK}/origin-corner-model.png'
+
+mark
+model-command '{"cmd":"add_feature","def":{"type":"construction_plane","definition":{"type":"offset","plane":"xy","distance":30}}}'
+wait-log '^Datum F3( in O1)? at '
+command view.fit
+wait-idle
+mark
+click-logged '^Datum F3( in O1)? at '
+wait-log '^Datum handle F3 corner [1-4] at '
+wait-idle
+sleep 500
+# The whole window: the handles are drawn over the view, not in its frame.
+screenshot '${MITCAD_TEST_WORK}/origin-plane-handles.png'

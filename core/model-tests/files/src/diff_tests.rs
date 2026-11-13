@@ -652,3 +652,46 @@ fn flat_pattern_items_are_added_changed_and_deleted() {
     let text = doc.to_json();
     assert!(diff_files(&text, &text).unwrap().identical);
 }
+
+/// mitcad#1741: the text for a person (the Version History window) names
+/// features by their names, counts a sketch's items and says nothing by an
+/// internal id; the text for agents keeps them.
+#[test]
+fn the_plain_text_names_no_ids() {
+    let mut doc = block(MockKernel::default());
+    let diff = changed(
+        &mut doc,
+        json!([
+            {"cmd": "set_parameter", "name": "d3", "value": 25},
+            {"cmd": "sketch.add_line", "sketch": "F1", "start": [70, 0], "end": [90, 0]},
+            {"cmd": "add_feature", "def": {"type": "extrude",
+             "profiles": [{"sketch": "F1", "region": REGION}],
+             "extent": {"type": "distance", "distance": 5}, "operation": "new_body"}},
+        ]),
+    );
+    let agents = diff.to_text();
+    assert!(
+        agents.contains("Extrude1 (F2): distance 20 mm -> 25 mm"),
+        "{agents}"
+    );
+    assert!(agents.contains("Sketch1 (F1): entities"), "{agents}");
+    let plain = diff.to_plain_text();
+    assert!(
+        plain.contains("  Extrude1: distance 20 mm -> 25 mm\n"),
+        "{plain}"
+    );
+    assert!(plain.contains("(extrude): added after Extrude1"), "{plain}");
+    assert!(plain.contains("  Sketch1: entities "), "{plain}");
+    assert!(plain.contains(" added)"), "{plain}");
+    assert!(
+        plain.starts_with(&format!("Summary: {}\n", diff.plain_summary())),
+        "{plain}"
+    );
+    for line in plain.lines() {
+        assert_eq!(
+            mitcad_model::notice::user_text_leaks(line),
+            None,
+            "{line} in {plain}"
+        );
+    }
+}

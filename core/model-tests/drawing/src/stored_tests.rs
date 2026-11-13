@@ -14,6 +14,7 @@ use mitcad_model::Document;
 use mitcad_model::datum::Vec3;
 use mitcad_model::ids::{ComponentUid, LARGEST_U32_ID};
 use mitcad_model::internal::profile::{cross, dot};
+use mitcad_model::notice;
 use mitcad_model::testing::MockKernel;
 use mitcad_model_api::DocumentApi;
 use mitcad_model_diff::diff_states;
@@ -1871,9 +1872,21 @@ fn a_view_keeps_what_it_showed_when_it_was_placed() {
     );
     let front = view(&doc, "D1", 1);
     assert!(front.get("error").is_none(), "{front}");
+    // In words for a person, the occurrence's id in the agents' detail
+    // (mitcad#1741).
+    let said = front["warnings"][0].as_str().unwrap_or_default().to_owned();
     assert_eq!(
-        front["warnings"],
-        json!([format!("the occurrence {second} is gone")]),
+        front["warnings"].as_array().map(Vec::len),
+        Some(1),
+        "{front}"
+    );
+    assert_eq!(
+        notice::user_message(&said),
+        "an occurrence is gone",
+        "{front}"
+    );
+    assert!(
+        said.contains(&format!("the occurrence {second} is gone")),
         "{front}"
     );
     assert!(view(&doc, "D1", 2).get("error").is_none());
@@ -1885,7 +1898,10 @@ fn a_view_keeps_what_it_showed_when_it_was_placed() {
         .filter_map(|w| w.as_str().map(str::to_owned))
         .collect();
     assert!(
-        warnings.contains(&format!("view 1: the occurrence {second} is gone")),
+        warnings
+            .iter()
+            .any(|w| w.starts_with("view 1: an occurrence is gone")
+                && w.contains(&format!("the occurrence {second} is gone"))),
         "{warnings:?}"
     );
     // The occurrence's own view has nothing left: not drawn, and why.

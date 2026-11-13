@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -23,12 +24,14 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QResizeEvent>
+#include <QScreen>
 #include <QShowEvent>
 #include <QWheelEvent>
 #include <QWindow>
 #include <QtLogging>
 
 #include "CefEngine.hpp"
+#include "webbrowser/ComponentWebFiles.hpp"
 #include "include/cef_client.h"
 #include "include/cef_context_menu_handler.h"
 #include "include/cef_cookie.h"
@@ -91,11 +94,14 @@ public:
     if (m_view == nullptr) {
       return false;
     }
+    // The view's size and scale taken (and kept for the frames) as
+    // GetViewRect does; the screen is the window's own, in CEF's pixels, so
+    // that a resize of the view changes nothing of it (mitcad#1716).
     CefRect rect;
     GetViewRect(browser, rect);
     info.device_scale_factor = 1.0f;
-    info.rect = rect;
-    info.available_rect = rect;
+    info.rect = m_view->screenRect(false);
+    info.available_rect = m_view->screenRect(true);
     return true;
   }
   bool GetScreenPoint(CefRefPtr<CefBrowser>, int viewX, int viewY, int& screenX, int& screenY) override {
@@ -238,20 +244,22 @@ public:
     }
     CefView::DownloadState state = CefView::DownloadState::InProgress;
     QString reason;
+    QString detail;
     if (item->IsComplete()) {
       state = CefView::DownloadState::Complete;
     } else if (item->IsCanceled()) {
       state = CefView::DownloadState::Canceled;
     } else if (item->IsInterrupted() || !item->IsInProgress()) {
       // Stopped, neither complete nor canceled: interrupted, after any
-      // number of bytes (none too).
+      // number of bytes (none too). Why in words for the user, CEF's code
+      // only for the log (mitcad#1716).
       state = CefView::DownloadState::Failed;
-      reason = QStringLiteral("interrupted after %1 bytes (reason %2)")
-                   .arg(item->GetReceivedBytes())
-                   .arg(static_cast<int>(item->GetInterruptReason()));
+      const int code = static_cast<int>(item->GetInterruptReason());
+      reason = webDownloadFailure(code);
+      detail = QStringLiteral("interrupted after %1 bytes (reason %2)").arg(item->GetReceivedBytes()).arg(code);
     }
     m_view->downloadChanged(item->GetId(), item->GetReceivedBytes(), item->GetTotalBytes(), state,
-                            QString::fromStdString(item->GetFullPath().ToString()), reason);
+                            QString::fromStdString(item->GetFullPath().ToString()), reason, detail);
   }
 
   // CefContextMenuHandler: no Chromium menu (an off-screen browser cannot
@@ -445,14 +453,63 @@ CefRect CefView::viewRect() {
     // Not from within CEF's call: the zoom once it has returned.
     QMetaObject::invokeMethod(this, &CefView::applyZoom, Qt::QueuedConnection);
   }
-  return CefRect(0, 0, std::max(1, static_cast<int>(std::lround(width() * m_scale))),
-                 std::max(1, static_cast<int>(std::lround(height() * m_scale))));
+  const CefRect rect(0, 0, std::max(1, static_cast<int>(std::lround(width() * m_scale))),
+                     std::max(1, static_cast<int>(std::lround(height() * m_scale))));
+  // Kept with its scale: a frame of this size was painted at it
+  // (mitcad#1716). The same size asked again at the same scale is kept once.
+  const QSize pixels(rect.width, rect.height);
+  if (m_requests.empty() || m_requests.back().pixels != pixels ||
+      std::abs(m_requests.back().scale - m_scale) > 1e-9) {
+    m_requests.push_back(ViewRequest{pixels, m_scale, size()});
+    constexpr std::size_t kKept = 64;
+    while (m_requests.size() > kKept) {
+      m_requests.pop_front();
+    }
+  }
+  return rect;
 }
 
-void CefView::applyScale() {
+CefRect CefView::screenRect(bool available) const {
+  const QWindow* screenWindow = window()->windowHandle();
+  const QScreen* shown = screenWindow != nullptr ? screenWindow->screen() : screen();
+  if (shown == nullptr) {
+    return CefRect(0, 0, std::max(1, static_cast<int>(std::lround(width() * m_scale))),
+                   std::max(1, static_cast<int>(std::lround(height() * m_scale))));
+  }
+  // In CEF's pixels, as GetScreenPoint's points.
+  const QRect area = available ? shown->availableGeometry() : shown->geometry();
+  return CefRect(static_cast<int>(std::lround(area.x() * m_scale)), static_cast<int>(std::lround(area.y() * m_scale)),
+                 std::max(1, static_cast<int>(std::lround(area.width() * m_scale))),
+                 std::max(1, static_cast<int>(std::lround(area.height() * m_scale))));
+}
+
+const CefView::ViewRequest* CefView::requestOf(const QSize& pixels) const {
+  // The newest of the same size first, then one a pixel off (CEF's rounding).
+  for (auto it = m_requests.rbegin(); it != m_requests.rend(); ++it) {
+    if (it->pixels == pixels) {
+      return &*it;
+    }
+  }
+  for (auto it = m_requests.rbegin(); it != m_requests.rend(); ++it) {
+    if (std::abs(it->pixels.width() - pixels.width()) <= 1 && std::abs(it->pixels.height() - pixels.height()) <= 1) {
+      return &*it;
+    }
+  }
+  return nullptr;
+}
+
+void CefView::applyScale(bool forced) {
   m_scale = devicePixelRatioF();
   if (CefRefPtr<CefBrowserHost> browserHost = host()) {
-    browserHost->NotifyScreenInfoChanged();
+    // The screen's information only when the screen or its scale changed
+    // (mitcad#1716): a show on the same screen tells CEF the size only.
+    const CefRect screenArea = screenRect(false);
+    const QRect area(screenArea.x, screenArea.y, screenArea.width, screenArea.height);
+    if (forced || area != m_screenTold || std::abs(m_scale - m_scaleTold) > 1e-9) {
+      m_screenTold = area;
+      m_scaleTold = m_scale;
+      browserHost->NotifyScreenInfoChanged();
+    }
     browserHost->WasResized();
   }
   applyZoom();
@@ -597,33 +654,32 @@ void CefView::painted(bool popup, const void* buffer, int width, int height) {
   // CEF's BGRA pixels, premultiplied: Qt's ARGB32 on a little-endian machine.
   QImage image(static_cast<const uchar*>(buffer), width, height, width * 4, QImage::Format_ARGB32_Premultiplied);
   QImage copy = image.copy();
-  // The frame's own scale (mitcad#1654), which need not be the view's: CEF
-  // is given the view in physical pixels (mitcad#1657), so a frame is of
-  // the view's size times the scale CEF last asked with, which can lag
-  // behind the window's. A frame of the view's shape is marked with its own
-  // scale, so that it fills the view (blurred only while it is of fewer
-  // pixels) and the page lies where the clicks land. A frame of another
-  // shape (painted before a resize) keeps the view's scale.
-  const QSize logical = popup ? m_popupRect.size() : size();
-  double ratio = devicePixelRatioF();
-  if (logical.width() > 0 && logical.height() > 0) {
-    const double across = double(width) / logical.width();
-    const double down = double(height) / logical.height();
-    // CEF rounds the frame's pixels up: each way's scale is the frame's to
-    // within a pixel of the view.
-    if (std::abs(across - down) <= 1.0 / std::min(logical.width(), logical.height()) + 1e-9) {
-      ratio = across;
-    }
-  }
+  // The scale the frame was painted with (mitcad#1716): CEF is given the
+  // view in physical pixels (mitcad#1657), each size with the scale it was
+  // given at (viewRect), and a frame is of one of those sizes. It is drawn
+  // at that scale from the view's top left: a frame painted before a resize
+  // keeps its own scale (never stretched to the view's new size), so frames
+  // never alternate between two scales. A popup's is the view's scale (its
+  // rectangle came back at it); a frame of a size never asked for, too.
+  const ViewRequest* request = popup ? nullptr : requestOf(QSize(width, height));
+  const double ratio = request != nullptr ? request->scale : m_scale;
   copy.setDevicePixelRatio(ratio);
   if (!popup) {
-    const QString frame = QStringLiteral("%1x%2 px at scale %3 for a view of %4x%5 at scale %6")
+    const QSize viewSize = size();
+    const QString origin = request != nullptr
+                                ? QStringLiteral("painted at scale %1 for %2x%3")
+                                      .arg(request->scale, 0, 'f', 2)
+                                      .arg(request->logical.width())
+                                      .arg(request->logical.height())
+                                : QStringLiteral("painted at an unknown scale");
+    const QString frame = QStringLiteral("%1x%2 px at scale %3 for a view of %4x%5 at scale %6, %7")
                               .arg(width)
                               .arg(height)
                               .arg(ratio, 0, 'f', 2)
-                              .arg(logical.width())
-                              .arg(logical.height())
-                              .arg(devicePixelRatioF(), 0, 'f', 2);
+                              .arg(viewSize.width())
+                              .arg(viewSize.height())
+                              .arg(devicePixelRatioF(), 0, 'f', 2)
+                              .arg(origin);
     if (frame != m_frameLogged) {
       m_frameLogged = frame;
       qDebug().noquote() << QStringLiteral("Component browser frame: %1").arg(frame);
@@ -684,15 +740,30 @@ void CefView::logged(const QString& message) {
 }
 
 QString CefView::downloadStarting(std::uint32_t id, const QString& suggestedName, const QUrl& url) {
+  // CEF asks again for a download it resumes on its own: it goes on into
+  // the same file rather than a new folder each time (mitcad#1716).
+  const auto known = m_downloadPaths.find(id);
+  if (known != m_downloadPaths.end()) {
+    return known->second;
+  }
   const QString path = beforeDownload ? beforeDownload(suggestedName, url) : QString();
   if (path.isEmpty()) {
     m_refused.insert(id);
+  } else {
+    m_downloadPaths[id] = path;
   }
   return path;
 }
 
 void CefView::downloadChanged(std::uint32_t id, qint64 received, qint64 total, DownloadState state,
-                              const QString& path, const QString& reason) {
+                              const QString& reportedPath, const QString& reason, const QString& detail) {
+  // An item interrupted before it wrote anything has no path of its own:
+  // the one it was given names it (mitcad#1716).
+  QString path = reportedPath;
+  const auto known = m_downloadPaths.find(id);
+  if (path.isEmpty() && known != m_downloadPaths.end()) {
+    path = known->second;
+  }
   // Each state, and the progress in tenths, for the log (where a download
   // stops shows there); CEF calls this on its browser thread, which is Qt's
   // main thread (the external message pump).
@@ -706,11 +777,12 @@ void CefView::downloadChanged(std::uint32_t id, qint64 received, qint64 total, D
                               .arg(QLatin1String(kStates[static_cast<int>(state)]))
                               .arg(received)
                               .arg(total)
-                              .arg(reason.isEmpty() ? QString() : QStringLiteral(", ") + reason)
+                              .arg(detail.isEmpty() ? QString() : QStringLiteral(", ") + detail)
                               .arg(QDir::toNativeSeparators(path));
   }
   if (state != DownloadState::InProgress) {
     m_downloadLog.erase(id);
+    m_downloadPaths.erase(id);
   }
   emit downloadUpdated(id, received, total, static_cast<int>(state), path, reason);
 }
@@ -719,7 +791,7 @@ void CefView::downloadChanged(std::uint32_t id, qint64 received, qint64 total, D
 
 void CefView::screenChanged() {
   qDebug().noquote() << QStringLiteral("Component browser scale: %1").arg(devicePixelRatioF(), 0, 'f', 2);
-  applyScale();
+  applyScale(true);
 }
 
 bool CefView::event(QEvent* event) {
@@ -745,8 +817,10 @@ void CefView::paintEvent(QPaintEvent* event) {
 
 void CefView::resizeEvent(QResizeEvent* event) {
   QWidget::resizeEvent(event);
+  // The size only: the screen is the same (mitcad#1716; a screen's or a
+  // scale's change comes through screenChanged). CEF asks for the view's
+  // rectangle, kept with its scale for the frames it paints at that size.
   if (CefRefPtr<CefBrowserHost> browserHost = host()) {
-    browserHost->NotifyScreenInfoChanged();
     browserHost->WasResized();
   }
 }

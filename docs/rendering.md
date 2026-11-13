@@ -974,7 +974,12 @@ application, which applies them when it shows a frame.
   ground's catcher factors over what the camera sees of the world behind
   the ground (Cycles' background pass): the frame has one plane then.
 - **Ground** (`CyclesRenderer::buildGround`): a shadow catcher quad 50
-  times the bodies' size, at the lowest body or at `height` (Z, mm);
+  times the bodies' size, at the lowest body or at `height` (Z, mm), a
+  hair under it (`groundHeight`: a ten-thousandth of the bodies' size, at
+  least a few hundred float steps at their distance from the origin): a
+  surface in the catcher's own plane, such as a sheet drawn on the XY
+  plane, would meet the catcher in the rays that leave it and render
+  black from above (mitcad#1738, `cli.render_3dm_plane_surfaces`);
   diffuse with the preset's albedo (what bodies see of it in reflections
   and bounced light), and with `reflections` a polished floor (35 % of a
   sharp GGX reflection). Refracted rays pass it (glass shows what is

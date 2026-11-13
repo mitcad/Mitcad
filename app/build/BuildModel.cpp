@@ -154,7 +154,7 @@ QJsonObject pickRecord(const SelectionItem& item, const CommandContext& context)
   if (const std::optional<gp_Trsf> placement = worldOf(item.occurrence, context)) {
     point.Transform(*placement);
   }
-  QJsonObject record{{QStringLiteral("item"), item.describe()}, {QStringLiteral("point"), pointJson(point)}};
+  QJsonObject record{{QStringLiteral("item"), item.logDescription()}, {QStringLiteral("point"), pointJson(point)}};
   // The snap distance there: kSnapPixels on the screen (mitcad#417).
   const double pixel = context.pixelSize(point);
   if (std::isfinite(pixel) && pixel > 0.0) {
@@ -174,7 +174,7 @@ std::optional<double> pickSnap(const QString& key, const CommandState& state) {
   const Selection& items = state.items(key);
   const QJsonObject pick = state.object(key + QStringLiteral("_pick"));
   const double snap = pick.value(QStringLiteral("snap")).toDouble(-1.0);
-  if (items.isEmpty() || str(pick, "item") != items.first().describe() || !std::isfinite(snap) || snap <= 0.0) {
+  if (items.isEmpty() || str(pick, "item") != items.first().logDescription() || !std::isfinite(snap) || snap <= 0.0) {
     return std::nullopt;
   }
   return snap;
@@ -186,7 +186,7 @@ std::optional<gp_Pnt> pickPoint(const QString& key, const CommandState& state, c
     return std::nullopt;
   }
   const QJsonObject pick = state.object(key + QStringLiteral("_pick"));
-  if (str(pick, "item") == items.first().describe()) {
+  if (str(pick, "item") == items.first().logDescription()) {
     if (const auto point = pointFrom(pick.value(QStringLiteral("point")))) {
       return point;
     }
@@ -205,7 +205,7 @@ std::optional<QJsonObject> atOf(const QString& key, const CommandState& state, c
   // A plane chosen without a point (mitcad#1196: the first part on a plane
   // before the click that says where, or Enter): at the plane's origin.
   const QJsonObject pick = state.object(key + QStringLiteral("_pick"));
-  const bool atOrigin = item.kind == SelectKind::Plane && str(pick, "item") == item.describe() &&
+  const bool atOrigin = item.kind == SelectKind::Plane && str(pick, "item") == item.logDescription() &&
                         !pick.contains(QStringLiteral("point"));
   const std::optional<QString> path = pathFromHost(item, context);
   if (!path) {
@@ -225,7 +225,7 @@ std::optional<QJsonObject> atOf(const QString& key, const CommandState& state, c
         return QJsonObject{{QStringLiteral("point"), pointJson(inHost(*point, context))}};
       }
     }
-    problem = QObject::tr("%1 is not in %2, where the Build tab places components.").arg(item.describe(), buildHost(context).name);
+    problem = QObject::tr("%1 is not in %2, where the Build tab places components.").arg(context.itemText(item), buildHost(context).name);
     return std::nullopt;
   }
   QJsonObject at{{QStringLiteral("geometry"), item.reference()}};

@@ -171,6 +171,7 @@ search: type the start of a command's name and press Enter.
   - [.rvt import](#rvt-import)
   - [SolidCraft import](#solidcraft-import)
   - [DWG import](#dwg-import)
+  - [.3dm import](#3dm-import)
 - [Outputs](#outputs)
   - [3D printing](#3d-printing)
   - [USDZ for AR and 3D viewers](#usdz-for-ar-and-3d-viewers)
@@ -932,6 +933,26 @@ The view shows a change at once:
   the view. What is nearer than it stands out of the screen, and what is
   farther lies behind it.
 
+**Preferences › Display › Focal length** sets how wide the perspective
+camera sees, in millimeters as for a lens on 35 mm film: a short focal
+length shows more around the model and makes near parts look larger; a
+long one sees less and looks flatter. It has two values in one row,
+each a slider with its value field, 20–70 mm:
+
+- **Focal length** (default 29 mm, the picture of earlier versions):
+  the perspective camera's.
+- **Anaglyph 3D** (default 50 mm): the camera's while View › Anaglyph 3D
+  is on. A longer lens than the perspective one keeps the model from
+  looking rounded in stereo.
+
+Turning Anaglyph 3D on switches to its focal length, and turning it off
+switches back. The view shows a change at once, and the model stays as
+large in the middle of the view: the camera moves closer or farther to
+make up for the lens. Standard views, named views, Fit and a sketch's
+view keep the focal length. Orthographic views and the orientation
+cube's own projections do not change. Cancel in Preferences puts the
+previous values back.
+
 **Preferences › Display › Small circles** sets how finely the view draws
 small holes, circles and arcs:
 
@@ -1080,9 +1101,12 @@ driver from the device's maker:
   installed and running, it can keep the device to itself; then quit
   the driver to use the device in MitCad.
 
-If the view jumps or an axis moves it the wrong way on Windows, turn on
-the [debug log](#debug-log), move the cap along one axis at a time, and
-attach the log to your report. The log shows what the device sends.
+If the view jumps or an axis moves it the wrong way, turn on the
+[debug log](#debug-log), move the cap along one axis at a time, and
+attach the log to your report. After each motion the log says which
+axis moved most and what the design does for it in Object mode, so you
+can compare it with what you did with the cap; on Windows it also shows
+what the device sends.
 
 ### Selection
 
@@ -1484,6 +1508,14 @@ other component stays inactive. The preview shows the plane, axis or
 point where the finished one will be, also when the active component is
 moved or turned.
 
+**Resize a construction plane or axis.** Select one construction plane
+or axis in the view: small squares appear at the corners of the plane
+(dots at the ends of the axis). Drag one to make the plane or axis
+larger or smaller in the view. The plane stays centered where it was, and
+only its drawing changes: sketches and features that use it do not
+change. MitCad saves the size with the design, and Undo takes it back. A
+plane or axis that you did not resize is drawn 100 mm.
+
 **Inspect:** Measure, Interference, Section Analysis ([Inspect: Measure,
 Annotations and Section
 Analysis](#inspect-measure-annotations-and-section-analysis)), Physical
@@ -1714,6 +1746,13 @@ the sketch. The extrusion then starts at that offset from the sketch
 plane, and its distances are measured from there. Extrusions saved
 before this change, and imported ones, keep their solids: a negative
 distance there goes its own way by its size.
+
+**Taper on curves.** A taper works on profiles of any curves: splines,
+ellipses and offset curves as well as lines and arcs. The walls of such
+a profile lean so that the far end is the profile offset by the
+distance times the tangent of the angle, and each curve keeps one wall.
+Holes in the profile lean the other way. If the angle closes the
+profile before the end, the message says so.
 
 **To Object in another component.** The object of To Object or of
 Start: Object can be a face or a body of another component, picked
@@ -2062,8 +2101,8 @@ because it is not round: dimension its flats or its ribs instead.
 
 A round hole printed lying on its side has a roof with nothing under
 it: the roof sags, and the hole comes out out of round and too small.
-When a body of the design has a print bed face (**Set as Print Bed
-Face**), the Hole panel offers *Print Shape* for such holes:
+The Hole panel offers *Print Shape* for such holes, whether or not a
+body of the design has a print bed face (**Set as Print Bed Face**):
 
 | Print Shape | The hole's top |
 |---|---|
@@ -2072,14 +2111,18 @@ Face**), the Hole panel offers *Print Shape* for such holes:
 | Flat Roof | the teardrop's sides cut short by a flat roof that bridges the hole, *Roof Sag* above the circle |
 
 The roof points away from the print bed face; without one, the design's
-−Z is down. Holes whose axis is not parallel to the bed stay round. The
+−Z is down and the roof points up (+Z), as the field's tooltip says. To
+print the body another way, right-click the face it lies on and choose
+**Set as Print Bed Face**. Holes whose axis is not parallel to the bed
+stay round. The
 lower part of the hole keeps its circle, and the hole keeps its
 diameter in drawings and callouts: only the solid gets the roof. A new
 flat roof's *Roof Sag* suggests the printed fit `hole_roof_sag` (0.4 mm,
 see [Tuning printed fits](#tuning-printed-fits)), which you tune to how
 far your printer's bridges sag. A counterbore lying on its side gets a
 roof of its own. Print shapes do not go with a press fit, a taper or a
-modeled thread. Changing the print bed face turns the roofs with it.
+modeled or tapered thread: the panel does not offer *Print Shape* for
+them. Changing the print bed face turns the roofs with it.
 
 ### Thread
 
@@ -2966,14 +3009,26 @@ again keeps the orientation it was made with, also a sketch on XZ made
 in an earlier version, which opens from the back.
 
 While you edit a sketch, the timeline at the bottom shows the sketch's
-own items instead: its points, curves, constraints and dimensions in the
-order you made them, each with its icon. A curve says its kind and
-whether it is construction; a dimension shows its value. Click an item to
-select it in the view, press Delete to delete it, and double-click a
-dimension to change its value. An item in conflict, or one that the
-others already imply, has the same mark as in the Sketch Palette. The
-list has no marker: a sketch is solved as a whole, so you cannot roll
-it back. When you finish the sketch, the timeline comes back.
+own work steps instead, in the order you made them: one icon for each
+time you used a tool. A Project of a chain of edges, a rectangle with its
+lines, corners and constraints, a fillet with its arc, a constraint, a
+dimension, a text, a Paste or an inserted drawing is one step each. A
+Trim or an Extend is a step too, also when it only shortens or lengthens
+a curve; that curve stays in the step that made it and also shows as
+changed in the Trim's or Extend's list. A step that
+made several items shows their number on its icon. Rest the pointer on a
+step to see its name and a list of the items it made: a point, a line, a
+Coincident and so on. Rest the pointer on an item in that list to see it
+in the view, and click it to select it. Click a step to select all its
+items in the view (Ctrl or Shift adds them to the selection or takes
+them out), press Delete to delete them, and double-click a dimension's
+step to change its value. A step whose item is in conflict, or is
+already implied by the others, has the same mark as in the Sketch
+Palette; the list of the step's items shows which item it is. A sketch
+made with an earlier version of MitCad shows one step for each of its
+items. The list has no marker: a sketch is solved as a whole, so you
+cannot roll it back. When you finish the sketch, the timeline comes
+back.
 
 On a planar face, the face's edges also bound the sketch's profiles.
 For example, draw an octagon inside a circular face: the area between
@@ -4717,6 +4772,22 @@ Sketch always shows the origin planes for the pick (refer to [Sketch mode](#sket
 shows its own origin and axes, whatever the eye of the Origin folder
 says.
 
+**The size and style of the origin planes.** Preferences › Display ›
+**Origin planes** sets how the view draws the origin:
+
+- **Size**: **Screen** (the default) draws the origin planes about
+  80 pixels wide at any zoom, so they never cover a small part and never
+  get lost beside a large one. A part in front of them hides them; to
+  use a hidden plane, click its row in the Origin folder of the Browser. **Model** draws them in millimeters (enter
+  the size beside it, 100 mm by default), so they zoom with the model.
+- **Style**: **Corner** (the default) draws each plane from the origin
+  into its positive quarter, with the X, Y and Z axes as red, green and
+  blue lines a little longer than the planes. **Centered** draws each plane
+  centered on the origin, with the axes through it.
+
+You click the planes and axes in the same way in each setting, also in
+Create Sketch.
+
 In the other commands the eye has priority. A command that takes a
 plane, an axis or a point, for example Offset Plane, Revolve or the
 Start Object of Extrude, does not show a hidden origin, so the origin
@@ -5458,16 +5529,19 @@ a parameter.
 
 **Name a value or make a parameter.** Type `name = value` to give the
 field's own parameter a name, for example `width = 30 mm`. When you type
-a name that no parameter has, the list offers this form. The list also
-offers **Add User Parameter**. It makes a new user parameter that is
+a name that no parameter has, the list offers **Add User Parameter**
+first, in every value field, so Enter makes a new user parameter. It is
 independent of the field's own parameter. Give its value or expression
 and its unit. MitCad refuses a name that exists already, an invalid
 name, a wrong unit or an expression that the design refuses. The editor
 then stays open with the reason. When the parameter is made, MitCad puts
 its name into the field where you typed it. The new parameter is in
 Edit Parameters and in the lists at once. In a sketch, Undo takes it
-back. In a feature panel it stays when you cancel the panel. The
-right-click menu of a value field has the same actions.
+back. In a feature panel it stays when you cancel the panel. In a
+feature panel or a sketch dimension, the row below Add User Parameter,
+**Name this value**, gives the field's own parameter the typed name
+instead: press Down, then Enter, and type the value. The right-click
+menu of a value field has the same actions.
 
 **Remove a name.** A sketch dimension whose parameter you named shows
 the name in its value editor, for example `width = 20 mm`. Delete the
@@ -6707,7 +6781,8 @@ print with it (for example "Filament 1: PETG (2 bodies)", "Filament 2:
 TPU (1 body)"). A body that has its component's material shows that
 material by name. Bodies without a material of their own or of their
 components show **No material: choose one**; hover over it to see what
-the slicer gets until you choose (the design's default material, such as
+the slicer gets until you choose: PLA Plastic, the material Print
+Analysis assumes too, not the design's default material (such as
 Steel). Click a row to open the material picker: type in its search
 field to narrow the list, then press Return to choose the first match,
 or click a material. The filaments (FDM plastics) come first, then the
@@ -6724,10 +6799,16 @@ HF names no Bambu Studio filament preset": give them one on the
 *Filament* tab of Materials (**Slicer presets**, see
 [Materials](#materials)). After **Send**, the message line names each
 filament that the design leaves without a value another filament has
-(for example "Steel (filament 2) sets no nozzle temperature: written as
-generic PLA's"): the slicer takes every filament's values from one
-list, so such a filament gets MitCad's generic values of its type, and
-the values you set reach their own filament.
+(for example "PLA Plastic (filament 2) sets no nozzle temperature:
+written as generic PLA's"): the slicer takes every filament's values
+from one list, so such a filament gets MitCad's generic values of its
+type, and the values you set reach their own filament. When the design
+has no printer (none chosen in the **Printer** row, none imported), the
+file names a stand-in printer that the slicer does not know, and the
+slicer makes no G-code until you choose a real printer there; the
+message line says so. Choose the printer in the **Printer** row, or
+bring the printer's settings in with **Import from Slicer…**, before
+you send.
 
 **Edit printers and processes.** In **Send to Slicer**, open the
 Printer or Process picker and choose its last row, **Edit printers…** or
@@ -7386,6 +7467,16 @@ folder as Save As asks, with the component's name as the file's name.
 MitCad does not write the component over the design's own file or over
 a file that a component of the design is linked from, also when the name
 differs only in case: choose another file.
+
+MitCad follows a link only to a file in the design's project (without a
+project: in the design's folder and the folders in it). If you select
+**Replace with a link to the new file** and choose a file outside the
+project, MitCad says so before it saves. **Save into the Project and
+Link** saves the file into the project's `parts` folder (a name that is
+taken gets a number) and links that file, so that the link is followed
+when the design opens again. **Save There and Link** saves the file
+where you chose; the link to it is not followed, and the component
+keeps the bodies saved with this design. **Cancel** saves nothing.
 
 **The active component in the view.** While a component other than
 the root is active, MitCad draws everything outside it as a ghost.
@@ -10560,6 +10651,7 @@ file's history.
 | `.rvt` (projects) | Open. Levels become components, elements become bodies and meshes | None | Walls, floors, roofs, ceilings, columns, beams and stair runs as features |
 | SolidCraft (`.sc`, `.solidcraft`) | Open, Import (every file format version) | None | Features, sketches, parameters, components and joints. Sheet metal |
 | DWG (`.dwg`, R13 to R2018) | Open, Import. 3D solids become bodies, 3D faces and meshes become mesh bodies, blocks become components with their occurrences | A drawing (R2000) | None. A drawing keeps no history |
+| `.3dm` (format versions 5 to 8) | Open, Import. Polysurfaces, surfaces and extrusions become bodies, meshes become mesh bodies, blocks become components with their occurrences | None | None. A `.3dm` model keeps no history |
 | STEP (`.step`, `.stp`) | Bodies. An assembly: its parts become components, each placed by an occurrence per instance | Bodies (AP214 or AP242). Components as an assembly | None |
 | IGES (`.iges`, `.igs`) | Bodies | Bodies | None |
 | BRep (`.brep`, `.brp`) | Bodies | Bodies | None |
@@ -10613,6 +10705,21 @@ Each format is imported in its own way:
   the design's folder and the folders in it). A link to a file elsewhere
   is not followed: its component keeps the bodies saved with the design,
   and a message tells you so. Keep linked designs in the project.
+- When you insert a design from outside the project of a saved design,
+  Insert Component tells you before it inserts that a link to the file
+  would not be followed, so changes to the file would not come in. Select
+  **Copy into the Project and Link** (the default) to copy the file into
+  the project's *parts* folder (without a project: a *parts* folder beside
+  the design) and link the copy. The designs that the file links from
+  outside the project are copied too, and a name that is taken gets a
+  number (*plate_2.mitcad*). The component keeps the file's name. Later
+  changes to the copy come in with Update Link. Select **Insert as a
+  Copy** to make the design a component that you can edit here, or
+  **Cancel**.
+- If a linked component's file is outside the project already, the
+  message at opening tells you what to do: move the file into the
+  project, or make the folder that holds both a project (File › Project ›
+  New Project…), then use Update Link.
 
 Insert SVG asks for these values:
 
@@ -10640,6 +10747,8 @@ Design files open as new designs:
   import](#rvt-import)).
 - `.dwg` drawings open as new designs of their 3D solids, meshes and
   blocks ([DWG import](#dwg-import)).
+- `.3dm` models open as new designs of their polysurfaces,
+  meshes and blocks ([.3dm import](#3dm-import)).
 
 There are other ways to open or import a file:
 
@@ -10818,8 +10927,20 @@ planar face, and it changes no geometry.
 
 The image is centered on the plane or face you picked. Its size comes
 from the file's resolution; when the file does not have one, MitCad uses
-96 pixels to the inch. The panel shows the image's outline while it is
-open. These are the panel's values:
+96 pixels to the inch. While the panel is open, the view shows the image
+where its values put it, with its outline and its opacity; when you
+change an image, it is shown only there, not where it was. You can also
+place it with handles in the view:
+
+- Drag the arrows at the image's center to move it along the plane's x
+  or y axis (**X**, **Y**).
+- Drag the ring around the image to turn it (**Angle**).
+- Drag the arrow at a corner to scale the image (**Width**). The image
+  keeps its proportions, and the opposite corner stays where it is.
+
+While you point at a handle or drag it, a box beside it shows its value;
+click the box to type the value instead. The panel's fields follow the handles.
+These are the panel's values:
 
 - **X** and **Y** move the image's center on its plane. They start at
   the middle of the plane or face you picked.
@@ -10864,7 +10985,8 @@ between two points on it:
 
 The image changes size about the first point, so that point stays where
 it is. The image must be shown. Press Esc to stop before the second
-click.
+click. Calibrating is the way to scale an image by a distance you know;
+the corner handles in the panel scale it by eye.
 
 ### Export
 
@@ -11538,6 +11660,46 @@ The import report:
 - Makes sure that the bodies lie in the drawing's extents (`$EXTMIN`,
   `$EXTMAX`)
 
+### .3dm import
+
+A `.3dm` model (format versions 5 to 8) opens as a new design. Use
+File › Open or Import, or `mitcad-cli import-3dm`. A `.3dm` model keeps
+no history. Thus everything is imported as bodies:
+
+- Polysurfaces and surfaces become bodies. A closed polysurface becomes
+  a solid. An open one becomes a surface body.
+- Extrusions (boxes, cylinders and extruded curves saved as extrusions)
+  become bodies too.
+- Meshes become mesh bodies.
+- If a polysurface cannot be built, the mesh saved with it in the file
+  comes in instead. The import report says so.
+- Each block becomes a component, named as the block. An occurrence
+  places it for every instance of it. Blocks inside blocks keep their
+  nesting. Occurrences only move and turn. Thus an instance that scales
+  or mirrors its block is copied into the component that holds it
+  instead. A block placed inside itself is placed once.
+- The bodies of a component on one layer are one base feature named
+  after the layer, with its parent layers (`Layer Parts::Bracket`). A
+  body takes its object's name and display color. Black, the file's
+  default color, keeps MitCad's color.
+- The model's units become the design's units: millimeters,
+  centimeters, meters, inches or feet. Bodies in other units are
+  converted to millimeters.
+
+Curves, points, text, dimensions and hatches are not imported. Hidden
+objects and objects on hidden layers are not imported either. SubD
+objects are not imported yet: convert them to polysurfaces before you
+save the file. Blocks are read from files of format version 6 and later.
+A damaged object is left out, and the rest of the file comes in. The
+import runs in a process of its own.
+
+The import report:
+
+- Counts the objects taken by kind
+- Names every kind not imported, with the count and why
+- Lists the components with their occurrences
+- Makes sure that every body built and is valid
+
 ## Outputs
 
 This chapter tells how to get a design out of MitCad for other uses.
@@ -11643,7 +11805,8 @@ The panel also has these options:
   the slicer of Preferences (3D Print, **Open in**). MitCad finds it
   automatically where possible. You can also select another program,
   for example an AppImage or, on macOS, an application in the
-  Applications folder.
+  Applications folder. MitCad remembers what you sent to, also *Folder
+  only*: the panel opens on it the next time.
 - **Use the open slicer window:** on until you turn it off; MitCad
   remembers your choice. When MitCad already started the slicer for
   this design and its window is still open, Send uses that window
@@ -12718,7 +12881,7 @@ guide that explains its settings.
 |---|---|---|
 | **General** | The **Language** of the interface. The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). **Show used sketches under their features** (off by default; see [Browser](#browser)). | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts) |
 | **Navigation** | The mouse scheme for orbit, pan and zoom | [View and navigation](#view-and-navigation) |
-| **Display** | **Camera**, **Orientation cube**, **Interface size**, **Text size**, **Icon size**, **Font**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Layout**, **Show the menu bar** (Windows and Linux), **Browser background**, **Ghost inactive components**, **Pick the active component first**, **Small circles** | [The window](#the-window), [View and navigation](#view-and-navigation), [Layouts](#layouts), [Components](#components) |
+| **Display** | **Camera**, **Orientation cube**, **Focal length** (perspective and **Anaglyph 3D**), **Interface size**, **Text size**, **Icon size**, **Font**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Layout**, **Show the menu bar** (Windows and Linux), **Browser background**, **Ghost inactive components**, **Pick the active component first**, **Small circles**, **Origin planes** | [The window](#the-window), [View and navigation](#view-and-navigation), [Layouts](#layouts), [Components](#components) |
 | **Cache** | The cache of computed results: on or off, the size, the folder, **Clear**, the memory limit | [Cache of computed results](#cache-of-computed-results) |
 | **Cloud** | The git program, the default author, the defaults of projects, live updates, the broker, **Known brokers** | [Sharing a project](#sharing-a-project), [Live updates](#live-updates) |
 | **Updates** | The automatic check for updates: on or off. Pre-releases: offered or not | [Updates](#updates) |
@@ -13060,7 +13223,9 @@ The application is `mitcad`, on Windows `mitcad.exe`. Its options:
 - `--demo`: starts with a 60 × 40 × 20 mm block
 - `--screenshot image.png`: saves the 3D view after start-up and quits
 - `--no-recovery`: does not offer autosaved work at start-up. File ›
-  Recover Designs still does.
+  Recover Designs still does. Give it when an AI assistant starts MitCad
+  to work in it: the assistant cannot answer that question, and its
+  changes wait until someone does.
 - `file`: the same as `--open file`, as a file association passes it.
   One file, not together with `--open`.
 - `--chrome=docked|floating`: puts the panels in docks, or as cards over

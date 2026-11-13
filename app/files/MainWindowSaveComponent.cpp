@@ -20,6 +20,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QListWidget>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QStringList>
 #include <QVBoxLayout>
@@ -27,6 +28,7 @@
 
 #include "../framework/DialogFolders.hpp"
 #include "../framework/Dialogs.hpp"
+#include "../framework/Json.hpp"
 #include "../projects/ProjectPicker.hpp"
 #include "RemoteController.hpp"
 #include "SaveComponentTarget.hpp"
@@ -87,6 +89,78 @@ std::optional<bool> askSaveComponent(QWidget* parent, const QString& name, const
   qDebug().noquote() << QStringLiteral("Save Component as Design dialog: replace with a link: %1")
                             .arg(replace->isChecked() ? QStringLiteral("yes") : QStringLiteral("no"));
   return replace->isChecked();
+}
+
+// What to do with a component saved with Replace with a link to a file the
+// link would not follow (mitcad#1739): save into the project's parts folder
+// instead, or save where it was asked and link that file as it is.
+enum class OutsideSaveChoice { IntoProject, There };
+
+// Asked before the file is written, in Insert Component's words for a file
+// outside the project (`askOutsideLink`, mitcad#1719); nothing when
+// cancelled. `inProject`: the design is in a project (else its own folder
+// is what its links are followed in).
+std::optional<OutsideSaveChoice> askOutsideSave(QWidget* parent, const QString& file, bool inProject) {
+  const QString name = QFileInfo(file).fileName();
+  const QString text =
+      inProject ? QObject::tr("%1 is outside this design's project, so a link to it is not followed: changes to "
+                              "the file will not come in.")
+                      .arg(name)
+                : QObject::tr("%1 is outside this design's folder, so a link to it is not followed: changes to "
+                              "the file will not come in.")
+                      .arg(name);
+  const QString more =
+      inProject ? QObject::tr("Save it into the project's parts folder and link that file, or save it where you "
+                              "chose and link it as it is.")
+                : QObject::tr("Save it into the parts folder beside this design and link that file, or save it "
+                              "where you chose and link it as it is.");
+  QMessageBox box(QMessageBox::Warning, QObject::tr("Save Component as Design"), text, QMessageBox::Cancel, parent);
+  box.setObjectName(QStringLiteral("saveComponentOutsideLink"));
+  box.setInformativeText(more);
+  QPushButton* into = box.addButton(QObject::tr("Save into the Project and &Link"), QMessageBox::AcceptRole);
+  into->setToolTip(QObject::tr("The file in the project is linked and followed when the design opens"));
+  QPushButton* there = box.addButton(QObject::tr("Save &There and Link"), QMessageBox::AcceptRole);
+  there->setToolTip(QObject::tr("The link is not followed: the component keeps the bodies saved with this design"));
+  box.setDefaultButton(into);
+  QString intoLabel = into->text();
+  QString thereLabel = there->text();
+  intoLabel.remove(QLatin1Char('&'));
+  thereLabel.remove(QLatin1Char('&'));
+  qDebug().noquote() << QStringLiteral("Save Component as Design outside the project: %1 (%2); choices %3 | %4 | "
+                                       "Cancel")
+                            .arg(name, inProject ? QStringLiteral("project") : QStringLiteral("folder"), intoLabel,
+                                 thereLabel);
+  qDebug().noquote() << QStringLiteral("Save Component as Design outside the project text: %1 %2").arg(text, more);
+  prepareModal(&box);
+  execDialog(&box);
+  std::optional<OutsideSaveChoice> chosen;
+  QString how = QStringLiteral("cancelled");
+  if (box.clickedButton() == into) {
+    chosen = OutsideSaveChoice::IntoProject;
+    how = QStringLiteral("save into the project and link");
+  } else if (box.clickedButton() == there) {
+    chosen = OutsideSaveChoice::There;
+    how = QStringLiteral("save there and link");
+  }
+  qDebug().noquote() << QStringLiteral("Save Component as Design outside the project: %1").arg(how);
+  return chosen;
+}
+
+// A file of the name `name` in `folder` that is not there yet: the name
+// itself, else with a suffix (`Box_2.mitcad`), as the copies of linked
+// files are named (mitcad#1719).
+QString freeFileIn(const QString& folder, const QString& name) {
+  const QFileInfo info(name);
+  const QString stem = info.completeBaseName();
+  QString suffix = info.suffix();
+  if (!suffix.isEmpty()) {
+    suffix.prepend(QLatin1Char('.'));
+  }
+  QString path = QDir(folder).filePath(name);
+  for (int n = 2; QFileInfo::exists(path); ++n) {
+    path = QDir(folder).filePath(QStringLiteral("%1_%2%3").arg(stem).arg(n).arg(suffix));
+  }
+  return path;
 }
 
 // The files the design's components are linked from (the `components`
@@ -175,11 +249,46 @@ void MainWindow::saveComponentAsDesign(const QString& component, const QString& 
     }
     rememberDialogFolder(DialogGroup::Open, path);
   }
-  const QString absolute = QFileInfo(path).absoluteFilePath();
+  QString absolute = QFileInfo(path).absoluteFilePath();
+  const QString base = documentFolder();
+  // Replace with a link to a file outside the design's project: the link
+  // would not be followed when the design opens again (mitcad#929). Said
+  // before saving, with the project's parts folder offered instead, as
+  // Insert Component does (mitcad#1719, mitcad#1739). A design not saved
+  // yet has no project to tell.
+  if (*replace && !base.isEmpty()) {
+    QJsonObject check;
+    try {
+      check = queryObject({{QStringLiteral("query"), QStringLiteral("link_check")},
+                           {QStringLiteral("path"), absolute},
+                           {QStringLiteral("base"), base}});
+    } catch (const std::exception& e) {
+      qWarning().noquote() << QStringLiteral("Save Component as Design: the link not checked: %1").arg(errorText(e));
+    }
+    const QString folder = check.value(QStringLiteral("folder")).toString();
+    if (check.value(QStringLiteral("followed")) == QJsonValue(false) && !folder.isEmpty()) {
+      const QString root = QFileInfo(folder).absolutePath();
+      const bool inProject = QFileInfo::exists(QDir(root).filePath(QStringLiteral(".mitcad/project.json")));
+      const std::optional<OutsideSaveChoice> choice = askOutsideSave(this, absolute, inProject);
+      if (!choice) {
+        qDebug().noquote() << "Save Component as Design cancelled";
+        return;
+      }
+      if (*choice == OutsideSaveChoice::IntoProject) {
+        // The folder is made when the first file goes into it; a name
+        // taken there is not written over.
+        if (!QDir().mkpath(folder)) {
+          qWarning().noquote() << QStringLiteral("Save Component as Design: could not make %1").arg(folder);
+        }
+        absolute = freeFileIn(folder, QFileInfo(absolute).fileName());
+        const QString savedInto = QDir(root).relativeFilePath(absolute);
+        qInfo().noquote() << QStringLiteral("Save Component as Design: saving into the project as %1").arg(savedInto);
+      }
+    }
+  }
   // Not over the design's own file or a file it links, however the path is
   // spelled (mitcad#1148): a name that differs only in case on a disk that
   // ignores it, a path through a link or with "..".
-  const QString base = documentFolder();
   const QStringList linked = linkedFiles(queryObject({{QStringLiteral("query"), QStringLiteral("components")}}), base);
   const SaveComponentClash clash = saveComponentClash(absolute, m_filePath, linked);
   if (clash != SaveComponentClash::None) {

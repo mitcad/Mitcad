@@ -28,8 +28,13 @@
 //! - **Narrow gaps** (mitcad#1519, [`gap_candidates`], [`gap_kind`]):
 //!   bodies printed in place closer than the gap a printer keeps open
 //!   fuse. The pairs whose boxes lie within the gap are measured by the
-//!   kernel's exact distance (`Kernel::measure_between`); a pair that
-//!   touches or overlaps is `interference`'s, not a narrow gap.
+//!   kernel's exact distance (`Kernel::measure_between`). Their contact
+//!   itself is `interference`'s, but a pair that touches is not left out
+//!   (mitcad#1672, [`face_gap`]): its faces are measured pair by pair
+//!   (`Kernel::face_separations`), the faces that touch or cross are the
+//!   contact, and the narrowest other pair whose faces face each other
+//!   across air ([`faces_across_a_gap`]) is a narrow gap beside the
+//!   contact (a peg in its hole beside a face both lie on).
 //!
 //! The functions take a [`TriangleMesh`] and the settings, so they are
 //! tested without a kernel (`print_analysis_tests.rs`); the queries that

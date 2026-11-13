@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# The visible-text guard's allow-list (mitcad#1741,
+# app/framework/VisibleTextGuard.hpp; tools/ui-test-lib.sh sets
+# MITCAD_TEST_TEXT_GUARD to this file). The guard fails a Linux UI test
+# when a text a person sees holds a topological name (E{, V{, F3:side),
+# a region key (r{) or an internal id as a whole word (F57, O3, k12, p15,
+# c4). An entry allows one such token in the texts its regular expression
+# matches, and only where the token is the user's own data: a name a test
+# types (a component, a parameter, a file). Never an entry for a text the
+# application makes up: fix the text instead (docs/ui-conventions.md,
+# "What a text says").
+#
+# <token: a regular expression the identifier matches whole> | <regular
+# expression the visible text must match> | <reason>
+
+F\d+ | ^My F\d+$ | tools/ui-my-library-test.sh imports its own filament presets, named My F1 to My F30
+p[1-8] | ^(?:Uses )?p[1-8](?: \* 2)?$ | tools/ui-parameter-align-test.sh adds user parameters p1 to p8 (p8 = p1 * 2) and reads their columns

@@ -86,7 +86,7 @@ void MainWindow::inspectionRecorded(const CommandDef& def, const CommandState& s
     row.inputs.insert(key, items);
     row.picks += static_cast<int>(items.size());
     for (const SelectionItem& item : items) {
-      identity << item.describe() + QStringLiteral(" @") + item.occurrence;
+      identity << item.logDescription() + QStringLiteral(" @") + item.occurrence;
     }
   }
   row.key = identity.join(QLatin1Char('\n'));

@@ -283,7 +283,7 @@ void takeComponentOf(const SelectionItem& item, CommandState& state, const Comma
   state.setChoice(QStringLiteral("move_type"), QStringLiteral("components"));
   qInfo().noquote() << QStringLiteral("Move/Copy: %1 is of another component than the active one: moving %2 "
                                       "(Move Object: Components)")
-                           .arg(item.describe(), occurrence);
+                           .arg(item.logDescription(), occurrence);
 }
 
 // The selection made before the command (the view's click on a placed

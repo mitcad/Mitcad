@@ -45,7 +45,17 @@
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
+#include <GeomAPI_ExtremaCurveCurve.hxx>
+#include <GeomAdaptor_Curve.hxx>
+#include <GeomConvert.hxx>
+#include <GeomConvert_ApproxCurve.hxx>
+#include <GeomConvert_CompCurveToBSplineCurve.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <Geom_Curve.hxx>
+#include <Geom_OffsetCurve.hxx>
 #include <Geom_Surface.hxx>
+#include <Geom_TrimmedCurve.hxx>
+#include <NCollection_Array1.hxx>
 #include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_List.hxx>
 #include <Precision.hxx>
@@ -1927,6 +1937,360 @@ ShapePtr tapered(const Shape& solid, const gp_Pln& neutral, const gp_Dir& pull, 
 
 namespace {
 
+// A curve of an edge over the edge's range, placed.
+struct RangedCurve {
+  occ::handle<Geom_Curve> curve;
+  double first = 0.0;
+  double last = 0.0;
+};
+
+// The edge's 3D curve over its range, with the edge's placement.
+RangedCurve curve_of_edge(const TopoDS_Edge& edge) {
+  RangedCurve result;
+  result.curve = BRep_Tool::Curve(edge, result.first, result.last);
+  if (result.curve.IsNull()) {
+    throw std::runtime_error("the tapered walls could not be built: a curve of the profile has no geometry");
+  }
+  return result;
+}
+
+// The same curve running the other way.
+RangedCurve reversed_curve(const RangedCurve& c) {
+  RangedCurve result;
+  result.curve = c.curve->Reversed();
+  result.first = c.curve->ReversedParameter(c.last);
+  result.last = c.curve->ReversedParameter(c.first);
+  return result;
+}
+
+// The straight piece from `from` to `to` as a B-spline of degree 1 over a
+// parameter range of `span`.
+occ::handle<Geom_BSplineCurve> straight_piece(const gp_Pnt& from, const gp_Pnt& to, double span) {
+  NCollection_Array1<gp_Pnt> poles(1, 2);
+  poles.SetValue(1, from);
+  poles.SetValue(2, to);
+  NCollection_Array1<double> knots(1, 2);
+  knots.SetValue(1, 0.0);
+  knots.SetValue(2, span);
+  NCollection_Array1<int> multiplicities(1, 2);
+  multiplicities.SetValue(1, 2);
+  multiplicities.SetValue(2, 2);
+  return new Geom_BSplineCurve(poles, knots, multiplicities, 1);
+}
+
+// The curve as a B-spline over the same parameters: a B-spline or Bezier
+// curve segmented, any other (an offset curve, a conic) approximated within
+// 1e-7 mm. Null when the approximation does not reach 1e-6 mm.
+occ::handle<Geom_BSplineCurve> spline_over(const RangedCurve& c) {
+  const occ::handle<Geom_Curve> trimmed = new Geom_TrimmedCurve(c.curve, c.first, c.last);
+  const GeomAbs_CurveType type = GeomAdaptor_Curve(c.curve).GetType();
+  if (type == GeomAbs_BSplineCurve || type == GeomAbs_BezierCurve) {
+    return GeomConvert::CurveToBSplineCurve(trimmed);
+  }
+  GeomConvert_ApproxCurve approximation(trimmed, Precision::Confusion(), GeomAbs_C1, 1000, 14);
+  if (!approximation.HasResult() || approximation.MaxError() > 1.0e-6) {
+    return occ::handle<Geom_BSplineCurve>();
+  }
+  return approximation.Curve();
+}
+
+// An edge on the curve between two vertices, whose tolerances grow to the
+// curve's ends where these lie a little apart from them (an approximation's
+// rounding). Throws when they lie far apart.
+TopoDS_Edge edge_between(const RangedCurve& c, const TopoDS_Vertex& from, const TopoDS_Vertex& to,
+                         double scale) {
+  BRep_Builder builder;
+  const std::pair<TopoDS_Vertex, double> ends[2] = {{from, c.first}, {to, c.last}};
+  for (const auto& [vertex, at] : ends) {
+    const double gap = c.curve->Value(at).Distance(BRep_Tool::Pnt(vertex));
+    if (gap > 1.0e-4 * scale) {
+      throw std::runtime_error("the tapered walls could not be built: the offset profile does not follow the profile");
+    }
+    if (gap > BRep_Tool::Tolerance(vertex)) {
+      builder.UpdateVertex(vertex, 1.01 * gap + Precision::Confusion());
+    }
+  }
+  BRepBuilderAPI_MakeEdge make(c.curve, from, to, c.first, c.last);
+  if (!make.IsDone()) {
+    throw std::runtime_error("the tapered walls could not be built: an edge of the offset profile failed");
+  }
+  return make.Edge();
+}
+
+// The taper of a prism whose walls OCCT's draft cannot lean (mitcad#1749):
+// the walls of splines, ellipses and offset curves, which the draft
+// refuses (it leans planes, cylinders and cones only). The far cap is the
+// near cap's loop offset in its plane by d = height * tan(angle): each
+// edge's exact offset (OCCT's offset curve, at the edge's own parameters),
+// joined at the profile's corners as the leaned planes of a draft meet.
+// Where the offsets of two edges cross (a corner the offset turns into the
+// profile), both end where they cross (OCCT's extrema of the two curves);
+// where they part (a corner it turns out of the profile), each runs on
+// along its end tangent to the point where the two tangents meet, a mitre,
+// as the offsets of two lines do. The far loop is moved up by the height;
+// each wall is the ruled surface between its edge and its offset (OCCT's
+// ruled loft through the two loops), point by point at the same curve
+// parameter, so that the rulings run square to the profile; a mitre's
+// straight piece takes a small part of the parameter, the wall fanning out
+// from the corner to it. One wall per edge, named as the prism's wall, the
+// caps as the prism's caps. Throws std::invalid_argument for a cap with
+// holes (holed_taper tapers the outline and its holes on their own) and
+// std::runtime_error where an edge's offset vanishes between its corners
+// (the taper closes the profile), the far loop crosses itself (the walls
+// come out invalid; the caller says where the profile closes), or the
+// walls cannot be built.
+ShapePtr ruled_taper(const Shape& solid, const std::vector<bool>& leaned, const gp_Pln& neutral,
+                     const gp_Dir& pull, double angle) {
+  const int near = near_cap_of(solid, leaned, neutral, pull);
+  if (near < 0) {
+    throw std::runtime_error("the tapered walls could not be built: the profile does not lie where the extrusion starts");
+  }
+  const TopoDS_Face cap = TopoDS::Face(solid.face(near).Oriented(TopAbs_FORWARD));
+  int loops = 0;
+  for (TopExp_Explorer w(cap, TopAbs_WIRE); w.More(); w.Next()) {
+    ++loops;
+  }
+  const TopoDS_Wire outer = BRepTools::OuterWire(cap);
+  if (loops != 1 || outer.IsNull()) {
+    throw std::invalid_argument("a profile with holes tapers its outline and its holes one by one");
+  }
+  const gp_XYZ origin = neutral.Location().XYZ();
+  double height = 0.0;
+  for (TopExp_Explorer v(solid.occt(), TopAbs_VERTEX); v.More(); v.Next()) {
+    height = std::max(height, (BRep_Tool::Pnt(TopoDS::Vertex(v.Current())).XYZ() - origin).Dot(pull.XYZ()));
+  }
+  if (!(height > Precision::Confusion())) {
+    throw std::runtime_error("the tapered walls could not be built: the extrusion has no length");
+  }
+  const gp_Vec rise = gp_Vec(pull) * height;
+  const double scale = std::max(1.0, diagonal(bounds_of(solid.occt())));
+  const double d = height * std::tan(angle);
+  const std::string closes = angle < 0.0
+                                 ? "the taper closes the profile before the end of the extrusion"
+                                 : "the widening taper makes the profile overlap itself before the end of the extrusion";
+
+  // The cap's edges as the loop runs, each with its curve along the loop.
+  struct Wall {
+    TopoDS_Edge edge;
+    RangedCurve base;
+    occ::handle<Geom_Curve> offset; // moved out of the profile by d
+    double from = 0.0;              // the offset's range between its corners
+    double to = 0.0;
+    std::optional<gp_Pnt> mitre_before; // the mitres it runs on to
+    std::optional<gp_Pnt> mitre_after;
+  };
+  std::vector<Wall> walls;
+  for (BRepTools_WireExplorer e(outer, cap); e.More(); e.Next()) {
+    if (BRep_Tool::Degenerated(e.Current())) {
+      continue;
+    }
+    Wall wall;
+    wall.edge = e.Current();
+    wall.base = curve_of_edge(wall.edge);
+    if (wall.edge.Orientation() == TopAbs_REVERSED) {
+      wall.base = reversed_curve(wall.base);
+    }
+    walls.push_back(wall);
+  }
+  if (walls.empty()) {
+    throw std::runtime_error("the tapered walls could not be built: the profile has no curves");
+  }
+  const std::size_t count = walls.size();
+
+  // The plane's normal turned so that a tangent along the loop crossed with
+  // it points out of the profile (the profile on the loop's left).
+  gp_Dir normal = neutral.Axis().Direction();
+  {
+    const RangedCurve& probe_curve = walls.front().base;
+    gp_Pnt middle;
+    gp_Vec tangent;
+    probe_curve.curve->D1(0.5 * (probe_curve.first + probe_curve.last), middle, tangent);
+    const gp_Vec out = tangent.Crossed(gp_Vec(normal));
+    if (out.Magnitude() > gp::Resolution()) {
+      const gp_Pnt probe = middle.Translated(out.Normalized() * (1.0e-4 * scale));
+      if (BRepClass_FaceClassifier(cap, probe, Precision::Confusion()).State() == TopAbs_IN) {
+        normal.Reverse();
+      }
+    }
+  }
+
+  // Each edge's offset (OCCT's offset curve, at the edge's parameters).
+  for (Wall& wall : walls) {
+    try {
+      OCC_CATCH_SIGNALS
+      const occ::handle<Geom_Curve> trimmed = new Geom_TrimmedCurve(wall.base.curve, wall.base.first, wall.base.last);
+      wall.offset = new Geom_OffsetCurve(trimmed, d, normal);
+    } catch (const Standard_Failure&) {
+      throw std::runtime_error("the tapered walls could not be built: a curve of the profile could not be offset");
+    }
+    wall.from = wall.base.first;
+    wall.to = wall.base.last;
+  }
+
+  // The corners: where the offsets of an edge and the next one meet.
+  std::vector<gp_Pnt> joints(count);
+  for (std::size_t i = 0; i < count; ++i) {
+    Wall& before = walls[i];
+    Wall& after = walls[(i + 1) % count];
+    gp_Pnt corner;
+    gp_Vec end_tangent;
+    before.base.curve->D1(before.base.last, corner, end_tangent);
+    gp_Vec start_tangent;
+    after.base.curve->D1(after.base.first, corner, start_tangent);
+    if (end_tangent.Magnitude() <= gp::Resolution() || start_tangent.Magnitude() <= gp::Resolution()) {
+      throw std::runtime_error("the tapered walls could not be built: a curve of the profile has no direction at its end");
+    }
+    const gp_Vec t1 = end_tangent.Normalized();
+    const gp_Vec t2 = start_tangent.Normalized();
+    const double turn = t1.Crossed(t2).Dot(gp_Vec(normal));
+    const gp_Pnt p = before.offset->Value(before.base.last);
+    const gp_Pnt q = after.offset->Value(after.base.first);
+    if (std::abs(turn) < 1.0e-7) {
+      if (t1.Dot(t2) < 0.0) {
+        throw std::runtime_error("the tapered walls could not be built: the profile turns back on itself at a corner");
+      }
+      // Tangent: the offsets meet.
+      joints[i] = gp_Pnt((p.XYZ() + q.XYZ()) / 2.0);
+    } else if (turn * d > 0.0) {
+      // The offsets part: each runs on along its end tangent to the mitre
+      // where the tangents meet (p + s t1 = q - u t2).
+      const double s = gp_Vec(p, q).Crossed(t2).Dot(gp_Vec(normal)) / turn;
+      if (!(s > -Precision::Confusion())) {
+        throw std::runtime_error("the tapered walls could not be built: the offset profile's corners do not meet");
+      }
+      const gp_Pnt mitre = p.Translated(t1 * std::max(0.0, s));
+      before.mitre_after = mitre;
+      after.mitre_before = mitre;
+      joints[i] = mitre;
+    } else {
+      // The offsets cross near the corner: both end where they cross.
+      GeomAPI_ExtremaCurveCurve crossing(before.offset, after.offset, 0.5 * (before.base.first + before.base.last),
+                                         before.base.last, after.base.first,
+                                         0.5 * (after.base.first + after.base.last));
+      if (crossing.NbExtrema() == 0 || crossing.LowerDistance() > 1.0e-6 * scale) {
+        throw std::runtime_error(closes);
+      }
+      double u = 0.0;
+      double w = 0.0;
+      crossing.LowerDistanceParameters(u, w);
+      before.to = u;
+      after.from = w;
+      gp_Pnt on_before;
+      gp_Pnt on_after;
+      crossing.NearestPoints(on_before, on_after);
+      joints[i] = gp_Pnt((on_before.XYZ() + on_after.XYZ()) / 2.0);
+    }
+  }
+  for (const Wall& wall : walls) {
+    if (!(wall.to - wall.from > 1.0e-9 * (wall.base.last - wall.base.first))) {
+      // The edge's wall shrinks to nothing before the far end.
+      throw std::runtime_error(closes);
+    }
+  }
+
+  // The names of the wall each edge of the cap sweeps, and of the caps.
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces_of;
+  TopExp::MapShapesAndUniqueAncestors(solid.occt(), TopAbs_EDGE, TopAbs_FACE, faces_of);
+  const NameList near_names = solid.face_names(near);
+  NameList far_names;
+  for (int i = 0; i < solid.face_count(); ++i) {
+    if (i != near && !leaned[static_cast<std::size_t>(i)]) {
+      const NameList& names = solid.face_names(i);
+      far_names.insert(far_names.end(), names.begin(), names.end());
+    }
+  }
+
+  // New vertices for the near loop (the input stays as it is), one for
+  // each vertex of the cap, and for the far loop, one at each joint.
+  std::vector<std::pair<TopoDS_Shape, TopoDS_Vertex>> copies;
+  const auto copy_of = [&copies](const TopoDS_Vertex& vertex) {
+    for (const auto& [source, copy] : copies) {
+      if (source.IsSame(vertex)) {
+        return copy;
+      }
+    }
+    TopoDS_Vertex made;
+    BRep_Builder().MakeVertex(made, BRep_Tool::Pnt(vertex), std::max(BRep_Tool::Tolerance(vertex), Precision::Confusion()));
+    copies.emplace_back(vertex, made);
+    return made;
+  };
+  std::vector<TopoDS_Vertex> far_vertices(count);
+  for (std::size_t i = 0; i < count; ++i) {
+    BRep_Builder().MakeVertex(far_vertices[i], joints[i].Translated(rise), Precision::Confusion());
+  }
+
+  BRepBuilderAPI_MakeWire near_loop;
+  BRepBuilderAPI_MakeWire far_loop;
+  NamedWire named;
+  for (std::size_t i = 0; i < count; ++i) {
+    const Wall& wall = walls[i];
+    // The offset between its corners, with its mitres' straight pieces,
+    // as one curve; the edge's parameters kept.
+    const occ::handle<Geom_BSplineCurve> body = spline_over({wall.offset, wall.from, wall.to});
+    if (body.IsNull()) {
+      throw std::runtime_error("the tapered walls could not be built: the offset of a curve could not be approximated");
+    }
+    const double span = 0.01 * (wall.to - wall.from);
+    const gp_Pnt body_start = body->StartPoint();
+    const gp_Pnt body_end = body->EndPoint();
+    GeomConvert_CompCurveToBSplineCurve joined(body);
+    if (wall.mitre_before && wall.mitre_before->Distance(body_start) > Precision::Confusion() &&
+        !joined.Add(straight_piece(*wall.mitre_before, body_start, span), 1.0e-6 * scale, false, false)) {
+      throw std::runtime_error("the tapered walls could not be built: a corner of the offset profile could not be joined");
+    }
+    if (wall.mitre_after && wall.mitre_after->Distance(body_end) > Precision::Confusion() &&
+        !joined.Add(straight_piece(body_end, *wall.mitre_after, span), 1.0e-6 * scale, true, false)) {
+      throw std::runtime_error("the tapered walls could not be built: a corner of the offset profile could not be joined");
+    }
+    const occ::handle<Geom_BSplineCurve> whole = joined.BSplineCurve();
+    RangedCurve top{occ::down_cast<Geom_Curve>(whole->Translated(rise)), whole->FirstParameter(), whole->LastParameter()};
+    if (top.curve.IsNull()) {
+      throw std::runtime_error("the tapered walls could not be built: the offset profile could not be moved");
+    }
+    const TopoDS_Edge near_edge = edge_between(wall.base, copy_of(TopExp::FirstVertex(wall.edge, true)),
+                                               copy_of(TopExp::LastVertex(wall.edge, true)), scale);
+    const TopoDS_Edge far_edge = edge_between(top, far_vertices[(i + count - 1) % count], far_vertices[i], scale);
+    near_loop.Add(near_edge);
+    far_loop.Add(far_edge);
+    if (!near_loop.IsDone() || !far_loop.IsDone()) {
+      throw std::runtime_error("the tapered walls could not be built: the offset profile's corners do not meet");
+    }
+    const TopoDS_Edge& added = near_loop.Edge();
+    const int index = faces_of.FindIndex(wall.edge);
+    if (index > 0) {
+      for (const TopoDS_Shape& face : faces_of.FindFromIndex(index)) {
+        const int f = solid.face_index(face);
+        if (f >= 0 && f != near && leaned[static_cast<std::size_t>(f)]) {
+          for (const std::string& name : solid.face_names(f)) {
+            named.edges.emplace_back(added, name);
+          }
+        }
+      }
+    }
+  }
+  if (!near_loop.IsDone() || !far_loop.IsDone() || !BRep_Tool::IsClosed(near_loop.Wire()) ||
+      !BRep_Tool::IsClosed(far_loop.Wire())) {
+    throw std::runtime_error("the tapered walls could not be built: the offset profile is not closed");
+  }
+  named.wire = near_loop.Wire();
+  ShapePtr lofted;
+  try {
+    OCC_CATCH_SIGNALS
+    lofted = through_sections({named.wire, far_loop.Wire()}, named, near_names, far_names, true, false, true);
+  } catch (const Standard_Failure&) {
+    throw std::runtime_error("the tapered walls could not be built as ruled surfaces");
+  }
+  if (lofted->occt().IsNull() || !is_valid(lofted->occt())) {
+    throw std::runtime_error("the tapered walls came out invalid");
+  }
+  GProp_GProps volume;
+  BRepGProp::VolumeProperties(lofted->occt(), volume);
+  if (!(volume.Mass() > Precision::Confusion())) {
+    throw std::runtime_error(closes);
+  }
+  return lofted;
+}
+
 ShapePtr tapered_draft(const Shape& solid, const std::vector<bool>& leaned, const gp_Pln& neutral,
                        const gp_Dir& pull, double angle) {
   if (ShapePtr closed = closing_cone(solid, leaned, neutral, pull, angle)) {
@@ -1941,13 +2305,14 @@ ShapePtr tapered_draft(const Shape& solid, const std::vector<bool>& leaned, cons
     if (!leaned[static_cast<std::size_t>(i)]) {
       continue;
     }
-    const NameList& names = solid.face_names(i);
     // OCCT leans a face into the material for a positive angle.
     draft.Add(solid.face(i), pull, -angle, neutral);
     if (!draft.AddDone()) {
-      throw std::invalid_argument("the taper cannot be applied to " +
-                                  (names.empty() ? std::string("a side face") : names.front()) +
-                                  "; tapers need straight lines and arcs");
+      // A side the draft cannot lean (OCCT leans planes, cylinders and
+      // cones only): the wall of a spline, an ellipse or an offset curve
+      // (mitcad#1749). The whole taper is then ruled from the profile to
+      // its offset.
+      return ruled_taper(solid, leaned, neutral, pull, angle);
     }
   }
   detail::build(draft);

@@ -379,7 +379,7 @@ ui_step "pick Body2's round face"          ui_click_pick "face F4.b0/F4:side(c1)
 ui_expect_new "Feature Control Frame Pick: 1 face" "the round face picked"
 ui_expect_new "Panel Feature Control Frame action tolerance.0 at" "Tolerance… placed"
 ui_step "Tolerance…"                       ui_click_logged "Panel Feature Control Frame action tolerance.0"
-ui_expect_new "Feature Control Frame dialog opened: face F4:side(c1) of F4.b0 {}" "the frame asked for"
+ui_expect_new "Feature Control Frame dialog opened: Body2: Face {}" "the frame asked for, on the round face in words"
 ui_focus_dialog '^Feature Control Frame$'
 ui_step "Perpendicularity (Down x7)"       ui_key Down Down Down Down Down Down Down
 ui_step "Cylindrical zone (Alt+Y)"         ui_key alt+y

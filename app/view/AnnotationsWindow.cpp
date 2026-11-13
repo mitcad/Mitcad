@@ -26,6 +26,7 @@
 
 #include "../framework/Icons.hpp"
 #include "../framework/NoticeLevel.hpp"
+#include "../framework/UserText.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
 #include "../platform/MacDialogs.hpp"
@@ -373,7 +374,8 @@ void AnnotationsWindow::fill() {
     if (!error.isEmpty()) {
       // Broken: a warning (mitcad#1040), with its icon and the reason.
       nameItem->setIcon(noticeIcon(NoticeLevel::Warning));
-      nameItem->setToolTip(noticeLevelText(NoticeLevel::Warning, tr("%1 is broken: %2").arg(name, error)));
+      // In words (mitcad#1741): the reason's names and ids are the log's.
+      nameItem->setToolTip(noticeLevelText(NoticeLevel::Warning, tr("%1 is broken: %2").arg(name, shownError(a))));
     } else {
       nameItem->setIcon(measurementSwatch(colour));
     }
@@ -381,7 +383,7 @@ void AnnotationsWindow::fill() {
     m_table->setItem(row, kKind, cell(kindName(own)));
     QTableWidgetItem* valueItem = cell(valueText);
     if (!error.isEmpty()) {
-      valueItem->setToolTip(error);
+      valueItem->setToolTip(shownError(a));
       // A warning's colour, as its name's badge (mitcad#1051).
       valueItem->setForeground(noticeColor(NoticeLevel::Warning, m_table->palette()));
     } else if (label.contains(QStringLiteral("warning"))) {

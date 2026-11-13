@@ -3,8 +3,9 @@
 """Insert > Component from Web (mitcad#1579) against a page of a small HTTP
 server of the test's own: a STEP file comes in as a component named after it
 with its part number and in Move; a zip of two STEP files lists both and
-brings in the one picked; a PDF is refused with its note. The downloads'
-temporary folders are gone afterwards.
+brings in the one picked; a PDF is refused with its note; a download the
+server breaks off fails with its reason in words (mitcad#1716). The
+downloads' temporary folders are gone afterwards.
 
 Usage: ui-component-web-test.py <app> <cli> <output folder> [<Qt's bin> [<the built web browser component>]]
        ui-component-web-test.py prepare <cli> <output folder>
@@ -17,6 +18,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -27,6 +29,8 @@ import zipfile
 
 STEP = "6494K13_NO THREADS_Bearing.step"
 PINS = ("PA100_pin.step", "PB200_pin.step")
+# A download the test's server breaks off (mitcad#1716): no file in the site.
+BROKEN = "broken.step"
 
 
 def prepare(cli, directory, environment=None):
@@ -64,12 +68,45 @@ def prepare(cli, directory, environment=None):
         "<li><a href=\"6494K13_NO%20THREADS_Bearing.step\">Bearing 6494K13</a></li>"
         "<li><a href=\"pins.zip\">Pins (zip)</a></li>"
         "<li><a href=\"datasheet.pdf\">Datasheet</a></li>"
+        "<li><a href=\"" + BROKEN + "\">Broken download</a></li>"
         "</ul></body></html>\n", encoding="utf-8")
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     """The site's files, each but the page as an attachment, as a supplier's
-    download links send them."""
+    download links send them; BROKEN a download the server breaks off."""
+
+    def do_GET(self):
+        if self.path.split("?")[0] == "/" + BROKEN:
+            self.broken()
+        else:
+            super().do_GET()
+
+    def broken(self):
+        """A STEP file the server stops sending after its first part
+        (mitcad#1716): the connection closed long before its length. It has
+        a validator (ETag), so the browser interrupts it rather than taking
+        what came as the whole file, and may ask for the rest, which the
+        server refuses: the download fails either way."""
+        if self.headers.get("Range"):
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        part = b"ISO-10303-21;\nHEADER;\n" + b"/* the first part of a larger file */\n" * 100
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(part) * 50))
+        self.send_header("ETag", '"broken-1"')
+        self.send_header("Accept-Ranges", "bytes")
+        self.end_headers()
+        self.wfile.write(part)
+        self.wfile.flush()
+        self.close_connection = True
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
 
     def end_headers(self):
         name = self.path.split("?")[0].rsplit("/", 1)[-1]
@@ -111,7 +148,7 @@ def workflow(port):
         "focus-widget componentBrowserAddress",
         "type http://127.0.0.1:%d/index.html" % port,
         "key Return",
-        "expect-log '^Component browser page: %s/index\\.html \\(3 links\\)$' 60" % host,
+        "expect-log '^Component browser page: %s/index\\.html \\(4 links\\)$' 60" % host,
         # The STEP file: a component named after it, its part number, in Move.
         "mark",
         "invoke-widget componentBrowser clickLink 'Bearing 6494K13'",
@@ -158,6 +195,16 @@ def workflow(port):
         "MitCad cannot import PDF documents \\(\\.pdf\\)\\.$' 30" % host,
         "expect-widget-property componentBrowserNote text 'MitCad cannot import PDF documents (.pdf).'",
         "expect-no-log '^Component browser download: datasheet'",
+        # A download the server breaks off (mitcad#1716): it fails, and the
+        # note says why in words (no number); the browser's interrupt code
+        # only in the log.
+        "mark",
+        "invoke-widget componentBrowser clickLink 'Broken download'",
+        "expect-log '^Component browser download: broken\\.step from %s/' 30" % host,
+        "expect-log '^Component browser download [0-9]+: interrupted, [0-9]+ of [-0-9]+ bytes, "
+        "interrupted after [0-9]+ bytes \\(reason [0-9]+\\), ' 90",
+        "expect-log '^Component browser download of broken\\.step failed: [^0-9]+$' 30",
+        "expect-no-log '^Component from Web: inserted broken'",
         "focus-main",
         "expect-model-bodies 2 5000",
         "expect-undo-depth ${before} 2",
@@ -184,7 +231,7 @@ def verify(directory):
     directory = Path(directory)
     served = (directory / "server.log").read_text(encoding="utf-8")
     for request in ("GET /index.html", "GET /6494K13_NO%20THREADS_Bearing.step", "GET /pins.zip",
-                    "GET /datasheet.pdf"):
+                    "GET /datasheet.pdf", "GET /" + BROKEN):
         if request not in served:
             raise RuntimeError("the test's server was not asked for " + request + ": " + served)
     downloads = directory / "downloads"
@@ -235,7 +282,7 @@ def run(app, cli, directory, qt_bin=None, component=None):
         server.shutdown()
     verify(directory)
     print("PASS: Component from Web: a STEP as a numbered component in Move, a zip's picked file, "
-          "a PDF refused, temporary files removed")
+          "a PDF refused, a broken-off download failed with its reason in words, temporary files removed")
 
 
 if __name__ == "__main__":

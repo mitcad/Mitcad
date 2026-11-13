@@ -11,7 +11,8 @@
 #      installed): the Cloud page's long message, which once made the
 #      window wider than the screen, wraps.
 # Each time Preferences opens on its Cloud page: the size it asks for (its
-# largest page's) and its minimum size fit a 1366 x 768 screen with a title
+# largest page's; each page's own size logged, mitcad#1751)
+# and its minimum size fit a 1366 x 768 screen with a title
 # bar and a taskbar, it is resizable, its frame lies within the screen's
 # available area, and the page list is as wide as its entries; on its
 # General page (Home in the page list) the minimum is that page's, and it
@@ -115,6 +116,14 @@ function Preferences-Fit([string]$Pattern, [string]$Description) {
   $asked = Since-Match '^Preferences opened: Cloud, (\d+) x (\d+)$'
   if (-not $asked) { Ui-Fail 'the size Preferences asks for is not logged' }
   Fits 'the size asked for' ([int]$asked.Groups[1].Value) ([int]$asked.Groups[2].Value)
+  # Each page's own size is logged (mitcad#1751), so a failure of the
+  # check above names the page; the dialog itself sizes by its largest page.
+  $pageSizes = @(Ui-LogLines | Select-Object -Skip $script:UiMark |
+                 ForEach-Object { [regex]::Match($_, '^Preferences page size: (.+), (\d+) x (\d+)$') } |
+                 Where-Object { $_.Success })
+  if (-not ($pageSizes | Where-Object { $_.Groups[1].Value -eq 'Cloud' })) {
+    Ui-Fail "the size Preferences asks for with its Cloud page is not logged"
+  }
   $minimum = Since-Match '^Preferences minimum (\d+) x (\d+), ([a-z]+)$'
   if (-not $minimum) { Ui-Fail "Preferences' minimum size is not logged" }
   Fits 'the minimum size' ([int]$minimum.Groups[1].Value) ([int]$minimum.Groups[2].Value)

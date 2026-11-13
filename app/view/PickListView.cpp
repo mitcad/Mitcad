@@ -149,7 +149,7 @@ void OcctViewer::openPickList() {
   for (const PickListEntry& entry : m_pickListEntries) {
     const QString words = pickListWords(entry.item);
     rows << words;
-    logged << QStringLiteral("%1 [%2]").arg(entry.item.describe(), words);
+    logged << QStringLiteral("%1 [%2]").arg(entry.item.logDescription(), words);
   }
   m_pickList->open(rows, m_pickListPosition.toPoint(), rect().marginsRemoved(m_overlayInsets), coveredRects());
   m_context->ClearDetected(false); // no hover beside the row's highlight
@@ -208,7 +208,7 @@ void OcctViewer::hoverPickListRow(int row) {
       }
       manager->EndImmediateDraw(m_viewer);
     }
-    qDebug().noquote() << QStringLiteral("Pick list hover %1").arg(entry.item.describe());
+    qDebug().noquote() << QStringLiteral("Pick list hover %1").arg(entry.item.logDescription());
   }
   requestFrame();
 }
@@ -219,7 +219,7 @@ void OcctViewer::choosePickListRow(int row, Qt::KeyboardModifiers modifiers) {
   }
   const SelectionItem item = m_pickListEntries[static_cast<std::size_t>(row)].item;
   const QPointF position = m_pickListPosition;
-  qDebug().noquote() << QStringLiteral("Pick list chose %1 [%2]").arg(item.describe(), pickListWords(item));
+  qDebug().noquote() << QStringLiteral("Pick list chose %1 [%2]").arg(item.logDescription(), pickListWords(item));
   closePickList(QStringLiteral("chosen"));
   // As a click on it would (OnSelectionChanged): where it was, with the
   // keys held as the row was clicked (Ctrl or Shift adds), then the item.

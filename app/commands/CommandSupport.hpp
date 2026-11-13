@@ -303,8 +303,17 @@ QString spatialPathRefusal(const SelectionItem& item, const CommandContext& cont
 // The listing of a 3D sketch's picked curves as the route the model finds
 // (the `sketch3d` query's `route`, routeText) with `chain` and `reversed`;
 // empty for other picks. `id` names the input in the log.
+// With `words`, also the same route in words for the panel (routeWords,
+// mitcad#1741), and nothing logged.
 QString spatialRouteListing(const Selection& items, bool chain, bool reversed, const CommandContext& context,
-                            const QString& id);
+                            const QString& id, QString* words = nullptr);
+// The route in words alone, for the panel (InputDef::itemsWords).
+inline QString spatialRouteWords(const Selection& items, bool chain, bool reversed, const CommandContext& context,
+                                 const QString& id) {
+  QString words;
+  spatialRouteListing(items, chain, reversed, context, id, &words);
+  return words;
+}
 // The names of the items (a 3D sketch's curves, in their order).
 QStringList itemNames(const Selection& items);
 // A whole 3D sketch picked into input `id` (an input's onPick): its one

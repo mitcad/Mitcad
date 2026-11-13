@@ -179,8 +179,8 @@ ui_expect_new "Joint highlight b: face F2:end($RECT) of F2.b0 in Plate:1 (O1) [J
 ui_expect_new "Joint highlight frame a at 20.0,20.0,10.0 [Joint1]" "side a's frame where the faces meet"
 ui_expect_new "Joint highlight frame b at 20.0,20.0,10.0 [Joint1]" "side b's frame there too"
 ui_expect_new "Joint highlight occurrences: Pin:1 (O2), Plate:1 (O1) [Joint1]" "the two occurrences it joins"
-ui_expect_new "Joint card: Joint1: revolute, a = Pin:1, face F4:start(" "the card names the joint and side a"
-ui_expect_new ", b = Plate:1, face F2:end(" "and side b"
+ui_expect_new "Joint card: Joint1: revolute, a = Pin:1, face of Body2" "the card names the joint and side a in words"
+ui_expect_new ", b = Plate:1, face of Body1" "and side b"
 
 echo "--- Joint2 replaces it: a frame override and a circular edge"
 ui_mark

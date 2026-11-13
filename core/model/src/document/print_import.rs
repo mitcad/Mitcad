@@ -10,6 +10,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
+use super::print_settings::hex_color;
 use super::{Document, ModelError, invalid};
 use crate::ids::ComponentUid;
 use crate::kernel::Kernel;
@@ -252,12 +253,35 @@ impl<K: Kernel> Document<K> {
                         })
                         .collect()
                 };
+                // Each material with its colour (its default appearance's,
+                // `#RRGGBB`) and the file it came from (its origin), so
+                // that two filaments of one name are told apart
+                // (mitcad#1728).
+                let materials: Vec<Value> = materials
+                    .iter()
+                    .map(|id| {
+                        let material = self.material(id);
+                        let colour = material
+                            .and_then(|m| m.appearance_list().into_iter().next())
+                            .and_then(|look| self.appearance(&look))
+                            .map(|look| hex_color(look.display_color()));
+                        let source = material
+                            .and_then(|m| m.origin.as_ref())
+                            .map_or_else(|| file.clone(), |origin| origin.id.clone());
+                        json!({
+                            "id": id,
+                            "name": material.map(|m| m.name.clone()),
+                            "colour": colour,
+                            "source": source,
+                        })
+                    })
+                    .collect();
                 Ok(json!({
                     "dialect": dialect_id,
                     "into": "design",
                     "printers": named(&printers, ItemKind::Printer),
                     "processes": named(&processes, ItemKind::Process),
-                    "materials": named(&materials, ItemKind::Material),
+                    "materials": materials,
                     "chosen": choose,
                     "report": report,
                 }))

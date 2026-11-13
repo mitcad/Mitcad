@@ -70,6 +70,25 @@ explain why the design structure needs an explicit policy decision.
 - **Spring:** choose `coil` dimensions and section; check pitch, turns,
   axis and end requirements. Do not construct each turn independently.
 
+## Fillets, lofts and booleans
+
+These constructions fail or mislead more often than others:
+
+- **Fillets:** round the edges of named faces (a set's `faces`) or
+  listed `edges` rather than every edge (`all_edges`): one edge the
+  radius cannot round fails the whole fillet, and every edge is the
+  likeliest set to contain one.
+- **Smooth lofts** follow curves through their sections, which can dip
+  below or bulge beyond the sections between them. Where an end must be
+  exact, extend the end sections past it and trim the loft with a `box`
+  cut, its face never on a plane a section lies in. Give every section
+  as many edges, starting at matching points: sections of different
+  edge counts are matched by the kernel, not by you. Use `ruled` where
+  straight spans between the sections are wanted.
+- **Booleans:** join the large bodies of one item with `combine` before
+  cutting or joining details into them; `combine`'s target is one body.
+  A cut can split a body into several, so list `bodies` after every cut.
+
 Read [sketches](sketches.md) before making a profile or route and
 [verification](verification.md) after each stage. If a feature cannot
 preserve a requested detail, revise the construction and keep the detail

@@ -94,6 +94,10 @@ export XCURSOR_SIZE=24
 CURSOR="Sketch cursor: bitmap 32x32, hot spot 10,10, ratio 1, icon line"
 
 ui_start_display
+# Parts built over the origin, beside which an origin plane is clicked:
+# the origin as 100 mm Centered squares (ui_origin_in_millimeters,
+# mitcad#1748).
+ui_origin_in_millimeters
 ui_start_app
 
 echo "--- Create Sketch asks for a plane and looks at it"

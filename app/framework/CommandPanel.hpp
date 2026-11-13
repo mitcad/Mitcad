@@ -2,11 +2,13 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <QColor>
 #include <QHash>
 #include <QPair>
+#include <QPoint>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
@@ -88,6 +90,9 @@ public:
   QJsonObject shownState() const override;
   // Logs where the inputs are, for UI tests.
   void logLayout() const override;
+  // Where logLayout logs an input ("key", or "key=value" for a choice's
+  // icon button), for live MCP's ui_click (mitcad#1735).
+  std::optional<QPoint> inputPlace(const QString& key) const override;
   // A button for `action` at the end of the title row, its place logged as
   // "Panel <command> <id> at x,y" with the action's command id's last part
   // (mitcad#564: Change Parameters while the panel stays open;
@@ -189,6 +194,11 @@ private:
   void updateNote(Row& row);
   // The rows in the order the panel shows them.
   std::vector<const Row*> orderedRows() const;
+  // The widget whose place is a row's (logLayout, inputPlace), and that
+  // place in the host window's coordinates: a value field's middle where
+  // the text is typed (mitcad#1735 shares it with ui_click).
+  static const QWidget* placedWidget(const Row& row);
+  static QPoint placeOf(const QWidget* widget);
   // The widget of a row that Tab moves the keyboard to: a value or text
   // field, a tile or a choice's rows; none for the rest.
   static QWidget* tabStop(const Row& row);

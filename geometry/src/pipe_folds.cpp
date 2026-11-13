@@ -1181,9 +1181,13 @@ void add_slotted_faces(BRepBuilderAPI_Sewing& sewing, const PathTube& tube, doub
   {
     double in = middles[widest];
     double out = in + kPi;
+    // Outside the slot the rim's point is the radius from its own point of
+    // the path, so `inside` is zero there only up to rounding (its sign
+    // differs between arithmetics, as with fused multiply-adds): the same
+    // slack as the scan's. `solve` puts the start on the edge exactly.
     for (int it = 0; it < 60; ++it) {
       const double m = (in + out) / 2.0;
-      (inside(xs[widest], m) > 0.0 ? in : out) = m;
+      (inside(xs[widest], m) > slack ? in : out) = m;
     }
     a0 = (in + out) / 2.0;
   }
@@ -2595,17 +2599,17 @@ UnfoldedSweep swept_resolving_folds(const FoldedSweep& sweep, const std::vector<
   if (unfolder->folds()) {
     // Not resolved here: the sweep in one piece where it builds (the model
     // warns of the fold), else the refusal.
-    const Whole one = built_whole(whole);
-    if (one.sound) {
-      return {one.shape, false};
-    }
     if (const std::optional<gp_Pnt> back = unfolder->turning_back()) {
       // (mitcad#1708) No miter can be built where the path turns right
-      // back on itself.
+      // back on itself, even when the kernel returns a negligible solid.
       throw std::runtime_error(placed_error(
           std::string(sweep.what) + "'s path turns right back at a corner, where no mitered corner can be built",
           std::string(sweep.what) + " passes through itself where its path turns right back at a corner",
           {point_place(*back)}));
+    }
+    const Whole one = built_whole(whole);
+    if (one.sound) {
+      return {one.shape, false};
     }
     if (why.empty()) {
       why = "the fold is not of a kind built in pieces";

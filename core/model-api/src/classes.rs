@@ -86,6 +86,7 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("set_face_appearance", Model),
     ("clear_face_appearances", Model),
     ("set_feature_visible", Model),
+    ("set_datum_display_size", Model),
     ("add_named_view", Model),
     ("delete_named_view", Model),
     ("rename_named_view", Model),
@@ -651,6 +652,11 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("filament_change_preview", Model),
     // Animate Joint's frames without a recompute (mitcad#1701).
     ("joint_poses", Model),
+    // The design at values of a parameter, tried on a copy (mitcad#1730).
+    ("parameter_range", Model),
+    // Whether a link to a file would be followed: it looks at the file
+    // system (mitcad#1719).
+    ("link_check", FileIo),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

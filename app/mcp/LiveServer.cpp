@@ -9,6 +9,7 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QEvent>
 #include <QDateTime>
 #include <QHostAddress>
@@ -28,6 +29,7 @@
 #include "MainWindow.hpp"
 #include "WindowManager.hpp"
 #include "framework/TitleBar.hpp"
+#include "AgentFolders.hpp"
 #include "AgentIndicator.hpp"
 #include "AssistantSetup.hpp"
 #include "ChatGate.hpp"
@@ -71,6 +73,8 @@ struct LiveServer::State {
     // When it came among the connections (mitcad#935): the oldest one that
     // has not authenticated gives way to a new one.
     quint64 order = 0;
+    // Since it came: within kPendingGraceMs it does not give way (mitcad#935).
+    QElapsedTimer opened;
     // The chat panel's marker of its own bridge connection (mitcad#947):
     // its calls go through the panel's approvals (ChatGate), and one that
     // waits for the user's answer holds the connection's next requests.
@@ -461,6 +465,9 @@ struct LiveServer::State {
     // now, before the request reads them.
     client.session->set_mcp_comment_policy(
         QSettings().value(QStringLiteral("ai/agentsMayResolveComments"), false).toBool());
+    // Clicks, keys and dialogs for viewing (mitcad#1735): only in a run
+    // started with --mcp-folder, and never for the chat's own connection.
+    client.session->set_mcp_input_tools(runAgentFoldersGiven() && client.chat.isEmpty());
     refreshComments();
     try {
       const std::string planText(client.session->prepare_mcp(rust::Str(message.constData(), size_t(message.size()))));
@@ -617,13 +624,17 @@ struct LiveServer::State {
       }
       std::vector<std::shared_ptr<Client>> pending;
       std::vector<quint64> since;
+      std::vector<qint64> waited;
       for (const auto& client : clients) {
         if (!client->authenticated && connected(*client)) {
           pending.push_back(client);
           since.push_back(client->order);
+          waited.push_back(client->opened.elapsed());
         }
       }
-      const int oldest = pendingToClose(since);
+      // A connection just come has its grace to send its line: idle ones
+      // opened again as soon as they close must not close an agent's first.
+      const int oldest = pendingToClose(since, waited);
       if (oldest >= 0) {
         pending[static_cast<std::size_t>(oldest)]->socket->abort();
       }
@@ -632,6 +643,7 @@ struct LiveServer::State {
       auto client = std::make_shared<Client>();
       client->socket = socket;
       client->order = ++connections;
+      client->opened.start();
       clients.push_back(client);
       QObject::connect(socket, &QTcpSocket::readyRead, owner, [this, client] { drain(client); });
       const std::weak_ptr<Client> weak = client;
@@ -644,8 +656,16 @@ struct LiveServer::State {
             gate->connectionClosed(gone->chat);
           }
         }
-        // Once the socket's QPointer has cleared.
-        QTimer::singleShot(0, owner, [this] { updateAgents(); });
+        // Once the socket's QPointer has cleared. A connection that never
+        // initialized was never among the agents: its end changes nothing
+        // the window shows, and the idle connections that other local
+        // accounts may open and reopen (mitcad#935) must not rewrite the
+        // window's record and its agent indicator each time, which kept the
+        // event loop too busy to read an agent's authentication.
+        const std::shared_ptr<Client> ended = weak.lock();
+        if (!ended || ended->initialized) {
+          QTimer::singleShot(0, owner, [this] { updateAgents(); });
+        }
       });
       QTimer::singleShot(5000, socket, [client] {
         if (!client->authenticated && client->socket) {

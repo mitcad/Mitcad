@@ -101,7 +101,9 @@ public:
       item->setText(0, row.value(QStringLiteral("name")).toString());
       const QString occurrence = row.value(QStringLiteral("occurrence")).toString();
       const QString path = row.value(QStringLiteral("path")).toString();
-      item->setText(1, occurrence.isEmpty() ? path : tr("%1 [%2]").arg(path, occurrence));
+      // The path by names; the occurrence's ids are the row's data, not
+      // text (mitcad#1741): the tree's nesting tells equal names apart.
+      item->setText(1, path);
       item->setData(0, Qt::UserRole, row);
       paths.insert(occurrence, item);
       m_rows.append(item);
@@ -189,7 +191,7 @@ private:
       const QJsonObject body = value.toObject();
       const QString name = body.value(QStringLiteral("name")).toString();
       m_transferNames << name;
-      lines << tr("%1 [%2]").arg(name, body.value(QStringLiteral("uid")).toString());
+      lines << name; // by its name, never its uid (mitcad#1741)
     }
     m_together->setVisible(false);
     m_details->setPlainText(lines.join(QLatin1Char('\n')));
@@ -316,7 +318,7 @@ private:
           const QString uid = item.value(QStringLiteral("uid")).toString();
           if (seen.contains(uid)) { continue; }
           seen.insert(uid);
-          entries << tr("%1 [%2]").arg(item.value(QStringLiteral("name")).toString(), uid);
+          entries << item.value(QStringLiteral("name")).toString(); // never its uid (mitcad#1741)
         }
       }
       lines << (key == QStringLiteral("features") ? tr("Sketches and features:") : tr("Bodies:"));

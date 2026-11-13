@@ -59,3 +59,5 @@ mitcad-mcp = { path = "../mcp" }
 mitcad-ifc = { path = "../ifc" }
 # The .dwg import (mitcad#453): its 3D content (the feature `solids`).
 mitcad-dwg = { path = "../dwg", features = ["solids"] }
+# The .3dm import (mitcad#1715): B-reps, extrusions, meshes and blocks.
+mitcad-3dm = { path = "../3dm" }

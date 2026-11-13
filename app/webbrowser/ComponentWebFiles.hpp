@@ -51,6 +51,12 @@ QString webComponentName(const QString& fileName);
 // one digit: "6494K13"); empty otherwise.
 QString webPartNumber(const QString& componentName);
 
+// Why a download stopped, in words for "The download of <file> failed:
+// <why>" (mitcad#1716): from the browser's interrupt code (Chromium's
+// download interrupt reasons, as CEF's cef_download_interrupt_reason_t
+// numbers them), never the code itself, which goes only to the log.
+QString webDownloadFailure(int interruptReason);
+
 // The user's sites (bookmarks): a name and a base URL, kept in the settings
 // (componentBrowser/sites); none are bundled.
 struct WebSite {

@@ -233,10 +233,11 @@ bool BindingsCard::rebuild() {
     lines->setSpacing(2);
     auto* head = new QHBoxLayout;
     head->setSpacing(6);
-    // A face by its short label, its topological name in the tooltip.
+    // A face by its short label, and in the tooltip in words (mitcad#1741:
+    // its topological name is the log's).
     auto* propertyLabel = textLabel(entry.property(), kTextWidth / 2,
                                     entry.kind == BindingEntry::Kind::FaceAppearance
-                                        ? tr("Face %1 of %2").arg(entry.face, entry.item)
+                                        ? tr("A face of %1").arg(entry.item)
                                         : QString());
     propertyLabel->setFont(bold);
     head->addWidget(propertyLabel);

@@ -21,7 +21,10 @@ This records an export orientation; it does not rotate the design.
 Inspect the body's bed-face result with `bodies` after later geometry
 edits. A saved face may be missing or no longer planar. Make separate
 components when pieces have independent assembly placement; keep pieces
-that must print assembled in their intended relative positions.
+that must print assembled in their intended relative positions. On a
+print plate, a body or an assembled occurrence without a bed face is
+oriented by the export itself, which can lay it on any flat face; assign
+one to each piece (the review's no-bed-face rule).
 
 Use `print_settings` to inspect wall and infill values. A geometric
 `shell` changes the CAD body; slicer walls and infill describe how that
@@ -56,6 +59,12 @@ These are different quantities: state whether clearance is across the
 diameter or between each pair of mating surfaces. Two opposed surfaces
 can accumulate their errors. Slots make adjustment possible when a
 precise rigid fit is unnecessary.
+
+Allowances that printed well in kits on that assumed process: 0.2 mm a
+side for a pocket, 0.2 mm for a hole, 0.15 mm for a peg and 0.15 mm for a
+cap. Make each kind of fit its own user parameter (`add_parameter` with
+`min`, `max` and `step`, and a `comment` saying per side or across), so
+that one test print tunes every fit of that kind.
 
 Use `printed_fit_parameters` to discover MitCad's fit names and defaults;
 use `parameters` to check any existing values before using the names in
@@ -95,7 +104,15 @@ that must be repeatedly dismantled.
 
 Use about 45° from the vertical as the initial unsupported-overhang
 limit. Keep bridges short and accessible; reorient or split the design
-when that avoids a difficult supported surface.
+when that avoids a difficult supported surface. Give undersides at least
+50° from the horizontal (at most 40° from the vertical), so that they pass
+a slicer's 45° threshold with a margin: `print_overhangs` with `angle` 40
+lists the faces without it.
+
+Plan every joint so that its pieces go together in one direction, and
+orient the pieces so that pins and the holes they enter both stand
+vertical on the bed: both print round, where a horizontal hole needs a
+`print_shape`.
 
 For a counterbore opening toward the bed, an ordinary circular recess
 leaves an unsupported ceiling. Give the `hole` a `print_bridging`:
@@ -161,6 +178,9 @@ Distinguish modeled ears from a slicer's brim when estimating plate space.
    `moved` names the plate it left and its count. Without a printer, obtain its actual bed
    and height before claiming that the design fits. Export arrangement
    can differ from assembly placement; inspect the resulting layout too.
+   A plated design without a printer profile exports a 3MF naming a
+   placeholder printer the slicer cannot slice with: import the printer's
+   slicer profile and choose it first (the review's no-print-profile rule).
 5. Use `print_estimate` for approximate material use. Supply realistic
    wall, layer and infill values; it is not a toolpath or print-time
    guarantee. Use `model_export` for the required mesh and inspect the
@@ -169,6 +189,38 @@ Distinguish modeled ears from a slicer's brim when estimating plate space.
 Report failed or unavailable checks. Change the geometry or explicitly
 state the remaining manufacturing assumption; a clean render is not
 evidence that the component will print or carry its load.
+
+## Export for a slicer
+
+A slicer project (a 3MF with a `dialect`) carries the plates, each
+piece's orientation, the filaments and the slicer's settings. Prepare
+them in this order:
+
+1. **A bed face for every printed body**, with `set_print_bed_face`.
+   Mirrored bodies (`mirror` without `combine`) and copies (`move` with
+   `copy`) are new bodies without one until it is assigned. Check each body's
+   `print_bed_face` in `bodies`.
+2. **Plates**: `add_print_plate`, then `place_on_plate` with the bodies
+   or occurrences and their `count`. An item is on one plate at most, so
+   a test plate (a fit coupon, a first piece to try) needs its own copy of
+   the part, made with `move` and `copy`, with its own bed face.
+   `print_plates` lists what is `unplaced`.
+3. **The slicer's settings** from the user's own slicer project (its
+   3MF, a preset or a bundle) with that slicer's `dialect`:
+   `import_print_profile` into the design. The design then uses the
+   printer and process read, and each filament becomes a material. Only
+   headless `model_command` takes it, from a file in the workspace; in the
+   live application ask the user to choose Import from Slicer… in Send to
+   Slicer.
+4. **Materials**: `set_component_material` gives the component its
+   filament's material, `set_body_material` a body that prints in
+   another. `print_settings` shows what a body prints with.
+5. **Export**: `model_export` with `"format": "3mf"`,
+   `"plates": "one_file"` (`"file_per_plate"` for a slicer with one
+   plate), the `dialect` and a `refinement` fine enough for the smallest
+   details. With `plates` the export lays every piece on its bed face
+   itself and takes no `bodies`. Read the result's `plates` and
+   `warnings`, then check the file in the slicer.
 
 ## Sources
 

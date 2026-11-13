@@ -50,6 +50,7 @@
 
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
 
 #include "../framework/Command.hpp"
 #include "CommandSupport.hpp"
@@ -131,6 +132,14 @@ bool placeShowable(const QJsonObject& feature, const CommandContext& context);
 // while it does not resolve.
 std::optional<PlaneFrame> placeFrame(const CommandState& state, const CommandContext& context,
                                      const PlacePanel& panel = {});
+// Where the placement's coordinates (the feature's component's: the
+// point, the references, placeFrame) are seen in the design: the
+// occurrence the face, edge or shaft was picked in, or where the
+// feature's component is seen; none in the root (mitcad#1743). A command
+// placed by a pick gives it as CommandDef::handlesSeenAt, so that its
+// handles are drawn at the part, not where the component's coordinates
+// would put them.
+std::optional<gp_Trsf> placeSeenAt(const CommandState& state, const CommandContext& context);
 // The plane and the centre in its coordinates for definitions that keep
 // them (a rack, a bevel pair), from a placement on a face or a plane;
 // none for another form.

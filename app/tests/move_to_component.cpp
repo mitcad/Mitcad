@@ -135,8 +135,8 @@ int moveToComponentTests() {
     QTreeWidgetItem* nested = target(tree, QStringLiteral("O1/O2"));
     check(tree->topLevelItemCount() == 1, "root contains all destinations");
     check(nested != nullptr && nested->parent() == target(tree, QStringLiteral("O1")), "nested destination has its parent");
-    check(nested != nullptr && nested->text(1).contains(QStringLiteral("Root/Assembly/Part [O1/O2]")),
-          "duplicate names have full path and occurrence context");
+    check(nested != nullptr && nested->text(1) == QStringLiteral("Root/Assembly/Part"),
+          "duplicate names have their full path, without the occurrence's ids (mitcad#1741)");
     tree->setCurrentItem(nested);
     const QString details = dialog->findChild<QPlainTextEdit*>(QStringLiteral("moveDetails"))->toPlainText();
     check(details.contains(QStringLiteral("Sketch1")) && details.contains(QStringLiteral("Extrude1")) &&
@@ -222,7 +222,10 @@ int moveToComponentTests() {
     check(together->isVisible() && !move->isEnabled(), "conflicts require explicit Keep Them Together");
     together->click();
     check(move->isEnabled() && dialog->findChild<QPlainTextEdit*>(QStringLiteral("moveDetails"))->toPlainText().contains(
-                                  QStringLiteral("Body2 [F3.b0]")), "expanded connected bodies are shown");
+                                  QStringLiteral("Body2")) &&
+                              !dialog->findChild<QPlainTextEdit*>(QStringLiteral("moveDetails"))->toPlainText().contains(
+                                  QStringLiteral("F3.b0")),
+          "expanded connected bodies are shown by name");
     check(queries.last().value(QStringLiteral("together")).toBool(), "query and command share together consent");
     move->click();
   }), "confirmed dependency group moves");
@@ -271,7 +274,8 @@ int moveToComponentTests() {
     check(!move->isEnabled(), "the bodies' own component is no destination");
     tree->setCurrentItem(target(tree, QStringLiteral("O1/O2")));
     const QString details = dialog->findChild<QPlainTextEdit*>(QStringLiteral("moveDetails"))->toPlainText();
-    check(details.contains(QStringLiteral("Body Transfer")) && details.contains(QStringLiteral("Body1 [F2.b0]")),
+    check(details.contains(QStringLiteral("Body Transfer")) && details.contains(QStringLiteral("Body1")) &&
+              !details.contains(QStringLiteral("F2.b0")),
           "the plan names the transfer and the bodies");
     check(queries.last().value(QStringLiteral("query")) == QStringLiteral("transfer_bodies"),
           "the transfer's own query plans it");

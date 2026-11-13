@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/framework/CommandPanel.cpp app/framework/CommandSession.cpp
 # check-all sources: app/framework/ManipulatorOverlay.cpp app/commands/HoleCommands.cpp app/commands/PlaceInputs.cpp
+# check-all sources: core/model/src/features/hole.rs tools/cli
 # Hole's keyboard, its dimensions in the view (mitcad#1181) and its Reference
 # rows (mitcad#1285), through the real UI on the demo block (60 x 40 x 20,
 # Body1, F2.b0); the Windows counterpart is
@@ -25,6 +26,14 @@
 #      when the view hides that edge, the same with Reference 2's first
 #      edge): the hole stays, the distance is the rest of the face's width.
 #      OK makes the hole.
+#   4. Print Shape with and without a print bed face (mitcad#1744), on a
+#      60 x 40 x 20 block that mitcad-cli makes (Sketch1 F1, Extrude1 F2)
+#      with a 6 mm hole 10 deep lying in it, started on its side at y 0
+#      along +Y (Hole1 F3, `plane`). Without a print bed face: Hole1 edited
+#      shows Print Shape, Teardrop chosen, OK and saved: the saved design's
+#      hole has two roof faces whose outward normals point down and
+#      sideways, so the roof points to +Z. With the block's top as its
+#      print bed face: the same, the roof pointing away from it, to -Z.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-hole-entry-test.sh
@@ -32,6 +41,11 @@
 source "$(dirname "$0")/ui-test-lib.sh"
 
 RECT='r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}'
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+CLI=${UI_CLI:-$(cd "$(dirname "$UI_APP")/.." && pwd)/tools/cli/mitcad-cli}
+mkdir -p "$ROOT/build"
+WORK=$(mktemp -d "$ROOT/build/ui-hole-entry.XXXXXX")
+trap 'ui_cleanup; rm -rf "$WORK"' EXIT
 
 # hole_on_top layout [app arguments]: the demo in that layout, Hole on the
 # block's top face with its distances 15 and 20 typed, the keyboard in
@@ -253,5 +267,94 @@ ui_expect_volume "Body Body1 (F2.b0): volume 48000.000 -> \([0-9.]*\) mm3" \
   "$(awk 'BEGIN { printf "%.6f", 47135.94936549554 }')" "one hole, 10 deep"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_stop_app
+
+echo "=== Print Shape with and without a print bed face (mitcad#1744)"
+# The block with a 6 mm hole lying in it, along +Y from its side at y 0;
+# a copy with the block's top as its print bed face.
+lying_block() {
+  cat << EOF
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "$RECT"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "hole", "diameter": 6,
+    "extent": {"type": "distance", "depth": 10},
+    "placement": {"type": "plane", "plane": {"origin": [0, 0, 0], "normal": [0, -1, 0]},
+      "points": [[30, 0, 10]]}}}
+EOF
+}
+{ echo "["; lying_block; echo "]"; } > "$WORK/free.json"
+{
+  echo "["
+  lying_block
+  echo "  ,{\"cmd\": \"set_print_bed_face\", \"uid\": \"F2.b0\", \"face\": \"F2:end($RECT)\"}"
+  echo "]"
+} > "$WORK/bed.json"
+for name in free bed; do
+  "$CLI" run "$WORK/$name.json" --save "$WORK/$name.mitcad" > "$WORK/cli.log" 2>&1 ||
+    { cat "$WORK/cli.log"; ui_fail "mitcad-cli $name"; }
+done
+
+# check description expectations...: the expectations (JSON objects) hold
+# for the saved design.
+check() {
+  local description=$1 file=$2
+  shift 2
+  local IFS=,
+  printf '[%s]\n' "$*" > "$WORK/check.json"
+  "$CLI" run "$WORK/check.json" --open "$file" > "$WORK/check.log" 2>&1 ||
+    { cat "$WORK/check.log"; ui_fail "$description"; }
+  echo "ok   $description"
+}
+
+# roof_faces x z count: the block's planar faces whose outward normal is
+# (x, 0, z), the number expected. A teardrop's roof along Y has two sides
+# at 45 degrees; their normals point back into the hole, down from a roof
+# that points up.
+roof_faces() {
+  printf '{"expect": {"query": {"query": "faces", "body": "F2.b0", "normal": [%s, 0, %s], "normal_tolerance": 0.001}, "result": {"total": %s}}}' \
+    "$1" "$2" "$3"
+}
+
+# teardrop file: Hole1 of the design edited to a Teardrop and saved.
+teardrop() {
+  ui_start_app --open "$1"
+  ui_step "fit (F6)"                       ui_key F6
+  ui_expect_log "Bodies shown: F2.b0" "the design shown"
+  ui_mark
+  ui_step "double-click Hole1"             ui_double_click_logged "Timeline Hole1"
+  ui_expect_new "Editing F3 with Hole" "Hole1 opens for editing" 30
+  ui_expect_new "Hole placement kept: plane" "its plane kept as it is"
+  ui_expect_new "Panel Hole input print_shape at" "Print Shape listed"
+  grep "Panel Hole input print_shape at" <(tail -n +"$UI_MARK" "$UI_LOG") | tail -1 | grep -q "(hidden)" &&
+    ui_fail "Print Shape is hidden"
+  echo "ok   Print Shape shown"
+  ui_mark
+  ui_step "Teardrop"                       ui_choose "Panel Hole input print_shape" 1
+  ui_expect_new "Hole: Print Shape = Teardrop" "Teardrop chosen"
+  ui_expect_new "Preview Hole: ok" "previewed" 30
+  ui_mark
+  ui_step "OK (Enter)"                     ui_key Return
+  ui_expect_new "Edited F3" "Hole1 edited" 30
+  grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+  ui_mark
+  ui_step "save (Ctrl+S)"                  ui_key ctrl+s
+  ui_expect_new "Saved $1" "saved"
+  ui_stop_app
+}
+
+echo "--- Without a print bed face: the design's -Z is down"
+teardrop "$WORK/free.mitcad"
+check "a teardrop without a print bed face, its roof toward +Z" "$WORK/free.mitcad" \
+  '{"expect": {"feature": "F3", "status": "ok"}}' \
+  '{"expect": {"query": {"query": "feature", "uid": "F3"}, "result": {"def": {"print_shape": "teardrop"}}}}' \
+  "$(roof_faces 1 -1 1)" "$(roof_faces -1 -1 1)" "$(roof_faces 1 1 0)" "$(roof_faces -1 1 0)"
+
+echo "--- With the block's top as its print bed face"
+teardrop "$WORK/bed.mitcad"
+check "a teardrop with the top as the print bed face, its roof away from it, toward -Z" "$WORK/bed.mitcad" \
+  '{"expect": {"feature": "F3", "status": "ok"}}' \
+  '{"expect": {"query": {"query": "feature", "uid": "F3"}, "result": {"def": {"print_shape": "teardrop"}}}}' \
+  "$(roof_faces 1 1 1)" "$(roof_faces -1 1 1)" "$(roof_faces 1 -1 0)" "$(roof_faces -1 -1 0)"
 
 ui_finish "UI Hole entry test"

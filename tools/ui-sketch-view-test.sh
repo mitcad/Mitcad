@@ -460,6 +460,10 @@ look_at_again() {
 }
 
 ui_stop_app
+# The block lies clear of the origin planes as the 100 mm Centered style
+# draws them, which reach into the fitted view (mitcad#1748: the default
+# 80 px Corner planes at the origin stay out of sight there).
+ui_origin_in_millimeters
 ui_start_app --open "$WORK/upright.mitcad"
 ui_step "fit (F6)"                       ui_key F6
 ui_mark

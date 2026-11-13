@@ -19,6 +19,7 @@ enum class FileKind {
   Rvt,     // .rvt, .rfa, .rte, .rft: a new document with the project's elements by level (mitcad#274)
   Solidcraft, // .sc, .solidcraft: a new document with the design's history (mitcad#450, mitcad#1622)
   Dwg,     // .dwg: a new document with the drawing's 3D content (mitcad#453)
+  ThreeDm, // .3dm: a new document with the model's bodies and blocks (mitcad#1715)
 };
 
 FileKind fileKind(const QString& path);

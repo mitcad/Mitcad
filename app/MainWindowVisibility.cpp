@@ -139,14 +139,15 @@ void MainWindow::refusePlanePick(const SelectionItem& item) {
                          : surface == QStringLiteral("torus")  ? tr("a toroidal surface")
                          : surface == QStringLiteral("mesh")   ? tr("a mesh's triangles")
                                                                : tr("a free-form surface, such as a thread's");
-    reason = tr("%1 is not planar (%2); pick a planar face or a plane, or make one with Construct.")
-                 .arg(item.describe(), kind);
+    // In words (mitcad#1741): the face's name is for the log below.
+    reason = tr("The face is not planar (%1); pick a planar face or a plane, or make one with Construct.")
+                 .arg(kind);
   }
   if (reason.isEmpty()) {
     return;
   }
   showError(tr("Create Sketch: %1").arg(reason));
-  qInfo().noquote() << QStringLiteral("Create Sketch: refused pick %1: %2").arg(item.describe(), reason);
+  qInfo().noquote() << QStringLiteral("Create Sketch: refused pick %1: %2").arg(item.logDescription(), reason);
 }
 
 // The sketches a command shows for its time (mitcad#546,

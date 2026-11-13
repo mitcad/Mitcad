@@ -71,6 +71,15 @@ struct ViewSettings {
   static constexpr int kMaxStereoDepth = 20;
   static constexpr int kMinStereoConvergence = 25;
   static constexpr int kMaxStereoConvergence = 400;
+  // The focal lengths (mitcad#1717), mm as on a 35 mm frame: the
+  // perspective camera's (`view/focalLength`, 29 mm: OCCT's 45-degree
+  // field of view, the picture from before) and Anaglyph 3D's
+  // (`view/anaglyphFocalLength`, 50 mm: a narrower view that looks less
+  // rounded in stereo).
+  int focalLength = 29;
+  int anaglyphFocalLength = 50;
+  static constexpr int kMinFocalLength = 20;
+  static constexpr int kMaxFocalLength = 70;
 
   static ViewSettings load();
   void save() const;
@@ -184,6 +193,9 @@ private:
   void setAnaglyph(bool on);
   // Its stereo depth and convergence (percent) to the view.
   void applyStereo(int depth, int convergence);
+  // The perspective camera's and Anaglyph 3D's focal lengths (mm,
+  // mitcad#1717) to the view.
+  void applyFocalLengths(int perspective, int anaglyph);
   void setBackground(ViewSettings::Background background);
   void setGridShown(bool shown);
   void syncChecks();

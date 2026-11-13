@@ -37,6 +37,7 @@
 #include <QScrollBar>
 #include <QSettings>
 #include <QStyle>
+#include <QStyleOption>
 #include <QTimer>
 #include <QToolButton>
 #include <QToolTip>
@@ -50,6 +51,7 @@
 #include "../framework/ChromeStyle.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/GlassCard.hpp"
+#include "../framework/VisibleTextGuard.hpp"
 #include "../framework/Icons.hpp"
 #include "../framework/PanelTree.hpp"
 #include "../framework/PlaceWatcher.hpp"
@@ -436,7 +438,7 @@ public:
   // A cell's tooltip (rich text): the feature's details, then its state;
   // a folded group's name and size. Logged when it changes; another
   // presentation of the timeline shows the same (mitcad#1076).
-  QString cellToolTip(int i) {
+  QString cellToolTip(int i, bool logged = true) {
     const DocumentSnapshot::Feature& feature = m_items[i].feature;
     const QString title = QStringLiteral("<b>%1</b>").arg(feature.name.toHtmlEscaped());
     // The feature's details (its kind, component and sizes), then its
@@ -482,7 +484,7 @@ public:
       state += QStringLiteral("<br>%1").arg(autoFixHint(feature.autoFix).toHtmlEscaped());
     }
     const QString tip = isHead(i) ? state : details + state;
-    if (tip != m_loggedTip) {
+    if (logged && tip != m_loggedTip) {
       m_loggedTip = tip;
       QString plain = isHead(i) ? state : title + state;
       plain.replace(QStringLiteral("<br>"), QStringLiteral(": "));
@@ -1140,6 +1142,21 @@ TimelineWidget::TimelineWidget(const CommandContext& model, QWidget* parent)
   layout->addWidget(m_searchBar);
 
   m_strip = new TimelineStrip(*this);
+  // The cells' tooltips for the UI tests' visible-text guard (mitcad#1741):
+  // the cells shown, read once after each rebuild, without the log line a
+  // shown tooltip writes.
+  VisibleTextGuard::addSource(this, [this] {
+    if (m_guardTexts.isEmpty()) {
+      constexpr int kMostCells = 100;
+      for (int i = 0, read = 0; i < m_strip->count() && read < kMostCells; ++i) {
+        if (!m_strip->hidden(i)) {
+          m_guardTexts << m_strip->cellToolTip(i, false);
+          ++read;
+        }
+      }
+    }
+    return m_guardTexts;
+  });
   m_scroll = new QScrollArea(this);
   m_scroll->setWidget(m_strip);
   if (floating) {
@@ -1171,8 +1188,14 @@ TimelineWidget::TimelineWidget(const CommandContext& model, QWidget* parent)
   // another panel makes room above or beside it).
   new PlaceWatcher(this, [this] { logLayout(); });
 
-  m_editor = new QLineEdit(m_strip);
+  // The rename editor lies over the strip, in the scroll area's viewport
+  // (mitcad#1742): a child of the strip was cut off at the strip's end,
+  // which is just after its last item.
+  m_editor = new QLineEdit(m_scroll->viewport());
+  m_editor->setObjectName(QStringLiteral("timelineRenameEditor"));
   m_editor->hide();
+  connect(m_editor, &QLineEdit::textChanged, this, [this] { placeEditor(); });
+  connect(scrollBar, &QScrollBar::valueChanged, this, [this] { placeEditor(); });
   connect(m_editor, &QLineEdit::returnPressed, this, [this] {
     const QString uid = m_editing;
     const QString name = m_editor->text().trimmed();
@@ -1241,6 +1264,7 @@ void TimelineWidget::applyPalette() {
 
 void TimelineWidget::rebuild(const DocumentSnapshot& snapshot) {
   m_snapshot = snapshot;
+  m_guardTexts.clear();
   QHash<QString, int> colours;
   for (int i = 1; i < snapshot.components.size(); ++i) {
     colours.insert(snapshot.components[i].uid, i - 1);
@@ -1605,14 +1629,69 @@ void TimelineWidget::startRename(const QString& uid) {
   }
   selectFeature(uid);
   m_editing = uid;
-  const QRect cell = m_strip->cell(i);
-  m_editor->setText(m_strip->item(i)->feature.name);
-  m_editor->setGeometry(cell.left(), cell.top() + 2, std::max(140, cell.width()), cell.height() - 4);
+  m_loggedEditor.clear();
+  {
+    const QSignalBlocker blocker(m_editor); // placed once, below
+    m_editor->setText(m_strip->item(i)->feature.name);
+  }
+  qDebug().noquote() << QStringLiteral("Renaming %1 in the timeline").arg(m_strip->item(i)->feature.name);
   m_editor->show();
+  placeEditor();
   m_editor->raise();
   m_editor->setFocus();
   m_editor->selectAll();
-  qDebug().noquote() << QStringLiteral("Renaming %1 in the timeline").arg(m_strip->item(i)->feature.name);
+}
+
+void TimelineWidget::placeEditor() {
+  if (m_editor == nullptr || m_editing.isEmpty() || m_editor->isHidden()) {
+    return;
+  }
+  const int i = m_strip->indexOf(m_editing);
+  if (i < 0 || m_strip->hidden(i)) {
+    return;
+  }
+  // As wide as the name needs, at least 140 px, at most the visible
+  // timeline; moved left when it would run past the visible right edge
+  // (mitcad#1742).
+  const QWidget* viewport = m_scroll->viewport();
+  const QRect visible = viewport->rect();
+  const QRect cell(m_strip->mapTo(viewport, m_strip->cell(i).topLeft()), m_strip->cell(i).size());
+  const int textWidth = m_editor->fontMetrics().horizontalAdvance(m_editor->text());
+  // The frame around the text as the style draws it, plus the line
+  // edit's own 2 px a side and a few for the cursor, as its size hint has
+  // them.
+  QStyle* editorStyle = m_editor->style();
+  QStyleOptionFrame option;
+  option.initFrom(m_editor);
+  option.lineWidth =
+      m_editor->hasFrame() ? editorStyle->pixelMetric(QStyle::PM_DefaultFrameWidth, &option, m_editor) : 0;
+  option.midLineWidth = 0;
+  option.state |= QStyle::State_Sunken;
+  const QMargins textPad = m_editor->textMargins();
+  const QMargins contentsPad = m_editor->contentsMargins();
+  const int inner =
+      textWidth + 2 * 2 + 4 + textPad.left() + textPad.right() + contentsPad.left() + contentsPad.right();
+  const int needed =
+      editorStyle->sizeFromContents(QStyle::CT_LineEdit, &option, QSize(inner, cell.height() - 4), m_editor).width();
+  const int editorWidth = std::max(1, std::min(visible.width(), std::max({140, cell.width(), needed})));
+  const int left = std::max(visible.left(), std::min(cell.left(), visible.right() + 1 - editorWidth));
+  const QRect place(left, cell.top() + 2, editorWidth, cell.height() - 4);
+  if (m_editor->geometry() != place) {
+    m_editor->setGeometry(place);
+  }
+  // For the UI tests: the editor in the visible timeline's coordinates.
+  const QString logged = QStringLiteral("Timeline rename editor at %1,%2 %3x%4 in the visible %5x%6, text %7 wide")
+                             .arg(place.x())
+                             .arg(place.y())
+                             .arg(place.width())
+                             .arg(place.height())
+                             .arg(visible.width())
+                             .arg(visible.height())
+                             .arg(textWidth);
+  if (logged != m_loggedEditor) {
+    m_loggedEditor = logged;
+    qDebug().noquote() << logged;
+  }
 }
 
 bool TimelineWidget::cancelEditing() {
@@ -2080,6 +2159,11 @@ void TimelineWidget::showSearchMenu(const QPoint& globalPosition) {
 }
 
 bool TimelineWidget::eventFilter(QObject* watched, QEvent* event) {
+  // The rename editor kept inside the visible timeline as it changes size
+  // (mitcad#1742).
+  if (event->type() == QEvent::Resize && m_scroll != nullptr && watched == m_scroll->viewport()) {
+    placeEditor();
+  }
   if (event->type() == QEvent::Wheel && m_scroll != nullptr &&
       (watched == m_scroll->viewport() || watched == m_scroll->horizontalScrollBar())) {
     wheelStrip(static_cast<QWheelEvent*>(event));

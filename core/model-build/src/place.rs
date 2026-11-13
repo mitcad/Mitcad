@@ -3377,6 +3377,7 @@ pub(crate) fn attach_part(
             flip: plan_joint.flip,
             limits: BTreeMap::new(),
             position,
+            start: BTreeMap::new(),
         };
         let uid = match reuse {
             Some(old) if matches!(state.entry(old).map(|e| &e.def), Some(FeatureDef::Joint(j)) if j.kind == plan_joint.kind) =>

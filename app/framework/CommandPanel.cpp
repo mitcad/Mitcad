@@ -1497,7 +1497,9 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
     const Selection& items = scope.items(id);
     // The picks by name where the input lists them (Combine's tools in
     // occurrences, mitcad#544), else their count.
-    const QString listed = items.isEmpty() ? QString() : scope.itemsText(id);
+    // In words where the input gives them (mitcad#1741).
+    const QString words = scope.itemsWords(id);
+    const QString listed = items.isEmpty() ? QString() : words.isEmpty() ? scope.itemsText(id) : words;
     const QString tip = input.tooltip.isEmpty() ? tr("Click to pick %1").arg(input.label) : input.tooltip;
     // An empty row may stand for something (InputDef::emptyShows): its
     // text and swatch then.
@@ -1518,9 +1520,16 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
       row.select->setToolTip(QStringLiteral("%1\n%2").arg(listed, tip));
     }
     if (row.order != nullptr) {
+      // Each pick in words (mitcad#1741), its kind until the session has
+      // named it.
+      const QStringList pickWords = scope.itemWords(id);
       QStringList texts;
       for (int i = 0; i < items.size(); ++i) {
-        texts << QStringLiteral("%1. %2").arg(i + 1).arg(items[i].describe());
+        QString word = i < pickWords.size() ? pickWords.at(i) : SelectionItem::kindText(items[i].kind);
+        if (!word.isEmpty()) {
+          word[0] = word[0].toUpper();
+        }
+        texts << QStringLiteral("%1. %2").arg(i + 1).arg(word);
       }
       QStringList shownTexts;
       for (int i = 0; i < row.order->count(); ++i) {
@@ -2126,36 +2135,68 @@ void CommandPanel::showEvent(QShowEvent* event) {
   scheduleMovedCheck();
 }
 
+QPoint CommandPanel::placeOf(const QWidget* widget) {
+  QRect area = widget->rect();
+  if (const auto* edit = qobject_cast<const QLineEdit*>(widget)) {
+    // The middle of where the text is typed: not on the field's trailing
+    // buttons (the fx of a value, mitcad#656: a narrow distance field
+    // beside its reference had its middle on it).
+    // (A field's mark only while shown, mitcad#980.)
+    const QList<QAction*> buttons = edit->actions();
+    const int trailing =
+        22 * static_cast<int>(std::count_if(buttons.begin(), buttons.end(), [](const QAction* button) {
+          return button->isVisible();
+        }));
+    area.setWidth(std::max(8, area.width() - trailing));
+  }
+  return GlassCard::mapToHost(widget, area.center());
+}
+
+const QWidget* CommandPanel::placedWidget(const Row& row) {
+  return row.select != nullptr  ? static_cast<QWidget*>(row.select)
+         : row.edit != nullptr  ? static_cast<QWidget*>(row.edit)
+         : row.combo != nullptr ? static_cast<QWidget*>(row.combo)
+         : row.table != nullptr ? static_cast<QWidget*>(row.table)
+         : row.check != nullptr ? static_cast<QWidget*>(row.check)
+         : row.add != nullptr   ? static_cast<QWidget*>(row.add)
+                                : row.field;
+}
+
+std::optional<QPoint> CommandPanel::inputPlace(const QString& key) const {
+  // "key", or "key=value" for a choice's icon button (as logLayout logs them).
+  QString rowKey = key;
+  QString option;
+  if (const qsizetype equals = key.indexOf(QLatin1Char('=')); equals >= 0) {
+    rowKey = key.left(equals);
+    option = key.mid(equals + 1);
+  }
+  const Row* row = m_byKey.value(rowKey, nullptr);
+  if (row == nullptr || !isVisible() || !row->field->isVisibleTo(this)) {
+    return std::nullopt;
+  }
+  settleLayout();
+  const QWidget* widget = placedWidget(*row);
+  if (!option.isEmpty()) {
+    const QToolButton* button = row->choiceButtons.value(option, nullptr);
+    if (button == nullptr || !button->isVisibleTo(this)) {
+      return std::nullopt;
+    }
+    widget = button;
+  }
+  return placeOf(widget);
+}
+
 QStringList CommandPanel::layoutLines() const {
   QStringList lines;
   // Rows made or shown just now are placed first, the page's scroll bar
   // shown or hidden (mitcad#1456).
   settleLayout();
   const auto position = [](const QWidget* widget) {
-    QRect area = widget->rect();
-    if (const auto* edit = qobject_cast<const QLineEdit*>(widget)) {
-      // The middle of where the text is typed: not on the field's trailing
-      // buttons (the fx of a value, mitcad#656: a narrow distance field
-      // beside its reference had its middle on it).
-      // (A field's mark only while shown, mitcad#980.)
-      const QList<QAction*> buttons = edit->actions();
-      const int trailing =
-          22 * static_cast<int>(std::count_if(buttons.begin(), buttons.end(), [](const QAction* button) {
-            return button->isVisible();
-          }));
-      area.setWidth(std::max(8, area.width() - trailing));
-    }
-    const QPoint center = GlassCard::mapToHost(widget, area.center());
+    const QPoint center = placeOf(widget);
     return QStringLiteral("%1,%2").arg(center.x()).arg(center.y());
   };
   for (const Row* row : orderedRows()) {
-    const QWidget* widget = row->select != nullptr  ? static_cast<QWidget*>(row->select)
-                            : row->edit != nullptr  ? static_cast<QWidget*>(row->edit)
-                            : row->combo != nullptr ? static_cast<QWidget*>(row->combo)
-                            : row->table != nullptr ? static_cast<QWidget*>(row->table)
-                            : row->check != nullptr ? static_cast<QWidget*>(row->check)
-                            : row->add != nullptr   ? static_cast<QWidget*>(row->add)
-                                                    : row->field;
+    const QWidget* widget = placedWidget(*row);
     const bool hidden = !row->field->isVisibleTo(this);
     lines << QStringLiteral("Panel %1 input %2 at %3%4")
                               .arg(m_def.name, row->key, position(widget),

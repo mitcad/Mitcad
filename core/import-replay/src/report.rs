@@ -253,6 +253,28 @@ pub struct BodyReport {
     pub uid: Option<mitcad_model::BodyUid>,
 }
 
+/// The items, each with `note_message` beside its `note` (mitcad#1741,
+/// `docs/ui-conventions.md` "What a text says"): the note in plain words,
+/// without the sketch's ids, topological names and coordinates it gives
+/// ([`notice::FeatureError::from_text`]), which the import report shows;
+/// `note` stays the agents' text.
+fn items_with_messages<S: serde::Serializer>(
+    items: &[ItemReport],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::{Error, SerializeSeq};
+    let mut seq = serializer.serialize_seq(Some(items.len()))?;
+    for item in items {
+        let mut value = serde_json::to_value(item).map_err(S::Error::custom)?;
+        if let Some(note) = &item.note {
+            value["note_message"] =
+                serde_json::json!(notice::FeatureError::from_text(note).message);
+        }
+        seq.serialize_element(&value)?;
+    }
+    seq.end()
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct DesignReport {
     /// `name.f3d`, `pkg.f3z!<document>` or the dump file.
@@ -263,6 +285,8 @@ pub struct DesignReport {
     /// `Options::geometric_tolerance`, mitcad#224).
     pub geometric_tolerance: f64,
     pub parameters: ParameterReport,
+    /// Each with `note_message` beside its `note` ([`items_with_messages`]).
+    #[serde(serialize_with = "items_with_messages")]
     pub items: Vec<ItemReport>,
     pub history: HistoryReport,
     /// The file's final bodies against the replayed ones.

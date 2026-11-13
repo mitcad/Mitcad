@@ -121,7 +121,7 @@ void MainWindow::recoverDocuments(bool atStart) {
   for (const RecoverableSession& session : sessions) {
     qInfo().noquote() << QStringLiteral("Recoverable %1").arg(session.describe());
   }
-  const std::vector<std::size_t> chosen = askRecovery(this, sessions);
+  const std::vector<std::size_t> chosen = askRecovery(this, sessions, atStart);
   if (!owner || (managed && !manager)) return;
   if (chosen.empty()) {
     if (!sessions.empty()) {

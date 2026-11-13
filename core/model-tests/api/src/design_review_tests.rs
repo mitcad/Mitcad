@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 
 use mitcad_model::Document;
 use mitcad_model::datum::SurfaceGeometry;
+use mitcad_model::kernel::BoundingBox;
 use mitcad_model::testing::MockKernel;
 use mitcad_model_api::DocumentApi;
 use serde_json::{Value, json};
@@ -537,4 +538,191 @@ fn printer_context_admits_print_review_and_an_outside_body_is_named() {
     assert_eq!(answer["print"]["enabled"], true);
     assert_eq!(answer["errors"], json!([]));
     assert_eq!(mesh_calls(&doc), 0, "build-volume review needs no mesh");
+}
+
+// The checks an agent ran by hand after modelling print kits (mitcad#1731).
+
+fn bodies(doc: &Document<MockKernel>) -> Vec<String> {
+    doc.bodies()
+        .iter()
+        .map(|body| body.uid.to_string())
+        .collect()
+}
+
+#[test]
+fn an_unnamed_piece_of_a_split_beside_a_named_body_is_a_stray_body_until_named() {
+    let mut doc = block();
+    // The cut leaves the block in two pieces, left and right of the slot.
+    *doc.kernel().piece_boxes.borrow_mut() = Some(vec![
+        BoundingBox {
+            min: [0.0, 0.0, 0.0],
+            max: [25.0, 40.0, 20.0],
+        },
+        BoundingBox {
+            min: [35.0, 0.0, 0.0],
+            max: [60.0, 40.0, 20.0],
+        },
+    ]);
+    command(
+        &mut doc,
+        json!({"cmd":"add_feature", "name":"Slot", "def":{"type":"box", "plane":"xy",
+            "corner":[25,0], "length":10, "width":40, "height":20, "operation":"cut"}}),
+    );
+    let pieces = bodies(&doc);
+    assert_eq!(pieces.len(), 2, "{pieces:?}");
+    let extra = pieces
+        .iter()
+        .find(|uid| *uid != "F2.b0")
+        .expect("the piece the cut split off")
+        .clone();
+    // Nothing named yet: default names are not this rule's.
+    assert!(findings(&review(&doc, &["stray-bodies"])).is_empty());
+    command(
+        &mut doc,
+        json!({"cmd":"rename_body", "uid":"F2.b0", "name":"Base"}),
+    );
+    let answer = review(&doc, &["stray-bodies"]);
+    assert_eq!(findings(&answer).len(), 1, "{answer}");
+    check_finding(
+        finding(&answer, "stray-bodies", &extra),
+        "warning",
+        "verification",
+        "measure-the-result",
+    );
+    command(
+        &mut doc,
+        json!({"cmd":"rename_body", "uid":extra, "name":"Right half"}),
+    );
+    assert!(findings(&review(&doc, &["stray-bodies"])).is_empty());
+}
+
+#[test]
+fn a_body_on_a_plate_without_a_bed_face_is_reported_until_one_is_assigned() {
+    let mut doc = document();
+    stock(&mut doc, "Print stock", [31.0, 23.0, 17.0]);
+    doc.kernel().surfaces.borrow_mut().insert(
+        "F1:bottom".to_owned(),
+        SurfaceGeometry::Plane {
+            origin: [0.0, 0.0, 0.0],
+            normal: [0.0, 0.0, -1.0],
+        },
+    );
+    printer(&mut doc);
+    let checks = json!({"query":"design_review", "checks":["no-bed-face"]});
+    // Without plates the export lays out nothing: no finding.
+    let unplated = query(&doc, checks.clone());
+    assert_eq!(unplated["print"]["enabled"], true, "{unplated}");
+    assert!(findings(&unplated).is_empty(), "{unplated}");
+    command(
+        &mut doc,
+        json!({"cmd":"add_print_plate", "name":"Bench plate"}),
+    );
+    let answer = query(&doc, checks.clone());
+    assert_eq!(findings(&answer).len(), 1, "{answer}");
+    check_finding(
+        finding(&answer, "no-bed-face", "F1.b0"),
+        "warning",
+        "3d-printing",
+        "orientation-and-strength",
+    );
+    bed(&mut doc, "F1.b0", "F1:bottom");
+    let answer = query(&doc, checks);
+    assert!(findings(&answer).is_empty(), "{answer}");
+    assert_eq!(mesh_calls(&doc), 0, "the plate checks need no mesh");
+    // print false runs no print checks.
+    let disabled = query(
+        &doc,
+        json!({"query":"design_review", "checks":["no-bed-face"], "print":false}),
+    );
+    assert_eq!(disabled["print"]["enabled"], false);
+}
+
+#[test]
+fn a_plate_without_a_printer_profile_is_reported_until_one_is_chosen() {
+    let mut doc = document();
+    stock(&mut doc, "Print stock", [31.0, 23.0, 17.0]);
+    let checks = json!({"query":"design_review", "checks":["no-print-profile"]});
+    // No plate, no printer: nothing is prepared for printing.
+    assert!(findings(&query(&doc, checks.clone())).is_empty());
+    let plate = command(
+        &mut doc,
+        json!({"cmd":"add_print_plate", "name":"Bench plate"}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let answer = query(&doc, checks.clone());
+    assert_eq!(findings(&answer).len(), 1, "{answer}");
+    check_finding(
+        finding(&answer, "no-print-profile", &plate),
+        "warning",
+        "3d-printing",
+        "checks",
+    );
+    printer(&mut doc);
+    let answer = query(&doc, checks);
+    assert!(findings(&answer).is_empty(), "{answer}");
+    assert_eq!(mesh_calls(&doc), 0, "the plate checks need no mesh");
+}
+
+#[test]
+fn a_profile_region_split_by_a_sketch_change_is_reported_until_auto_fix() {
+    let mut doc = block();
+    assert!(findings(&review(&doc, &["split-profile"])).is_empty());
+    // A line across the rectangle splits the extruded region in two.
+    command(
+        &mut doc,
+        json!({"cmd":"sketch.add_line", "sketch":"F1", "start":[30,0], "end":[30,40]}),
+    );
+    let answer = review(&doc, &["split-profile"]);
+    assert_eq!(findings(&answer).len(), 1, "{answer}");
+    check_finding(
+        finding(&answer, "split-profile", "F2"),
+        "warning",
+        "sketches",
+        "profiles-and-the-sketch-palette",
+    );
+    // Auto Fix selects the pieces found: the reference is exact again.
+    command(&mut doc, json!({"cmd":"auto_fix", "features":["F2"]}));
+    assert!(findings(&review(&doc, &["split-profile"])).is_empty());
+}
+
+#[test]
+fn two_selected_regions_merged_by_a_sketch_change_are_a_split_profile() {
+    let mut doc = document();
+    command(&mut doc, json!({"cmd":"sketch.create"}));
+    command(
+        &mut doc,
+        json!({"cmd":"sketch.add_rectangle", "sketch":"F1", "corner":[0,0],
+            "width":60, "height":40}),
+    );
+    let dividing = command(
+        &mut doc,
+        json!({"cmd":"sketch.add_line", "sketch":"F1", "start":[30,0], "end":[30,40]}),
+    );
+    let halves: Vec<Value> = query(&doc, json!({"query":"profiles"}))
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|region| json!({"sketch":"F1", "region":region["region"]}))
+        .collect();
+    assert_eq!(halves.len(), 2, "{halves:?}");
+    command(
+        &mut doc,
+        json!({"cmd":"add_feature", "def":{"type":"extrude", "profiles":halves,
+            "extent":{"type":"distance", "distance":20}, "operation":"new_body"}}),
+    );
+    assert!(findings(&review(&doc, &["split-profile"])).is_empty());
+    command(
+        &mut doc,
+        json!({"cmd":"sketch.remove", "sketch":"F1", "items":[dividing["made"][0]]}),
+    );
+    let answer = review(&doc, &["split-profile"]);
+    assert_eq!(findings(&answer).len(), 1, "{answer}");
+    check_finding(
+        finding(&answer, "split-profile", "F2"),
+        "warning",
+        "sketches",
+        "profiles-and-the-sketch-palette",
+    );
 }

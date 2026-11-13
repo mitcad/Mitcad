@@ -48,6 +48,9 @@ param(
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
 Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'construct.offset_plane' = 'F8' } -StepPause 0
+# Parts built over the origin, beside which an origin plane or axis is
+# clicked: the origin as 100 mm Centered squares (mitcad#1748).
+Ui-OriginInMillimeters
 
 # The view's origin and the Origin folder's light bulb (mitcad#739).
 $originShown = "Design origin shown in the view; the Origin folder's light bulb off"

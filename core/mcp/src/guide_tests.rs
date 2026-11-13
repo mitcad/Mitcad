@@ -288,13 +288,17 @@ fn the_instructions_and_the_tool_description_point_at_the_guides() {
 }
 
 /// The names MCP permits, as the application gives them to
-/// `model_reference` (core/ffi/src/mcp.rs).
+/// `model_reference` (core/ffi/src/mcp.rs): the headless server's
+/// `CadBackend` adds the two print imports its `model_command` takes into
+/// the design (the 3d-printing guide's slicer export, mitcad#1733).
 fn permitted() -> Vocabulary {
     let owned =
         |names: &[&str]| -> Vec<String> { names.iter().map(|name| (*name).to_owned()).collect() };
+    let mut commands = owned(&mitcad_model_api::classes::external_commands());
+    commands.extend(owned(&["import_print_profile", "import_slicer_presets"]));
     Vocabulary {
         queries: owned(&mitcad_model_api::classes::external_queries()),
-        commands: owned(&mitcad_model_api::classes::external_commands()),
+        commands,
         features: owned(<mitcad_model::FeatureDef>::TYPE_NAMES),
     }
 }
@@ -401,4 +405,53 @@ fn the_guides_name_only_what_mcp_permits() {
     );
     assert!(mitcad_model_api::classes::command_class("export").is_some());
     assert!(!permits("export"));
+}
+
+#[test]
+fn the_guides_keep_the_slicer_export_and_the_field_tested_pitfalls() {
+    // mitcad#1733: the order of a slicer export and what fails often,
+    // from the notes of an agent that printed kits through MCP.
+    let printing = topic_text("3d-printing");
+    let export = printing
+        .split_once("## Export for a slicer")
+        .expect("3d-printing: the export for a slicer")
+        .1;
+    let order = [
+        "`set_print_bed_face`",
+        "`place_on_plate`",
+        "`import_print_profile`",
+        "`set_component_material`",
+        "`model_export`",
+    ];
+    let at: Vec<usize> = order
+        .iter()
+        .map(|step| {
+            export
+                .find(step)
+                .unwrap_or_else(|| panic!("the export names {step}"))
+        })
+        .collect();
+    assert!(at.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+    for point in [
+        "Mirrored bodies",
+        "its own copy",
+        "\"plates\": \"one_file\"",
+        "`refinement`",
+        "Import from Slicer…",
+    ] {
+        assert!(export.contains(point), "the export: {point}");
+    }
+    for point in ["0.15 mm for a peg", "`step`", "50°", "one direction"] {
+        assert!(printing.contains(point), "3d-printing: {point}");
+    }
+    let features = topic_text("choosing-features");
+    for point in [
+        "`all_edges`",
+        "dip",
+        "as many edges",
+        "`combine`",
+        "after every cut",
+    ] {
+        assert!(features.contains(point), "choosing-features: {point}");
+    }
 }

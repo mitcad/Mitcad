@@ -108,7 +108,7 @@ void MainWindow::pickComing(const CommandDef& def, const InputDef& input, const 
   // A feature that changes the picked body goes only into the body's own
   // component (mitcad#1634): activated without a question.
   if (activatingInputs(def.id).contains(input.id)) {
-    activateForPick(def, item);
+    activateForPick(def, input, item);
     return;
   }
   // Construction planes, axes and points ask (mitcad#960); other features
@@ -119,14 +119,21 @@ void MainWindow::pickComing(const CommandDef& def, const InputDef& input, const 
   askToActivatePicked(item, QString(), madeBy(def.featureType));
 }
 
-bool MainWindow::activateForPick(const CommandDef& def, const SelectionItem& item) {
+bool MainWindow::activateForPick(const CommandDef& def, const InputDef& input, const SelectionItem& item) {
   // An agent's request never activates by itself: it gets the model's
   // refusal, and ui_state names the component to activate.
   if (m_mcpRequestActive || m_mcpPicking || !m_session) {
     return false;
   }
-  const PickActivation activation =
-      activationForPick(m_snapshot, item, m_session->picksOf(activatingInputs(def.id)));
+  // The picks made before, but not the one an input of one item holds:
+  // the new pick takes its place (mitcad#1743: a hole's Place On moved to
+  // another component's face goes into that component, not the one of
+  // the face it leaves).
+  QStringList before = activatingInputs(def.id);
+  if (input.max == 1) {
+    before.removeAll(input.id);
+  }
+  const PickActivation activation = activationForPick(m_snapshot, item, m_session->picksOf(before));
   if (activation.isEmpty()) {
     return false;
   }
@@ -140,7 +147,7 @@ bool MainWindow::activateForPick(const CommandDef& def, const SelectionItem& ite
     return false;
   }
   qDebug().noquote() << QStringLiteral("Activated %1 for %2 (picked %3)")
-                            .arg(activation.name, def.name, item.describe());
+                            .arg(activation.name, def.name, item.logDescription());
   m_session->setActivationNotice(activatedNotice(def.name, activation.name, 0));
   return true;
 }
@@ -168,7 +175,7 @@ QString MainWindow::activateForPreselection(const CommandDef& def, const Selecti
     return QString();
   }
   qDebug().noquote() << QStringLiteral("Activated %1 for %2 (picked %3)")
-                            .arg(activation.name, def.name, activation.picked.describe());
+                            .arg(activation.name, def.name, activation.picked.logDescription());
   return activatedNotice(def.name, activation.name, 0);
 }
 
@@ -207,7 +214,7 @@ void MainWindow::takeActivationOffer(CommandSession& session) {
     return of.isEmpty() || of == component;
   });
   qDebug().noquote() << QStringLiteral("Activated %1 for %2 (picked %3), %4 pick(s) dropped")
-                            .arg(offer.name, session.def().name, offer.picked.describe())
+                            .arg(offer.name, session.def().name, offer.picked.logDescription())
                             .arg(dropped);
   session.setActivationNotice(activatedNotice(session.def().name, offer.name, dropped));
 }

@@ -143,7 +143,9 @@ bool CommandSession::scriptInputs(const QJsonObject& inputs, const ItemReader& r
           return false;
         }
         if (!input.acceptsIn(*item, m_state)) {
-          error = tr("%1: %2 does not take %3").arg(m_def.name, input.label, item->describe());
+          // In words, and the item as agents name it (this answers MCP).
+          error = tr("%1: %2 does not take %3").arg(m_def.name, input.label, m_host.itemText(*item)) +
+                  QStringLiteral(" (%1)").arg(item->logDescription());
           return false;
         }
         items.append(input.convert ? input.convert(*item) : *item);
@@ -205,7 +207,7 @@ QJsonObject CommandSession::scriptState() {
     case InputDef::Type::Selection: {
       QJsonArray items;
       for (const SelectionItem& item : m_state.items(slot.key)) {
-        items.append(item.describe());
+        items.append(item.logDescription());
       }
       entry.insert(QStringLiteral("items"), items);
       entry.insert(QStringLiteral("active"), slot.key == m_active);

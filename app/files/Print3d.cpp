@@ -438,6 +438,7 @@ PrintSettings PrintSettings::load() {
   print.slicer.program = settings.value(QStringLiteral("slicerProgram")).toString();
   print.slicer.arguments = settings.value(QStringLiteral("slicerArguments")).toStringList();
   print.slicer.argumentsAfter = settings.value(QStringLiteral("slicerArgumentsAfter")).toStringList();
+  print.folderOnly = settings.value(QStringLiteral("folderOnly"), print.folderOnly).toBool();
   const QString format = settings.value(QStringLiteral("format"), print.format).toString();
   print.format = format == QStringLiteral("stl") ? format : QStringLiteral("3mf");
   const QString refinement = settings.value(QStringLiteral("refinement"), print.refinement).toString();
@@ -458,6 +459,7 @@ void PrintSettings::save() const {
   settings.setValue(QStringLiteral("slicerProgram"), slicer.program);
   settings.setValue(QStringLiteral("slicerArguments"), slicer.arguments);
   settings.setValue(QStringLiteral("slicerArgumentsAfter"), slicer.argumentsAfter);
+  settings.setValue(QStringLiteral("folderOnly"), folderOnly);
   settings.setValue(QStringLiteral("format"), format);
   settings.setValue(QStringLiteral("refinement"), refinement);
   settings.setValue(QStringLiteral("deviation"), deviation);
@@ -925,6 +927,27 @@ QVector<QPair<QString, QString>> slicerChoices(const QVector<Slicer>& found, con
 }
 
 QString otherSlicerChoice() { return kOtherSlicer; }
+
+Slicer installedSlicer(const Slicer& saved, const QVector<Slicer>& found) {
+  if (!saved.isValid() || found.contains(saved)) {
+    return saved;
+  }
+  const QString location = saved.location();
+  const QFileInfo info(location);
+  // A bare name (a program on PATH) is looked for there.
+  const bool there = info.isAbsolute() || location.contains(QLatin1Char('/')) || location.contains(QLatin1Char('\\'))
+                         ? info.exists()
+                         : !QStandardPaths::findExecutable(location).isEmpty();
+  return there ? saved : Slicer{};
+}
+
+Slicer panelSlicer(const PrintSettings& settings, const QVector<Slicer>& found) {
+  if (settings.folderOnly) {
+    return Slicer{};
+  }
+  const Slicer saved = installedSlicer(settings.slicer, found);
+  return saved.isValid() ? saved : found.value(0);
+}
 
 Selection printStartBodies(const Selection& selection, const QJsonArray& instances, bool* selected) {
   Selection bodies;

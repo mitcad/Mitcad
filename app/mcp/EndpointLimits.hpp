@@ -20,6 +20,14 @@ constexpr qsizetype kRefusalLogChars = 2000;
 constexpr int kMaxClients = 8;
 // Connections that have not authenticated yet: they hold no client slot.
 constexpr int kMaxPending = 4;
+// How long a new connection has to send its authentication line before it
+// can give way to newer ones: connections that never authenticate and are
+// opened again as soon as they close would otherwise close every agent's
+// connection before its line is read.
+constexpr qint64 kPendingGraceMs = 250;
+// Waiting connections past which the oldest gives way even within its
+// grace.
+constexpr int kMaxPendingHard = 64;
 
 // `text` as a message repeats it: whole when it has at most `most`
 // characters, else its first `most` with "…" and how many were left out.
@@ -30,6 +38,14 @@ QString echoed(const QString& text, qsizetype most = kEchoChars);
 // the oldest one, to be closed when `most` already wait; -1 when there is
 // room.
 int pendingToClose(const std::vector<quint64>& pendingSince, int most = kMaxPending);
+
+// The same with each waiting connection's time so far (`waitedMs`, in the
+// same order): when `most` already wait, the oldest of those that waited
+// `graceMs` or longer gives way; none while every one is within its grace,
+// unless `hardMost` wait, when the oldest gives way whatever its time; -1
+// when none.
+int pendingToClose(const std::vector<quint64>& pendingSince, const std::vector<qint64>& waitedMs,
+                   int most = kMaxPending, qint64 graceMs = kPendingGraceMs, int hardMost = kMaxPendingHard);
 
 // Whether a connection that has just authenticated may stay with
 // `authenticated` others in.

@@ -121,4 +121,17 @@ QString routeText(const QJsonObject& route, QString* why) {
       .arg(listed, route.value(QStringLiteral("start")).toString(), route.value(QStringLiteral("end")).toString());
 }
 
+QString routeWords(const QJsonObject& route, const QString& sketchName) {
+  const int count = static_cast<int>(route.value(QStringLiteral("curves")).toArray().size());
+  if (!route.value(QStringLiteral("error")).toString().isEmpty() || count == 0) {
+    return QObject::tr("Not one path");
+  }
+  QString words = sketchName.isEmpty() ? QObject::tr("%n curve(s)", nullptr, count)
+                                       : QObject::tr("%n curve(s) of %1", nullptr, count).arg(sketchName);
+  if (route.value(QStringLiteral("closed")).toBool()) {
+    words = QObject::tr("%1, closed").arg(words);
+  }
+  return words;
+}
+
 } // namespace mitcad::cmd

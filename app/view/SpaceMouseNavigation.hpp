@@ -241,6 +241,71 @@ inline SpaceMouseRates spaceMouseRates(const SpaceMouseSettings& settings, const
   return rates;
 }
 
+// A motion's axes for the debug log (mitcad#1720), on every platform: the
+// largest deflection of each axis while the cap moved (sign kept, the
+// view's frame, before an axis's Reverse), and what the strongest axis
+// does to the model in Object mode, so that a check with a device reads
+// from the log alone whether each motion of the cap follows it. For
+// example "3D mouse axes: tx 0.00, ty 0.00, tz 0.00, rx -0.62, ry 0.03,
+// rz 0.00; strongest rx: in Object mode the model tilts its top away from
+// the user".
+class SpaceMouseAxesLog {
+public:
+  // Axes that moved the view.
+  void add(const SpaceMouseAxes& axes) {
+    for (std::size_t axis = 0; axis < 6; ++axis) {
+      if (std::isfinite(axes[axis]) && std::abs(axes[axis]) > std::abs(m_peak[axis])) {
+        m_peak[axis] = axes[axis];
+      }
+    }
+    m_moved = true;
+  }
+
+  // What each axis, positive and negative, does to the model in Object
+  // mode.
+  static const char* objectMotion(std::size_t axis, bool positive) {
+    static const char* const motions[6][2] = {
+        {"moves left", "moves right"},
+        {"moves down", "moves up"},
+        {"moves away", "comes closer"},
+        {"tilts its top away from the user", "tilts its top toward the user"},
+        {"turns clockwise seen from above", "turns counter-clockwise seen from above"},
+        {"rolls clockwise as the user sees it", "rolls counter-clockwise as the user sees it"}};
+    return axis < 6 ? motions[axis][positive ? 1 : 0] : "";
+  }
+
+  // The line once the cap has come to rest after a motion (empty when
+  // nothing moved since the last one); starts the next motion afresh.
+  QString take() {
+    if (!m_moved) {
+      return QString();
+    }
+    QString text = QStringLiteral("3D mouse axes: ");
+    std::size_t strongest = 0;
+    for (std::size_t axis = 0; axis < 6; ++axis) {
+      if (axis > 0) {
+        text += QStringLiteral(", ");
+      }
+      text += QStringLiteral("%1 %2").arg(QLatin1String(spaceMouseAxisKey(axis))).arg(m_peak[axis], 0, 'f', 2);
+      if (std::abs(m_peak[axis]) > std::abs(m_peak[strongest])) {
+        strongest = axis;
+      }
+    }
+    if (m_peak[strongest] != 0.0) {
+      text += QStringLiteral("; strongest %1: in Object mode the model %2")
+                  .arg(QLatin1String(spaceMouseAxisKey(strongest)),
+                       QLatin1String(objectMotion(strongest, m_peak[strongest] > 0.0)));
+    }
+    m_peak = SpaceMouseAxes{};
+    m_moved = false;
+    return text;
+  }
+
+private:
+  SpaceMouseAxes m_peak{};
+  bool m_moved = false;
+};
+
 // A camera as plain numbers: the eye, the target, the up direction, the
 // camera's scale (`height`: Graphic3d_Camera::Scale, the view's shorter
 // side at the target, which the zoom scales and SetScale takes back) and

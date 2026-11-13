@@ -478,6 +478,16 @@ public:
   // Applied at once while Anaglyph 3D is on; logs "Anaglyph 3D: stereo
   // depth 5 %, convergence 100 %" when they change.
   void setStereoParameters(double depth, double convergence);
+  // The focal lengths (mitcad#1717), mm as on a 35 mm frame: the
+  // perspective camera's and Anaglyph 3D's. The camera's field of view is
+  // the one in force, 2 atan(12 mm / f) (view/CameraHeight.hpp): Anaglyph
+  // 3D's while it is on, otherwise the perspective one. A change keeps the
+  // height the view shows at the target (the eye moves along the view
+  // direction). Logs "View: focal length 35 mm, anaglyph focal length
+  // 50 mm" when they change.
+  void setFocalLengths(double perspective, double anaglyph);
+  // The focal length of the camera's field of view, mm.
+  double focalLength() const;
   // Looks along `direction` (from the eye to the model) with `up` upwards,
   // fitted, smoothly when the navigation settings say so (standard views,
   // the orientation cube's home).
@@ -547,6 +557,13 @@ public:
   void setHandleAreas(const QObject* owner, std::vector<HandleArea> areas) {
     m_handleAreasOwner = owner;
     m_handleAreas = owner != nullptr ? std::move(areas) : std::vector<HandleArea>();
+  }
+  // Clears the areas only while `owner` set them (a construction plane's
+  // resize handles hidden, mitcad#1748, leave a command's in place).
+  void clearHandleAreas(const QObject* owner) {
+    if (m_handleAreasOwner == owner) {
+      setHandleAreas(nullptr, {});
+    }
   }
   // The panels floating over the view and the cards at its top (widget
   // pixels): what the handles' value boxes keep out of (mitcad#656).
@@ -930,6 +947,29 @@ public:
   // The box the origin planes take when shown: what a fit frames when the
   // view shows nothing to fit (mitcad#1000).
   void setOriginBox(const Bnd_Box& box) { m_originBox = box; }
+  // How the design's origin is drawn (Preferences › Display › Origin
+  // planes, mitcad#1748, view/OriginPreference.hpp). `onScreen` (Size
+  // Screen): every object of a root origin datum (its plane, axis or point,
+  // and their highlights; isOriginItem) is drawn with a zoom-persistent
+  // transform at the origin, its shape in device pixels, so that it keeps
+  // its size on the screen at any zoom; `corner` (Style Corner): the origin
+  // axes drawn as solid lines in the axes' colours. The caller draws the
+  // datums and highlights anew afterwards.
+  void setOriginLook(bool onScreen, bool corner);
+  bool originOnScreen() const { return m_originOnScreen; }
+  // A root origin datum's item (a plane, axis or point of the design's
+  // own origin, `xy` … `origin`, no occurrence).
+  static bool isOriginItem(const SelectionItem& item);
+  // Millimetres of the model per logical pixel of the view near a point
+  // (along the camera's up).
+  double modelPerPixel(const gp_Pnt& at) const;
+  // For UI tests (mitcad#1748): the XY origin plane as drawn now, logged
+  // "View origin planes: <screen|model> size, <corner|centred> style; XY
+  // <mm> mm a side, <px> px across on the screen" when it changed (each
+  // time the camera rests and after setDatums): its square's side in the
+  // model and the largest distance between its corners in the window,
+  // through the persistence OCCT applies.
+  void logOriginSize();
   // Fits the view to a box (model coordinates) as Fit fits everything:
   // along the current view direction, with Fit's margin, in the part of the
   // view no card covers; at once (mitcad#405).
@@ -968,7 +1008,10 @@ public:
   // camera() and the next frame are where the view is going (live MCP's
   // replies and screenshots, mitcad#405).
   void settleCamera();
-  // The perspective camera's vertical field of view, degrees.
+  // The perspective camera's vertical field of view, degrees. Setting it
+  // (the MCP ui_camera's fov) sets the field of view in force, the
+  // perspective one or Anaglyph 3D's, until a focal length changes, and
+  // keeps the height at the target (mitcad#1717).
   double fieldOfView() const;
   void setFieldOfView(double degrees);
   // Looks at a plane from the side its normal points to, `up` upwards, and
@@ -987,7 +1030,14 @@ public:
   // The same without rounding, for drawing over the view.
   QPointF toWidgetF(const gp_Pnt& point) const;
   // A point of a plane datum that faces the viewer, away from the others.
-  gp_Pnt planePickPoint(const gp_Pnt& origin, const gp_Dir& normal, double size) const;
+  // With `corner`, of a square drawn from the origin into the quadrant of
+  // the positive model axes in it (cornerPlanePickCandidates).
+  gp_Pnt planePickPoint(const gp_Pnt& origin, const gp_Dir& normal, double size, bool corner = false) const;
+  // Points of a plane datum drawn in the Corner style (mitcad#1748): its
+  // square from the origin along the positive ways of the two model axes
+  // in it, `size` a side; its middle first, then nearer one axis or the
+  // other, then nearer the origin and nearer the far corner.
+  std::vector<gp_Pnt> cornerPlanePickCandidates(const gp_Pnt& origin, const gp_Dir& normal, double size) const;
   // Points of a plane datum in the order a click is best tried at; with
   // `offDiagonals`, points off its diagonals instead, which an axis seen
   // along a diagonal does not cover (a placement input puts the planes
@@ -1248,7 +1298,9 @@ private:
   // gives it now; the layer of a profile's selection highlight.
   void placeProfile(const occ::handle<AIS_Shape>& profile);
   Graphic3d_ZLayerId profileHighlightLayer() const;
-  int styleDatum(const occ::handle<AIS_Shape>& object, SelectKind kind) const;
+  // `owner`: the datum's uid; an origin axis takes its axis' colour in the Corner
+  // style (setOriginLook, mitcad#1748).
+  int styleDatum(const occ::handle<AIS_Shape>& object, SelectKind kind, const QString& owner = QString()) const;
   void logInactiveGhosts();
   // Whether a picked item is a transparent body's (BodyDisplay::transparent),
   // or one of its faces, edges or vertices, or their highlight.
@@ -1622,6 +1674,10 @@ private:
   bool m_newDesignTop = false;
   bool m_fitMade = false;
   Bnd_Box m_originBox;
+  // setOriginLook (mitcad#1748); the last "View origin planes: ..." line.
+  bool m_originOnScreen = false;
+  bool m_originCorner = false;
+  QString m_loggedOriginSize;
   bool m_resizeToLog = false;
   FirstBodiesFit m_firstFit; // the design's first bodies fitted once (expectFirstBodies)
   bool m_documentVisible = true;
@@ -1815,11 +1871,25 @@ private:
   bool m_monoPerspective = false;
   double m_stereoDepth = 0.05;
   double m_stereoConvergence = 1.0;
+  // The fields of view of the focal lengths (mitcad#1717), degrees: the
+  // perspective camera's (OCCT's default until the settings set it) and
+  // Anaglyph 3D's (50 mm). The focal lengths as set, for the log.
+  double m_perspectiveFieldOfView = 45.0;
+  double m_anaglyphFieldOfView = 26.99147;
+  double m_focalLength = 0.0;
+  double m_anaglyphFocalLength = 0.0;
   // The camera's projection as the view keeps it: a stereo one with
   // Anaglyph 3D's depth and convergence while it is on, otherwise a
   // stereo one goes back to m_monoPerspective's (a camera saved before
-  // Anaglyph 3D was switched).
+  // Anaglyph 3D was switched); and the field of view in force
+  // (mitcad#1717), with the height at the target kept.
   void keepProjection(Graphic3d_Camera& camera) const;
+  // An animation of the view ended where it was going (its cameras keep
+  // the projection and field of view it started with).
+  void endViewAnimation();
+  // The field of view and projection of the camera's last logged line
+  // "Camera field of view …" (mitcad#1717); empty for an orthographic one.
+  QString m_loggedLens;
   // "stereo", "perspective" or "orthographic": the camera's projection, as
   // the log names it.
   QString projectionName() const;

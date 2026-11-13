@@ -28,6 +28,7 @@ use crate::regions::{Layout, Region, RegionCurve, best_match, regions_and_layout
 use crate::solve::{
     DimensionInput, Extra, Goal, SketchStatus, SolveError, Solved, drag_extra, solve_extra,
 };
+use crate::steps::SketchSteps;
 use crate::text::{self, TextOutline};
 use crate::topo::{FaceName, RegionKey};
 use crate::{
@@ -269,6 +270,11 @@ pub struct SketchDef<P = ParamId> {
     /// a rotation and a flip after the own frame (`placement.rs`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placement: Option<Box<SketchPlacement<P>>>,
+    /// Which use of a tool made which items (mitcad#1750, `steps.rs`):
+    /// sketch mode's list of work steps. Not geometry: definitions that
+    /// differ only in it are equal.
+    #[serde(skip_serializing_if = "SketchSteps::is_empty")]
+    pub steps: SketchSteps,
 }
 
 impl<P> Default for SketchDef<P> {
@@ -286,6 +292,7 @@ impl<P> Default for SketchDef<P> {
             offsets: Vec::new(),
             text_values: Vec::new(),
             placement: None,
+            steps: SketchSteps::default(),
         }
     }
 }
@@ -326,6 +333,9 @@ struct SketchDefIn<P> {
     placement: Option<Box<SketchPlacement<P>>>,
     #[serde(default = "Vec::new")]
     shapes: Vec<LegacyShape<P>>,
+    /// None in designs saved before mitcad#1750.
+    #[serde(default)]
+    steps: SketchSteps,
 }
 
 impl<'de, P: Deserialize<'de>> Deserialize<'de> for SketchDef<P> {
@@ -345,6 +355,7 @@ impl<'de, P: Deserialize<'de>> Deserialize<'de> for SketchDef<P> {
             text_values: def.text_values,
             // An empty placement is none (mitcad#787).
             placement: def.placement.filter(|p| !p.is_empty()),
+            steps: def.steps,
         };
         if !def.shapes.is_empty() {
             if !sketch.entities.is_empty() || !sketch.dimensions.is_empty() {
@@ -629,6 +640,7 @@ impl<P> SketchDef<P> {
                 Some(p) => Some(Box::new(p.map_value(f)?)),
                 None => None,
             },
+            steps: self.steps.clone(),
         })
     }
 

@@ -84,8 +84,8 @@ public:
       }
       return {};
     case Qt::ToolTipRole:
-      return QStringLiteral("%1 (%2)%3")
-          .arg(result.name, result.uid, result.visible ? QString() : tr(", hidden"));
+      // By its name (mitcad#1741): the uid is the row's data.
+      return result.name + (result.visible ? QString() : tr(", hidden"));
     default: return {};
     }
   }

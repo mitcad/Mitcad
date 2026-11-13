@@ -22,7 +22,9 @@ namespace mitcad {
 // Logs (app/COMMANDS.md, "Logs that UI tests read"): "3D mouse: <backend>
 // connected (<device>)", "3D mouse: none", "3D mouse: off", "3D mouse:
 // <backend> disconnected", "3D mouse: button <n> runs <command>" (debug;
-// "3D mouse: button <n> has no command").
+// "3D mouse: button <n> has no command"), "3D mouse axes: tx …, ty …, tz …,
+// rx …, ry …, rz …; strongest <axis>: in Object mode the model …" (debug,
+// when the cap comes to rest; mitcad#1720).
 class SpaceMouseController : public QObject {
   Q_DECLARE_TR_FUNCTIONS(mitcad::SpaceMouseController)
 
@@ -62,6 +64,7 @@ private:
   Factory m_factory;
   std::unique_ptr<SpaceMouseBackend> m_backend;
   SpaceMouseAxes m_axes{};
+  SpaceMouseAxesLog m_axesLog;
   bool m_fromDevice = false;
   bool m_loggedOff = false;
 };

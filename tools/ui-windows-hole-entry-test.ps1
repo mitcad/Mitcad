@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/framework/CommandPanel.cpp app/framework/CommandSession.cpp
 # check-all sources: app/framework/ManipulatorOverlay.cpp app/commands/HoleCommands.cpp app/commands/PlaceInputs.cpp
+# check-all sources: core/model/src/features/hole.rs tools/cli
 # Input-driven Windows UI test of Hole's keyboard and its dimensions in the
 # view (mitcad#1181) in the build VM (tools/ui-windows-lib.ps1 says how the
 # input is posted), on the demo block (60 x 40 x 20, Body1, F2.b0); the
@@ -24,6 +25,12 @@
 #      when the view hides that edge, the same with Reference 2's first
 #      edge): the hole stays, the distance is the rest of the face's width.
 #      OK makes the hole.
+#   4. Print Shape with and without a print bed face (mitcad#1744), on a
+#      60 x 40 x 20 block that mitcad-cli makes with a 6 mm hole 10 deep
+#      lying in it along +Y (Hole1 F3): without a print bed face Hole1
+#      edited shows Print Shape, Teardrop chosen and saved, its roof to +Z
+#      (the saved design's roof faces); with the block's top as its print
+#      bed face, the roof away from it, to -Z.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-hole-entry-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -258,5 +265,87 @@ Ui-Mark
 Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
 Ui-ExpectNew 'Added 1 hole(s) (simple), diameter 10' 'the hole added' 30
 Ui-ExpectVolume 'Body Body1 \(F2\.b0\): volume 48000\.000 -> ([0-9.]+) mm3' 47135.94936549554 'one hole, 10 deep'
+
+Write-Host '=== Print Shape with and without a print bed face (mitcad#1744)'
+$cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
+  ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $cli) { Ui-Fail "no mitcad-cli.exe beside $($script:UiApp)" }
+$work = Join-Path $script:UiOut 'files'
+Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $work | Out-Null
+
+# The block with a 6 mm hole lying in it, along +Y from its side at y 0;
+# a copy with the block's top as its print bed face.
+$lying = @(
+  '{"cmd": "sketch.create"}',
+  '{"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40}',
+  ('{"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "' + $rect +
+   '"}], "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}}'),
+  ('{"cmd": "add_feature", "def": {"type": "hole", "diameter": 6, "extent": {"type": "distance", "depth": 10}, ' +
+   '"placement": {"type": "plane", "plane": {"origin": [0, 0, 0], "normal": [0, -1, 0]}, "points": [[30, 0, 10]]}}}'))
+$bedFace = '{"cmd": "set_print_bed_face", "uid": "F2.b0", "face": "F2:end(' + $rect + ')"}'
+$designs = @{ 'free' = $lying; 'bed' = $lying + $bedFace }
+foreach ($name in $designs.Keys) {
+  $scriptFile = Join-Path $work "$name.json"
+  Set-Content -Encoding ascii $scriptFile ('[' + ($designs[$name] -join ', ') + ']')
+  $made = & $cli run $scriptFile --save (Join-Path $work "$name.mitcad")
+  if ($LASTEXITCODE -ne 0) { Ui-Fail "mitcad-cli run ${name}: $($made -join ' / ')" }
+}
+
+# The block's planar faces whose outward normal is (x, 0, z), the number
+# expected. A teardrop's roof along Y has two sides at 45 degrees; their
+# normals point back into the hole, down from a roof that points up.
+function Roof-Faces([int]$X, [int]$Z, [int]$Count) {
+  return ('{"expect": {"query": {"query": "faces", "body": "F2.b0", "normal": [' + $X + ', 0, ' + $Z +
+          '], "normal_tolerance": 0.001}, "result": {"total": ' + $Count + '}}}')
+}
+# The expectations hold for the saved design.
+function Check-Design([string]$Description, [string]$Design, [string[]]$Expectations) {
+  $scriptFile = Join-Path $work 'check.json'
+  Set-Content -Encoding ascii $scriptFile ('[' + ($Expectations -join ', ') + ']')
+  $checked = & $cli run $scriptFile --open $Design
+  if ($LASTEXITCODE -ne 0) { Ui-Fail "${Description}: $($checked -join ' / ')" }
+  Write-Host "ok   $Description"
+}
+$teardropSaved = @(
+  '{"expect": {"feature": "F3", "status": "ok"}}',
+  '{"expect": {"query": {"query": "feature", "uid": "F3"}, "result": {"def": {"print_shape": "teardrop"}}}}')
+
+# Hole1 of the design edited to a Teardrop and saved.
+function Edit-Teardrop([string]$Name) {
+  Ui-StartApp "hole-entry-print-$Name" @('--open', (Join-Path $work "$Name.mitcad"))
+  Ui-Step 'fit (F6)'                     { Ui-Key 'F6' }
+  Ui-ExpectLog 'Bodies shown: F2.b0' 'the design shown'
+  Ui-Mark
+  Ui-Step 'edit Hole1 (double-click)'    { Ui-DoubleClickLogged 'Timeline Hole1' }
+  Ui-ExpectNew 'Editing F3 with Hole' 'Hole1 opens for editing' 30
+  Ui-ExpectNew 'Hole placement kept: plane' 'its plane kept as it is'
+  Ui-ExpectNew 'Panel Hole input print_shape at' 'Print Shape listed'
+  $row = Ui-LastMatch '^(Panel Hole input print_shape at .*)$'
+  if ("$row".Contains('(hidden)')) { Ui-Fail 'Print Shape is hidden' }
+  Write-Host 'ok   Print Shape shown'
+  Ui-Mark
+  Ui-Step 'Teardrop (wheel)'             { Ui-WheelLogged 'Panel Hole input print_shape' -1 }
+  Ui-ExpectNew 'Hole: Print Shape = Teardrop' 'Teardrop chosen'
+  Ui-ExpectNew 'Preview Hole: ok' 'previewed' 30
+  Ui-Mark
+  Ui-Step 'OK (Enter)'                   { Ui-Key 'Return' }
+  Ui-ExpectNew 'Edited F3' 'Hole1 edited' 30
+  if (Logged-SinceMark 'Recompute failed') { Ui-Fail 'a recompute failed' }
+  Ui-Mark
+  Ui-Step 'save (Ctrl+S)'                { Ui-Key 'ctrl+s' }
+  Ui-ExpectNew 'Saved ' 'saved'
+  Ui-StopApp
+}
+
+Write-Host '--- Without a print bed face: the design''s -Z is down'
+Edit-Teardrop 'free'
+Check-Design 'a teardrop without a print bed face, its roof toward +Z' (Join-Path $work 'free.mitcad') `
+  ($teardropSaved + @((Roof-Faces 1 -1 1), (Roof-Faces -1 -1 1), (Roof-Faces 1 1 0), (Roof-Faces -1 1 0)))
+
+Write-Host '--- With the block''s top as its print bed face'
+Edit-Teardrop 'bed'
+Check-Design 'a teardrop with the top as the print bed face, its roof away from it, toward -Z' (Join-Path $work 'bed.mitcad') `
+  ($teardropSaved + @((Roof-Faces 1 1 1), (Roof-Faces -1 1 1), (Roof-Faces 1 -1 0), (Roof-Faces -1 -1 0)))
 
 Ui-Finish 'UI Windows Hole entry test'

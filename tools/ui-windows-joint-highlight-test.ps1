@@ -128,8 +128,8 @@ Ui-ExpectNew "Joint highlight b: face F2:end($rect) of F2.b0 in Plate:1 (O1) [Jo
 Ui-ExpectNew 'Joint highlight frame a at 20.0,20.0,10.0 [Joint1]' "side a's frame where the faces meet"
 Ui-ExpectNew 'Joint highlight frame b at 20.0,20.0,10.0 [Joint1]' "side b's frame there too"
 Ui-ExpectNew 'Joint highlight occurrences: Pin:1 (O2), Plate:1 (O1) [Joint1]' 'the two occurrences it joins'
-Ui-ExpectNew 'Joint card: Joint1: revolute, a = Pin:1, face F4:start(' 'the card names the joint and side a'
-Ui-ExpectNew ', b = Plate:1, face F2:end(' 'and side b'
+Ui-ExpectNew 'Joint card: Joint1: revolute, a = Pin:1, face of Body2' 'the card names the joint and side a in words'
+Ui-ExpectNew ', b = Plate:1, face of Body1' 'and side b'
 
 Write-Host '--- Joint2 replaces it: a frame override and a circular edge'
 Ui-Mark

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <utility>
 #include <vector>
 
 #include <QJsonArray>
@@ -19,6 +20,7 @@
 
 #include "../view/ViewReveal.hpp"
 #include "SketchChains.hpp"
+#include "SketchOverlay.hpp"
 
 namespace mitcad::sketch {
 
@@ -57,8 +59,8 @@ int SketchController::selectEntities(const QStringList& ids, bool reveal, bool f
   return static_cast<int>(items.size());
 }
 
-bool SketchController::selectItem(const QString& id, Qt::KeyboardModifiers modifiers) {
-  SelectionItem item;
+bool SketchController::selectionItemOf(const QString& id, SelectionItem& item) const {
+  item = SelectionItem();
   item.owner = m_uid;
   item.name = id;
   if (m_model.point(id) != nullptr) {
@@ -73,23 +75,56 @@ bool SketchController::selectItem(const QString& id, Qt::KeyboardModifiers modif
     item.kind = SelectKind::SketchConstraint;
   } else if (m_model.dimension(id) != nullptr) {
     item.kind = SelectKind::SketchDimension;
+  } else if (m_model.text(id) != nullptr) {
+    // A text, as a click on its outline selects it (mitcad#1750).
+    item.kind = SelectKind::SketchCurve;
+    item.occurrence = m_host.sketchOccurrence(m_uid);
   } else {
+    return false;
+  }
+  return true;
+}
+
+bool SketchController::selectItem(const QString& id, Qt::KeyboardModifiers modifiers) {
+  return selectItems(QStringList{id}, modifiers);
+}
+
+bool SketchController::selectItems(const QStringList& ids, Qt::KeyboardModifiers modifiers) {
+  Selection items;
+  for (const QString& id : ids) {
+    SelectionItem item;
+    if (selectionItemOf(id, item) && !items.contains(item)) {
+      items.append(item);
+    }
+  }
+  if (items.isEmpty()) {
     return false;
   }
   Selection next;
   if (modifiers & (Qt::ControlModifier | Qt::ShiftModifier)) {
     next = m_host.selection();
-    if (next.contains(item)) {
-      next.removeAll(item);
-    } else {
-      next.append(item);
+    const bool all = std::all_of(items.cbegin(), items.cend(),
+                                 [&next](const SelectionItem& item) { return next.contains(item); });
+    for (const SelectionItem& item : std::as_const(items)) {
+      if (all) {
+        next.removeAll(item);
+      } else if (!next.contains(item)) {
+        next.append(item);
+      }
     }
   } else {
-    next.append(item);
+    next = items;
   }
-  // The view draws it (refreshView) and the list marks its row.
+  // The view draws them (refreshView) and the list marks their cells.
   m_host.setSelection(next);
   return true;
+}
+
+void SketchController::setHoverAnnotation(const QString& id) {
+  if (id != m_hoverAnnotation) {
+    m_hoverAnnotation = id;
+    m_overlay->update();
+  }
 }
 
 bool SketchController::selectChainAt(const QPointF& screen, Qt::KeyboardModifiers modifiers) {

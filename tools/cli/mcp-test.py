@@ -1168,6 +1168,27 @@ class McpTest(unittest.TestCase):
             self.assertAlmostEqual(float(written["nozzle_temperature"][0]), 223)
             client.finish()
 
+    def test_print_export_without_a_profile_says_how_to_import_one(self):
+        """mitcad#1727: no printer profile, no material: PLA and a warning naming the step."""
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            client.tool("model_command", {"document": document, "command": BOX})
+            exported = client.tool("model_export", {
+                "document": document, "path": "no-profile.3mf", "format": "3mf",
+                "dialect": "bambu_studio"})["result"]
+            warnings = exported["warnings"]
+            self.assertTrue(any("import_print_profile" in w for w in warnings), exported)
+            # What the application shows names no command.
+            shown = exported["warning_messages"]
+            self.assertEqual(len(shown), len(warnings), exported)
+            self.assertFalse(any("import_print_profile" in w for w in shown), exported)
+            with zipfile.ZipFile(self.workspace / "no-profile.3mf") as package:
+                written = json.loads(package.read("Metadata/project_settings.config"))
+            self.assertEqual(written["filament_settings_id"], ["PLA Plastic"])
+            self.assertEqual(written["filament_type"], ["PLA"])
+            client.finish()
+
     def test_workspace_slicer_presets_keep_confined_inherited_values(self):
         root = self.workspace / "presets"
         choices = slicer_fixture(root)
@@ -1685,6 +1706,56 @@ class McpTest(unittest.TestCase):
                     "type": "normal_to_face_at_point", "face": {"body": "F2.b0", "face": face},
                     "point": {"point": [60, 0, 10]}}}})
             self.assertTrue(any(h["rule"] == "volatile-parent" and h["target"] == "F4" for h in made["hints"]), made)
+            client.finish()
+
+    def test_set_parameter_says_the_warnings_it_brought(self):
+        """mitcad#1729: a parameter that splits an extruded profile answers the
+        extrusion's region warning in its result, also with timeline none."""
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            def command(value, **options):
+                return client.tool("model_command", {"document": document, "command": value, **options})
+            def query(value):
+                return client.tool("model_query", {"document": document, "query": value})["result"]
+            # A circle of 100 with a bar of 20 x 80 inside it; the bar extruded.
+            command({"cmd": "sketch.create"})
+            command({"cmd": "sketch.add_circle", "sketch": "F1", "center": [0, 0], "diameter": 100})
+            command({"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [-10, -40],
+                     "width": 20, "height": 80})
+            bar = query({"query": "profiles", "sketch": "F1", "point": [0, 0]})
+            self.assertEqual(len(bar), 1, bar)
+            region = bar[0]["region"]
+            made = command({"cmd": "add_feature", "def": {
+                "type": "extrude", "profiles": [{"sketch": "F1", "region": region}],
+                "extent": {"type": "distance", "distance": 5}, "operation": "new_body"}})
+            self.assertEqual(made["result"]["uid"], "F2")
+            self.assertNotIn("warnings", made["result"])
+            height = [p["name"] for p in query({"query": "parameters"}) if abs(p["value"] - 80) < 1e-9]
+            self.assertEqual(len(height), 1, height)
+            # 110 long, the bar crosses the circle: its region is split, and
+            # the extrusion finds it as the pieces, with a warning. The
+            # result says so although the timeline is not asked for.
+            longer = {"cmd": "set_parameter", "name": height[0], "value": 110}
+            split = command(longer, timeline="none")
+            self.assertNotIn("changes", split)
+            self.assertNotIn("timeline", split)
+            warnings = split["result"]["warnings"]
+            self.assertEqual(len(warnings), 1, split)
+            self.assertTrue(warnings[0].startswith("Extrude1: region " + region + " found as r{"), warnings)
+            self.assertTrue(warnings[0].endswith(" after a change in Sketch1"), warnings)
+            about = [n for n in split["result"]["notices"] if n.get("target") == "F2"]
+            self.assertEqual([n["level"] for n in about], ["warning"], split)
+            self.assertNotIn("r{", about[0]["message"])
+            self.assertIn({"kind": "region", "sketch": "F1", "name": region}, about[0]["places"])
+            self.assertEqual(split["failed_features"], [])
+            # A warning that goes brings nothing; in an array each entry
+            # says its own.
+            back = {"cmd": "set_parameter", "name": height[0], "value": 80}
+            self.assertNotIn("warnings", command(back, timeline="none")["result"])
+            both = command([longer, back], timeline="none")
+            self.assertEqual(both["results"][0]["warnings"], warnings)
+            self.assertNotIn("warnings", both["results"][1])
             client.finish()
 
     def test_compact_results_and_command_arrays(self):

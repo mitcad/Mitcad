@@ -288,7 +288,10 @@ memory, and MitCad does not write them.
 The desktop application starts a local MCP listener automatically. An
 AI assistant can find the listener after the application is open. A restart
 with special arguments is not necessary. To disable the listener, start
-MitCad with `--no-mcp`.
+MitCad with `--no-mcp`. An agent that starts MitCad itself (a test or a
+debugging run, often with `--mcp-folder DIR`) adds `--no-recovery`: else
+an earlier session that did not end normally makes MitCad ask about its
+unsaved work at start-up, and edits wait for that dialog (mitcad#1725).
 
 On macOS, the installed bundle includes the CLI:
 
@@ -454,6 +457,9 @@ The live catalogue has these tools:
 - The application's own tools `ui_state`, `ui_log`, `ui_screenshot`,
   `ui_select`, `ui_command` and `ui_camera`
 - `document_new` (a new design beside the open ones, mitcad#1266)
+- In an application started with `--mcp-folder` only: `ui_click`,
+  `ui_type` and `ui_dialog` (mitcad#1735,
+  [Clicks, keys and dialogs](#clicks-keys-and-dialogs))
 
 The rule of thumb: what the user can see and do in the window, an AI assistant
 can read and do through these tools. The assistant gets the same undo and
@@ -573,6 +579,19 @@ these states:
 - During drags, animations, imports and dialogs
 - When the window is read-only
 
+**A dialog the user must answer** (mitcad#1725) is never closed for an
+agent: the refusal of `model_command`, `ui_command`, `document_save`,
+`document_open`, `document_new` and `model_export` names it by its title,
+for example `The dialog "Recover Unsaved Work" is open in MitCad …`, and
+says to ask the user to answer it. `ui_state` lists it as `dialog`
+(`title`, and `recovery_at_start`), with `blocked_reason`;
+`document_list` gives the same `blocked_reason`. Queries and the ui
+tools that only read work meanwhile. The recovery question is asked at
+start-up when an earlier session ended without closing its designs (P8c):
+an agent that starts MitCad itself, for a test or a debugging run, starts
+it with `--no-recovery`, and the refusal says so for that dialog. Asked by
+the user (File › Recover Designs), the refusal only names it.
+
 **Command arrays** (mitcad#689): `command` is one command object or an
 array of them. The array runs in order, as the native API runs one, and
 becomes one undo step labelled `… (agent)`. It stops at the first
@@ -619,6 +638,22 @@ The view, the Sketch Palette and the undo of the sketch follow. The
 result is the usual result of the command, with `sketch`. Commands on
 other features are refused with the reason until the sketch is finished
 (`ui_command` with `sketch.finish`).
+
+**Work steps.** Each `sketch.*` command that makes items records them as
+one work step of the sketch, and its result names it (`"step": "s3"`).
+The user sees one icon for each step in the timeline's place. An array
+that runs as one undo step is also one work step. The kind of a step is
+the command's name without `sketch.`: for example `rectangle`, `project`
+or `add_constraint`. A `sketch.trim` or `sketch.extend` is a step of its
+own, also when it only shortens or lengthens a curve. The curve that it
+changes stays with the step that made it. The `sketch` query
+(`model_query`) returns `steps` in the order they were made:
+`{"id": "s3", "kind": "rectangle", "items": ["c1", "p5", "k1", …]}`. A
+trim's or an extension's step also has `changed`, the curves that it
+changed. An item that no step holds is shown as `{"items": ["p7"]}`.
+This happens in designs saved before work steps were recorded, and in
+imports. Refer to "The work steps of a sketch" in
+[commands.md](../core/model-api/src/commands.md).
 
 **The ui tools** work in every mode. `ui_state` and `ui_log` work at any
 time. `ui_screenshot`, `ui_select` and `ui_command` work at any time
@@ -711,9 +746,9 @@ A new bridge can connect again to the same document. `--workspace`,
 | `document_save` | `document`. Optional `path`. Optional `overwrite` (default false). | `document`, `path`, `saved`, `status`, `state`. `status` is the text of the status bar, with the recorded version. Refer to the text below the table. |
 | `document_open` | `path`. Optional `discard` (default false). | `document` (the new handle), `path`, `name`, `state`, `busy`, `editable`, `opened`, `replaced` (the old handle). Refer to the text below the table. |
 | `document_new` | Optional `name`, `folder`. | `document` (the new design's handle), `path` (null for an untitled design), `name`, `state`, `busy`, `editable`, `created`, `previous` (the calling design's handle, still valid), `recorded` (true when a project recorded it), `note` when the current project's folder could not be used. Refer to the text below the table. |
-| `ui_state` | `{}` | `document`, `name`, `path`, `modified`, `read_only`, `read_only_reason`, `mode`, `busy`, `editable`, `active_component`, `undo`, `redo`, `undo_depth`, `selection`, `hint`, `hint_is_error`, `status_line`, `status_line_is_error`, `agents`, `sketch`, `command`, `comments` (`open`: the number of open comments), `app`. Refer to the text below the table. |
+| `ui_state` | `{}` | `document`, `name`, `path`, `modified`, `read_only`, `read_only_reason`, `mode`, `busy`, `editable`, `active_component`, `undo`, `redo`, `undo_depth`, `selection`, `hint`, `hint_is_error`, `status_line`, `status_line_is_error`, `agents`, `sketch`, `command`, `comments` (`open`: the number of open comments), `app`, `dialog` (the open dialog's `title` and `recovery_at_start`, or null), `blocked_reason` (when not `editable`). Refer to the text below the table. |
 | `ui_log` | `since` (a sequence number). `limit` (default 200, at most 2000). | `lines`, `next`, `dropped`. Refer to the text below the table. |
-| `ui_screenshot` | `window` (default false). `max_size` (default 1280, 64 to 4096). `max_bytes` (the encoded image's bytes, 4096 to 5 MiB; default 5 MiB inline, none for a file). `format` (`png` default, `jpeg`), `quality` (JPEG, default 90). `width` and `height`, or `aspect`. `path`, `overwrite`. | An MCP image block, after the text: `format`, `mime_type`, `of`, `width`, `height`, `full_width`, `full_height`, `bytes`, `downscaled_for_bytes`, `max_bytes`. With `path`, also `path` and no image. Refer to the text below the table. |
+| `ui_screenshot` | `window` (default false). `max_size` (default 1280, 64 to 4096). `max_bytes` (the encoded image's bytes, 4096 to 5 MiB; default 5 MiB inline, none for a file). `format` (`png` default, `jpeg`), `quality` (JPEG, default 90). `width` and `height`, or `aspect`. `path`, `overwrite`. | An MCP image block, after the text: `format`, `mime_type`, `of`, `width`, `height`, `full_width`, `full_height`, `bytes`, `downscaled_for_bytes`, `max_bytes`; of the window, `windows`. With `path`, also `path` and no image. Refer to the text below the table. |
 | `ui_select` | `document`. `items` (entities) or `comment` (a comment's id). `reveal` (`none`, `pan` default, `fit`). | `document`, `selected`, `selection`, `view` (`none`, `pan`, `zoom`), `camera`. With a command panel open, also `picked`, `into_command` and `command`. With `comment`, also `comment`. Refer to the text below the table. |
 | `ui_command` | `document`. `id` or `edit`. `inputs`. `finish` (`ok` default, `cancel`, `keep_open`). Or `search` alone (words, `""` for all) to list the commands. | `document`, `command`, `panel`, `committed`, `open`, `mode`, `sketch`, `undo`, `previews`, `log`, `hint`. For a `view.*` command, also `camera`. A listing: `document`, `mode`, `search`, `commands` (`id`, `name`, `kind`, `agents`, `why`, `available`), `count`, `total`, and `note` when there was nothing to finish. Refer to the text below the table. |
 | `ui_camera` | `eye`, `target`, `up`, `height`, `fov`, `projection`. `box`, `frame` (`none` default, `shown`, `selection`) or `comment` (a comment's id), optional `aspect` with them. | `camera`, `framed` (`none`, `box`, `shown`, `selection`, `comment`), `changed`, `aspect` when given, `comment` with it. Refer to the text below the table. |
@@ -796,6 +831,12 @@ as entities*, mitcad#985).
 ([Comments for agents](#comments-for-agents)); it is left out while the
 model computes.
 
+`dialog` is the modal dialog open in the application, which only the
+user can answer, or null: its `title`, and `recovery_at_start` true for
+the recovery question MitCad asks at start-up (and a question over it).
+While one is open, `editable` is false and `blocked_reason` names it
+(mitcad#1725; [A dialog the user must answer](#live-tools)).
+
 `hint` and `hint_is_error` give the status line. While Create Sketch
 waits for a plane, `hint` gives the text of its banner. Then
 `status_line` and `status_line_is_error` give the status line when it
@@ -834,7 +875,16 @@ gets the same cut line.
 
 **`ui_screenshot`** returns the image that the user sees, with the
 sketch overlay. By default, it shows the 3D view. With `window`, it
-shows the whole window. MitCad scales the image to fit
+shows the whole window, with the application's other windows that are
+open over it at their places on the screen: popups and open lists,
+tooltips, dialogs (mitcad#1734). The picture grows to take in what lies
+outside the main window, within the screens; what no window covers is
+transparent. `windows` in the result gives each window's `kind`
+(`main` first, then `window`, `dialog`, `popup` and `tooltip` in the
+order they stack), its `title` when it has one, and its `x`, `y`,
+`width` and `height` in the full picture's pixels (`full_width` by
+`full_height`). A window manager's frame and title bar are not in the
+picture. MitCad scales the image to fit
 `max_size`. Then it scales the image further until the encoded image
 (the PNG or JPEG file, the result's `bytes`) takes at most `max_bytes`
 (mitcad#1188).
@@ -947,7 +997,9 @@ Commands that open a file dialog or another window are refused:
 export, and others. `document_save` with a path and `document_open` do
 Save As and Open, and `document_new` does New Design. If a command opens any other modal dialog, MitCad
 closes the dialog at once and refuses the call with the name of the
-dialog.
+dialog. In an application started with `--mcp-folder`, `ui_dialog` shows
+such a window for viewing, and the refusal says so
+([Clicks, keys and dialogs](#clicks-keys-and-dialogs)).
 
 In the result, `panel` is as the `command` of `ui_state`, after the
 preview. `previews` holds the `Preview …` log lines: the validation, the
@@ -962,9 +1014,17 @@ of the perspective, 1 to 170 degrees. `projection` is `orthographic` or
 `perspective`. `box` is `{"min": [x, y, z], "max": [x, y, z]}`.
 
 In the result, `camera` holds `eye`, `target`, `up`, `direction`,
-`distance`, `height`, `width`, `projection`, `fov` and `view_size`.
-`direction` is a unit vector from the eye to the target. `width` is the
-mm at the target. `view_size` is the pixels of the view.
+`distance`, `height`, `width`, `projection`, `fov`, `focal_length` and
+`view_size`. `direction` is a unit vector from the eye to the target.
+`width` is the mm at the target. `focal_length` is `fov` as the focal
+length in mm on a 35 mm frame, 12 / tan(fov / 2). `view_size` is the
+pixels of the view.
+
+The field of view in force is the perspective camera's or, while
+Anaglyph 3D is on, its own (Preferences › Display › Focal length). A
+`fov` given sets the one in force until a focal length changes in
+Preferences. A new field of view keeps the height at the target: the
+eye moves along its line.
 
 The values given replace the values of the camera at once, without
 animation. If no `height` is given, the eye of a perspective camera
@@ -1013,6 +1073,75 @@ commands and sketches. It frames the isolated bodies when the design
 isolates some. Otherwise it frames everything shown. Home (`view.home`)
 takes the eye, target, up and height of a named view with the name
 `Home`.
+
+### Clicks, keys and dialogs
+
+`ui_click`, `ui_type` and `ui_dialog` (mitcad#1735) let an agent use the
+window as a person does, for screenshots of the real UI (a manual's
+pictures, a field filled in, a dialog open). The live catalogue lists them
+only when the application was started with `--mcp-folder`, and never to
+the chat panel's own connection; the headless server has none of them.
+In any other run they are not listed, and the application refuses them.
+
+**`ui_click`** posts the move, the press and the release (twice with
+`double`) of `button` (`left`, `right` or `middle`) to the window as Qt
+events. Where:
+
+- `input`: a command panel's input by its key, as `ui_state`'s `command`
+  lists the inputs (`key=value` for one of a choice's icon buttons). The
+  place is the one that `ui_command`'s `log` gives for it ("Panel Extrude
+  input distance at 1471,595"): a value field's middle where the text is
+  typed.
+- `at`: `[x, y]` in the window's logical pixels from its top-left corner,
+  as those log lines and a whole-window `ui_screenshot` at full size show
+  them. A place outside the window is refused.
+
+A floating panel in a window of its own over the main window takes a
+click on it. A field clicked takes the keyboard. A click on an open list
+goes to the list; a click outside it closes the list and goes no
+further, as a real click does. The result has `at`, `posted` and
+`target` (the widget's class, object name and text: for the agent).
+
+**`ui_type`** posts key events to what has the keyboard: an open list,
+else the focused field of the window or of one of its panels. `text`
+comes first, any Unicode (`ä`, `ö`, `Ø`, `°`), one character after
+another; then `keys`, key names separated by spaces (`Enter`, `Tab`,
+`Shift+Tab`, `Escape`, `Backspace`, `Delete`, arrows, `Home`, `End`,
+`F2`, `Ctrl+A`). The keys go to the field: the application's menu
+shortcuts do not run from them (`ui_command` runs those commands). An
+unknown key name is refused before anything is typed.
+
+The events of both run right after the call has answered, so that a
+dialog that a click opens can run its own event loop while the
+connection goes on. Read the effect with `ui_state` (a panel's input
+text) or `ui_screenshot`.
+
+**`ui_dialog`** shows a window that `ui_command` refuses because it opens
+a dialog or another window (Edit Parameters, Preferences, Grid Settings,
+Send to Slicer's panel), for viewing. It takes one of:
+
+- `open`: a command id. A dialog opens right after the result (`opening`);
+  a command panel opens at once (`opened`, with the panel's inputs). A
+  command that `ui_command` runs, one whose dialog reads or writes files
+  (`file.*`, `insert.*`, imports, exports, a library's publishing) and one
+  that opens another application (`help.*`) are refused; a file dialog
+  that opens anyway is closed.
+- `read: true`: the open window's `title`, `place` (`[x, y, width,
+  height]` in the window's coordinates), `modal`, `fields` (each `kind`,
+  `label`, `value`, `enabled`; tables and trees with their `columns` and
+  `rows`, groups' rows after them) and `buttons` (each `text`, `enabled`,
+  `default` and `closes`). For a panel, `panel` is as `ui_state`'s
+  `command`, and its buttons are OK (or its own label, such as Send) and
+  Cancel. While the window is still opening, the result is `busy` with
+  `retry_after_ms`.
+- `press`: a button whose `closes` is true (a dialog button box's Close or
+  Cancel), or `Close` or `Cancel`, which close the window as its title
+  bar's close button does (a panel: Cancel). Any other button is refused:
+  nothing is changed or written through the window.
+
+While such a window is open, `ui_click` and `ui_type` are refused, so the
+window stays for viewing only. `ui_screenshot` with `window: true` takes
+its picture.
 
 ### Comments for agents
 
@@ -1128,7 +1257,9 @@ of the document, unless `drawing` gives one.
 3MF and USDZ (mitcad#1569, commands.md "Mesh refinement"): a preset,
 `low`, `medium` (the default) or `high`, or the tolerances
 `{"deviation": mm, "angle": radians}` with optional `face_triangles` and
-`max_edge`. The `export` command checks the values; another format with
+`max_edge`. One of `deviation` and `angle` may be left out and is then
+`medium`'s (0.03 mm, 15°; mitcad#1732); an object with neither is
+refused. The `export` command checks the values; another format with
 `refinement` is refused. A small printed part, a 7 mm part or a 15 mm
 wheel, shows facets at the default and takes for example
 `{"deviation": 0.03, "angle": 0.052}`.
@@ -2084,6 +2215,21 @@ computations can still use much time and memory.
   refused, the document unchanged), `ui_camera`'s `aspect`, a JPEG
   screenshot of an asked size written into the folder, an image block
   and the `print_thickness` summary.
+- [tools/ui-mcp-input-test.sh](../tools/ui-mcp-input-test.sh) (Xvfb, the
+  same shell client, an application started with `--mcp-folder`) covers
+  the input tools (mitcad#1735): the tools listed, `ui_click` on Extrude's
+  distance field by its input key and at its place, `ui_type` with
+  `Ctrl+A` and the Unicode text `pyörä_d` (a user parameter's name) that
+  the panel's input then holds, a place outside the window, an input not
+  shown and an unknown key refused; `ui_dialog` refusing a command
+  without a dialog and one with files, Edit Parameters opened, read
+  (title, buttons, the parameter in its table) and shown by a
+  whole-window screenshot, `ui_click` and `ui_type` refused while it is
+  open, OK refused and Close closing it; and Send to Slicer's panel
+  opened for viewing, Send refused and Cancel closing it. The key names
+  and the dialogs `ui_dialog` opens are unit-tested in `app.unit`
+  (`app/tests/ui_keys.cpp`, `app/tests/ui_command_list.cpp`), the catalogue
+  in `core.mcp`.
 - [tools/ui-mcp-document-new-test.sh](../tools/ui-mcp-document-new-test.sh)
   (Xvfb, the same shell client) covers `document_new` (mitcad#1266):
   `ui_command` `file.new_design` refused with a pointer to it, a folder
@@ -2095,6 +2241,14 @@ computations can still use much time and memory.
   untitled design and a name in the first folder. The chat UI test
   (`tools/ui-chat-test.py`, run `new-design`) runs a chat agent's "read
   the open design, `document_new`, build in it" without the user's hand.
+- [tools/ui-mcp-recovery-dialog-test.sh](../tools/ui-mcp-recovery-dialog-test.sh)
+  (Xvfb, the same shell client) covers a dialog that waits for the user
+  (mitcad#1725): with a killed session's autosave, the recovery question
+  at start-up is listed by `ui_state` (`dialog`, `blocked_reason`),
+  `model_command` and `ui_command` are refused naming it and
+  `--no-recovery`, `document_list` gives the reason, and queries work;
+  after Later commands run again; File › Recover Designs' question is
+  named without the start-up's hint.
 - The unit tests of the folder rules are in `app.unit`.
 - The unit tests of the classification are in `core.model`, and those of
   the live catalogue are in `core.mcp`.

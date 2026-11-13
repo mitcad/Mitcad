@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MIT
+# The timeline's rename editor at the end of the timeline (mitcad#1742,
+# app/COMMANDS.md, the timeline's rename in place), on
+# timeline-rename-editor.json (Sketch1 to Sketch30):
+#   1. A wide window, the strip ending just after Sketch30: Sketch30
+#      renamed from its menu to a name of 30 characters, typed into the
+#      editor; the editor grows with the name.
+#   2. The window 820 px wide, the timeline scrolled to its end: the
+#      renamed last item's editor opens with its 30 characters, moved left
+#      to the visible right edge; Esc keeps the name.
+# Every "Timeline rename editor at x,y wxh in the visible WxH, text N wide"
+# line is checked by tools/ui-timeline-rename-editor-test.sh (Linux): the
+# editor wholly inside the visible timeline and at least as wide as its
+# text.
+expect-ever 'View area'
+wait-idle
+window-resize 1580 900
+wait-idle
+expect-ever '^Timeline Sketch30 at '
+
+# 1. The last item renamed to a name of 30 characters.
+mark
+context-menu-logged '^Timeline Sketch30 at ' 'Rename'
+wait-log '^Renaming Sketch30 in the timeline$'
+wait-log '^Timeline rename editor at '
+type 'Rounded corner of the last arm'
+wait-idle
+key Return
+wait-log '^Renamed Sketch30 to Rounded corner of the last arm$'
+wait-log '^Timeline Rounded corner of the last arm at '
+wait-idle
+
+# 2. A narrow window: the timeline overflows; scrolled to its end, the
+# last item's editor lies against the visible right edge.
+window-resize 820 700
+wait-idle
+mark
+wheel-logged '^Timeline Sketch1 at ' -30
+wait-log '^Timeline Rounded corner of the last arm at '
+wait-idle
+mark
+context-menu-logged '^Timeline Rounded corner of the last arm at ' 'Rename'
+wait-log '^Renaming Rounded corner of the last arm in the timeline$'
+wait-log '^Timeline rename editor at '
+wait-idle
+key Escape
+wait-idle
+expect-never '^Renamed Rounded corner of the last arm to '

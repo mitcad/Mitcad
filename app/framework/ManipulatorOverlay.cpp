@@ -156,8 +156,9 @@ void ManipulatorOverlay::layoutBoxes() {
       continue;
     }
     const int index = static_cast<int>(i);
-    if (!handle.manipulator.boxAtZero && std::abs(handle.value) < 1e-12 && index != m_hover &&
-        index != m_drag && index != m_boxHover) {
+    // A quiet handle's box (mitcad#1747) likewise, whatever its value.
+    if ((handle.manipulator.quiet || (!handle.manipulator.boxAtZero && std::abs(handle.value) < 1e-12)) &&
+        !isActive(index)) {
       continue;
     }
     Handle shown = handle;
@@ -326,10 +327,16 @@ void ManipulatorOverlay::setHandles(std::vector<Handle> handles) {
       const Handle& next = handles[i];
       const Manipulator& a = previous.manipulator;
       const Manipulator& b = next.manipulator;
-      if (next.key == previous.key && a.kind == b.kind && a.element == b.element &&
-          a.origin.IsEqual(b.origin, 1e-9) && a.direction.IsEqual(b.direction, 1e-12) &&
-          (a.kind != Manipulator::Kind::Ring || a.reference.IsEqual(b.reference, 1e-12)) &&
-          (a.kind != Manipulator::Kind::Arrow || (a.base == b.base && a.factor == b.factor)) &&
+      // One of an input's several handles (InputDef::manipulators,
+      // mitcad#1747) is named by its element: it keeps its drag where the
+      // drag's other inputs move it a little (an image's corner, whose
+      // opposite corner stays up to the panel's rounding of its centre).
+      const bool named = a.kind != Manipulator::Kind::Toggle && a.element >= 0;
+      const bool samePlace =
+          named || (a.origin.IsEqual(b.origin, 1e-9) && a.direction.IsEqual(b.direction, 1e-12) &&
+                    (a.kind != Manipulator::Kind::Ring || a.reference.IsEqual(b.reference, 1e-12)) &&
+                    (a.kind != Manipulator::Kind::Arrow || (a.base == b.base && a.factor == b.factor)));
+      if (next.key == previous.key && a.kind == b.kind && a.element == b.element && samePlace &&
           std::isfinite(next.value)) {
         return static_cast<int>(i);
       }
@@ -367,6 +374,19 @@ double ManipulatorOverlay::pixelSize(const gp_Pnt& at) const {
   const QPointF b = m_viewer.toWidgetF(at.Translated(gp_Vec(up)));
   const double pixels = std::hypot(b.x() - a.x(), b.y() - a.y());
   return pixels > 1e-9 ? 1.0 / pixels : 1.0;
+}
+
+double ManipulatorOverlay::ringRadius(const Manipulator& m) const {
+  // Round geometry (Manipulator::radius, mitcad#1747): an arrow's length
+  // and twice its reach beyond it, so that the arrows at its edge stay
+  // inside the ring; else the usual size on the screen.
+  const HandleSize size = sizeOf(m);
+  const double pixel = pixelSize(m.origin);
+  return m.radius > 0.0 ? m.radius + (size.arrow + 2.0 * size.grab) * pixel : size.ring * pixel;
+}
+
+bool ManipulatorOverlay::isActive(int index) const {
+  return index == m_hover || index == m_drag || index == m_boxHover;
 }
 
 bool ManipulatorOverlay::seenEdgeOn(const Manipulator& m) const {
@@ -427,7 +447,7 @@ ManipulatorOverlay::Drawn ManipulatorOverlay::draw(const Handle& handle) const {
   if (cross.Magnitude() < 1e-9) {
     return drawn; // a ring without a reference across its axis
   }
-  const double radius = sizeOf(m).ring * pixelSize(m.origin);
+  const double radius = ringRadius(m);
   const gp_Dir side(cross);
   const auto at = [&](double angle) {
     return m_viewer.toWidgetF(m.origin.Translated(
@@ -581,7 +601,7 @@ double ManipulatorOverlay::ringAngle(const Handle& handle, const QPointF& positi
   if (m.kind != Manipulator::Kind::Ring || cross.Magnitude() < 1e-9) {
     return std::numeric_limits<double>::quiet_NaN();
   }
-  const double radius = sizeOf(m).ring * pixelSize(m.origin);
+  const double radius = ringRadius(m);
   const gp_Dir side(cross);
   const QPointF c = m_viewer.toWidgetF(m.origin);
   const QPointF r = m_viewer.toWidgetF(m.origin.Translated(gp_Vec(m.reference) * radius)) - c;
@@ -721,6 +741,8 @@ bool ManipulatorOverlay::viewerEvent(QEvent* event) {
                                   .arg(step.step, 0, 'g', 6)
                                   .arg(step.zoom, 0, 'g', 6);
       }
+      // The command keeps its inputs as they are now (InputDef::onHandleDrag).
+      emit dragStarted(handle.key, handle.manipulator.element);
     }
     if (m_drag >= 0) {
       Handle& handle = m_handles[static_cast<std::size_t>(m_drag)];
@@ -858,6 +880,9 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
     // Move's; the other commands' handles are drawn as they were.
     const bool faint = !active && m_handles[i].manipulator.large && seenEdgeOn(m_handles[i].manipulator);
     painter.setOpacity(faint ? kFaintOpacity : 1.0);
+    // A quiet handle's line from its origin and its arc only while it or
+    // its box is under the mouse or dragged (mitcad#1747).
+    const bool lined = !m_handles[i].manipulator.quiet || isActive(static_cast<int>(i));
     if (m_handles[i].manipulator.kind == Manipulator::Kind::Marker) {
       const QPointF at = drawn.handle;
       painter.setPen(QPen(kInk, 2.0));
@@ -879,7 +904,7 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
       painter.setBrush(m_handles[i].manipulator.on ? color : QColor(Qt::white));
       painter.drawEllipse(drawn.handle, 6.0, 6.0);
     } else if (m_handles[i].manipulator.kind == Manipulator::Kind::Arrow) {
-      if (m_handles[i].manipulator.valueBox) {
+      if (lined && m_handles[i].manipulator.valueBox) {
         // A dimension (mitcad#656): a solid line from the reference, a
         // short bar across it there.
         painter.setPen(QPen(color, 1.4));
@@ -887,7 +912,7 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
         const QPointF line = unit(drawn.handle - drawn.origin);
         const QPointF bar(-line.y() * 6.0, line.x() * 6.0);
         painter.drawLine(drawn.origin - bar, drawn.origin + bar);
-      } else {
+      } else if (lined) {
         painter.setPen(QPen(color, 1.0, Qt::DashLine));
         painter.drawLine(drawn.origin, drawn.handle);
       }
@@ -910,7 +935,7 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
       painter.setBrush(Qt::NoBrush);
       haloed(painter, QPen(color, active ? size.line + 1.0 : size.line),
              [&painter, &drawn] { painter.drawPolyline(drawn.ring); });
-      if (!drawn.arc.isEmpty()) {
+      if (!drawn.arc.isEmpty() && lined) {
         // An angle's dimension (mitcad#656): the zero line along the
         // reference, the arc to the knob.
         painter.setPen(QPen(color, 1.4));
@@ -918,8 +943,10 @@ void ManipulatorOverlay::paintEvent(QPaintEvent*) {
         haloed(painter, QPen(color, std::max(size.shaft - 1.0, 3.0), Qt::SolidLine, Qt::RoundCap),
                [&painter, &drawn] { painter.drawPolyline(drawn.arc); });
       }
-      painter.setPen(QPen(color, 1.0, Qt::DashLine));
-      painter.drawLine(drawn.origin, drawn.handle);
+      if (lined) {
+        painter.setPen(QPen(color, 1.0, Qt::DashLine));
+        painter.drawLine(drawn.origin, drawn.handle);
+      }
       painter.setPen(QPen(kHalo, 1.5));
       painter.setBrush(color);
       painter.drawEllipse(drawn.handle, size.knob, size.knob);
@@ -1009,12 +1036,17 @@ void ManipulatorOverlay::logPlaces() {
                    .arg(m_command, handle.label).arg(point.X()).arg(point.Y()).arg(point.Z()).arg(at.x()).arg(at.y());
       continue;
     }
-    const QString key = handle.manipulator.kind == Manipulator::Kind::Toggle
-                            ? QStringLiteral("%1.%2%3")
-                                  .arg(handle.key)
-                                  .arg(handle.manipulator.element)
-                                  .arg(handle.manipulator.on ? QString() : QStringLiteral(" (off)"))
-                            : handle.key;
+    // A pattern's instance "suppressed.2 (off)", one of an input's several
+    // handles "width.2" (mitcad#1747), else the input.
+    QString key = handle.key;
+    if (handle.manipulator.kind == Manipulator::Kind::Toggle) {
+      key = QStringLiteral("%1.%2%3")
+                .arg(handle.key)
+                .arg(handle.manipulator.element)
+                .arg(handle.manipulator.on ? QString() : QStringLiteral(" (off)"));
+    } else if (handle.manipulator.element >= 0) {
+      key = QStringLiteral("%1.%2").arg(handle.key).arg(handle.manipulator.element);
+    }
     lines << QStringLiteral("Manipulator %1 %2 at %3,%4").arg(m_command, key).arg(at.x()).arg(at.y());
     if (handle.manipulator.kind == Manipulator::Kind::Arrow) {
       // Which way the arrow points in the design, for UI tests (mitcad#958:

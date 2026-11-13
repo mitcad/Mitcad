@@ -104,7 +104,8 @@ fn printed<'a>(result: &'a Value, name: &str) -> &'a Value {
 #[test]
 fn a_component_s_material_reaches_the_slicer_with_its_own_filament_slot() {
     // Two components: Lid and Box, a block each; the root has no material
-    // of its own (steel, no filament values).
+    // of its own (the design's default steel, which prints as PLA,
+    // mitcad#1727).
     let mut doc = Document::new(MockKernel::default());
     doc.create_component(Some("Lid"), Transform::IDENTITY, true)
         .unwrap();
@@ -132,14 +133,15 @@ fn a_component_s_material_reaches_the_slicer_with_its_own_filament_slot() {
     assert_eq!(slot_entry(&project, "filament_type", lid_slot), "PETG");
     assert_eq!(slot_entry(&project, "nozzle_temperature", lid_slot), "255");
     assert_eq!(slot_entry(&project, "hot_plate_temp", lid_slot), "70");
-    // The Box's does not: the default material, written as PLA with
+    // The Box's does not: no material of its own prints as the print
+    // default, PLA (mitcad#1727: not the design's default steel), with
     // MitCad's generic PLA values, which the export says.
     let other = part_block(&model, "Body2");
     let other_slot = part_value(other, "extruder").unwrap();
     assert_ne!(lid_slot, other_slot);
     assert_eq!(
         slot_entry(&project, "filament_settings_id", other_slot),
-        "Steel"
+        "PLA Plastic"
     );
     assert_eq!(slot_entry(&project, "filament_type", other_slot), "PLA");
     assert_eq!(
@@ -149,14 +151,14 @@ fn a_component_s_material_reaches_the_slicer_with_its_own_filament_slot() {
     assert_eq!(slot_entry(&project, "hot_plate_temp", other_slot), "60");
     let warnings = result["warnings"].to_string();
     assert!(
-        warnings.contains("Steel (filament 2) sets no ")
+        warnings.contains("PLA Plastic (filament 2) sets no ")
             && warnings.contains("nozzle temperature")
             && warnings.contains("written as generic PLA's"),
         "{warnings}"
     );
     // The log line of tests: each part's material and own values.
     assert_eq!(printed(&result, "Body1")["material"], "petg-hf");
-    assert_eq!(printed(&result, "Body2")["material"], "steel");
+    assert_eq!(printed(&result, "Body2")["material"], "pla");
     let own = |name: &str| printed(&result, name)["own_values"].as_u64().unwrap();
     assert!(own("Body1") > own("Body2"), "{result}");
     // PrusaSlicer's lists alike, PETG HF's filament first.
@@ -391,4 +393,94 @@ fn placements_of_two_materials_take_a_filament_slot_each() {
     for slot in slots {
         assert_eq!(slot["bodies"], json!([body.to_string()]), "{table}");
     }
+}
+
+#[test]
+fn without_a_material_or_a_printer_the_slicer_gets_pla_and_the_export_says_no_printer() {
+    // mitcad#1727: one block at the root, no material anywhere and no
+    // printer profile: the filament is the print default, PLA (as print
+    // analysis assumes), not the design's default steel; the printer is a
+    // stand-in the slicer does not know, which the export says.
+    let mut doc = Document::new(MockKernel::default());
+    let body = small_block(&mut doc);
+    let material: Value = serde_json::from_str(
+        &doc.query(&json!({"query": "body_material", "body": body.to_string()}).to_string())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(material["source"], "default", "{material}");
+    assert_eq!(
+        material["print_material"],
+        json!({"id": "pla", "name": "PLA Plastic"})
+    );
+    let (result, data) = send(&mut doc, "no-printer.3mf");
+    let (project, _) = settings_files(&data);
+    assert_eq!(project["filament_settings_id"], json!(["PLA Plastic"]));
+    assert_eq!(project["filament_type"], json!(["PLA"]));
+    assert_eq!(project["printer_settings_id"], "Mitcad printer");
+    assert_eq!(printed(&result, "Body1")["material"], "pla");
+    // For agents: the step, with the command.
+    let warnings: Vec<&str> = result["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("no printer profile") && w.contains("import_print_profile")),
+        "{result}"
+    );
+    assert!(!warnings.iter().any(|w| w.contains("Steel")), "{result}");
+    // For people: the same in plain words, naming no command.
+    let shown: Vec<&str> = result["warning_messages"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no warning_messages: {result}"))
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert_eq!(shown.len(), warnings.len(), "{result}");
+    assert!(
+        shown
+            .iter()
+            .any(|w| w.starts_with("no printer was chosen") && w.contains("Printer row")),
+        "{result}"
+    );
+    assert!(
+        !shown.iter().any(|w| w.contains("import_print_profile")),
+        "{result}"
+    );
+    // PrusaSlicer's project says it too.
+    let (prusa, _) = send_for(&mut doc, "no-printer-prusa.3mf", "prusaslicer");
+    assert!(
+        prusa["warnings"]
+            .to_string()
+            .contains("import_print_profile"),
+        "{prusa}"
+    );
+
+    // With a printer chosen at the root, the slicer gets its name and the
+    // export says nothing of a printer.
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "create_print_profile", "kind": "printer", "name": "Bench",
+             "values": {"nozzle_diameter": 0.4}},
+            {"cmd": "set_property", "owner": "C0", "set": "Print Printer", "key": "profile",
+             "value": "bench"},
+        ]),
+    );
+    let (result, data) = send(&mut doc, "bench.3mf");
+    let (project, _) = settings_files(&data);
+    assert_eq!(project["printer_settings_id"], "Bench");
+    assert!(
+        !result["warnings"]
+            .to_string()
+            .contains("import_print_profile"),
+        "{result}"
+    );
+    assert_eq!(result.get("warning_messages"), None, "{result}");
+    // The body still prints as PLA.
+    assert_eq!(printed(&result, "Body1")["material"], "pla");
 }

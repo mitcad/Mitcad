@@ -82,6 +82,7 @@ CommandDef primitive(const CommandContext& context, Primitive kind) {
                                            : QObject::tr("Torus");
   const PlacePanel place = placePanel(kind, def.name);
   def.inputs = placeInputs(place);
+  def.handlesSeenAt = [](const CommandState& state, const CommandContext& model) { return placeSeenAt(state, model); };
   const auto direction = choiceInput(QStringLiteral("direction"), QObject::tr("Direction"),
                                      {{QStringLiteral("one_side"), QStringLiteral("One Side")},
                                       {QStringLiteral("symmetric"), QStringLiteral("Symmetric")}},

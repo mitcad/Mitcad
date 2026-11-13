@@ -51,6 +51,9 @@ FileKind fileKind(const QString& path) {
   if (suffix == QStringLiteral("dwg")) {
     return FileKind::Dwg;
   }
+  if (suffix == QStringLiteral("3dm")) {
+    return FileKind::ThreeDm;
+  }
   return FileKind::None;
 }
 
@@ -59,11 +62,13 @@ namespace {
 // The CAD formats, one filter: designs with a history (FreeCAD, .f3d),
 // part and assembly files (.ipt, .iam), IFC building models (.ifc,
 // .ifczip), building projects and families (.rvt, .rfa, .rte, .rft), SolidCraft
-// designs (.sc, .solidcraft), drawings' 3D content (.dwg), then STEP, IGES
-// and BRep. Both spellings of .FCStd, .ipt, .iam, .ifc, .rvt, .rfa, .sc and
-// .dwg: name filters match case-sensitively on Linux.
+// designs (.sc, .solidcraft), drawings' 3D content (.dwg), NURBS models
+// (.3dm), then STEP, IGES and BRep. Both spellings of .FCStd, .ipt, .iam,
+// .ifc, .rvt, .rfa, .sc, .dwg and .3dm: name filters match case-sensitively
+// on Linux.
 const char* const kCad = "*.FCStd *.fcstd *.f3d *.f3z *.ipt *.IPT *.iam *.IAM *.ifc *.IFC *.ifczip *.rvt *.RVT *.rfa *.RFA "
-                         "*.rte *.rft *.sc *.SC *.solidcraft *.dwg *.DWG *.step *.stp *.iges *.igs *.brep *.brp";
+                         "*.rte *.rft *.sc *.SC *.solidcraft *.dwg *.DWG *.3dm *.3DM *.step *.stp *.iges *.igs *.brep "
+                         "*.brp";
 const char* const kMesh = "*.stl *.obj";
 const char* const kDrawing = "*.dxf *.svg";
 

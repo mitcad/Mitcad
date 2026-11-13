@@ -466,6 +466,12 @@ public:
   // The inputs as they are, whether OK can run (`ready`, else `message`),
   // the last preview's outcome and the panel's messages (shownState).
   QJsonObject scriptState();
+  // Where a click on an input lands in the host window (live MCP's
+  // ui_click, mitcad#1735; CommandPresenter::inputPlace); none without a
+  // frontend that tells.
+  std::optional<QPoint> inputPlace(const QString& key) const {
+    return m_presenter != nullptr ? m_presenter->inputPlace(key) : std::nullopt;
+  }
   // A measurement of the history shown again (mitcad#648,
   // CommandSessionScript.cpp): the choices as given, as if chosen, then
   // every selection input with the items given (emptied when it has none
@@ -605,6 +611,9 @@ private:
   void finishAsyncCancel();
   void updateManipulators();
   void manipulatorDragged(const QString& key, double value);
+  // A drag of a handle began: the inputs as they are now, for
+  // InputDef::onHandleDrag (mitcad#1747).
+  void manipulatorDragStarted(const QString& key, int element);
   // A toggle in the view was clicked: its element's number goes in or out
   // of the text input (P9: a pattern's suppressed instances).
   void toggleElement(const QString& key, int element);
@@ -796,6 +805,7 @@ private:
   QJsonObject m_shownReport; // the report of the preview shown (toggles)
   QString m_loggedPreviewBodies; // the bodies the last preview logged (mitcad#266)
   QString m_loggedPreviewTool;   // where it drew its tool, as logged (mitcad#636)
+  QString m_loggedToolLook;      // how it drew its tool, as logged (mitcad#1743)
   QString m_loggedPreviewDatum = QStringLiteral("none"); // where it drew its datum, as logged (mitcad#1029)
   QString m_loggedPreviewCurve = QStringLiteral("none"); // the curve it drew, as logged (mitcad#1496)
   void logPreviewCurve(const QString& curve);
@@ -1030,6 +1040,15 @@ private:
     int middleIndex = -1;
   };
   std::optional<ProxyBasis> m_proxyBasis; // the shown exact preview's
+  // The handle whose drag began last, and the inputs then
+  // (InputDef::onHandleDrag, mitcad#1747); kept until the next drag, as a
+  // dragged value may wait for the model.
+  struct HandleDrag {
+    QString key;
+    int element = -1;
+    CommandState atStart;
+  };
+  std::optional<HandleDrag> m_handleDrag;
   QString m_proxyKey;                     // the input dragged, empty: none
   double m_proxyValue = 0.0;              // its value dragged to
   bool m_proxyShown = false;

@@ -6,13 +6,26 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepClass_FaceClassifier.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepGProp.hxx>
+#include <BRepTools.hxx>
+#include <GProp_GProps.hxx>
 #include <GeomAbs_SurfaceType.hxx>
+#include <TopAbs_State.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Face.hxx>
+#include <TopoDS_Wire.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
@@ -844,6 +857,254 @@ void test_thin_open_chains() {
   CHECK(throws_with([&] { extrude_feature(spec); }, "its key"));
 }
 
+// A closed periodic cubic B-spline through eight poles on an ellipse of
+// half-axes 25 and 15 about (cx, cy), scaled by `size`: a smooth convex blob
+// whose least radius of curvature is about 7.5 mm at size 1.
+Segment blob(const std::string& name, double cx, double cy, double size) {
+  Segment s;
+  s.name = name;
+  s.kind = SegmentKind::BSpline;
+  s.degree = 3;
+  s.periodic = true;
+  for (int i = 0; i < 8; ++i) {
+    const double t = i * kPi / 4.0;
+    s.poles.emplace_back(cx + size * 25.0 * std::cos(t), cy + size * 15.0 * std::sin(t));
+  }
+  for (int i = 0; i <= 8; ++i) {
+    s.knots.push_back(i);
+    s.multiplicities.push_back(1);
+  }
+  return s;
+}
+
+// How far the point lies from the shape.
+double distance_to(const TopoDS_Shape& shape, const gp_Pnt& point) {
+  BRepExtrema_DistShapeShape measure(BRepBuilderAPI_MakeVertex(point).Vertex(), shape);
+  return measure.IsDone() && measure.NbSolution() > 0 ? measure.Value() : -1.0;
+}
+
+// The area and the length of the outline of a loop's region in the sketch
+// plane.
+std::pair<double, double> area_and_length(const Loop& loop) {
+  const TopoDS_Face face = make_profile(Frame{}, Region{"r", {loop}}).face;
+  GProp_GProps area;
+  BRepGProp::SurfaceProperties(face, area);
+  GProp_GProps length;
+  BRepGProp::LinearProperties(BRepTools::OuterWire(face), length);
+  return {area.Mass(), length.Mass()};
+}
+
+// A blob of B-splines extruded h with a taper (mitcad#1749): a valid solid
+// with one wall per curve named as the straight prism's (`side(<curve>)`),
+// its end cap at z = h the profile offset by h tan(angle): every sampled
+// point of the end cap's outline lies that far from the profile's outline
+// below it (out of the profile where the taper widens, in it where it
+// narrows), of a hole's loop that far from the hole the other way (holes
+// shrink as the outline grows). The volume is the outline's minus the
+// holes' (a convex loop offset by d keeps the area A + P d + pi d^2,
+// Steiner, so its taper has h (A + P d / 2 + pi d^2 / 3)).
+void check_spline_taper(const Shape& solid, const Region& region, double h, double angle) {
+  CHECK(BRepCheck_Analyzer(solid.occt()).IsValid());
+  std::size_t curves = 0;
+  for (const Loop& loop : region.loops) {
+    for (const Segment& segment : loop.segments) {
+      ++curves;
+      CHECK(solid.find_faces("F2:side(" + segment.name + ")").size() == 1);
+    }
+  }
+  CHECK(static_cast<std::size_t>(solid.face_count()) == curves + 2);
+  CHECK(solid.find_faces("F2:start(" + region.name + ")").size() == 1);
+  const std::vector<int> ends = solid.find_faces("F2:end(" + region.name + ")");
+  CHECK(ends.size() == 1);
+  if (ends.size() != 1) {
+    return;
+  }
+  const double d = h * std::tan(angle);
+  const TopoDS_Face& end = solid.face(ends[0]);
+  const TopoDS_Face outline = make_profile(Frame{}, Region{"o", {region.loops[0]}}).face;
+  std::vector<TopoDS_Face> holes;
+  for (std::size_t i = 1; i < region.loops.size(); ++i) {
+    holes.push_back(make_profile(Frame{}, Region{"h", {region.loops[i]}}).face);
+  }
+  const TopoDS_Wire outer = BRepTools::OuterWire(end);
+  int loops = 0;
+  double worst = 0.0;
+  for (TopExp_Explorer w(end, TopAbs_WIRE); w.More(); w.Next(), ++loops) {
+    const bool is_outline = w.Current().IsSame(outer);
+    for (TopExp_Explorer e(w.Current(), TopAbs_EDGE); e.More(); e.Next()) {
+      const BRepAdaptor_Curve curve(TopoDS::Edge(e.Current()));
+      for (int k = 0; k <= 40; ++k) {
+        const gp_Pnt p = curve.Value(curve.FirstParameter() + k * (curve.LastParameter() - curve.FirstParameter()) / 40.0);
+        worst = std::max(worst, std::abs(p.Z() - h));
+        const gp_Pnt below(p.X(), p.Y(), 0.0);
+        double off = std::numeric_limits<double>::infinity();
+        bool in_hole = false;
+        if (is_outline) {
+          off = distance_to(BRepTools::OuterWire(outline), below);
+          const TopAbs_State state = BRepClass_FaceClassifier(outline, below, 1e-7).State();
+          CHECK(state == (d > 0.0 ? TopAbs_OUT : TopAbs_IN));
+        } else {
+          for (const TopoDS_Face& hole : holes) {
+            off = std::min(off, distance_to(BRepTools::OuterWire(hole), below));
+            in_hole = in_hole || BRepClass_FaceClassifier(hole, below, 1e-7).State() == TopAbs_IN;
+          }
+          CHECK(in_hole == (d > 0.0));
+        }
+        worst = std::max(worst, std::abs(off - std::abs(d)));
+      }
+    }
+  }
+  std::printf("check_spline_taper: %g degrees, %zu loops, end cap off the offset profile by %g mm at most\n",
+              angle * 180.0 / kPi, region.loops.size(), worst);
+  CHECK(loops == static_cast<int>(region.loops.size()));
+  CHECK(worst < 1e-6);
+  double expected = 0.0;
+  for (std::size_t i = 0; i < region.loops.size(); ++i) {
+    const auto [a, p] = area_and_length(region.loops[i]);
+    const double grow = i == 0 ? d : -d;
+    expected += (i == 0 ? 1.0 : -1.0) * h * (a + p * grow / 2.0 + kPi * grow * grow / 3.0);
+  }
+  CHECK_NEAR_TOL(volume(solid), expected, 1e-3);
+}
+
+Segment straight(const std::string& name, double x0, double y0, double x1, double y1) {
+  Segment s;
+  s.name = name;
+  s.kind = SegmentKind::Line;
+  s.start = gp_Pnt2d(x0, y0);
+  s.end = gp_Pnt2d(x1, y1);
+  return s;
+}
+
+// A quadratic Bezier curve by its three control points.
+Segment arch(const std::string& name, const gp_Pnt2d& a, const gp_Pnt2d& b, const gp_Pnt2d& c) {
+  Segment s;
+  s.name = name;
+  s.kind = SegmentKind::BSpline;
+  s.degree = 2;
+  s.poles = {a, b, c};
+  s.knots = {0, 1};
+  s.multiplicities = {3, 3};
+  return s;
+}
+
+// A profile of lines and a spline meeting at sharp corners, extruded h with
+// a taper (mitcad#1749): a valid solid with one wall per curve named as the
+// straight prism's, its end cap one loop at z = h, the profile offset by
+// d = h tan(angle) with its corners joined as a draft's planes meet: no
+// point of the end cap's loop nearer to the profile than |d| (a mitre's
+// points lie farther), most of them at |d| (the offsets), on the side of
+// the profile the taper moves to. The sections of ruled walls between two
+// loops change area steadily: the volume lies between h times the near
+// cap's area and h times the end cap's.
+void check_cornered_taper(const Shape& solid, const Region& region, double h, double angle) {
+  CHECK(BRepCheck_Analyzer(solid.occt()).IsValid());
+  const std::vector<Segment>& segments = region.loops[0].segments;
+  for (const Segment& segment : segments) {
+    CHECK(solid.find_faces("F2:side(" + segment.name + ")").size() == 1);
+  }
+  CHECK(static_cast<std::size_t>(solid.face_count()) == segments.size() + 2);
+  CHECK(solid.find_faces("F2:start(" + region.name + ")").size() == 1);
+  const std::vector<int> ends = solid.find_faces("F2:end(" + region.name + ")");
+  CHECK(ends.size() == 1);
+  if (ends.size() != 1) {
+    return;
+  }
+  const double d = h * std::tan(angle);
+  const TopoDS_Face& end = solid.face(ends[0]);
+  const TopoDS_Face profile = make_profile(Frame{}, region).face;
+  const TopoDS_Wire outline = BRepTools::OuterWire(profile);
+  int samples = 0;
+  int on_offset = 0;
+  double nearest = std::numeric_limits<double>::infinity();
+  double height_off = 0.0;
+  bool sides = true;
+  for (TopExp_Explorer e(end, TopAbs_EDGE); e.More(); e.Next()) {
+    const BRepAdaptor_Curve curve(TopoDS::Edge(e.Current()));
+    for (int k = 0; k <= 40; ++k) {
+      const gp_Pnt p = curve.Value(curve.FirstParameter() + k * (curve.LastParameter() - curve.FirstParameter()) / 40.0);
+      height_off = std::max(height_off, std::abs(p.Z() - h));
+      const gp_Pnt below(p.X(), p.Y(), 0.0);
+      const double off = distance_to(outline, below);
+      nearest = std::min(nearest, off);
+      ++samples;
+      if (std::abs(off - std::abs(d)) < 1e-6) {
+        ++on_offset;
+      }
+      sides = sides && BRepClass_FaceClassifier(profile, below, 1e-7).State() == (d > 0.0 ? TopAbs_OUT : TopAbs_IN);
+    }
+  }
+  std::printf("check_cornered_taper: %g degrees, %d of %d end cap points at the offset, the nearest %.9g from the "
+              "profile (offset %.9g)\n",
+              angle * 180.0 / kPi, on_offset, samples, nearest, std::abs(d));
+  CHECK(height_off < 1e-6);
+  CHECK(nearest > std::abs(d) - 1e-6);
+  CHECK(2 * on_offset > samples);
+  CHECK(sides);
+  GProp_GProps near_area;
+  BRepGProp::SurfaceProperties(profile, near_area);
+  GProp_GProps end_area;
+  BRepGProp::SurfaceProperties(end, end_area);
+  const double low = h * std::min(near_area.Mass(), end_area.Mass());
+  const double high = h * std::max(near_area.Mass(), end_area.Mass());
+  CHECK(volume(solid) > low * (1.0 - 1e-4) && volume(solid) < high * (1.0 + 1e-4));
+  CHECK(d > 0.0 ? end_area.Mass() > near_area.Mass() : end_area.Mass() < near_area.Mass());
+}
+
+// A taper on a closed B-spline profile (mitcad#1749, GitHub #307): OCCT's
+// draft leans planes, cylinders and cones only, so a spline's wall is ruled
+// from the profile to its offset. 10 mm at -25 degrees (the walls move in
+// 4.66 mm, less than the blob's least radius of curvature) and at +5
+// degrees; with a hole of a smaller blob, which shrinks as the outline
+// grows; and symmetric, each half as one side.
+void test_taper_of_a_spline_profile() {
+  const Region single{"r{c1}", {Loop{{blob("c1", 0, 0, 1)}}}};
+  for (const double degrees : {-25.0, 5.0}) {
+    ExtrudeFeatureSpec spec = spec_of({single}, 10);
+    spec.side1.taper = degrees * kPi / 180.0;
+    const ShapePtr solid = extrude_feature(spec);
+    check_spline_taper(*solid, single, 10, spec.side1.taper);
+  }
+
+  const Region holed{"r{c1}", {Loop{{blob("c1", 0, 0, 1)}}, Loop{{blob("c2", 0, 0, 0.3)}}}};
+  ExtrudeFeatureSpec spec = spec_of({holed}, 10);
+  spec.side1.taper = 5.0 * kPi / 180.0;
+  const ShapePtr holed_solid = extrude_feature(spec);
+  check_spline_taper(*holed_solid, holed, 10, spec.side1.taper);
+
+  // Symmetric, 10 each way at -10 degrees: twice one side's volume, the
+  // wall in two pieces.
+  spec = spec_of({single}, 10);
+  spec.side1.taper = -10.0 * kPi / 180.0;
+  const double one = volume(*extrude_feature(spec));
+  spec.side2 = distance(10, -10.0 * kPi / 180.0);
+  const ShapePtr both = extrude_feature(spec);
+  CHECK(BRepCheck_Analyzer(both->occt()).IsValid());
+  CHECK_NEAR_TOL(volume(*both), 2.0 * one, 1e-5);
+  CHECK(both->find_faces("F2:side(c1)").size() == 2);
+  CHECK(both->find_faces("F2:start(r{c1})").size() == 1 && both->find_faces("F2:end(r{c1})").size() == 1);
+
+  // Sharp corners where a spline meets a line, at -10 and +5 degrees. A D
+  // of a line and a parabolic arch: two convex corners, where the offsets
+  // of a narrowing taper cross and those of a widening one part to a
+  // mitre. A notch: a block whose top-left is cut away by an arch leaving a
+  // line at a reflex corner, where it is the other way round.
+  const Region d_shape{"r{c1,c2}", {Loop{{straight("c1", 0, 0, 40, 0),
+                                          arch("c2", gp_Pnt2d(40, 0), gp_Pnt2d(20, 24), gp_Pnt2d(0, 0))}}}};
+  const Region notch{"r{c1,c2,c3,c4,c5}",
+                     {Loop{{straight("c1", 0, 0, 30, 0), straight("c2", 30, 0, 30, 20), straight("c3", 30, 20, 15, 20),
+                            arch("c4", gp_Pnt2d(15, 20), gp_Pnt2d(10, 30), gp_Pnt2d(0, 35)),
+                            straight("c5", 0, 35, 0, 0)}}}};
+  for (const Region* shape : {&d_shape, &notch}) {
+    for (const double degrees : {-10.0, 5.0}) {
+      ExtrudeFeatureSpec cornered = spec_of({*shape}, 10);
+      cornered.side1.taper = degrees * kPi / 180.0;
+      const ShapePtr solid = extrude_feature(cornered);
+      check_cornered_taper(*solid, *shape, 10, cornered.side1.taper);
+    }
+  }
+}
+
 } // namespace
 
 // Along a direction off the sketch normal (mitcad#539): a 20 x 10 rectangle
@@ -918,6 +1179,8 @@ void extrude_feature_tests() {
   guarded("test_thin_open_chains", test_thin_open_chains);
   // A negative side of two (mitcad#765).
   guarded("test_negative_side", test_negative_side);
+  // A taper on a closed B-spline profile (mitcad#1749).
+  guarded("test_taper_of_a_spline_profile", test_taper_of_a_spline_profile);
 }
 
 } // namespace test

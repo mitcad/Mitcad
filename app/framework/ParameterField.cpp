@@ -807,6 +807,15 @@ bool ParameterField::fill() {
     }
     actions << logName;
   };
+  // Add User Parameter comes first in every field, so that an unknown name
+  // and Enter make the same kind of parameter wherever it is typed; Name
+  // this value is one row below it (mitcad#1723).
+  const ParameterSource* source = parameterSourceOf(m_edit);
+  if (m_options.create && source != nullptr && source->addParameter && (browsing || !name.isEmpty())) {
+    action(kCreate,
+           name.isEmpty() ? tr("Add User Parameter…") : tr("Add User Parameter “%1”…").arg(name),
+           tr("a new parameter of its own"), QStringLiteral("create"));
+  }
   if (m_options.naming && (browsing || (!name.isEmpty() && leadingName(at)))) {
     action(kName,
            name.isEmpty() || !leadingName(at) ? tr("Name this value: name = …")
@@ -818,12 +827,6 @@ bool ParameterField::fill() {
   if (m_options.removeName && browsing && !namedPrefix(at.text).isEmpty()) {
     action(kRemoveName, tr("Remove Name"), tr("gives this parameter its automatic name back"),
            QStringLiteral("remove name"));
-  }
-  const ParameterSource* source = parameterSourceOf(m_edit);
-  if (m_options.create && source != nullptr && source->addParameter && (browsing || !name.isEmpty())) {
-    action(kCreate,
-           name.isEmpty() ? tr("Add User Parameter…") : tr("Add User Parameter “%1”…").arg(name),
-           tr("a new parameter of its own"), QStringLiteral("create"));
   }
   if (browsing && source != nullptr && source->query) {
     action(kFormula,tr("Edit Formula…"),tr("A larger formula editor with functions, templates and parameter limits"),

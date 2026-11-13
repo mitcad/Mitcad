@@ -703,7 +703,14 @@ impl<K: Kernel> Document<K> {
                 value["source"] = json!("component");
                 value["component"] = json!(c);
             }
-            MaterialSource::Default => value["source"] = json!("default"),
+            MaterialSource::Default => {
+                value["source"] = json!("default");
+                // What a slicer gets for it meanwhile (mitcad#1727): the
+                // print default, PLA, not the design's default.
+                if let Some(print) = self.material(crate::print_analysis::DEFAULT_MATERIAL) {
+                    value["print_material"] = json!({"id": print.id, "name": print.name});
+                }
+            }
         }
         value["appearance_set_by_hand"] = json!(self.appearance_set_by_hand(uid));
         // The variant the body's printer picks (mitcad#1054).

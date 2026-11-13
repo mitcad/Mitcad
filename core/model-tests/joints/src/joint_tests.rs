@@ -318,7 +318,8 @@ fn either_side_can_be_the_free_one() {
     assert_eq!(joint["state"], "failed", "{joint}");
     assert_eq!(
         joint["error"],
-        "both sides are fixed (Pin:1 and Plate:1) and the joint does not hold"
+        "neither side can move (Pin:1 is grounded, and Plate:1 is grounded) and the joint does not \
+         hold"
     );
     assert_near(rig.placement(rig.o1).translation, [0.0, 0.0, 0.0]);
     // An offset and an angle along and about the joint's z axis.
@@ -1261,4 +1262,162 @@ fn the_joints_query_says_what_each_side_is_on() {
     assert_eq!(row["a"]["occurrence"], "Pin:1");
     assert_eq!(row["b"]["geometry"]["face"], json!(plate_top));
     assert_eq!(row["b"]["component"], rig.plate.to_string());
+}
+
+/// A rigid joint of the pin's bottom on the plate's top that fails: its
+/// uid.
+fn failing_joint(rig: &mut Rig) -> FeatureUid {
+    let cmd = json!({"cmd": "add_joint", "kind": "rigid", "flip": true,
+                     "a": rig.pin_bottom(), "b": rig.plate_top()});
+    let result = rig.run(cmd);
+    assert_ne!(result["error"], Value::Null, "{result}");
+    result["uid"].as_str().unwrap().parse().unwrap()
+}
+
+/// The feature query's notices of a joint: (level, message, places).
+fn joint_notices(rig: &Rig, uid: FeatureUid) -> Vec<(String, String, Value)> {
+    let feature = query(&rig.doc, json!({"query": "feature", "uid": uid}));
+    feature["notices"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|n| {
+            (
+                n["level"].as_str().unwrap_or_default().to_owned(),
+                n["message"].as_str().unwrap_or_default().to_owned(),
+                n["places"].clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_joint_says_what_holds_its_sides() {
+    // mitcad#1745: when neither side can move, the joint's error says in
+    // words, with the components' names, what holds each side, and paints
+    // what holds them: the occurrences by their paths from the root.
+    let mut rig = rig();
+    rig.ground(rig.o1, true);
+    rig.ground(rig.o2, true);
+    let uid = failing_joint(&mut rig);
+    let notices = joint_notices(&rig, uid);
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    let (level, message, places) = &notices[0];
+    assert_eq!(level, "error");
+    assert_eq!(
+        message,
+        "neither side can move (Pin:1 is grounded, and Plate:1 is grounded) and the joint does \
+         not hold"
+    );
+    assert_eq!(
+        places,
+        &json!([{"kind": "occurrence", "path": "O2"}, {"kind": "occurrence", "path": "O1"}])
+    );
+
+    // The plate held by a rigid group with a grounded base (Plate:2, O3).
+    let mut rig = self::rig();
+    let o3 = rig
+        .doc
+        .copy_occurrence(rig.o1, Some(shift(0.0, 200.0, 0.0)))
+        .unwrap();
+    rig.ground(o3, true);
+    rig.ground(rig.o2, true);
+    let group = rig.run(json!({"cmd": "add_rigid_group", "occurrences": ["Plate:1", "Plate:2"]}));
+    assert_eq!(group["error"], Value::Null, "{group}");
+    let uid = failing_joint(&mut rig);
+    let notices = joint_notices(&rig, uid);
+    let (_, message, places) = &notices[0];
+    assert_eq!(
+        message,
+        "neither side can move (Pin:1 is grounded, and Plate:1 is in a rigid group with Plate:2, \
+         which is grounded) and the joint does not hold"
+    );
+    assert_eq!(
+        places,
+        &json!([{"kind": "occurrence", "path": "O2"}, {"kind": "occurrence", "path": "O1"},
+                {"kind": "occurrence", "path": format!("{o3}")}])
+    );
+    assert_near(rig.placement(rig.o1).translation, [0.0, 0.0, 0.0]);
+
+    // Both sides in one rigid group: they move as one.
+    let mut rig = self::rig();
+    let group = rig.run(json!({"cmd": "add_rigid_group", "occurrences": ["Plate:1", "Pin:1"]}));
+    assert_eq!(group["error"], Value::Null, "{group}");
+    let uid = failing_joint(&mut rig);
+    let notices = joint_notices(&rig, uid);
+    let (_, message, places) = &notices[0];
+    assert_eq!(
+        message,
+        "both sides move as one (a rigid group joins Plate:1 and Pin:1) and the joint does not \
+         hold"
+    );
+    assert_eq!(
+        places,
+        &json!([{"kind": "occurrence", "path": "O1"}, {"kind": "occurrence", "path": "O2"}])
+    );
+}
+
+#[test]
+fn a_joint_says_when_other_joints_hold_a_side() {
+    // mitcad#1745: the plate joined rigidly to a grounded base (Plate:2,
+    // O3) by an earlier joint, the pin grounded: a joint of the pin on the
+    // plate cannot move either, and says that the plate is held by joints.
+    let mut rig = rig();
+    let o3 = rig
+        .doc
+        .copy_occurrence(rig.o1, Some(shift(0.0, 200.0, 0.0)))
+        .unwrap();
+    rig.ground(o3, true);
+    let plate_bottom = json!({"occurrence": "Plate:1",
+        "geometry": {"body": rig.plate_body, "face": rig.face(rig.plate_body, "start")}});
+    let base_top = json!({"occurrence": "Plate:2",
+        "geometry": {"body": rig.plate_body, "face": rig.face(rig.plate_body, "end")}});
+    let on_base = rig.run(json!({"cmd": "add_joint", "kind": "rigid", "flip": true,
+                                 "a": plate_bottom, "b": base_top}));
+    assert_eq!(on_base["error"], Value::Null, "{on_base}");
+    assert_near(rig.placement(rig.o1).translation, [0.0, 200.0, 5.0]);
+    rig.ground(rig.o2, true);
+    let uid = failing_joint(&mut rig);
+    let joint = rig.joint_json(uid);
+    assert_eq!(joint["state"], "failed", "{joint}");
+    let notices = joint_notices(&rig, uid);
+    let (_, message, places) = &notices[0];
+    assert_eq!(
+        message,
+        "neither side can move (Pin:1 is grounded, and Plate:1 is joined rigidly to Plate:2, \
+         which cannot move) and the joint does not hold"
+    );
+    assert_eq!(
+        places,
+        &json!([{"kind": "occurrence", "path": "O2"}, {"kind": "occurrence", "path": "O1"},
+                {"kind": "occurrence", "path": format!("{o3}")}])
+    );
+}
+
+#[test]
+fn a_joint_warns_when_a_later_move_places_its_side() {
+    // mitcad#1745: a move later in the timeline places the pin again, so
+    // it does not stay where the joint put it: a warning on the joint, the
+    // pin painted.
+    let mut rig = rig();
+    rig.ground(rig.o1, true);
+    let uid = rig.joint("rigid", json!({"flip": true}));
+    assert!(joint_notices(&rig, uid).is_empty());
+    let moved = rig.run(
+        json!({"cmd": "add_feature", "def": {"type": "move_occurrence",
+        "occurrences": [rig.o2.to_string()],
+        "transform": {"type": "translate_xyz", "x": 0, "y": 30, "z": 0}}}),
+    );
+    assert_eq!(moved["error"], Value::Null, "{moved}");
+    let notices = joint_notices(&rig, uid);
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    let (level, message, places) = &notices[0];
+    assert_eq!(level, "warning");
+    assert_eq!(
+        message,
+        "Pin:1 is placed again by a move later in the timeline, so it does not stay where this \
+         joint puts it"
+    );
+    assert_eq!(places, &json!([{"kind": "occurrence", "path": "O2"}]));
 }

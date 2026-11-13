@@ -236,7 +236,8 @@ void ConfigurationBindingsPage::fill() {
     }
     m_table->item(row, kItem)->setIcon(themeIcon(icon));
     if (entry.kind == BindingEntry::Kind::FaceAppearance) {
-      m_table->item(row, kProperty)->setToolTip(tr("Face %1 of %2").arg(entry.face, entry.item));
+      // In words (mitcad#1741): the face's topological name is the log's.
+      m_table->item(row, kProperty)->setToolTip(tr("A face of %1").arg(entry.item));
     }
     if (readable.form == ReadableBinding::Form::Expression) {
       m_table->item(row, kFollows)->setToolTip(entry.expression);

@@ -1688,9 +1688,24 @@ private:
     m_groundObjects.insert(object);
   }
 
-  // The ground's height: the asked one or the bottom of the bodies.
+  // The ground's height: a hair under the asked one or under the bottom of
+  // the bodies. A surface in the ground's own plane (a sheet drawn on the
+  // XY plane, a face that lies on the ground) would meet the shadow catcher
+  // there and come out black from above (mitcad#1738); the hair, a
+  // ten-thousandth of the bodies' size and at least a few hundred float
+  // steps at their distance from the origin, is far below a pixel.
   float groundHeight() const {
-    return m_environment.groundAtHeight ? static_cast<float>(m_environment.groundHeight) : m_bounds.min.z;
+    const float z =
+        m_environment.groundAtHeight ? static_cast<float>(m_environment.groundHeight) : m_bounds.min.z;
+    if (!m_bounds.valid()) {
+      return z;
+    }
+    const ccl::float3 size = m_bounds.size();
+    const float reach = std::max({std::fabs(m_bounds.min.x), std::fabs(m_bounds.min.y), std::fabs(m_bounds.min.z),
+                                  std::fabs(m_bounds.max.x), std::fabs(m_bounds.max.y), std::fabs(m_bounds.max.z),
+                                  std::fabs(z)});
+    const float hair = std::max(1e-4f * std::max({size.x, size.y, size.z, 1.0f}), 1e-5f * reach);
+    return z - hair;
   }
 
   // Whether the last view looks at the ground's plane from below: a

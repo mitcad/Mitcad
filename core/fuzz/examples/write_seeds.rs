@@ -605,6 +605,14 @@ fn solidcraft_seeds() -> Seeds {
     seeds
 }
 
+/// The `.3dm` reader's sample model and its import test's case.
+fn seeds_3dm() -> Seeds {
+    vec![
+        seed("sample", mitcad_3dm::testfile::sample()),
+        seed("block-in-itself", mitcad_3dm::testfile::block_in_itself()),
+    ]
+}
+
 fn all() -> Vec<(&'static str, Seeds)> {
     let mut zip = zip_seeds();
     zip.extend(freecad_file_seeds());
@@ -627,6 +635,7 @@ fn all() -> Vec<(&'static str, Seeds)> {
         ("freecad_file", freecad_file_seeds()),
         ("f3d_file", f3d_seeds()),
         ("solidcraft_file", solidcraft_seeds()),
+        ("model_3dm", seeds_3dm()),
     ]
 }
 

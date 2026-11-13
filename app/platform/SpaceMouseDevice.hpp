@@ -94,20 +94,32 @@ inline bool parseSpaceMouseHidReport(const std::uint8_t* data, std::size_t size,
 }
 
 // HID's axes in the view's frame. IOKit's HID values on macOS have the
-// same axes. The translation: X to the right, Y toward the user, Z down.
-// The rotation Rx, Ry, Rz is about those axes but turns the other way
-// round from the translation's right-handed frame: positive clockwise seen
-// from the axis' tip (mitcad#1034). spacenavd shows it: it takes the same
-// devices' HID values into its own frame by swapping Y and Z and reversing
-// both, translation and rotation alike (dev.c, DF_SWAPYZ | DF_INVYZ, for
-// every USB device of the vendor), and spaceMouseFromSpnav below then
-// gives the view's frame; going the two ways must give the same axes
-// (the unit test checks it). Before mitcad#1034 every rotation came out
-// reversed on Windows and macOS against Linux.
-//   view tx = X, ty = -Z, tz = Y; view rx = -Rx, ry = Rz, rz = -Ry.
+// same axes. The translation: X to the right, Y toward the user, Z down, a
+// right-handed frame. The rotation Rx, Ry, Rz is the cap's turn about those
+// same axes by the right-hand rule (positive counter-clockwise seen from
+// the axis' tip), so it goes into the view's frame exactly as the
+// translation does (mitcad#1720). The cap's six motions, each read alone:
+//   pushed right: X > 0          the view's tx > 0
+//   lifted: Z < 0                ty > 0
+//   pulled toward the user: Y > 0  tz > 0
+//   tilted forward (its top away from the user): Rx < 0  rx < 0
+//   twisted clockwise seen from above: Rz > 0  ry < 0
+//   rolled right (its top to the right): Ry < 0  rz < 0
+// and in Object mode the model does what the cap did (the unit test
+// follows each motion from the device's values to the model).
+// mitcad#1034 had reversed every rotation (-Rx, Rz, -Ry) to agree with
+// spaceMouseFromSpnav as it then was, which had them reversed itself; a
+// user then saw every turn go the wrong way (GitHub mitcad/Mitcad#294,
+// mitcad#1720). spacenavd takes the same devices' HID
+// values into its own frame by swapping Y and Z and reversing both,
+// translation and rotation alike (DF_SWAPYZ | DF_INVYZ, for every USB
+// device of the vendor), and spaceMouseFromSpnav below then gives the
+// view's frame; going the two ways must give the same axes (the unit test
+// checks it).
+//   view tx = X, ty = -Z, tz = Y; view rx = Rx, ry = -Rz, rz = Ry.
 inline SpaceMouseAxes spaceMouseFromHid(const std::array<int, 3>& t, const std::array<int, 3>& r) {
   const double scale = 1.0 / kSpaceMouseFullScale;
-  return {t[0] * scale, -t[2] * scale, t[1] * scale, -r[0] * scale, r[2] * scale, -r[1] * scale};
+  return {t[0] * scale, -t[2] * scale, t[1] * scale, r[0] * scale, -r[2] * scale, r[1] * scale};
 }
 
 // Where a device sends its rotation (mitcad#1034): in report 1 after the
@@ -294,11 +306,15 @@ inline SpnavEvent parseSpnavEvent(const std::array<std::int32_t, 8>& data) {
 }
 
 // spacenavd's frame (left-handed: x to the right, y up, z into the
-// screen, as libspnav documents it) in the view's.
+// screen, as libspnav documents it) in the view's. Its rotation is the
+// HID rotation taken through the same swap and reversal as its
+// translation (see spaceMouseFromHid), so it comes into the view's frame
+// as the translation does: z reversed, rz reversed (mitcad#1720; before,
+// rx and ry were reversed and rz kept, every turn the wrong way).
 inline SpaceMouseAxes spaceMouseFromSpnav(const std::array<int, 6>& motion) {
   const double scale = 1.0 / kSpaceMouseFullScale;
   return {motion[0] * scale, motion[1] * scale, -motion[2] * scale,
-          -motion[3] * scale, -motion[4] * scale, motion[5] * scale};
+          motion[3] * scale, motion[4] * scale, -motion[5] * scale};
 }
 
 // Calls `changed(button, pressed)` for each bit that differs between two

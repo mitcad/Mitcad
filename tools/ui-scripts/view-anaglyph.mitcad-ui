@@ -6,7 +6,10 @@
 # Display's stereo depth and convergence reach the view at once, are saved
 # when Preferences is accepted and put back when it is cancelled; off
 # again, the camera is in the projection it had before; Orthographic while
-# it is on ends it. Run by tools/ui-view-anaglyph-test.sh (Linux) and
+# it is on ends it. Preferences › Display's focal lengths (mitcad#1717):
+# the perspective camera's and Anaglyph 3D's fields of view, each with the
+# model as large at the target as before. Run by
+# tools/ui-view-anaglyph-test.sh (Linux) and
 # tools/ui-windows-view-anaglyph-test.ps1 (Windows).
 wait-idle
 command view.fit
@@ -84,5 +87,66 @@ command view.anaglyph
 expect-log '^Anaglyph 3D off: perspective camera$'
 wait-log '^Camera direction -?0 -?0 -1 up -?0 1 -?0 [(]perspective[)]$' 30
 expect-setting view/anaglyph false
+
+# Focal length (mitcad#1717): Preferences › Display sets the perspective
+# camera's (35 mm: a field of view of 2 atan(12 / 35) = 37.8 degrees) and
+# Anaglyph 3D's (50 mm: 27.0 degrees); the view takes them at once, with
+# the model as large at the target as before, they are saved with OK and
+# put back on Cancel; Anaglyph 3D on takes its own, off the perspective
+# one again, each time with the same height at the target.
+capture-view-height wide
+mark
+command tools.preferences.display
+focus-dialog '^Preferences$'
+focus-widget preferencesFocalLength
+key ctrl+a
+type 35
+expect-log '^View: focal length 35 mm, anaglyph focal length 50 mm$'
+focus-widget preferencesAnaglyphFocalLength
+key ctrl+a
+type 50
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+expect-log '^Preferences: focal length 35 mm, anaglyph focal length 50 mm$'
+expect-setting view/focalLength 35
+expect-setting view/anaglyphFocalLength 50
+wait-log '^Camera field of view 37[.][789] degrees, focal length 3[45][.][0-9] mm [(]perspective[)], visible height [0-9.]+ mm at the target$' 30
+expect-view-zoom ${wide} unchanged
+# Cancelled, the view goes back to the saved one, as large as before.
+mark
+command tools.preferences.display
+focus-dialog '^Preferences$'
+focus-widget preferencesFocalLength
+key ctrl+a
+type 60
+expect-log '^View: focal length 60 mm, anaglyph focal length 50 mm$'
+key Escape
+expect-dialog-gone '^Preferences$'
+focus-main
+expect-log '^View: focal length 35 mm, anaglyph focal length 50 mm$'
+expect-setting view/focalLength 35
+expect-no-log '^Preferences: focal length'
+wait-idle
+expect-view-zoom ${wide} unchanged
+# Anaglyph 3D on: its own focal length, the same height at the target.
+capture-view-height mono
+mark
+command view.anaglyph
+expect-log '^Anaglyph 3D on: stereo camera, red/cyan, stereo depth 8 %, convergence 150 %$'
+wait-log '^Camera field of view (26[.]9|27[.][01]) degrees, focal length (49|50)[.][0-9] mm [(]stereo[)], visible height [0-9.]+ mm at the target$' 30
+expect-view-zoom ${mono} unchanged
+# A standard view keeps it: no other field of view.
+mark
+command view.front
+wait-log '^Camera direction -?0 1 -?0 up -?0 -?0 1 [(]stereo[)]$' 30
+expect-no-log '^Camera field of view'
+# Off: the perspective one again, the same height at the target.
+capture-view-height stereo
+mark
+command view.anaglyph
+expect-log '^Anaglyph 3D off: perspective camera$'
+wait-log '^Camera field of view 37[.][789] degrees, focal length 3[45][.][0-9] mm [(]perspective[)], visible height [0-9.]+ mm at the target$' 30
+expect-view-zoom ${stereo} unchanged
 command view.orthographic
 expect-never 'TestDriver: FAIL'

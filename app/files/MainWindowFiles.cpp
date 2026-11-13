@@ -287,7 +287,7 @@ void MainWindow::registerFileCommands() {
                         QStringLiteral("fcstd"),   QStringLiteral("ipt"),   QStringLiteral("iam"),
                         QStringLiteral("ifc"),     QStringLiteral("ifczip"), QStringLiteral("rvt"),
                         QStringLiteral("rfa"),     QStringLiteral("solidcraft"), QStringLiteral("sc"),
-                        QStringLiteral("dwg"),     QStringLiteral("open")};
+                        QStringLiteral("dwg"),     QStringLiteral("3dm"),   QStringLiteral("open")};
   m_registry->add(importDef);
   CommandDef exportDef = def("file.export", tr("Export…"), "export",
                              tr("Bodies to STEP, IGES, STL, OBJ or BRep; a sketch to DXF"),
@@ -520,6 +520,7 @@ bool MainWindow::openFile(const QString& path, QString& error) {
   case FileKind::Rvt:
   case FileKind::Solidcraft:
   case FileKind::Dwg:
+  case FileKind::ThreeDm:
     // After the window shows: the import has a progress dialog. (Opened by
     // openPath, it asks its choices, mitcad#507.)
     afterEventWhenIdle(*this, this,
@@ -770,6 +771,7 @@ bool MainWindow::importPath(const QString& path, bool interactive, QString* erro
   case FileKind::Rvt:
   case FileKind::Solidcraft:
   case FileKind::Dwg:
+  case FileKind::ThreeDm:
     // A .sc file of another program is refused before the import starts
     // (mitcad#1622).
     if (fileKind(path) == FileKind::Solidcraft) {
@@ -1046,7 +1048,7 @@ bool MainWindow::importDrawing(const QString& path, bool interactive, QString* e
                         : QJsonValue(QJsonObject{{QStringLiteral("face"), item.name},
                                                  {QStringLiteral("body"), item.owner}});
     selectedOccurrence = item.occurrence;
-    planes.append({QStringLiteral("selected"), tr("Selected: %1").arg(item.describe())});
+    planes.append({QStringLiteral("selected"), tr("Selected: %1").arg(pickListText(item, m_snapshot))});
   }
   planes.append({QStringLiteral("xy"), tr("XY plane")});
   planes.append({QStringLiteral("xz"), tr("XZ plane")});
@@ -1167,21 +1169,68 @@ void MainWindow::insertComponent(const QString& given) {
     }
     rememberDialogFolder(DialogGroup::Import, path);
   }
-  const std::optional<bool> linked = askLinked(this, path);
-  if (!linked) {
-    return;
+  const QString absolute = QFileInfo(path).absoluteFilePath();
+  const QString base = m_filePath.isEmpty() ? QString() : QFileInfo(m_filePath).absolutePath();
+  // A link to a file outside the design's project would not be followed
+  // when the design opens again (mitcad#929): said before inserting, with
+  // the copy into the project offered (mitcad#1719). A design not saved yet
+  // has no project to tell; it is asked as before.
+  std::optional<bool> linked;
+  bool copyIntoProject = false;
+  QString copyFolder;
+  if (!base.isEmpty()) {
+    QJsonObject check;
+    try {
+      check = queryObject({{QStringLiteral("query"), QStringLiteral("link_check")},
+                           {QStringLiteral("path"), absolute},
+                           {QStringLiteral("base"), base}});
+    } catch (const std::exception& e) {
+      qWarning().noquote() << QStringLiteral("Insert Component: the link not checked: %1").arg(errorText(e));
+    }
+    if (check.value(QStringLiteral("followed")) == QJsonValue(false)) {
+      copyFolder = check.value(QStringLiteral("folder")).toString();
+      const QString root = QFileInfo(copyFolder).absolutePath();
+      const bool inProject = QFileInfo::exists(QDir(root).filePath(QStringLiteral(".mitcad/project.json")));
+      const std::optional<OutsideLinkChoice> choice = askOutsideLink(this, path, inProject);
+      if (!choice) {
+        return;
+      }
+      copyIntoProject = *choice == OutsideLinkChoice::CopyIntoProject;
+      linked = copyIntoProject;
+    }
   }
-  QJsonObject command = cmd("insert_component", {{QStringLiteral("path"), QFileInfo(path).absoluteFilePath()},
-                                                 {QStringLiteral("link"), *linked}});
-  if (!m_filePath.isEmpty()) {
-    command.insert(QStringLiteral("base"), QFileInfo(m_filePath).absolutePath());
+  if (!linked) {
+    // Not asked yet: a file in the project, or a design not saved.
+    linked = askLinked(this, path);
+    if (!linked) {
+      return;
+    }
+  }
+  QJsonObject command = cmd("insert_component", {{QStringLiteral("path"), absolute}, {QStringLiteral("link"), *linked}});
+  if (!base.isEmpty()) {
+    command.insert(QStringLiteral("base"), base);
+  }
+  if (copyIntoProject) {
+    command.insert(QStringLiteral("copy_into_project"), true);
   }
   QJsonObject result;
   if (runModelCommand(command, &result)) {
+    for (const QJsonValue& value : result.value(QStringLiteral("copied")).toArray()) {
+      const QJsonObject copied = value.toObject();
+      const QString to = copied.value(QStringLiteral("to")).toString();
+      qInfo().noquote() << QStringLiteral("Insert Component: copied %1 into the project as %2")
+                               .arg(QFileInfo(copied.value(QStringLiteral("from")).toString()).fileName(),
+                                    QDir(QFileInfo(copyFolder).absolutePath()).relativeFilePath(to));
+    }
     qInfo().noquote() << QStringLiteral("Inserted component %1 (%2) from %3")
                              .arg(result.value(QStringLiteral("name")).toString(),
                                   *linked ? QStringLiteral("linked") : QStringLiteral("copy"),
                                   QFileInfo(path).fileName());
+    if (copyIntoProject) {
+      showStatus(tr("%1 is copied into the project and linked; changes to the copy come in with Update Link.")
+                     .arg(QFileInfo(path).fileName()),
+                 NoticeLevel::Information);
+    }
     m_viewer->fitAll();
   }
 }

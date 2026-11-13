@@ -1115,6 +1115,34 @@ void printTests() {
   }
   CHECK(found.isEmpty() || mitcad::slicerChoices(found, found.first(), Slicer{}).size() == found.size() + 2);
 
+  // What Open in starts on (mitcad#1726): Folder only when the last send
+  // chose it, else the settings' slicer while its program is there, else
+  // the first one found.
+  {
+    touch(dir + QStringLiteral("/installed-slicer"));
+    const Slicer installed{QStringLiteral("Installed"), dir + QStringLiteral("/installed-slicer"), {}, {}};
+    const Slicer removed{QStringLiteral("Removed"), dir + QStringLiteral("/removed-slicer"), {}, {}};
+    const QVector<Slicer> listed{saved};
+    mitcad::PrintSettings print;
+    CHECK(mitcad::panelSlicer(print, listed) == saved);
+    CHECK(!mitcad::panelSlicer(print, {}).isValid());
+    print.slicer = installed;
+    CHECK(mitcad::installedSlicer(installed, listed) == installed);
+    CHECK(mitcad::panelSlicer(print, listed) == installed);
+    print.folderOnly = true;
+    CHECK(!mitcad::panelSlicer(print, listed).isValid());
+    CHECK(!mitcad::panelSlicer(print, {}).isValid());
+    // A slicer removed since: not offered, the first one found instead;
+    // one of the found ones is there by that.
+    print.folderOnly = false;
+    print.slicer = removed;
+    CHECK(!mitcad::installedSlicer(removed, listed).isValid());
+    CHECK(mitcad::panelSlicer(print, listed) == saved);
+    CHECK(!mitcad::panelSlicer(print, {}).isValid());
+    CHECK(mitcad::installedSlicer(saved, listed) == saved);
+    CHECK(!mitcad::installedSlicer(Slicer{}, listed).isValid());
+  }
+
   // The folder of a design, emptied for each send.
   QString error;
   const QString folder = mitcad::preparePrintFolder(dir, QStringLiteral("My: part"), &error);
@@ -2515,7 +2543,8 @@ void selectionEntryTests() {
     item.kind = SelectKind::Body;
     item.owner = QStringLiteral("F9.b0");
     item.occurrence.clear();
-    CHECK(selectionOwnerText(item, snapshot) == QStringLiteral("Body: F9.b0"));
+    // A body not in the snapshot: its kind, never its uid (mitcad#1741).
+    CHECK(selectionOwnerText(item, snapshot) == QStringLiteral("Body"));
     // The pick list's words (mitcad#1703): names, never uids or
     // topological names.
     item = SelectionItem{SelectKind::Edge, body.uid, QStringLiteral("E{F2:top|F2:side0}"), QString()};
@@ -2920,6 +2949,7 @@ int printValueChoicesTests();
 int screenshotBudgetTests();
 int gridSpacingTests();
 int cameraTurnTests();
+int visibleTextTests();
 int valueStepTests();
 int recentDesignsTests();
 int uiCommandListTests();
@@ -2958,6 +2988,8 @@ int startBackdropTests();
 int commandSearchTests();
 int defaultViewTests();
 int windowPlaceTests();
+int uiKeysTests();
+int originPreferenceTests();
 
 int main(int argc, char* argv[]) {
   // The application's own class: its notify() is tested (busy_input.cpp).
@@ -3098,6 +3130,7 @@ int main(int argc, char* argv[]) {
     failures += screenshotBudgetTests();
     failures += gridSpacingTests();
     failures += cameraTurnTests();
+    failures += visibleTextTests();
     failures += valueStepTests();
     failures += recentDesignsTests();
     failures += uiCommandListTests();
@@ -3136,6 +3169,8 @@ int main(int argc, char* argv[]) {
     failures += commandSearchTests();
     failures += defaultViewTests();
     failures += windowPlaceTests();
+    failures += uiKeysTests();
+    failures += originPreferenceTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

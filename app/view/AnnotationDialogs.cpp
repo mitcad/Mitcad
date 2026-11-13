@@ -30,6 +30,7 @@
 #include <QVBoxLayout>
 #include <QtLogging>
 
+#include "../framework/UserText.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
@@ -826,7 +827,8 @@ std::optional<AnnotationEdit> editAnnotation(QWidget* parent, const QJsonObject&
   layout->addLayout(form);
   const QString error = annotation.value(QStringLiteral("error")).toString();
   if (!error.isEmpty()) {
-    auto* broken = new QLabel(QObject::tr("Broken: %1").arg(error), &dialog);
+    // In words (mitcad#1741).
+    auto* broken = new QLabel(QObject::tr("Broken: %1").arg(shownError(annotation)), &dialog);
     broken->setWordWrap(true);
     setErrorStyleSheet(broken);
     layout->insertWidget(0, broken);

@@ -14,7 +14,8 @@ is the [MIT license](LICENSE).
 - **Many CAD formats.** FreeCAD, `.f3d`, SolidCraft and `.ipt` files open
   with their history. IFC and `.rvt` building models open with their
   storeys and elements. DWG drawings open with their 3D solids and
-  blocks. MitCad imports and exports STEP, IGES, BRep, STL, OBJ, DXF and
+  blocks, `.3dm` models with their polysurfaces, meshes and blocks.
+  MitCad imports and exports STEP, IGES, BRep, STL, OBJ, DXF and
   3MF, imports SVG, and exports USDZ, web pages and drawings (PDF, SVG,
   DXF, DWG).
   The full table is in the user guide:
@@ -193,6 +194,7 @@ corpus setup: [docs/development.md](docs/development.md#the-check-script).
 | `core/expr`, `core/print-keys` | Parameter expressions with units; the print settings' key map (both re-exported by the model) |
 | `core/ipt` | `.ipt` reader: compound file, property sets, segments, the bodies |
 | `core/solidcraft` | `.sc` and `.solidcraft` reader: the JSON design or its container, upgraded to one format; a `.sc` file only by its format key |
+| `core/3dm` | `.3dm` reader: the archive's chunks, layers, blocks and objects, and their conversion to the neutral B-rep model |
 | `core/dxf`, `core/3mf`, `core/usdz` | DXF, 3MF and USDZ |
 | `core/vcs`, `core/update` | Version history in git; automatic updates |
 | `core/ffi`, `core/cpp` | CXX bridges between Rust and C++ |

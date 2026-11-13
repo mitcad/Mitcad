@@ -85,5 +85,6 @@ int import_ifc(const std::vector<std::string>& args);
 int import_rvt(const std::vector<std::string>& args);
 int import_solidcraft(const std::vector<std::string>& args);
 int import_dwg(const std::vector<std::string>& args);
+int import_3dm(const std::vector<std::string>& args);
 
 } // namespace mitcad::cli

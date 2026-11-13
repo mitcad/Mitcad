@@ -966,6 +966,10 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
             let mut value = datum_json(&view.datum);
             value["uid"] = json!(view.uid);
             value["name"] = json!(view.name);
+            // Drawn at the size its resize handles set (mitcad#1748).
+            if let Some(size) = self.datum_display_size(view.uid) {
+                value["display_size"] = json!(size);
+            }
             datums.push(value);
         }
         Value::Array(datums)
@@ -974,6 +978,13 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
     fn datum_json(&self, query: &DatumQuery) -> Result<Value, ApiError> {
         let (uid, name, datum) = self.datum_by_id(&query.uid)?;
         let mut value = datum_json(&datum);
+        if let Some(size) = uid
+            .parse::<FeatureUid>()
+            .ok()
+            .and_then(|feature| self.datum_display_size(feature))
+        {
+            value["display_size"] = json!(size);
+        }
         value["uid"] = json!(uid);
         value["name"] = json!(name);
         Ok(value)

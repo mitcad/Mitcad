@@ -18,8 +18,8 @@ or, as a skill, the file `references/<id>.md`.
 ## Topics
 
 - [principles](references/principles.md): before any modeling task; intent, parameters, feature order, names and groups.
-- [choosing-features](references/choosing-features.md): when several features could make the shape; choose the one that preserves its purpose.
+- [choosing-features](references/choosing-features.md): when several features could make the shape; choose the one that preserves its purpose; where fillets, lofts and booleans fail.
 - [sketches](references/sketches.md): before the first sketch or a sketch edit; joined geometry, constraints, dimensions and projections.
 - [references](references/references.md): before placing a sketch, component or feature; stable parents and geometry that follows edits.
 - [verification](references/verification.md): after every modeling change; status, dimensions, bodies, pictures and recovery.
-- [3d-printing](references/3d-printing.md): when a component is to be FDM/FFF printed; orientation, fits, printable details and manufacturing checks.
+- [3d-printing](references/3d-printing.md): when a component is to be FDM/FFF printed; orientation, fits, printable details, manufacturing checks and the export for a slicer.

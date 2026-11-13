@@ -257,6 +257,66 @@ impl ProfileRegion {
         (area, [moment[0] / area, moment[1] / area])
     }
 
+    /// The length of all its loops (mm, the outer boundary and the holes;
+    /// mitcad#1741: the selection card's perimeter): lines, circles and
+    /// circular arcs exactly, ellipses and elliptical arcs to a few parts
+    /// in a million; None when a loop has a spline.
+    pub fn perimeter(&self) -> Option<f64> {
+        let distance = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+        // Counter-clockwise from start to end, as the samples run.
+        let sweep = |start: f64, end: f64| {
+            if end <= start {
+                end + std::f64::consts::TAU - start
+            } else {
+                end - start
+            }
+        };
+        // Along the ellipse in many short chords.
+        let elliptic = |a: f64, b: f64, start: f64, sweep: f64| {
+            const STEPS: u32 = 1024;
+            let at = |t: f64| [a * t.cos(), b * t.sin()];
+            (0..STEPS)
+                .map(|i| {
+                    let t0 = start + sweep * f64::from(i) / f64::from(STEPS);
+                    let t1 = start + sweep * f64::from(i + 1) / f64::from(STEPS);
+                    distance(at(t0), at(t1))
+                })
+                .sum::<f64>()
+        };
+        let mut total = 0.0;
+        for segment in self.loops.iter().flat_map(|l| &l.segments) {
+            total += match &segment.geometry {
+                SegmentGeometry::Line { start, end } => distance(*start, *end),
+                SegmentGeometry::Circle { radius, .. } => std::f64::consts::TAU * radius.abs(),
+                SegmentGeometry::Arc {
+                    radius,
+                    start_angle,
+                    end_angle,
+                    ..
+                } => radius.abs() * sweep(*start_angle, *end_angle),
+                SegmentGeometry::Ellipse {
+                    major_radius,
+                    minor_radius,
+                    ..
+                } => elliptic(*major_radius, *minor_radius, 0.0, std::f64::consts::TAU),
+                SegmentGeometry::EllipseArc {
+                    major_radius,
+                    minor_radius,
+                    start_angle,
+                    end_angle,
+                    ..
+                } => elliptic(
+                    *major_radius,
+                    *minor_radius,
+                    *start_angle,
+                    sweep(*start_angle, *end_angle),
+                ),
+                SegmentGeometry::BSpline { .. } => return None,
+            };
+        }
+        Some(total)
+    }
+
     /// Whether a point in sketch coordinates lies inside the region (in
     /// its outer loop and outside its holes, by the sampled loops;
     /// mitcad#1587).
@@ -417,6 +477,81 @@ mod tests {
         let (min, max) = region.bounds();
         assert!((min[0] + 10.0).abs() < 1e-9 && max[0].abs() < 1e-9);
         assert!((min[1] + 10.0).abs() < 1e-9 && (max[1] - 10.0).abs() < 1e-9);
+    }
+
+    /// mitcad#1741: the selection card's perimeter, a half disc's arc and
+    /// diameter exactly, an ellipse to a few parts in a million, none with
+    /// a spline.
+    #[test]
+    fn region_perimeters() {
+        let half = std::f64::consts::FRAC_PI_2;
+        let segment = |key: &str, geometry| ProfileSegment {
+            key: key.parse().unwrap(),
+            geometry,
+        };
+        let mut region = ProfileRegion {
+            key: "r{c1[c2,c2],c2[c1,c1]}".parse().unwrap(),
+            loops: vec![ProfileLoop {
+                segments: vec![
+                    segment(
+                        "c2[c1,c1]",
+                        SegmentGeometry::Arc {
+                            center: [0.0, 0.0],
+                            radius: 10.0,
+                            start_angle: half,
+                            end_angle: 3.0 * half,
+                        },
+                    ),
+                    segment(
+                        "c1[c2,c2]",
+                        SegmentGeometry::Line {
+                            start: [0.0, -10.0],
+                            end: [0.0, 10.0],
+                        },
+                    ),
+                ],
+            }],
+        };
+        let expected = 10.0 * std::f64::consts::PI + 20.0;
+        assert!((region.perimeter().unwrap() - expected).abs() < 1e-9);
+        // An arc that runs past the x axis (its end angle below its start).
+        region.loops[0].segments[0].geometry = SegmentGeometry::Arc {
+            center: [0.0, 0.0],
+            radius: 10.0,
+            start_angle: 3.0 * half,
+            end_angle: half,
+        };
+        assert!((region.perimeter().unwrap() - expected).abs() < 1e-9);
+        // A circle of radius 2 as a hole: both loops count.
+        region.loops.push(ProfileLoop {
+            segments: vec![segment(
+                "c3",
+                SegmentGeometry::Circle {
+                    center: [-4.0, 0.0],
+                    radius: 2.0,
+                    start: 0.0,
+                },
+            )],
+        });
+        let with_hole = expected + 4.0 * std::f64::consts::PI;
+        assert!((region.perimeter().unwrap() - with_hole).abs() < 1e-9);
+        // An ellipse with equal radii is a circle.
+        region.loops[1].segments[0].geometry = SegmentGeometry::Ellipse {
+            center: [-4.0, 0.0],
+            major_radius: 2.0,
+            minor_radius: 2.0,
+            rotation: 0.3,
+        };
+        assert!((region.perimeter().unwrap() - with_hole).abs() < 1e-4);
+        region.loops[1].segments[0].geometry = SegmentGeometry::BSpline {
+            degree: 1,
+            poles: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 0.0]],
+            weights: Vec::new(),
+            knots: Vec::new(),
+            multiplicities: Vec::new(),
+            periodic: false,
+        };
+        assert_eq!(region.perimeter(), None);
     }
 
     /// mitcad#1259: a region turned about a point keeps its keys and its

@@ -177,7 +177,7 @@ std::optional<QJsonObject> atOf(const CommandState& state, const CommandContext&
   const Active active = activeOf(context);
   const std::optional<QString> path = pathFromActive(item, active);
   if (!path) {
-    problem = QObject::tr("%1 is not in %2, where the component goes.").arg(item.describe(), active.name);
+    problem = QObject::tr("%1 is not in %2, where the component goes.").arg(context.itemText(item), active.name);
     return std::nullopt;
   }
   QJsonObject at{{QStringLiteral("geometry"), item.reference()}};
@@ -191,7 +191,7 @@ std::optional<QJsonObject> atOf(const CommandState& state, const CommandContext&
   }
   const QJsonObject toward = state.object(kToward);
   const QJsonArray xyz = toward.value(QStringLiteral("toward")).toArray();
-  if (str(toward, "item") == item.describe() && xyz.size() == 3) {
+  if (str(toward, "item") == item.logDescription() && xyz.size() == 3) {
     const gp_Vec way = gp_Vec(xyz[0].toDouble(), xyz[1].toDouble(), xyz[2].toDouble()).Transformed(back);
     if (way.Magnitude() > 1e-12) {
       at.insert(QStringLiteral("toward"), xyzJson(way.X(), way.Y(), way.Z()));
@@ -404,7 +404,7 @@ CommandDef mountPartCommand(const std::shared_ptr<MountPart>& part, DocumentHost
                 const std::optional<gp_Pnt> point = build::pickPoint(kAt, state, context);
                 if (point) {
                   if (const std::optional<gp_Dir> toward = context.towardViewer(*point)) {
-                    state.setObject(kToward, {{QStringLiteral("item"), item.describe()},
+                    state.setObject(kToward, {{QStringLiteral("item"), item.logDescription()},
                                               {QStringLiteral("toward"), xyzJson(toward->X(), toward->Y(), toward->Z())}});
                   }
                 }
@@ -436,11 +436,11 @@ CommandDef mountPartCommand(const std::shared_ptr<MountPart>& part, DocumentHost
     build::recordPick(kAt, item, state, context);
     if (const std::optional<gp_Pnt> point = build::pickPoint(kAt, state, context)) {
       if (const std::optional<gp_Dir> toward = context.towardViewer(*point)) {
-        state.setObject(kToward, {{QStringLiteral("item"), item.describe()},
+        state.setObject(kToward, {{QStringLiteral("item"), item.logDescription()},
                                   {QStringLiteral("toward"), xyzJson(toward->X(), toward->Y(), toward->Z())}});
       }
     }
-    qInfo().noquote() << QStringLiteral("Place Component: Place On %1 from the selection").arg(item.describe());
+    qInfo().noquote() << QStringLiteral("Place Component: Place On %1 from the selection").arg(item.logDescription());
   };
   def.init = [part](CommandState& state, const CommandContext&) {
     const QVector<MountFrameInfo> frames = framesOf(*part);

@@ -124,6 +124,25 @@ void slotTests() {
   }
   CHECK(static_cast<int>(waiting.size()) == kMaxPending);
   CHECK(waiting.back() == 9U);
+  // With the time each has waited: one within its grace does not give way,
+  // so a client's connection just come has time to send its line while
+  // idle ones are opened again as soon as they close.
+  using mitcad::mcp::kMaxPendingHard;
+  using mitcad::mcp::kPendingGraceMs;
+  const qint64 young = kPendingGraceMs - 1;
+  const qint64 old = kPendingGraceMs;
+  CHECK(pendingToClose({3, 1, 2}, {old, old, old}) == -1);
+  CHECK(pendingToClose({7, 4, 9, 5}, {old, old, old, old}) == 1);
+  CHECK(pendingToClose({7, 4, 9, 5}, {old, young, old, young}) == 0);
+  CHECK(pendingToClose({7, 4, 9, 5}, {young, young, young, young}) == -1);
+  std::vector<quint64> many;
+  std::vector<qint64> manyWaited;
+  for (int order = 0; order < kMaxPendingHard; ++order) {
+    many.push_back(static_cast<quint64>(100 - order));
+    manyWaited.push_back(young);
+  }
+  // Too many waiting: the oldest gives way whatever its time.
+  CHECK(pendingToClose(many, manyWaited) == kMaxPendingHard - 1);
   // Only authenticated connections count toward the clients' slots.
   CHECK(clientSlotFree(0));
   CHECK(clientSlotFree(kMaxClients - 1));

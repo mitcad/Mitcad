@@ -41,7 +41,9 @@ dblclick-logged '^Dimension k5 text at '
 wait-log '^Sketch value editor at .* with d1 = 20 mm$'
 key ctrl+a
 type width
-wait-log '^Parameter suggestions for dimension d1 "width": none; actions: name'
+wait-log '^Parameter suggestions for dimension d1 "width": none; actions: create, name$'
+key Down
+wait-log '^Parameter suggestion highlighted: Name this value: width = '
 key Return
 wait-log '^Parameter naming for dimension d1: width = $'
 type '20 mm'
@@ -99,7 +101,9 @@ dblclick-logged '^Dimension k5 text at '
 wait-log '^Sketch value editor at .* with d1 = 20 mm$'
 key ctrl+a
 type width
-wait-log '^Parameter suggestions for dimension d1 "width": none; actions: name'
+wait-log '^Parameter suggestions for dimension d1 "width": none; actions: create, name$'
+key Down
+wait-log '^Parameter suggestion highlighted: Name this value: width = '
 key Return
 wait-log '^Parameter naming for dimension d1: width = $'
 type '20 mm'
@@ -121,7 +125,9 @@ dblclick-logged '^Dimension k5 text at '
 wait-log '^Sketch value editor at .* with d1 = 20 mm$'
 key ctrl+a
 type width
-wait-log '^Parameter suggestions for dimension d1 "width": none; actions: name'
+wait-log '^Parameter suggestions for dimension d1 "width": none; actions: create, name$'
+key Down
+wait-log '^Parameter suggestion highlighted: Name this value: width = '
 key Return
 wait-log '^Parameter naming for dimension d1: width = $'
 type '20 mm'
@@ -144,7 +150,9 @@ dblclick-logged '^Dimension k5 text at '
 wait-log '^Sketch value editor at .* with d1 = 20 mm$'
 key ctrl+a
 type width
-wait-log '^Parameter suggestions for dimension d1 "width": none; actions: name'
+wait-log '^Parameter suggestions for dimension d1 "width": none; actions: create, name$'
+key Down
+wait-log '^Parameter suggestion highlighted: Name this value: width = '
 key Return
 wait-log '^Parameter naming for dimension d1: width = $'
 type '20 mm'
@@ -185,7 +193,9 @@ dblclick-logged '^Dimension k5 text at '
 wait-log '^Sketch value editor at .* with d1 = 30( mm)?$'
 key ctrl+a
 type width
-wait-log '^Parameter suggestions for dimension d1 "width": none; actions: name'
+wait-log '^Parameter suggestions for dimension d1 "width": none; actions: create, name$'
+key Down
+wait-log '^Parameter suggestion highlighted: Name this value: width = '
 key Return
 wait-log '^Parameter naming for dimension d1: width = $'
 type '30 mm'
@@ -227,7 +237,9 @@ dblclick-logged '^Dimension k5 text at '
 wait-log '^Sketch value editor at .* with d1 = 20 mm$'
 key ctrl+a
 type width
-wait-log '^Parameter suggestions for dimension d1 "width": none; actions: name'
+wait-log '^Parameter suggestions for dimension d1 "width": none; actions: create, name$'
+key Down
+wait-log '^Parameter suggestion highlighted: Name this value: width = '
 key Return
 wait-log '^Parameter naming for dimension d1: width = $'
 type '20 mm'

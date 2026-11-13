@@ -414,7 +414,7 @@ CommandDef extrudeCommand(const CommandContext& context) {
       if (item.kind == SelectKind::Face && refused && !state.items(QStringLiteral("wrap")).contains(item)) {
         profiles.append(item);
         qDebug().noquote() << QStringLiteral("Extrude: %1 is no planar face, refused as the profile")
-                                  .arg(item.describe());
+                                  .arg(item.logDescription());
         return;
       }
     }

@@ -136,6 +136,14 @@ std::optional<MeshInsertChoice> askMeshInsert(QWidget* parent, const QString& fi
 // Insert Component: linked (true) or a copy (false).
 std::optional<bool> askLinked(QWidget* parent, const QString& file);
 
+// Insert Component of a file outside the design's project (mitcad#1719): a
+// link to it would not be followed when the design opens again. Copy into
+// the project and link (the default), insert as a copy, or nothing when
+// cancelled. `inProject`: the design is in a project (else the rule is its
+// folder).
+enum class OutsideLinkChoice { CopyIntoProject, Copy };
+std::optional<OutsideLinkChoice> askOutsideLink(QWidget* parent, const QString& file, bool inProject);
+
 // Import or Open of a STEP file with an assembly (mitcad#1274): its parts
 // as components with an occurrence per instance ("components", the
 // default) or one base feature ("base"); nothing when cancelled. Its

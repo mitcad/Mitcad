@@ -11,6 +11,14 @@ red button.
 2. After the window's scale changes (the view's screenChanged, which Qt's
    DevicePixelRatioChange and the window's screenChanged call; CEF is asked
    for the screen's information again), the same.
+3. The window resized in quick steps, larger and smaller with the view's
+   shape kept, as a user's drag does (mitcad#1716): every frame is drawn at
+   the scale it was painted with, the scale the view gave CEF with the
+   frame's size, never stretched by another (the view's log line for each
+   frame: "..., painted at scale 1.65 for 960x540"). CEF still delivers
+   frames of the earlier size while the window grows; the view once drew
+   such a frame of the view's shape stretched to fill it, so the page
+   alternated between two scales.
 
 The places are read from the screen (xwd), and the clicks are X input
 (xdotool), as a user's. CEF paints its windowless frames at a scale of 1
@@ -30,6 +38,7 @@ Runs on its own hidden X display (cmake/SelectionUiTests.cmake: xvfb-run).
 """
 import importlib.util
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -70,8 +79,8 @@ def page(next_page):
 def workflow(port, directory):
     host = "http://127\\.0\\.0\\.1:%d" % port
     scale = scale_text().replace(".", "\\.")
-    frame = ("^Component browser frame: [0-9]+x[0-9]+ px at scale [0-9.]+ for a view of [0-9]+x[0-9]+ at scale %s$"
-             % scale)
+    frame = ("^Component browser frame: [0-9]+x[0-9]+ px at scale [0-9.]+ for a view of [0-9]+x[0-9]+ at scale %s, "
+             "painted at scale [0-9.]+ for [0-9]+x[0-9]+$" % scale)
     lines = [
         "wait-idle",
         "command insert.component_web",
@@ -92,6 +101,9 @@ def workflow(port, directory):
         "expect-log '^Component browser scale: %s$' 10" % scale,
         "expect-file '%s' 120" % (directory / "phase2.done"),
         "expect-log '^Component browser navigates to %s/page3\\.html' 30" % host,
+        "expect-log '^Component browser page: %s/page3\\.html' 60" % host,
+        # 3. The window resized in steps (mitcad#1716).
+        "expect-file '%s' 180" % (directory / "phase3.done"),
         "quit",
     ]
     return "\n".join(lines) + "\n"
@@ -150,6 +162,90 @@ def last_frame(log_path):
     return float(words[words.index("px") + 3]), tuple(int(v) for v in size.split("x"))
 
 
+# A frame's log line (CefView::painted, mitcad#1716): its pixels, the scale it
+# is drawn at, the view's size and scale, and the scale and view size CEF was
+# given with the frame's size.
+FRAME = re.compile(r"^Component browser frame: (\d+)x(\d+) px at scale ([0-9.]+) for a view of (\d+)x(\d+) "
+                   r"at scale ([0-9.]+), painted (?:at scale ([0-9.]+) for (\d+)x(\d+)|at an unknown scale)$")
+
+
+def frames(log_path, after):
+    """The frames' log lines after the first `after` lines of the log."""
+    lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[after:]
+    return [line for line in lines if line.startswith("Component browser frame: ")]
+
+
+def window_of(title):
+    """The X window of a visible top-level window by its title, and its size
+    in the screen's pixels."""
+    end = time.time() + 20
+    while time.time() < end:
+        found = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", title],
+                               capture_output=True, text=True).stdout.split()
+        if found:
+            geometry = subprocess.run(["xdotool", "getwindowgeometry", found[0]], capture_output=True,
+                                      text=True, check=True).stdout
+            size = re.search(r"Geometry: (\d+)x(\d+)", geometry)
+            if size:
+                return found[0], int(size.group(1)), int(size.group(2))
+        time.sleep(0.2)
+    raise RuntimeError("no window '%s' on the screen" % title)
+
+
+def resize_in_steps(directory, log_path):
+    """3. The window resized in quick steps with the view's shape kept (a
+    frame of the earlier size then has the view's shape, which the view once
+    stretched to fill it), then every frame since checked: drawn at the scale
+    it was painted with, that scale the display's, its pixels the view size
+    CEF was given times it."""
+    window, width, height = window_of("^Component from Web$")
+    _, view = last_frame(log_path)
+    # The window's own parts around the view, in the screen's pixels.
+    around = (width - round(view[0] * SCALE), height - round(view[1] * SCALE))
+    start = len(log_path.read_text(encoding="utf-8", errors="replace").splitlines())
+    sizes = []
+    for factor in (1.06, 1.12, 1.18, 1.24, 1.18, 1.10, 1.02, 0.94, 0.88, 0.94, 1.0):
+        logical = (round(view[0] * factor), round(view[1] * factor))
+        sizes.append(logical)
+        subprocess.run(["xdotool", "windowsize", window, str(round(logical[0] * SCALE) + around[0]),
+                        str(round(logical[1] * SCALE) + around[1])], check=True)
+        time.sleep(0.08)
+    # The last size's frame, then a moment for any late ones.
+    end = time.time() + 30
+    while time.time() < end:
+        last = frames(log_path, start)
+        match = FRAME.match(last[-1]) if last else None
+        # The newest frame painted for the view's own (last) size.
+        if match and match.group(7) and match.group(8, 9) == match.group(4, 5):
+            break
+        time.sleep(0.2)
+    time.sleep(1.5)
+    seen = frames(log_path, start)
+    drawn = set()
+    for line in seen:
+        match = FRAME.match(line)
+        if not match:
+            raise RuntimeError("phase 3: a frame of an unknown scale or an unreadable line: %s" % line)
+        pixels = (int(match.group(1)), int(match.group(2)))
+        scale, painted = float(match.group(3)), float(match.group(7))
+        asked = (int(match.group(8)), int(match.group(9)))
+        if abs(scale - painted) > 0.005:
+            raise RuntimeError("phase 3: a frame painted at scale %.2f was drawn at %.2f: %s" % (painted, scale, line))
+        if abs(painted - SCALE) > 0.005:
+            raise RuntimeError("phase 3: a frame painted at scale %.2f, not the display's %.2f: %s"
+                               % (painted, SCALE, line))
+        for axis in (0, 1):
+            if abs(pixels[axis] - asked[axis] * painted) > 1.5:
+                raise RuntimeError("phase 3: a frame's pixels are not the view size CEF was given times its "
+                                   "scale: %s" % line)
+        drawn.add(pixels)
+    if len(drawn) < 3:
+        raise RuntimeError("phase 3: %d frame size(s) while the window was resized to %d sizes (%s)"
+                           % (len(drawn), len(sizes), log_path))
+    print("ok   phase 3: %d frames of %d sizes while the window was resized in %d steps, each drawn at the "
+          "scale %.2f it was painted with" % (len(seen), len(drawn), len(sizes), SCALE))
+
+
 def check_and_click(directory, log_path, phase, device_scale):
     """The page fills the view and the button is where the page puts it,
     on the screen; then a click there."""
@@ -197,7 +293,7 @@ def run(app, directory, component, qt_bin=None, device_scale=False):
     for name, following in (("page1.html", "page2.html"), ("page2.html", "page3.html"),
                             ("page3.html", "page3.html")):
         (site / name).write_text(page(following), encoding="utf-8")
-    for name in ("phase1.done", "phase2.done", "server.log"):
+    for name in ("phase1.done", "phase2.done", "phase3.done", "server.log"):
         (directory / name).unlink(missing_ok=True)
     server = web.start_server(directory)
     port = server.server_address[1]
@@ -223,6 +319,9 @@ def run(app, directory, component, qt_bin=None, device_scale=False):
                         wait_log(log_path, "Component browser scale: " + scale_text(), page2, 60)
                         check_and_click(directory, log_path, 2, device_scale)
                         (directory / "phase2.done").touch()
+                        wait_log(log_path, "Component browser page: http://127.0.0.1:%d/page3.html" % port, 0, 120)
+                        resize_in_steps(directory, log_path)
+                        (directory / "phase3.done").touch()
                     except Exception as error:  # reported after the run
                         failure.append(str(error))
                         app_run.kill()
@@ -243,7 +342,8 @@ def run(app, directory, component, qt_bin=None, device_scale=False):
     finally:
         server.shutdown()
     print("PASS: Component from Web at scale %s: the page fills the view%s and a click at the button's place on "
-          "the screen clicks it, before and after the window's scale changes"
+          "the screen clicks it, before and after the window's scale changes; while the window is resized, every "
+          "frame is drawn at the scale it was painted with"
           % (scale_text(), " at the view's physical pixels" if device_scale else ""))
 
 

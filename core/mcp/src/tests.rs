@@ -878,6 +878,9 @@ fn assert_export_mesh_and_overwrite(export: &Value) {
         json!({"path": "a.stl", "format": "stl",
                "refinement": {"deviation": 0.03, "angle": 0.052,
                               "face_triangles": 0, "max_edge": 2}}),
+        // One of the two alone: the other is the Medium preset's (mitcad#1732).
+        json!({"path": "a.stl", "format": "stl", "refinement": {"deviation": 0.03}}),
+        json!({"path": "a.stl", "format": "stl", "refinement": {"angle": 0.1}}),
     ] {
         if let Err(error) = check(&arguments) {
             panic!("{arguments}: {error}");
@@ -2131,6 +2134,11 @@ fn live_ui_state_counts_the_open_comments() {
             .unwrap()
             .contains("number of open comments (comments.open")
     );
+    // The open dialog an agent cannot answer, and how to start without the
+    // recovery question (mitcad#1725).
+    let described = state["description"].as_str().unwrap();
+    assert!(described.contains("dialog.title") && described.contains("--no-recovery"));
+    assert!(described.chars().count() <= catalog::DESCRIPTION_CHARS);
     // The application's count comes back as it gave it.
     let (name, _) = live_tool(session.prepare(call("ui_state", json!({}))).unwrap());
     assert_eq!(name, "ui_state");
@@ -2861,5 +2869,112 @@ fn a_refusal_s_tail_becomes_its_detail_and_places() {
     assert_eq!(
         agent_text("fillet failed"),
         ("fillet failed".to_owned(), Vec::new())
+    );
+}
+
+/// Clicks, keys and dialogs for viewing (mitcad#1735): listed and run only
+/// when the application allows them (a run started with --mcp-folder), never
+/// in the headless server; each takes one place, something to type, or one
+/// step of a dialog.
+#[test]
+fn live_input_tools_only_where_the_application_allows_them() {
+    let names = |session: &mut LiveSession| -> Vec<String> {
+        let response = live_response(
+            session
+                .prepare(request(json!(7), "tools/list", json!({})))
+                .unwrap(),
+        )
+        .unwrap();
+        response["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let input = ["ui_click", "ui_type", "ui_dialog"];
+    let mut session = ready_live();
+    assert!(
+        names(&mut session)
+            .iter()
+            .all(|name| !input.contains(&name.as_str()))
+    );
+    let response = live_response(
+        session
+            .prepare(call("ui_type", json!({"text": "a"})))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(response["error"]["code"], -32602);
+    assert!(
+        catalog::tools()
+            .iter()
+            .all(|tool| !input.contains(&tool["name"].as_str().unwrap()))
+    );
+
+    session.set_input_tools(true);
+    let listed = names(&mut session);
+    assert_eq!(&listed[listed.len() - 3..], input);
+    for tool in catalog::input_tools() {
+        let description = tool["description"].as_str().unwrap();
+        assert!(description.chars().count() <= catalog::DESCRIPTION_CHARS);
+        assert!(description.contains("--mcp-folder"), "{}", tool["name"]);
+        assert!(tool["inputSchema"]["properties"]["document"].is_object());
+    }
+    for (name, arguments) in [
+        ("ui_click", json!({})),
+        ("ui_click", json!({"input": "distance", "at": [10, 10]})),
+        ("ui_click", json!({"at": [10]})),
+        ("ui_click", json!({"at": [10, "a"]})),
+        ("ui_click", json!({"input": ""})),
+        ("ui_click", json!({"at": [10, 10], "button": "fourth"})),
+        ("ui_click", json!({"at": [10, 10], "double": "yes"})),
+        ("ui_type", json!({})),
+        ("ui_type", json!({"text": 5})),
+        ("ui_dialog", json!({})),
+        ("ui_dialog", json!({"read": false})),
+        (
+            "ui_dialog",
+            json!({"open": "solid.parameters", "press": "Close"}),
+        ),
+        (
+            "ui_dialog",
+            json!({"open": "solid.parameters", "read": true}),
+        ),
+        ("ui_dialog", json!({"press": ""})),
+    ] {
+        let response =
+            live_response(session.prepare(call(name, arguments.clone())).unwrap()).unwrap();
+        assert_eq!(response["error"]["code"], -32602, "{name} {arguments}");
+    }
+    for (name, arguments) in [
+        ("ui_click", json!({"input": "distance"})),
+        (
+            "ui_click",
+            json!({"input": "operation=cut", "document": "live-1"}),
+        ),
+        (
+            "ui_click",
+            json!({"at": [120.5, 40], "button": "right", "double": true}),
+        ),
+        ("ui_type", json!({"text": "py\u{f6}r\u{e4}_d"})),
+        ("ui_type", json!({"keys": "Ctrl+A Backspace"})),
+        ("ui_type", json!({"text": "12 mm", "keys": "Enter"})),
+        ("ui_dialog", json!({"open": "solid.parameters"})),
+        ("ui_dialog", json!({"read": true})),
+        ("ui_dialog", json!({"press": "Close"})),
+    ] {
+        assert!(matches!(
+            session.prepare(call(name, arguments.clone())).unwrap(),
+            PreparedMessage::Tool { name: tool, arguments: given } if tool == name && given == arguments
+        ));
+        session.finish(json!({}), false).unwrap();
+    }
+
+    session.set_input_tools(false);
+    assert!(
+        names(&mut session)
+            .iter()
+            .all(|name| !input.contains(&name.as_str()))
     );
 }

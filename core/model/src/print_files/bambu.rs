@@ -869,9 +869,15 @@ pub(super) fn export(
         }
         None => {
             if !config.contains_key("printer_settings_id") {
-                let name = first
-                    .and_then(|f| f.printer_name.clone())
-                    .unwrap_or_else(|| "Mitcad printer".to_owned());
+                // No printer at all: a stand-in the slicer does not know,
+                // which the export says (mitcad#1727).
+                let name = match first.and_then(|f| f.printer_name.clone()) {
+                    Some(name) => name,
+                    None => {
+                        warnings.push(super::NO_PRINTER_PROFILE.to_owned());
+                        super::STAND_IN_PRINTER.to_owned()
+                    }
+                };
                 config.insert("printer_settings_id".to_owned(), json!(name));
             }
         }

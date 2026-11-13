@@ -50,7 +50,8 @@ CommandDef convertMeshCommand(const CommandContext& context) {
             return body;
           })
           .withRefusedHint([](const SelectionItem& item, const CommandState&) {
-            return QObject::tr("Convert Mesh works on mesh bodies; %1 is not one.").arg(item.describe());
+            return QObject::tr("Convert Mesh works on mesh bodies; pick a mesh body (the picked %1 is not one).")
+                .arg(SelectionItem::kindText(item.kind));
           }),
       choiceInput(QStringLiteral("mode"), QObject::tr("Type"), kConvertModes, QStringLiteral("faceted"))
           .withTooltip(QObject::tr("Faceted Solid: any closed mesh, flat faces. Analytic: one straight extrusion")),

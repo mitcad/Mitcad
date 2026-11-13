@@ -140,6 +140,33 @@ QRectF insideOf(QRectF row, const QRectF& bounds) {
   return row;
 }
 
+// The width a value field needs to show all of its text: the text, its
+// margins (a name label before it), the frame and padding of kFieldStyle,
+// the line edit's own margin and cursor, and each icon button at its side
+// (the fx button), as wide as the line edit makes them (16 px icon, 6 px
+// frame, 4 px margin). From `base` up to a third of the view, never
+// narrower than `base` (mitcad#1724).
+struct FieldFit {
+  int width = 0; // the field's width
+  int text = 0;  // its text's
+  int room = 0;  // the room the field gives its text
+};
+
+FieldFit fieldFit(const QLineEdit& edit, int base, int viewWidth) {
+  const QMargins margins = edit.textMargins();
+  int chrome = margins.left() + margins.right() + 2 * 1 + 2 * 4 + 2 * 2 + 4;
+  for (const QToolButton* button : edit.findChildren<QToolButton*>(QString(), Qt::FindDirectChildrenOnly)) {
+    if (button->defaultAction() && button->defaultAction()->isVisible()) {
+      chrome += 16 + 6 + 4;
+    }
+  }
+  FieldFit fit;
+  fit.text = edit.fontMetrics().horizontalAdvance(edit.text());
+  fit.width = std::clamp(fit.text + chrome, base, std::max(base, viewWidth / 3));
+  fit.room = fit.width - chrome;
+  return fit;
+}
+
 // The place nearest `row` inside `bounds` that keeps clear of the pointer
 // and of the fields placed already. A move towards the pointer (against
 // `away`, from the pointer to where the field belongs) counts up to twice
@@ -3497,7 +3524,9 @@ void SketchController::setFields(const QVector<FieldSpec>& fields) {
     auto* edit = new QLineEdit(&m_viewer);
     edit->setObjectName(QStringLiteral("sketchField_") + spec.id);
     edit->setStyleSheet(kFieldStyle);
-    edit->setFixedWidth(spec.kind == FieldSpec::Kind::Text ? 140 : 104); // with the fx button (mitcad#567)
+    // With the fx button (mitcad#567); a longer text widens it (mitcad#1724).
+    field.baseWidth = spec.kind == FieldSpec::Kind::Text ? 140 : 104;
+    edit->setFixedWidth(field.baseWidth);
     edit->setToolTip(spec.label);
     edit->setPlaceholderText(spec.label);
     auto* label = new QLabel(spec.label, &m_viewer);
@@ -3666,6 +3695,7 @@ void SketchController::fieldEdited(int index) {
     field.edit->setStyleSheet(field.typed && !field.valid ? kInvalidFieldStyle : kFieldStyle);
     field.edit->setProperty("nativeInlineInvalid", field.typed && !field.valid);
     field.edit->setToolTip(problem);
+    fitField(field); // placed below with its new width
   }
   qDebug().noquote() << QStringLiteral("Sketch value %1: %2%3")
                             .arg(field.spec.id, text,
@@ -3677,6 +3707,47 @@ void SketchController::fieldEdited(int index) {
   }
   placeFields();
   m_overlay->update();
+}
+
+bool SketchController::fitField(Field& field) {
+  if (!field.edit || field.baseWidth <= 0) {
+    return false;
+  }
+  const FieldFit fit = fieldFit(*field.edit, field.baseWidth, m_viewer.width());
+  if (fit.width == field.edit->width()) {
+    return false;
+  }
+  // placeFields() keeps the wider field inside the view and off the point
+  // the next click places (mitcad#671); the native inline editor follows
+  // its size.
+  field.edit->setFixedWidth(fit.width);
+  qDebug().noquote() << QStringLiteral("Sketch field %1 is %2 px wide: its text %3 px, room %4 px")
+                            .arg(field.spec.id)
+                            .arg(fit.width)
+                            .arg(fit.text)
+                            .arg(fit.room);
+  return true;
+}
+
+void SketchController::fitEditor() {
+  if (!m_editor || m_editorBaseWidth <= 0) {
+    return;
+  }
+  const FieldFit fit = fieldFit(*m_editor, m_editorBaseWidth, m_viewer.width());
+  if (fit.width == m_editor->width()) {
+    return;
+  }
+  // It grows to the right from where it opened, moved left only as far as
+  // the view's right edge needs.
+  m_editor->setFixedWidth(fit.width);
+  const int x = std::clamp(m_editor->x(), 0, std::max(0, m_viewer.width() - fit.width));
+  if (x != m_editor->x()) {
+    m_editor->move(x, m_editor->y());
+  }
+  qDebug().noquote() << QStringLiteral("Sketch value editor is %1 px wide: its text %2 px, room %3 px")
+                            .arg(fit.width)
+                            .arg(fit.text)
+                            .arg(fit.room);
 }
 
 bool SketchController::fieldMouse(QLineEdit* edit, QWidget* source, QEvent* event) {
@@ -3822,6 +3893,7 @@ void SketchController::setLive(const QString& id, double value) {
   QLineEdit* edit = m_fields[i].edit;
   if (edit->text() != text) {
     edit->setText(text);
+    fitField(m_fields[i]); // back to its own width after a longer text (mitcad#1724)
     if (edit->hasFocus() || nativeInlineEditorFocused(edit)) {
       edit->selectAll();
     }
@@ -3874,12 +3946,20 @@ void SketchController::openValueEditor(const QPointF& at, const QString& text, F
     ParameterField::attach(edit, suggest);
     width += 20; // the fx button
   }
+  // A longer text, such as an expression it opens with, widens it, and it
+  // grows as it is typed (mitcad#1724).
+  const int baseWidth = width;
+  width = fieldFit(*edit, baseWidth, m_viewer.width()).width;
   edit->setFixedWidth(width);
   const QSize size = edit->sizeHint();
   if (m_editorLabel) {
     m_editorLabel->setFixedHeight(size.height());
   }
-  edit->move(static_cast<int>(at.x() - width / 2.0), static_cast<int>(at.y() - size.height() / 2.0));
+  int left = static_cast<int>(at.x() - width / 2.0);
+  if (width > baseWidth) {
+    left = std::clamp(left, 0, std::max(0, m_viewer.width() - width)); // widened, inside the view
+  }
+  edit->move(left, static_cast<int>(at.y() - size.height() / 2.0));
   if (!showNativeInlineEditor(edit)) {
     edit->show();
     edit->raise();
@@ -3896,6 +3976,12 @@ void SketchController::openValueEditor(const QPointF& at, const QString& text, F
     edit->selectAll();
   }
   m_editor = edit;
+  m_editorBaseWidth = baseWidth;
+  connect(edit, &QLineEdit::textChanged, this, [this, edit] {
+    if (edit == m_editor) {
+      fitEditor();
+    }
+  });
   m_editorKind = kind;
   m_editorText = text;
   m_editorName = nameInText ? name : QString();
@@ -4026,6 +4112,7 @@ void SketchController::closeEditor() {
   m_editorDimension.clear();
   m_editorName.clear();
   m_editorLabel = nullptr;
+  m_editorBaseWidth = 0;
 }
 
 bool SketchController::evaluate(const QString& text, FieldSpec::Kind kind, QString& expression,

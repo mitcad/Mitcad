@@ -3,8 +3,11 @@
 // read into a new design's Top and Create Sketch's plane pick in a new
 // design look a few degrees off the isometric view. Seen through OCCT's
 // orthographic camera as the 3D view sets it (that direction, Z up), the
-// origin planes' squares (100 mm, centred on the origin, as
-// MainWindow::showDatums draws them):
+// origin planes' squares in the Centred style (100 mm, centred on the
+// origin: Preferences › Display › Origin planes with Style Centred and Size
+// Model at its default, mitcad#1748; the default Corner style's squares lie
+// each in its own positive quadrant, so they never overlap, and Size Screen
+// only scales them about the origin):
 //   - edges of two planes along different axes are at least 5° apart on
 //     the screen;
 //   - edges of two planes along the same axis, parallel in any parallel
@@ -38,7 +41,7 @@ void check(bool value, const char* expression, int line) {
 #define CHECK(value) check((value), #value, __LINE__)
 
 constexpr double kDegree = 3.14159265358979323846 / 180.0;
-constexpr double kSide = 100.0;             // kDatumSize in MainWindow.cpp
+constexpr double kSide = 100.0;             // MainWindow::kDefaultDatumSize, the Centred style
 constexpr double kMinAngle = 5.0;           // degrees between edges along different axes
 constexpr double kMinApart = 0.04 * kSide; // between the lines of parallel edges
 

@@ -274,6 +274,7 @@ pub(crate) fn row_spec(
             min,
             max,
             target: rest,
+            start: None,
         })
     };
     let amount = if limited {

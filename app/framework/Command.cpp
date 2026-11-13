@@ -2,8 +2,11 @@
 #include "Command.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <set>
 #include <utility>
+
+#include <QCoreApplication>
 
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
@@ -299,6 +302,8 @@ void CommandState::removeRow(const QString& list, int index) {
   dropRow(m_parameters, full, index);
   dropRow(m_parameterTips, full, index);
   dropRow(m_itemsTexts, full, index);
+  dropRow(m_itemWords, full, index);
+  dropRow(m_itemsWords, full, index);
   dropRow(m_choices, full, index);
   dropRow(m_checks, full, index);
   m_rows[full] = std::max(0, m_rows.value(full) - 1);

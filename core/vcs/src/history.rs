@@ -359,7 +359,8 @@ impl ProjectRepo {
     /// What each of `versions` (a file's history, newest first) changed in
     /// the design against the version after it in the list, the one before
     /// it (P12e, the Version History window): the summary of their
-    /// comparison (P12c, [`DesignDiff::summary`]; `no changes` when the
+    /// comparison for a person (P12c, [`DesignDiff::plain_summary`],
+    /// mitcad#1741: no internal ids; `no changes` when the
     /// design is the same, as after a rename). None for the oldest version
     /// and next to a version that deleted the file; an error for a version
     /// whose design file cannot be read (another program's, a newer
@@ -376,7 +377,7 @@ impl ProjectRepo {
             let design = self.design_of(blob, &version.path);
             if let Some(old) = &before {
                 out[i] = Some(match (old, &design) {
-                    (Ok(old), Ok(new)) => Ok(diff_states(old, new).summary),
+                    (Ok(old), Ok(new)) => Ok(diff_states(old, new).plain_summary()),
                     (Err(e), _) | (_, Err(e)) => Err(e.clone()),
                 });
             }

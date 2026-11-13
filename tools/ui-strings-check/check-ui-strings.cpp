@@ -7,7 +7,10 @@
 // short prepositions, articles and conjunctions in lower case inside Title
 // Case ("Save as Mesh", not "Save As Mesh"); "×" in sizes and "°" in angles
 // of the app's texts; no user-facing AppKit literal outside the system menu
-// items; and no '{x}' quoting in the Rust messages.
+// items; no '{x}' quoting in the Rust messages; and no
+// SelectionItem::logDescription() (internal names and ids, mitcad#1741) in
+// a text a person sees: inside a tr() text's .arg() chain or a text
+// setter's arguments (kTextSinks).
 //
 //   mitcad-check-ui-strings DIR|FILE.md...
 //                                  scans the .cpp, .hpp, .mm and .rs files
@@ -577,6 +580,53 @@ void checkText(const std::string& file, int line, const std::string& text, bool 
   }
 }
 
+// The index of the ")" that closes the "(" at `open`, or t.size().
+std::size_t closing(const std::vector<Token>& t, std::size_t open) {
+  int depth = 0;
+  for (std::size_t i = open; i < t.size(); ++i) {
+    if (punct(t[i], "(")) {
+      ++depth;
+    } else if (punct(t[i], ")") && --depth == 0) {
+      return i;
+    }
+  }
+  return t.size();
+}
+
+// Calls whose arguments are text a person sees: the translated texts (with
+// the .arg() chain after them) and the widgets' and the window's text
+// setters.
+const std::set<std::string> kTextSinks = {
+    "tr",          "translate",  "QT_TR_NOOP",         "QT_TRANSLATE_NOOP", "setText",    "setToolTip",
+    "setStatusTip", "setWhatsThis", "setWindowTitle",  "setPlaceholderText", "setTitle", "setLabelText",
+    "showStatus",  "showError",  "showMessage",        "showText",           "addItem",    "information",
+    "warning",     "critical",   "question",           "showNotice"};
+
+// Rule 11 (mitcad#1741): SelectionItem::logDescription() (a kind, an
+// internal name and an owner's id) goes to logs, keys and agents only,
+// never into a text a person sees: a call of it inside the arguments of a
+// text sink (kTextSinks), or in the .arg() chain after a tr() text.
+void scanLogDescriptions(const std::string& file, const std::vector<Token>& t, std::vector<Violation>& out) {
+  std::set<std::size_t> reported;
+  for (std::size_t i = 0; i + 1 < t.size(); ++i) {
+    if (t[i].kind != Kind::Ident || !punct(t[i + 1], "(") || !kTextSinks.count(t[i].text)) {
+      continue;
+    }
+    std::size_t end = closing(t, i + 1);
+    // A translated text's .arg(...) chain is its text too.
+    const bool translated = t[i].text == "tr" || t[i].text == "translate";
+    while (translated && end + 3 < t.size() && punct(t[end + 1], ".") && t[end + 2].kind == Kind::Ident &&
+           t[end + 2].text == "arg" && punct(t[end + 3], "(")) {
+      end = closing(t, end + 3);
+    }
+    for (std::size_t j = i + 2; j < end && j < t.size(); ++j) {
+      if (t[j].kind == Kind::Ident && t[j].text == "logDescription" && reported.insert(j).second) {
+        out.push_back({file, t[j].line, {"logDescription()"}, "a log description in a text a person sees"});
+      }
+    }
+  }
+}
+
 // The texts of a C++ or Objective-C++ source.
 void scanSource(const std::string& file, const std::string& source, std::vector<Violation>& out) {
   const std::vector<Token> t = Lexer(source).run();
@@ -617,6 +667,7 @@ void scanSource(const std::string& file, const std::string& source, std::vector<
       checkText(file, token.line, token.text, true, true, out);
     }
   }
+  scanLogDescriptions(file, t, out);
 }
 
 // Markdown prose without its code, link targets, URLs and HTML tags. The
@@ -1080,6 +1131,10 @@ int selfTest() {
       "  v = tr(\"Open the \\\n"                                                // 26: continued
       "and save\");\n"                                                          // 27
       "  w = tr(\"Mitcad again\");\n"                                           // 28: Mitcad
+      "  x->setToolTip(item.logDescription());\n"                              // 29: a log text
+      "  y = tr(\"%1 is not one\").arg(name).arg(item.logDescription());\n"    // 30: a log text
+      "  qDebug() << QStringLiteral(\"Picked %1\").arg(item.logDescription());\n" // 31: a log
+      "  z->setText(tr(\"Open\")); key(item.logDescription());\n"              // 32: a key
       "}\n";
   const std::string markdown =
       "# Title\n"                                                              // 1
@@ -1153,6 +1208,7 @@ int selfTest() {
       "planted.cpp:14 @\"text\"",       "planted.cpp:16 ribbon, @\"text\"",
       "planted.cpp:20 Title Case",      "planted.cpp:21 deg, x in a size",
       "planted.md:9 Title Case, deg",   "planted.cpp:28 Mitcad",
+      "planted.cpp:29 logDescription()", "planted.cpp:30 logDescription()",
       "core/planted/src/lib.rs:6 '{x}'",  "core/planted/src/lib.rs:9 '{x}'",
       "core/planted/src/lib.rs:11 '{x}'", "core/planted/src/lib.rs:16 '{x}'",
       "core/planted/src/lib.rs:17 '{x}'", "core/planted/src/lib.rs:20 '{x}'",

@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-3dm"
+description = "Reader for .3dm models (archive versions 5 to 8): the chunks, the settings, layers and object table, the geometry classes (B-reps, extrusions, NURBS and other surfaces and curves, meshes) and their conversion to the neutral B-rep model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mitcad_3dm"
+
+[[bin]]
+name = "mitcad-3dm-inspect"
+path = "src/bin/mitcad-3dm-inspect.rs"
+
+[dependencies]
+# The neutral B-rep model the bodies are converted to, which OCCT builds
+# (core/ffi `build_brep_body`), as the .f3d and .dwg imports' bodies.
+mitcad-asm = { path = "../asm" }
+# Vector helpers on [f64; 3].
+mitcad-vec3 = { path = "../vec3" }
+# The meshes' compressed buffers are zlib streams.
+miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"] }
+# The file's summary as JSON (mitcad-3dm-inspect, the import report).
+serde_json = { workspace = true }

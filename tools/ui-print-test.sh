@@ -42,6 +42,9 @@
 #      panel open) and the next Esc cancels; Send as assembled sends it
 #      as assembled; the format STL chosen while asking ends the question
 #      likewise.
+#   9. Open in: Folder only (mitcad#1726): sent, the files' folder instead
+#      of a slicer; the next panel opens on Folder only, the settings'
+#      slicer still listed, and a send to it is remembered again.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-print-test.sh
@@ -209,6 +212,39 @@ ui_focus_dialog '^Preferences$'
 ui_step "OK (Enter)"                     ui_key Return
 ui_focus_main
 ui_expect_new "Preferences: slicer Fake slicer ($WORK/fake-slicer.sh <files>)" "the slicer stays"
+
+echo "--- Folder only is remembered (mitcad#1726)"
+rm -f "$ARGS"
+ui_mark
+ui_step "3D print (search)"              ui_command "Send to Slicer"
+ui_expect_new "Panel Send to Slicer input slicer at " "the panel"
+# Folder only is the entry above the settings' slicer.
+ui_step "Open in: Folder only"           ui_choose "Panel Send to Slicer input slicer" -1
+ui_expect_new "Send to Slicer: Open in = Folder only" "Folder only chosen"
+ui_step "send (Enter)"                   ui_key Return
+# The folder is logged, not opened (MITCAD_TEST_LOG_URLS, ui-test-lib.sh).
+ui_expect_new "3D Print: opened $FOLDER" "the files' folder instead of a slicer"
+ui_expect_new "Done Send to Slicer" "sent"
+sleep 0.5
+[ -f "$ARGS" ] && ui_fail "the slicer was started with Folder only"
+grep -q '^folderOnly=true$' "$XDG_CONFIG_HOME/Mitcad/Mitcad.conf" || ui_fail "Folder only is not in the settings"
+echo "ok   no slicer started, Folder only in the settings"
+ui_mark
+ui_step "3D print again (search)"        ui_command "Send to Slicer"
+ui_expect_new "Panel Send to Slicer input slicer at " "the panel"
+ui_expect_new "3D Print panel: " "the panel's line"
+panel_line=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "3D Print panel: " | tail -1)
+[[ $panel_line == *", slicer none; slicers Folder only | Fake slicer - "* ]] ||
+  ui_fail "the next panel does not open on Folder only with the settings' slicer listed: $panel_line"
+echo "ok   the next panel opens on Folder only, the settings' slicer still listed"
+# The slicer again, for the sends below: remembered the same way.
+ui_step "Open in: the slicer"            ui_choose "Panel Send to Slicer input slicer" 1
+ui_expect_new "Send to Slicer: Open in = Fake slicer - " "the slicer chosen"
+ui_step "send (Enter)"                   ui_key Return
+ui_expect_new "3D Print: started $WORK/fake-slicer.sh " "the slicer started"
+slicer_ran
+grep -q '^folderOnly=false$' "$XDG_CONFIG_HOME/Mitcad/Mitcad.conf" || ui_fail "Folder only is still in the settings"
+echo "ok   the slicer remembered again"
 
 echo "--- STL where the design shows the bodies (mitcad#17)"
 # A 20 x 10 x 5 pin in a component placed twice: turned a quarter about z

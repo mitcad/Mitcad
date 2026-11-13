@@ -2560,7 +2560,10 @@ void TestDriver::run(const Step& step) {
                              .arg(names(drawing.planes), names(drawing.axes), names(drawing.points))
                              .arg(share, 0, 'f', 2);
           if (shown) {
-            return drawing.planes.size() == 3 && drawing.axes.size() == 3 && drawing.points.size() == 1 && share >= 1.0;
+            // At least 0.15 %: the default origin's three 80 px squares
+            // (mitcad#1748) take about half a percent of a 1280 x 800
+            // window, the 100 mm Centered ones of a new design more.
+            return drawing.planes.size() == 3 && drawing.axes.size() == 3 && drawing.points.size() == 1 && share >= 0.15;
           }
           return drawing.empty() && share < 0.05;
         },
@@ -4555,7 +4558,7 @@ void TestDriver::run(const Step& step) {
         seen.append(*actual);
         if (seen.size() != index) continue;
         *point = view->mapTo(topWindow(), candidate.second);
-        qInfo().noquote() << QStringLiteral("Release-order edge %1: %2").arg(index).arg(actual->describe());
+        qInfo().noquote() << QStringLiteral("Release-order edge %1: %2").arg(index).arg(actual->logDescription());
         return true;
       }
       m_waitDetail = QStringLiteral("only %1 clean visible edges for index %2").arg(seen.size()).arg(index);
@@ -4658,11 +4661,11 @@ void TestDriver::run(const Step& step) {
           const Selection& selected = current->selection();
           if (selected.size() != 1 || selected.first().kind != kind || selected.first() != *expected) {
             m_waitDetail = QStringLiteral("actual selection has %1 items; expected %2")
-                .arg(selected.size()).arg(expected->describe());
+                .arg(selected.size()).arg(expected->logDescription());
             return false;
           }
           qInfo().noquote() << QStringLiteral("TestDriver: actual %1 selected after viewport click: %2")
-              .arg(kindName, selected.first().describe());
+              .arg(kindName, selected.first().logDescription());
           return true;
         }, 6, QStringLiteral("the actual viewport click did not select the probed %1").arg(kindName));
       });
@@ -4728,7 +4731,7 @@ void TestDriver::run(const Step& step) {
       }
       if (!found) { m_waitDetail = QStringLiteral("no fresh point for %1").arg(target.pattern()); return false; }
       const auto item = view.itemAt(view.mapFrom(topWindow(), *at));
-      const QString actual = item ? item->describe() : QStringLiteral("nothing");
+      const QString actual = item ? item->logDescription() : QStringLiteral("nothing");
       m_waitDetail = QStringLiteral("pick at offset %1,%2: %3").arg(dx).arg(dy).arg(actual);
       if (!expected.match(actual).hasMatch()) { return false; }
       qInfo().noquote() << QStringLiteral("TestDriver: %1").arg(m_waitDetail);

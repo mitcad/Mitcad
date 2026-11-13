@@ -319,6 +319,9 @@ CommandDef pulleyCommand(const CommandContext& context) {
     };
   };
   def.inputs = placeInputs(place);
+  // The handles and the belt line where the pulley's component is seen
+  // (mitcad#1743).
+  def.handlesSeenAt = [](const CommandState& state, const CommandContext& model) { return placeSeenAt(state, model); };
   // Check Belt right under Place On (mitcad#656): the belt round this
   // pulley and another made before, its rows under it; kept with the
   // pulley (`belt_check`), nothing made.

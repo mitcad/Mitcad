@@ -70,6 +70,8 @@ pub(crate) struct AddJoint {
     #[serde(default)]
     position: JointPosition<ValueInput>,
     #[serde(default)]
+    start: BTreeMap<Motion, f64>,
+    #[serde(default)]
     name: Option<String>,
     #[serde(default)]
     component: Option<String>,
@@ -325,6 +327,7 @@ impl<K: Kernel> JointsCrateOps<K> for Document<K> {
                     flip,
                     limits,
                     position,
+                    start,
                     name,
                     component: c,
                 } = *input;
@@ -343,6 +346,7 @@ impl<K: Kernel> JointsCrateOps<K> for Document<K> {
                     flip,
                     limits,
                     position,
+                    start,
                 };
                 self.add_feature_to(&FeatureDef::Joint(def), name.as_deref(), Some(c))?
             }

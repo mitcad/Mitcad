@@ -166,7 +166,7 @@ CommandDef MainWindow::commentTargetCommand(bool retarget) {
     const Selection& picks = state.items(QStringLiteral("target"));
     return QStringLiteral("Comment %1 on %2%3")
         .arg(retarget ? QStringLiteral("retargeted") : QStringLiteral("added"),
-             picks.isEmpty() ? QStringLiteral("nothing") : picks.first().describe(),
+             picks.isEmpty() ? QStringLiteral("nothing") : picks.first().logDescription(),
              state.checked(QStringLiteral("at_point")) ? QStringLiteral(" at the point clicked") : QString());
   };
   return def;

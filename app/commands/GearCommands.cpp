@@ -199,6 +199,7 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
   const auto shared = std::make_shared<GearShared>();
   const PlacePanel place = placePanel();
   def.inputs = placeInputs(place);
+  def.handlesSeenAt = [](const CommandState& state, const CommandContext& model) { return placeSeenAt(state, model); };
   def.inputs += {
       choiceInput(QStringLiteral("kind"), QObject::tr("Type"), kKinds, QStringLiteral("spur"))
           .withChoiceIcons({{QStringLiteral("spur"), QStringLiteral("gear-spur")},

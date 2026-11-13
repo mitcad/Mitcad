@@ -862,7 +862,7 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
     const QJsonObject view = value.toObject();
     if (view.contains(QStringLiteral("error"))) {
       problems << tr("View %1: %2").arg(view.value(QStringLiteral("id")).toInt())
-                      .arg(mitcad::modelMessage(view.value(QStringLiteral("error")).toString()));
+                      .arg(mitcad::modelMessage(mitcad::userText(view.value(QStringLiteral("error")).toString())));
     }
     // What of the bodies it keeps is gone from the design (mitcad#1293): a
     // warning, the rest drawn.

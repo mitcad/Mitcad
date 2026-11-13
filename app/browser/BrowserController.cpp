@@ -37,6 +37,7 @@
 #include "../framework/MoveOccurrenceDialog.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/Theme.hpp"
+#include "../framework/UserText.hpp"
 #include "../files/Libraries.hpp"
 #include "../library/EditOptionsDialog.hpp"
 #include "../library/PartOptions.hpp"
@@ -1525,7 +1526,7 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     if (item.isValid()) {
       menu.add(QStringLiteral("isolate"), tr("Isolate"), [this, item] {
         m_host.setIsolation({item});
-        qDebug().noquote() << QStringLiteral("Isolated %1").arg(item.describe());
+        qDebug().noquote() << QStringLiteral("Isolated %1").arg(item.logDescription());
       });
     }
     if (isolated) {
@@ -2227,7 +2228,7 @@ void BrowserController::deleteSelection(const Selection& items) {
     if (represented.contains(item)) continue;
     const QString uid = item.kind == SelectKind::Feature ? item.owner : item.creatingFeature();
     if (m_snapshot.feature(uid)) features.append(uid);
-    else skipped.append(item.describe());
+    else skipped.append(item.logDescription());
   }
   deleteTargets(features, {}, {}, skipped);
 }
@@ -2745,22 +2746,30 @@ void BrowserController::projectAgain(const QString& sketch) {
   }
   // "Project Again in Sketch2: done" or with what stays on the old curves
   // (the model's warnings), for the status line and UI tests.
+  // The status says the warnings in words (`warning_messages`,
+  // mitcad#1741); the log keeps the agents' texts with the region keys.
   QStringList warnings;
+  QStringList logged;
   for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
-    warnings << mitcad::modelMessage(warning.toString());
+    logged << warning.toString();
+  }
+  for (const QString& shown : shownTexts(result, QStringLiteral("warnings"), QStringLiteral("warning_messages"))) {
+    warnings << mitcad::modelMessage(shown);
   }
   const DocumentSnapshot::Feature* feature = m_snapshot.feature(sketch);
   const QString name = feature != nullptr ? feature->name : sketch;
   const QString message = warnings.isEmpty()
                               ? tr("Project Again in %1: done").arg(name)
                               : tr("Project Again in %1: %2").arg(name, warnings.join(QStringLiteral("; ")));
-  qDebug().noquote() << message;
+  qDebug().noquote() << (logged.isEmpty() ? message
+                                          : QStringLiteral("Project Again in %1: %2")
+                                                .arg(name, logged.join(QStringLiteral("; "))));
   m_host.showStatus(message, warnings.isEmpty() ? NoticeLevel::Success : NoticeLevel::Warning);
 }
 
 void BrowserController::findInBrowser(const SelectionItem& item) {
   if (m_browser->revealItem(item)) {
-    qDebug().noquote() << QStringLiteral("Found %1 in the browser").arg(item.describe());
+    qDebug().noquote() << QStringLiteral("Found %1 in the browser").arg(item.logDescription());
   } else {
     m_host.showStatus(tr("Nothing in the browser stands for it."), NoticeLevel::Information);
   }

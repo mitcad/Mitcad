@@ -27,4 +27,5 @@ wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; exit 1; }
 ui_expect_log 'TestDriver: done' "the 3D mouse turned, panned and zoomed the view and its button ran Fit"
 ui_expect_log ' fps, longest frame ' "the 3D mouse motion's log line gives its frame rate and longest frame"
 ui_expect_log ' grid rebuild(s), turned ' "the 3D mouse motion's log line counts its grid rebuilds"
+ui_expect_log 'strongest ry: in Object mode the model turns counter-clockwise' "the 3D mouse axes line names what the spin did to the model"
 ui_finish '3D mouse'

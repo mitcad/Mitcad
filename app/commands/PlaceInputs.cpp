@@ -21,6 +21,7 @@
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <gp_Pln.hxx>
+#include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
 #include <QObject>
@@ -33,6 +34,7 @@
 #include "../framework/ModelShapes.hpp"
 #include "../framework/Theme.hpp"
 #include "PlaceGeometry.hpp"
+#include "SketchNormal.hpp"
 
 namespace mitcad::cmd {
 namespace {
@@ -284,6 +286,41 @@ QJsonObject linkOf(const CommandState& state, const CommandContext& context, con
     link.insert(QStringLiteral("target"), target);
   }
   return link;
+}
+
+// Before a pick places the part: the feature's component as it is now (a
+// pick may have activated the picked body's component, mitcad#1634: a
+// hole goes into the beam it is drilled in), seen at the occurrence the
+// item was picked in when the item is that component's own (another
+// occurrence of it), so that the handles are drawn where the click was
+// (mitcad#1743).
+void followPick(CommandState& state, const CommandContext& context, const SelectionItem& item) {
+  QJsonObject components;
+  try {
+    components = context.queryObject({{QStringLiteral("query"), QStringLiteral("components")}});
+  } catch (...) {
+    return;
+  }
+  const QString was = state.object(kContext).value(QStringLiteral("component")).toString(QStringLiteral("C0"));
+  const QString active = components.value(QStringLiteral("active")).toString(was);
+  const QJsonArray occurrences = components.value(QStringLiteral("occurrences")).toArray();
+  if (!item.occurrence.isEmpty() && componentAt(occurrences, item.occurrence) == active) {
+    if (active != was || seenPath(state) != item.occurrence) {
+      setContext(state, context, active, item.occurrence);
+    }
+  } else if (active != was) {
+    setContext(state, context, active, QString());
+  }
+}
+
+// Where the feature's component is seen in the design (the occurrence's
+// placement); none in the root, or when the path leads nowhere.
+std::optional<gp_Trsf> seenWorld(const CommandState& state, const CommandContext& context) {
+  const QString path = seenPath(state);
+  if (path.isEmpty()) {
+    return std::nullopt;
+  }
+  return occurrenceWorldIn(occurrencesOf(context), path);
 }
 
 // --- Geometry of faces and lines (the feature's component's coordinates)
@@ -739,15 +776,23 @@ void logPlace(const CommandState& state, const PlacePanel& panel, const CommandC
   }
   QString text = QStringLiteral("Place %1: %2 %3")
                      .arg(panel.command, formName(form),
-                          isFixedPlane(item) ? fixedPlaneText(item, context) : item.describe());
+                          isFixedPlane(item) ? fixedPlaneText(item, context) : item.logDescription());
   if (form == PlaceForm::Face && !state.items(kEdge1).isEmpty() && !state.items(kEdge2).isEmpty()) {
     text += QStringLiteral(", %1 from %2, %3 from %4")
-                .arg(state.text(kOffset1), state.items(kEdge1).first().describe(), state.text(kOffset2),
-                     state.items(kEdge2).first().describe());
+                .arg(state.text(kOffset1), state.items(kEdge1).first().logDescription(), state.text(kOffset2),
+                     state.items(kEdge2).first().logDescription());
     if (const auto point = facePoint(state, context)) {
-      text += QStringLiteral(" (point %1, %2, %3)")
-                  .arg(number(roundTo(point->X(), 1e-6)), number(roundTo(point->Y(), 1e-6)),
-                       number(roundTo(point->Z(), 1e-6)));
+      const auto coordinates = [](const gp_Pnt& p) {
+        return QStringLiteral("%1, %2, %3")
+            .arg(number(roundTo(p.X(), 1e-6) + 0.0), number(roundTo(p.Y(), 1e-6) + 0.0),
+                 number(roundTo(p.Z(), 1e-6) + 0.0));
+      };
+      text += QStringLiteral(" (point %1)").arg(coordinates(*point));
+      // In a component placed elsewhere, where its handles are drawn
+      // (mitcad#1743).
+      if (const auto seen = seenWorld(state, context)) {
+        text += QStringLiteral(" (in the design %1)").arg(coordinates(point->Transformed(*seen)));
+      }
     }
   }
   const QString plane = state.object(kPlane).value(QStringLiteral("ref")).toString();
@@ -916,14 +961,19 @@ void picked(const SelectionItem& item, CommandState& state, const CommandContext
   if (item.at) {
     click = gp_Pnt((*item.at)[0], (*item.at)[1], (*item.at)[2]);
   }
-  if (storedForm(state) == PlaceForm::Face && isLineItem(item)) {
+  const SelectionItem before = itemFromJson(state.object(kItem));
+  // An edge of another body or occurrence is no reference of the face
+  // (mitcad#1743), as the pick rule says.
+  const bool foreignEdge = item.kind == SelectKind::Edge && before.kind == SelectKind::Face &&
+                           (item.owner != before.owner || item.occurrence != before.occurrence);
+  if (storedForm(state) == PlaceForm::Face && isLineItem(item) && !foreignEdge) {
     // A line along the face it is on: a new reference; Place On keeps the
     // face.
-    const SelectionItem face = itemFromJson(state.object(kItem));
+    const SelectionItem face = before;
     state.setItems(kAt, {face});
     if (rereference(state, context, item, -1)) {
       state.setObject(kNoAlign, QJsonObject()); // a new reference: Align is Reference 1 again
-      qDebug().noquote() << QStringLiteral("Place %1: %2 is a reference now").arg(panel.command, item.describe());
+      qDebug().noquote() << QStringLiteral("Place %1: %2 is a reference now").arg(panel.command, item.logDescription());
       logPlace(state, panel, context);
       return;
     }
@@ -934,10 +984,13 @@ void picked(const SelectionItem& item, CommandState& state, const CommandContext
   }
   if (formOfItem(item) == PlaceForm::None) {
     // Taken by the input but placing nothing: what was there stays.
-    const QJsonObject before = state.object(kItem);
-    state.setItems(kAt, before.isEmpty() ? Selection() : Selection{itemFromJson(before)});
+    state.setItems(kAt, state.object(kItem).isEmpty() ? Selection() : Selection{before});
     return;
   }
+  // A new face or body: its own references, measured from where it was
+  // clicked, in the component it goes into and where that is seen
+  // (mitcad#1743); nothing of the face before is kept (placeItem).
+  followPick(state, context, item);
   placeItem(state, context, item, click);
   if (formOfItem(item) == PlaceForm::Axis && panel.turns && state.items(kAlign).isEmpty()) {
     // A shaft with a flat: aligned to it at once (mitcad#656), so that a
@@ -945,7 +998,7 @@ void picked(const SelectionItem& item, CommandState& state, const CommandContext
     if (const auto flat = shaftFlat(item, context)) {
       state.setItems(kAlign, {*flat});
       state.setObject(kAlignAuto, {{QStringLiteral("flat"), true}}); // goes with the shaft
-      qDebug().noquote() << QStringLiteral("Place %1: aligned to the flat %2").arg(panel.command, flat->describe());
+      qDebug().noquote() << QStringLiteral("Place %1: aligned to the flat %2").arg(panel.command, flat->logDescription());
     }
   }
   logPlace(state, panel, context);
@@ -1107,8 +1160,20 @@ QVector<InputDef> placeInputs(const PlacePanel& panel) {
           .withAccepts([](const SelectionItem& item) { return formOfItem(item) != PlaceForm::None || isLineItem(item); })
           .withPickRule([](const CommandState&) { return kPlaceKinds; },
                         [](const SelectionItem& item, const CommandState& state) {
-                          // A body's straight edge is a reference of a face.
-                          return formOfItem(item) != PlaceForm::None || storedForm(state) == PlaceForm::Face;
+                          if (formOfItem(item) != PlaceForm::None) {
+                            return true;
+                          }
+                          // A body's straight edge is a reference of a face:
+                          // of the face's own body where it was picked. An
+                          // edge of another body or occurrence is not, and a
+                          // click there picks the face under it, which then
+                          // has its own references (mitcad#1743).
+                          if (storedForm(state) != PlaceForm::Face) {
+                            return false;
+                          }
+                          const SelectionItem face = itemFromJson(state.object(kItem));
+                          return item.kind != SelectKind::Edge || face.kind != SelectKind::Face ||
+                                 (item.owner == face.owner && item.occurrence == face.occurrence);
                         })
           .withPlaces()
           .withOnPick([panel](const SelectionItem& item, CommandState& state, const CommandContext& context) {
@@ -1281,6 +1346,7 @@ void initPlace(CommandState& state, const CommandContext& context, const PlacePa
     if (formOfItem(item) == PlaceForm::None) {
       state.setItems(kAt, {});
     } else {
+      followPick(state, context, item);
       placeItem(state, context, item, std::nullopt);
       logPlace(state, panel, context);
     }
@@ -1765,6 +1831,10 @@ std::optional<PlaneFrame> placeFrame(const CommandState& state, const CommandCon
   frame.x = dirOf(answer.value(QStringLiteral("x_axis"))).value_or(defaultX(*axis));
   frame.y = dirOf(answer.value(QStringLiteral("y_axis"))).value_or(axis->Crossed(frame.x));
   return frame;
+}
+
+std::optional<gp_Trsf> placeSeenAt(const CommandState& state, const CommandContext& context) {
+  return seenWorld(state, context);
 }
 
 std::optional<std::pair<QJsonValue, QJsonArray>> planeCenterOf(const CommandState& state,

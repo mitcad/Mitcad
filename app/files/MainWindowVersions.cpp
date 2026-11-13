@@ -526,7 +526,8 @@ QString MainWindow::compareWithOpenDesign(const QString& file, const FileVersion
     const rust::Box<Project> project = open_project(rustStr(file.toUtf8()));
     const rust::Box<Document> old =
         load_version(*project, rustStr(version.id.toUtf8()), rustStr(file.toUtf8()));
-    const QJsonObject options{{QStringLiteral("text"), true}};
+    // For a person (mitcad#1741): names, no internal ids.
+    const QJsonObject options{{QStringLiteral("text"), true}, {QStringLiteral("plain"), true}};
     return qstr(diff_documents(*old, idleDocument(), rustStr(compactJson(options))));
   } catch (const std::exception& e) {
     return tr("Could not compare them: %1").arg(errorText(e));
@@ -538,7 +539,8 @@ std::optional<QString> MainWindow::compareVersionGeometry(const QString& file, c
   const QByteArray path = file.toUtf8();
   const QByteArray id = version.id.toUtf8();
   const QByteArray beforeId = before != nullptr ? before->id.toUtf8() : QByteArray();
-  const QByteArray options = compactJson({{QStringLiteral("text"), true}, {QStringLiteral("geometry"), true}});
+  const QByteArray options = compactJson(
+      {{QStringLiteral("text"), true}, {QStringLiteral("geometry"), true}, {QStringLiteral("plain"), true}});
   // The versions take what the result store has (P7d).
   const QByteArray store = resultStoreDirectory().toUtf8();
   const QByteArray buildId = resultStoreBuildId().toUtf8();

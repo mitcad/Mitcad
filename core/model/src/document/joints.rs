@@ -360,6 +360,7 @@ impl<K: Kernel> Document<K> {
     ) -> Result<Dragged, ModelError> {
         let mut dragged = self.joint_drag(occurrence, grab, target)?;
         let mut edits = Vec::new();
+        let changed = |v: f64, was: f64| (v - was).abs() > 1e-12 * (1.0 + v.abs());
         for joint in &self.result.joints.active {
             let Some(values) = dragged.values.get(&joint.uid) else {
                 continue;
@@ -370,16 +371,46 @@ impl<K: Kernel> Document<K> {
                 .filter_map(|spec| {
                     let target = spec.target?;
                     let v = *values.get(&spec.motion)?;
-                    ((v - target).abs() > 1e-12 * (1.0 + v.abs()))
-                        .then_some((spec.motion, Some(ValueInput::Number(v))))
+                    changed(v, target).then_some((spec.motion, Some(ValueInput::Number(v))))
                 })
                 .collect();
-            if moved.is_empty() {
+            // A joint's free motions that moved (mitcad#1745): the joint
+            // keeps them as its start values, so that it places its moving
+            // side where the drag left it, also when a feature before it
+            // places that side.
+            let now = self
+                .result
+                .joints
+                .joints
+                .get(&joint.uid)
+                .and_then(|r| r.values.as_ref());
+            let free: BTreeMap<Motion, f64> = joint
+                .motions
+                .iter()
+                .filter(|spec| spec.target.is_none())
+                .filter_map(|spec| Some((spec.motion, *values.get(&spec.motion)?)))
+                .collect();
+            let free_moved = free.iter().any(|(m, v)| {
+                let was = joint
+                    .motions
+                    .iter()
+                    .find(|s| s.motion == *m)
+                    .and_then(|s| s.start)
+                    .or_else(|| now.and_then(|n| n.get(m).copied()));
+                was.is_none_or(|was| changed(*v, was))
+            });
+            let mut def = self.joint_input(joint.uid)?;
+            let keeps_start = free_moved && matches!(def, FeatureDef::Joint(_));
+            if moved.is_empty() && !keeps_start {
                 continue;
             }
-            let mut def = self.joint_input(joint.uid)?;
             let position = match &mut def {
-                FeatureDef::Joint(j) => &mut j.position,
+                FeatureDef::Joint(j) => {
+                    if keeps_start {
+                        j.start.extend(free);
+                    }
+                    &mut j.position
+                }
                 FeatureDef::AsBuiltJoint(j) => &mut j.position,
                 _ => unreachable!("a joint"),
             };
@@ -413,16 +444,21 @@ impl<K: Kernel> Document<K> {
             .filter(|r| r.status.is_ok())
             .map(|r| r.uid)
             .collect();
+        // An occurrence a feature before the marker places keeps its own
+        // placement: the drag is kept only when the joints, with their new
+        // start values, put it where the drag left it (mitcad#1745).
+        let positioned: Vec<(OccurrenceUid, String)> = placements
+            .iter()
+            .filter_map(|(o, _)| {
+                let by = self.state.positioning_features(*o);
+                (!by.is_empty()).then(|| (*o, by.join(", ")))
+            })
+            .collect();
         self.apply_checked(
             |state| {
                 for (o, transform) in &placements {
-                    let by = state.positioning_features(*o);
-                    if !by.is_empty() {
-                        return Err(invalid(format!(
-                            "{} is placed by {} in the timeline; capture the position instead",
-                            state.assembly.occurrence_name(*o),
-                            by.join(", ")
-                        )));
+                    if positioned.iter().any(|(p, _)| p == o) {
+                        continue;
                     }
                     state.assembly.occurrence_mut(*o).expect("exists").transform = *transform;
                 }
@@ -431,11 +467,35 @@ impl<K: Kernel> Document<K> {
                 }
                 Ok((format!("Drag {name}"), ()))
             },
-            |state, result| joints_still_hold(state, result, &held, &name),
+            |state, result| {
+                for (o, by) in &positioned {
+                    let wanted = placements.iter().find(|(p, _)| p == o).map(|(_, t)| t);
+                    let kept = match (wanted, result.placements.get(o)) {
+                        (Some(w), Some(at)) => same_placement(w, at),
+                        _ => false,
+                    };
+                    if !kept {
+                        return Err(invalid(format!(
+                            "{} is placed by {by} in the timeline; capture the position instead",
+                            state.assembly.occurrence_name(*o)
+                        )));
+                    }
+                }
+                joints_still_hold(state, result, &held, &name)
+            },
         )?;
         dragged.placements = placements;
         Ok(dragged)
     }
+}
+
+/// Whether two placements agree as a solve repeats them (1e-3 mm, 1e-6 in
+/// the rotation's entries): a drag the timeline does not keep is off by far
+/// more.
+fn same_placement(a: &crate::transform::Transform, b: &crate::transform::Transform) -> bool {
+    let rotation = (0..3).all(|r| (0..3).all(|c| (a.linear[r][c] - b.linear[r][c]).abs() <= 1e-6));
+    let translation = (0..3).all(|i| (a.translation[i] - b.translation[i]).abs() <= 1e-3);
+    rotation && translation
 }
 
 /// Refuses a drag after which a joint, as-built joint, rigid group,

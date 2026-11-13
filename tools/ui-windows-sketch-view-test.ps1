@@ -45,6 +45,9 @@ param(
 
 Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'view.environment.dark' = 'F8'; 'view.environment.light' = 'F9';
   'view.front' = 'F11'; 'view.iso' = 'F12' } -StepPause 0
+# Parts built over the origin, beside which an origin plane or axis is
+# clicked: the origin as 100 mm Centered squares (mitcad#1748).
+Ui-OriginInMillimeters
 
 # Expect-Recoloured "dark|light": the sketch entities shown were recoloured
 # for that background, the rectangle's four lines among the fully

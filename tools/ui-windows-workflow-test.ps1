@@ -64,6 +64,9 @@
 #      cube are in Bodies and highlighted, the surface left out; a click on
 #      the cube takes it and its highlight out, a click on the surface picks
 #      nothing; Send writes the plate's file alone.
+#  16. Open in: Folder only (mitcad#1726): sent, the files' folder instead
+#      of the slicer; the next panel opens on Folder only, the settings'
+#      slicer still listed, and a send to it is remembered again.
 # Commands without a default shortcut get one in the test's settings
 # (popups such as the command search close at once in session 0).
 # Mitcad runs with Mesa's software OpenGL (MITCAD_MESA_DIR) in session 0
@@ -81,6 +84,9 @@ Ui-Init $App $Out $QtBin @{
   'sketch.create' = 'F7'; 'inspect.properties' = 'F8'; 'file.export' = 'F9'; 'file.import' = 'F11'
   'file.save_to_project' = 'F12'; 'make.print3d' = 'Shift+F9'; 'file.project_settings' = 'Shift+F11'
   'solid.helix' = 'Shift+F7' } -StepPause 0
+# Parts built over the origin, beside which an origin plane or axis is
+# clicked: the origin as 100 mm Centered squares (mitcad#1748).
+Ui-OriginInMillimeters
 $work = Join-Path $script:UiOut 'files'
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $work | Out-Null
@@ -91,6 +97,8 @@ Remove-Item -Recurse -Force $printTemp -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $printTemp | Out-Null
 $env:TMP = $printTemp
 $env:TEMP = $printTemp
+# The files' folder of a send with Folder only is logged, not opened (part 16).
+$env:MITCAD_TEST_LOG_URLS = '1'
 $slicerArgs = Join-Path $script:UiOut 'slicer-args.txt'
 # Not the arguments of an earlier run's last print, which the first
 # Slicer-Arguments would take before the slicer wrote its own (mitcad#271).
@@ -841,5 +849,41 @@ $got = @(Slicer-Arguments)
 $printFile = [IO.Path]::GetFullPath((Join-Path $printTemp 'mitcad-print\print\print.3mf'))
 if ($got.Count -ne 1 -or $got[0] -ne $printFile) { Ui-Fail "the slicer's arguments: $($got -join ' | ')" }
 Write-Host "ok   the plate alone sent: $sentLine"
+
+Write-Host '--- Open in: Folder only is remembered (mitcad#1726)'
+$settingsFile = Join-Path $script:UiSettings 'Mitcad\Mitcad.ini'
+Remove-Item -Force $slicerArgs -ErrorAction SilentlyContinue
+Ui-Mark
+Ui-Step '3D print (Shift+F9)'            { Ui-Key 'shift+F9' }
+Ui-ExpectNew 'Panel Send to Slicer input slicer at ' 'the panel laid out'
+# Folder only is the entry above the settings' slicer.
+Ui-Step 'Open in: Folder only (wheel)'   { Ui-WheelLogged 'Panel Send to Slicer input slicer' 1 }
+Ui-ExpectNew 'Send to Slicer: Open in = Folder only' 'Folder only chosen'
+Ui-Step 'send (Enter)'                   { Ui-Key 'Return' }
+# The folder is logged, not opened (MITCAD_TEST_LOG_URLS).
+Ui-ExpectNew '3D Print: opened ' "the files' folder instead of the slicer"
+Ui-ExpectNew 'Done Send to Slicer' 'sent'
+Start-Sleep -Milliseconds 500
+if (Test-Path $slicerArgs) { Ui-Fail 'the slicer was started with Folder only' }
+if (-not (Select-String -Quiet -Pattern '^folderOnly=true$' -Path $settingsFile)) { Ui-Fail 'Folder only is not in the settings' }
+Write-Host 'ok   no slicer started, Folder only in the settings'
+Ui-Mark
+Ui-Step '3D print again (Shift+F9)'      { Ui-Key 'shift+F9' }
+Ui-ExpectNew 'Panel Send to Slicer input slicer at ' 'the panel laid out'
+Ui-ExpectNew '3D Print panel: ' "the panel's line"
+$panelLine = @(Ui-NewLines | Where-Object { $_.Contains('3D Print panel: ') })[-1]
+if (-not $panelLine.Contains(', slicer none; slicers Folder only | Fake slicer - ')) {
+  Ui-Fail "the next panel does not open on Folder only with the settings' slicer listed: $panelLine"
+}
+Write-Host "ok   the next panel opens on Folder only, the settings' slicer still listed"
+# The slicer again: remembered the same way.
+Ui-Step 'Open in: the slicer (wheel)'    { Ui-WheelLogged 'Panel Send to Slicer input slicer' -1 }
+Ui-ExpectNew 'Send to Slicer: Open in = Fake slicer - ' 'the slicer chosen'
+Ui-Step 'send (Enter)'                   { Ui-Key 'Return' }
+Ui-ExpectNew '3D Print: started ' 'the slicer started'
+$got = @(Slicer-Arguments)
+if ($got.Count -ne 1 -or $got[0] -ne $printFile) { Ui-Fail "the slicer's arguments: $($got -join ' | ')" }
+if (-not (Select-String -Quiet -Pattern '^folderOnly=false$' -Path $settingsFile)) { Ui-Fail 'Folder only is still in the settings' }
+Write-Host 'ok   the slicer remembered again'
 
 Ui-Finish 'UI Windows workflow test'

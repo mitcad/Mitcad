@@ -200,6 +200,12 @@ impl LiveMcpSession {
     pub fn set_mcp_comment_policy(&mut self, may_resolve: bool) {
         self.0.set_may_resolve_comments(may_resolve);
     }
+
+    /// Clicks, keys and dialogs for viewing (mitcad#1735): the application
+    /// allows them only in a run started with --mcp-folder.
+    pub fn set_mcp_input_tools(&mut self, allowed: bool) {
+        self.0.set_input_tools(allowed);
+    }
 }
 
 /// Validate one model command before the GUI submits it to its worker.

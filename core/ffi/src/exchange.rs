@@ -219,6 +219,7 @@ impl Document {
         let (breps, meshes) = imported.split_at(found.len().min(imported.len()));
         for (report, feature) in found.iter_mut().zip(breps) {
             report["feature"] = json!(feature.feature.uid);
+            report["feature_name"] = json!(feature.feature.name);
             report["bodies"] = imported_json(feature)["bodies"].clone();
         }
         // The mesh bodies' materials and appearances, part of the import's
@@ -241,6 +242,7 @@ impl Document {
         self.0.merge_undo(depth, &label);
         for (report, feature) in meshes_found.iter_mut().zip(meshes) {
             report["feature"] = json!(feature.feature.uid);
+            report["feature_name"] = json!(feature.feature.name);
             report["bodies"] = imported_json(feature)["bodies"].clone();
             if let Some(body) = feature.bodies.first() {
                 let attributes = self.0.body_attributes(body.uid);

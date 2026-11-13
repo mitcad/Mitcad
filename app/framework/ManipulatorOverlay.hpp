@@ -82,6 +82,9 @@ public:
   }
 
 signals:
+  // A drag of the handle began: `element` is its Manipulator::element (one
+  // of an input's several handles, mitcad#1747), -1 for most.
+  void dragStarted(const QString& key, int element);
   void dragged(const QString& key, double value);
   void dragFinished(const QString& key);
   // A toggle was clicked (P9: a pattern's instance).
@@ -136,6 +139,11 @@ private:
   };
   ArrowStep arrowStep(const Handle& handle) const;
   double pixelSize(const gp_Pnt& at) const; // mm per pixel near a point
+  // A ring's radius in the design (mm): round its geometry
+  // (Manipulator::radius) or the usual size on the screen.
+  double ringRadius(const Manipulator& m) const;
+  // Whether handle `index` or its value box is under the mouse or dragged.
+  bool isActive(int index) const;
   // Whether the view sees a handle too obliquely to drag it well
   // (mitcad#1707): a ring whose plane is within about 15 degrees of the
   // view direction (drawn as a line or a thin ellipse), which takes no

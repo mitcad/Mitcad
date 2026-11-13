@@ -166,6 +166,22 @@ bool SketchModel::load(const QJsonObject& sketch) {
   for (const QJsonValue& id : sketch.value(QStringLiteral("order")).toArray()) {
     order << id.toString();
   }
+  steps.clear();
+  for (const QJsonValue& value : sketch.value(QStringLiteral("steps")).toArray()) {
+    const QJsonObject s = value.toObject();
+    StepData step;
+    step.id = s.value(QStringLiteral("id")).toString();
+    step.kind = s.value(QStringLiteral("kind")).toString();
+    for (const QJsonValue& id : s.value(QStringLiteral("items")).toArray()) {
+      step.items << id.toString();
+    }
+    for (const QJsonValue& id : s.value(QStringLiteral("changed")).toArray()) {
+      step.changed << id.toString();
+    }
+    if (!step.items.isEmpty()) {
+      steps.push_back(step);
+    }
+  }
   const bool framed = sketchFrame(sketch, frame);
 
   for (const QJsonValue& value : sketch.value(QStringLiteral("entities")).toArray()) {

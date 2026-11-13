@@ -1067,8 +1067,9 @@ finding.
 | `freecad_file` | `FcstdFile::from_bytes` and each object's shape data |
 | `f3d_file` | `F3dFile::from_bytes`, its segments and body blobs, nested documents |
 | `solidcraft_file` | `SolidcraftFile::from_bytes` and each feature's inputs |
+| `model_3dm` | `File3dm::read`, each object's conversion to the neutral B-rep model, the render meshes (mitcad#1715) |
 
-The `.ipt`, `.dwg`, IFC and FreeCAD targets stop where the import workers
+The `.ipt`, `.dwg`, `.3dm`, IFC and FreeCAD targets stop where the import workers
 hand the data to OCCT: the geometry built from it is the kernel's.
 
 They need a nightly toolchain and cargo-fuzz. The full check
@@ -1607,6 +1608,20 @@ and the row's values (see
 [core/dwg/README.md](../core/dwg/README.md)); it skips without the
 variable. Each drawing is imported in a child process of its own, several
 at once, as the other corpus tests do (mitcad#875; the options above).
+
+### .3dm corpus
+
+Real `.3dm` models are never committed. `MITCAD_3DM_CORPUS` points at a
+folder of them (subfolders too): openly licensed sample models, each
+with its source and licence in an `index.tsv` (mitcad#1715). The cargo
+test `core.3dm` reads and converts each `.3dm` file without OCCT (every
+object read, every B-rep's faces on a surface and its loops closed), and
+the ctest `3dm.corpus` (`tools/cli/3dm-corpus.cmake`) imports each model
+an `index.tsv` lists (column `file`; `check` `no` for a model with
+objects left out on purpose) with `mitcad-cli import-3dm --check`, a
+model a child process, several at once, as the `.dwg` corpus does: every
+body built and valid, every solid, surface and mesh taken. Both skip
+without the variable.
 
 ### FreeCAD reference models and corpus
 
@@ -2308,6 +2323,11 @@ runs one step after another. Build and lint use half the cores unless
   packages carry its licence text and the third-party notices name it.
 - If GPL components are ever included, the distribution becomes
   GPL-3.0-or-later; keep such components behind replaceable interfaces.
+- A file format reader learned from the format's published reference
+  source (`core/3dm`, mitcad#1715) takes only the format's facts from it
+  (typecodes, ids, the order and meaning of the fields), written anew in
+  Rust under MIT; no code of that source or of another reader is copied,
+  and its README says where the knowledge comes from.
 - Rust dependencies are checked by cargo-deny (`core/deny.toml`).
 - The fuzz crates (`core/fuzz`, `core/vcs/fuzz`) are development tools in
   workspaces of their own, outside `core/Cargo.lock` and cargo-deny:
@@ -2466,7 +2486,13 @@ The Linux UI test `ui-mcp-files-camera` (`tools/ui-mcp-files-camera-test.sh`)
 drives the bridge from the shell (jq, two FIFOs) for Save As and Open into
 the folders for designs and for the camera (mitcad#402, mitcad#405).
 The Linux UI test `ui-mcp-document-new` (`tools/ui-mcp-document-new-test.sh`)
-drives it the same way for `document_new` (mitcad#1266).
+drives it the same way for `document_new` (mitcad#1266), and
+`ui-mcp-recovery-dialog` (`tools/ui-mcp-recovery-dialog-test.sh`) for the
+refusals while the recovery dialog of the start-up or another dialog
+waits for the user, and `ui_state`'s `dialog` (mitcad#1725).
+The Linux UI test `ui-mcp-input` (`tools/ui-mcp-input-test.sh`) drives it
+the same way for `ui_click`, `ui_type` and `ui_dialog` in an application
+started with `--mcp-folder` (mitcad#1735).
 
 Follow the focused checks with `tools/check-all.sh` in the Linux isolated
 environment and the documented Windows and macOS builds with CTest.

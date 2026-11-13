@@ -658,6 +658,10 @@ if(BUILD_TESTING)
   # The .dwg reader (mitcad#453) on drawings written by its tests in every
   # version (no OCCT).
   mitcad_cargo_test(core.dwg mitcad-dwg)
+  # The .3dm reader on its sample model (no OCCT): the chunks, settings,
+  # layers, blocks, the geometry classes and their conversion; its corpus
+  # test reads MITCAD_3DM_CORPUS and skips without it.
+  mitcad_cargo_test(core.3dm mitcad-3dm)
   # The vector helpers on [f64; 3] that the model, the solver and the
   # readers share (mitcad#582; no OCCT).
   mitcad_cargo_test(core.vec3 mitcad-vec3)

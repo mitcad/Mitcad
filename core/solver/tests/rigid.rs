@@ -191,6 +191,72 @@ fn a_joint_keeps_its_free_motions_where_they_are() {
 }
 
 #[test]
+fn start_values_place_a_free_side_there() {
+    // mitcad#1745: a cylindrical joint's free side, 25 above and turned,
+    // placed with its slide and turn at their start values (10, 0) instead
+    // of the nearest (25, 0.7); a limit keeps a start within it.
+    let turned = Pose::rotation([0.0; 3], [0.0, 0.0, 1.0], 0.7);
+    let fa = Pose::translation([4.0, -3.0, 25.0]).after(&turned);
+    let mut s = RigidSystem::new();
+    let body = s.add_body(false);
+    let j = s
+        .add_joint(joint(Some(body), fa, None, at([0.0; 3]), &[Tz, Rz]))
+        .unwrap();
+    s.set_start(j, Tz, 10.0).unwrap();
+    s.set_start(j, Rz, 0.0).unwrap();
+    assert!(s.solve(&opts()).is_ok());
+    assert_holds(&s, &[j]);
+    let values = s.joint_values(j);
+    assert!(
+        (values[0] - 10.0).abs() < 1e-9 && values[1].abs() < 1e-9,
+        "{values:?}"
+    );
+    assert_near(moved(&s, body, fa.translation), [0.0, 0.0, 10.0]);
+    // From b's side: the free body is b, and the start holds the same way.
+    let mut s = RigidSystem::new();
+    let body = s.add_body(false);
+    let j = s
+        .add_joint(joint(None, at([0.0; 3]), Some(body), fa, &[Tz, Rz]))
+        .unwrap();
+    s.set_start(j, Tz, -5.0).unwrap();
+    assert!(s.solve(&opts()).is_ok());
+    assert_holds(&s, &[j]);
+    assert!(
+        (s.joint_values(j)[0] + 5.0).abs() < 1e-9,
+        "{:?}",
+        s.joint_values(j)
+    );
+    assert_near(moved(&s, body, fa.translation), [0.0, 0.0, 5.0]);
+    // A limit keeps the start within it; a target wins over it.
+    let mut s = RigidSystem::new();
+    let body = s.add_body(false);
+    let mut limited = joint(Some(body), fa, None, at([0.0; 3]), &[Tz]);
+    limited.motions[0].max = Some(4.0);
+    let j = s.add_joint(limited).unwrap();
+    s.set_start(j, Tz, 10.0).unwrap();
+    assert!(s.solve(&opts()).is_ok());
+    assert!(
+        (s.joint_values(j)[0] - 4.0).abs() < 1e-9,
+        "{:?}",
+        s.joint_values(j)
+    );
+    let mut s = RigidSystem::new();
+    let body = s.add_body(false);
+    let mut driven = joint(Some(body), fa, None, at([0.0; 3]), &[Tz]);
+    driven.motions[0].target = Some(7.0);
+    let j = s.add_joint(driven).unwrap();
+    s.set_start(j, Tz, 10.0).unwrap();
+    assert!(s.solve(&opts()).is_ok());
+    assert!(
+        (s.joint_values(j)[0] - 7.0).abs() < 1e-9,
+        "{:?}",
+        s.joint_values(j)
+    );
+    // Only a joint's own free motions take one.
+    assert!(s.set_start(j, Rz, 0.0).is_err());
+}
+
+#[test]
 fn limits_hold_free_motions_and_targets_drive_them() {
     let mut s = RigidSystem::new();
     let body = s.add_body(false);

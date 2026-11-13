@@ -34,6 +34,7 @@
 #include <QPair>
 #include <QPushButton>
 #include <QPlainTextEdit>
+#include <QRegularExpression>
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -156,6 +157,7 @@
 #include "update/UpdateController.hpp"
 #include "report/ReportCenter.hpp"
 #include "view/ModeBanner.hpp"
+#include "view/OriginPreference.hpp"
 #include "view/SmallCirclesPreference.hpp"
 #include "view/SpaceMouseController.hpp"
 #include "view/ViewController.hpp"
@@ -182,7 +184,7 @@ const QColor kFeatureFacesHoverColor = viewColor(ColorRole::FeatureFacesHover, f
 // (mitcad#731).
 const QColor kPrintBedColor = printBedColor();
 // Size of the planes and axes that stand for datums, mm.
-constexpr double kDatumSize = 100.0;
+constexpr double kDatumSize = MainWindow::kDefaultDatumSize;
 const QStringList kOriginDatums = {QStringLiteral("xy"), QStringLiteral("xz"), QStringLiteral("yz"),
                                    QStringLiteral("x"),  QStringLiteral("y"),  QStringLiteral("z"),
                                    QStringLiteral("origin")};
@@ -472,15 +474,11 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
       m_viewer(new OcctViewer(this)), m_statusLabel(new QLabel(this)),
       m_rendererLabel(new QLabel(this)) {
   m_viewer->setObjectName(QStringLiteral("modelView"));
-  // What a fit frames in a view with nothing to fit, and a new design's
-  // first view (mitcad#1000): the box of the origin planes, as showDatums
-  // draws them (kDatumSize, centred on the origin).
-  {
-    Bnd_Box originBox;
-    const double half = kDatumSize / 2.0;
-    originBox.Update(-half, -half, -half, half, half, half);
-    m_viewer->setOriginBox(originBox);
-  }
+  // How the origin is drawn (Preferences › Display › Origin planes,
+  // mitcad#1748), and what a fit frames in a view with nothing to fit, a new
+  // design's first view (mitcad#1000): the box of the origin planes as
+  // showDatums draws them (MainWindowOrigin.cpp).
+  applyOriginDisplay(false);
   m_documentSession->setWaitHandler([this](const QString& label, ModelJob& job, const QElapsedTimer& clock,
                                           bool& logged) { waitForJob(label, job, clock, logged); });
   // Section Analysis off the UI thread (mitcad#438): its rounds read only
@@ -507,6 +505,10 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   // Preferences > Display > Small circles changed (mitcad#879): the shown
   // bodies' display meshes made again with the new choice.
   connect(&SmallCirclesNotifier::instance(), &SmallCirclesNotifier::changed, this, [this] { remeshDisplay(); });
+  // Preferences > Display > Origin planes changed (mitcad#1748): the origin
+  // drawn anew in every window at once.
+  connect(&OriginDisplayNotifier::instance(), &OriginDisplayNotifier::changed, this,
+          [this] { applyOriginDisplay(true); });
   setAcceptDrops(true);
 
   // The project indicator (mitcad#89): the current project, its kind, the
@@ -3543,7 +3545,21 @@ TopoDS_Shape MainWindow::itemShape(const SelectionItem& item) const {
     if (item.kind != SelectKind::Component) {
       SelectionItem own = item;
       own.occurrence.clear();
-      const TopoDS_Shape shape = itemShape(own);
+      // A component's origin datum in millimetres, as large as the design's
+      // own origin is drawn now (mitcad#1748): no zoom-persistent
+      // transform is drawn at a component's place.
+      const bool originDatum = (item.kind == SelectKind::Plane || item.kind == SelectKind::Axis ||
+                                item.kind == SelectKind::Point) &&
+                               kOriginDatums.contains(item.owner);
+      TopoDS_Shape shape;
+      try {
+        shape = originDatum ? originDatumShape(queryObject({{QStringLiteral("query"), QStringLiteral("datum")},
+                                                            {QStringLiteral("uid"), item.owner}}),
+                                               m_originDisplay.style, originModelSize())
+                            : itemShape(own);
+      } catch (const std::exception&) {
+        return TopoDS_Shape(); // gone from the model
+      }
       return shape.IsNull() ? shape : shape.Moved(placementOf(item.occurrence));
     }
   }
@@ -3671,10 +3687,13 @@ TopoDS_Shape MainWindow::itemShape(const SelectionItem& item) const {
       }
       [[fallthrough]];
     case SelectKind::Axis:
-    case SelectKind::Point:
-      return datumShape(queryObject({{QStringLiteral("query"), QStringLiteral("datum")},
-                                     {QStringLiteral("uid"), item.owner}}),
-                        kDatumSize);
+    case SelectKind::Point: {
+      const QJsonObject datum =
+          queryObject({{QStringLiteral("query"), QStringLiteral("datum")}, {QStringLiteral("uid"), item.owner}});
+      // The design's origin as Preferences draws it, a construction plane
+      // or axis at the size its handles set (mitcad#1748).
+      return kOriginDatums.contains(item.owner) ? originShape(datum) : datumShape(datum, datumDisplaySize(datum));
+    }
     default:
       return TopoDS_Shape();
     }
@@ -4491,7 +4510,10 @@ void MainWindow::showDatums() {
       continue; // View › Show (mitcad#1287)
     }
     const SelectKind kind = datumKind(datum.value(QStringLiteral("type")).toString());
-    DatumDisplay display{uid, kind, datumShape(datum, kDatumSize)};
+    // The origin as Preferences draws it, construction geometry at the size
+    // its handles set (mitcad#1748).
+    DatumDisplay display{uid, kind,
+                         kOriginDatums.contains(uid) ? originShape(datum) : datumShape(datum, datumDisplaySize(datum))};
     // A component's datum where its occurrence places it.
     display.occurrence = kOriginDatums.contains(uid) ? QString() : placingOccurrence(uid);
     if (!display.occurrence.isEmpty()) {
@@ -4563,6 +4585,9 @@ void MainWindow::showDatums() {
   m_loggedDatums = logged;
   m_loggedDatumPlaces.clear();
   logDatumPlaces();
+  // A selected construction plane's or axis's handles where it is drawn
+  // now (mitcad#1748).
+  updateDatumHandles();
 }
 
 void MainWindow::logDatumPlaces() {
@@ -4574,36 +4599,48 @@ void MainWindow::logDatumPlaces() {
   // a place logged before the view was laid out is 0,0, mitcad#318).
   QStringList lines;
   const bool picks = qEnvironmentVariableIsSet("MITCAD_LOG_PICKS");
+  // The origin's planes and axes as large as they are drawn now (mitcad#1748:
+  // with Size Screen, as many millimetres as their pixels take at this zoom).
+  const double originSize = originModelSize();
+  const bool corner = m_originDisplay.style == OriginStyle::Corner;
   for (const QJsonObject& datum : std::as_const(m_loggedDatums)) {
     const QString uid = datum.value(QStringLiteral("uid")).toString();
     const SelectKind kind = datumKind(datum.value(QStringLiteral("type")).toString());
     const QString occurrence = datumOccurrence(uid);
+    const bool ofOrigin = kOriginDatums.contains(uid);
+    const double size = ofOrigin ? originSize : datumDisplaySize(datum);
     std::vector<gp_Pnt> candidates;
-    if (kind == SelectKind::Plane && !kOriginDatums.contains(uid)) {
+    if (kind == SelectKind::Plane && !ofOrigin) {
       // A construction plane's square, away from its middle.
       const gp_Pnt middle = pointOf(datum.value(QStringLiteral("origin")));
       const gp_Vec x = vectorOf(datum.value(QStringLiteral("x_axis")));
       const gp_Vec y = vectorOf(datum.value(QStringLiteral("y_axis")));
       for (const double fraction : {0.3, 0.2, 0.1}) {
         for (const gp_Vec& direction : {x + y, x - y, y - x, (x + y).Reversed()}) {
-          candidates.push_back(middle.Translated(direction * (kDatumSize * fraction)));
+          candidates.push_back(middle.Translated(direction * (size * fraction)));
         }
       }
     } else if (kind == SelectKind::Plane) {
-      candidates = m_viewer->planePickCandidates(pointOf(datum.value(QStringLiteral("origin"))),
-                                                 gp_Dir(vectorOf(datum.value(QStringLiteral("normal")))),
-                                                 kDatumSize);
-      candidates.insert(candidates.begin(),
-                        m_viewer->planePickPoint(pointOf(datum.value(QStringLiteral("origin"))),
-                                                 gp_Dir(vectorOf(datum.value(QStringLiteral("normal")))),
-                                                 kDatumSize));
+      const gp_Pnt planeOrigin = pointOf(datum.value(QStringLiteral("origin")));
+      const gp_Dir normal(vectorOf(datum.value(QStringLiteral("normal"))));
+      candidates = corner ? m_viewer->cornerPlanePickCandidates(planeOrigin, normal, size)
+                          : m_viewer->planePickCandidates(planeOrigin, normal, size);
+      candidates.insert(candidates.begin(), m_viewer->planePickPoint(planeOrigin, normal, size, corner));
+    } else if (kind == SelectKind::Axis && ofOrigin && corner) {
+      // The Corner style's axis: from the origin along its positive way,
+      // past the planes (mitcad#1748), away from the planes' edges first.
+      const gp_Pnt start = pointOf(datum.value(QStringLiteral("origin")));
+      const gp_Vec along(positiveWay(gp_Dir(vectorOf(datum.value(QStringLiteral("direction"))))));
+      for (const double fraction : {1.12, 1.18, 1.06, 0.9, 0.6, 0.3}) {
+        candidates.push_back(start.Translated(along * (size * fraction)));
+      }
     } else if (kind == SelectKind::Axis) {
       // Along the axis, nearer to its middle or the other way.
       const gp_Pnt middle = pointOf(datum.value(QStringLiteral("origin")));
       const gp_Vec along = vectorOf(datum.value(QStringLiteral("direction")));
       for (const double fraction : {0.4, 0.3, 0.2, 0.12, 0.06}) {
         for (const double sign : {1.0, -1.0}) {
-          candidates.push_back(middle.Translated(along * (kDatumSize * fraction * sign)));
+          candidates.push_back(middle.Translated(along * (size * fraction * sign)));
         }
       }
     } else {
@@ -4659,13 +4696,13 @@ void MainWindow::logDatumPlaces() {
       }
     };
     tryPlaces(candidates);
-    if (picks && !found && kind == SelectKind::Plane && kOriginDatums.contains(uid)) {
+    if (picks && !found && kind == SelectKind::Plane && ofOrigin && !corner) {
       // None of them picks the plane: with a placement input's planes
       // behind the axes (mitcad#656), the axis seen along the diagonal
       // towards the eye covers them in an isometric view.
       std::vector<gp_Pnt> sides = m_viewer->planePickCandidates(
           pointOf(datum.value(QStringLiteral("origin"))), gp_Dir(vectorOf(datum.value(QStringLiteral("normal")))),
-          kDatumSize, true);
+          size, true);
       if (!occurrence.isEmpty()) {
         const gp_Trsf placement = placementOf(occurrence).Transformation();
         for (gp_Pnt& side : sides) {
@@ -5115,7 +5152,7 @@ void MainWindow::lookAt(const SelectionItem& item) {
       up.Transform(placement);
     }
     m_viewer->lookAlong(normal, up);
-    qDebug().noquote() << QStringLiteral("Look at %1").arg(item.describe());
+    qDebug().noquote() << QStringLiteral("Look at %1").arg(item.logDescription());
   } catch (const std::exception& e) {
     showError(errorText(e));
   }
@@ -5406,7 +5443,7 @@ void MainWindow::setSelection(const Selection& items) {
     constexpr int kLoggedNames = 100;
     QStringList names;
     for (const SelectionItem& item : items.mid(0, kLoggedNames)) {
-      names << item.describe();
+      names << item.logDescription();
     }
     if (items.size() > kLoggedNames) {
       names << QStringLiteral("and %1 more").arg(items.size() - kLoggedNames);
@@ -5465,6 +5502,7 @@ void MainWindow::updateIdleView() {
   }
   m_autoselect->setActive(m_mode == Mode::Idle);
   updateSelectionCreate();
+  updateDatumHandles(); // a selected construction plane's or axis's (mitcad#1748)
   updateMakeCard(); // the Make tab's body card (mitcad#1049)
   updateModeBanner();
   if (m_mode == Mode::Command) {
@@ -5689,6 +5727,53 @@ void MainWindow::updateIdleHighlights() {
   }
 }
 
+namespace {
+
+// A profile, sketch curve, point, constraint or dimension: an item of a
+// sketch that the card names in words (mitcad#1741).
+bool isSketchItem(SelectKind kind) {
+  return kind == SelectKind::Profile || kind == SelectKind::SketchCurve || kind == SelectKind::SketchPoint ||
+         kind == SelectKind::SketchConstraint || kind == SelectKind::SketchDimension;
+}
+
+} // namespace
+
+QString MainWindow::sketchItemBlock(const SelectionItem& item) {
+  const QString key = QStringLiteral("sketch item:%1:%2:%3")
+                          .arg(static_cast<unsigned>(item.kind))
+                          .arg(item.owner, item.name);
+  if (!m_idleMeasurements.contains(key)) {
+    QElapsedTimer measureClock;
+    measureClock.start();
+    // The sketch query's answer, once per sketch while the selection stays.
+    const QString sketchKey = QStringLiteral("sketch answer:") + item.owner;
+    QJsonObject sketchAnswer;
+    const DocumentSnapshot::Feature* feature = m_snapshot.feature(item.owner);
+    if (feature != nullptr && feature->isSketch()) {
+      if (!m_idleMeasurements.contains(sketchKey)) {
+        QString answer;
+        try {
+          answer = QString::fromUtf8(compactJson(queryObject(
+              {{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), item.owner}})));
+        } catch (const std::exception&) {
+          // Named without measurements.
+        }
+        m_idleMeasurements.insert(sketchKey, answer);
+      }
+      sketchAnswer = QJsonDocument::fromJson(m_idleMeasurements.value(sketchKey).toUtf8()).object();
+    }
+    const SketchItemCard card = sketchItemCard(item, sketchAnswer, feature != nullptr ? feature->name : QString(),
+                                               [](const QString& type) { return sketch::constraintName(type); });
+    QString block = QStringLiteral("<b>%1</b>").arg(card.title.toHtmlEscaped());
+    if (!card.measurements.isEmpty()) {
+      block += QStringLiteral("<br>%1").arg(card.measurements);
+    }
+    m_idleMeasurements.insert(key, block);
+    m_idleMeasureMs += measureClock.elapsed();
+  }
+  return m_idleMeasurements.value(key);
+}
+
 // The idle card's text: the selection, its measurements (measured once per
 // selection, m_idleMeasurements) and the selected features' and joints'
 // cards (updateIdleView).
@@ -5696,6 +5781,7 @@ void MainWindow::updateIdleCard() {
   QString text = tr("<b>No command</b><br>Press S to search for a command, or right-click the "
                     "selection for the commands that fit it.");
   QStringList jointCards; // the selected joints' lines of the card (mitcad#523)
+  QStringList sketchBlocks; // the selected sketch items' blocks, logged (mitcad#1741)
   // A failed feature selected on the timeline has no faces to keep in the
   // selection: the timeline's selection alone has a card, with why it
   // failed (mitcad#961).
@@ -5784,7 +5870,8 @@ void MainWindow::updateIdleCard() {
           continue;
         }
       }
-      details << item.describe();
+      // In words (mitcad#1741): the card's tooltip.
+      details << pickListText(item, m_snapshot);
       // A joint: its kind and what each side is on (mitcad#523).
       if (const QString joint = jointCardBlock(item); !joint.isEmpty()) {
         lines << joint;
@@ -5827,8 +5914,13 @@ void MainWindow::updateIdleCard() {
         lines << block;
       } else if (const QString moved = moveFaceCard(item); !moved.isEmpty()) {
         lines << moved; // a Move Face's timeline cell (mitcad#531)
+      } else if (isSketchItem(item.kind)) {
+        // A profile, sketch curve, point, constraint or dimension in words,
+        // with what it measures (mitcad#1741): never its key or id.
+        lines << sketchItemBlock(item);
+        sketchBlocks << lines.last();
       } else if (measurements.isEmpty()) {
-        lines << item.describe().toHtmlEscaped();
+        lines << QStringLiteral("<b>%1</b>").arg(pickListText(item, m_snapshot).toHtmlEscaped());
       } else {
         lines << QStringLiteral("<b>%1</b><br>%2").arg(label.toHtmlEscaped(), measurements);
       }
@@ -5894,6 +5986,18 @@ void MainWindow::updateIdleCard() {
   }
   m_idleInfo->setText(text);
   m_idleInfo->setVisible(!text.isEmpty());
+  // What a person reads of the selected sketch items on it, for UI tests
+  // (mitcad#1741).
+  QString plain = sketchBlocks.join(QStringLiteral("<br>"));
+  plain.replace(QStringLiteral("<br>"), QStringLiteral(" | "));
+  plain.remove(QRegularExpression(QStringLiteral("<[^>]*>")));
+  plain.replace(QStringLiteral("&lt;"), QStringLiteral("<"))
+      .replace(QStringLiteral("&gt;"), QStringLiteral(">"))
+      .replace(QStringLiteral("&amp;"), QStringLiteral("&"));
+  if (plain != m_loggedIdleCard) {
+    m_loggedIdleCard = plain;
+    qDebug().noquote() << QStringLiteral("Idle card sketch items: %1").arg(plain.isEmpty() ? QStringLiteral("none") : plain);
+  }
   // What the card says of the selected joints, for UI tests.
   const QString cards = jointCards.join(QStringLiteral("; "))
                             .remove(QStringLiteral("<b>"))

@@ -25,6 +25,9 @@ QStringList savedAgentFolders();
 void saveAgentFolders(const QStringList& folders);
 // Folders allowed for this run only (--mcp-folder), besides the setting.
 void setRunAgentFolders(const QStringList& folders);
+// Whether this run was started with --mcp-folder: live MCP's input tools
+// (ui_click, ui_type, ui_dialog, mitcad#1735) are only for such a run.
+bool runAgentFoldersGiven();
 // Every allowed folder: the setting's, then this run's.
 QStringList agentFolders();
 

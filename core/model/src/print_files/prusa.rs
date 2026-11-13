@@ -400,13 +400,19 @@ pub(super) fn export(shared: &Shared<'_>, on_plates: bool) -> ExportOutput {
             .or(fallback)
             .unwrap_or_else(|| default.to_owned())
     };
+    // No printer at all: a stand-in the slicer does not know, which the
+    // export says (mitcad#1727).
+    let printer_name = first.and_then(|f| f.printer_name.clone());
+    if printer_name.is_none()
+        && first
+            .and_then(|f| f.dialect_text("printer_settings_id", DIALECT))
+            .is_none()
+    {
+        warnings.push(super::NO_PRINTER_PROFILE.to_owned());
+    }
     lines.insert(
         "printer_settings_id".to_owned(),
-        preset(
-            "printer_settings_id",
-            first.and_then(|f| f.printer_name.clone()),
-            "Mitcad printer",
-        ),
+        preset("printer_settings_id", printer_name, super::STAND_IN_PRINTER),
     );
     lines.insert(
         "print_settings_id".to_owned(),

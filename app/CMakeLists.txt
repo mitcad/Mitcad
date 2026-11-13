@@ -75,6 +75,7 @@ qt_add_executable(mitcad
   framework/Restart.hpp
   framework/Command.cpp
   framework/Command.hpp
+  framework/CommandItemText.cpp
   framework/CommandPresenter.hpp
   framework/CommandMessage.cpp
   framework/CommandMessage.hpp
@@ -260,6 +261,10 @@ qt_add_executable(mitcad
   # The UI tests' sync key (mitcad#15).
   framework/TestSync.cpp
   framework/TestSync.hpp
+  # The UI tests' guard against internal identifiers in visible text
+  # (mitcad#1741).
+  framework/VisibleTextGuard.cpp
+  framework/VisibleTextGuard.hpp
   # Calls after the current event, never during a job (mitcad#888).
   framework/IdleCall.hpp
   platform/WindowsTestSync.hpp
@@ -835,7 +840,11 @@ if(BUILD_TESTING)
   target_sources(test_app PRIVATE sketch/AutoConstraint.cpp sketch/AutoConstraint.hpp sketch/SketchGeometry.cpp)
   # Selection inputs' entries: a click toggles one per region (mitcad#199):
   # plain Qt Core.
-  target_sources(test_app PRIVATE framework/Selection.cpp framework/Selection.hpp)
+  target_sources(test_app PRIVATE framework/Selection.cpp framework/Selection.hpp framework/CommandItemText.cpp)
+  # The visible-text guard's identifiers, rich text and allow-list
+  # (mitcad#1741), and the selection card's words for sketch items.
+  target_sources(test_app PRIVATE tests/visible_text.cpp framework/VisibleTextGuard.cpp
+                                  framework/VisibleTextGuard.hpp)
   # Solid-mode profile groups share the actual selection and an independent hover.
   target_sources(test_app PRIVATE tests/autoselect.cpp framework/AutoselectPanel.cpp framework/AutoselectPanel.hpp)
   # When a navigation of the view ends (mitcad#214): plain C++.
@@ -3194,4 +3203,29 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND BASH_EXECUTABLE)
             "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-macos-window-place")
   set_tests_properties(app.ui-macos-window-place PROPERTIES
     TIMEOUT 600 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# Live MCP's input tools (mitcad#1735, docs/mcp.md "Clicks, keys and
+# dialogs"): ui_click and ui_type post mouse and key events to the window,
+# ui_dialog opens a window ui_command refuses for viewing, reads it and
+# closes it; only in a run started with --mcp-folder.
+target_sources(mitcad PRIVATE MainWindowMcpInput.cpp mcp/DialogWatch.cpp mcp/DialogWatch.hpp
+               mcp/UiKeys.cpp mcp/UiKeys.hpp)
+if(BUILD_TESTING)
+  # Key names and Unicode text as key presses: plain Qt Gui.
+  target_sources(test_app PRIVATE tests/ui_keys.cpp mcp/UiKeys.cpp mcp/UiKeys.hpp)
+endif()
+# Preferences › Display › Origin planes and the resize handles of
+# construction planes and axes (mitcad#1748, GitHub mitcad/Mitcad#273 and
+# #279, app/COMMANDS.md "Origin planes and the size of construction
+# geometry"): the origin at a size on the screen or in millimetres, in the
+# Corner or Centred style; a selected construction plane's or axis's
+# handles set the size the model keeps with it (set_datum_display_size).
+target_sources(mitcad PRIVATE view/OriginPreference.cpp view/OriginPreference.hpp view/DatumHandles.cpp
+                              view/DatumHandles.hpp MainWindowOrigin.cpp)
+if(BUILD_TESTING)
+  # The settings' load and save, and the shapes each style draws: Qt Core
+  # and OCCT's shape building.
+  target_sources(test_app PRIVATE tests/origin_preference.cpp view/OriginPreference.cpp view/OriginPreference.hpp)
+  target_link_libraries(test_app PRIVATE TKTopAlgo TKBRep)
 endif()

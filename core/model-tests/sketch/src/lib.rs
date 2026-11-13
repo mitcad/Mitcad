@@ -78,3 +78,8 @@ mod sketch_move_hold_1645_tests;
 mod sketch_whole_messages_1626_tests;
 // The sketch query's creation order of a sketch's items (mitcad#1492).
 mod sketch_order_1492_tests;
+// An SVG drawing with a DOCTYPE, and the limits on its entities
+// (mitcad#1721).
+mod sketch_svg_doctype_1721_tests;
+// The work steps that made a sketch's items (mitcad#1750).
+mod sketch_steps_1750_tests;

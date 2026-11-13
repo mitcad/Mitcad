@@ -28,10 +28,12 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::library_items::profile_title;
+use super::materials::MaterialSource;
 use super::{DocState, Document, InstanceView, ModelError, invalid};
 use crate::ids::{BodyUid, ComponentUid, OccurrenceUid};
 use crate::kernel::Kernel;
 use crate::material::{DEFAULT_MATERIAL, Material, VariantMatch};
+use crate::print_analysis::DEFAULT_MATERIAL as PRINT_DEFAULT_MATERIAL;
 use crate::print_keys::{self, Dialect, KeyDef, PrintSet};
 use crate::print_library::{BasedOn, ItemData, ItemKind};
 use crate::print_profile::{
@@ -817,9 +819,35 @@ impl<K: Kernel> Document<K> {
         self.print_profile(id.trim()).filter(|p| p.kind == kind)
     }
 
+    /// The material a body prints with and its appearance: its own or a
+    /// component's default with [`Self::body_look`]; a body without either
+    /// prints as the print default (mitcad#1727: PLA, the material print
+    /// analysis assumes, not the design's default steel), in its own
+    /// appearance where it has one, else PLA's.
+    fn body_print_material(
+        &self,
+        body: BodyUid,
+        path: Option<&[OccurrenceUid]>,
+    ) -> (&Material, Option<&str>) {
+        let (material, source) = self.body_material(body, path);
+        if source != MaterialSource::Default {
+            return (material, self.body_look(body, path));
+        }
+        let Some(print) = self.material(PRINT_DEFAULT_MATERIAL) else {
+            return (material, self.body_look(body, path));
+        };
+        let own = self
+            .state
+            .body_attributes
+            .get(&body)
+            .and_then(|a| a.appearance.as_deref());
+        (print, own.or(print.appearance.as_deref()))
+    }
+
     /// The material of the nearest component level that has a default,
-    /// else the built-in default, with that component's appearance
-    /// (mitcad#1055; none: the material's default).
+    /// else the print default (mitcad#1727: PLA, not the design's default
+    /// steel), with that component's appearance (mitcad#1055; none: the
+    /// material's default).
     fn levels_material(&self, levels: &[PropertyOwner]) -> (&Material, Option<&str>) {
         levels
             .iter()
@@ -832,6 +860,7 @@ impl<K: Kernel> Document<K> {
                     .and_then(|id| self.material(id))
                     .map(|m| (m, self.component_appearance(c)))
             })
+            .or_else(|| self.material(PRINT_DEFAULT_MATERIAL).map(|m| (m, None)))
             .or_else(|| self.material(DEFAULT_MATERIAL).map(|m| (m, None)))
             .expect("the default material is built in")
     }
@@ -1003,12 +1032,9 @@ impl<K: Kernel> Document<K> {
             }
         }
         // The filament: the body's material, else the nearest component's
-        // default.
+        // default, else the print default (mitcad#1727).
         let (material, look) = match target {
-            PrintTarget::Body(body, path) => (
-                self.body_material(*body, path.as_deref()).0,
-                self.body_look(*body, path.as_deref()),
-            ),
+            PrintTarget::Body(body, path) => self.body_print_material(*body, path.as_deref()),
             _ => {
                 let (material, own) = self.levels_material(&levels);
                 (material, own.or(material.appearance.as_deref()))

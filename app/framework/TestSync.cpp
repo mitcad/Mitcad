@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "framework/TestSync.hpp"
 
+#include "framework/VisibleTextGuard.hpp"
 #include "platform/WindowsTestSync.hpp"
 
 #include <QCoreApplication>
@@ -161,6 +162,11 @@ void TestSync::poll() {
                                    [](const QPointer<QTimer>& timer) { return timer && timer->isActive(); });
   if (m_last.elapsed() < kSettleMs || (running && m_since.elapsed() < kLongestMs)) {
     return;
+  }
+  // The texts a person sees now, checked for internal identifiers before
+  // the step's sync is answered (mitcad#1741; nothing without the guard).
+  if (m_answered < m_count) {
+    VisibleTextGuard::check();
   }
   while (m_answered < m_count) {
     qDebug().noquote() << QStringLiteral("Sync %1").arg(++m_answered);

@@ -8,8 +8,9 @@ use std::fmt::Write;
 use serde_json::Value;
 
 use crate::{
-    BodyGeometry, DesignDiff, FieldChange, Kind, Measure, ParameterChange, ParameterState,
-    SketchChange, SketchItems, ValueChange, motion, number, scalars,
+    BodyGeometry, DesignDiff, FeatureChange, FieldChange, ItemChange, Kind, Measure,
+    ParameterChange, ParameterState, SketchChange, SketchItems, ValueChange, motion, number,
+    scalars,
 };
 use mitcad_model::expr::format_number;
 use mitcad_model::ids::{BodyUid, FeatureUid};
@@ -434,7 +435,23 @@ fn counts(parts: &mut Vec<String>, kinds: &[Kind], one: &str, many: &str, change
 
 /// The summary: `d3 20 mm -> 25 mm, +1 feature, 2 features modified`.
 pub(super) fn summary(diff: &DesignDiff) -> String {
-    let mut parts: Vec<String> = diff.document.iter().map(|c| c.text.clone()).collect();
+    summary_of(diff, false)
+}
+
+/// The summary, for a person without the ids of the document's fields
+/// when `plain` (mitcad#1741).
+fn summary_of(diff: &DesignDiff, plain: bool) -> String {
+    let mut parts: Vec<String> = diff
+        .document
+        .iter()
+        .map(|c| {
+            if plain {
+                plain_field(c)
+            } else {
+                c.text.clone()
+            }
+        })
+        .collect();
     let kinds: Vec<Kind> = diff.parameters.iter().map(|p| p.kind).collect();
     let changed: Vec<&ParameterChange> = diff
         .parameters
@@ -497,15 +514,224 @@ pub(super) fn summary(diff: &DesignDiff) -> String {
     }
 }
 
+// For a person (mitcad#1741, `docs/ui-conventions.md` "What a text says"):
+// the same lines without internal names and ids. Items are named by their
+// names; a field whose values name ids says only that it changed; a
+// sketch counts its items.
+
+/// Whether `text` names something by an internal name or id: a
+/// topological name, a region key, a sketch's or a feature's id
+/// ([`mitcad_model::notice::user_text_leaks`]), or a component's or an
+/// occurrence's (`C2`, `O1`).
+fn names_ids(text: &str) -> bool {
+    if mitcad_model::notice::user_text_leaks(text).is_some() {
+        return true;
+    }
+    let bytes = text.as_bytes();
+    let word = |i: usize| i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_');
+    (0..bytes.len()).any(|i| {
+        matches!(bytes[i], b'C' | b'O') && (i == 0 || !word(i - 1)) && {
+            let mut end = i + 1;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                end += 1;
+            }
+            end > i + 1 && !word(end)
+        }
+    })
+}
+
+/// A field's path in words: `profiles[0].region` -> `profiles region`.
+fn field_words(field: &str) -> String {
+    let mut words = String::new();
+    let mut depth = 0;
+    for c in field.chars() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth -= 1,
+            _ if depth > 0 => {}
+            '.' | '_' => words.push(' '),
+            _ => words.push(c),
+        }
+    }
+    words.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A field change for a person: its line, or that the field changed when
+/// its values name ids.
+fn plain_field(f: &FieldChange) -> String {
+    if names_ids(&f.text) {
+        format!("{} changed", field_words(&f.field))
+    } else {
+        f.text.clone()
+    }
+}
+
+/// A value change for a person: by its parameter where its label names a
+/// sketch's item (`k5 length`).
+fn plain_value(v: &ValueChange) -> String {
+    if names_ids(&v.label) {
+        format!("{} {} -> {}", v.to_parameter, v.from_text, v.to_text)
+    } else {
+        v.text.clone()
+    }
+}
+
+/// A sketch's changes counted: `entities 8 -> 10 (2 added), constraints 4
+/// (1 changed), 2 entities moved`.
+fn plain_sketch(sketch: &SketchChange) -> String {
+    let mut parts = Vec::new();
+    for (what, items) in [
+        ("entities", &sketch.entities),
+        ("constraints", &sketch.constraints),
+        ("dimensions", &sketch.dimensions),
+    ] {
+        if items.is_empty() {
+            continue;
+        }
+        let mut part = if items.from == items.to {
+            format!("{what} {}", items.to)
+        } else {
+            format!("{what} {} -> {}", items.from, items.to)
+        };
+        let details: Vec<String> = [
+            ("added", items.added.len()),
+            ("deleted", items.deleted.len()),
+            ("changed", items.modified.len()),
+        ]
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(how, count)| format!("{count} {how}"))
+        .collect();
+        if !details.is_empty() {
+            let _ = write!(part, " ({})", details.join(", "));
+        }
+        parts.push(part);
+    }
+    if !sketch.moved.is_empty() {
+        parts.push(format!(
+            "{} moved",
+            plural(sketch.moved.len(), "entity", "entities")
+        ));
+    }
+    parts.join(", ")
+}
+
+/// `text` without the uid after the name at its start: `Extrude1 (F2):`
+/// -> `Extrude1:`, `Fillet1 (F3, fillet):` -> `Fillet1 (fillet):`.
+fn without_uid(text: &str, name: &str, uid: &str) -> String {
+    if let Some(rest) = text.strip_prefix(&format!("{name} ({uid}, ")) {
+        format!("{name} ({rest}")
+    } else if let Some(rest) = text.strip_prefix(&format!("{name} ({uid})")) {
+        format!("{name}{rest}")
+    } else {
+        text.to_owned()
+    }
+}
+
+/// Lines without repeats, in their order (a definition's fields that each
+/// say "profiles changed").
+fn unique(parts: Vec<String>) -> Vec<String> {
+    let mut seen = Vec::new();
+    for part in parts {
+        if !seen.contains(&part) {
+            seen.push(part);
+        }
+    }
+    seen
+}
+
+/// A feature's line for a person.
+fn plain_feature(f: &FeatureChange) -> String {
+    let text = without_uid(&f.text, &f.name, &f.uid.to_string());
+    if !names_ids(&text) || matches!(f.kind, Kind::Added | Kind::Deleted) {
+        return text;
+    }
+    let (entry, def): (Vec<&FieldChange>, Vec<&FieldChange>) = f
+        .fields
+        .iter()
+        .partition(|field| ENTRY_FIELDS.contains(&field.field.as_str()));
+    let mut parts: Vec<String> = entry.into_iter().map(plain_field).collect();
+    parts.extend(f.values.iter().map(plain_value));
+    parts.extend(def.into_iter().map(plain_field));
+    if let Some(sketch) = &f.sketch {
+        let counted = plain_sketch(sketch);
+        if !counted.is_empty() {
+            parts.push(counted);
+        }
+    }
+    // Where it moved to: the last part of its line, by name.
+    if f.moved
+        && let Some(moved) = f.text.rsplit("; ").next().and_then(|last| {
+            let last = last.rsplit_once("): ").map_or(last, |(_, rest)| rest);
+            last.starts_with("moved ").then(|| last.to_owned())
+        })
+    {
+        parts.push(moved);
+    }
+    format!("{}: {}", f.name, unique(parts).join("; "))
+}
+
+/// A component's, occurrence's, body's or other item's line for a person.
+fn plain_item(item: &ItemChange) -> String {
+    let text = match &item.uid {
+        Some(uid) => without_uid(&item.text, &item.name, uid),
+        None => item.text.clone(),
+    };
+    if !names_ids(&text) {
+        return text;
+    }
+    let what = match item.kind {
+        Kind::Added => "added".to_owned(),
+        Kind::Deleted => "deleted".to_owned(),
+        _ => unique(item.fields.iter().map(plain_field).collect()).join("; "),
+    };
+    format!("{}: {what}", item.name)
+}
+
+/// A parameter's line for a person.
+fn plain_parameter(p: &ParameterChange) -> String {
+    if names_ids(&p.text) && !names_ids(&p.name) {
+        format!("{}: changed", p.name)
+    } else {
+        p.text.clone()
+    }
+}
+
 impl DesignDiff {
     /// The differences for people (`mitcad-cli diff`): the summary, then a
     /// line per change by section.
     pub fn to_text(&self) -> String {
+        self.render(false)
+    }
+
+    /// The same for a person in the application (mitcad#1741, the Version
+    /// History window): features, bodies and the rest by their names, a
+    /// sketch's items counted, a field whose values name internal ids
+    /// (references, region keys) only as changed; no topological names,
+    /// region keys or ids. [`DesignDiff::to_text`] stays the agents' and
+    /// the CLI's.
+    pub fn to_plain_text(&self) -> String {
+        self.render(true)
+    }
+
+    /// The summary for a person (mitcad#1741): [`DesignDiff::summary`]
+    /// with the document's fields as [`DesignDiff::to_plain_text`] says
+    /// them.
+    pub fn plain_summary(&self) -> String {
+        summary_of(self, true)
+    }
+
+    fn render(&self, plain: bool) -> String {
         if self.identical {
             return "No differences\n".to_owned();
         }
-        let mut out = format!("Summary: {}\n", self.summary);
-        let mut section = |title: &str, lines: Vec<&str>| {
+        let summary = if plain {
+            self.plain_summary()
+        } else {
+            self.summary.clone()
+        };
+        let mut out = format!("Summary: {summary}\n");
+        let mut section = |title: &str, lines: Vec<String>| {
             if !lines.is_empty() {
                 let _ = writeln!(out, "{title}:");
                 for line in lines {
@@ -513,17 +739,39 @@ impl DesignDiff {
                 }
             }
         };
-        section(
-            "Document",
-            self.document.iter().map(|c| c.text.as_str()).collect(),
-        );
+        let field = |c: &FieldChange| {
+            if plain {
+                plain_field(c)
+            } else {
+                c.text.clone()
+            }
+        };
+        section("Document", self.document.iter().map(field).collect());
         section(
             "Parameters",
-            self.parameters.iter().map(|c| c.text.as_str()).collect(),
+            self.parameters
+                .iter()
+                .map(|p| {
+                    if plain {
+                        plain_parameter(p)
+                    } else {
+                        p.text.clone()
+                    }
+                })
+                .collect(),
         );
         section(
             "Timeline",
-            self.features.iter().map(|c| c.text.as_str()).collect(),
+            self.features
+                .iter()
+                .map(|f| {
+                    if plain {
+                        plain_feature(f)
+                    } else {
+                        f.text.clone()
+                    }
+                })
+                .collect(),
         );
         for (title, items) in [
             ("Components", &self.components),
@@ -540,13 +788,25 @@ impl DesignDiff {
             ("Drawings", &self.drawings),
             ("Tables", &self.tables),
         ] {
-            section(title, items.iter().map(|c| c.text.as_str()).collect());
+            section(
+                title,
+                items
+                    .iter()
+                    .map(|c| if plain { plain_item(c) } else { c.text.clone() })
+                    .collect(),
+            );
         }
         if let Some(geometry) = &self.geometry {
             let _ = writeln!(out, "Geometry:");
             for body in &geometry.bodies {
-                let BodyGeometry { text, .. } = body;
-                let _ = writeln!(out, "  {text}");
+                let BodyGeometry {
+                    text, uid, name, ..
+                } = body;
+                if plain {
+                    let _ = writeln!(out, "  {}", without_uid(text, name, &uid.to_string()));
+                } else {
+                    let _ = writeln!(out, "  {text}");
+                }
             }
             let totals: Vec<String> = [
                 measure("volume", &geometry.volume, "mm^3"),
@@ -573,7 +833,15 @@ impl DesignDiff {
                 let _ = writeln!(out, "  Total: {}", totals.join("; "));
             }
             for error in &geometry.errors {
-                let _ = writeln!(out, "  warning: {error}");
+                if plain {
+                    let _ = writeln!(
+                        out,
+                        "  warning: {}",
+                        mitcad_model::notice::user_message(error)
+                    );
+                } else {
+                    let _ = writeln!(out, "  warning: {error}");
+                }
             }
         }
         out

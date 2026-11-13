@@ -207,7 +207,7 @@ void registerSketchPlaneCommands(CommandRegistry& registry, sketch::SketchContro
     const Selection& planes = s.items(kPlane);
     QString text = QStringLiteral("Redefined the plane of %1: %2")
                        .arg(context.featureName(uid),
-                            planes.isEmpty() ? QStringLiteral("the same plane") : planes.first().describe());
+                            planes.isEmpty() ? QStringLiteral("the same plane") : planes.first().logDescription());
     QStringList values;
     for (const PlacementValue& value : kValues) {
       const QString id = QString::fromLatin1(value.id);

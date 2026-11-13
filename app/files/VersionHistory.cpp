@@ -427,7 +427,10 @@ void VersionHistoryDialog::compare() {
                                 {QStringLiteral("path"), m_file},
                                 {QStringLiteral("from"), older->id},
                                 {QStringLiteral("to"), version->id}};
-      text = parseObject(project->command(rustStr(compactJson(command)))).value(QStringLiteral("text")).toString();
+      // For a person (mitcad#1741): names, no internal ids; `text` is the
+      // agents'.
+      const QJsonObject answer = parseObject(project->command(rustStr(compactJson(command))));
+      text = answer.value(QStringLiteral("plain_text")).toString(answer.value(QStringLiteral("text")).toString());
     } catch (const std::exception& e) {
       text = tr("Could not compare them: %1").arg(errorText(e));
     }

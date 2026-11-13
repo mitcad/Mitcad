@@ -1,0 +1,68 @@
+[
+  {"comment": "Where a new joint puts its moving side, its Offset, and a drag along its free motions (mitcad#1745, from a reported roller assembly reduced to three cylinders). Wheel (C1, Wheel:1 O1, grounded): a cylinder of diameter 60 and height 20 on the origin, Cylinder1 F1 (Body1)."},
+  {"cmd": "create_component", "name": "Wheel"},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [0, 0],
+    "diameter": 60, "height": 20, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "ground_occurrence", "occurrence": "Wheel:1"},
+
+  {"comment": "Shaft (C2, Shaft:1 O2 at x = 100): a cylinder of diameter 20 and height 800, Cylinder2 F2 (Body2)."},
+  {"cmd": "create_component", "name": "Shaft", "transform": {"translation": [100, 0, 0]}},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [0, 0],
+    "diameter": 20, "height": 800, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"},
+
+  {"comment": "Bearing (C3, Bearing:1 O3): a cylinder of diameter 40 and height 10, Cylinder3 F3 (Body3), placed away from both by a move in the timeline (Move1 F4), as the reported bearing was."},
+  {"cmd": "create_component", "name": "Bearing"},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [0, 0],
+    "diameter": 40, "height": 10, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "add_feature", "def": {"type": "move_occurrence", "occurrences": ["O3"],
+    "transform": {"type": "translate_xyz", "x": 200, "y": -150, "z": 40}}},
+  {"expect": {"occurrence": "Bearing:1", "body": "Body3", "center": [200, -150, 45], "tolerance": 1e-6}},
+
+  {"comment": "Joint1 F5: the shaft turns in the wheel (revolute, the shaft's side on the wheel's top circle). The wheel is grounded, so the shaft moves onto its axis; without start values its turn stays nearest to where it is, and its middle (the origin of its side) stands on the wheel's top circle."},
+  {"cmd": "add_joint", "kind": "revolute",
+    "a": {"occurrence": "Shaft:1", "geometry": {"body": "F2.b0", "face": "F2:side0"}},
+    "b": {"occurrence": "Wheel:1", "geometry": {"body": "F1.b0", "edge": "E{F1:side0|F1:top}"}}},
+  {"expect": {"occurrence": "Shaft:1", "body": "Body2", "center": [0, 0, 20], "tolerance": 1e-6}},
+
+  {"comment": "Joint2 F6, as the Joint command makes it: the shaft's side (origin A) and the bearing's bottom (origin B), cylindrical, Offset 300 mm (the parameter bearing_offset), Flip, its free motions starting at 0. The shaft is held by the grounded wheel, so the bearing moves: its bottom's middle goes onto the shaft's axis, 300 mm from the shaft's middle, and not where it was nearest."},
+  {"cmd": "add_parameter", "name": "bearing_offset", "expression": "300 mm"},
+  {"cmd": "add_joint", "kind": "cylindrical", "flip": true, "offset": "bearing_offset",
+    "a": {"occurrence": "Shaft:1", "geometry": {"body": "F2.b0", "face": "F2:side0"}},
+    "b": {"occurrence": "Bearing:1", "geometry": {"body": "F3.b0", "face": "F3:bottom"}},
+    "start": {"tz": 0, "rz": 0}},
+  {"expect": {"query": {"query": "joints"}, "result": {"joints": [
+    {"name": "Joint1", "state": "placed", "solved": true},
+    {"name": "Joint2", "state": "placed", "solved": true, "moved": ["O3"], "values": {"tz": 0, "rz": 0},
+     "frames": {"a": {"origin": [0, 0, 20]}, "b": {"origin": [0, 0, 320], "z_axis": [0, 0, -1]}}}]}}},
+  {"expect": {"occurrence": "Bearing:1", "body": "Body3", "center": [0, 0, 325], "tolerance": 1e-6}},
+
+  {"comment": "A new Offset moves the bearing by its change."},
+  {"cmd": "set_parameter", "name": "bearing_offset", "expression": "250 mm"},
+  {"expect": {"occurrence": "Bearing:1", "body": "Body3", "center": [0, 0, 275], "tolerance": 1e-6}},
+  {"expect": {"occurrence": "Shaft:1", "body": "Body2", "center": [0, 0, 20], "tolerance": 1e-6}},
+
+  {"comment": "A drag of the bearing 100 mm along the shaft's axis: kept where it is dropped (the joint's start value of tz becomes 100), although Move1 places the bearing before the joint; the shaft stays."},
+  {"cmd": "drag_occurrence", "occurrence": "Bearing:1", "point": [0, 0, 270], "target": [0, 0, 370]},
+  {"expect": {"occurrence": "Bearing:1", "body": "Body3", "center": [0, 0, 375], "tolerance": 1e-6}},
+  {"expect": {"occurrence": "Shaft:1", "body": "Body2", "center": [0, 0, 20], "tolerance": 1e-6}},
+  {"expect": {"query": {"query": "feature", "uid": "F6"}, "result": {"def": {"start": {"tz": 100}}}, "tolerance": 1e-6}},
+  {"expect": {"query": {"query": "joints"}, "result": {"joints": [
+    {"name": "Joint1"}, {"name": "Joint2", "solved": true, "values": {"tz": 100}}]}, "tolerance": 1e-6}},
+
+  {"comment": "Recomputed again (undone and redone), the bearing stays where the drag left it; a new Offset moves it from there."},
+  {"cmd": "undo"},
+  {"expect": {"occurrence": "Bearing:1", "body": "Body3", "center": [0, 0, 275], "tolerance": 1e-6}},
+  {"cmd": "redo"},
+  {"expect": {"occurrence": "Bearing:1", "body": "Body3", "center": [0, 0, 375], "tolerance": 1e-6}},
+  {"cmd": "set_parameter", "name": "bearing_offset", "expression": "300 mm"},
+  {"expect": {"occurrence": "Bearing:1", "body": "Body3", "center": [0, 0, 425], "tolerance": 1e-6}},
+
+  {"comment": "Without start values (as joints of older designs and imports), the cylindrical joint keeps its free motions nearest to where the bearing is: the offset then only shifts its slide value, and the bearing stays on the axis where it was."},
+  {"cmd": "edit_feature", "uid": "F6", "def": {"type": "joint", "kind": "cylindrical", "flip": true, "offset": "bearing_offset",
+    "a": {"occurrence": "O2", "geometry": {"body": "F2.b0", "face": "F2:side0"}},
+    "b": {"occurrence": "O3", "geometry": {"body": "F3.b0", "face": "F3:bottom"}}}},
+  {"expect": {"occurrence": "Bearing:1", "body": "Body3", "center": [0, 0, 45], "tolerance": 1e-6}}
+]

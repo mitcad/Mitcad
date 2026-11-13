@@ -18,6 +18,10 @@ struct Options {
     /// Also the bodies' volumes and areas, as last computed.
     #[serde(default)]
     geometry: bool,
+    /// The text for a person (`DesignDiff::to_plain_text`, mitcad#1741:
+    /// names, no internal ids), as the Version History window shows it.
+    #[serde(default)]
+    plain: bool,
     /// Names of the two designs (files, versions) for the answer, and the
     /// design file whose versions they are; `to` None with `path`: the
     /// file as saved.
@@ -39,7 +43,11 @@ pub fn diff_documents(from: &Document, to: &Document, json: &str) -> Result<Stri
     if options.geometry {
         diff.add_geometry(&from.0, &to.0);
     }
-    let text = diff.to_text();
+    let text = if options.plain {
+        diff.to_plain_text()
+    } else {
+        diff.to_text()
+    };
     if options.text {
         // The heading of the version history's `diff` command.
         let to = options.to.as_deref();

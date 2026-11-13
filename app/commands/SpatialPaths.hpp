@@ -63,5 +63,10 @@ QStringList wholeRoute(const QJsonObject& sketch3d, QString* why = nullptr);
 // from p1)" or "c7 (closed)"; for curves that are no path, "Not one path".
 // The model's reason is in `why`.
 QString routeText(const QJsonObject& route, QString* why = nullptr);
+// The same route in words, as the panel shows it (mitcad#1741): its number
+// of curves and its sketch's name, "5 curves of 3DSketch1", a closed one
+// "3 curves of 3DSketch1, closed"; "Not one path". Never a curve's or a
+// point's id: routeText is the log's.
+QString routeWords(const QJsonObject& route, const QString& sketchName);
 
 } // namespace mitcad::cmd

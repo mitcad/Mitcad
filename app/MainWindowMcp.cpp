@@ -119,8 +119,9 @@ QString MainWindow::mcpBlockedReason(bool editing) const {
   if (!m_import.isNull()) {
     return QStringLiteral("An import is running; retry when it has finished.");
   }
-  if (m_closePending || QApplication::activeModalWidget() != nullptr) {
-    return QStringLiteral("The design is closing or waiting for a dialog.");
+  const QString dialog = mcpDialogReason();
+  if (!dialog.isEmpty()) {
+    return dialog;
   }
 #ifdef MITCAD_MACOS_NATIVE_UI
   if (m_nativeForm || m_nativeClosingCommand || nativeDialogModalActive() ||
@@ -132,6 +133,16 @@ QString MainWindow::mcpBlockedReason(bool editing) const {
     return readOnlyReason();
   }
   return QString();
+}
+
+QString MainWindow::mcpDialogReason() const {
+  if (m_closePending) {
+    return QStringLiteral("The design is closing.");
+  }
+  // An agent cannot answer a dialog that is open (mitcad#1725): the
+  // refusal names it, and the recovery question at start-up says how to
+  // start without it.
+  return mcp::dialogRefusal();
 }
 
 QJsonObject MainWindow::mcpDocumentInfo() const {
@@ -439,8 +450,8 @@ QJsonObject MainWindow::mcpExport(const QJsonObject& arguments) {
     // are not the design's.
     refuse(QStringLiteral("Finish the sketch before exporting: editing it rolls the later features back."));
   }
-  if (m_closePending || QApplication::activeModalWidget() != nullptr) {
-    refuse(QStringLiteral("The design is closing or waiting for a dialog."));
+  if (const QString waiting = mcpDialogReason(); !waiting.isEmpty()) {
+    refuse(waiting);
   }
   // An existing file only with overwrite (mitcad#1569), as document_save's.
   const bool overwrite = arguments.value(QStringLiteral("overwrite")).toBool(false);
@@ -548,8 +559,8 @@ QJsonObject MainWindow::mcpSave(const QJsonObject& arguments) {
   if (m_session || m_mode == Mode::Command) {
     refuse(QStringLiteral("Finish the current command before saving."));
   }
-  if (m_closePending || QApplication::activeModalWidget() != nullptr) {
-    refuse(QStringLiteral("The design is closing or waiting for a dialog."));
+  if (const QString waiting = mcpDialogReason(); !waiting.isEmpty()) {
+    refuse(waiting);
   }
   if (windowReadOnly()) {
     refuse(readOnlyReason());
@@ -666,8 +677,8 @@ QJsonObject MainWindow::mcpNew(const QJsonObject& arguments) {
   if (m_windowManager == nullptr) {
     refuse(QStringLiteral("This window cannot open another design beside it."));
   }
-  if (m_closePending || QApplication::activeModalWidget() != nullptr) {
-    refuse(QStringLiteral("The design is closing or waiting for a dialog."));
+  if (const QString waiting = mcpDialogReason(); !waiting.isEmpty()) {
+    refuse(waiting);
   }
 #ifdef MITCAD_MACOS_NATIVE_UI
   if (nativeDialogModalActive()) {
@@ -915,6 +926,17 @@ QJsonObject MainWindow::mcpTool(const QString& name, const QJsonObject& argument
   // A new design beside this one (mitcad#1266).
   if (name == QStringLiteral("document_new")) {
     return mcpNew(arguments);
+  }
+  // Clicks, keys and dialogs for viewing (mitcad#1735), only in a run
+  // started with --mcp-folder.
+  if (name == QStringLiteral("ui_click")) {
+    return mcpClick(arguments);
+  }
+  if (name == QStringLiteral("ui_type")) {
+    return mcpType(arguments);
+  }
+  if (name == QStringLiteral("ui_dialog")) {
+    return mcpDialog(arguments);
   }
   throw std::runtime_error("Unknown live document tool");
 }

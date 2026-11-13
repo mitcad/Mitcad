@@ -1513,7 +1513,7 @@ void takeWholeRoute(const SelectionItem& item, CommandState& state, const Comman
 }
 
 QString spatialRouteListing(const Selection& items, bool chain, bool reversed, const CommandContext& context,
-                            const QString& id) {
+                            const QString& id, QString* words) {
   // A whole 3D sketch picked: its route.
   if (items.size() == 1 && wholeSketchPick(items.first())) {
     const QJsonObject sketch = spatialSketchOf(items.first().owner, context);
@@ -1523,7 +1523,7 @@ QString spatialRouteListing(const Selection& items, bool chain, bool reversed, c
       for (const QString& curve : route) {
         curves.append({SelectKind::SketchCurve, items.first().owner, curve, QString()});
       }
-      return spatialRouteListing(curves, false, reversed, context, id);
+      return spatialRouteListing(curves, false, reversed, context, id, words);
     }
   }
   const QString sketch = spatialOwner(items, context);
@@ -1537,7 +1537,13 @@ QString spatialRouteListing(const Selection& items, bool chain, bool reversed, c
     const QJsonObject answer = context.queryObject(
         {{QStringLiteral("query"), QStringLiteral("sketch3d")}, {QStringLiteral("uid"), sketch}, {QStringLiteral("path"), path}});
     QString why;
-    const QString text = routeText(answer.value(QStringLiteral("route")).toObject(), &why);
+    const QJsonObject route = answer.value(QStringLiteral("route")).toObject();
+    const QString text = routeText(route, &why);
+    if (words != nullptr) {
+      // For the panel (mitcad#1741), and logged once by the listing.
+      *words = routeWords(route, context.featureName(sketch) == sketch ? QString() : context.featureName(sketch));
+      return text;
+    }
     if (!why.isEmpty()) {
       qDebug().noquote() << QStringLiteral("Path %1 of %2 is not one path: %3").arg(id, sketch, why);
     }

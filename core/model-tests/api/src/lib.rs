@@ -75,3 +75,9 @@ mod sketch3d_relations_tests;
 mod sketch3d_clipboard_tests;
 // The `bodies` query's last feature of each body (mitcad#1704).
 mod body_last_features_tests;
+// The `parameter_range` query: the design at a parameter's limits on a copy
+// (mitcad#1730).
+mod parameter_range_tests;
+// How large construction planes and axes are drawn: their resize handles' size
+// (mitcad#1748).
+mod datum_display_size_tests;

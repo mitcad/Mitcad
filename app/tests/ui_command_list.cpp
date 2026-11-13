@@ -139,5 +139,25 @@ int uiCommandListTests() {
   mitcad::CommandRegistry empty;
   CHECK(mitcad::mcp::nearestCommandsText(empty, QStringLiteral("file.new")).startsWith(
       QStringLiteral("ui_command with search")));
+
+  // ui_dialog's windows for viewing (mitcad#1735): those ui_command refuses
+  // for a dialog, except files and other applications.
+  const auto viewed = [](const char* id) { return mitcad::mcp::dialogViewRefusal(QString::fromLatin1(id)).isEmpty(); };
+  CHECK(viewed("solid.parameters"));
+  CHECK(viewed("sketch.parameters"));
+  CHECK(viewed("make.print3d"));
+  CHECK(viewed("tools.preferences"));
+  CHECK(viewed("view.grid_settings"));
+  CHECK(!viewed("solid.extrude"));
+  CHECK(mitcad::mcp::dialogViewRefusal(QStringLiteral("solid.extrude")).contains(QStringLiteral("ui_command")));
+  CHECK(!viewed("file.open"));
+  CHECK(!viewed("file.save_as"));
+  CHECK(!viewed("insert.dxf"));
+  CHECK(!viewed("sketch.import_dxf"));
+  CHECK(!viewed("sketch.insert_svg"));
+  CHECK(!viewed("sheet.export_dxf"));
+  CHECK(!viewed("tools.publish_library"));
+  CHECK(!viewed("help.user_guide"));
+  CHECK(mitcad::mcp::dialogViewRefusal(QStringLiteral("file.export")).contains(QStringLiteral("files")));
   return failures;
 }

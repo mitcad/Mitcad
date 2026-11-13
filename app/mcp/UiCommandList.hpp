@@ -25,6 +25,13 @@ namespace mcp {
 // refused.
 bool opensDialog(const QString& id);
 
+// Why ui_dialog does not open a command's window for viewing (mitcad#1735),
+// empty when it does: only the commands ui_command refuses for their
+// dialog or window (opensDialog), except those that read or write files
+// (file.*, insert.*, imports, exports, a library's publishing) or start
+// another application (help.*: the browser, the file manager, mail).
+QString dialogViewRefusal(const QString& id);
+
 // The registry's ids nearest `wanted`, best first, at most `count`: those
 // that share the most of its words (split at '.', '_', '-' and spaces, in
 // the id or the name, any case), then by the fewest edits between the

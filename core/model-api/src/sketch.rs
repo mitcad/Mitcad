@@ -1094,6 +1094,43 @@ pub(super) fn with_shown_texts(mut value: Value) -> Value {
     value
 }
 
+/// The kind of the work step a `sketch.*` command records (mitcad#1750):
+/// its name without `sketch.` (`rectangle`, `project`, `fillet`), and
+/// `intersect` for a `sketch.project` with `section`.
+pub(super) fn step_kind(command: &Value) -> Option<String> {
+    let name = command["cmd"].as_str()?.strip_prefix("sketch.")?;
+    if name == "project" && command["section"].as_bool() == Some(true) {
+        return Some("intersect".to_owned());
+    }
+    Some(name.to_owned())
+}
+
+/// The curves a `sketch.*` command changes that its work step names as
+/// `changed` (mitcad#1750): a `sketch.trim`'s or `sketch.extend`'s
+/// `curve`. They stay with the step that made them.
+pub(super) fn step_changes(command: &Value) -> Vec<EntityUid> {
+    let name = command["cmd"].as_str().unwrap_or_default();
+    if name != "sketch.trim" && name != "sketch.extend" {
+        return Vec::new();
+    }
+    command["curve"]
+        .as_str()
+        .and_then(|curve| EntityUid::parse_curve(curve).ok())
+        .into_iter()
+        .collect()
+}
+
+/// A sketch command's answer with the work step its edits recorded
+/// (mitcad#1750): `"step": "s3"`.
+pub(super) fn with_step(mut answer: Value, step: Option<(FeatureUid, u32)>) -> Value {
+    if let Some((_, id)) = step
+        && answer.is_object()
+    {
+        answer["step"] = json!(format!("s{id}"));
+    }
+    answer
+}
+
 /// The result of an edit: what it made and the sketch's status.
 pub(super) fn report_json(report: &EditReport, def: Option<&SketchDef>) -> Value {
     let texts: Vec<String> = report.texts.iter().map(|t| format!("t{}", t.0)).collect();
@@ -1591,6 +1628,11 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
                             .collect();
                         let mut value = json!({"key": r.profile.key, "area": r.area,
                                                "centroid": r.centroid, "loops": loops});
+                        // The length of its loops (mitcad#1741: the
+                        // selection card), none with a spline.
+                        if let Some(perimeter) = r.profile.perimeter() {
+                            value["perimeter"] = json!(perimeter);
+                        }
                         if r.profile.face_bounded() {
                             value["face_bounded"] = json!(true);
                         }
@@ -1832,6 +1874,27 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
             .map(ToString::to_string)
             .collect();
         result["order"] = json!(order);
+        // The work steps that made them (mitcad#1750): sketch mode lists
+        // them, one cell each; an item no step holds (a design saved before
+        // steps were recorded, an import) is a step of its own, without an
+        // id or a kind.
+        let steps: Vec<Value> = mitcad_model::sketch::steps::in_order(def)
+            .into_iter()
+            .map(|step| match (step.id, step.kind) {
+                (Some(id), Some(kind)) => {
+                    let mut value =
+                        json!({"id": format!("s{id}"), "kind": kind, "items": step.items});
+                    // What it changed that another step made (a trim, an
+                    // extension).
+                    if !step.changed.is_empty() {
+                        value["changed"] = json!(step.changed);
+                    }
+                    value
+                }
+                _ => json!({"items": step.items}),
+            })
+            .collect();
+        result["steps"] = json!(steps);
         // The inactive constraints and dimensions the geometry does not
         // meet (mitcad#721).
         if !status.unmet_inactive.is_empty() {

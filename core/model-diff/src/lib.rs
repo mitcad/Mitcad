@@ -19,7 +19,8 @@
 //!   and the values of its parameter slots (`Extrude1: distance 10 mm ->
 //!   15 mm`). A sketch's entities, constraints and dimensions are compared
 //!   by id: their counts, those added, deleted and changed, and the
-//!   entities of which only the solved position or size changed; its
+//!   entities of which only the solved position or size changed (their
+//!   work steps, mitcad#1750, are left out); its
 //!   dimensions' values are slot values.
 //! - **Document:** units, the timeline marker, the active component, the
 //!   render settings (mitcad#47, by field: `render.environment.preset`).
@@ -848,6 +849,8 @@ struct Feature {
     suppressed_when: Option<String>,
     component: ComponentUid,
     visible: Option<bool>,
+    /// How large a construction plane or axis is drawn (mitcad#1748).
+    display_size: Option<f64>,
     /// Its definition in the file form without `type`: parameters by name
     /// (through `rename`), B-rep data by SHA-256 and size.
     def: Value,
@@ -889,6 +892,7 @@ fn features(state: &DocState, rename: &dyn Fn(String) -> String) -> Vec<Feature>
                 suppressed_when: state.bindings.suppressed_when.get(&entry.uid).cloned(),
                 component: entry.component,
                 visible: state.feature_visibility.get(&entry.uid).copied(),
+                display_size: state.datum_display_sizes.get(&entry.uid).copied(),
                 def: value,
             }
         })
@@ -976,6 +980,13 @@ fn feature_changes(a: &Side, b: &Side, xs: &[Feature], ys: &[Feature]) -> Vec<Fe
                 }
                 if x.visible != y.visible {
                     fields.push(field_change("visible", json!(x.visible), json!(y.visible)));
+                }
+                if x.display_size != y.display_size {
+                    fields.push(field_change(
+                        "display_size",
+                        json!(x.display_size),
+                        json!(y.display_size),
+                    ));
                 }
                 let mut sketch = None;
                 if x.type_name != y.type_name {
@@ -1087,6 +1098,10 @@ const SOLVED: [&str; 3] = ["at", "radius", "minor_radius"];
 fn sketch_change(a: &Value, b: &Value, fields: &mut Vec<FieldChange>) -> Option<SketchChange> {
     let mut a = a.as_object().cloned().unwrap_or_default();
     let mut b = b.as_object().cloned().unwrap_or_default();
+    // The work steps that made the items (mitcad#1750) are no change of
+    // the design: what they made is compared below.
+    a.remove("steps");
+    b.remove("steps");
     let mut change = SketchChange::default();
     for list in ["entities", "constraints", "dimensions"] {
         let take = |fields: &mut Map<String, Value>| match fields.remove(list) {

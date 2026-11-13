@@ -32,8 +32,9 @@
 //! iteration: in joint order, a joint between a side that is fixed (or
 //! already joined to something fixed) and one that is not moves the free
 //! side's bodies, with every body joined to it so far, so that the joint
-//! holds at its start values (its targets, else the values nearest to
-//! where the bodies are); between two free sides `a`'s side moves. Only
+//! holds at its start values (its targets, else those set with
+//! [`RigidSystem::set_start`], else the values nearest to where the bodies
+//! are); between two free sides `a`'s side moves. Only
 //! joints that close a loop are left to the iteration.
 //!
 //! Every motion folded into a body's pose leaves it a rotation to rounding
@@ -735,6 +736,10 @@ struct JointRec {
     /// A coupling's motions and relation (mitcad#466; no sides, frames or
     /// values of its own).
     coupling: Option<CouplingRec>,
+    /// Per motion, the value a free motion (no target) takes when the
+    /// joint places its free side ([`RigidSystem::set_start`],
+    /// mitcad#1745); empty or None: the value nearest to where it is.
+    start: Vec<Option<f64>>,
 }
 
 /// Rigid bodies and the joints between them.
@@ -1392,6 +1397,40 @@ impl RigidSystem {
         Ok(self.push(joint, None))
     }
 
+    /// The value joint `joint`'s free motion `freedom` takes when the
+    /// joint places its free side before iterating (mitcad#1745: a new
+    /// joint puts its origins together at its offset and angle, a dragged
+    /// one where the drag left it), instead of the value nearest to where
+    /// the bodies are. A target, a coupling that makes the motion follow,
+    /// and a joint that closes a loop (placed by the iteration) leave it
+    /// unused; it is kept within the motion's limits.
+    pub fn set_start(
+        &mut self,
+        joint: JointId,
+        freedom: Freedom,
+        value: f64,
+    ) -> Result<(), RigidError> {
+        let rec = self
+            .joints
+            .get_mut(joint.0 as usize)
+            .ok_or(RigidError::NoJoint(joint))?;
+        if rec.parts.is_some() || rec.coupling.is_some() {
+            return Err(RigidError::NoJoint(joint));
+        }
+        let k = rec
+            .def
+            .motions
+            .iter()
+            .position(|m| m.freedom == freedom)
+            .ok_or(RigidError::NoMotion(joint, freedom))?;
+        if !value.is_finite() {
+            return Err(RigidError::BadValue(freedom));
+        }
+        rec.start.resize(rec.def.motions.len(), None);
+        rec.start[k] = Some(value);
+        Ok(())
+    }
+
     fn push(&mut self, def: RigidJoint, parts: Option<Vec<ConstraintPart>>) -> JointId {
         let values = vec![0.0; def.motions.len()];
         self.joints.push(JointRec {
@@ -1399,6 +1438,7 @@ impl RigidSystem {
             values,
             parts,
             coupling: None,
+            start: Vec::new(),
         });
         let id = JointId(self.joints.len() as u32 - 1);
         self.joints[id.0 as usize].values = self.start_values(id.0 as usize);
@@ -1440,6 +1480,7 @@ impl RigidSystem {
             },
             values: Vec::new(),
             parts: None,
+            start: Vec::new(),
             coupling: Some(CouplingRec {
                 driver,
                 follower,
@@ -2040,6 +2081,7 @@ impl RigidSystem {
                 continue;
             }
             if !(fixed_a && fixed_b) {
+                self.take_start(j);
                 let joint = &self.joints[j];
                 let freedoms: Vec<Freedom> = joint.def.motions.iter().map(|m| m.freedom).collect();
                 let m = motion_pose(&freedoms, &joint.values);
@@ -2060,6 +2102,37 @@ impl RigidSystem {
             }
             if let (Some(x), Some(y)) = (ra, rb) {
                 cluster[x] = y;
+            }
+        }
+    }
+
+    /// Joint `j` places its free side: its free motions with a start value
+    /// ([`RigidSystem::set_start`]) take it, within their limits; a target
+    /// and a coupling's follower keep theirs.
+    fn take_start(&mut self, j: usize) {
+        if self.joints[j].start.is_empty() {
+            return;
+        }
+        let followed: Vec<usize> = self
+            .joints
+            .iter()
+            .filter_map(|rec| rec.coupling.as_ref())
+            .filter(|c| c.follower.0 == j)
+            .map(|c| c.follower.1)
+            .collect();
+        let joint = &mut self.joints[j];
+        for (k, m) in joint.def.motions.iter().enumerate() {
+            let Some(Some(start)) = joint.start.get(k).copied() else {
+                continue;
+            };
+            if m.target.is_some() || followed.contains(&k) {
+                continue;
+            }
+            let v = start
+                .max(m.min.unwrap_or(f64::NEG_INFINITY))
+                .min(m.max.unwrap_or(f64::INFINITY));
+            if let Some(slot) = joint.values.get_mut(k) {
+                *slot = v;
             }
         }
     }

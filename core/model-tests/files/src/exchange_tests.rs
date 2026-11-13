@@ -534,6 +534,96 @@ fn export_writes_bodies_with_names_and_imported_colours() {
     assert_eq!(limited.tolerance().face_triangles, 1000);
 }
 
+/// A refinement object with only `deviation` or only `angle` takes the
+/// other from the Medium preset, and one with neither is refused by the
+/// fields' names (mitcad#1732).
+#[test]
+fn a_refinement_object_takes_the_missing_tolerance_from_medium() {
+    let medium = Refinement::Preset(RefinementPreset::Medium).tolerance();
+    assert_eq!((medium.deviation, medium.angle), (0.03, 15f64.to_radians()));
+    let tolerance = |value: serde_json::Value| {
+        serde_json::from_value::<Refinement>(value).map(Refinement::tolerance)
+    };
+    assert_eq!(
+        tolerance(json!({"deviation": 0.03})).unwrap(),
+        MeshTolerance {
+            deviation: 0.03,
+            angle: medium.angle,
+            face_triangles: 0,
+            max_edge: 0.0
+        }
+    );
+    assert_eq!(
+        tolerance(json!({"deviation": 0.005, "max_edge": 2})).unwrap(),
+        MeshTolerance {
+            deviation: 0.005,
+            angle: medium.angle,
+            face_triangles: 0,
+            max_edge: 2.0
+        }
+    );
+    assert_eq!(
+        tolerance(json!({"angle": 0.1})).unwrap(),
+        MeshTolerance {
+            deviation: medium.deviation,
+            angle: 0.1,
+            face_triangles: 0,
+            max_edge: 0.0
+        }
+    );
+    // Both given, and a preset, read as before.
+    assert_eq!(
+        tolerance(json!({"deviation": 0.05, "angle": 0.2})).unwrap(),
+        MeshTolerance {
+            deviation: 0.05,
+            angle: 0.2,
+            face_triangles: 0,
+            max_edge: 0.0
+        }
+    );
+    assert_eq!(tolerance(json!("medium")).unwrap(), medium);
+    for (bad, expected) in [
+        (json!({}), vec!["deviation", "angle"]),
+        (json!({"max_edge": 2}), vec!["deviation", "angle"]),
+        (
+            json!({"tolerance": 0.03}),
+            vec!["unknown field `tolerance`"],
+        ),
+        (json!("coarse"), vec!["coarse", "low", "medium", "high"]),
+        (json!(0.03), vec!["a preset", "deviation", "angle"]),
+    ] {
+        let error = tolerance(bad.clone()).unwrap_err().to_string();
+        for text in expected {
+            assert!(error.contains(text), "{bad}: {error}");
+        }
+    }
+
+    // Through the `export` command, which reaches the kernel with them.
+    let mut b = block();
+    command(
+        &mut b.doc,
+        json!({"cmd": "export", "path": "only-deviation.obj", "refinement": {"deviation": 0.03}}),
+    )
+    .unwrap();
+    command(
+        &mut b.doc,
+        json!({"cmd": "export", "path": "only-angle.obj", "refinement": {"angle": 0.1}}),
+    )
+    .unwrap();
+    let written = b.doc.kernel().written.borrow().clone();
+    assert_eq!(written.len(), 2);
+    let error = command(
+        &mut b.doc,
+        json!({"cmd": "export", "path": "empty.obj", "refinement": {}}),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("deviation") && error.contains("angle"),
+        "{error}"
+    );
+    assert_eq!(b.doc.kernel().written.borrow().len(), 2);
+}
+
 #[test]
 fn sketches_export_to_dxf() {
     let mut b = block();

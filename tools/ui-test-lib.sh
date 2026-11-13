@@ -101,6 +101,14 @@ export MITCAD_NEW_DESIGN_VIEW=0
 # the tests read English texts. A test of the language passes --language,
 # which comes first.
 export MITCAD_LANGUAGE=en
+# The guard against internal identifiers in text a person sees
+# (mitcad#1741, app/framework/VisibleTextGuard.hpp): at each sync the app
+# reads every visible text and logs "Identifier in visible text: <widget's
+# object path>: <identifier>: <text>" for a topological name, a region key
+# or an internal id in one, which fails the test (ui_guard_check). The
+# allow-list holds only tokens that are a test's own typed data, each with
+# its reason.
+export MITCAD_TEST_TEXT_GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ui-visible-text-allow.txt"
 # No browser either: an address the app would open (a report's issue form,
 # mitcad#61) is logged instead ("Open URL (test, not opened): <url>").
 export MITCAD_TEST_LOG_URLS=1
@@ -415,15 +423,27 @@ ui_wait_idle() {
   echo "note: the app was still computing after 60 s"
 }
 
+# ui_guard_check "where": fails the test when the app logged an internal
+# identifier in a visible text (MITCAD_TEST_TEXT_GUARD above), naming the
+# widget and the text.
+ui_guard_check() {
+  local found
+  found=$(grep -m 3 '^Identifier in visible text: ' "$UI_LOG")
+  [ -z "$found" ] && return 0
+  echo "$found"
+  ui_fail "an internal identifier in text a person sees ($1; docs/ui-conventions.md, \"What a text says\")"
+}
+
 # ui_step "description" command...: runs a UI action (once the app computes
 # nothing), waits until the app has handled it (ui_sync) and checks for
-# crashes.
+# crashes and for internal identifiers in the texts shown then.
 ui_step() {
   local name=$1; shift
   ui_wait_idle
   "$@"
   ui_sync
   ui_crashed && ui_fail "crashed during '$name'"
+  ui_guard_check "after '$name'"
   echo "ok   $name"
 }
 
@@ -732,6 +752,17 @@ ui_create_sketch() {
     sleep 0.2
   done
   ui_fail "no sketch started on $plane"
+}
+
+# ui_origin_in_millimeters: the apps started after it draw the design's
+# origin as 100 mm squares centered on it (Preferences › Display › Origin
+# planes: Size Model, Style Centered), as before mitcad#1748, for a test
+# that clicks an origin plane beside a part built over the origin: the
+# default 80 px Corner squares lie in the positive octant, where such a
+# part hides them.
+ui_origin_in_millimeters() {
+  mkdir -p "$UI_CONFIG/Mitcad"
+  printf '\n[view]\noriginSize=model\noriginSizeMm=100\noriginStyle=centred\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
 }
 
 # ui_show_origin: the Origin folder's light bulb on, unless it is already
@@ -1183,6 +1214,7 @@ ui_update_test_hooks() {
 }
 
 ui_finish() {
+  ui_guard_check "during the test"
   # The warning itself, at the start of its line: a test driver's logged
   # step (expect-never 'OCCT view event failed|…') only names it.
   if grep -q "^OCCT view event failed:" "$UI_LOG"; then

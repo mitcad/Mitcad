@@ -95,10 +95,10 @@ QString jointSideGeometryText(const JointSide& side);
 // then "Joint highlight occurrences: Pin:1 (O2), Plate:1 (O1) [Joint1]".
 QStringList jointHighlightLog(const JointHighlight& joint);
 
-// The selection card's text of a joint (rich text): "<b>Joint1</b>:
-// revolute, a = Pin:1, face F4:start(...) of Body2, b = Plate:1, face ...";
-// `bodyName` names a body uid (empty: its uid is shown). Long names are
-// shortened in the middle.
-QString jointCardText(const JointHighlight& joint, const std::function<QString(const QString&)>& bodyName);
+// The selection card's text of a joint (rich text) in words (mitcad#1741):
+// "<b>Joint1</b>: revolute, a = Pin:1, face of Body2, b = Plate:1, face of
+// Body1"; `name` names a body or feature uid (empty when it cannot: "a
+// body", "a sketch"). Never a topological name or an id.
+QString jointCardText(const JointHighlight& joint, const std::function<QString(const QString&)>& name);
 
 } // namespace mitcad

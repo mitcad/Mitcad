@@ -113,8 +113,18 @@ impl<K: Kernel> DispatchOps<K> for Document<K> {
                 names: super::sketch::SketchCommand::NAMES,
                 prefix: Some("sketch."),
                 run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    // What its edits make is one work step of its kind
+                    // (mitcad#1750), named in the answer.
+                    let kind = super::sketch::step_kind(&value);
+                    let changes = super::sketch::step_changes(&value);
                     let command = super::sketch::parse_sketch_command(value)?;
-                    doc.run_sketch_command(command)
+                    doc.set_sketch_step_kind(kind);
+                    doc.set_sketch_step_changes(changes);
+                    let result = doc.run_sketch_command(command);
+                    let step = doc.recorded_sketch_step();
+                    doc.set_sketch_step_kind(None);
+                    result
+                        .map(|answer| super::sketch::with_step(answer, step))
                         .map(super::sketch::with_shown_texts)
                 },
             },

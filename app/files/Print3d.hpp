@@ -95,6 +95,9 @@ QVector<Slicer> findSlicers(const SlicerSearch& search = SlicerSearch::system())
 // The settings of 3D Print (group "print"), remembered between sends.
 struct PrintSettings {
   Slicer slicer;              // none: the first one found
+  // The last send's Open in was Folder only (mitcad#1726): the panel opens
+  // on it again; `slicer` stays what it was, listed in the panel.
+  bool folderOnly = false;
   QString format = "3mf";     // "3mf": one file (the first time, mitcad#655); "stl": a file per body
   QString refinement = "high"; // low, medium, high or custom
   double deviation = 0.01;     // custom: mm
@@ -275,6 +278,16 @@ QVector<QPair<QString, QString>> slicerChoices(const QVector<Slicer>& found, con
 QString slicerChoice(const Slicer& slicer);
 Slicer slicerOfChoice(const QString& choice);
 QString otherSlicerChoice();
+
+// The settings' slicer while its program is there (one of `found`, or its
+// program or application bundle exists; a bare name is looked for on PATH),
+// else none: a slicer removed since the last send is not offered.
+Slicer installedSlicer(const Slicer& saved, const QVector<Slicer>& found);
+
+// What Open in starts on (mitcad#1726): none (Folder only) when the last
+// send chose it, else the settings' slicer while it is installed, else the
+// first one found (none without any).
+Slicer panelSlicer(const PrintSettings& settings, const QVector<Slicer>& found);
 
 // Preferences' 3D Print group: the slicer the command starts.
 class SlicerPreferencesBox : public QGroupBox {

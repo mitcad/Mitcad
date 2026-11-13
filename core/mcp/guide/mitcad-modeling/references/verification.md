@@ -60,7 +60,9 @@ properties for volume, area, kind and bounding box, or volumes/boxes
 alone when enough. A solid item needs positive volume and the intended
 solid kind; a surface is appropriate only when requested. A join can
 leave disconnected solids in one body, so body count alone does not
-prove physical connection.
+prove physical connection. A cut that splits a body leaves its extra
+pieces as new bodies with default names: name the wanted pieces and join
+or remove the others (the review's stray-bodies rule).
 
 Compare volume change with the operation: cuts should remove the
 intended material and additions should join the intended target.
@@ -74,11 +76,23 @@ properties alone are component-local. Use `interference` for relevant
 bodies where overlap should be absent and inspect any overlap. An empty
 result does not prove the intended clearance or contact: measure those.
 
-Read `parameters` to verify that named sizes drive geometry. For intended
-adjustable sizes, try a reasonable `set_parameter` change, inspect
-recomputation, then restore the original expression. Preserve the
-existing design's values and undo history deliberately; do not leave a
-trial dimension as the final result.
+Read `parameters` to verify that named sizes drive geometry. For a
+parameter with a min and a max, run `parameter_range`: it evaluates the
+design at both limits (or at given `values` or `steps`) on a copy and
+reports per value the bodies' volumes and boxes, the body count, failed
+features and new warnings against the current value, without changing
+the document or its undo history:
+
+```json
+{"query": "parameter_range", "parameter": "Width", "steps": 3}
+```
+
+A limit at which a profile splits, a feature fails or a body appears is
+a limit to fix: lower the max or raise the min until both ends build
+the intended shape. For other adjustable sizes, try a reasonable
+`set_parameter` change, inspect recomputation, then restore the original
+expression. Preserve the existing design's values and undo history
+deliberately; do not leave a trial dimension as the final result.
 
 ## Look from several sides
 
@@ -105,6 +119,13 @@ stack patches, duplicate bodies or tiny offsets to conceal failure.
 In a live shared design, respect user edits and undo boundaries; never
 undo unrelated work. A batch's one undo step helps with a bounded stage
 only when its inputs and ids were already known.
+
+A dialog open in the live application waits for the user: edits are
+refused until it is answered, and the refusal and the dialog in
+`ui_state` name it. Ask the user to answer it; do not delete files to get
+past it. When you start MitCad yourself to check your work, start it with
+`--no-recovery`, so that the question about an earlier session's unsaved
+work does not stop your edits at start-up.
 
 ## Finish with evidence
 

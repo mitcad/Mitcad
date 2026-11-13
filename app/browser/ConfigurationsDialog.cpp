@@ -23,6 +23,7 @@
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QHideEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QKeyEvent>
@@ -34,7 +35,12 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QScopedValueRollback>
+#include <QScreen>
+#include <QSettings>
+#include <QShowEvent>
 #include <QSignalBlocker>
+#include <QStyle>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -45,6 +51,7 @@
 
 #include "../framework/DialogFolders.hpp"
 #include "../framework/Dialogs.hpp"
+#include "../framework/FitToScreen.hpp"
 #include "../framework/Icons.hpp"
 #include "../framework/PanelTree.hpp"
 #include "../framework/PlaceWatcher.hpp"
@@ -59,6 +66,12 @@ namespace {
 namespace cfg = configurations;
 
 constexpr int kNameRole = Qt::UserRole; // an option's or a row's name
+
+// The Rows sheet's columns are made at most this wide by the window
+// (mitcad#1714); the user may drag them wider.
+constexpr int kRowColumnMax = 300;
+// The window's size and place between openings (mitcad#1714).
+const char* const kGeometryKey = "configurations/geometry";
 
 // An option column as log lines and refusal keys name it, in English
 // whatever the interface language (mitcad#1471): the English header in
@@ -1156,6 +1169,85 @@ ConfigurationsDialog::ConfigurationsDialog(DocumentHost& host, QWidget* parent) 
   // The cells' places are logged again when the window moves or resizes.
   new PlaceWatcher(this, [this] { logLayout(); });
   refresh();
+  // The size and place the user left it at (mitcad#1714); Qt moves a kept
+  // place no longer on a connected screen onto one.
+  m_restored = restoreGeometry(QSettings().value(QLatin1String(kGeometryKey)).toByteArray());
+}
+
+ConfigurationsDialog::~ConfigurationsDialog() {
+  // Closed with its design window while open: no hide event comes.
+  if (isVisible()) {
+    saveWindowGeometry();
+  }
+}
+
+void ConfigurationsDialog::saveWindowGeometry() {
+  // A window presented natively is never on the screen itself.
+  if (m_placed && !testAttribute(Qt::WA_DontShowOnScreen)) {
+    QSettings().setValue(QLatin1String(kGeometryKey), saveGeometry());
+  }
+}
+
+void ConfigurationsDialog::showEvent(QShowEvent* event) {
+  QDialog::showEvent(event);
+  if (testAttribute(Qt::WA_DontShowOnScreen)) {
+    return;
+  }
+  if (!m_placed) {
+    m_placed = true;
+    if (!m_restored) {
+      widenToRows();
+    }
+    qDebug().noquote() << QStringLiteral("Configurations window size %1x%2 (%3)")
+                              .arg(width())
+                              .arg(height())
+                              .arg(m_restored ? QStringLiteral("kept") : QStringLiteral("for the rows' columns"));
+  }
+  // On a connected screen at every opening, and while it is shown, with its
+  // real frame (known once the window is on the screen).
+  QTimer::singleShot(0, this, [this] {
+    capWindowToScreen(this);
+    keepWindowOnScreen(this);
+  });
+}
+
+void ConfigurationsDialog::hideEvent(QHideEvent* event) {
+  saveWindowGeometry();
+  QDialog::hideEvent(event);
+}
+
+void ConfigurationsDialog::widenToRows() {
+  const int count = m_rows->columnCount();
+  const QScreen* onScreen = screen();
+  if (count == 0 || onScreen == nullptr || m_tabs->currentWidget() == nullptr) {
+    return;
+  }
+  const QHeaderView* header = m_rows->horizontalHeader();
+  int columns = header->sectionSizeHint(count - 1); // the last one stretches
+  for (int c = 0; c + 1 < count; ++c) {
+    columns += header->sectionSize(c);
+  }
+  // Around the sheet: the window's and the tab's margins (every page has the
+  // current one's width), the sheet's frame and a vertical scroll bar.
+  const QMargins page = m_rows->parentWidget() != nullptr && m_rows->parentWidget()->layout() != nullptr
+                            ? m_rows->parentWidget()->layout()->contentsMargins()
+                            : QMargins();
+  const int scrollBar = m_rows->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, m_rows);
+  const int around = width() - m_tabs->currentWidget()->width() + page.left() + page.right() +
+                     2 * m_rows->frameWidth() + scrollBar;
+  // The title bar's borders are not known before the window shows: room
+  // for a typical frame; the later capWindowToScreen takes the real one.
+  constexpr int kFrame = 16;
+  const QRect available = onScreen->availableGeometry();
+  const int target = std::min(columns + around, available.width() - kFrame);
+  if (target <= width()) {
+    return;
+  }
+  const int grown = target - width();
+  resize(target, height());
+  // Still centered where it was placed, inside the screen.
+  const int right = std::max(available.left(), available.right() + 1 - target - kFrame);
+  move(std::clamp(x() - grown / 2, available.left(), right), y());
 }
 
 QWidget* ConfigurationsDialog::makeOptionsPage() {
@@ -1292,6 +1384,26 @@ QWidget* ConfigurationsDialog::makeRowsPage() {
   m_rows->setAlternatingRowColors(true);
   m_rows->verticalHeader()->hide();
   m_rows->horizontalHeader()->setStretchLastSection(true);
+  // Long parameter names (mitcad#1714): fillRows makes each column as wide
+  // as its header and cells, up to kRowColumnMax; a header still cut keeps
+  // both ends of its name, the whole name in its tooltip. The user drags a
+  // column to another width, which later refreshes keep; sideways scrolling
+  // moves by pixels, not a column at a time.
+  m_rows->horizontalHeader()->setTextElideMode(Qt::ElideMiddle);
+  m_rows->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+  m_rows->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+  qDebug().noquote() << QStringLiteral("Configurations rows horizontal scroll: %1")
+                            .arg(m_rows->horizontalScrollMode() == QAbstractItemView::ScrollPerPixel
+                                     ? QStringLiteral("per pixel")
+                                     : QStringLiteral("per item"));
+  connect(m_rows->horizontalHeader(), &QHeaderView::sectionResized, this, [this](int column, int, int size) {
+    // The last column stretches with the window: no width of the user's.
+    const QTableWidgetItem* header = m_rows->horizontalHeaderItem(column);
+    if (!m_fittingColumns && header != nullptr && column + 1 < m_rows->columnCount()) {
+      m_columnWidths.insert(header->text(), size);
+    }
+    tipRowHeader(column);
+  });
   layout->addWidget(m_rows, 1);
   auto* buttons = new QHBoxLayout;
   m_addRow = new QPushButton(themeIcon(QStringLiteral("add")), tr("Add Row"));
@@ -1665,6 +1777,8 @@ void ConfigurationsDialog::fillRows() {
   const QString current = m_selectRow.isEmpty() ? selectedRow() : m_selectRow;
   m_selectRow.clear();
   const QVector<RowColumn> columns = rowColumns();
+  // The sections change with the columns: no width the user dragged.
+  const QScopedValueRollback<bool> fitting(m_fittingColumns, true);
   m_rows->clear();
   m_rows->setColumnCount(static_cast<int>(columns.size()));
   m_rows->setRowCount(static_cast<int>(m_table.rows.size()));
@@ -1779,7 +1893,60 @@ void ConfigurationsDialog::fillRows() {
     qDebug().noquote() << QStringLiteral("Configurations row marks: %1")
                               .arg(marked.isEmpty() ? QStringLiteral("none") : marked);
   }
+  fitRowColumns();
   m_rows->viewport()->update(); // its placeholder
+}
+
+void ConfigurationsDialog::fitRowColumns() {
+  const QScopedValueRollback<bool> fitting(m_fittingColumns, true);
+  QHeaderView* header = m_rows->horizontalHeader();
+  // QTableView's own hint is protected; QAbstractItemView's is public.
+  const QAbstractItemView* view = m_rows;
+  const int last = m_rows->columnCount() - 1;
+  QStringList logged;
+  for (int c = 0; c <= last; ++c) {
+    const QTableWidgetItem* item = m_rows->horizontalHeaderItem(c);
+    if (item == nullptr) {
+      continue;
+    }
+    const int needs = header->sectionSizeHint(c);
+    if (c < last) {
+      // The last column takes the room left (stretchLastSection).
+      const auto dragged = m_columnWidths.constFind(item->text());
+      header->resizeSection(c, dragged != m_columnWidths.cend()
+                                   ? dragged.value()
+                                   : std::min(std::max(needs, view->sizeHintForColumn(c)), kRowColumnMax));
+    }
+    tipRowHeader(c);
+    if (c < last) {
+      logged << QStringLiteral("Configurations rows column %1: width %2, header needs %3, %4")
+                    .arg(item->text())
+                    .arg(header->sectionSize(c))
+                    .arg(needs)
+                    .arg(item->toolTip().isEmpty() ? QStringLiteral("no tooltip")
+                                                   : QStringLiteral("tooltip %1").arg(item->toolTip()));
+    }
+  }
+  const QString text = logged.join(QLatin1Char('\n'));
+  if (text != m_loggedColumns) {
+    m_loggedColumns = text;
+    for (const QString& line : std::as_const(logged)) {
+      qDebug().noquote() << line;
+    }
+  }
+}
+
+void ConfigurationsDialog::tipRowHeader(int column) {
+  QTableWidgetItem* item = m_rows->horizontalHeaderItem(column);
+  if (item == nullptr) {
+    return;
+  }
+  // The whole text where the column is narrower than its header needs.
+  const QHeaderView* header = m_rows->horizontalHeader();
+  const QString tip = header->sectionSize(column) < header->sectionSizeHint(column) ? item->text() : QString();
+  if (item->toolTip() != tip) {
+    item->setToolTip(tip);
+  }
 }
 
 // ---------------------------------------------------------------------------

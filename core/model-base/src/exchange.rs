@@ -239,11 +239,46 @@ impl LengthUnit {
 
 /// Mesh refinement of STL and OBJ export: a preset or the
 /// tolerances themselves.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Refinement {
     Preset(RefinementPreset),
     Custom(MeshTolerance),
+}
+
+/// Read by hand and not as an untagged enum, whose one error for every
+/// refused value says nothing of what is wrong with it (mitcad#1732): a
+/// text is a preset and an object the tolerances, each with its own error.
+impl<'de> Deserialize<'de> for Refinement {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Refinement;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str(
+                    "a refinement: a preset (low, medium, high) or an object with deviation, \
+                     angle or both",
+                )
+            }
+
+            fn visit_str<E: serde::de::Error>(self, preset: &str) -> Result<Refinement, E> {
+                RefinementPreset::deserialize(serde::de::value::StrDeserializer::new(preset))
+                    .map(Refinement::Preset)
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<Refinement, A::Error> {
+                MeshTolerance::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                    .map(Refinement::Custom)
+            }
+        }
+
+        deserializer.deserialize_any(Visitor)
+    }
 }
 
 impl Default for Refinement {
@@ -270,7 +305,7 @@ pub enum RefinementPreset {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "MeshToleranceFields")]
 pub struct MeshTolerance {
     /// Largest distance between the mesh and the surface, millimetres.
     pub deviation: f64,
@@ -289,6 +324,40 @@ pub struct MeshTolerance {
     /// The kernel's meshing does not use it.
     #[serde(default, skip_serializing_if = "is_no_length")]
     pub max_edge: f64,
+}
+
+/// [`MeshTolerance`] as it is written: `deviation` or `angle` may be left
+/// out, and the one left out is the Medium preset's (mitcad#1732: 0.03 mm,
+/// 15 degrees); an object with neither is refused.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MeshToleranceFields {
+    deviation: Option<f64>,
+    angle: Option<f64>,
+    #[serde(default)]
+    face_triangles: u64,
+    #[serde(default)]
+    max_edge: f64,
+}
+
+impl TryFrom<MeshToleranceFields> for MeshTolerance {
+    type Error = &'static str;
+
+    fn try_from(fields: MeshToleranceFields) -> Result<Self, Self::Error> {
+        if fields.deviation.is_none() && fields.angle.is_none() {
+            return Err(
+                "a refinement object needs deviation (mm), angle (radians) or both; the one \
+                 left out is the medium preset's (0.03 mm, 15 degrees)",
+            );
+        }
+        let medium = Refinement::Preset(RefinementPreset::Medium).tolerance();
+        Ok(Self {
+            deviation: fields.deviation.unwrap_or(medium.deviation),
+            angle: fields.angle.unwrap_or(medium.angle),
+            face_triangles: fields.face_triangles,
+            max_edge: fields.max_edge,
+        })
+    }
 }
 
 fn is_zero(n: &u64) -> bool {

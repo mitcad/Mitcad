@@ -220,7 +220,8 @@ void MainWindow::registerAnnotateCommands() {
           },
           [this, frameChosen](int, const CommandState& state, const CommandContext&) {
             const Selection& picked = state.items(QStringLiteral("a"));
-            const QString what = picked.isEmpty() ? QString() : picked.first().describe();
+            // In words (mitcad#1741): the dialog's On row shows it.
+            const QString what = picked.isEmpty() ? QString() : pickListText(picked.first(), m_snapshot);
             const std::optional<QJsonObject> chosen =
                 askFeatureControlFrame(this, geometricCharacteristics(), *frameChosen, datumLetters(), what);
             if (chosen) {

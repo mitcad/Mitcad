@@ -981,6 +981,42 @@ fn region(s: &Value, key: &str) -> (f64, [f64; 2]) {
     )
 }
 
+/// mitcad#1741: each region of the `sketch` query has its perimeter (the
+/// selection card shows it): a 40 x 20 rectangle with a hole of diameter
+/// 10 is 120 mm round plus the hole's circle, the disc its circle alone.
+#[test]
+fn sketch_regions_have_their_perimeters() {
+    let mut d = with_sketch();
+    command(
+        &mut d,
+        json!({"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0],
+               "width": 40, "height": 20}),
+    );
+    command(
+        &mut d,
+        json!({"cmd": "sketch.add_circle", "sketch": "F1", "center": [20, 10], "diameter": 10}),
+    );
+    let s = sketch(&d);
+    let mut perimeters: Vec<f64> = s["regions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            r["perimeter"]
+                .as_f64()
+                .unwrap_or_else(|| panic!("no perimeter: {r}"))
+        })
+        .collect();
+    perimeters.sort_by(f64::total_cmp);
+    let circle = 10.0 * std::f64::consts::PI;
+    assert_eq!(perimeters.len(), 2, "{perimeters:?}");
+    assert!((perimeters[0] - circle).abs() < 1e-6, "{perimeters:?}");
+    assert!(
+        (perimeters[1] - 120.0 - circle).abs() < 1e-6,
+        "{perimeters:?}"
+    );
+}
+
 #[test]
 fn text_glyphs_bound_regions_with_islands() {
     let mut d = with_sketch();

@@ -26,14 +26,26 @@ expect-log '^Command search chose view.fit$'
 focus-main
 command tools.search
 focus-widget commandSearchInput
-# An all-disabled result cannot become selected or activate on Return.
+# The stronger disabled match's mode hint does not run a weaker enabled match.
 type 'Finish Sketch'
-expect-command-search 'Finish Sketch' - disabled
-key Down Up
 expect-command-search 'Finish Sketch' - disabled
 mark
 key Return
 expect-command-search 'Finish Sketch' - disabled
+expect-no-log '^Command search chose '
+key Escape
+focus-main
+command tools.search
+focus-widget commandSearchInput
+# With every match disabled, arrow keys cannot select one or activate it.
+# Finish Sketch also finds the enabled Sketch preferences through its keywords.
+type Concentric
+expect-command-search Concentric - disabled
+key Down Up
+expect-command-search Concentric - disabled
+mark
+key Return
+expect-command-search Concentric - disabled
 expect-no-log '^Command search chose '
 key Escape
 focus-main

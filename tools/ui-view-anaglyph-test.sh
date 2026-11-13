@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/view/ViewController.cpp app/view/ViewController.hpp app/OcctViewer.cpp app/OcctViewer.hpp
 # check-all sources: app/framework/TestDriver.cpp tools/cli tools/ui-scripts/view-anaglyph.mitcad-ui
+# check-all sources: app/view/CameraHeight.hpp
 # Anaglyph 3D (mitcad#1449) through the real UI, the shared input script
 # tools/ui-scripts/view-anaglyph.mitcad-ui (also run by
 # tools/ui-windows-view-anaglyph-test.ps1) on a block that mitcad-cli makes
@@ -10,7 +11,10 @@
 # still selects a face; Preferences › Display's stereo depth and
 # convergence reach the view at once, are saved with OK and put back on
 # Cancel; off, the camera is in its projection from before; Orthographic
-# ends it.
+# ends it. Preferences › Display's focal lengths (mitcad#1717): 35 mm for
+# the perspective camera and 50 mm for Anaglyph 3D give 37.8 and 27.0
+# degrees, Anaglyph 3D on and off switches between them, and the model's
+# height at the target stays.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-view-anaglyph-test.sh

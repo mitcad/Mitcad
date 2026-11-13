@@ -223,9 +223,13 @@ QString MainWindow::jointCardBlock(const SelectionItem& item) const {
   if (entry.isEmpty()) {
     return QString();
   }
-  return jointCardText(jointHighlightOf(entry, item.occurrence), [this](const QString& body) {
-    const auto found = m_snapshot.bodies.constFind(body);
-    return found == m_snapshot.bodies.cend() ? QString() : found->name;
+  return jointCardText(jointHighlightOf(entry, item.occurrence), [this](const QString& uid) {
+    const auto found = m_snapshot.bodies.constFind(uid);
+    if (found != m_snapshot.bodies.cend()) {
+      return found->name;
+    }
+    const DocumentSnapshot::Feature* feature = m_snapshot.feature(uid);
+    return feature == nullptr ? QString() : feature->name;
   });
 }
 

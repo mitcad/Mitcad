@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::{DocState, Document, ModelError, invalid, library_items::FileWrite};
 use crate::appearance::{Appearance, library_appearance};
 use crate::kernel::Kernel;
-use crate::material::{Material, MaterialOrigin, built_in_material};
+use crate::material::{Material, MaterialOrigin, built_in_material, numbered_name};
 use crate::print_library::{
     ItemData, ItemKind, Libraries, LibraryItem, LibraryKind, carried, item_path,
 };
@@ -119,12 +119,12 @@ impl DocState {
                 })
                 .expect("a free id");
         }
+        // A name the design holds is numbered as elsewhere: "X (2)",
+        // "X (3)", ... (mitcad#1728).
         if self.material_name_taken(&material.name, &material.id, None) {
-            let base = material.name.clone();
-            material.name = (1..)
-                .map(|n| format!("{base} ({n})"))
-                .find(|name| !self.material_name_taken(name, &material.id, None))
-                .expect("a free name");
+            material.name = numbered_name(&material.name, |name| {
+                self.material_name_taken(name, &material.id, None)
+            });
         }
         let id = material.id.clone();
         self.materials.push(material);

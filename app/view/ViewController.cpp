@@ -116,6 +116,7 @@
 #include "../browser/BrowserPreferences.hpp"
 // General: show the version in the view (mitcad#1209).
 #include "VersionWatermark.hpp"
+#include "OriginPreference.hpp"
 #include "SmallCirclesPreference.hpp"
 
 namespace mitcad {
@@ -281,8 +282,9 @@ const PreferencePage kPreferencePages[] = {
     {"navigation", QT_TRANSLATE_NOOP("View", "Navigation"), "mouse orbit pan zoom scheme"},
     {"display", QT_TRANSLATE_NOOP("View", "Display"),
      "camera perspective orthographic orientation view cube projection follow background environment render device gpu cuda worker optix ghost inactive components pick priority layout docked floating browser background rows card "
+     "focal_length lens field_of_view anaglyph stereo "
      "quick_access_toolbar quick-access toolbar theme dark light mode colour color scheme "
-     "menu_bar menus hamburger"},
+     "menu_bar menus hamburger origin_planes origin planes axes size screen model millimetres corner centred"},
     {"cache", QT_TRANSLATE_NOOP("View", "Cache"), "results memory disk diagnostics"},
     {"cloud", QT_TRANSLATE_NOOP("View", "Cloud"),
      "git remote sync push fetch version control author email name mqtt live broker"},
@@ -455,6 +457,9 @@ ViewSettings ViewSettings::load() {
   s.stereoDepth = std::clamp(number("stereoDepth", s.stereoDepth), kMinStereoDepth, kMaxStereoDepth);
   s.stereoConvergence =
       std::clamp(number("stereoConvergence", s.stereoConvergence), kMinStereoConvergence, kMaxStereoConvergence);
+  s.focalLength = std::clamp(number("focalLength", s.focalLength), kMinFocalLength, kMaxFocalLength); // mitcad#1717
+  s.anaglyphFocalLength =
+      std::clamp(number("anaglyphFocalLength", s.anaglyphFocalLength), kMinFocalLength, kMaxFocalLength);
   return s;
 }
 
@@ -483,6 +488,8 @@ void ViewSettings::save() const {
   store.setValue(kGroup + QStringLiteral("anaglyph"), anaglyph);           // mitcad#1449
   store.setValue(kGroup + QStringLiteral("stereoDepth"), stereoDepth);
   store.setValue(kGroup + QStringLiteral("stereoConvergence"), stereoConvergence);
+  store.setValue(kGroup + QStringLiteral("focalLength"), focalLength); // mitcad#1717
+  store.setValue(kGroup + QStringLiteral("anaglyphFocalLength"), anaglyphFocalLength);
 }
 
 void ViewSettings::colors(QColor& upper, QColor& lower, bool& gradient) const {
@@ -890,6 +897,8 @@ void ViewController::apply() {
   m_viewer.setPerspective(m_settings.perspective);
   // Anaglyph 3D (mitcad#1449) after the projection it goes back to.
   m_viewer.setStereoParameters(m_settings.stereoDepth / 100.0, m_settings.stereoConvergence / 100.0);
+  // The focal lengths (mitcad#1717): the camera takes the one in force.
+  m_viewer.setFocalLengths(m_settings.focalLength, m_settings.anaglyphFocalLength);
   m_viewer.setAnaglyph(m_settings.anaglyph);
   m_viewer.setCubeProjection(m_settings.cubeProjection); // mitcad#774
   QColor top;
@@ -1005,6 +1014,10 @@ void ViewController::setAnaglyph(bool on) {
 
 void ViewController::applyStereo(int depth, int convergence) {
   m_viewer.setStereoParameters(depth / 100.0, convergence / 100.0);
+}
+
+void ViewController::applyFocalLengths(int perspective, int anaglyph) {
+  m_viewer.setFocalLengths(perspective, anaglyph); // logs "View: focal length …"
 }
 
 void ViewController::setRendered(bool on) {
@@ -1857,6 +1870,78 @@ void ViewController::showPreferences(const QString& page) {
   auto* cameraLabel = new QLabel(tr("C&amera:"));
   cameraLabel->setBuddy(camera);
   display->addRow(cameraLabel, cameraRow);
+  // The focal lengths (mitcad#1717, GitHub mitcad/Mitcad#282) of the
+  // perspective camera and of Anaglyph 3D, each a slider with its value
+  // field, in mm as on a 35 mm frame, side by side in one row as Anaglyph
+  // 3D's two values (Preferences fits a 1366 x 768 screen). The view takes
+  // a change at once (put back when the dialog is cancelled); saved when
+  // the dialog is accepted, at once in the Settings window. The value field
+  // is the setting; the slider moves with it.
+  auto* focalRow = new QHBoxLayout;
+  const auto addFocalLength = [focalRow](const QString& name, int value, const QString& tipText) {
+    auto* lengthSlider = new QSlider(Qt::Horizontal);
+    lengthSlider->setObjectName(name + QStringLiteral("Slider"));
+    lengthSlider->setRange(ViewSettings::kMinFocalLength, ViewSettings::kMaxFocalLength);
+    lengthSlider->setSingleStep(1);
+    lengthSlider->setPageStep(5);
+    lengthSlider->setValue(value);
+    lengthSlider->setToolTip(tipText);
+    lengthSlider->setMinimumWidth(90);
+    auto* lengthValue = new QSpinBox;
+    lengthValue->setObjectName(name);
+    lengthValue->setRange(ViewSettings::kMinFocalLength, ViewSettings::kMaxFocalLength);
+    lengthValue->setSuffix(tr(" mm"));
+    lengthValue->setValue(value);
+    lengthValue->setToolTip(tipText);
+    QObject::connect(lengthSlider, &QSlider::valueChanged, lengthValue, &QSpinBox::setValue);
+    QObject::connect(lengthValue, &QSpinBox::valueChanged, lengthSlider, &QSlider::setValue);
+    focalRow->addWidget(lengthSlider, 1);
+    focalRow->addWidget(lengthValue);
+    return lengthValue;
+  };
+  QSpinBox* focalLength =
+      addFocalLength(QStringLiteral("preferencesFocalLength"), m_settings.focalLength,
+                     tr("The perspective camera's lens, as on a 35 mm frame: shorter shows more, longer is flatter"));
+  focalRow->addSpacing(12);
+  auto* anaglyphFocalLengthLabel = new QLabel(tr("Anagl&yph 3D"));
+  focalRow->addWidget(anaglyphFocalLengthLabel);
+  QSpinBox* anaglyphFocalLength =
+      addFocalLength(QStringLiteral("preferencesAnaglyphFocalLength"), m_settings.anaglyphFocalLength,
+                     tr("Anaglyph 3D's lens, as on a 35 mm frame: longer looks less rounded"));
+  anaglyphFocalLengthLabel->setBuddy(anaglyphFocalLength);
+  auto* focalLengthLabel = new QLabel(tr("Focal lengt&h:"));
+  focalLengthLabel->setBuddy(focalLength);
+  display->addRow(focalLengthLabel, focalRow);
+  const auto previewFocalLengths = [this, focalLength, anaglyphFocalLength] {
+    applyFocalLengths(focalLength->value(), anaglyphFocalLength->value());
+  };
+  connect(focalLength, &QSpinBox::valueChanged, host, previewFocalLengths);
+  connect(anaglyphFocalLength, &QSpinBox::valueChanged, host, previewFocalLengths);
+  // Whether it saved anything: only a change shows the saved note.
+  const auto saveFocalLengths = [this, focalLength, anaglyphFocalLength]() -> bool {
+    if (focalLength->value() == m_settings.focalLength &&
+        anaglyphFocalLength->value() == m_settings.anaglyphFocalLength) {
+      return false;
+    }
+    m_settings.focalLength = focalLength->value();
+    m_settings.anaglyphFocalLength = anaglyphFocalLength->value();
+    m_settings.save();
+    qDebug().noquote() << QStringLiteral("Preferences: focal length %1 mm, anaglyph focal length %2 mm")
+                              .arg(m_settings.focalLength)
+                              .arg(m_settings.anaglyphFocalLength);
+    return true;
+  };
+  if (window != nullptr) {
+    const auto saveFocalLengthsNoted = [saveFocalLengths, saved] {
+      if (saveFocalLengths()) {
+        saved();
+      }
+    };
+    connect(focalLength, &QSpinBox::valueChanged, host, saveFocalLengthsNoted);
+    connect(anaglyphFocalLength, &QSpinBox::valueChanged, host, saveFocalLengthsNoted);
+  } else {
+    connect(dialog.get(), &QDialog::accepted, focalLength, saveFocalLengths);
+  }
   // Anaglyph 3D's stereo depth and convergence (mitcad#1449), in percent,
   // side by side in one row (Preferences fits a 1366 x 768 screen): the
   // view takes a change at once (put back when the dialog is cancelled);
@@ -2101,7 +2186,6 @@ void ViewController::showPreferences(const QString& page) {
   themeChoice->setCurrentIndex(themeChoice->findData(themeChoiceName(themePreference())));
   themeChoice->setToolTip(tr("The colors of MitCad's panels, cards and dialogs: the desktop's, or always light or "
                              "dark"));
-  display->addRow(tr("&Theme:"), themeChoice);
   // The size of the whole UI (mitcad#1495, GitHub mitcad/Mitcad#194): Qt's
   // scale factor at the next start (framework/InterfaceSize). Saved when
   // the dialog is accepted, at once in the Settings window.
@@ -2115,13 +2199,22 @@ void ViewController::showPreferences(const QString& page) {
   auto* interfaceSizeNote = new QLabel(tr("Takes effect when MitCad starts again."));
   interfaceSizeNote->setObjectName(QStringLiteral("interfaceSizeNote"));
   interfaceSizeNote->setEnabled(false); // the quiet colour of a hint
+  // The theme and the interface size, both about how MitCad's own UI looks,
+  // in one row (mitcad#1751: Preferences fits a 1366 x 768 screen with the
+  // focal lengths' row of mitcad#1717); Alt+I still reaches the size
+  // through its label.
+  auto* interfaceSizeLabel = new QLabel(tr("&Interface size:"));
+  interfaceSizeLabel->setBuddy(interfaceSize);
   auto* interfaceSizeRow = new QHBoxLayout;
+  interfaceSizeRow->addWidget(themeChoice);
+  interfaceSizeRow->addSpacing(12);
+  interfaceSizeRow->addWidget(interfaceSizeLabel);
   interfaceSizeRow->addWidget(interfaceSize);
   interfaceSizeRow->addWidget(interfaceSizeNote, 1);
   // A label of its own: a row of a layout gets no buddy from the form.
-  auto* interfaceSizeLabel = new QLabel(tr("&Interface size:"));
-  interfaceSizeLabel->setBuddy(interfaceSize);
-  display->addRow(interfaceSizeLabel, interfaceSizeRow);
+  auto* themeLabel = new QLabel(tr("&Theme:"));
+  themeLabel->setBuddy(themeChoice);
+  display->addRow(themeLabel, interfaceSizeRow);
   const auto saveInterfaceSizeChoice = [interfaceSize] {
     const int percent = interfaceSize->currentData().toInt();
     if (saveInterfaceSize(percent)) {
@@ -2461,7 +2554,14 @@ void ViewController::showPreferences(const QString& page) {
                             Qt::ToolTipRole);
   smallCircles->setItemData(1, tr("Every circle as finely as a large one"), Qt::ToolTipRole);
   smallCircles->setToolTip(tr("How finely the 3D view draws small circles and arcs; exported meshes do not change"));
-  display->addRow(tr("S&mall circles:"), smallCircles);
+  // In a row with Origin planes (below), which the page has no height for
+  // on a row of its own (Preferences fits a 1366 x 768 screen, mitcad#1748).
+  // Its label keeps Alt+M (a row of a layout gets no buddy of its own).
+  auto* smallCirclesRow = new QHBoxLayout;
+  smallCirclesRow->addWidget(smallCircles);
+  auto* smallCirclesLabel = new QLabel(tr("S&mall circles:"));
+  smallCirclesLabel->setBuddy(smallCircles);
+  display->addRow(smallCirclesLabel, smallCirclesRow);
   // Where the keyboard is, for the UI tests (Alt+M, then Up or Down).
   connect(qApp, &QApplication::focusChanged, smallCircles, [smallCircles](QWidget*, QWidget* now) {
     if (now == smallCircles) {
@@ -2480,6 +2580,70 @@ void ViewController::showPreferences(const QString& page) {
     connect(smallCircles, &QComboBox::currentIndexChanged, host, saving(applySmallCircles));
   } else {
     connect(dialog.get(), &QDialog::accepted, smallCircles, applySmallCircles);
+  }
+  // Origin planes (mitcad#1748): a size on the screen (the default) or in
+  // millimetres, the Corner or the Centred style, in one row (Preferences
+  // fits a 1366 x 768 screen). Saved when the dialog is accepted, at once in
+  // the Settings window; every open window draws its origin anew
+  // (OriginDisplayNotifier).
+  const OriginDisplay savedOrigin = savedOriginDisplay();
+  auto* originSize = new QComboBox;
+  originSize->setObjectName(QStringLiteral("originSize"));
+  originSize->addItem(tr("Screen"), originSizeId(OriginSize::Screen));
+  originSize->addItem(tr("Model"), originSizeId(OriginSize::Model));
+  originSize->setItemData(0, tr("The same size on the screen at any zoom"), Qt::ToolTipRole);
+  originSize->setItemData(1, tr("A size in millimeters that zooms with the model"), Qt::ToolTipRole);
+  originSize->setCurrentIndex(originSize->findData(originSizeId(savedOrigin.size)));
+  originSize->setToolTip(tr("How large the 3D view draws the origin's planes and axes"));
+  auto* originMillimetres = new QDoubleSpinBox;
+  originMillimetres->setObjectName(QStringLiteral("originSizeMm"));
+  originMillimetres->setDecimals(1);
+  originMillimetres->setRange(kOriginMinMillimetres, kOriginMaxMillimetres);
+  originMillimetres->setSingleStep(10.0);
+  originMillimetres->setSuffix(tr(" mm"));
+  originMillimetres->setValue(savedOrigin.millimetres);
+  originMillimetres->setEnabled(savedOrigin.size == OriginSize::Model);
+  originMillimetres->setToolTip(tr("The side of each origin plane with the Model size"));
+  auto* originStyle = new QComboBox;
+  originStyle->setObjectName(QStringLiteral("originStyle"));
+  originStyle->addItem(tr("Corner"), originStyleId(OriginStyle::Corner));
+  originStyle->addItem(tr("Centered"), originStyleId(OriginStyle::Centred));
+  originStyle->setItemData(0, tr("Each plane from the origin into its positive quarter, with colored axes"),
+                           Qt::ToolTipRole);
+  originStyle->setItemData(1, tr("Each plane centered on the origin"), Qt::ToolTipRole);
+  originStyle->setCurrentIndex(originStyle->findData(originStyleId(savedOrigin.style)));
+  originStyle->setToolTip(tr("Where the origin's planes lie around it"));
+  auto* originStyleLabel = new QLabel(tr("&Style:"));
+  originStyleLabel->setBuddy(originStyle);
+  auto* originLabel = new QLabel(tr("O&rigin planes:"));
+  originLabel->setBuddy(originSize);
+  // On the Small circles row (above).
+  smallCirclesRow->addSpacing(12);
+  smallCirclesRow->addWidget(originLabel);
+  smallCirclesRow->addWidget(originSize);
+  smallCirclesRow->addWidget(originMillimetres);
+  smallCirclesRow->addSpacing(8);
+  smallCirclesRow->addWidget(originStyleLabel);
+  smallCirclesRow->addWidget(originStyle);
+  smallCirclesRow->addStretch(1);
+  connect(originSize, &QComboBox::currentIndexChanged, originMillimetres, [originSize, originMillimetres] {
+    originMillimetres->setEnabled(originSize->currentData().toString() == originSizeId(OriginSize::Model));
+  });
+  const auto applyOrigin = [originSize, originMillimetres, originStyle] {
+    OriginDisplay chosen;
+    chosen.size = originSizeFromId(originSize->currentData().toString()).value_or(OriginSize::Screen);
+    chosen.millimetres = originMillimetres->value();
+    chosen.style = originStyleFromId(originStyle->currentData().toString()).value_or(OriginStyle::Corner);
+    if (saveOriginDisplay(chosen)) {
+      qDebug().noquote() << QStringLiteral("Preferences: origin planes %1").arg(chosen.describe());
+    }
+  };
+  if (window != nullptr) {
+    connect(originSize, &QComboBox::currentIndexChanged, host, saving(applyOrigin));
+    connect(originMillimetres, &QDoubleSpinBox::editingFinished, host, saving(applyOrigin));
+    connect(originStyle, &QComboBox::currentIndexChanged, host, saving(applyOrigin));
+  } else {
+    connect(dialog.get(), &QDialog::accepted, originSize, applyOrigin);
   }
   if (window != nullptr) {
     connect(ghostInactive, &QCheckBox::toggled, host, saving(applyGhostInactive));
@@ -2612,7 +2776,12 @@ void ViewController::showPreferences(const QString& page) {
                                        ? QStringLiteral("prerelease")
                                        : QStringLiteral("stable"));
     PrintSettings print = PrintSettings::load();
-    print.slicer = slicerBox->chosen();
+    // A slicer chosen here is what Send to Slicer opens on next; left as
+    // it was, a remembered Folder only stays (mitcad#1726).
+    if (const Slicer printSlicer = slicerBox->chosen(); printSlicer != print.slicer) {
+      print.slicer = printSlicer;
+      print.folderOnly = false;
+    }
     print.save();
     qDebug().noquote() << QStringLiteral("Preferences: slicer %1")
                               .arg(print.slicer.isValid() ? print.slicer.describe() : QStringLiteral("automatic"));
@@ -2870,6 +3039,16 @@ void ViewController::showPreferences(const QString& page) {
   // The size the window opens at: the largest page's, so that it keeps its
   // size between pages (UI tests check that it fits a 1366 x 768 screen).
   const QSize size = dialog->sizeHint();
+  // What the window asks for with each page alone (mitcad#1751), so that
+  // a UI test names the page that would not fit a 1366 x 768 screen.
+  for (int row = 0; row < stack->count(); ++row) {
+    showPage(row);
+    const QSize asked = dialog->sizeHint();
+    qDebug().noquote() << QStringLiteral("Preferences page size: %1, %2 x %3")
+                              .arg(pages->item(row)->text())
+                              .arg(asked.width())
+                              .arg(asked.height());
+  }
   pages->setCurrentRow(wantedIndex);
   showPage(wantedIndex);
   pages->setFocus();
@@ -2941,6 +3120,7 @@ void ViewController::showPreferences(const QString& page) {
   if (execDialog(dialog.get()) != QDialog::Accepted) {
     m_viewer.setNavigation(m_settings.navigation);
     applyStereo(m_settings.stereoDepth, m_settings.stereoConvergence); // mitcad#1449
+    applyFocalLengths(m_settings.focalLength, m_settings.anaglyphFocalLength); // mitcad#1717
     return;
   }
   (*commit)();

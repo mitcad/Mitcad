@@ -65,6 +65,10 @@ public:
   virtual TopoDS_Shape analysisShape(const QJsonObject& request) const = 0;
   QString bodyName(const QString& uid) const;
   QString featureName(const QString& uid) const;
+  // An item in words for text a person sees (mitcad#1741): its kind and
+  // its owner's name ("Face of Body1", "Profile of Sketch2", "Origin XY",
+  // "Extrude1"); never a topological name, a region key or an id.
+  QString itemText(const SelectionItem& item) const;
   // The expression to show for a parameter of feature `owner`: its own
   // dimensions show their expression, other parameters their name.
   QString valueText(const QJsonValue& slot, const QString& owner) const;
@@ -159,6 +163,19 @@ struct Manipulator {
   // view direction) takes no press and is drawn fainter
   // (ManipulatorOverlay::seenEdgeOn).
   bool large = false;
+  // Ring: drawn round geometry this many millimetres from its origin (an
+  // image reference's half diagonal, mitcad#1747), an arrow's length and
+  // twice its reach further out, so that arrows at the geometry's edge
+  // stay inside it; 0: the usual size on the screen.
+  double radius = 0.0;
+  // The value the handle stands at while its input has none (an empty
+  // Width: the image's size from its file, mitcad#1747); NaN: no handle
+  // then. A drag gives the input a value.
+  double autoValue = std::numeric_limits<double>::quiet_NaN();
+  // Arrow and Ring with valueBox: the value box, a dimension's line from
+  // the origin and a ring's arc only while the handle or its box is under
+  // the mouse or dragged (an image reference's seven handles, mitcad#1747).
+  bool quiet = false;
 };
 
 // A handle a sketch command shows in the sketch (CommandDef::sketchHandle,
@@ -377,6 +394,10 @@ struct InputDef {
   // empty: the count. Called with the picks, the state and the model
   // whenever a selection changes.
   std::function<QString(const Selection&, const CommandState&, const CommandContext&)> itemsText;
+  // Selection: the same picks in words for the panel where itemsText names
+  // them by ids for the log (mitcad#1741: a 3D sketch's route, "5 curves of
+  // 3DSketch1"); unset: the panel shows itemsText.
+  std::function<QString(const Selection&, const CommandState&, const CommandContext&)> itemsWords;
   // Selection: what an empty row's button says instead of "None", with the
   // colour of its swatch then (mitcad#656: an empty Align is Reference 1,
   // in Reference 1's green); an empty text: "None" and its own colour.
@@ -436,6 +457,16 @@ struct InputDef {
   // A handle in the view that drags the value; none when it returns none.
   std::function<std::optional<Manipulator>(const CommandState&, const CommandContext&)>
       manipulator;
+  // Value: several handles that drag the value (mitcad#1747: an image's
+  // four corners drag its Width), each named by its Manipulator::element
+  // (0, 1, ...); asked also while the value is none (Manipulator::autoValue).
+  std::function<std::vector<Manipulator>(const CommandState&, const CommandContext&)> manipulators;
+  // Value with `manipulators`: called after a drag of handle `element` set
+  // the value, before onChange, with the inputs as they were when the drag
+  // began: sets the inputs that follow that handle (an image's corner: its
+  // centre, so that the opposite corner stays where it was).
+  std::function<void(int element, const CommandState& atStart, CommandState&, const CommandContext&)>
+      onHandleDrag;
   // Text: toggles in the view (P9: a dot at each instance of a pattern)
   // from the shown preview's report; a click toggles the element's number
   // in the text ("2, 5": the suppressed ones).
@@ -703,6 +734,16 @@ struct InputDef {
     manipulator = std::move(handle);
     return *this;
   }
+  InputDef& withManipulators(
+      std::function<std::vector<Manipulator>(const CommandState&, const CommandContext&)> handles) {
+    manipulators = std::move(handles);
+    return *this;
+  }
+  InputDef& withHandleDrag(
+      std::function<void(int element, const CommandState& atStart, CommandState&, const CommandContext&)> call) {
+    onHandleDrag = std::move(call);
+    return *this;
+  }
   InputDef& withToggles(
       std::function<std::vector<Manipulator>(const CommandState&, const CommandContext&, const QJsonObject&)> made) {
     toggles = std::move(made);
@@ -741,6 +782,11 @@ struct InputDef {
   InputDef& withItemsText(
       std::function<QString(const Selection&, const CommandState&, const CommandContext&)> text) {
     itemsText = std::move(text);
+    return *this;
+  }
+  InputDef& withItemsWords(
+      std::function<QString(const Selection&, const CommandState&, const CommandContext&)> words) {
+    itemsWords = std::move(words);
     return *this;
   }
   InputDef& withChoiceImages(std::function<QImage(const QString&)> image) {
@@ -936,6 +982,15 @@ public:
   // A selection's picks by name (InputDef::itemsText); empty: their count.
   QString itemsText(const QString& id) const { return m_itemsTexts.value(key(id)); }
   void setItemsText(const QString& id, const QString& text) { m_itemsTexts[key(id)] = text; }
+  // An ordered selection's picks in words, one per pick in order
+  // (CommandContext::itemText, mitcad#1741: the panel's list of them);
+  // empty until the model was asked.
+  QStringList itemWords(const QString& id) const { return m_itemWords.value(key(id)); }
+  // A selection's picks as the panel lists them in words (InputDef::itemsWords,
+  // mitcad#1741); empty: itemsText.
+  QString itemsWords(const QString& id) const { return m_itemsWords.value(key(id)); }
+  void setItemsWords(const QString& id, const QString& words) { m_itemsWords[key(id)] = words; }
+  void setItemWords(const QString& id, const QStringList& words) { m_itemWords[key(id)] = words; }
 
   QString choice(const QString& id) const { return m_choices.value(key(id)); }
   void setChoice(const QString& id, const QString& option) { m_choices[key(id)] = option; }
@@ -967,6 +1022,8 @@ private:
   QHash<QString, QString> m_parameters;
   QHash<QString, QString> m_parameterTips;
   QHash<QString, QString> m_itemsTexts;
+  QHash<QString, QStringList> m_itemWords;
+  QHash<QString, QString> m_itemsWords;
   QHash<QString, QString> m_choices;
   QHash<QString, bool> m_checks;
   QHash<QString, int> m_rows;
@@ -1280,6 +1337,11 @@ struct CommandDef {
   // (mitcad#475: a new cut's hidden targets start unchecked). It must not
   // query the model: the preview may still be applied.
   std::function<bool(QJsonObject& report, CommandState&)> previewReported;
+  // Where the shown preview moves a pick (mitcad#1745: Joint's origin on
+  // the component its preview moves): the move of the pick's highlight
+  // from where the design has it; none draws it there.
+  std::function<std::optional<gp_Trsf>(const SelectionItem&, const CommandState&, const CommandContext&)>
+      pickMoved;
   // Options of a new feature's add_feature command beside its definition,
   // in its preview and on OK (mitcad#1632: Thread's fit_faces and shared,
   // which fit the faces to the thread in the same undo step); not for an
@@ -1360,6 +1422,18 @@ struct CommandDef {
   // one while Extend is checked and the tool is a plane or a face): drawn
   // see-through orange, in the tool input's colour, instead of blue.
   bool extendedToolPreview = false;
+  // The preview's tool always removes material, whatever the definition's
+  // `operation` says (Hole, mitcad#1743: a hole cuts): drawn see-through
+  // red over the result as a cut's tool is, not blue.
+  bool cutPreview = false;
+  // Where the handles (the value inputs' manipulators) and `viewLines`,
+  // worked out in the part's own coordinates (its feature's component's),
+  // are seen in the design: the occurrence its placement was picked in
+  // (mitcad#1743: a hole on a face of a component placed elsewhere drew
+  // its handles where the component's coordinates put them, away from the
+  // hole). Called with the handle's state (a list row's for a row's
+  // input); none: drawn as they are (the root).
+  std::function<std::optional<gp_Trsf>(const CommandState&, const CommandContext&)> handlesSeenAt;
 
   // Actions and tools.
   std::function<void()> run;

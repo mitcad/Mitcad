@@ -443,6 +443,7 @@ pub(crate) fn attach_mount(
         flip: true,
         limits: BTreeMap::new(),
         position,
+        start: BTreeMap::new(),
     };
     if let Some(o) = state.assembly.occurrence_mut(occurrence) {
         o.transform = plan.placement;

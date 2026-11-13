@@ -842,14 +842,14 @@ fn only_links_in_the_design_project_are_followed() {
     let messages = reopened.update_links(Some(&designs)).unwrap();
     assert_eq!(messages.len(), 2, "{messages:?}");
     assert_eq!(messages[0], "part is updated from ../parts/part.mitcad");
+    // In words, with the way out, and no path (mitcad#1719).
     assert_eq!(
         messages[1],
-        format!(
-            "far: the link outside the project is not followed ({}); it keeps the bodies \
-             saved with the project",
-            far.display()
-        )
+        "far: the file is outside the project, so the link is not followed and it keeps the \
+         bodies saved with the project; to follow it, move the file into the project, or make \
+         the folder that holds both a project (File › Project › New Project…), then Update Link"
     );
+    assert!(!messages[1].contains(far.to_str().unwrap()), "{messages:?}");
     reopened.recompute();
     assert_eq!(reopened.component_bodies(linked).len(), 2);
     assert_eq!(reopened.component_bodies(outside).len(), 1);
@@ -861,8 +861,8 @@ fn only_links_in_the_design_project_are_followed() {
         let mut opened = Document::from_json(&json, MockKernel::default()).unwrap();
         let messages = opened.update_links(Some(&designs)).unwrap();
         assert!(
-            messages[0].contains("link outside the project is not followed")
-                && messages[0].contains(path)
+            messages[0].starts_with("part: the file is outside the project, so the link is not")
+                && !messages[0].contains(path)
                 && !messages[0].contains("cannot read"),
             "{messages:?}"
         );
@@ -882,9 +882,10 @@ fn only_links_in_the_design_project_are_followed() {
     let messages = unsaved.update_links(None).unwrap();
     assert_eq!(messages.len(), 2, "{messages:?}");
     assert!(
-        messages
-            .iter()
-            .all(|m| m.contains("link outside the project is not followed")),
+        messages.iter().all(|m| m.contains(
+            "the design is not saved yet, so the link is not followed and it keeps the bodies \
+             saved with the design; save the design, then Update Link"
+        )),
         "{messages:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -923,7 +924,8 @@ fn a_design_in_no_project_follows_links_in_its_folder() {
     let mut opened = Document::from_json(&saved, MockKernel::default()).unwrap();
     let messages = opened.update_links(Some(&designs)).unwrap();
     assert!(
-        messages[0].contains("link outside the project is not followed (../outside.mitcad)"),
+        messages[0].starts_with("part: the file is outside the project, so the link is not")
+            && !messages[0].contains("outside.mitcad"),
         "{messages:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);

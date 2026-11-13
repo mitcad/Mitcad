@@ -231,10 +231,17 @@ private:
   // A wheel over the strip or its scroll bar (mitcad#826): the larger of
   // its two deltas scrolls the strip sideways; nothing goes on to the view.
   void wheelStrip(QWheelEvent* event);
+  // The rename editor over its cell in the scroll area's viewport, as wide
+  // as the name needs and wholly in the visible timeline (mitcad#1742);
+  // logs its place when it changes.
+  void placeEditor();
 
   std::function<QString(const QString&)> m_featureDetails;
   std::function<void(const QString&)> m_presentationRenamer; // setPresentationRenamer
   QStringList m_hoveredFeatures;
+  // The cells' tooltips the visible-text guard read since the last rebuild
+  // (mitcad#1741).
+  QStringList m_guardTexts;
   const CommandContext& m_model;
   DocumentSnapshot m_snapshot; // the last rebuild's
   QSet<QString> m_collapsed;   // folded groups
@@ -246,6 +253,7 @@ private:
   QScrollArea* m_scroll = nullptr;
   QLineEdit* m_editor = nullptr;
   QString m_editing; // the feature being renamed
+  QString m_loggedEditor; // placeEditor's last log line
   QString m_logged;
   QString m_filter; // empty: all components; kActiveFilter or a component's uid
   bool m_subcomponents = true;

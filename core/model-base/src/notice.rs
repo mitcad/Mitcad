@@ -126,6 +126,11 @@ pub enum NoticePlace {
         sketch: Option<String>,
         name: String,
     },
+    /// An occurrence, with every body it places (mitcad#1745: what holds
+    /// a joint's side): its path of uids from the root, `O1/O4`.
+    Occurrence {
+        path: String,
+    },
 }
 
 // (Coordinates are finite numbers: a place equals itself.)
@@ -165,6 +170,11 @@ impl NoticePlace {
         }
     }
 
+    /// An occurrence by its path of uids from the root (`O1/O4`).
+    pub fn occurrence(path: impl Into<String>) -> Self {
+        Self::Occurrence { path: path.into() }
+    }
+
     /// A region of the sketch `sketch` (its uid) by its key.
     pub fn region_of(sketch: impl ToString, name: impl Into<String>) -> Self {
         Self::Region {
@@ -181,7 +191,7 @@ impl NoticePlace {
             | Self::Edge { name, .. }
             | Self::Vertex { name, .. }
             | Self::Region { name, .. } => Some(name),
-            Self::Point { .. } | Self::Box { .. } => None,
+            Self::Point { .. } | Self::Box { .. } | Self::Occurrence { .. } => None,
         }
     }
 
@@ -191,7 +201,10 @@ impl NoticePlace {
             Self::Face { body, .. } | Self::Edge { body, .. } | Self::Vertex { body, .. } => {
                 body.as_deref()
             }
-            Self::Point { .. } | Self::Box { .. } | Self::Region { .. } => None,
+            Self::Point { .. }
+            | Self::Box { .. }
+            | Self::Region { .. }
+            | Self::Occurrence { .. } => None,
         }
     }
 
@@ -222,7 +235,7 @@ impl NoticePlace {
                 body.is_none() && other.body().is_some()
             }
             Self::Region { sketch, .. } => sketch.is_none() && other.sketch().is_some(),
-            Self::Point { .. } | Self::Box { .. } => false,
+            Self::Point { .. } | Self::Box { .. } | Self::Occurrence { .. } => false,
         };
         unknown
             && std::mem::discriminant(self) == std::mem::discriminant(other)
@@ -238,7 +251,10 @@ impl NoticePlace {
                     *body = Some(uid.to_owned());
                 }
             }
-            Self::Point { .. } | Self::Box { .. } | Self::Region { .. } => {}
+            Self::Point { .. }
+            | Self::Box { .. }
+            | Self::Region { .. }
+            | Self::Occurrence { .. } => {}
         }
         self
     }
@@ -661,6 +677,7 @@ pub fn about_place(place: NoticePlace, inner: &str) -> String {
         NoticePlace::Vertex { .. } => "vertex",
         NoticePlace::Region { .. } => "region",
         NoticePlace::Point { .. } | NoticePlace::Box { .. } => "place",
+        NoticePlace::Occurrence { .. } => "occurrence",
     };
     let detail = format!(
         "{kind} {}: {}",

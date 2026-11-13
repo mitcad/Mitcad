@@ -23,6 +23,8 @@
 //!   of its stroke width: its outline offset by half the width to both
 //!   sides (the sketch's offset, round at corners), joined by square ends
 //!   at an open path's ends; the band is filled.
+//! - XML: a DOCTYPE is read (mitcad#1721), with no external DTD or entity
+//!   fetched and the internal subset's entities bounded (`parse_xml`).
 
 use std::collections::HashMap;
 use std::f64::consts::TAU;
@@ -761,9 +763,167 @@ fn path_data(d: &str, matrix: &Matrix) -> Vec<SubPath> {
     paths
 }
 
+/// The most text the entities a drawing declares in its DOCTYPE may
+/// expand to, all their uses together (mitcad#1721): 16 MiB, far above
+/// what a drawing program writes (a few namespace names), far below what
+/// an expansion bomb asks for.
+pub const ENTITY_TEXT_LIMIT: usize = 16 << 20;
+
+/// How deep [`entity_expansion`] follows entities within entities: above
+/// the parser's own limit of 10.
+const ENTITY_DEPTH: usize = 16;
+
+/// The XML of a drawing (mitcad#1721). A DOCTYPE is allowed, as drawing
+/// programs write the SVG 1.1 one: the parser never fetches an external
+/// DTD or entity (a reference to an external entity is an unknown one,
+/// refused), and the entities of the internal subset are refused before
+/// parsing when their uses would expand past [`ENTITY_TEXT_LIMIT`]
+/// ([`entity_expansion`]); the parser's own limits (references nested 10
+/// deep, 255 per reference) stop loops besides. The message says what is
+/// wrong in words; the parser's own text goes to the detail, for agents
+/// and the log.
+fn parse_xml(text: &str) -> Result<Document<'_>, String> {
+    const NOT_XML: &str = "it is not an SVG drawing: the file is not valid XML";
+    const EXPANDS: &str =
+        "it is not an SVG drawing: its entity declarations expand to too much text";
+    let expansion = entity_expansion(text);
+    if expansion > ENTITY_TEXT_LIMIT {
+        return Err(crate::said(
+            EXPANDS,
+            format!(
+                "it is not an SVG drawing: the entities of its DOCTYPE expand to {expansion} \
+                 bytes, more than {ENTITY_TEXT_LIMIT}"
+            ),
+        ));
+    }
+    let options = roxmltree::ParsingOptions {
+        allow_dtd: true,
+        ..Default::default()
+    };
+    Document::parse_with_options(text, options).map_err(|e| {
+        let said = if matches!(e, roxmltree::Error::EntityReferenceLoop(_)) {
+            EXPANDS
+        } else {
+            NOT_XML
+        };
+        crate::said(said, format!("it is not an SVG drawing: {e}"))
+    })
+}
+
+/// How much text the uses of the entities declared in `text` expand to,
+/// in bytes, saturating (mitcad#1721): each `&name;` of a declared entity,
+/// anywhere in the text, counts its value with the entities in it
+/// expanded in turn; one that refers back to itself counts as without
+/// end. Declarations are looked for anywhere (in comments too) and a name
+/// declared twice counts its longer value, so that the count is never
+/// below what the parser expands. Character references and the five
+/// predefined entities are not declared ones and count nothing.
+pub fn entity_expansion(text: &str) -> usize {
+    let declared = declared_entities(text);
+    if declared.is_empty() {
+        return 0;
+    }
+    let mut expanded: HashMap<&str, Option<usize>> = HashMap::new();
+    let mut total = 0usize;
+    for name in entity_references(text) {
+        if declared.contains_key(name) {
+            total = total.saturating_add(expanded_len(name, &declared, &mut expanded, 0));
+            if total == usize::MAX {
+                break;
+            }
+        }
+    }
+    total
+}
+
+/// The entities `<!ENTITY name "value">` (or `'value'`, or `% name` for a
+/// parameter entity, which the parser keeps among the same names) declared
+/// in `text`, by name; an external one (`SYSTEM`, `PUBLIC`) has no value
+/// to expand and is left out.
+fn declared_entities(text: &str) -> HashMap<&str, &str> {
+    let mut declared: HashMap<&str, &str> = HashMap::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("<!ENTITY") {
+        rest = &rest[at + "<!ENTITY".len()..];
+        let mut decl = rest.trim_start();
+        if let Some(after) = decl.strip_prefix('%') {
+            decl = after.trim_start();
+        }
+        let name_end = decl
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '>')
+            .unwrap_or(decl.len());
+        let name = &decl[..name_end];
+        let def = decl[name_end..].trim_start();
+        let Some(quote) = def.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+            continue;
+        };
+        let Some(end) = def[1..].find(quote) else {
+            continue;
+        };
+        let value = &def[1..1 + end];
+        if name.is_empty() {
+            continue;
+        }
+        let longer = declared.get(name).is_none_or(|v| v.len() < value.len());
+        if longer {
+            declared.insert(name, value);
+        }
+    }
+    declared
+}
+
+/// The names of the references `&name;` in `text`, in order (character
+/// references `&#…;` left out).
+fn entity_references(text: &str) -> impl Iterator<Item = &str> {
+    text.split('&').skip(1).filter_map(|after| {
+        let end = after.find(';')?;
+        let name = &after[..end];
+        let plain = !name.is_empty()
+            && !name.starts_with('#')
+            && !name
+                .chars()
+                .any(|c| c.is_whitespace() || matches!(c, '<' | '>' | '&' | '"' | '\''));
+        plain.then_some(name)
+    })
+}
+
+/// The length of entity `name`'s value with the entities in it expanded,
+/// saturating; `None` in `expanded` marks one being expanded, so that a
+/// loop counts as without end. References nested deeper than
+/// [`ENTITY_DEPTH`] count as without end too (the parser refuses them
+/// sooner), which also keeps a long chain of entities from exhausting the
+/// stack.
+fn expanded_len<'a>(
+    name: &'a str,
+    declared: &HashMap<&'a str, &'a str>,
+    expanded: &mut HashMap<&'a str, Option<usize>>,
+    depth: usize,
+) -> usize {
+    if depth > ENTITY_DEPTH {
+        return usize::MAX;
+    }
+    match expanded.get(name) {
+        Some(Some(len)) => return *len,
+        Some(None) => return usize::MAX,
+        None => {}
+    }
+    let Some(value) = declared.get(name).copied() else {
+        return 0;
+    };
+    expanded.insert(name, None);
+    let mut len = value.len();
+    for inner in entity_references(value) {
+        if declared.contains_key(inner) {
+            len = len.saturating_add(expanded_len(inner, declared, expanded, depth + 1));
+        }
+    }
+    expanded.insert(name, Some(len));
+    len
+}
+
 /// Reads an SVG drawing into sketch millimetres.
 pub fn read(text: &str, options: &SvgOptions) -> Result<SvgDrawing, String> {
-    let document = Document::parse(text).map_err(|e| format!("it is not an SVG drawing: {e}"))?;
+    let document = parse_xml(text)?;
     let root = document.root_element();
     if root.tag_name().name() != "svg" {
         return Err("it is not an SVG drawing: its root is not an svg element".to_owned());

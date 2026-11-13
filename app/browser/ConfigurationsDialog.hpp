@@ -17,8 +17,10 @@
 #include "ConfigurationsData.hpp"
 
 class QCheckBox;
+class QHideEvent;
 class QLabel;
 class QPushButton;
+class QShowEvent;
 class QTabWidget;
 class QTableWidget;
 class QTableWidgetItem;
@@ -82,6 +84,7 @@ class ConfigurationsDialog : public QDialog {
 
 public:
   ConfigurationsDialog(DocumentHost& host, QWidget* parent = nullptr);
+  ~ConfigurationsDialog() override;
 
   // Shows the table as the model has it now.
   void refresh();
@@ -90,6 +93,11 @@ public:
   // do, and the tab shown with the bindings an option drives (empty: all).
   void setBindingActions(const BindingActions& actions);
   void showBindings(const QString& option = QString());
+
+protected:
+  // The window's size and place kept between openings (mitcad#1714).
+  void showEvent(QShowEvent* event) override;
+  void hideEvent(QHideEvent* event) override;
 
 private:
   enum OptionColumn {
@@ -123,6 +131,14 @@ private:
     QString parameter; // an option's or a parameter's name
   };
   QVector<RowColumn> rowColumns() const;
+  // The sheet's columns as wide as their headers and cells (mitcad#1714),
+  // after fillRows; a header cut gets its whole text as its tooltip.
+  void fitRowColumns();
+  void tipRowHeader(int column);
+  // The window widened, where the screen has room, so that the sheet's
+  // columns fit: its first opening without a kept size.
+  void widenToRows();
+  void saveWindowGeometry();
   void rowEdited(QTableWidgetItem* item);
   void addRow();
   void generateRows();
@@ -215,6 +231,15 @@ private:
   bool m_building = false;
   QString m_reason;    // why the last run() failed
   QString m_selectRow; // a row to select once the sheet shows it (Add Row)
+  // The Rows sheet's columns (mitcad#1714): the widths the user dragged
+  // them to, by header text, kept over refreshes; true while the window
+  // sizes them itself.
+  QHash<QString, int> m_columnWidths;
+  bool m_fittingColumns = false;
+  QString m_loggedColumns;
+  // The kept size and place was restored; the window has been shown once.
+  bool m_restored = false;
+  bool m_placed = false;
 
   QString m_logged;
   QString m_loggedOptions;

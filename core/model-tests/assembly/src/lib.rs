@@ -32,3 +32,5 @@ mod envelope_source_tests;
 
 // Linked designs read again: on opening and while open (mitcad#1416).
 mod link_update_tests;
+// A design linked from outside the project, copied into it (mitcad#1719).
+mod link_copy_tests;

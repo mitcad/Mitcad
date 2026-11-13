@@ -1888,7 +1888,8 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
       const bool drawn = shown && body.visible && !node.isolatedOut;
       const QString feature = uid.section(QLatin1Char('.'), 0, 0);
       const DocumentSnapshot::Feature* made = snapshot.feature(feature);
-      QString tip = tr("%1 (%2), made by %3").arg(node.name, uid, made != nullptr ? made->name : feature);
+      // In words (mitcad#1741): the body's uid is for agents and logs.
+      QString tip = made != nullptr ? tr("%1, made by %2").arg(node.name, made->name) : node.name;
       // The face that lies on the print bed (mitcad#731).
       if (!body.printBedFace.isEmpty()) {
         tip += QLatin1Char('\n') + tr("Print bed face: %1").arg(printBedText(snapshot, body));

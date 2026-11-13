@@ -248,6 +248,9 @@ impl ProjectRepo {
                     None => Value::Null,
                 };
                 answer["text"] = json!(diff.to_text());
+                // The same for a person (mitcad#1741): the Version History
+                // window shows it.
+                answer["plain_text"] = json!(diff.to_plain_text());
                 answer
             }
             other => {

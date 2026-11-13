@@ -283,6 +283,10 @@ grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_stop_app
 
 echo "--- A design with a component: the origin planes shown, behind the bodies (mitcad#844)"
+# The origin as 100 mm Centered squares, which reach out beside the
+# blocks as the checks below expect (mitcad#1748: the default 80 px
+# Corner squares lie under Part).
+ui_origin_in_millimeters
 ui_start_app --open "$PARTS"
 ui_step "fit (F6)"                       ui_key F6
 ui_expect_log "Bodies shown: " "the blocks shown"

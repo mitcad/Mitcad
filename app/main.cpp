@@ -354,6 +354,7 @@ int runApplication(int argc, char* argv[]) {
       QStringLiteral("Open <file> at start-up: a MitCad design (.mitcad), an .f3d or .f3z design, "
                      "a FreeCAD document (.FCStd), an .ipt part, an .iam assembly, an IFC file (.ifc, .ifczip), an "
                      ".rvt project or .rfa family, a SolidCraft design (.sc, .solidcraft), a .dwg drawing's 3D content, "
+                     "a .3dm model, "
                      "STEP, IGES, BRep, STL, OBJ or DXF as a new document."),
       QStringLiteral("file"));
   const QCommandLineOption qtDialogsOption(

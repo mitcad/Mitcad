@@ -1,0 +1,143 @@
+# SPDX-License-Identifier: MIT
+# Preferences › Display › Origin planes and the resize handles of a
+# construction plane (mitcad#1748, GitHub mitcad/Mitcad#273 and #279), on a
+# new design. The origin's size is read from the view itself: "View origin
+# planes: <size> size, <style> style; XY <mm> mm a side, <px> px across on
+# the screen" (OcctViewer::logOriginSize, through the transform OCCT draws
+# it with).
+#   1. Size Screen and the Corner style (a fresh profile's defaults): the XY
+#      plane's size on the screen stays within 3 px after a zoom in and a
+#      zoom out; a click on its logged place picks it.
+#   2. Preferences: Model, 25 mm: a plane of 25 mm a side, still 25 mm after
+#      a zoom out; a click picks it.
+#   3. Preferences: Screen again, the Centered style: the size on the screen
+#      unchanged by a zoom; a click picks the plane.
+#   4. A construction plane 20 mm above XY, selected: a drag of its corner
+#      handle sets the size it is drawn at, which the model keeps
+#      (display_size) in one undo step ("Resize Plane1").
+# Run by tools/ui-origin-size-test.sh (Linux).
+wait-idle
+expect-ever '^Origin planes: screen size, corner style$'
+expect-ever '^Browser eye Root/Origin at '
+
+# 1. Screen size, Corner style.
+mark
+click-logged '^Browser eye Root/Origin at '
+wait-log '^View origin drawn: planes xy, xz, yz; axes x, y, z; point origin$'
+wait-log '^View origin planes: screen size, corner style; XY '
+wait-idle
+capture screen_px '^View origin planes: screen size, corner style; XY [0-9.]+ mm a side, ([0-9.]+) px across'
+capture-view-height start
+mark
+wheel 50 50 3
+expect-view-zoom ${start} in
+wait-log '^View origin planes: screen size, corner style; XY '
+wait-idle
+capture zoomed_in '^View origin planes: screen size, corner style; XY [0-9.]+ mm a side, ([0-9.]+) px across'
+expect-near ${zoomed_in} ${screen_px} 0 3
+capture-view-height closer
+mark
+wheel 50 50 -6
+expect-view-zoom ${closer} out
+wait-log '^View origin planes: screen size, corner style; XY '
+wait-idle
+capture zoomed_out '^View origin planes: screen size, corner style; XY [0-9.]+ mm a side, ([0-9.]+) px across'
+expect-near ${zoomed_out} ${screen_px} 0 3
+mark
+click-logged '^Datum xy at '
+wait-log '^Selected: .*\[plane xy\]'
+wait-idle
+mark
+key Escape
+wait-log '^Selected: nothing'
+wait-idle
+
+# 2. Model size, 25 mm.
+mark
+command tools.preferences.display
+focus-dialog '^Preferences$'
+qt-choice originSize Model
+focus-widget originSizeMm
+key ctrl+a
+type 25
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+wait-log '^Preferences: origin planes model size 25 mm, corner style$'
+expect-setting view/originSize model
+expect-setting view/originSizeMm 25
+wait-log '^Origin planes: model size 25 mm, corner style$'
+wait-log '^View origin planes: model size, corner style; XY '
+wait-idle
+capture model_mm '^View origin planes: model size, corner style; XY ([0-9.]+) mm a side'
+expect-near ${model_mm} 25 0 0.01
+capture-view-height model_start
+mark
+wheel 50 50 -3
+expect-view-zoom ${model_start} out
+wait-idle
+capture model_out '^View origin planes: model size, corner style; XY ([0-9.]+) mm a side'
+expect-near ${model_out} 25 0 0.01
+mark
+click-logged '^Datum xy at '
+wait-log '^Selected: .*\[plane xy\]'
+wait-idle
+mark
+key Escape
+wait-log '^Selected: nothing'
+wait-idle
+
+# 3. Screen size again, the Centered style.
+mark
+command tools.preferences.display
+focus-dialog '^Preferences$'
+qt-choice originSize Screen
+qt-choice originStyle Centered
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+wait-log '^Preferences: origin planes screen size, centred style$'
+expect-setting view/originStyle centred
+wait-log '^View origin planes: screen size, centred style; XY '
+wait-idle
+capture centred_px '^View origin planes: screen size, centred style; XY [0-9.]+ mm a side, ([0-9.]+) px across'
+capture-view-height centred_start
+mark
+wheel 50 50 4
+expect-view-zoom ${centred_start} in
+wait-log '^View origin planes: screen size, centred style; XY '
+wait-idle
+capture centred_in '^View origin planes: screen size, centred style; XY [0-9.]+ mm a side, ([0-9.]+) px across'
+expect-near ${centred_in} ${centred_px} 0 3
+mark
+click-logged '^Datum xy at '
+wait-log '^Selected: .*\[plane xy\]'
+wait-idle
+mark
+key Escape
+wait-log '^Selected: nothing'
+wait-idle
+
+# 4. A construction plane's corner handle.
+mark
+model-command '{"cmd":"add_feature","def":{"type":"construction_plane","definition":{"type":"offset","plane":"xy","distance":20}}}'
+wait-log '^Datum F1( in O1)? at '
+command view.fit
+wait-idle
+mark
+click-logged '^Datum F1( in O1)? at '
+wait-log '^Selected: .*\[plane F1( in O1)?\]'
+wait-log '^Datum handle F1 corner [1-4] at '
+wait-idle
+mark
+drag-from '^Datum handle F1 corner [1-4] at ' 40 30
+wait-log '^Datum handle F1 resized to [0-9.]+ mm$'
+wait-idle
+capture dragged '^Datum handle F1 resized to ([0-9.]+) mm$'
+capture-model-number stored '{"query":"datum","uid":"F1"}' display_size
+expect-near ${stored} ${dragged} 0 0.000001
+wait-log '^Datum handle F1 corner [1-4] at '
+mark
+key ctrl+z
+wait-log '^Undo: Resize Plane1$'
+wait-idle

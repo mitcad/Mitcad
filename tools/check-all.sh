@@ -251,7 +251,7 @@ CORPUS_PASSED=${XDG_CACHE_HOME:-$HOME/.cache}/mitcad/corpus-passed
 UI_BASE=(third_party CMakeLists.txt CMakePresets.json cmake triplets rust-toolchain.toml vcpkg.json)
 UI_COMMON=(app geometry core)
 UI_SMOKE=(smoke workflow command file)
-UI_LIBRARY=(tools/ui-test-lib.sh tools/ui-image-stats.py tools/xwd2png.py)
+UI_LIBRARY=(tools/ui-test-lib.sh tools/ui-image-stats.py tools/xwd2png.py tools/ui-visible-text-allow.txt)
 UI_PASSED=${XDG_CACHE_HOME:-$HOME/.cache}/mitcad/ui-passed
 CTEST_PASSED=${XDG_CACHE_HOME:-$HOME/.cache}/mitcad/ctest-passed
 # The memory a corpus test's child may commit, and its time.

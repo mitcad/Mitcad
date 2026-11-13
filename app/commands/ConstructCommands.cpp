@@ -235,6 +235,9 @@ InputDef fieldInput(const FieldSpec& field, const CommandContext& context) {
                     false)
         .withItemsText([key](const Selection& items, const CommandState& state, const CommandContext& model) {
           return spatialRouteListing(items, false, keptPathReversed(state, key), model, key);
+        })
+        .withItemsWords([key](const Selection& items, const CommandState& state, const CommandContext& model) {
+          return spatialRouteWords(items, false, keptPathReversed(state, key), model, key);
         });
   case Field::Distance:
     return valueInput(key, name, ValueKind::Length, QStringLiteral("10 mm"));

@@ -9,10 +9,14 @@
 # extrusion k high (k = 2 mm), no configurations yet; Qt's own file dialogs
 # (--no-native-dialogs).
 #   1. Configurations…, Rows: Import CSV… with a small table of screw
-#      sizes (size, d [mm], k [mm]: M3 3 3, M4 4 4, M5 5 5), previewed
-#      (size the key option, d and k parameter columns, size and d made),
-#      imported in one step: three rows, the table closed; the options
-#      are the row M3, so k takes its 3 mm (300 mm3).
+#      sizes (size, d [mm], k [mm] and a parameter of the design with a
+#      40-character name: M3 3 3 6, M4 4 4 8, M5 5 5 10), previewed (size
+#      the key option, d, k and the long one parameter columns, size and d
+#      made), imported in one step: three rows, the table closed; the
+#      options are the row M3, so k takes its 3 mm (300 mm3). The sheet
+#      scrolls sideways per pixel, and the long name's column is as wide
+#      as its header, or at the window's maximum with the whole name as
+#      its header's tooltip (mitcad#1714).
 #   2. M4's d and k selected and copied (Ctrl+C), pasted at M5's d
 #      (Ctrl+V): M5 takes 4 mm and 4 mm.
 #   3. Options: Add Option… on the closed table with rows offers the
@@ -33,9 +37,13 @@ FILE=$WORK/screw.mitcad
 trap 'ui_cleanup; rm -rf -- "${WORK:?}"' EXIT
 
 R='r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}'
+# A parameter name of 40 characters (mitcad#1714).
+LONG=thread_length_below_the_head_of_the_bolt
+[ ${#LONG} -eq 40 ] || ui_fail "the long name has ${#LONG} characters"
 cat > "$WORK/model.json" << EOF
 [
   {"cmd": "add_parameter", "name": "k", "unit": "mm", "expression": "2 mm"},
+  {"cmd": "add_parameter", "name": "$LONG", "unit": "mm", "expression": "1 mm"},
   {"cmd": "sketch.create"},
   {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 10, "height": 10},
   {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "$R"}],
@@ -43,7 +51,7 @@ cat > "$WORK/model.json" << EOF
 ]
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
-printf '%s\r\n' 'size,d [mm],k [mm]' 'M3,3,3' 'M4,4,4' 'M5,5,5' > "$WORK/screws.csv"
+printf '%s\r\n' "size,d [mm],k [mm],$LONG [mm]" 'M3,3,3,6' 'M4,4,4,8' 'M5,5,5,10' > "$WORK/screws.csv"
 
 # expect_volume expected description: the last body volume change logged
 # since the mark.
@@ -87,15 +95,30 @@ ui_expect_new "Rows import preview of screws.csv: 3 rows from the file: added M3
   "the preview: three rows, size and d made"
 ui_expect_new "Rows import column size [Text]: key option, a new parameter" "the first column is the key option"
 ui_expect_new "Rows import column k [mm]: parameter column" "k is a parameter column"
+ui_expect_new "Rows import column $LONG [mm]: parameter column" "the long name is a parameter column"
 sleep 0.5
 tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Configurations rows: closed" && ui_fail "the preview changed the table"
 ui_mark
 ui_step "Import (Enter)"                 ui_key Return
 ui_expect_new "Configurations imported rows from screws.csv: 3 rows from the file: added M3, M4, M5" "imported"
-ui_expect_new "Configurations rows: closed, default none, current M3: M3: size = M3, d = 3 mm, k = 3 mm; M4: size = M4, d = 4 mm, k = 4 mm; M5: size = M5, d = 5 mm, k = 5 mm" \
+ui_expect_new "Configurations rows: closed, default none, current M3: M3: size = M3, d = 3 mm, k = 3 mm, $LONG = 6 mm; M4: size = M4, d = 4 mm, k = 4 mm, $LONG = 8 mm; M5: size = M5, d = 5 mm, k = 5 mm, $LONG = 10 mm" \
   "the Rows sheet: a row per size, a column per parameter, the table closed"
 ui_expect_new "Configurations row M5 d at" "the cells' places are logged"
 expect_volume 300 "10 x 10 x 3: k follows the row M3 the options are on"
+# Long parameter names (mitcad#1714).
+ui_expect_log "Configurations rows horizontal scroll: per pixel" "the sheet scrolls sideways per pixel"
+ui_expect_new "Configurations rows column $LONG: width " "the long name's column is sized"
+COLUMN=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Configurations rows column $LONG: width " | tail -1)
+WIDTH=$(sed -n 's/.*: width \([0-9]*\), header needs [0-9]*, .*/\1/p' <<< "$COLUMN")
+NEEDS=$(sed -n 's/.*: width [0-9]*, header needs \([0-9]*\), .*/\1/p' <<< "$COLUMN")
+[ -n "$WIDTH" ] && [ -n "$NEEDS" ] || ui_fail "the long name's column: '$COLUMN'"
+if [ "$WIDTH" -ge "$NEEDS" ]; then
+  echo "ok   the long name's header fits: width $WIDTH px, it needs $NEEDS px"
+elif [[ $COLUMN == *", tooltip $LONG" ]]; then
+  echo "ok   the long name's header is cut at $WIDTH px (it needs $NEEDS px), its tooltip the whole name"
+else
+  ui_fail "the long name's column is $WIDTH px, its header needs $NEEDS px, without the name as tooltip: '$COLUMN'"
+fi
 
 echo "--- 2. Copy and paste a block of cells"
 ui_focus_dialog '^Configurations$'

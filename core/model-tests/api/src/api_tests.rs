@@ -209,7 +209,9 @@ fn block() -> Document<MockKernel> {
                "parameters": ["d1", "d2"],
                "status": {"dof": 0, "fully_constrained": ["c1", "c2", "c3", "c4", "p5", "p6", "p7", "p8"],
                           "redundant": [], "conflicts": []},
-               "recomputed": 1, "error": null})
+               "recomputed": 1, "error": null,
+               // The work step that made them (mitcad#1750).
+               "step": "s1"})
     );
     let extrude = command(
         &mut doc,

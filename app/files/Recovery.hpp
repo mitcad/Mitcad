@@ -64,6 +64,8 @@ void discardSession(RecoverableSession& session);
 // (all healthy designs selected initially), Discard (the ones selected,
 // after a question; they are removed and leave `sessions`) and Later.
 // Returns the selected healthy sessions to restore, or an empty list.
-std::vector<std::size_t> askRecovery(QWidget* parent, std::vector<RecoverableSession>& sessions);
+// `atStart`: asked at start-up rather than by File > Recover Designs (live
+// MCP's refusal then points to --no-recovery, mitcad#1725).
+std::vector<std::size_t> askRecovery(QWidget* parent, std::vector<RecoverableSession>& sessions, bool atStart);
 
 } // namespace mitcad

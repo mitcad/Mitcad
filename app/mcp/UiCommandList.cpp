@@ -75,6 +75,26 @@ bool opensDialog(const QString& id) {
   return false;
 }
 
+QString dialogViewRefusal(const QString& id) {
+  if (!opensDialog(id)) {
+    return QStringLiteral("it opens no dialog: ui_command runs it");
+  }
+  for (const char* prefix : {"file.", "insert."}) {
+    if (id.startsWith(QLatin1String(prefix))) {
+      return QStringLiteral("its dialog reads or writes files");
+    }
+  }
+  if (id.startsWith(QLatin1String("help."))) {
+    return QStringLiteral("it opens another application or a web page");
+  }
+  for (const char* word : {"import", "export", "insert_", "publish"}) {
+    if (id.contains(QLatin1String(word))) {
+      return QStringLiteral("its dialog reads or writes files");
+    }
+  }
+  return {};
+}
+
 QStringList nearestCommandIds(const CommandRegistry& registry, const QString& wanted, int count) {
   const QString text = wanted.trimmed().toLower();
   const QStringList words = wordsOf(text);

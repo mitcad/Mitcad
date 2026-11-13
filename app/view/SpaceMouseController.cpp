@@ -87,7 +87,18 @@ void SpaceMouseController::apply() {
   }
   const SpaceMouseSettings settings = m_hooks.settings ? m_hooks.settings() : SpaceMouseSettings();
   const bool flat = m_hooks.flat && m_hooks.flat();
-  m_hooks.rates(spaceMouseRates(settings, m_axes, flat));
+  const SpaceMouseRates rates = spaceMouseRates(settings, m_axes, flat);
+  // The motion's axes in the debug log (mitcad#1720), written as the cap
+  // comes to rest, before the view's own line of the motion.
+  if (rates.moving()) {
+    m_axesLog.add(m_axes);
+  } else {
+    const QString line = m_axesLog.take();
+    if (!line.isEmpty()) {
+      qDebug().noquote() << line;
+    }
+  }
+  m_hooks.rates(rates);
 }
 
 void SpaceMouseController::button(int index, bool pressed) {

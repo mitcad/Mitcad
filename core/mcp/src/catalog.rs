@@ -299,7 +299,7 @@ fn refinement_schema() -> Value {
         "type": ["string", "object"],
         "minLength": 1,
         "maxLength": 16,
-        "description": "STL, OBJ, 3MF, USDZ: the mesh's tolerances, a preset (low, medium the default, high) or {\"deviation\": mm, \"angle\": radians} with optional face_triangles (a face's most triangles, 0 none) and max_edge (mm, a triangle's longest edge, 0 none), e.g. {\"deviation\": 0.03, \"angle\": 0.052} for a small printed part",
+        "description": "STL, OBJ, 3MF, USDZ: the mesh's tolerances, a preset (low, medium the default, high) or {\"deviation\": mm, \"angle\": radians} with optional face_triangles (a face's most triangles, 0 none) and max_edge (mm, a triangle's longest edge, 0 none); deviation or angle left out is medium's (0.03 mm, 15 degrees), e.g. {\"deviation\": 0.03, \"angle\": 0.052} for a small printed part",
         "properties": {
             "deviation": {"type": "number", "description": "The surface's largest distance from the mesh in mm"},
             "angle": {"type": "number", "description": "The largest angle between neighbouring facets' normals in radians"},
@@ -523,7 +523,7 @@ fn ui_tools() -> Vec<Value> {
         ),
         tool(
             "ui_state",
-            "The application's state: mode (idle, sketch, command, pick_plane), the active component, the sketch being edited with its Sketch Palette status and warnings (each with the entities it is about), the running command with its inputs and panel messages, the selection, the hint or error line, read-only state, unsaved changes, undo and redo labels, connected agents, the number of open comments (comments.open: notes the user pinned for an agent; read them first, from the resource mitcad://comments or model_query {\"query\": \"comments\", \"status\": \"open\"}), and the application's version and build.",
+            "The application's state: mode (idle, sketch, command, pick_plane), the active component, the sketch being edited with its Sketch Palette status and warnings (each with the entities it is about), the running command with its inputs and panel messages, the selection, the hint or error line, read-only state, unsaved changes, undo and redo labels, connected agents, the number of open comments (comments.open: notes the user pinned for an agent; read them first, from the resource mitcad://comments or model_query {\"query\": \"comments\", \"status\": \"open\"}), the application's version and build, and the dialog open in the application (dialog.title; null without one), which only the user can answer: edits wait until it is answered (blocked_reason says why). An agent that starts MitCad itself passes --no-recovery, so that the question about an earlier session's unsaved work does not wait at start-up.",
             json!({}),
             &[],
             true,
@@ -544,7 +544,7 @@ fn ui_tools() -> Vec<Value> {
             "ui_screenshot",
             "An image of the 3D view as the user sees it, including the sketch overlay, or of the whole window, scaled to fit max_size pixels and then down until its encoded image takes at most max_bytes bytes, returned as an MCP image (PNG, or JPEG with format; the format asked for is kept, and downscaled_for_bytes tells when the budget made it smaller). max_bytes counts the PNG or JPEG bytes (the result's bytes); the image block's base64 is 4/3 of that, and the rest of the response adds under 2 KiB. Its default, 5 MiB, keeps the response within Mitcad's own 8 MiB transport limit; a client with a lower limit of its own passes a smaller max_bytes (e.g. 500000). An image that cannot fit is refused with error_code screenshot_too_large. With path it is written to that file in a folder the user allows agents to use, and only the path, the size and the bytes are returned, at full size unless max_bytes is given. width and height, or aspect, render the 3D view offscreen at that size, without the widgets over it, so the picture does not take the window's shape; frame it first with ui_camera's aspect.",
             json!({
-                "window": {"type": "boolean", "default": false, "description": "The whole window instead of the 3D view"},
+                "window": {"type": "boolean", "default": false, "description": "The whole window instead of the 3D view, with the application's open popups, lists, tooltips and dialogs over it at their places; the result's windows says where each lies in the picture"},
                 "max_size": {"type": "integer", "minimum": 64, "maximum": 4096, "default": 1280, "description": "The longer side's largest size in pixels"},
                 "max_bytes": {"type": "integer", "minimum": SCREENSHOT_MIN_BYTES, "maximum": SCREENSHOT_INLINE_BYTES, "description": "The encoded PNG or JPEG image's largest size in bytes (not its base64): the picture is scaled down until it fits. Default 5 MiB for an image returned inline; a file written to path has no limit unless this is given"},
                 "format": {"type": "string", "enum": ["png", "jpeg"], "description": "png (the default, or by the path's extension) or jpeg"},
@@ -632,6 +632,55 @@ fn ui_tools() -> Vec<Value> {
     ]
 }
 
+/// Clicks, keys and dialogs for viewing (mitcad#1735): the live catalogue
+/// lists them only when the application allows them (a run started with
+/// --mcp-folder, never the chat's own connection); the headless server
+/// never has them. The application posts the events to its window.
+pub(crate) fn input_tools() -> Vec<Value> {
+    let document = json!({"type": "string", "minLength": 1, "maxLength": ID_CHARS, "description": LIVE_DOCUMENT});
+    vec![
+        tool(
+            "ui_click",
+            "Click in the application window as the user does with the mouse, for screenshots of the real UI: the move, the press and the release (and a second press with double) are posted to the window as Qt events and run right after the result; read their effect with ui_state or ui_screenshot. Where: input, a command panel's input by its key as ui_state's command lists the inputs (key=value for a choice's button), at the place ui_command's log gives it (\"Panel Extrude input distance at 1471,595\"); or at, [x, y] in the window's logical pixels from its top-left corner, as those log lines and a whole-window ui_screenshot at full size show them. A field clicked takes the keyboard for ui_type. A click outside an open list closes the list. Refused while a dialog or a window opened for viewing (ui_dialog) is open. Only in an application started with --mcp-folder.",
+            json!({
+                "document": document,
+                "input": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "A command panel's input key (key=value for a choice's button)"},
+                "at": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "x, y in the window's logical pixels from its top-left corner"},
+                "button": {"type": "string", "enum": ["left", "right", "middle"], "default": "left"},
+                "double": {"type": "boolean", "default": false, "description": "A double-click"}
+            }),
+            &[],
+            false,
+            true,
+        ),
+        tool(
+            "ui_type",
+            "Type into what has the keyboard in the application window (a field clicked with ui_click, an open list), posted as Qt key events that run right after the result: text first, any Unicode (ä, ö, Ø, °, a parameter's name) one character after another, then keys, key names separated by spaces (Enter, Tab, Shift+Tab, Escape, Backspace, Delete, Left, Right, Up, Down, Home, End, F2, Ctrl+A). The keys go to the field; the application's menu shortcuts do not run from them (ui_command runs those commands). Read the effect with ui_state (a panel's input text) or ui_screenshot. Refused while a dialog or a window opened for viewing (ui_dialog) is open. Only in an application started with --mcp-folder.",
+            json!({
+                "document": document,
+                "text": {"type": "string", "maxLength": 4096, "description": "Unicode text, typed one character after another"},
+                "keys": {"type": "string", "maxLength": 1000, "description": "Key names separated by spaces, after the text: Enter, Tab, Escape, Backspace, Ctrl+A, ..."}
+            }),
+            &[],
+            false,
+            true,
+        ),
+        tool(
+            "ui_dialog",
+            "View a window that ui_command refuses because it opens a dialog or another window (Edit Parameters, Preferences, Grid Settings, Send to Slicer's panel), for screenshots of the real UI. open (a command id) opens it: a dialog right after the result, a command panel at once; then read lists the open window: title, place ([x, y, width, height] in the window's coordinates), fields (kind, label, value, enabled; tables with their columns and rows) and buttons (text, enabled, closes); and press closes it with a button whose closes is true (Close, Cancel), or with Close or Cancel the window as its title bar's close button does. Nothing is changed or written through it: other buttons are refused, and so are ui_click and ui_type while it is open. Commands that read or write files (file.*, insert.*, imports, exports) or open another application (help.*) are refused, and a file dialog that opens is closed. ui_screenshot with window: true takes the picture. Only in an application started with --mcp-folder.",
+            json!({
+                "document": document,
+                "open": {"type": "string", "minLength": 1, "maxLength": ID_CHARS, "description": "A command id whose window ui_command refuses (ui_command's search lists them with agents false)"},
+                "read": {"type": "boolean", "description": "List the open window's fields and buttons"},
+                "press": {"type": "string", "minLength": 1, "maxLength": NAME_CHARS, "description": "A closing button's text (Close, Cancel)"}
+            }),
+            &[],
+            false,
+            false,
+        ),
+    ]
+}
+
 fn tool(
     name: &str,
     description: &str,
@@ -676,6 +725,27 @@ pub(crate) fn check(name: &str, arguments: &Value) -> Result<(), String> {
         "ui_command" if has("search") && (has("id") || has("edit") || has("inputs")) => Err(
             "ui_command's search lists the commands: give no id, edit or inputs with it".to_owned(),
         ),
+        // One place for a click, one thing to type, one step of a dialog
+        // (mitcad#1735).
+        "ui_click" if has("input") == has("at") => {
+            Err("ui_click takes either input or at".to_owned())
+        }
+        "ui_type" if !has("text") && !has("keys") => {
+            Err("ui_type takes text, keys or both".to_owned())
+        }
+        "ui_dialog"
+            if [
+                has("open"),
+                arguments.get("read").and_then(Value::as_bool) == Some(true),
+                has("press"),
+            ]
+            .iter()
+            .filter(|given| **given)
+            .count()
+                != 1 =>
+        {
+            Err("ui_dialog takes one of open, read: true and press".to_owned())
+        }
         _ => Ok(()),
     }
 }

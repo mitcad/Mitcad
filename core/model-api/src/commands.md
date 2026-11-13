@@ -772,6 +772,11 @@ millimetres, angles radians. Build sketches with the
   expression, which becomes the sketch's own text parameter of the text.
   The text is laid out with the parameter's text and follows it; its
   `text` keeps the string it had when it was last set.
+- `steps` (mitcad#1750): the work steps that made its items, `[{"id": 2,
+  "kind": "rectangle", "entities": ["c1", "p5"], "constraints": ["k1"]}]`,
+  recorded by the `sketch.*` commands, with `texts` and a trim's or an
+  extension's `changed` curves where there are any; left out when there
+  are none ([The work steps of a sketch](#the-work-steps-of-a-sketch)).
 - `patterns`: copy groups, `{"id": "k5", "type": "circular", "center":
   "p3", "count": 6, "angle": "d4", "entities": ["c2", "p7"], "copies":
   [{"index": [1, 0], "entities": {"c2": "c9", "p7": "p10"}}, …]}` or
@@ -1141,6 +1146,22 @@ parameters.
     the geometry kernel could not lean the profile's walls by … degrees
     over … mm (…)`. The feature's error, the timeline and MCP's results
     carry the same text; the message's start is as before.
+  - A taper works on every curve of a profile (mitcad#1749): splines,
+    ellipses and offset curves as well as lines and arcs. Where OCCT's
+    draft cannot lean a wall (it leans planes, cylinders and cones only),
+    the walls are ruled from the profile to its offset in the sketch plane
+    by `d tan(taper)` at the far end (each curve's exact offset, OCCT's
+    offset curve), each point of an edge to the point of its offset at the
+    same curve parameter. At a sharp corner (a D of a spline and a line, a
+    notch where a spline leaves a line) the offsets join as a draft's
+    planes meet: where two offsets cross, both end there; where they part,
+    each runs on along its end tangent to the mitre where the tangents
+    meet, the walls fanning out from the corner to it. Each curve keeps
+    one wall named `side(<curve>)`, the caps `start` and `end`, as without
+    a taper; holes taper the other way, for every extent with a distance
+    and for cuts. A taper that closes the profile before the end fails as
+    above (`the taper closes the profile before the end of the extrusion`
+    where the offset finds no single loop).
 - `<object>`: `{"type": "plane", "plane": p}` (a plane reference: origin
   plane, construction plane, a planar face as an unbounded plane, or a
   fixed plane), `{"type": "face", "body": b, "face": f, "chained": false}`
@@ -1567,8 +1588,17 @@ is no longer a region's own is found again:
    (a bar lengthened across another curve keeps both of its parts
    selected, so the area that was selected stays selected). Regions in a
    hole of those pieces (islands inside) stay out, as the old region's
-   holes did; an area inside the outline that was a hole and is now
-   joined to the boundary is taken as a piece.
+   holes did. A hole that the change took across the outline stays out
+   too (mitcad#1740): a 40 x 20 plate less a hole whose diameter grows to
+   24 is found as its left and right pieces, not the piece of the plate
+   inside the circle. The key names only the outline, so the holes are
+   read from the curves: an area that curves outside the key bound alone
+   (the key's curves crossed freely) stays out when it holds none of the
+   outline's corners, does not reach the outside of every region, and
+   lies more inside the outline than outside it. A line across the region
+   (it bounds no area), a region lengthened across another curve (its
+   pieces hold corners) and a region grown into an outline lying mostly
+   outside it keep every piece.
 2. When the key's segments trace no loop (a curve of it is gone, or no
    longer meets the curve at its end), the reference means the region
    with the most curves in common, then the most identical segments,
@@ -4749,6 +4779,27 @@ any feature fails, the result also has `"failed_features"`: each one and
 whether this command added or edited it ([Failed features in command
 results](#failed-features-in-command-results)).
 
+A command that brings a warning to a feature that was there before it
+says so in its result (mitcad#1729): `"warnings"` lists each warning such
+a feature has now and did not have before the command, as
+`"<feature's name>: <warning>"` in timeline order, the text the `feature`
+query gives (with the names, for agents), and `"warning_messages"` says
+the same in plain words. So `set_parameter`, `suppress_feature`,
+`set_marker`, `undo` and the others tell, for example, that a driven
+dimension split an extruded profile and the extrude kept its region as
+the pieces (`"Extrude1: region r{…} found as r{…} + r{…} after a change in
+Sketch1"`), without a look at the timeline; a warning that stays as it
+was is not repeated, and one that goes brings nothing. In `add_feature`
+and `edit_feature` they come after the feature's own warnings (which are
+without its name; no `"warning_messages"` there); in a sketch command
+after its own, in both lists. A feature the command added is left out
+(`add_feature` gives its own, an import reports its items). A command
+whose `"warnings"` say something else (an export's, a count) keeps them
+as they are. In every case each is also a warning among the result's
+`"notices"`, with the feature's uid as its `target` and its places.
+Tests: `core.model.sketch-refs` (`profile_selection_tests.rs`), `cli.mcp`
+(`mcp-test.py`, with `"timeline": "none"`).
+
 ### Timeline and parameters
 
 | Command | Fields | Result |
@@ -4847,7 +4898,7 @@ once.
 | `begin_command` | | `token`: an opaque string identifying a checkpoint of the current definition, revision, saved state and both history stacks |
 | `restore_command` | `token` | restores that checkpoint after its scene recomputes successfully; keeps the token for retries |
 | `discard_command` | `token` | releases the checkpoint without changing the current definition or history |
-| `merge_undo` | `depth`: the undo depth before the action, `label` | merges the undo steps after `depth` into one step named `label` (clears redo); `undo_depth`. Refuses a `depth` past the last step |
+| `merge_undo` | `depth`: the undo depth before the action, `label` | merges the undo steps after `depth` into one step named `label` (clears redo), and the sketch work steps they recorded into one per sketch ([The work steps of a sketch](#the-work-steps-of-a-sketch)); `undo_depth`. Refuses a `depth` past the last step |
 | `mark_saved` | | `revision`; the definition state is the design file's (saved or opened). No undo step, nothing recomputed |
 
 - Undo and redo restore the whole definition (parameters, timeline,
@@ -4956,6 +5007,27 @@ once.
   with its edges in its own appearance's colour, and a click goes
   through it to what lies behind ([app/COMMANDS.md](../../../app/COMMANDS.md),
   "Transparent bodies and components").
+
+#### Display size of construction planes and axes (mitcad#1748)
+
+| Command | Fields | Result |
+|---|---|---|
+| `set_datum_display_size` | `uid` (a construction plane or axis), `size` (mm, greater than 0 and at most 1 000 000; null or left out: the default size) | undo step `Resize Plane1` / `Resize Axis1` unless nothing changes; nothing recomputed |
+
+- How large the application draws a construction plane (its square's
+  side) or axis (its line's length): its resize handles in the 3D view
+  send this command ([app/COMMANDS.md](../../../app/COMMANDS.md), "Origin
+  planes and the size of construction geometry"). Display only: the
+  datum's plane or line, what sketches and features use, does not
+  change. Other features, construction points among them, are refused
+  (`Point1 has no display size: …`).
+- The `datums` and `datum` queries list `"display_size"` for a datum that
+  has one (left out otherwise); the design file keeps it on the feature
+  (`"display_size": 40`, left out when not set), a design comparison lists
+  it as a `display_size` change. Deleting the feature forgets it; a file
+  with a size on another feature reads without it, a size that is not a
+  positive number is refused. Code: `document/browser.rs`. Tests:
+  `core/model-tests/api/src/datum_display_size_tests.rs`.
 
 ### Named views
 
@@ -5485,7 +5557,7 @@ The `faces` and `edges` queries tell where each face and edge is
 
 | Query | Fields | Result |
 |---|---|---|
-| `datums` | `origin` (also the origin datums) | per datum: `uid`, `name`, `type` and its geometry |
+| `datums` | `origin` (also the origin datums) | per datum: `uid`, `name`, `type` and its geometry; `display_size` where set ([Display size of construction planes and axes](#display-size-of-construction-planes-and-axes-mitcad1748)) |
 | `datum` | `uid` (`F3` or `xy`) | `type` `plane`: `origin`, `normal`, `x_axis`, `y_axis`; `axis`: `origin`, `direction`; `point`: `point` |
 | `properties` | `bodies` (default all), `components` ([Physical Properties' extent](#physical-properties-extent-mitcad1095)), `density`, `densities` {uid: g/cm³} | `bodies`, one entry per placement of a body ([placed bodies](#physical-properties-extent-mitcad1095)): `uid`, `name`, `occurrence` (a body of a component), `material`, `density`, `volume`, `area`, `mass`, `center_of_mass` (design coordinates), `inertia` (3 × 3, at the centre of mass, along the design's axes), `principal_moments`, `principal_axes`, `bbox` {`min`, `max`, `size`} along the design's axes, `faces`, `edges`, `vertices`; `total`: `volume`, `area`, `mass`, `center_of_mass`, `inertia`, `bbox`, `faces`, `edges`, `vertices`; with `components` also `components`: `uid`, `name`, `occurrence` |
 | `measure` | `a`, `b` (optional) selections | `a`, `b`: `kind` and `volume`, `area`, `length`, `point`, `circle` {`center`, `axis`, `radius`, `sweep`}, `axis` {`origin`, `direction`} (*Measure with axes*), `plane` {`origin`, `normal`} of a planar face or a datum plane (the middle of the face on its plane, the normal out of the material; mitcad#714) as they apply; with `b` also `between`: `main` (`"offset"` or `"distance"`), `main_points` (the main dimension's two endpoints), `distance` (the finite shapes' minimum), `on_a`, `on_b`, `inside`, `angle` (null unless both have a normal, a direction or an axis), `offset` (only for two parallel planes, *Measure in the design*), `axis_distance`, `axis_points`, `center_distance` (*Measure with axes*) |
@@ -5962,8 +6034,10 @@ The `sketch` query (`{"query": "sketch", "uid": "F1"}`) returns:
 - `patterns` and `offsets`, also `values` and `value`: `parameter`,
   `value`, `expression`;
 - `regions`: `key`, `area`, `centroid`, `loops` (segment keys, outer loop
-  first); a glyph's region also `text` and `letter` (false for a
-  counter);
+  first), `perimeter` (mm, the length of all its loops, holes included:
+  lines, circles and arcs exactly, ellipses to a few parts in a million;
+  left out when a loop has a spline; mitcad#1741, the selection card's);
+  a glyph's region also `text` and `letter` (false for a counter);
 - `dof`, `fully_constrained` (entity ids), `redundant` (constraint ids
   implied by the others, all of them; the `warnings` group them, and
   fixes that follow only from other fixes are not listed, mitcad#1171)
@@ -5974,7 +6048,12 @@ The `sketch` query (`{"query": "sketch", "uid": "F1"}`) returns:
   dimensions](#inactive-constraints-and-dimensions));
 - `order`: the ids of the points, curves, constraints and dimensions in
   the order they were made (see [The order of a sketch's
-  items](#the-order-of-a-sketchs-items), mitcad#1492).
+  items](#the-order-of-a-sketchs-items), mitcad#1492);
+- `steps`: the work steps that made them, in that order (see [The work
+  steps of a sketch](#the-work-steps-of-a-sketch), mitcad#1750):
+  `{"id": "s2", "kind": "rectangle", "items": ["c1", "p5", …]}` (a trim's
+  or an extension's also `changed`, the curves it changed), an item no
+  step holds as `{"items": ["p7"]}`.
 
 The positions, curves and status come from the sketch's last evaluation
 while it succeeded and was made from the definition and the parameter
@@ -6667,13 +6746,19 @@ Examples: `tools/cli/tests/f6_*.json`.
   project are followed (mitcad#929; for a design in no project, its
   folder and the folders in it): a link whose path is absolute outside it,
   or whose `..` leads out of it, is not read at all, and its component
-  keeps the saved bodies with the message "<component>: the link outside
-  the project is not followed (<path>); it keeps the bodies saved with
-  the project". Without `base` no link is followed. So that links stay
-  followed, `insert_component` records a file in the project by its path
-  relative to `base` (`../parts/plate.mitcad`, with `/`), whatever form
-  `path` had; a file outside the project keeps `path` as given, and its
-  link is not followed when the design opens again.
+  keeps the saved bodies with the message "<component>: the file is
+  outside the project, so the link is not followed and it keeps the
+  bodies saved with the project; to follow it, move the file into the
+  project, or make the folder that holds both a project (File › Project ›
+  New Project…), then Update Link" (mitcad#1719: in words, no path).
+  Without `base` no link is followed ("…: the design is not saved yet, so
+  the link is not followed…"). So that links stay followed,
+  `insert_component` records a file in the project by its path relative
+  to `base` (`../parts/plate.mitcad`, with `/`), whatever form `path`
+  had; a file outside the project keeps `path` as given, and its link is
+  not followed when the design opens again, unless `copy_into_project`
+  copies it in first ([Linked designs from outside the
+  project](#linked-designs-from-outside-the-project-mitcad1719)).
 - **Deleting.** `delete_occurrence` deletes an occurrence; the last one
   of a component deletes the component with its features, the feature
   that made it and what depends on them, and the components only it
@@ -6696,7 +6781,7 @@ Examples: `tools/cli/tests/f6_*.json`.
 | `copy_occurrence` | `occurrence`, `transform` (optional) | `occurrence`, `name` |
 | `paste_new` | `occurrence`, `transform` (optional) | `component`, `occurrence`, `name` |
 | `delete_occurrence` | `occurrence` | `deleted`: features; `notices` for the cut-scope exclusions it dropped |
-| `insert_component` | `path` or `library` ([Component libraries](#library-parts)), `link` (default true), `transform`, `name`, `base` (directory of relative paths), `mount` (placed by a mount frame instead of `transform`, [Mount frames](#mount-frames)), `parameters` (linked with options, [Options of inserted components](#options-of-inserted-components)) | `component`, `occurrence`, `name`, `bodies` (the new component's), `frames` (its mount frames: `name`, `kind`, `joint`, `pitch`, `cells`, `footprint`, `feature` (the joint origin), `occurrence`), `joint` and `joint_name` (a mount placement's, else null), `mount` (what the placement did, as `mount_preview` answers); with `parameters` also `moves` and `refused` |
+| `insert_component` | `path` or `library` ([Component libraries](#library-parts)), `link` (default true), `transform`, `name`, `base` (directory of relative paths), `mount` (placed by a mount frame instead of `transform`, [Mount frames](#mount-frames)), `parameters` (linked with options, [Options of inserted components](#options-of-inserted-components)), `copy_into_project` (default false: a linked file outside the project copied into it first, [Linked designs from outside the project](#linked-designs-from-outside-the-project-mitcad1719)) | `component`, `occurrence`, `name`, `bodies` (the new component's), `frames` (its mount frames: `name`, `kind`, `joint`, `pitch`, `cells`, `footprint`, `feature` (the joint origin), `occurrence`), `joint` and `joint_name` (a mount placement's, else null), `mount` (what the placement did, as `mount_preview` answers); with `parameters` also `moves` and `refused`; with `copy_into_project` also `copied` |
 | `update_links` | `base` (optional) | `messages` |
 | `reparent_occurrence` | `occurrence` (path from the root), `parent` (path; empty: the root) | see [Moving an occurrence to another parent](#moving-an-occurrence-to-another-parent) |
 
@@ -6953,6 +7038,8 @@ the timeline`).
  "offset": 0, "angle": 0, "flip": true,
  "limits": {"rz": {"min": "-90 deg", "max": "90 deg", "rest": "30 deg"}},
  "position": {"rz": "45 deg"}}
+{"type": "joint", "kind": "cylindrical", "a": {…}, "b": {…}, "offset": 300,
+ "start": {"tz": 0, "rz": 0}}
 {"type": "as_built_joint", "kind": "revolute", "a": "O2", "b": "O1",
  "origin": {"occurrence": "O2", "geometry": "F9"},
  "relative": [[1, 0, 0, 100], [0, 1, 0, 0], [0, 0, 1, 0]], "limits": {}}
@@ -6963,7 +7050,7 @@ the timeline`).
 
 - `joint` (named `Joint<n>`): `kind`, `slide_axis` (sliders only), `a`,
   `b`, `offset` (along z, a length), `angle` (about z), `flip`, `limits`,
-  `position`; `offset`, `angle` and `flip` default to 0 and false. The
+  `position`, `start`; `offset`, `angle` and `flip` default to 0 and false. The
   two origins must be on different occurrences, and at most one may be
   the component's own geometry.
 - `limits`: per free motion of the kind, `{"min", "max", "rest"}`, each
@@ -6980,6 +7067,19 @@ the timeline`).
   joints need, stays within its limits, and otherwise stays where it is.
   Driven values say where a motion is, not whether it can move: degrees
   of freedom leave them out.
+- `start` (mitcad#1745): per free motion of the kind, a number (mm,
+  radians): where the motion is when the joint places its moving side,
+  instead of the value nearest to where that side is. The application's
+  Joint command writes 0 for every free motion of a new joint, so that the
+  moving side goes where its origin meets the other at the offset and
+  angle (a cylindrical joint's offset then moves it), and `drag_occurrence`
+  writes the values a drag leaves its free motions at. Unused for a driven
+  motion (its `position` or `rest`) and for a joint that closes a loop
+  (the solver iterates those from where the occurrences are); kept within
+  the motion's limits. A joint without it (older designs, imports,
+  `add_joint` without it) keeps its free motions nearest to where the
+  moving side is, so that its offset along a free slide only shifts the
+  slide's value.
 - `as_built_joint` (`AsBuiltJoint<n>`): two occurrence paths `a` and `b`
   joined where they are: `relative` is `a`'s placement in `b`'s
   coordinates when it was made (rows of a rotation and a translation;
@@ -7024,7 +7124,8 @@ at that point:
   between a side that is fixed (or joined to something fixed by the
   joints before it) and one that is not moves the free side, with every
   unit joined to it so far, so that the joint holds at its driven values
-  and, for free motions, at the values nearest to where it is; between
+  and, for free motions, at its `start` values, else at the values
+  nearest to where it is; between
   two free sides side `a` moves onto side `b`. An open chain needs
   nothing else.
 - Joints that close a loop are iterated: the units move as little as
@@ -7037,10 +7138,26 @@ at that point:
   `moved`; `satisfied` when nothing had to move). Placements set by
   joints are not cached: grounding, ungrounding and moving an occurrence
   recompute them.
-- Joints whose sides cannot move (both fixed, or both in one unit) only
-  hold or fail: `both sides are fixed (Pin:1 and Plate:1) and the joint
-  does not hold`, `both sides move with Pin:1, Pin:2 and the joint does not hold`, or `… is not
-  at its position`.
+- Joints whose sides cannot move only hold or fail, saying in words, with
+  the components' names, what holds each side (mitcad#1745): `neither
+  side can move (Pin:1 is grounded, and Plate:1 is in a rigid group with
+  Base:1, which is grounded) and the joint does not hold`, `both sides
+  move as one (a rigid group joins Pin:1 and Pin:2) and the joint does not
+  hold`, or `… is not at its position`. A side cannot move when it is the
+  component's own geometry (`an origin on Box's own geometry does not
+  move`), when its unit has a grounded member (`Pin:1 is grounded`, `… is
+  in a rigid group with Base:1, which is grounded`), or when joints before
+  it that let nothing move (rigid ones, or those whose motions are all
+  driven and in no motion link) join it to such a unit (`Plate:1 is
+  joined rigidly to Base:1, which cannot move`). The error's places are
+  the occurrences that hold them (`{"kind": "occurrence", "path":
+  "O1/O4"}`, the path of uids from the root; the application paints every
+  body the occurrence places).
+- A joint whose moving occurrence a `move_occurrence` or
+  `capture_position` later in the timeline places again warns, the
+  occurrence its place: `Pin:1 is placed again by a move later in the
+  timeline, so it does not stay where this joint puts it` (… by a captured
+  position …; the detail names the feature).
 - Joints that contradict each other fail the joint feature, which moves
   nothing: `over-constrained: Joint1 (at its rz position), Joint2 and
   Joint4 cannot all hold` (the rank analysis of the joints' equations,
@@ -7065,7 +7182,7 @@ feature and moves nothing.
 
 | Command | Fields | Result |
 |---|---|---|
-| `add_joint` | `kind`, `slide_axis`, `a`, `b` (origins; `occurrence` by uids or names from the component), `offset`, `angle`, `flip`, `limits`, `position`, `name`, `component` (the active one when left out) | `uid`, `name`, `parameters` (created), `state`, `solved` |
+| `add_joint` | `kind`, `slide_axis`, `a`, `b` (origins; `occurrence` by uids or names from the component), `offset`, `angle`, `flip`, `limits`, `position`, `start` (where the free motions start, as the definition's; `{"tz": 0, "rz": 0}` puts a cylindrical joint's origins together as the Joint command does), `name`, `component` (the active one when left out) | `uid`, `name`, `parameters` (created), `state`, `solved` |
 | `add_as_built_joint` | `kind`, `slide_axis`, `a`, `b` (occurrence paths), `origin`, `limits`, `position`, `name`, `component` | the same; `relative` recorded from the placements at the marker |
 | `add_rigid_group` | `occurrences` (two or more, placed in the component), `name`, `component` | `uid`, `name` |
 | `drive_joint` | `joint` (uid or name; of a shared name the only joint, [Feature names are not unique](#feature-names-are-not-unique-mitcad1107)), `values` (per motion a [value](#values), or null to take the position away) | `uid`, `parameters` (created), `state`, `values`; one undo step `Drive Joint1` |
@@ -7082,11 +7199,14 @@ feature and moves nothing.
   a set touch ([Motion studies and contact
   sets](#motion-studies-and-contact-sets)).
 - `drag_occurrence` keeps where `joint_drag` puts the occurrences: their
-  own placements become the dragged ones (refused for an occurrence a
-  `move_occurrence` or `capture_position` before the marker places:
-  `capture the position instead`), and every driven motion that moved is
-  driven to its new value (its `position` becomes the number). The
-  joints before the marker then reproduce the dragged placements.
+  own placements become the dragged ones, every driven motion that moved
+  is driven to its new value (its `position` becomes the number), and a
+  joint whose free motions moved keeps their new values as its `start`
+  (mitcad#1745). The joints before the marker then reproduce the dragged
+  placements. An occurrence a `move_occurrence` or `capture_position`
+  before the marker places keeps its own placement: the drag is kept when
+  the joints, with their start values, put it where the drag left it,
+  else refused (`capture the position instead`).
   A drag after which a joint, as-built joint, rigid group, constraint set
   or motion link that held would fail, recomputed in timeline order,
   moves nothing (mitcad#1666): `Arm:1 was not moved: where the drag would
@@ -7299,8 +7419,9 @@ tests `constraint_tests.rs`, `core/solver/tests/rigid_constraints.rs`,
   recompute does](#what-recompute-does)): constraints place their free
   side first by the smallest motion that makes each row hold, join
   nothing, and leave the rest to the iteration; a row whose sides cannot
-  move only holds or fails (`row 1 (align): both sides are fixed (Pin:1
-  and Plate:1) and the constraint does not hold`). Contradictions name
+  move only holds or fails (`row 1 (align): neither side can move (Pin:1
+  is grounded, and Plate:1 is grounded) and the constraint does not
+  hold`, with the occurrences' places). Contradictions name
   rows: `over-constrained: Joint1 and Constraint2 row 1 (align) cannot
   all hold`, a value at its rest `(at its offset)`. Constraint rows count
   in the degrees of freedom, `redundant` and `conflicting` (by the set's
@@ -7815,6 +7936,15 @@ with `fill`, `fill-rule`, `stroke`, `stroke-width`, `display` and
 not read: a warning). Images and foreign objects are left out with a
 warning.
 
+A DOCTYPE is read (mitcad#1721), the SVG 1.1 declaration as drawing
+programs write it and an internal subset with its entities: nothing
+outside the file is fetched (a use of an external entity is refused as
+not valid XML), and a file whose declared entities would expand to more
+than 16 MiB in all, or nest deeper than 10, is refused ("its entity
+declarations expand to too much text"). A file that is not valid XML is
+refused in those words; the parser's own text is the error's detail, for
+agents and the log.
+
 - Geometry, exactly: lines are lines; quadratic and cubic Bézier pieces
   are splines of degree 2 and 3 with the same control points; elliptical
   arcs and circles are arcs and circles of the sketch where the drawing's
@@ -7863,8 +7993,8 @@ An importer that builds bodies itself adds them without files:
   The file's mesh bodies come in after them, one base feature each,
   placed as the import with the timeline places them, with the physical
   material and appearance their records name (mitcad#1376); the report's
-  `meshes` lists each: `source` (its container), `triangles`, `feature`,
-  `bodies`, `appearance` and `material` (the body's ids, null where none
+  `meshes` lists each: `source` (its container), `triangles`, `feature`
+  (and `feature_name`, as the bodies in `imported`), `bodies`, `appearance` and `material` (the body's ids, null where none
   came in), or `error` for one that could not be read; `mesh_gaps` says
   what of their materials and appearances did not come in. The import is
   one undo step.
@@ -7924,7 +8054,9 @@ The result: `file`, `design`, `items` (timeline items), `counts` (items
 per outcome: `parametric`, `partial`, `fallback`, `skipped`) and
 `report`: per design `parameters` (imported, as values, renamed,
 skipped, mismatched), `items` (`index`, `name`, `type`, `outcome`,
-`features`, `verified`, `note`, `component` when not the root,
+`features`, `verified`, `note` (the agents' text, with the sketch's ids)
+and `note_message` (the same in plain words, which the import report
+shows; mitcad#1741), `component` when not the root,
 `geometric_deviation`: the largest distance in mm beyond 0.001 mm at
 which a lookup of its decoded inputs took the replay's geometry for the
 file's, when one did; `exact_retry` when it was tried again on the
@@ -8477,7 +8609,8 @@ or `Document::import_ipt(path, json)` for the report alone) imports an
   hang watchdog gave up on the replay outside its items, so that the stored
   bodies came in without the timeline; mitcad#507) and `seconds` {`read`,
   `import`}; `imported` lists the document's bodies after the replay
-  (`feature` is the feature that made the body). Sheet-metal faces,
+  (`feature` is the feature that made the body, `feature_name` its name
+  for a person, mitcad#1741). Sheet-metal faces,
   flanges on one edge and cuts through the sheet replay as `sheet_rules`
   (named `Sheet rules <style>`, before the first face), `sheet_face`,
   `sheet_flange` and `sheet_cut` (mitcad#211; the `.f3d` import's base and
@@ -8525,7 +8658,8 @@ ASM history the record carries), `truncated`); `imported`
 (each body: `source` `<segment>#<record>/<body>`, `solid`, `valid`
 (OCCT's checker), `volume`, `raw_volume` (before the solids were
 oriented), `area`, `faces`, `issues`, `messages` (the builder's, with what
-the checker finds wrong), `feature`,
+the checker finds wrong), `feature` (its uid), `feature_name` (its name,
+the one the import report dialog shows, mitcad#1741),
 `bodies` with `uid`, `name`, `kind`); `skipped` (bodies not built:
 `source`, `error`); `warnings`; `seconds` {`read`, `build`}; and with
 `reference`, `reference`: `file`, `step_solids`, `solids` (pairs:
@@ -9091,6 +9225,79 @@ version: header variables, classes, objects, data storage, both forms of
 the B-rep record, the plan of components), `cli.import_dwg_<version>`
 (the test drawing through OCCT) and `dwg.corpus` (`MITCAD_DWG_CORPUS`).
 
+### .3dm import
+
+`{"cmd": "import_3dm", "path": "model.3dm", …}` (C++ `Document::command`,
+or `Document::import_3dm(path, json)` for the report alone) imports a
+`.3dm` model (mitcad#1715; `core/ffi/src/import_3dm.rs`, the reader is
+[core/3dm](../../3dm/README.md)), files of format versions 5 to 8. Bodies
+only: a `.3dm` model keeps no feature history.
+
+- **Bodies:** B-reps (polysurfaces and surfaces, which the format saves
+  as B-reps of one face), extrusions (each segment of a profile a side
+  face, the caps where the extrusion has them) and untrimmed NURBS and
+  plane surfaces, converted to the neutral B-rep model of the imports and
+  built by its B-rep builder; meshes as mesh bodies. A B-rep that cannot
+  be built comes in as the render mesh saved with it where it has one,
+  with a warning (`render_mesh_fallbacks`). Coordinates are the model's
+  units scaled to millimetres (no unit: millimetres assumed).
+- **Components:** each block is a component named as the block, placed by
+  an occurrence per instance; nested blocks in their blocks. An instance
+  whose transform is not rigid (a scale or a mirror) is copied into the
+  component that holds it, the bodies moved by the transform
+  (`Kernel::transform_shape`). Block definitions are read from files of
+  format version 6 and later; in older files their instances are left out
+  with a warning. An instance of a block inside that block (directly or
+  through other blocks) is left out (`a block placed inside itself`), and
+  copies stop at 10,000 instances and 100,000 bodies.
+- **Features:** the bodies of a component on one layer are one base
+  feature named `Layer <path>` (`Parent::Child`; in a component
+  `<component> layer <path>`), source `<file>, layer <path>`; a body is
+  named after its object, else `Solid n`, `Surface n` or `Mesh n`, and
+  coloured by its object's display colour (its own, its layer's, or for
+  a block's geometry the instance's); black, the format's default, leaves
+  the body MitCad's colour. The model's unit becomes the document's when
+  it was empty and MitCad has it (mm, cm, m, in, ft). One undo step.
+- **Left out:** hidden objects and objects on hidden layers, curves,
+  points, annotations and other classes that are not solids, surfaces or
+  meshes (left out by design: `design` true, no notice), SubD objects and
+  objects that could not be read (a warning each kind). A file the reader
+  refuses (not a `.3dm` file, a version before 2) is an error; a damaged
+  object is left out as not read, the rest of the file imported.
+- **Options:** `text` (the report as text), `report_path`.
+- **Report** (`report`): `format` (`3dm`), `version` (the archive's: 50,
+  60, 70, 80), `application`, `units` (the document's, when set),
+  `file_units`, `unit_mm`, `units_assumed`, `tolerance` (the model's
+  absolute tolerance, its units), `layers`, `objects` and `taken` (by
+  kind), `left_out` (`type`, `count`, `why`, `design`), `components`
+  (`name`, `bodies`, `occurrences`, `placed`, `component`),
+  `copied_instances`, `bodies`, `solids`, `meshes`, `valid`,
+  `solid_volume` (mm³, each body once), `render_mesh_fallbacks`,
+  `not_built` (`source`, `error`, and for agents `object`: the object's
+  index in the file), `checks` (every body built and valid, every solid,
+  surface and mesh taken) and `pass`, `warnings`, `warning_details`,
+  `notices`. The command's result: `file`, `bodies`, `components`,
+  `notices`, `report`.
+- **Words, not places** (docs/ui-conventions.md, "What a message says"):
+  `warnings`, `not_built`'s `source` and `error` and the error of a file
+  that cannot be read say what is wrong in words and name an object by
+  its kind, name, block and layer ("the B-rep \"Bracket\" in the block
+  Bolt on the layer Parts cannot be read: the data ends early"), never
+  by its index in the file, a byte offset, a typecode or a class id.
+  Those are for agents: `warning_details` gives each warning with its
+  `detail` ("object 17: the data ends early (8 bytes needed at offset
+  4096, 2 left)"), `not_built` its `object`, and the log (the import
+  process's standard error, `import: .3dm: …`) the same.
+
+Tests: `core.3dm` (the reader and the conversion on its test models, cut
+short and damaged; the models of `MITCAD_3DM_CORPUS` read and converted),
+`cli.import_3dm` (the sample model through OCCT),
+`cli.import_3dm_block_in_itself` and `3dm.corpus` (the models an
+`index.tsv` under `MITCAD_3DM_CORPUS` lists, through OCCT),
+`cli.render_3dm_plane_surfaces` (plane surfaces drawn facing up in each
+of the file's forms come in facing up and render lit from above,
+mitcad#1738).
+
 ### The import's outcomes on the timeline
 
 The importers that replay a history (the `.f3d` and `.ipt` imports,
@@ -9199,7 +9406,12 @@ tolerances themselves (mitcad#398):
   so it is shared by both faces as before and a small face beside a large
   cylinder (a bore's wall) meshes as without the bound.
 - `{"deviation": mm, "angle": radians}` holds the deviation on every
-  face, however large: the explicit absolute tolerance. `face_triangles`
+  face, however large: the explicit absolute tolerance. One of the two
+  may be left out and is then `medium`'s (`{"deviation": 0.01}` has the
+  angle 15°, `{"angle": 0.1}` the deviation 0.03 mm; mitcad#1732); an
+  object with neither is refused with an error that names both fields
+  (test `a_refinement_object_takes_the_missing_tolerance_from_medium`).
+  `face_triangles`
   added to it bounds the faces as the presets do (`0`, the default when
   numbers are given: no bound). `max_edge` (mm; `0`, the default and the
   presets': none) is the longest edge a triangle of an STL, OBJ or 3MF
@@ -9485,25 +9697,40 @@ whole documents; nothing is computed unless the geometry is asked for.
 | `components`, `occurrences`, `bodies`, `groups`, `views`, `analyses`, `appearances`, `flat_patterns` | `kind`, `uid` (not for groups, views and analyses; the body's for Flat Patterns), `name`, `fields`, `text` |
 | `geometry` | with the geometry: `bodies` (those that differ: `kind`, `uid`, `name`, `volume` and `area` as `from`, `to`, `change`, `relative`, `text`), `volume`, `area` (sums), `errors` |
 
-Texts use `->` and ASCII units (`mm^3`). Entry points:
+Texts use `->` and ASCII units (`mm^3`). The texts above (`text`,
+`to_text`) name features, bodies and the rest with their uids and list a
+sketch's ids: they are the agents', the CLI's and the log's. The text for
+a person (mitcad#1741, `DesignDiff::to_plain_text`, the Version History
+window) names them only by their names (`Extrude1: distance 20 mm -> 25
+mm`, `Fillet1 (fillet): added after Extrude1`, `Body1: volume …`), counts
+a sketch's items (`Sketch1: entities 8 -> 11 (3 added)`), says a field
+whose values name internal ids only as changed (`profiles region
+changed`), and gives the summary with the document's fields so
+(`DesignDiff::plain_summary`, also each version's `changes` in the
+version history's list); no topological names, region keys or ids.
+Entry points:
 
 - The version history's `diff` command: `path`, `from` (a version), `to`
   (a version; left out: the file as saved in the folder); the answer adds
-  `path`, `from` and `to` (ids; `to` null for the saved file) and `text`
+  `path`, `from` and `to` (ids; `to` null for the saved file), `text`
   (`command_text`: `Changes in part.mitcad from abc1234 to def5678:` and
-  the text). An older version is read under the path the file had there.
-  B-rep data is compared by SHA-256, so no store is read.
+  the text) and `plain_text` (the text for a person). An older version is
+  read under the path the file had there. B-rep data is compared by
+  SHA-256, so no store is read.
 - The bridge's `diff_documents(from, to, options)` for two documents (the
-  open one and a version from `load_version`): options `text`,
-  `geometry` (the bodies as last computed; compute the versions first,
-  as a job), and `from`, `to`, `path` to name them in the answer.
+  open one and a version from `load_version`): options `text`, `plain`
+  (with `text`: the text for a person), `geometry` (the bodies as last
+  computed; compute the versions first, as a job), and `from`, `to`,
+  `path` to name them in the answer.
 - Rust: `diff_documents`, `diff_files`, `diff_states` with
-  `read_design`, `DesignDiff::add_geometry`, `to_json`, `to_text`.
+  `read_design`, `DesignDiff::add_geometry`, `to_json`, `to_text`,
+  `to_plain_text`, `plain_summary`.
 - `mitcad-cli diff <a.mitcad> <b.mitcad>` and `mitcad-cli diff <file>
   <version> [<version>]`, with `--json` and `--geometry` (both
   recomputed, linked components not followed).
 
-Tests: `core/model-tests/files/src/diff_tests.rs`, `core/vcs/src/tests.rs`
+Tests: `core/model-tests/files/src/diff_tests.rs` (the text for a person:
+`the_plain_text_names_no_ids`), `core/vcs/src/tests.rs`
 (`versions_compare_their_designs`), ctest `cli.diff`
 (`tools/cli/diff-test.cmake`).
 
@@ -14953,7 +15180,10 @@ An example, a chamfer wider than the face beside its edge:
 
 A point is a place too, `{"kind": "point", "at": [28.28, -28.28, 202]}`,
 where an error says where in the model's space; its coordinates are in
-the detail, never in the message.
+the detail, never in the message. So is an occurrence,
+`{"kind": "occurrence", "path": "O1/O4"}` (its path of uids from the
+root, mitcad#1745: what holds a joint's side), painted as every body it
+places.
 
 An older text, or an imported one, that still names them is cleaned on
 the way: the names become their kind in words ("an edge", "a face", "a
@@ -17970,7 +18200,7 @@ library's or an import's, [Print profiles](#print-profiles)).
 | Query | Fields | Result |
 |---|---|---|
 | `materials` | | the built-in materials the design does not replace, in their order, then the design's: the fields above, `built_in`, `replaces_built_in` (a design's material with a built-in's id), `class` (its own or worked out, as in `library_items`), `class_fixed` (true when print settings make it an FDM plastic, mitcad#1102), `display_color` (its appearance's), `bodies` (uids of bodies that name it) and `components` (whose default it is) |
-| `body_material` | `body`, `occurrence` (the path that places it, `O1/O4` or names) | the material's fields and `source`: `body`, `component` (with `component`, whose default it is) or `default`; `appearance_set_by_hand` |
+| `body_material` | `body`, `occurrence` (the path that places it, `O1/O4` or names) | the material's fields and `source`: `body`, `component` (with `component`, whose default it is) or `default` (with `print_material`, `id` and `name` of what a slicer gets meanwhile: the print default `pla`, mitcad#1727); `appearance_set_by_hand` |
 | `material_conflicts` | `bodies`, `material` (null: their components' default) | `bodies`: `{uid, name, appearance}` of those whose appearance was set by hand and would change |
 
 The design file keeps the design's materials as `"materials": [{"id",
@@ -18349,7 +18579,7 @@ bodies: the report counts them as left out.
 
 | Command | Fields | Result |
 |---|---|---|
-| `import_print_profile` | `path`, `dialect`, `into` (`design` the default, `user`, `project`), `project`, `choose` (into the design: the root chooses the printer and process read; true by default) | into the design (one undo step `Import Print Settings plate.3mf`): `printers`, `processes`, `materials` (`id`, `name`), `chosen`; into a library: `items` (`kind`, `id`, `name`, `version`, `path`); both `dialect` and `report`: `mapped`, `mapped_keys`, `kept`, `kept_keys`, `left_out`, `problems`, `log` |
+| `import_print_profile` | `path`, `dialect`, `into` (`design` the default, `user`, `project`), `project`, `choose` (into the design: the root chooses the printer and process read; true by default) | into the design (one undo step `Import Print Settings plate.3mf`): `printers`, `processes` (`id`, `name`), `materials` (`id`, `name`: a name the design already holds is numbered, `PLA (2)`, `PLA (3)`, ...; `colour`: its appearance's `#RRGGBB`; `source`: the file it came from, mitcad#1728), `chosen`; into a library: `items` (`kind`, `id`, `name`, `version`, `path`); both `dialect` and `report`: `mapped`, `mapped_keys`, `kept`, `kept_keys`, `left_out`, `problems`, `log` |
 
 **An installed slicer's presets** (mitcad#830,
 `print_files/installed.rs`, `document/slicer_presets.rs`). The user
@@ -18391,7 +18621,7 @@ nothing.
 
 | Command | Fields | Result |
 |---|---|---|
-| `import_slicer_presets` | `dialect` (`bambu_studio`, `orcaslicer`, `qidi_studio`), `folder` (the slicer's data folder, `slicer_presets`' `folder`), `presets` (`[{path, same_name}]`, `same_name` `copy` or `override`), `into` (`design` the default, `user`, `project`), `project` | as `import_print_profile`'s (into the design `printers`, `processes`, `materials`; into a library `items`), the overridden items among them, with `overridden` (`kind`, `id`, `name`; in a library `version`, `path`), `copied` (`kind`, `name`, `from`: the preset's name), `dialect`, `into`, `report` |
+| `import_slicer_presets` | `dialect` (`bambu_studio`, `orcaslicer`, `qidi_studio`), `folder` (the slicer's data folder, `slicer_presets`' `folder`), `presets` (`[{path, same_name}]`, `same_name` `copy` or `override`), `into` (`design` the default, `user`, `project`), `project` | as `import_print_profile`'s (into the design `printers`, `processes`, `materials`, each `id` and `name`; into a library `items`), the overridden items among them, with `overridden` (`kind`, `id`, `name`; in a library `version`, `path`), `copied` (`kind`, `name`, `from`: the preset's name), `dialect`, `into`, `report` |
 
 | Query | Fields | Result |
 |---|---|---|
@@ -18410,6 +18640,23 @@ the range a dialect takes (Bambu Studio's -1 for "automatic" in
 refuses; the key map's `range` of the dialect key) is left out of that
 dialect's file, and the slicer keeps its default, with a warning.
 
+**No material, no printer** (mitcad#1727). A body without a material of
+its own or of a component up its path prints as the print default, the
+built-in `pla` (`PLA Plastic`, the material print analysis assumes), in
+its own appearance where it has one, else PLA's: not as the design's
+default steel, which only stands for its density. `body_material` of
+such a body (`source` `default`) gives that print default as
+`print_material` (`id`, `name`). A design without a printer (no profile
+chosen and no slicer's preset name kept) names a stand-in printer,
+`Mitcad printer`, which the slicer does not know and slices nothing
+with until a real printer is chosen there; the Bambu family's and
+PrusaSlicer's exports then warn `no printer profile was imported: …;
+import the printer's profile first (import_print_profile, or the
+Printer row of Send to Slicer)`. That warning is the agents' text; the
+result then also has `warning_messages`, every warning as the
+application shows it, this one in plain words without the command
+(`docs/ui-conventions.md`, "What a message says").
+
 **Filament values some materials set** (mitcad#1052). A slicer reads
 every filament's value of a key from one list, an entry per filament: a
 key no material of the written slots sets stays the slicer's, but one
@@ -18419,9 +18666,9 @@ default material). A slot whose material does not set it takes the value
 of MitCad's generic filament of its type (PLA, PETG, ABS, ASA, TPU, PA:
 the base library's diameter, nozzle and bed temperatures and the first
 layer's, and fan speed; a slot without a type is written as PLA), else
-the first slot's that sets it, with a warning per slot (`Steel (filament
-2) sets no nozzle temperature, bed temperature: written as generic
-PLA's`). The type, the colour, a preset's name and a filament's override
+the first slot's that sets it, with a warning per slot (`PLA Plastic
+(filament 2) sets no nozzle temperature, bed temperature: written as
+generic PLA's`). The type, the colour, a preset's name and a filament's override
 of the printer's extruder settings (`nil`) keep their own rules. The
 result's `printed` gives each written part's `body`, `name` (the
 part's), `material` (its id) and `own_values` (its material's filament
@@ -24617,7 +24864,7 @@ folder the design was read from; a design never saved follows no link).
 
 | Query | Fields | Result |
 |---|---|---|
-| `links` | `base` (optional) | `links`: per linked design (not library parts), in the order of the components, `component`, `name`, `path` (as the design saves it), `file` (the file it is followed to; null when not followed), `options` (linked with options), `changed` (the file is not the text the component last took), `problem` (why it is not followed or cannot be read; null) |
+| `links` | `base` (optional) | `links`: per linked design (not library parts), in the order of the components, `component`, `name`, `path` (as the design saves it), `file` (the file it is followed to; null when not followed), `options` (linked with options), `changed` (the file is not the text the component last took), `problem` (why it is not followed or cannot be read, in words; for a file outside the project with the way out, mitcad#1719: "the file is outside the project, so the link is not followed; to follow it, move the file into the project, or make the folder that holds both a project (File › Project › New Project…), then Update Link"; null) |
 
 - **One undo step.** `update_link` takes the changed files' bodies (a
   design linked with options its design) as one undo step, `Update Link
@@ -26178,7 +26425,7 @@ an undo step. The ordinary non-print checks do not request meshes.
 
 | Query | Fields | Result |
 |---|---|---|
-| `design_review` | `scope` (`all` by default, a component uid or name, or an array of feature uids), `checks` (rule ids; all when omitted, none for an empty array), `print` (`auto` by default, `true`, `false`) | `findings`: `rule`, `level` (`error`, `warning`, `info`, the Notice levels), `target` (feature uid, body uid or user parameter name), `message`, `advice`, `guide` (`topic`, `anchor`); `errors` (print checks that could not run: `rule`, `target`, `message`); `print` (`enabled`, `bodies`, `contexts`, `default_nozzle_diameter`, `default_layer_height`) |
+| `design_review` | `scope` (`all` by default, a component uid or name, or an array of feature uids), `checks` (rule ids; all when omitted, none for an empty array), `print` (`auto` by default, `true`, `false`) | `findings`: `rule`, `level` (`error`, `warning`, `info`, the Notice levels), `target` (feature uid, body uid, plate id or user parameter name), `message`, `advice`, `guide` (`topic`, `anchor`); `errors` (print checks that could not run: `rule`, `target`, `message`); `print` (`enabled`, `bodies`, `contexts`, `default_nozzle_diameter`, `default_layer_height`) |
 
 Examples through the model query tool:
 
@@ -26213,11 +26460,18 @@ suppressed definitions.
 | `thin-wall` | warning | Thin regions from the existing print-thickness query, with a minimum of two nozzle diameters. |
 | `outside-build-volume` | warning | The existing build-volume query lists the body's current shown placement outside the printer bed, height or permitted area. |
 | `min-gap` | warning | Two checked bodies on the same plate (or, without plates, in the design) are apart but closer than the design's `print_in_place_gap`, else 0.3 mm, as `print_min_gap` finds them (mitcad#1519); the target is the pair's first body. |
+| `stray-bodies` | warning | A piece that a feature in the scope split off a body (a cut that leaves a body in several pieces gives the extra pieces new bodies) still has a default name while another piece of the same split was named (mitcad#1731). The target is the unnamed piece. Splits where no piece is named are left to the user's naming. |
+| `no-bed-face` | warning | A checked body on a print plate whose piece has no usable print bed face, so the 3D print export orients it automatically. A body on its own plate item, or on none, is a piece of its own; bodies on a plate through an occurrence item print as assembled, are one piece that turns onto a bed face of any of its bodies, and are reported once, at their first checked body (mitcad#1731). |
+| `no-print-profile` | warning | A plate whose checked bodies include one without an effective printer profile: its 3MF names a placeholder printer the slicer cannot slice with (mitcad#1727, mitcad#1731). The target is the plate's id. |
+| `split-profile` | warning | A feature whose profile region references a sketch change found as several regions (the region was split) or as fewer regions than the feature selected (selected regions merged). The feature builds with the regions found and otherwise keeps only its region warning; `auto_fix` writes them into the definition (mitcad#1731). |
 
 With `print: auto`, only scoped final bodies with an assigned print bed
 face, a print plate or an effective printer profile are checked. Explicit
 `true` checks all scoped printable bodies; `false` runs no print checks.
 If `checks` selects no print rule, none runs regardless of `print`.
+`no-bed-face` and `no-print-profile` are print checks that apply only to
+a design with print plates; like `outside-build-volume` they request no
+meshes.
 A selected modifying feature includes the final bodies its output sets.
 The review uses the current body's first shown occurrence (else its
 first occurrence, else its own coordinates), as the underlying print
@@ -27026,9 +27280,11 @@ the right, 1.15 mm from a seam's end, and on the left each a radius of
 
 The `sketch` query's `order` (mitcad#1492) lists the ids of the
 sketch's points, curves, constraints and dimensions (`p1`, `c3`, `k1`,
-…) in the order they were made; sketch mode shows them so in the
-timeline's place ([app/COMMANDS.md](../../../app/COMMANDS.md), "The
-sketch's items in the timeline's place"). Texts, patterns, offsets and
+…) in the order they were made; sketch mode's list of the sketch's
+work steps in the timeline's place follows it ([The work steps of a
+sketch](#the-work-steps-of-a-sketch), mitcad#1750;
+[app/COMMANDS.md](../../../app/COMMANDS.md), "The sketch's work steps in
+the timeline's place"). Texts, patterns, offsets and
 projections are not listed.
 
 A sketch stores no order across its two numberings, but each numbering
@@ -27066,3 +27322,171 @@ change heads only, so results read from the result store stay packed
 Code: `Document::body_last_features` (`core/model/src/document.rs`),
 the `bodies` query (`core/model-api/src/lib.rs`). Test:
 `core/model-tests/api/src/body_last_features_tests.rs`.
+
+## A parameter's range tried on a copy
+
+The `parameter_range` query (mitcad#1730) evaluates the design at values
+of one parameter, by default its min and its max ([Parameter
+limits](#parameter-limits)), without changing the document: each value
+is set with `set_parameter` on a copy of the document that recomputes
+from its cached results, and the answer compares the design there with
+the design at the current value. The document, its undo history, its
+results and its revision stay as they were. One parameter at a time.
+
+| Query | Fields | Result |
+|---|---|---|
+| `parameter_range` | `parameter` (name); optional `values` (1 to 50 numbers in mm, radians or plain numbers, as `set_parameter`'s `value`) or `steps` (2 to 50 values evenly from its min to its max, both included; 2 when neither is given), `time_limit_s` (1 to 600 seconds for all values together, default 30) | `parameter`; `current` (`value`, `text`, `body_count`, `bodies`, `failed_features`, `feature_warnings`); `values`, one per value: `value`, `text`, then `changed`, `body_count`, `body_count_change`, `bodies` (`uid`, `name`, `volume`, `bbox` {`min`, `max`}, and `volume_change` and `bbox_change` {`min`, `max`} against the same body now, or `new`; `changed`), `removed_bodies` (`uid`, `name`), `failed_features` (`feature`, `name`, `error`, `new` when it does not fail now), `new_warnings` (`feature`, `name`, `warning` as the feature gives it, `message` as a person reads it), `applied`, `applied_text` and `limited` when the limits held the parameter at another value; or `error` when `set_parameter` refused the value; or `timed_out`; `timing_ms` each; `timed_out`, `timing_ms` and `time_limit_s` of the whole query; changes nothing |
+
+```json
+{"query": "parameter_range", "parameter": "HoleOffset", "steps": 3}
+```
+
+- A value is set as `set_parameter`'s `value` sets it: limits that are
+  not strict hold it at the min, the max or the step (`applied`,
+  `limited`), a strict limit refuses it (`error`), and the
+  configurations' rules follow it.
+- `changed` is true when the body count differs, a body is new or gone,
+  a volume differs by more than a millionth of it, a box corner moves
+  more than 0.000 001 mm, a feature fails or stops failing, or a feature
+  warns of something it does not warn of now (a region found as two
+  regions after a sketch change, `region r{…} found as r{…} + r{…} after
+  a change in Sketch1`). Bodies are those at the timeline marker, in
+  their component's coordinates, as the `bodies` query gives them;
+  without measurements from the geometry kernel a body has no `volume`.
+- The time limit covers all values: a value whose recompute is still
+  running when it passes is stopped and, with the values after it, has
+  `timed_out` instead of a result; what was evaluated before is kept in
+  the answer. A cancel of the document's running job rejects the query.
+- A text parameter, an unknown name, a parameter without the min or the
+  max (when no `values` are given), `values` and `steps` together, and a
+  time limit out of its range refuse the query.
+
+Code: `core/model-api/src/parameter_range.rs` (with `Document::fork`).
+Tests: `core/model-tests/api/src/parameter_range_tests.rs` and the
+module's own tests (the time limit).
+
+## Linked designs from outside the project (mitcad#1719)
+
+A link is followed only to a file in the design's project (mitcad#929,
+[External components](#components-and-occurrences)). So that a link made
+to a file elsewhere does not silently stop following it (GitHub
+mitcad/Mitcad#251), the application asks `link_check` before Insert
+Component links a file and, for a file outside, offers to copy it into
+the project and link the copy (`insert_component` with
+`copy_into_project`), to insert it as a copy, or to cancel
+([app/COMMANDS.md](../../../app/COMMANDS.md), "Linked designs"). Save
+Component as Design asks it too before it replaces a component with a
+link to the new file, and offers to save that file into the `folder`
+instead (mitcad#1739).
+
+| Query | Fields | Result |
+|---|---|---|
+| `link_check` | `path` (absolute, or relative to `base`), `base` (the design file's folder; left out: a design not saved, which follows no link) | `file` (absolute), `followed` (a link to it would be followed when the design opens again), `folder` (where `copy_into_project` puts copies: `parts/` of the project, or of the design's folder without a project; null without `base`); reads nothing but the file system's folders |
+
+- **`copy_into_project`.** With `link` (the default) and a `path` whose
+  link would not be followed from `base`, `insert_component` first copies
+  the file into the `folder` above (made when missing). A name taken
+  there gets a suffix (`plate_2.mitcad`, then `_3`, …); nothing is
+  written over. The designs the file links whose files are outside the
+  project are copied there too, and so on (a design linked twice, or a
+  loop of links, is copied once); in the copies, links to the copies name
+  them, and links to files in the project name those files from the
+  copies' folder, so every one of them is followed. A copy is a single
+  file (version 2): B-rep data the file refers to in its own project's
+  store goes inside; a file whose data cannot be read is refused, and so
+  is one with fields a newer MitCad wrote. The originals are not changed.
+  The copy is then inserted linked, its path recorded from `base`
+  (`../parts/plate_2.mitcad`), and the component is named after the file
+  asked for (`plate`, `plate (1)` when taken, unless `name` says
+  otherwise). `copied` lists the
+  files copied, the one asked for first: `from`, `to` (absolute). A file
+  the link follows, or `"link": false`, is inserted as it is (`copied`
+  empty). Without `base` it is refused: "the design is not saved yet, so
+  there is no project to copy the file into; save the design first".
+- **Messages.** A link that is not followed says so in words, with the
+  way out and the component's name only, no path: the `update_links` and
+  `update_link` line and the `links` query's `problem` above.
+
+Code: `core/model/src/document/link_copies.rs` (`check_link`,
+`copy_link_into_project`), `crate::file::relinked_text`,
+`NotFollowed` (`core/model/src/document/components.rs`), the API in
+`core/model-api/src/components.rs`. Tests:
+`core/model-tests/assembly/src/link_copy_tests.rs`, and the UI test
+`tools/ui-link-outside-test.sh`.
+
+## The work steps of a sketch
+
+A sketch records which use of a tool made which of its points, curves,
+constraints, dimensions and texts (mitcad#1750): sketch mode lists these
+work steps in the timeline's place, one cell per step
+([app/COMMANDS.md](../../../app/COMMANDS.md), "The sketch's work steps in
+the timeline's place").
+
+- **Recording.** Every `sketch.*` command whose edit makes items records
+  them as one step: its `id` (`s<n>`, one more than the largest in the
+  sketch), its `kind` (the command's name without `sketch.`:
+  `rectangle`, `add_line`, `project`, `fillet`, `add_constraint`,
+  `add_dimension`, `add_text`, `paste`, `import_svg`, …; `intersect` for
+  a `sketch.project` with `section`) and the ids of the items, texts
+  (`t<n>`) among them. The command's answer names it: `"step": "s3"`. A
+  command that makes nothing (a drag, a new value) records none.
+- **Changed items.** Items a later command changes stay with the step
+  that made them. A `sketch.trim` or `sketch.extend` is a step of its own
+  all the same, also when it only shortens or lengthens its `curve`: the
+  step names that curve as `changed` (and holds what it made, a piece or
+  a constraint, as its own). A changed curve deleted later leaves the
+  step that changed it too.
+- **One go.** `merge_undo` makes the steps recorded after its `depth` one
+  step per sketch, as it makes their undo steps one: what sketch mode's
+  tools and command panels run as several commands (a projected edge
+  chain, a line and the constraints its snaps add, an axis or a body edge
+  made for a pick, a trim dragged across several curves) is one step. It
+  keeps the first one's id; its kind is the first that is not `project`,
+  `axis` or `add_point` (what a tool makes for its inputs), else the
+  first one's.
+- **Deletes, undo and redo.** Deleted items leave their step, and a step
+  left with none goes. The steps are part of the sketch's definition, so
+  undo and redo bring them back with the items.
+- **Not geometry.** Two definitions that differ only in their steps are
+  equal, and the steps are no part of the definition's fingerprint: a
+  merge of steps evaluates nothing again.
+- **Without steps.** A design saved before the steps were recorded, an
+  import (`.f3d`, FreeCAD, `.ipt`, …), and a sketch added whole with
+  `add_feature`, have none; an `.svg` or `.dxf` inserted with
+  `sketch.import_svg` or `sketch.import_dxf` is one step. The `sketch`
+  query lists each point, curve, constraint and dimension no step holds
+  as a step of its own, without `id` and `kind` (a text no step holds is
+  not listed). Nothing is migrated: such a sketch's later edits record
+  their own steps beside its items.
+- **Stored.** The sketch's definition has them as `steps`: `[{"id": 2,
+  "kind": "rectangle", "entities": ["c1", "p5", …], "constraints": ["k1",
+  …]}]` (`constraints` holds its constraints and dimensions; `texts` its
+  texts; `changed` the points and curves it changed that are another
+  step's); left out when there are none.
+
+The `sketch` query's `steps` lists them in the order they were made: each
+recorded step where its first item comes in [the
+order](#the-order-of-a-sketchs-items), after every recorded step made
+before it (a step that made no point, curve, constraint or dimension, a
+text's or a trim that only shortened a curve, comes before the next
+recorded step, or last), each item no step holds where it comes. Each has
+its `items` (made or changed) in that order, then its texts; a step that
+changed curves also `changed`:
+
+```json
+"steps": [
+  {"id": "s1", "kind": "project", "items": ["p1", "p2", "c3", "p4", "c5"]},
+  {"id": "s2", "kind": "rectangle", "items": ["c6", "p10", "p11", "k1", "…"]},
+  {"id": "s3", "kind": "trim", "items": ["c3"], "changed": ["c3"]},
+  {"id": "s4", "kind": "add_text", "items": ["t20"]},
+  {"items": ["p21"]}
+]
+```
+
+Code: `core/sketch/src/steps.rs` (`record`, `merge_new`, `in_order`),
+`Document::edit_sketch` and `Document::merge_undo`
+(`core/model/src/document.rs`), the kind and the changed curve from the
+command in `core/model-api/src/dispatch.rs` (`sketch::step_kind`,
+`sketch::step_changes`). Tests: `core/sketch/src/steps.rs` and
+`core/model-tests/sketch/src/sketch_steps_1750_tests.rs`, and the UI test
+`tools/ui-sketch-item-list-test.sh`.

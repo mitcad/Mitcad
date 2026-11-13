@@ -30,7 +30,6 @@
 #include <QAction>
 #include <QColor>
 #include <QCursor>
-#include <QDesktopServices>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
@@ -63,6 +62,7 @@
 #include "../print/ProfilePickerRows.hpp"
 #include "../print/SlicerImport.hpp"
 #include "../print/SlicerMaterialRows.hpp"
+#include "../report/ReportCenter.hpp"
 #include "Print3d.hpp"
 #include "SlicerProcesses.hpp"
 #include "mitcad/geometry/import.hpp"
@@ -127,10 +127,13 @@ struct BedInUse {
 // (Print3d.hpp; Save As Mesh logs it too, mitcad#734).
 QString bedLog(const QJsonObject& bed) { return printBedLog(bed); }
 
-// An export's warnings, one per line.
+// An export's warnings, one per line: in plain words where the result
+// gives them (`warning_messages`, mitcad#1727: `warnings` keeps the
+// agents' texts, which may name a command).
 QStringList exportWarnings(const QJsonObject& result) {
   QStringList warnings;
-  for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
+  const QJsonArray shown = result.value(QStringLiteral("warning_messages")).toArray();
+  for (const QJsonValue& warning : shown.isEmpty() ? result.value(QStringLiteral("warnings")).toArray() : shown) {
     warnings << mitcad::modelMessage(warning.toString());
   }
   return warnings;
@@ -1072,6 +1075,13 @@ CommandDef MainWindow::print3dCommand() {
         // A component's material is the body's as it is (mitcad#1052); only
         // the design's default is no material.
         row.chosen = material.value(QStringLiteral("source")).toString() != QStringLiteral("default");
+        // Without one, the row's tooltip names what the slicer gets
+        // meanwhile: the print default, PLA (mitcad#1727).
+        const QJsonObject print = material.value(QStringLiteral("print_material")).toObject();
+        if (!row.chosen && !print.isEmpty()) {
+          row.name = shownMaterialName(print.value(QStringLiteral("id")).toString(),
+                                       print.value(QStringLiteral("name")).toString());
+        }
         // The variant the printer picks (mitcad#1054).
         row.variant =
             material.value(QStringLiteral("variant")).toObject().value(QStringLiteral("label")).toString();
@@ -1727,13 +1737,16 @@ CommandDef MainWindow::print3dCommand() {
     state.setChecked(QStringLiteral("drop"), placement.drop);
     const PrintSettings settings = PrintSettings::load();
     panel->found = findSlicers();
-    panel->saved = settings.slicer;
+    // A saved slicer removed since is not offered.
+    panel->saved = installedSlicer(settings.slicer, panel->found);
     panel->other = Slicer{};
     state.setChoice(QStringLiteral("format"), settings.format);
     state.setChoice(QStringLiteral("refinement"), settings.refinement);
     state.setText(QStringLiteral("deviation"), QStringLiteral("%1 mm").arg(settings.deviation));
     state.setText(QStringLiteral("angle"), QStringLiteral("%1 deg").arg(settings.angle));
-    const Slicer current = settings.slicer.isValid() ? settings.slicer : panel->found.value(0);
+    // Folder only when the last send chose it (mitcad#1726), else the
+    // settings' slicer, else the first one found.
+    const Slicer current = panelSlicer(settings, panel->found);
     panel->previous = slicerChoice(current);
     state.setChoice(QStringLiteral("slicer"), panel->previous);
     state.setChecked(QStringLiteral("reuse"), settings.reuseWindow);
@@ -1822,7 +1835,8 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
   const double deviation = state.value(QStringLiteral("deviation")); // mm
   const double angle = state.value(QStringLiteral("angle"));         // radians
   const Slicer slicer = slicerOfChoice(state.choice(QStringLiteral("slicer")));
-  // Remembered; "None" this time keeps the slicer of the settings.
+  // Remembered, Folder only as any slicer (mitcad#1726): the next panel
+  // opens on it; the slicer of the settings stays, listed there.
   PrintSettings settings = PrintSettings::load();
   settings.format = format;
   settings.refinement = refinementChoice;
@@ -1832,6 +1846,7 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
   if (std::isfinite(angle)) {
     settings.angle = qRadiansToDegrees(angle);
   }
+  settings.folderOnly = !slicer.isValid();
   if (slicer.isValid()) {
     settings.slicer = slicer;
   }
@@ -2003,10 +2018,7 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
       written << plate.value(QStringLiteral("name")).toString();
       ++platesSent;
     }
-    QStringList warnings;
-    for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
-      warnings << mitcad::modelMessage(warning.toString());
-    }
+    const QStringList warnings = exportWarnings(result);
     if (!warnings.isEmpty()) {
       *warned = warnings.join(QLatin1Char('\n'));
     }
@@ -2041,10 +2053,7 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
       for (const QJsonValue& slot : result.value(QStringLiteral("filaments")).toArray()) {
         filaments << QString::number(slot.toInt());
       }
-      QStringList warnings;
-      for (const QJsonValue& warning : result.value(QStringLiteral("warnings")).toArray()) {
-        warnings << mitcad::modelMessage(warning.toString());
-      }
+      const QStringList warnings = exportWarnings(result);
       qInfo().noquote() << QStringLiteral("3D Print: print settings for %1, filaments %2%3")
                                .arg(dialect, filaments.join(QLatin1Char(',')),
                                     warnings.isEmpty() ? QString()
@@ -2126,7 +2135,8 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
 
   // One start of the slicer with every file.
   const auto openFolder = [folder] {
-    QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+    // The UI tests' MITCAD_TEST_LOG_URLS logs it instead (no file manager).
+    openExternalUrl(QUrl::fromLocalFile(folder));
     qInfo().noquote() << QStringLiteral("3D Print: opened %1").arg(folder);
   };
   if (!slicer.isValid()) {

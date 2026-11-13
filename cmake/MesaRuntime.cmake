@@ -2112,9 +2112,11 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-remove-dimension-name"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-sketch-remove-dimension-name PROPERTIES TIMEOUT 300)
-    # Sketch mode's list of the sketch's items in creation order in the
-    # timeline's place (mitcad#1492). The Linux test's shared input script
-    # (tools/ui-sketch-item-list-test.sh).
+    # Sketch mode's list of the sketch's work steps in the timeline's place
+    # (mitcad#1750, after mitcad#1492's list of items): a Project, a
+    # Rectangle and a dimension as three cells, the hover list, the error
+    # badge, Delete from a cell, and a sketch saved without steps. The
+    # Linux test's shared input script (tools/ui-sketch-item-list-test.sh).
     add_test(NAME app.ui-windows-sketch-item-list
       COMMAND powershell -NoProfile -ExecutionPolicy Bypass
               -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-item-list-test.ps1"
@@ -2452,6 +2454,18 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-window-place"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-window-place PROPERTIES TIMEOUT 420)
+    # An unknown name and Enter make a user parameter in a drawing tool's
+    # field, a sketch dimension and a command panel's field, and name =
+    # value typed out still names the field's own parameter (mitcad#1723).
+    # The Linux test's shared input script
+    # (tools/ui-parameter-unknown-name-test.sh).
+    add_test(NAME app.ui-windows-parameter-unknown-name
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-parameter-unknown-name-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-parameter-unknown-name"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-parameter-unknown-name PROPERTIES TIMEOUT 300)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

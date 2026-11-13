@@ -2,7 +2,11 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <utility>
+
+#include <QPoint>
+#include <QString>
 
 #include "Command.hpp"
 #include "NoticeLevel.hpp"
@@ -107,6 +111,11 @@ public:
   // input key: `error` or `hint`). Empty when the frontend cannot tell.
   virtual QJsonObject shownState() const { return {}; }
   virtual void logLayout() const = 0;
+  // Where a click on an input lands, as logLayout logs it, in the host
+  // window's coordinates (live MCP's ui_click, mitcad#1735): "key", or
+  // "key=value" for a choice's button. None when the input is not shown or
+  // the frontend cannot tell.
+  virtual std::optional<QPoint> inputPlace(const QString& /*key*/) const { return std::nullopt; }
 
 private:
   Actions m_actions;

@@ -1064,6 +1064,92 @@ pub fn single_file_text(json: &str, store: &dyn BlobStore) -> Result<Option<Stri
     )))
 }
 
+/// The paths of the files a design file links (its linked components',
+/// not library parts'), as the file saves them, read without loading the
+/// design (mitcad#1719). Text that is not JSON links nothing.
+pub(crate) fn linked_paths(json: &str) -> Vec<String> {
+    let json = json.strip_prefix('\u{feff}').unwrap_or(json);
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let components = value
+        .get("components")
+        .and_then(serde_json::Value::as_array);
+    let mut out = Vec::new();
+    for component in components.into_iter().flatten() {
+        if component.get("library").is_some_and(|l| !l.is_null()) {
+            continue;
+        }
+        let path = component
+            .pointer("/link/path")
+            .and_then(serde_json::Value::as_str);
+        if let Some(path) = path
+            && !out.iter().any(|p| p == path)
+        {
+            out.push(path.to_owned());
+        }
+    }
+    out
+}
+
+/// The text of the design file at `path` copied elsewhere (mitcad#1719):
+/// its links' paths changed as `links` maps them (a path it does not hold
+/// stays), and the B-rep data it refers to read from the store of the
+/// project it is in and put inside, so that the copy stands on its own as
+/// a single file. Its statistics and preview are kept. An error, so that
+/// nothing is lost, when data it refers to cannot be read or it has
+/// fields a newer MitCad wrote.
+pub(crate) fn relinked_text(
+    json: &str,
+    path: &Path,
+    links: &std::collections::BTreeMap<String, String>,
+) -> Result<String, FileError> {
+    let Loaded {
+        mut state,
+        mut warnings,
+        statistics,
+        preview,
+        unknown_fields,
+    } = load_parts(json)?;
+    if !unknown_fields.is_empty() {
+        return Err(FileError::Invalid(format!(
+            "it has fields a newer MitCad wrote ({}): open and save it in that MitCad first",
+            unknown_fields.join(", ")
+        )));
+    }
+    if has_references(&state) {
+        warnings.clear();
+        if let Some(project) = Project::find(path) {
+            resolve(&mut state, &project.store(), &mut warnings);
+        }
+        if has_references(&state) {
+            return Err(FileError::Invalid(format!(
+                "the B-rep data it refers to cannot be read{}",
+                if warnings.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", warnings.join("; "))
+                }
+            )));
+        }
+    }
+    for component in &mut state.assembly.components {
+        if component.library.is_some() {
+            continue;
+        }
+        if let Some(link) = component.link.as_mut()
+            && let Some(new) = links.get(&link.path)
+        {
+            link.path = new.clone();
+        }
+    }
+    Ok(v2::save_with(
+        &state,
+        &statistics.unwrap_or_default(),
+        preview.as_ref(),
+    ))
+}
+
 /// Whether a base feature refers to B-rep data elsewhere.
 pub(crate) fn has_references(state: &DocState) -> bool {
     state.features.iter().any(|f| match &f.def {

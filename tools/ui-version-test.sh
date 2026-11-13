@@ -534,7 +534,7 @@ ui_expect_new "d3 (Extrude1 distance): 20 mm -> 36 mm" "the unsaved change of d3
 ui_mark
 ui_step "compare the geometry (Alt+G)"   ui_key alt+g
 ui_expect_new "Version History geometry v8 with the open design: Summary: d3 20 mm -> 36 mm" "both computed" 30
-ui_expect_new "Geometry: |   Body1 (F2.b0): volume 48000 -> 86400 mm^3 (+38400, +80%)" "the body's volume compared"
+ui_expect_new "Geometry: |   Body1: volume 48000 -> 86400 mm^3 (+38400, +80%)" "the body's volume compared, by its name"
 
 echo "--- Version History: Save Copy As"
 COPIES=$WORK/copies

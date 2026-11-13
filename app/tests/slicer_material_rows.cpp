@@ -103,12 +103,13 @@ BodyMaterial body(const char* uid, const char* name, const char* id, const char*
 
 void groups() {
   // Two bodies of PETG, one of TPU between them, and one without a
-  // material (the default, Steel).
+  // material (the design's default, Steel, which the slicer gets as the
+  // print default, PLA: mitcad#1727).
   const QVector<FilamentGroup> made = mitcad::filamentGroups({
       body("F1.b0", "Body1", "petg", "PETG", true),
       body("F2.b0", "Body2", "tpu", "TPU", true),
       body("F3.b0", "Body3", "petg", "PETG", true),
-      body("F4.b0", "Body4", "steel", "Steel", false),
+      body("F4.b0", "Body4", "steel", "PLA Plastic", false),
   });
   CHECK(made.size() == 3);
   if (made.size() == 3) {
@@ -119,7 +120,7 @@ void groups() {
     CHECK(mitcad::filamentRowText(made.at(2), 3) == QStringLiteral("No material: choose one (1 body)"));
     CHECK(mitcad::filamentRowTooltip(made.at(0)) == QStringLiteral("PETG: Body1, Body3"));
     CHECK(mitcad::filamentRowTooltip(made.at(2)) ==
-          QStringLiteral("Body4 has no material of its own: until one is chosen, the slicer gets Steel."));
+          QStringLiteral("Body4 has no material of its own: until one is chosen, the slicer gets PLA Plastic."));
   }
   // One material: a row "Material" without the count; a body without one
   // says so, not as if the default were chosen.

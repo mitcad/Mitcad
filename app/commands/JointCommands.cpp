@@ -353,6 +353,96 @@ HandleMaker angleHandle(const QStringList& inputs) {
   };
 }
 
+// --- Where the preview puts the joint's sides (mitcad#1745)
+
+const QString kPreviewPlacements = QStringLiteral("preview_placements");
+
+// A preview's report came (CommandDef::previewReported): the occurrences it
+// places elsewhere, by their paths from the root, kept for the handles.
+// Nothing to compute again.
+bool keepPlacements(QJsonObject& report, CommandState& state) {
+  QJsonObject placed;
+  if (report.value(QStringLiteral("status")).toString() == QStringLiteral("ok")) {
+    for (const QJsonValue& value : report.value(QStringLiteral("placements")).toArray()) {
+      const QJsonObject placement = value.toObject();
+      placed.insert(str(placement, "path"), placement.value(QStringLiteral("transform")));
+    }
+  }
+  state.setObject(kPreviewPlacements, placed);
+  return false;
+}
+
+// Whether the shown preview places the occurrence of `item` elsewhere: it,
+// or an occurrence that holds it.
+bool movedInPreview(const SelectionItem& item, const CommandState& state) {
+  const QJsonObject placed = state.object(kPreviewPlacements);
+  for (auto it = placed.begin(); it != placed.end(); ++it) {
+    if (item.occurrence == it.key() || item.occurrence.startsWith(it.key() + QLatin1Char('/'))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Where the shown preview moves a pick (CommandDef::pickMoved): an origin
+// on a component the preview places elsewhere is drawn there, as the move
+// from where the design has the component.
+std::optional<gp_Trsf> pickMovedInPreview(const SelectionItem& item, const CommandState& state,
+                                          const CommandContext& context) {
+  const QJsonObject placed = state.object(kPreviewPlacements);
+  for (auto it = placed.begin(); it != placed.end(); ++it) {
+    if (item.occurrence != it.key() && !item.occurrence.startsWith(it.key() + QLatin1Char('/'))) {
+      continue;
+    }
+    const auto before = worldOf(it.key(), context);
+    if (!before) {
+      return std::nullopt;
+    }
+    return trsfOf(it.value().toArray()) * before->Inverted();
+  }
+  return std::nullopt;
+}
+
+// The frame Joint's handles stand on, at the joint's origin: origin B's,
+// where A moves onto it (the offset along its Z axis, the angle about it
+// from its X axis). When the preview moves B's side instead (A's is held
+// by ground or by other joints), origin A's as Flip turns it, its Z axis
+// reversed: the offset's arrow then reaches where B's origin goes, and the
+// angle's ring turns as B turns.
+std::optional<Frame> jointHandleFrame(const CommandState& state, const CommandContext& context) {
+  const Selection& a = state.items(QStringLiteral("a"));
+  const Selection& b = state.items(QStringLiteral("b"));
+  if (!a.isEmpty() && !b.isEmpty() && movedInPreview(b.first(), state) && !movedInPreview(a.first(), state)) {
+    if (auto frame = originFrame(a.first(), context)) {
+      if (!state.checked(QStringLiteral("flip"))) {
+        // Half a turn about X: Z and Y reversed.
+        frame->z.Reverse();
+        frame->y.Reverse();
+      }
+      return frame;
+    }
+  }
+  return pickedFrame(state, context, {QStringLiteral("b"), QStringLiteral("a")});
+}
+
+std::optional<Manipulator> jointOffsetHandle(const CommandState& state, const CommandContext& context) {
+  const auto frame = jointHandleFrame(state, context);
+  if (!frame) {
+    return std::nullopt;
+  }
+  return arrow(frame->origin, frame->z);
+}
+
+std::optional<Manipulator> jointAngleHandle(const CommandState& state, const CommandContext& context) {
+  const auto frame = jointHandleFrame(state, context);
+  if (!frame) {
+    return std::nullopt;
+  }
+  Manipulator handle = ring(frame->origin, frame->z);
+  handle.reference = frame->x;
+  return handle;
+}
+
 // --- Limits and positions
 
 QVector<InputDef> limitInputs() {
@@ -447,6 +537,55 @@ QJsonObject positionOf(const CommandState& state) {
     }
   }
   return position;
+}
+
+// Where the free motions start when the joint places its moving side
+// (mitcad#1745, the model's `start`): a new joint's at 0, so that its
+// origins meet at the offset and angle; an edit keeps the joint's own, else
+// takes them where the joint is (so that a new offset or angle moves the
+// side by its change), and leaves out those it cannot tell.
+const QString kStart = QStringLiteral("start");
+const QString kStartLoaded = QStringLiteral("start_loaded");
+
+void loadStart(const QJsonObject& feature, CommandState& state, const QJsonObject& joints) {
+  QJsonObject start = feature.value(kStart).toObject();
+  const QString uid = str(feature, "uid");
+  const QJsonObject position = feature.value(QStringLiteral("position")).toObject();
+  const QJsonObject limits = feature.value(QStringLiteral("limits")).toObject();
+  for (const QJsonValue& value : joints.value(QStringLiteral("joints")).toArray()) {
+    const QJsonObject joint = value.toObject();
+    if (str(joint, "uid") != uid) {
+      continue;
+    }
+    const QJsonObject values = joint.value(QStringLiteral("values")).toObject();
+    for (auto it = values.begin(); it != values.end(); ++it) {
+      const bool driven = position.contains(it.key()) ||
+                          limits.value(it.key()).toObject().contains(QStringLiteral("rest"));
+      if (!driven && !start.contains(it.key()) && it.value().isDouble()) {
+        start.insert(it.key(), it.value());
+      }
+    }
+  }
+  state.setObject(kStart, start);
+  state.setObject(kStartLoaded, {{QStringLiteral("loaded"), true}});
+}
+
+QJsonObject startOf(const CommandState& state) {
+  const QJsonObject kept = state.object(kStart);
+  const bool loaded = state.object(kStartLoaded).value(QStringLiteral("loaded")).toBool();
+  const QJsonObject position = positionOf(state);
+  QJsonObject start;
+  for (const QString& motion : motionsIn(state)) {
+    if (position.contains(motion) || state.checked(QStringLiteral("rest_on_") + motion)) {
+      continue; // driven: held at its value
+    }
+    if (kept.contains(motion)) {
+      start.insert(motion, kept.value(motion));
+    } else if (!loaded) {
+      start.insert(motion, 0.0);
+    }
+  }
+  return start;
 }
 
 void addMotions(QJsonObject& def, const CommandState& state) {
@@ -600,16 +739,20 @@ CommandDef jointCommand(const CommandContext& context) {
   def.inputs += {
       valueInput(QStringLiteral("offset"), QObject::tr("Offset"), ValueKind::Length, QStringLiteral("0 mm"))
           .withTooltip(QObject::tr("Along the joint's Z axis"))
-          .withManipulator(offsetHandle({QStringLiteral("b"), QStringLiteral("a")})),
+          .withManipulator(jointOffsetHandle),
       valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("0 deg"))
           .withTooltip(QObject::tr("About the joint's Z axis"))
-          .withManipulator(angleHandle({QStringLiteral("b"), QStringLiteral("a")})),
+          .withManipulator(jointAngleHandle),
       flipInput(QStringLiteral("flip"), QObject::tr("Flip"))
           .withTooltip(QObject::tr("Turns origin A over: a face onto a face")),
   };
   def.inputs += limitInputs();
   def.inputs += {hidden(QStringLiteral("component")), hidden(QStringLiteral("position"))};
   def.enabled = [&context] { return occurrenceCount(context) > 0; };
+  // The handles stand on the joint's origin where the preview puts it.
+  def.previewReported = keepPlacements;
+  // An origin on the component the preview moves is drawn where it goes.
+  def.pickMoved = pickMovedInPreview;
 
   def.build = [](const CommandState& state, const CommandContext& context) {
     QJsonObject joint{{QStringLiteral("type"), QStringLiteral("joint")}};
@@ -618,6 +761,10 @@ CommandDef jointCommand(const CommandContext& context) {
       return result;
     }
     addMotions(joint, state);
+    const QJsonObject start = startOf(state);
+    if (!start.isEmpty()) {
+      joint.insert(kStart, start);
+    }
     if (nonZero(state, QStringLiteral("offset"))) {
       joint.insert(QStringLiteral("offset"), state.expression(QStringLiteral("offset")));
     }
@@ -637,6 +784,7 @@ CommandDef jointCommand(const CommandContext& context) {
     state.setItems(QStringLiteral("a"), {originItem(feature.value(QStringLiteral("a")), prefix, context)});
     state.setItems(QStringLiteral("b"), {originItem(feature.value(QStringLiteral("b")), prefix, context)});
     loadMotions(feature, state, context);
+    loadStart(feature, state, jointsOf(context));
     loadValue(state, QStringLiteral("offset"), feature.value(QStringLiteral("offset")), feature, context);
     loadValue(state, QStringLiteral("angle"), feature.value(QStringLiteral("angle")), feature, context);
     state.setChecked(QStringLiteral("flip"), feature.value(QStringLiteral("flip")).toBool());

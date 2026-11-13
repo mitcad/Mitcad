@@ -22,6 +22,8 @@
 mod bodies;
 // Browser and timeline (U3).
 mod browser;
+// Which features keep a display size (mitcad#1748): the design file reads it.
+pub(crate) use browser::has_display_size;
 mod components;
 mod copy;
 mod datums;
@@ -291,6 +293,10 @@ pub struct DocState {
     /// while a feature uses it, construction geometry shown; see
     /// `document/browser.rs`).
     pub feature_visibility: BTreeMap<FeatureUid, bool>,
+    /// How large construction planes and axes are drawn, mm, where set by
+    /// their resize handles (mitcad#1748; `document/browser.rs`): display
+    /// only, the datum's geometry does not change.
+    pub datum_display_sizes: BTreeMap<FeatureUid, f64>,
     /// Cameras saved by name (U5), in the order they were added.
     pub named_views: Vec<NamedView>,
     /// The Origin folder's light bulb and Isolate (P9).
@@ -398,6 +404,7 @@ impl Default for DocState {
             next_uid: 1,
             assembly: Assembly::default(),
             feature_visibility: BTreeMap::new(),
+            datum_display_sizes: BTreeMap::new(),
             named_views: Vec::new(),
             display: DisplayState::default(),
             favorites: BTreeSet::new(),
@@ -1215,6 +1222,8 @@ impl DocState {
             .retain(|body, _| !removed.contains(&body.feature));
         self.feature_visibility
             .retain(|uid, _| !removed.contains(uid));
+        self.datum_display_sizes
+            .retain(|uid, _| !removed.contains(uid));
         self.import_notes.retain(|uid, _| !removed.contains(uid));
         self.release_components(removed);
         self.drop_orphan_drawings();
@@ -1728,6 +1737,12 @@ pub struct Document<K: Kernel> {
     /// state, like the statistics; a save given a new one changes it
     /// through a shared reference ([`Document::save_file_previewed`]).
     design_preview: RwLock<Option<crate::file::DesignPreview>>,
+    /// The kind of step the running command's sketch edits record, and the
+    /// step recorded last (mitcad#1750, [`Document::set_sketch_step_kind`]).
+    /// Runtime context only.
+    sketch_step_kind: Option<String>,
+    recorded_sketch_step: Option<(FeatureUid, u32)>,
+    sketch_step_changes: Vec<EntityUid>,
 }
 
 /// A `sketch` query's answer with what it was made from (mitcad#679): the
@@ -1792,6 +1807,9 @@ impl<K: Kernel> Document<K> {
             statistics: RwLock::new(crate::file::KeptStatistics::new_design()),
             unknown_fields: RwLock::new(Default::default()),
             design_preview: RwLock::new(None),
+            sketch_step_kind: None,
+            recorded_sketch_step: None,
+            sketch_step_changes: Vec::new(),
         }
     }
 
@@ -2148,6 +2166,9 @@ impl<K: Kernel> Document<K> {
             statistics: RwLock::new(self.kept_statistics()),
             unknown_fields: RwLock::new(self.kept_unknown_fields()),
             design_preview: RwLock::new(self.kept_design_preview()),
+            sketch_step_kind: None,
+            recorded_sketch_step: None,
+            sketch_step_changes: Vec::new(),
         })
     }
 
@@ -3473,7 +3494,11 @@ impl<K: Kernel> Document<K> {
         // And its offsets made again for what vanishes at their distances
         // now (mitcad#1234).
         let retrimmed = self.sketch_output(sketch).and_then(|o| o.retrimmed.clone());
-        self.apply(|state| {
+        // What the edit makes is a step of the running command's kind
+        // (mitcad#1750, [`Document::set_sketch_step_kind`]).
+        let step_kind = self.sketch_step_kind.clone();
+        let step_changes = self.sketch_step_changes.clone();
+        let result = self.apply(|state| {
             let position = state.require(sketch)?;
             let entry = state.features[position].clone();
             let FeatureDef::Sketch(def) = &entry.def else {
@@ -3502,10 +3527,19 @@ impl<K: Kernel> Document<K> {
                     .and_then(|m| crate::sketch::project::with_moved(def, &m))
                     .unwrap_or_else(|| def.clone()),
             };
+            let before = crate::sketch::steps::Items::of(&def);
             let (value, def, report) = {
                 let mut editor = SketchEdit::new(def, &mut state.parameters, sketch, &entry.name);
                 let value = edit(&mut editor).map_err(invalid)?;
-                let (def, report) = editor.finish().map_err(invalid)?;
+                let (mut def, mut report) = editor.finish().map_err(invalid)?;
+                // The steps kept to the items there are, and what it made
+                // recorded as one (mitcad#1750).
+                report.step = crate::sketch::steps::record(
+                    &mut def,
+                    &before,
+                    step_kind.as_deref(),
+                    &step_changes,
+                );
                 (value, def, report)
             };
             let edited = FeatureEntry {
@@ -3529,7 +3563,76 @@ impl<K: Kernel> Document<K> {
                 format!("{what} in {}", entry.name)
             };
             Ok((label, (value, report)))
-        })
+        });
+        if let Ok((_, report)) = &result
+            && let Some(step) = report.step
+        {
+            self.recorded_sketch_step = Some((sketch, step));
+        }
+        result
+    }
+
+    /// The kind of step the sketch edits of the running command record
+    /// (mitcad#1750, `sketch/steps.rs`): the api sets it to the command's
+    /// name (`rectangle` for `sketch.rectangle`) while a `sketch.*` command
+    /// runs, and clears it after. Without one an edit records no step (an
+    /// import, an internal edit): its items are listed one by one. Setting
+    /// it forgets the step recorded last.
+    pub fn set_sketch_step_kind(&mut self, kind: Option<String>) {
+        self.sketch_step_kind = kind;
+        self.recorded_sketch_step = None;
+        self.sketch_step_changes.clear();
+    }
+
+    /// The curves the running command changes that other steps made (a
+    /// trim's or an extension's curve, mitcad#1750): its step names them as
+    /// changed, also when it makes nothing. Set after
+    /// [`Self::set_sketch_step_kind`], which clears them.
+    pub fn set_sketch_step_changes(&mut self, curves: Vec<EntityUid>) {
+        self.sketch_step_changes = curves;
+    }
+
+    /// The sketch and id of the step the last sketch edit since
+    /// [`Self::set_sketch_step_kind`] recorded.
+    pub fn recorded_sketch_step(&self) -> Option<(FeatureUid, u32)> {
+        self.recorded_sketch_step
+    }
+
+    /// Makes the sketch steps recorded after the undo step `depth` one step
+    /// per sketch (mitcad#1750, [`crate::sketch::steps::merge_new`]): what
+    /// [`Self::merge_undo`] makes one undo step was made in one go. Only
+    /// the steps change, which are no part of what the sketch evaluates
+    /// to: nothing is evaluated again.
+    fn merge_sketch_steps(&mut self, depth: usize) {
+        let Some(before) = self.undo.get(depth).map(|step| &step.state) else {
+            return;
+        };
+        let mut merged: Vec<(usize, FeatureEntry)> = Vec::new();
+        for (position, entry) in self.state.features.iter().enumerate() {
+            let FeatureDef::Sketch(def) = &entry.def else {
+                continue;
+            };
+            if def.steps.is_empty() {
+                continue;
+            }
+            let kept = match before.entry(entry.uid).map(|e| &e.def) {
+                Some(FeatureDef::Sketch(old)) => old.steps.ids(),
+                _ => Default::default(),
+            };
+            let mut def = def.clone();
+            if crate::sketch::steps::merge_new(&mut def, &kept) {
+                merged.push((
+                    position,
+                    FeatureEntry {
+                        def: FeatureDef::Sketch(def),
+                        ..(**entry).clone()
+                    },
+                ));
+            }
+        }
+        for (position, entry) in merged {
+            self.state.features[position] = Arc::new(entry);
+        }
     }
 
     /// The bodies before a timeline position, from the last recompute.
@@ -4428,6 +4531,9 @@ impl<K: Kernel> Document<K> {
         if self.undo.len() <= depth {
             return;
         }
+        // The sketch steps of the commands merged are one step too
+        // (mitcad#1750).
+        self.merge_sketch_steps(depth);
         // The state and its revision stay: only the steps in between go,
         // the library files they wrote joining the first (mitcad#655).
         let files: Vec<library_items::FileWrite> = self.undo[depth..]
@@ -4983,3 +5089,7 @@ pub use thread_fit::{AutoFixFit, NoFit, SharedChoice};
 // A sheet-metal flange's profile sketch made on its wall, or moved back
 // onto it (mitcad#1648).
 mod flange_profile;
+// Linked designs from outside the project: whether a link would be
+// followed, and the file copied into the project to link (mitcad#1719).
+mod link_copies;
+pub use link_copies::{LINK_COPY_FOLDER, LinkCheck, LinkCopy, check_link, copy_link_into_project};

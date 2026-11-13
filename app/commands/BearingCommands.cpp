@@ -236,6 +236,7 @@ CommandDef bearingCommand(const CommandContext& context) {
     }
     def.inputs = placeList + def.inputs;
   }
+  def.handlesSeenAt = [](const CommandState& state, const CommandContext& model) { return placeSeenAt(state, model); };
 
   def.init = [](CommandState& state, const CommandContext& model) {
     if (!grooved(state)) {

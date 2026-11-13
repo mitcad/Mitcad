@@ -25,7 +25,8 @@ class ImportProgress;
 // an IFC building model (import_ifc, mitcad#273),
 // an .rvt project's elements by level (import_rvt, mitcad#274),
 // a SolidCraft design with its history (import_solidcraft, mitcad#450), or
-// a .dwg drawing's 3D content (import_dwg, mitcad#453),
+// a .dwg drawing's 3D content (import_dwg, mitcad#453), a .3dm model's
+// bodies and blocks (import_3dm, mitcad#1715),
 // in a process of its own: the application runs itself with
 // --import-worker, and a crash of the geometry kernel cannot take the
 // window with it. The import runs to its end; a progress dialog shows the

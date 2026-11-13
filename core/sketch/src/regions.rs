@@ -1572,8 +1572,10 @@ impl Layout {
     /// loop, the regions inside it are the pieces of the old region (one,
     /// renamed, or several, split by the change). A region inside the loop
     /// that lies in a hole of the others stays out, as the old region's
-    /// holes did. None when the key's segments do not close a loop on the
-    /// current curves.
+    /// holes did, and so does one inside an outline of other curves that
+    /// now reaches the loop: a hole the change took across the boundary
+    /// (mitcad#1740, `Layout::old_side`). None when the key's segments do
+    /// not close a loop on the current curves.
     pub fn pieces(&self, key: &RegionKey) -> Option<Vec<usize>> {
         let candidates: Vec<Vec<Run>> = key.segments().map(|s| self.runs(s)).collect();
         if candidates.iter().any(Vec::is_empty) {
@@ -1599,9 +1601,117 @@ impl Layout {
                 if forward { a } else { -a }
             })
             .sum();
-        let mut inside = self.spread(&walk, &on_loop, area > 0.0)?;
+        let left = area > 0.0;
+        let inside = self.spread(&walk, &on_loop, left)?;
+        let mut inside = self.old_side(key, &runs, &walk, left, inside);
         inside.sort_unstable();
         Some(inside)
+    }
+
+    /// The regions of `inside` (the regions inside the traced loop) that
+    /// were on the old region's side of its curves (mitcad#1740). The key
+    /// names only the old outline, so where the old region's holes were is
+    /// read from the curves: the areas that the curves outside the key
+    /// bound alone (crossing the key's curves freely) are those of the
+    /// holes and of the curves the change drew across. Such an area stays
+    /// part of the old region when it holds a region at a corner of the
+    /// loop (where key curves meet as before), or reaches the outside of
+    /// every region; else it was a hole that the change took across the
+    /// outline (a hole wider than the plate cuts it in two, and the piece
+    /// inside the hole is not the plate's), and stays out when more of its
+    /// area lies inside the loop than outside it. A line across the region
+    /// (no area of its own), a region lengthened across another curve (its
+    /// pieces hold corners) and a region grown into an outline that lies
+    /// mostly outside it keep every piece.
+    fn old_side(
+        &self,
+        key: &RegionKey,
+        runs: &[Run],
+        walk: &[(usize, bool)],
+        left: bool,
+        inside: Vec<usize>,
+    ) -> Vec<usize> {
+        let key_curves: BTreeSet<&CurveId> = key.segments().map(|s| &s.curve).collect();
+        // The loop's corners: where a segment of the key ends (a closed
+        // curve's run has no corner, its start is where it is cut now).
+        let corners: BTreeSet<usize> = key
+            .segments()
+            .zip(runs)
+            .filter(|(segment, _)| segment.ends.is_some())
+            .filter_map(|(_, run)| run.ends)
+            .flat_map(|(a, b)| [a, b])
+            .collect();
+        let count = self
+            .edges
+            .iter()
+            .flat_map(|e| e.sides.iter().flatten())
+            .map(|s| s.region + 1)
+            .chain(inside.iter().map(|&r| r + 1))
+            .max()
+            .unwrap_or(0);
+        // The outside of every region is one more node.
+        let outside = count;
+        // The regions joined across the key's curves (union-find).
+        let mut parent: Vec<usize> = (0..=count).collect();
+        let root = |parent: &mut [usize], mut at: usize| -> usize {
+            while parent[at] != at {
+                parent[at] = parent[parent[at]];
+                at = parent[at];
+            }
+            at
+        };
+        let mut areas = vec![0.0_f64; count];
+        for edge in &self.edges {
+            let [l, r] = edge.sides.map(|s| s.map_or(outside, |s| s.region));
+            if l < count {
+                areas[l] += edge.area;
+            }
+            if r < count {
+                areas[r] -= edge.area;
+            }
+            if key_curves.contains(&edge.curve) {
+                let (a, b) = (root(&mut parent, l), root(&mut parent, r));
+                parent[a] = b;
+            }
+        }
+        let roots: Vec<usize> = (0..=count).map(|n| root(&mut parent, n)).collect();
+        let mut anchored: BTreeSet<usize> = BTreeSet::new();
+        anchored.insert(roots[outside]);
+        for &(e, forward) in walk {
+            let edge = &self.edges[e];
+            let at_corner = edge
+                .ends
+                .is_some_and(|(a, b)| corners.contains(&a) || corners.contains(&b));
+            if at_corner && let Some(side) = edge.sides[usize::from(forward != left)] {
+                anchored.insert(roots[side.region]);
+            }
+        }
+        let kept: Vec<usize> = inside
+            .iter()
+            .copied()
+            .filter(|&region| {
+                let at = roots[region];
+                if anchored.contains(&at) {
+                    return true;
+                }
+                // An area of other curves alone: in when no more of it
+                // lies inside the loop than outside.
+                let (mut within, mut without) = (0.0, 0.0);
+                for (r, area) in areas.iter().enumerate() {
+                    if roots[r] != at {
+                        continue;
+                    }
+                    if inside.contains(&r) {
+                        within += area.abs();
+                    } else {
+                        without += area.abs();
+                    }
+                }
+                within <= without
+            })
+            .collect();
+        // Never nothing: what the loop holds when no piece is anchored.
+        if kept.is_empty() { inside } else { kept }
     }
 
     /// The stretches of edges a segment of a key can be now, shortest

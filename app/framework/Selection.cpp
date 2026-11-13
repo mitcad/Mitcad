@@ -28,19 +28,26 @@ QString selectionOwnerText(const SelectionItem& item, const DocumentSnapshot& sn
       const auto found = std::find_if(level->cbegin(), level->cend(), [&](const auto& occurrence) {
         return occurrence.uid == uid;
       });
-      if (found == level->cend()) {
-        names << uid;
+      // A level not in the snapshot ends the path: never its uid
+      // (mitcad#1741).
+      if (found == level->cend() || found->name.isEmpty()) {
         break;
       }
-      names << (found->name.isEmpty() ? found->uid : found->name);
+      names << found->name;
       level = &found->children;
     }
-    lines << QCoreApplication::translate("Selection", "Component: %1")
-                 .arg(names.join(QStringLiteral(" › ")).toHtmlEscaped());
+    if (!names.isEmpty()) {
+      lines << QCoreApplication::translate("Selection", "Component: %1")
+                   .arg(names.join(QStringLiteral(" › ")).toHtmlEscaped());
+    }
   }
+  // A body not in the snapshot (yet) is named by its kind, never by its uid.
   const auto body = snapshot.bodies.constFind(item.owner);
-  const QString name = body == snapshot.bodies.cend() || body->name.isEmpty() ? item.owner : body->name;
-  lines << QCoreApplication::translate("Selection", "Body: %1").arg(name.toHtmlEscaped());
+  if (body != snapshot.bodies.cend() && !body->name.isEmpty()) {
+    lines << QCoreApplication::translate("Selection", "Body: %1").arg(body->name.toHtmlEscaped());
+  } else {
+    lines << QCoreApplication::translate("Selection", "Body");
+  }
   return lines.join(QStringLiteral("<br>"));
 }
 
@@ -152,6 +159,9 @@ QString selectionMeasurementText(const QJsonObject& measured) {
       QStringLiteral("mm"));
   add(QCoreApplication::translate("Selection", "Area"), measured.value(QStringLiteral("area")),
       QStringLiteral("mm²"));
+  // A profile's (mitcad#1741).
+  add(QCoreApplication::translate("Selection", "Perimeter"), measured.value(QStringLiteral("perimeter")),
+      QStringLiteral("mm"));
   add(QCoreApplication::translate("Selection", "Volume"), measured.value(QStringLiteral("volume")),
       QStringLiteral("mm³"));
   const QJsonObject circle = measured.value(QStringLiteral("circle")).toObject();
@@ -343,7 +353,7 @@ QString SelectionItem::countText(SelectKind kind, int count) {
   return kindTranslated(count == 1 ? words.countOne : words.countMany).arg(count);
 }
 
-QString SelectionItem::describe() const {
+QString SelectionItem::logDescription() const {
   const QString kindText = kindName(kind);
   // Where an occurrence places it (components).
   const QString in = occurrence.isEmpty() ? QString() : QStringLiteral(" in ") + occurrence;
@@ -540,6 +550,131 @@ SelectionItem featureCurveItem(const QString& feature, const QString& occurrence
 
 bool isFeatureCurve(const SelectionItem& item) {
   return item.kind == SelectKind::Feature && item.geometry == featureCurveGeometry();
+}
+
+namespace {
+
+// The entry of `list` (the sketch answer's entities, constraints,
+// dimensions) whose `field` is `id`.
+QJsonObject entryWith(const QJsonObject& sketch, const char* list, const char* field, const QString& id) {
+  for (const QJsonValue& value : sketch.value(QLatin1String(list)).toArray()) {
+    const QJsonObject entry = value.toObject();
+    if (entry.value(QLatin1String(field)).toString() == id) {
+      return entry;
+    }
+  }
+  return {};
+}
+
+double pointDistance(const QJsonArray& a, const QJsonArray& b) {
+  if (a.size() < 2 || b.size() < 2) {
+    return std::nan("");
+  }
+  return std::hypot(a.at(0).toDouble() - b.at(0).toDouble(), a.at(1).toDouble() - b.at(1).toDouble());
+}
+
+QString selectionText(const char* text) { return QCoreApplication::translate("Selection", text); }
+
+// A sketch curve's type in words (the sketch definition's entity types).
+QString curveWord(const QString& type) {
+  if (type == QStringLiteral("line")) return selectionText("Line");
+  if (type == QStringLiteral("circle")) return selectionText("Circle");
+  if (type == QStringLiteral("arc")) return selectionText("Arc");
+  if (type == QStringLiteral("ellipse")) return selectionText("Ellipse");
+  if (type == QStringLiteral("elliptical_arc")) return selectionText("Elliptical arc");
+  if (type == QStringLiteral("spline") || type == QStringLiteral("fitted_spline")) return selectionText("Spline");
+  return selectionText("Curve");
+}
+
+} // namespace
+
+SketchItemCard sketchItemCard(const SelectionItem& item, const QJsonObject& sketch, const QString& sketchName,
+                              const std::function<QString(const QString&)>& constraintName) {
+  SketchItemCard card;
+  // "<kind> of Sketch3"; without the sketch's name the kind alone.
+  const auto where = [&sketchName](const QString& kind) {
+    return sketchName.isEmpty() ? kind : selectionText("%1 of %2").arg(kind, sketchName);
+  };
+  QJsonObject measured;
+  switch (item.kind) {
+  case SelectKind::Profile: {
+    card.title = where(selectionText("Profile"));
+    const QJsonObject region = entryWith(sketch, "regions", "key", item.name);
+    measured.insert(QStringLiteral("area"), region.value(QStringLiteral("area")));
+    measured.insert(QStringLiteral("perimeter"), region.value(QStringLiteral("perimeter")));
+    break;
+  }
+  case SelectKind::SketchCurve: {
+    const QJsonObject curve = entryWith(sketch, "entities", "id", item.name);
+    const QString type = curve.value(QStringLiteral("type")).toString();
+    card.title = where(curve.isEmpty() ? SelectionItem::kindText(item.kind) : curveWord(type));
+    if (card.title.at(0).isLower()) {
+      card.title[0] = card.title.at(0).toUpper();
+    }
+    const QJsonObject geometry = curve.value(QStringLiteral("geometry")).toObject();
+    if (type == QStringLiteral("line")) {
+      measured.insert(QStringLiteral("length"), pointDistance(geometry.value(QStringLiteral("start")).toArray(),
+                                                              geometry.value(QStringLiteral("end")).toArray()));
+    } else if (type == QStringLiteral("circle") || type == QStringLiteral("arc")) {
+      const double radius = geometry.value(QStringLiteral("radius")).toDouble(std::nan(""));
+      if (type == QStringLiteral("arc")) {
+        double sweep = geometry.value(QStringLiteral("end_angle")).toDouble() -
+                       geometry.value(QStringLiteral("start_angle")).toDouble();
+        const double turn = 2.0 * std::acos(-1.0);
+        sweep = std::fmod(std::fmod(sweep, turn) + turn, turn); // counter-clockwise
+        measured.insert(QStringLiteral("length"), radius * sweep);
+      }
+      measured.insert(QStringLiteral("circle"), QJsonObject{{QStringLiteral("radius"), radius}});
+    }
+    break;
+  }
+  case SelectKind::SketchPoint:
+    card.title = where(selectionText("Point"));
+    break;
+  case SelectKind::SketchConstraint: {
+    // A fixed entity's lock is "fix:<entity>".
+    const bool fix = item.name.startsWith(QStringLiteral("fix:"));
+    const QString type = fix ? QStringLiteral("fix")
+                             : entryWith(sketch, "constraints", "id", item.name).value(QStringLiteral("type")).toString();
+    const QString kind = fix ? selectionText("Fix")
+                         : type.isEmpty() || !constraintName ? QString()
+                                                             : constraintName(type);
+    if (kind.isEmpty()) {
+      card.title = sketchName.isEmpty() ? selectionText("Constraint")
+                                        : selectionText("Constraint in %1").arg(sketchName);
+    } else {
+      card.title = sketchName.isEmpty() ? selectionText("%1 constraint").arg(kind)
+                                        : selectionText("%1 constraint in %2").arg(kind, sketchName);
+    }
+    break;
+  }
+  case SelectKind::SketchDimension: {
+    const QJsonObject dimension = entryWith(sketch, "dimensions", "id", item.name);
+    // Its parameter's name is the user's (they rename it, formulas use it).
+    QString parameter = dimension.value(QStringLiteral("value")).toString();
+    if (parameter.isEmpty()) {
+      parameter = dimension.value(QStringLiteral("reference")).toString();
+    }
+    const QString kind = parameter.isEmpty() ? selectionText("Dimension")
+                                             : selectionText("Dimension %1").arg(parameter);
+    card.title = sketchName.isEmpty() ? kind : selectionText("%1 in %2").arg(kind, sketchName);
+    const QJsonValue value = dimension.value(QStringLiteral("measured"));
+    if (value.isDouble() && std::isfinite(value.toDouble())) {
+      const bool angle = dimension.value(QStringLiteral("type")).toString() == QStringLiteral("angle");
+      const double shown = angle ? value.toDouble() * 180.0 / std::acos(-1.0) : value.toDouble();
+      card.measurements = selectionText("Value: <b>%1 %2</b>")
+                              .arg(QString::number(shown, 'g', 6), angle ? QStringLiteral("°") : QStringLiteral("mm"));
+    }
+    break;
+  }
+  default:
+    card.title = SelectionItem::kindText(item.kind);
+    break;
+  }
+  if (card.measurements.isEmpty()) {
+    card.measurements = selectionMeasurementText(measured);
+  }
+  return card;
 }
 
 } // namespace mitcad

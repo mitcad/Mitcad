@@ -23,7 +23,10 @@
 #     500 mm apart framed one after the other give the same screenshot,
 #     unlike the whole design; ui_select's reveal "fit" moves the view
 #     before the next screenshot; view.fit frames only the isolated body;
-#     a Home named view's target and height hold after view.home.
+#     a Home named view's target and height hold after view.home;
+#   - mitcad#1734: with a command panel's drop-down list open, ui_screenshot
+#     of the window takes in the list (a window of its own) over the panel
+#     and its windows names it a popup; once closed it is gone.
 # The Python flow tools/ui-mcp-live.py (tools/ui-mcp-test.sh) covers the
 # other live tools.
 #
@@ -367,6 +370,67 @@ expect '.bytes <= 8192 and .max_bytes == 8192' "a file with max_bytes keeps to i
 mcp_tool model_query "$(jq -cn --arg d "$DOC" '{document: $d, query: {query: "print_thickness", minimum: 6}}')"
 expect '(.result.bodies[0] | has("triangles") | not) and .result.thin_triangles > 0' \
   "print_thickness answers its summary over MCP"
+
+echo "--- A picture of the window shows an open list (mitcad#1734)"
+# window_shot name: ui_screenshot of the whole window at its full size; the
+# PNG in $WORK/name.png, the result in $WORK/name.json.
+window_shot() {
+  mcp_tool ui_screenshot '{"window": true, "max_size": 4096}'
+  jq -r '.result.content[] | select(.type == "image") | .data' "$WORK/answer.json" | base64 -d > "$WORK/$1.png"
+  [ -s "$WORK/$1.png" ] || ui_fail "no picture of the window in $1.png"
+  cp "$WORK/result.json" "$WORK/$1.json"
+}
+ui_focus_main
+ui_mark
+ui_step "Box (search)"                     ui_command "Box"
+ui_expect_new "Command Box started" "the Box panel opened" 30
+ui_expect_new "Panel Box input direction at " "the panel placed its Direction list" 30
+ui_wait_idle
+window_shot closed
+expect '.of == "window" and .width == .full_width and .downscaled_for_bytes == false
+  and .windows[0].kind == "main" and ([.windows[] | select(.kind == "popup")] | length == 0)' \
+  "a picture of the window with no list open: the main window, no popup"
+ui_step "open the Direction list"          ui_click_logged "Panel Box input direction"
+ui_sync
+# The list is a window of its own; the next picture takes it in.
+for _ in $(seq 1 25); do
+  window_shot open
+  jq -e '[.windows[] | select(.kind == "popup")] | length == 1' "$WORK/result.json" > /dev/null && break
+  sleep 0.2
+done
+expect '.of == "window" and .width == .full_width and .windows[0].kind == "main"
+  and ([.windows[] | select(.kind == "popup")] | length == 1)' \
+  "the picture of the window takes in the open list as a popup over the main window"
+expect '[.windows[] | select(.kind == "popup")][0] | .width >= 16 and .height >= 16
+  and .x >= 0 and .y >= 0 and .x + .width <= $w and .y + .height <= $h' \
+  "the list lies within the picture" --argjson w "$(jq '.full_width' "$WORK/open.json")" \
+  --argjson h "$(jq '.full_height' "$WORK/open.json")"
+# The list's part over the main window, in both pictures (each has the main
+# window where its windows[0] says): its rows differ from the closed panel.
+read -r OX OY CX CY LW LH < <(jq -rn --slurpfile o "$WORK/open.json" --slurpfile c "$WORK/closed.json" '
+  $o[0] as $open | $c[0] as $closed | $open.windows[0] as $om | $closed.windows[0] as $cm |
+  ([$open.windows[] | select(.kind == "popup")][0]) as $p |
+  ([$p.x, $om.x] | max) as $x0 | ([$p.y, $om.y] | max) as $y0 |
+  ([$p.x + $p.width, $om.x + $om.width] | min) as $x1 | ([$p.y + $p.height, $om.y + $om.height] | min) as $y1 |
+  [$x0, $y0, $x0 - $om.x + $cm.x, $y0 - $om.y + $cm.y, $x1 - $x0, $y1 - $y0] | @tsv')
+[ "${LW:-0}" -ge 16 ] && [ "${LH:-0}" -ge 16 ] || ui_fail "the open list does not lie over the main window"
+CHANGED=$(differing "$WORK/closed.png[${LW}x${LH}+${CX}+${CY}]" "$WORK/open.png[${LW}x${LH}+${OX}+${OY}]")
+awk -v n="$CHANGED" -v area=$((LW * LH)) 'BEGIN { exit !(n > 50 && n * 50 > area) }' ||
+  ui_fail "the picture of the window does not show the list's rows ($CHANGED of $((LW * LH)) pixels differ)"
+echo "ok   the picture shows the list's rows over the panel ($CHANGED of $((LW * LH)) pixels differ)"
+ui_step "close the list (Esc)"             ui_key Escape
+ui_sync
+for _ in $(seq 1 25); do
+  window_shot after
+  jq -e '[.windows[] | select(.kind == "popup")] | length == 0' "$WORK/result.json" > /dev/null && break
+  sleep 0.2
+done
+expect '[.windows[] | select(.kind == "popup")] | length == 0' "a closed list is no longer in the picture"
+ui_focus_main
+ui_mark
+ui_step "cancel Box (Esc)"                 ui_key Escape
+ui_expect_new "Command Box cancelled" "Box cancelled"
+ui_wait_idle
 
 bridge_close
 ui_crashed && ui_fail "the application crashed"

@@ -32,11 +32,15 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QPoint>
+#include <QPointF>
 #include <QPointer>
 #include <QRect>
+#include <QRectF>
 #include <QRegion>
 #include <QScopedValueRollback>
 #include <QStackedWidget>
+#include <QScreen>
+#include <QSizeF>
 #include <QSysInfo>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -114,7 +118,7 @@ QJsonObject itemJson(const SelectionItem& item) {
           {QStringLiteral("occurrence"), item.occurrence},
           {QStringLiteral("geometry"), item.geometry},
           {QStringLiteral("reference"), item.reference()},
-          {QStringLiteral("text"), item.describe()}};
+          {QStringLiteral("text"), item.logDescription()}};
 }
 
 QJsonArray selectionJson(const Selection& items) {
@@ -384,6 +388,73 @@ CommentShown mcpComment(const QJsonObject& arguments, const CommandContext& mode
   return *shown;
 }
 
+// A separate top-level window in a picture of the main window
+// (mitcad#1734): what it is for an agent and how high it stacks.
+struct TopLevelLayer {
+  QWidget* window = nullptr;
+  QRect rect; // on the screen, in logical pixels
+  QString kind;
+  int rank = 0;
+};
+
+// The visible top-level windows of the application over a main window:
+// popups (menus, open lists), tooltips, dialogs and windows of its own,
+// in the order they stack (cards and tool windows, dialogs, popups, then
+// tooltips; the active window last within its rank). The window that
+// holds the main window (its document frame), any other window that holds
+// a design, and what belongs to another design's main window are left out.
+std::vector<TopLevelLayer> topLevelLayers(const MainWindow* main) {
+  std::vector<TopLevelLayer> layers;
+  for (QWidget* window : QApplication::topLevelWidgets()) {
+    if (window == main || window == main->window() || !window->isVisible() || window->isMinimized() ||
+        window->testAttribute(Qt::WA_DontShowOnScreen) || window->windowOpacity() <= 0.0 || window->width() < 8 ||
+        window->height() < 8 ||
+        qobject_cast<const MainWindow*>(window) != nullptr || window->findChild<MainWindow*>() != nullptr) {
+      continue;
+    }
+    bool another = false;
+    for (const QWidget* owner = window->parentWidget(); owner != nullptr; owner = owner->parentWidget()) {
+      if (owner != main && qobject_cast<const MainWindow*>(owner) != nullptr) {
+        another = true;
+        break;
+      }
+    }
+    if (another) {
+      continue;
+    }
+    TopLevelLayer layer;
+    layer.window = window;
+    layer.rect = QRect(window->mapToGlobal(QPoint(0, 0)), window->size());
+    switch (window->windowType()) {
+    case Qt::ToolTip:
+      layer.kind = QStringLiteral("tooltip");
+      layer.rank = 3;
+      break;
+    case Qt::Popup:
+      layer.kind = QStringLiteral("popup");
+      layer.rank = 2;
+      break;
+    case Qt::Dialog:
+    case Qt::Sheet:
+      layer.kind = QStringLiteral("dialog");
+      layer.rank = 1;
+      break;
+    default:
+      layer.kind = QStringLiteral("window");
+      break;
+    }
+    layers.push_back(layer);
+  }
+  const QWidget* active = QApplication::activeWindow();
+  std::stable_sort(layers.begin(), layers.end(), [active](const TopLevelLayer& a, const TopLevelLayer& b) {
+    if (a.rank != b.rank) {
+      return a.rank < b.rank;
+    }
+    return a.window != active && b.window == active;
+  });
+  return layers;
+}
+
 } // namespace
 
 QJsonObject MainWindow::mcpUiState() {
@@ -410,7 +481,14 @@ QJsonObject MainWindow::mcpUiState() {
        m_mode == Mode::PickPlane ? QStringLiteral("hint") : noticeLevelName(m_statusLevel)},
       {QStringLiteral("agents"), m_mcpAgents},
       {QStringLiteral("agent_clients"), QJsonArray::fromStringList(m_mcpAgentNames)},
-      {QStringLiteral("editable"), mcpBlockedReason(true).isEmpty()}};
+      {QStringLiteral("editable"), mcpBlockedReason(true).isEmpty()},
+      // The dialog open in the application, which only the user can answer
+      // (mitcad#1725): its title, and whether it is the recovery question
+      // of the start-up; null without one.
+      {QStringLiteral("dialog"), mcp::dialogState()}};
+  if (const QString blocked = mcpBlockedReason(true); !blocked.isEmpty()) {
+    state.insert(QStringLiteral("blocked_reason"), blocked);
+  }
   if (m_mode == Mode::PickPlane && !m_statusLabel->text().isEmpty() && m_statusLabel->text() != pickPlaneText()) {
     state.insert(QStringLiteral("status_line"), m_statusLabel->text());
     state.insert(QStringLiteral("status_line_is_error"), !m_statusLabel->styleSheet().isEmpty());
@@ -567,6 +645,7 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
   };
   QImage image;
   QString what = QStringLiteral("view");
+  QJsonArray windows; // a picture of the window: where each window lies in it
   if (offscreen) {
     // Offscreen at that size, so the picture does not take the window's
     // shape (mitcad#689); the model must not be computing meanwhile.
@@ -605,6 +684,59 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
           }
         }
       }
+    }
+    // The application's other top-level windows (popups, open lists,
+    // tooltips, dialogs) at their places on the screen over the window, as
+    // the window server composes them on macOS (mitcad#1734); the picture
+    // takes in what lies outside the window, within the screens.
+    const QRect mainRect(mapToGlobal(QPoint(0, 0)), size());
+    const QRect desktop = screen() != nullptr ? screen()->virtualGeometry() : QRect();
+    std::vector<TopLevelLayer> layers = topLevelLayers(this);
+    if (desktop.isValid()) {
+      for (TopLevelLayer& layer : layers) {
+        layer.rect &= desktop;
+      }
+    }
+    layers.erase(std::remove_if(layers.begin(), layers.end(),
+                                [](const TopLevelLayer& layer) { return layer.rect.isEmpty(); }),
+                 layers.end());
+    QRect bounds = mainRect;
+    for (const TopLevelLayer& layer : layers) {
+      bounds |= layer.rect;
+    }
+    if (!layers.empty()) {
+      const qreal ratio = shot.devicePixelRatio();
+      QPixmap canvas((QSizeF(bounds.size()) * ratio).toSize());
+      canvas.setDevicePixelRatio(ratio);
+      canvas.fill(Qt::transparent);
+      QPainter painter(&canvas);
+      painter.drawPixmap(mainRect.topLeft() - bounds.topLeft(), shot);
+      for (const TopLevelLayer& layer : layers) {
+        // Only the part within the screens.
+        const QRect source(layer.rect.topLeft() - layer.window->mapToGlobal(QPoint(0, 0)), layer.rect.size());
+        painter.drawPixmap(layer.rect.topLeft() - bounds.topLeft(), layer.window->grab(source));
+      }
+      painter.end();
+      shot = canvas;
+    }
+    // Where each window lies in the full picture (its pixels), for an agent.
+    const qreal scale = shot.devicePixelRatio();
+    const auto placed = [&bounds, scale](const QString& kind, const QRect& area, const QString& title) {
+      const QRect in = QRectF(QPointF(area.topLeft() - bounds.topLeft()) * scale, QSizeF(area.size()) * scale)
+                           .toAlignedRect();
+      QJsonObject place{{QStringLiteral("kind"), kind},
+                        {QStringLiteral("x"), in.x()},
+                        {QStringLiteral("y"), in.y()},
+                        {QStringLiteral("width"), in.width()},
+                        {QStringLiteral("height"), in.height()}};
+      if (!title.isEmpty()) {
+        place.insert(QStringLiteral("title"), title);
+      }
+      return place;
+    };
+    windows.append(placed(QStringLiteral("main"), mainRect, QString()));
+    for (const TopLevelLayer& layer : layers) {
+      windows.append(placed(layer.kind, layer.rect, layer.window->windowTitle()));
     }
     image = shot.toImage();
     what = QStringLiteral("window");
@@ -663,6 +795,11 @@ QJsonObject MainWindow::mcpScreenshot(const QJsonObject& arguments) {
                      {QStringLiteral("downscaled_for_bytes"), fitted.downscaled}};
   if (byteLimit || target.isEmpty()) {
     result.insert(QStringLiteral("max_bytes"), static_cast<qint64>(budget));
+  }
+  if (!windows.isEmpty()) {
+    // In the full picture's pixels (full_width by full_height); the main
+    // window first, then the windows over it as they stack (mitcad#1734).
+    result.insert(QStringLiteral("windows"), windows);
   }
   if (!target.isEmpty()) {
     // Into the allowed folder: only the path and the size go back.
@@ -854,7 +991,7 @@ bool MainWindow::mcpItemCorners(const Selection& items, std::vector<gp_Pnt>& cor
     }
     if (shape.IsNull()) {
       if (required && missing != nullptr) {
-        *missing = item.describe();
+        *missing = item.logDescription();
         return false;
       }
       continue;
@@ -897,6 +1034,8 @@ QJsonObject MainWindow::mcpCameraJson() const {
           {QStringLiteral("width"), camera.height * aspect},
           {QStringLiteral("projection"), camera.perspective ? QStringLiteral("perspective") : QStringLiteral("orthographic")},
           {QStringLiteral("fov"), m_viewer->fieldOfView()},
+          // mm as on a 35 mm frame, the same field of view (mitcad#1717)
+          {QStringLiteral("focal_length"), m_viewer->focalLength()},
           {QStringLiteral("view_size"), QJsonArray{m_viewer->width(), m_viewer->height()}}};
 }
 
@@ -1123,8 +1262,8 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
     return listing(arguments.value(QStringLiteral("search")).toString(), QString());
   }
   mcpRefuseBusy();
-  if (m_closePending || QApplication::activeModalWidget() != nullptr) {
-    refuse(QStringLiteral("The design is closing or waiting for a dialog."));
+  if (const QString waiting = mcpDialogReason(); !waiting.isEmpty()) {
+    refuse(waiting);
   }
   const QString id = arguments.value(QStringLiteral("id")).toString();
   const QString edit = arguments.value(QStringLiteral("edit")).toString();
@@ -1283,8 +1422,11 @@ QJsonObject MainWindow::mcpUiCommand(const QJsonObject& arguments) {
                  .arg(mcp::echoed(id), mcp::nearestCommandsText(*m_registry, id)));
     }
     if (mcp::opensDialog(id)) {
-      refuse(QStringLiteral("%1 opens a file dialog or another window, which an agent cannot use: run it in the application.")
-                 .arg(def->name));
+      // Shown for viewing by ui_dialog where the run allows it (mitcad#1735).
+      const bool viewable = mcp::runAgentFoldersGiven() && mcp::dialogViewRefusal(id).isEmpty();
+      refuse(QStringLiteral("%1 opens a file dialog or another window, which an agent cannot use: %2")
+                 .arg(def->name, viewable ? QStringLiteral("ui_dialog with open shows it for viewing.")
+                                          : QStringLiteral("run it in the application.")));
     }
     if (windowReadOnly() && !readOnlyCommand(*def)) {
       refuse(readOnlyReason());

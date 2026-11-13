@@ -443,11 +443,46 @@ fn a_region_a_change_splits_selects_all_its_pieces() {
     // The vertical bar's height and the horizontal one's width.
     assert_eq!(parameter(&doc, "d4"), 620.0);
     assert_eq!(parameter(&doc, "d5"), 620.0);
-    for name in ["d4", "d5"] {
-        command(
+    // Each `set_parameter` says in its result what it brought to the
+    // extrusion (mitcad#1729): the warning of the tip it split, named by
+    // the feature, and not again the one that was there before it.
+    let mut brought: Vec<String> = Vec::new();
+    for (name, tip) in [("d4", &top_tip), ("d5", &right_tip)] {
+        let result = command(
             &mut doc,
             json!({"cmd": "set_parameter", "name": name, "value": 650}),
         );
+        let warnings: Vec<String> = result["warnings"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{name}: no warnings in {result}"))
+            .iter()
+            .map(|w| w.as_str().unwrap().to_owned())
+            .collect();
+        let prefix = format!("Extrude1: region {} found as r{{", tip.region);
+        let own: Vec<&String> = warnings.iter().filter(|w| w.starts_with(&prefix)).collect();
+        assert_eq!(own.len(), 1, "{name}: {result}");
+        assert!(own[0].ends_with("after a change in Sketch1"), "{result}");
+        // In plain words beside them, and each a notice about the
+        // extrusion with the regions as its places.
+        let shown = "Extrude1: a region found as 2 regions after a change in Sketch1";
+        assert_eq!(
+            result["warning_messages"],
+            json!(vec![shown; warnings.len()]),
+            "{result}"
+        );
+        let notices = result["notices"].as_array().unwrap();
+        assert_eq!(notices.len(), warnings.len(), "{result}");
+        let place = json!({"kind": "region", "sketch": "F1", "name": tip.region.to_string()});
+        assert!(
+            notices.iter().any(|n| {
+                n["level"] == "warning"
+                    && n["message"] == shown
+                    && n["target"] == "F2"
+                    && n["places"].as_array().is_some_and(|p| p.contains(&place))
+            }),
+            "{result}"
+        );
+        brought.extend(warnings);
     }
     let output = doc.sketch_output(F1).unwrap();
     // The ring in two, and the top and right tips each in a piece between
@@ -498,6 +533,10 @@ fn a_region_a_change_splits_selects_all_its_pieces() {
         .map(|w| w.as_str().unwrap())
         .collect();
     assert_eq!(warnings.len(), 2, "{warnings:?}");
+    // The same two the results of `set_parameter` gave (mitcad#1729).
+    let named: BTreeSet<String> = warnings.iter().map(|w| format!("Extrude1: {w}")).collect();
+    let brought: BTreeSet<String> = brought.into_iter().collect();
+    assert!(named.is_subset(&brought), "{named:?} of {brought:?}");
     for old in [&top_tip, &right_tip] {
         let prefix = format!("region {} found as r{{", old.region);
         let warning = warnings
@@ -521,10 +560,13 @@ fn a_region_a_change_splits_selects_all_its_pieces() {
 
     // Back to 620: the old keys are the regions' own again, no warning.
     for name in ["d4", "d5"] {
-        command(
+        let result = command(
             &mut doc,
             json!({"cmd": "set_parameter", "name": name, "value": 620}),
         );
+        // A warning that goes brings nothing to the result.
+        assert_eq!(result["warnings"], Value::Null, "{result}");
+        assert_eq!(result["notices"], Value::Null, "{result}");
     }
     assert_eq!(timeline_entry(&doc, "F2")["status"], json!("ok"));
     assert_eq!(bodies(&doc).len(), 9);
@@ -659,4 +701,173 @@ fn a_region_with_nothing_like_it_fails_the_feature() {
         json!(format!("Sketch1 has no profile {}", disc.region))
     );
     assert!(bodies(&doc).is_empty());
+}
+
+/// The keys `profile` finds for a reference, as a set.
+fn found_keys(doc: &Document<MockKernel>, profile: &ProfileRef) -> BTreeSet<String> {
+    let means = query(
+        doc,
+        json!({"query": "profile", "sketch": "F1", "region": profile.region}),
+    );
+    means["regions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no regions: {means}"))
+        .iter()
+        .map(|k| k.as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// The keys of the regions at the points, as a set.
+fn keys_at(doc: &Document<MockKernel>, at: &[[f64; 2]]) -> BTreeSet<String> {
+    at.iter()
+        .map(|&p| region_at(doc, p).region.to_string())
+        .collect()
+}
+
+#[test]
+fn a_hole_that_splits_the_plate_leaves_its_inside_out() {
+    // A 40 x 20 plate with a hole of 10 at its middle (d1), the plate less
+    // the hole extruded (mitcad#1740). At 24 the hole is wider than the
+    // plate and cuts it in two: the region is found as the left and the
+    // right piece, not the piece of the plate inside the hole, which was
+    // the hole's inside.
+    let mut doc = sketch(&[]);
+    command(
+        &mut doc,
+        json!({"cmd": "sketch.add_circle", "sketch": "F1", "center": [20, 10],
+               "diameter": 10}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0],
+               "width": 40, "height": 20}),
+    );
+    assert_eq!(parameter(&doc, "d1"), 10.0);
+    let plate = region_at(&doc, [5.0, 5.0]);
+    let def = json!({"type": "extrude", "profiles": [plate],
+                     "extent": {"type": "distance", "distance": 10}, "operation": "new_body"});
+    command(&mut doc, json!({"cmd": "add_feature", "def": def}));
+    assert_eq!(timeline_entry(&doc, "F2")["status"], json!("ok"));
+    assert_eq!(bodies(&doc).len(), 1);
+
+    command(
+        &mut doc,
+        json!({"cmd": "set_parameter", "name": "d1", "value": 24}),
+    );
+    // The left and right pieces, the piece inside the hole and the two
+    // caps of the circle outside the plate.
+    assert_eq!(doc.sketch_output(F1).unwrap().regions.len(), 5);
+    let pieces = keys_at(&doc, &[[2.0, 10.0], [38.0, 10.0]]);
+    let middle = region_at(&doc, [20.0, 10.0]).region.to_string();
+    assert!(!pieces.contains(&middle));
+    assert_eq!(found_keys(&doc, &plate), pieces);
+    // The main piece carries the old key.
+    assert_eq!(selected_keys(&doc, std::slice::from_ref(&plate)).len(), 2);
+    // The plate less the circle: the circle of radius 12 within the plate's
+    // height 20 about its centre has 2 (10 √44 + 144 asin(10/12)).
+    let inside_circle = 2.0 * (10.0 * 44.0_f64.sqrt() + 144.0 * (10.0_f64 / 12.0).asin());
+    let area = selected_area(&doc, std::slice::from_ref(&plate));
+    assert!(
+        (area - (800.0 - inside_circle)).abs() < 1e-3 * 800.0,
+        "area {area}, expected {}",
+        800.0 - inside_circle
+    );
+    // Two bodies, and the warning names the two pieces.
+    assert_eq!(bodies(&doc).len(), 2);
+    let entry = timeline_entry(&doc, "F2");
+    assert_eq!(entry["status"], json!("warning"), "{entry}");
+    let feature = query(&doc, json!({"query": "feature", "uid": "F2"}));
+    let warnings = feature["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{feature}");
+    let warning = warnings[0].as_str().unwrap();
+    assert!(
+        warning.starts_with(&format!("region {} found as r{{", plate.region)),
+        "{warning}"
+    );
+    assert_eq!(warning.matches(" + ").count(), 1, "{warning}");
+    assert!(!warning.contains(&middle), "{warning}");
+    assert!(warning.ends_with("after a change in Sketch1"), "{warning}");
+    assert!(
+        entry["notices"].as_array().unwrap().iter().any(|n| {
+            n["level"] == "warning"
+                && n["message"] == "a region found as 2 regions after a change in Sketch1"
+        }),
+        "{entry}"
+    );
+
+    // Back to 10: the plate's own key again, one body, no warning.
+    command(
+        &mut doc,
+        json!({"cmd": "set_parameter", "name": "d1", "value": 10}),
+    );
+    assert_eq!(timeline_entry(&doc, "F2")["status"], json!("ok"));
+    assert_eq!(bodies(&doc).len(), 1);
+}
+
+#[test]
+fn a_line_through_the_plate_and_its_hole_keeps_the_hole_out() {
+    // A 40 x 10 plate with a hole of 4 at (10, 5), then a line at x = 10
+    // across both: the plate's pieces are bounded by the hole's halves now,
+    // and the halves of the disc in the hole stay out (mitcad#1740).
+    let mut doc = sketch(&[[0.0, 0.0, 40.0, 10.0]]);
+    command(
+        &mut doc,
+        json!({"cmd": "sketch.add_circle", "sketch": "F1", "center": [10, 5], "diameter": 4}),
+    );
+    let plate = region_at(&doc, [35.0, 5.0]);
+    command(
+        &mut doc,
+        json!({"cmd": "sketch.add_line", "sketch": "F1", "start": [10, 0], "end": [10, 10]}),
+    );
+    let pieces = keys_at(&doc, &[[2.0, 5.0], [35.0, 5.0]]);
+    assert_eq!(pieces.len(), 2);
+    assert_eq!(found_keys(&doc, &plate), pieces);
+    let hole = std::f64::consts::PI * 4.0;
+    let area = selected_area(&doc, std::slice::from_ref(&plate));
+    assert!((area - (400.0 - hole)).abs() < 1e-3 * 400.0, "area {area}");
+}
+
+#[test]
+fn lines_across_a_region_keep_every_piece() {
+    // A 40 x 10 rectangle, then two lines across it: the old key finds all
+    // three pieces, the middle one too, though it holds none of the
+    // rectangle's corners (the lines bound no area of their own).
+    let mut doc = sketch(&[[0.0, 0.0, 40.0, 10.0]]);
+    let old = region_at(&doc, [5.0, 5.0]);
+    for x in [15, 25] {
+        command(
+            &mut doc,
+            json!({"cmd": "sketch.add_line", "sketch": "F1", "start": [x, 0], "end": [x, 10]}),
+        );
+    }
+    let pieces = keys_at(&doc, &[[5.0, 5.0], [20.0, 5.0], [35.0, 5.0]]);
+    assert_eq!(pieces.len(), 3);
+    assert_eq!(found_keys(&doc, &old), pieces);
+    close(selected_area(&doc, std::slice::from_ref(&old)), 400.0);
+}
+
+#[test]
+fn a_region_grown_into_a_circle_beside_it_keeps_the_overlap() {
+    // A 40 x 10 rectangle (d1 its width) and a circle of 8 beside it at
+    // (45, 5). Widened to 43 the rectangle reaches into the circle: the
+    // overlap was never a hole of the rectangle, and most of the circle
+    // lies outside it, so the old key finds the rectangle less the circle
+    // and the overlap, the whole widened rectangle (mitcad#1740).
+    let mut doc = sketch(&[[0.0, 0.0, 40.0, 10.0]]);
+    assert_eq!(parameter(&doc, "d1"), 40.0);
+    command(
+        &mut doc,
+        json!({"cmd": "sketch.add_circle", "sketch": "F1", "center": [45, 5], "diameter": 8}),
+    );
+    let old = region_at(&doc, [5.0, 5.0]);
+    command(
+        &mut doc,
+        json!({"cmd": "set_parameter", "name": "d1", "value": 43}),
+    );
+    let pieces = keys_at(&doc, &[[5.0, 5.0], [42.0, 5.0]]);
+    assert_eq!(pieces.len(), 2);
+    assert!(!pieces.contains(&region_at(&doc, [46.0, 5.0]).region.to_string()));
+    assert_eq!(found_keys(&doc, &old), pieces);
+    let area = selected_area(&doc, std::slice::from_ref(&old));
+    assert!((area - 430.0).abs() < 1e-3 * 430.0, "area {area}");
 }

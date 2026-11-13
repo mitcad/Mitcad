@@ -396,3 +396,6 @@ mod spatial_plane_curves_tests;
 pub mod print_changes;
 // A thread's face fitted to the thread (mitcad#1632).
 pub use document::{AutoFixFit, NoFit, SharedChoice};
+// Linked designs from outside the project: whether a link would be
+// followed, and the file copied into the project to link (mitcad#1719).
+pub use document::{LINK_COPY_FOLDER, LinkCheck, LinkCopy, check_link, copy_link_into_project};

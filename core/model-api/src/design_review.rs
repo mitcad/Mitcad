@@ -13,13 +13,14 @@ use mitcad_model::Document;
 use mitcad_model::expr::{Dims, ParamKind};
 use mitcad_model::features::construction::PlaneDefinition;
 use mitcad_model::features::geom_ref::GeomRef;
-use mitcad_model::features::{FeatureDef, SketchPlane};
-use mitcad_model::ids::{BodyUid, FeatureUid};
+use mitcad_model::features::{FeatureDef, FeatureEntry, SketchPlane};
+use mitcad_model::ids::{BodyUid, FeatureUid, OccurrenceUid};
 use mitcad_model::kernel::Kernel;
 use mitcad_model::notice::NoticeLevel;
 use mitcad_model::parameters::ParamId;
+use mitcad_model::print_plates::PlateTarget;
 use mitcad_model::topo::TopoName;
-use mitcad_model::{DocState, PrintTarget};
+use mitcad_model::{DocState, InstanceView, PrintTarget};
 
 pub(super) const RULES: &[&str] = &[
     "failed-feature",
@@ -36,6 +37,10 @@ pub(super) const RULES: &[&str] = &[
     "thin-wall",
     "outside-build-volume",
     "min-gap",
+    "stray-bodies",
+    "no-bed-face",
+    "no-print-profile",
+    "split-profile",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -219,6 +224,116 @@ fn used_parameters<K: Kernel>(doc: &Document<K>) -> BTreeSet<ParamId> {
     used
 }
 
+/// Whether a body name is a generated one, `Body<n>`, as the model names
+/// new bodies (`display_names`, mitcad#291).
+fn default_body_name(name: &str) -> bool {
+    name.strip_prefix("Body")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// `stray-bodies` (mitcad#1731): the pieces a feature split a body into
+/// (`features/pieces.rs`) that still have default names while another
+/// piece of the same split was named. A cut that splits a body leaves the
+/// extra pieces as new bodies, easily missed until the bodies are listed.
+fn stray_bodies<K: Kernel>(doc: &Document<K>, entry: &FeatureEntry, findings: &mut Vec<Value>) {
+    let Some(groups) = doc
+        .last_result()
+        .results
+        .iter()
+        .find(|result| result.uid == entry.uid)
+        .and_then(|result| result.output.as_ref())
+        .and_then(|output| output.split_pieces.as_ref())
+    else {
+        return;
+    };
+    // The design keeps every body's name once a command has run, the
+    // generated ones too: a default name is one of the generated form.
+    let default = |body: BodyUid| default_body_name(&doc.body_name(body));
+    let mut reported = BTreeSet::new();
+    for group in groups.iter() {
+        let pieces: Vec<BodyUid> = group
+            .pieces
+            .iter()
+            .filter(|piece| !piece.gone && doc.body_shape(piece.body).is_some())
+            .map(|piece| piece.body)
+            .collect();
+        let Some(named) = pieces.iter().find(|body| !default(**body)) else {
+            continue;
+        };
+        for body in pieces.iter().filter(|body| default(**body)) {
+            if reported.insert(*body) {
+                findings.push(finding(
+                    "stray-bodies",
+                    NoticeLevel::Warning,
+                    body,
+                    format!(
+                        "{} split {} and left {} as an extra body with a default name",
+                        entry.name,
+                        doc.body_name(*named),
+                        doc.body_name(*body)
+                    ),
+                    "List the bodies: name the piece if it is wanted, or join or remove it if the split was not intended.",
+                    "verification",
+                    "measure-the-result",
+                ));
+            }
+        }
+    }
+}
+
+/// `split-profile` (mitcad#1731): a feature whose profile references a
+/// sketch change found as several regions (a region split in pieces), or
+/// as fewer regions than the feature selected (regions merged). The
+/// feature builds with what was found and keeps only the region warning.
+fn split_profile<K: Kernel>(doc: &Document<K>, entry: &FeatureEntry) -> Option<String> {
+    let profiles = entry.def.info().profiles();
+    // The references found under other keys: their sketch and how many
+    // regions each was found as.
+    let mut changed: Vec<(FeatureUid, usize)> = Vec::new();
+    let mut found_regions = BTreeSet::new();
+    for profile in profiles {
+        // A reference that finds no region fails its feature, which
+        // `failed-feature` reports.
+        let Some(found) = doc
+            .sketch_output(profile.sketch)
+            .and_then(|output| output.found(&profile.region))
+        else {
+            continue;
+        };
+        if !found.exact {
+            changed.push((profile.sketch, found.regions.len()));
+        }
+        found_regions.extend(
+            found
+                .regions
+                .iter()
+                .map(|region| (profile.sketch, region.profile.key.to_string())),
+        );
+    }
+    let sketch_name = |uid: FeatureUid| {
+        doc.feature(uid)
+            .map_or_else(|| uid.to_string(), |sketch| sketch.name.clone())
+    };
+    if let Some((sketch, pieces)) = changed.iter().find(|(_, pieces)| *pieces > 1) {
+        return Some(format!(
+            "{} uses a profile region that a change in {} split into {} pieces",
+            entry.name,
+            sketch_name(*sketch),
+            *pieces
+        ));
+    }
+    let (sketch, _) = *changed.first()?;
+    (found_regions.len() < profiles.len()).then(|| {
+        format!(
+            "{} selected {} profile regions, which a change in {} merged into {}",
+            entry.name,
+            profiles.len(),
+            sketch_name(sketch),
+            found_regions.len()
+        )
+    })
+}
+
 /// The complete query, also used by MCP hints with an explicit feature
 /// scope, the three hint rule ids, and print disabled.
 pub(super) fn review<K: Kernel>(doc: &Document<K>, query: &ReviewQuery) -> Result<Value, ApiError> {
@@ -358,6 +473,23 @@ pub(super) fn review<K: Kernel>(doc: &Document<K>, query: &ReviewQuery) -> Resul
                     "Use a stable base face, origin datum or construction reference instead of finishing or pattern geometry.", "references", "stable-parents"));
             }
         }
+        if active && enabled("stray-bodies") {
+            stray_bodies(doc, entry, &mut findings);
+        }
+        if active
+            && enabled("split-profile")
+            && let Some(message) = split_profile(doc, entry)
+        {
+            findings.push(finding(
+                "split-profile",
+                NoticeLevel::Warning,
+                entry.uid,
+                message,
+                "Check that the feature still uses the intended area; select its profiles again, or use auto_fix to keep the regions found.",
+                "sketches",
+                "profiles-and-the-sketch-palette",
+            ));
+        }
         if enabled("default-names")
             && entry
                 .name
@@ -392,9 +524,16 @@ pub(super) fn review<K: Kernel>(doc: &Document<K>, query: &ReviewQuery) -> Resul
     let mut errors = Vec::new();
     let mut contexts = Vec::new();
     let mut print_bodies = 0;
-    let print_requested = ["overhang", "thin-wall", "outside-build-volume", "min-gap"]
-        .iter()
-        .any(|rule| enabled(rule));
+    let print_requested = [
+        "overhang",
+        "thin-wall",
+        "outside-build-volume",
+        "min-gap",
+        "no-bed-face",
+        "no-print-profile",
+    ]
+    .iter()
+    .any(|rule| enabled(rule));
     if forced != Some(false) && print_requested {
         print_bodies = printing(
             doc,
@@ -488,6 +627,11 @@ fn printing<K: Kernel>(
     // The checked bodies by the plate they print on (mitcad#1519): only
     // bodies printed together can fuse.
     let mut by_plate: BTreeMap<Option<usize>, Vec<BodyUid>> = BTreeMap::new();
+    // mitcad#1731: the first checked body of each plate that prints without
+    // a printer profile, and the occurrence items already looked at for a
+    // bed face.
+    let mut unprofiled: BTreeMap<usize, BodyUid> = BTreeMap::new();
+    let mut bedless: BTreeSet<Vec<OccurrenceUid>> = BTreeSet::new();
     let instances = doc.instances();
     // The marker's final bodies may have been modified after their creator.
     // Scope includes the body's creator or any selected feature producing
@@ -549,6 +693,14 @@ fn printing<K: Kernel>(
             .entry(doc.plate_of_body(body, Some(path)))
             .or_default()
             .push(body);
+        if let Some(plate) = doc.plate_of_body(body, Some(path)) {
+            if settings.printer.is_none() {
+                unprofiled.entry(plate).or_insert(body);
+            }
+            if enabled("no-bed-face") {
+                no_bed_face(doc, body, path, plate, &instances, &mut bedless, findings);
+            }
+        }
         let number = |key: &str, default| {
             settings
                 .value(key)
@@ -643,7 +795,87 @@ fn printing<K: Kernel>(
     if enabled("min-gap") {
         min_gaps(doc, &by_plate, findings, errors)?;
     }
+    if enabled("no-print-profile") {
+        for (plate, body) in unprofiled {
+            let plate = &doc.print_plates()[plate];
+            findings.push(finding(
+                "no-print-profile",
+                NoticeLevel::Warning,
+                &plate.id,
+                format!(
+                    "{} prints without a printer profile ({} has none): its 3MF names a placeholder printer, which the slicer cannot slice with as it is",
+                    plate.name,
+                    doc.body_name(body)
+                ),
+                "Import the printer's slicer profile with import_print_profile and choose it as the printer before exporting the 3MF.",
+                "3d-printing",
+                "checks",
+            ));
+        }
+    }
     Ok(checked)
+}
+
+/// `no-bed-face` (mitcad#1731): a checked body on a plate whose piece has
+/// no usable print bed face, so the export orients it automatically
+/// (`exchange/bed.rs`), which can lay an assembled piece on any flat face.
+/// A body on its own item, or on none, is a piece of its own; one placed
+/// through an occurrence item is a piece with the occurrence's other bodies,
+/// which turns onto a bed face of any of them and is reported once.
+fn no_bed_face<K: Kernel>(
+    doc: &Document<K>,
+    body: BodyUid,
+    path: &[OccurrenceUid],
+    plate: usize,
+    instances: &[InstanceView],
+    seen: &mut BTreeSet<Vec<OccurrenceUid>>,
+    findings: &mut Vec<Value>,
+) {
+    let usable = |uid: BodyUid| doc.print_bed_face(uid).is_some_and(|bed| bed.plane.is_ok());
+    let plates = doc.print_plates();
+    let own = PlateTarget::Body(body);
+    let occurrence = if plates.iter().any(|p| p.item(&own).is_some()) {
+        None
+    } else {
+        plates[plate]
+            .items
+            .iter()
+            .filter_map(|item| match &item.target {
+                PlateTarget::Occurrence(o) if path.starts_with(o) => Some(o),
+                _ => None,
+            })
+            .min_by_key(|o| o.len())
+    };
+    let message = match occurrence {
+        None if !usable(body) => format!(
+            "{} prints on {} without a print bed face, so the export orients it by itself",
+            doc.body_name(body),
+            plates[plate].name
+        ),
+        Some(o)
+            if seen.insert(o.clone())
+                && !instances
+                    .iter()
+                    .filter(|instance| instance.path.starts_with(o))
+                    .any(|instance| usable(instance.body)) =>
+        {
+            format!(
+                "{} prints on {} as assembled without a print bed face on any of its bodies, so the export orients it by itself",
+                doc.plate_target_name(&PlateTarget::Occurrence(o.clone())),
+                plates[plate].name
+            )
+        }
+        _ => return,
+    };
+    findings.push(finding(
+        "no-bed-face",
+        NoticeLevel::Warning,
+        body,
+        message,
+        "Assign the face that should lie on the bed with set_print_bed_face, so the export does not choose one.",
+        "3d-printing",
+        "orientation-and-strength",
+    ));
 }
 
 /// `min-gap` (mitcad#1519): the checked bodies of each plate that are

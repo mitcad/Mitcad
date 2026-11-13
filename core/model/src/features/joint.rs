@@ -315,6 +315,14 @@ pub struct JointDef<P = ParamId> {
     /// Values the free motions are driven to (`drive_joint`).
     #[serde(default = "BTreeMap::new", skip_serializing_if = "BTreeMap::is_empty")]
     pub position: JointPosition<P>,
+    /// Where the free motions are when the joint places its moving side
+    /// (mm, radians; numbers, mitcad#1745): the Joint command's new joint
+    /// at 0, so that its origins meet at the offset and angle; a drag's
+    /// values, so that the drag is kept. A free motion without one starts
+    /// at the value nearest to where the side is. Unused for a motion
+    /// that is driven and for a joint that closes a loop.
+    #[serde(default = "BTreeMap::new", skip_serializing_if = "BTreeMap::is_empty")]
+    pub start: BTreeMap<Motion, f64>,
 }
 
 impl<P> JointDef<P> {
@@ -332,8 +340,27 @@ impl<P> JointDef<P> {
             flip: copy,
             limits: with(map_limits),
             position: with(map_position),
+            start: clone,
         }
     }
+}
+
+/// A joint's start values: free motions of its kind, finite numbers.
+fn check_start(
+    kind: JointKind,
+    slide: SlideAxis,
+    start: &BTreeMap<Motion, f64>,
+) -> Result<(), String> {
+    let motions = kind.motions(slide);
+    for (motion, value) in start {
+        if !motions.contains(motion) {
+            return Err(format!("start: a {kind} joint has no free motion {motion}"));
+        }
+        if !value.is_finite() {
+            return Err(format!("start: the value of {motion} must be finite"));
+        }
+    }
+    Ok(())
 }
 
 impl FeatureInfo for JointDef {
@@ -346,6 +373,7 @@ impl FeatureInfo for JointDef {
 
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
         check_kind(self.kind, self.slide_axis, &self.limits, &self.position)?;
+        check_start(self.kind, self.slide_axis, &self.start)?;
         self.a.check(ctx).map_err(|e| format!("a: {e}"))?;
         self.b.check(ctx).map_err(|e| format!("b: {e}"))?;
         if self.a.occurrence.is_empty() && self.b.occurrence.is_empty() {

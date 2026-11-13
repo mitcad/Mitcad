@@ -92,6 +92,10 @@ void setRunAgentFolders(const QStringList& folders) {
   }
 }
 
+bool runAgentFoldersGiven() {
+  return !runFolders().isEmpty();
+}
+
 QStringList agentFolders() {
   QStringList folders = savedAgentFolders();
   for (const QString& folder : std::as_const(runFolders())) {

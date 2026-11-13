@@ -1330,8 +1330,9 @@ fn a_project_s_slots_of_one_preset_in_two_colours_stay_two_materials() {
             "Generic PETG @Bench Mini",
             "Generic PLA @Bench Mini",
             // Two materials of a design never share a name: the second
-            // slot of the same preset takes the design's next free name.
-            "Generic PETG @Bench Mini (1)",
+            // slot of the same preset takes the design's next free name,
+            // numbered from 2 as every other name (mitcad#1728).
+            "Generic PETG @Bench Mini (2)",
             "Generic TPU @Bench Mini"
         ],
         "{result}"
@@ -1364,4 +1365,86 @@ fn a_project_s_slots_of_one_preset_in_two_colours_stay_two_materials() {
         written["filament_colour"],
         json!(["#FFFFFF", "#FFFFFF", "#000000", "#FFFFFF"])
     );
+}
+
+#[test]
+fn same_name_filaments_are_numbered_from_two_with_their_colour_and_source() {
+    // mitcad#1728: a filament whose name the design already holds is "X
+    // (2)", "X (3)", ... as every other numbered name (`numbered_name`),
+    // and the import result gives each material its colour and the file
+    // it came from, so that an agent tells two of one name apart.
+    let slots = |colours: &[&str]| {
+        let n = colours.len();
+        json!({
+            "printer_settings_id": "Bench Mini 0.4 nozzle",
+            "printable_area": ["0x0", "180x0", "180x180", "0x180"],
+            "nozzle_diameter": ["0.4"],
+            "print_settings_id": "Standard",
+            "layer_height": "0.2",
+            "filament_settings_id": vec!["Shop PLA @Bench Mini"; n],
+            "filament_type": vec!["PLA"; n],
+            "filament_colour": colours,
+            "nozzle_temperature": vec!["215"; n],
+            "filament_density": vec!["1.24"; n],
+        })
+    };
+    let dir = mitcad_model::testing::unique_temp_dir("print-same-name-filaments");
+    let import = |doc: &mut Document<MockKernel>, file: &str, colours: &[&str]| {
+        let data = project(
+            "BambuStudio-02.00.00.00",
+            vec![(
+                "Metadata/project_settings.config",
+                slots(colours).to_string().into_bytes(),
+            )],
+            Vec::new(),
+        );
+        let path = dir.join(file).to_str().unwrap().to_owned();
+        std::fs::write(&path, &data).unwrap();
+        command(
+            doc,
+            json!({"cmd": "import_print_profile", "path": path, "into": "design"}),
+        )
+    };
+    let fields = |result: &Value| -> Vec<(String, String, String)> {
+        result["materials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| {
+                let text = |key: &str| m[key].as_str().unwrap_or_default().to_owned();
+                (text("name"), text("colour"), text("source"))
+            })
+            .collect()
+    };
+    let mut doc = Document::new(MockKernel::default());
+
+    // Two slots of one preset in two colours: two materials of one name.
+    let first = import(&mut doc, "two.3mf", &["#FFFFFF", "#000000"]);
+    let owned = |name: &str, colour: &str, source: &str| {
+        (name.to_owned(), colour.to_owned(), source.to_owned())
+    };
+    assert_eq!(
+        fields(&first),
+        [
+            owned("Shop PLA @Bench Mini", "#FFFFFF", "two.3mf"),
+            owned("Shop PLA @Bench Mini (2)", "#000000", "two.3mf"),
+        ],
+        "{first}"
+    );
+
+    // The same preset from another file is the next number, its own
+    // colour and its own file.
+    let second = import(&mut doc, "red.3mf", &["#FF0000"]);
+    assert_eq!(
+        fields(&second),
+        [owned("Shop PLA @Bench Mini (3)", "#FF0000", "red.3mf")],
+        "{second}"
+    );
+    // The result's ids are the design's materials of those names.
+    for result in [&first, &second] {
+        for m in result["materials"].as_array().unwrap() {
+            let material = doc.material(m["id"].as_str().unwrap()).unwrap();
+            assert_eq!(material.name, m["name"].as_str().unwrap(), "{result}");
+        }
+    }
 }

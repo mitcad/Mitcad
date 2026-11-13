@@ -78,8 +78,12 @@ struct SelectionItem {
 
   // How a feature definition refers to it ("References to geometry").
   QJsonValue reference() const;
-  // "Face F2:end(...) of F2.b0", for logs and tooltips.
-  QString describe() const;
+  // "Face F2:end(...) of F2.b0": the kind, the internal name and the owner's
+  // id, for log lines, keys and agents only (mitcad#1741). Never in text a
+  // person sees: pickListText or sketchItemCard say it in words
+  // (docs/ui-conventions.md, "What a text says"); tools/check-all.sh's
+  // grep keeps it out of tr() texts.
+  QString logDescription() const;
   // The feature that created the entity (F3 of F3:side(c1)), or empty.
   QString creatingFeature() const;
 
@@ -175,5 +179,23 @@ QString selectionOwnerText(const SelectionItem& item, const DocumentSnapshot& sn
 // "Bracket:1: Body2: Edge", "Sketch2: Profile", "Origin: XY"; never a
 // topological name or an id (a name not in the snapshot is left out).
 QString pickListText(const SelectionItem& item, const DocumentSnapshot& snapshot);
+
+// A selected profile, sketch curve, point, constraint or dimension on the
+// idle card (mitcad#1741), in the interface language: its kind and where it
+// is (`title`: "Profile of Sketch3", "Line of Sketch3", "Horizontal
+// constraint in Sketch1"), and what can be measured (`measurements`, rich
+// text as selectionMeasurementText's: a profile's area and perimeter, a
+// line's length, a circle's or an arc's radius and diameter, a dimension's
+// value). `sketch` is the `sketch` query's answer for the item's sketch
+// (empty when it could not be asked), `sketchName` the sketch's name
+// (empty: unknown) and `constraintName` a constraint type's name
+// (sketch::constraintName). Never the region key, an item's id or a
+// coordinate.
+struct SketchItemCard {
+  QString title;
+  QString measurements;
+};
+SketchItemCard sketchItemCard(const SelectionItem& item, const QJsonObject& sketch, const QString& sketchName,
+                              const std::function<QString(const QString&)>& constraintName);
 
 } // namespace mitcad

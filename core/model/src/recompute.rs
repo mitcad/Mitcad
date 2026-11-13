@@ -624,9 +624,13 @@ pub(crate) fn def_fingerprint(def: &FeatureDef, params: &Parameters) -> u128 {
     if let FeatureDef::Base(base) = def {
         base.fingerprint(&mut fingerprint);
     } else {
-        let named = def
+        let mut named = def
             .map_params(&mut |_, id| Ok::<_, ()>(params.name(*id)))
             .expect("names never fail");
+        // A sketch's work steps are no part of its result (mitcad#1750).
+        if let FeatureDef::Sketch(sketch) = &mut named {
+            sketch.steps = Default::default();
+        }
         serde_json::to_writer(&mut fingerprint, &named).expect("definitions serialize");
     }
     fingerprint.finish()

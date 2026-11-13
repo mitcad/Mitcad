@@ -13,7 +13,9 @@
 #   3. Send to a (fake) Bambu Studio: the log names each part's material
 #      and own values; the 3MF's project settings (unzipped) give the Lid's
 #      part a filament of its own with PETG HF's temperatures, the Box's
-#      the default material's with generic PLA values; the warning says so.
+#      the print default's, PLA, with generic PLA values (mitcad#1727: not
+#      the design's default steel); the warning says so, and that no
+#      printer was chosen, in plain words.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-print-send-material-test.sh
@@ -109,9 +111,17 @@ ui_mark
 ui_step "Send (Enter)"                     ui_key Return
 ui_expect_new "3D Print: print settings for bambu_studio, filaments 1,2" "Bambu Studio's settings, two filaments"
 ui_expect_new "Print export: Body1 material petg-hf, " "the Lid's part is of PETG HF"
-ui_expect_new "Print export: Body2 material steel, " "the Box's of the default material"
-ui_expect_new "3D Print warnings: Steel (filament 2) sets no " \
-  "the default material's filament takes values it does not set, which the export says"
+ui_expect_new "Print export: Body2 material pla, " "the Box's without a material prints as PLA (mitcad#1727)"
+ui_expect_new "3D Print warnings: PLA Plastic (filament 2) sets no " \
+  "the print default's filament takes values it does not set, which the export says"
+# No printer chosen (mitcad#1727): the slicer gets a stand-in printer,
+# which the notice says in plain words, naming no command.
+ui_expect_new "no printer was chosen: the slicer gets a stand-in printer" \
+  "the notice says the slicer cannot slice with the stand-in printer"
+if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "3D Print warnings:" | grep -qF "import_print_profile"; then
+  ui_fail "the shown warning names a command: $(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "3D Print warnings:" | tail -1)"
+fi
+echo "ok   the shown warning names no command"
 for _ in $(seq 1 50); do
   [ -f "$ARGS" ] && break
   sleep 0.2
@@ -119,7 +129,7 @@ done
 [ -f "$ARGS" ] || ui_fail "the slicer was not started"
 [ "$(cat "$ARGS")" = "$FOLDER/lid-box.3mf" ] || ui_fail "the slicer's arguments: $(cat "$ARGS")"
 echo "ok   the slicer got the 3MF"
-expect_3mf '.filament_settings_id' '["PETG HF","Steel"]' "a filament per material, the Lid's first"
+expect_3mf '.filament_settings_id' '["PETG HF","PLA Plastic"]' "a filament per material, the Lid's first"
 expect_3mf '.filament_type' '["PETG","PLA"]' "their types"
 expect_3mf '.nozzle_temperature' '["255","210"]' "PETG HF's nozzle temperature, generic PLA's for the other"
 expect_3mf '.hot_plate_temp' '["70","60"]' "PETG HF's bed temperature"

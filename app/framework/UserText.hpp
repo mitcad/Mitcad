@@ -109,6 +109,21 @@ inline QString agentText(const QString& text) {
   return agents + text.mid(from);
 }
 
+// The text a person reads of a model entry's `error` (an annotation's,
+// mitcad#1741): the message of its first notice, which the model cleaned
+// of names and ids, else userText of the error. The `error` itself is the
+// agents' and the log's.
+inline QString shownError(const QJsonObject& entry) {
+  const QJsonArray notices = entry.value(QStringLiteral("notices")).toArray();
+  for (const QJsonValue& notice : notices) {
+    const QString message = notice.toObject().value(QStringLiteral("message")).toString();
+    if (!message.isEmpty()) {
+      return message;
+    }
+  }
+  return userText(entry.value(QStringLiteral("error")).toString());
+}
+
 // The texts a person reads of a model answer's list `key` (a sketch
 // command's "warnings" or "notes"): its plain-word list `shown`
 // ("warning_messages", "note_messages", mitcad#1612) where the model gives

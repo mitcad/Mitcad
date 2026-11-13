@@ -1,0 +1,13 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/parameter-unknown-name.mitcad-ui (mitcad#1723): Sketch1 on XY holds a 40 x 25 rectangle (its width k5 d1, its height k6 d2), a free line from (0, 40) to (30, 40) for a new dimension and a construction line at x = -30 that widens the fitted view to the dimensions' values; Extrude1 (F2) extrudes the rectangle 10 mm (d3). No user parameters."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 25},
+  {"cmd": "sketch.set_dimension_text", "sketch": "F1", "dimension": "k5", "text": [20, -8]},
+  {"cmd": "sketch.set_dimension_text", "sketch": "F1", "dimension": "k6", "text": [48, 12]},
+  {"cmd": "sketch.add_line", "sketch": "F1", "start": [0, 40], "end": [30, 40]},
+  {"cmd": "sketch.add_line", "sketch": "F1", "start": [-30, -30], "end": [-30, 70], "construction": true},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}}
+]

@@ -19,6 +19,10 @@
 #   4. Box:1 again with Replace with a link to the new file: Box2.mitcad
 #      written and Box:1 linked to it; its row then has no Save Component
 #      as Design... (a linked component).
+#   5. A:1 with Replace with a link, the file given outside the design's
+#      folder: the dialog says the link would not be followed; Save into
+#      the Project and Link (Enter) writes parts\A.mitcad beside the
+#      design and links it, nothing outside (mitcad#1739).
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-save-component-test.ps1 [-App build\dev\mitcad.exe] [-Cli build\dev\tools\cli\mitcad-cli.exe] [-Out dir] [-QtBin dir]
 param(
@@ -209,23 +213,26 @@ Ui-FocusDialog '^Save Component as Design$'
 # alone still lost the key now and then (0.57.0 and 0.59.0-rc3), so the box
 # is checked before Enter: Alt+R again, after activating again, until the
 # app logs it checked.
-$checked = $false
-for ($try = 1; $try -le 4 -and -not $checked; $try++) {
-  [UiInput]::Note = ''
-  $active = [UiInput]::Activate($script:UiTarget)
-  if ([UiInput]::Note) { Write-Host "note: activating the dialog: $([UiInput]::Note)" }
-  if (-not $active) { Write-Host 'note: the dialog is not the active window' }
-  Ui-SyncOr 300
-  $before = Ui-CountLog 'replace with a link checked: yes'
-  Ui-Key 'alt+r'
-  $deadline = (Get-Date).AddSeconds(3)
-  while ((Get-Date) -lt $deadline -and (Ui-CountLog 'replace with a link checked: yes') -le $before) {
-    Start-Sleep -Milliseconds 100
+function Check-Replace {
+  $checked = $false
+  for ($try = 1; $try -le 4 -and -not $checked; $try++) {
+    [UiInput]::Note = ''
+    $active = [UiInput]::Activate($script:UiTarget)
+    if ([UiInput]::Note) { Write-Host "note: activating the dialog: $([UiInput]::Note)" }
+    if (-not $active) { Write-Host 'note: the dialog is not the active window' }
+    Ui-SyncOr 300
+    $before = Ui-CountLog 'replace with a link checked: yes'
+    Ui-Key 'alt+r'
+    $deadline = (Get-Date).AddSeconds(3)
+    while ((Get-Date) -lt $deadline -and (Ui-CountLog 'replace with a link checked: yes') -le $before) {
+      Start-Sleep -Milliseconds 100
+    }
+    $checked = (Ui-CountLog 'replace with a link checked: yes') -gt $before
+    if (-not $checked) { Write-Host "note: Alt+R did not check the box (try $try)" }
   }
-  $checked = (Ui-CountLog 'replace with a link checked: yes') -gt $before
-  if (-not $checked) { Write-Host "note: Alt+R did not check the box (try $try)" }
+  if (-not $checked) { Ui-Fail 'Alt+R never checked Replace with a link' }
 }
-if (-not $checked) { Ui-Fail 'Alt+R never checked Replace with a link' }
+Check-Replace
 Ui-Mark
 Ui-Step 'Replace with a link (Alt+R), Save... (Enter)' { Ui-Key 'Return' }
 Ui-ExpectNew 'Save Component as Design dialog: replace with a link: yes' 'replaced'
@@ -241,6 +248,44 @@ Ui-ExpectNew "Saved component Box as design $workLogged/Box2.mitcad: 1 reference
 if (-not (Test-Path (Join-Path $work 'Box2.mitcad'))) { Ui-Fail 'Box2.mitcad was not written' }
 Ui-Step 'clear the selection (Esc)'      { Ui-Key 'Escape' }
 Row-Menu 'Browser Root/Box:1'
+Expect-Lacks $entry
+Close-Menu
+
+Write-Host '--- 5. Replace with a link to a file outside the design''s folder: said before saving (mitcad#1739)'
+$outside = Join-Path $script:UiOut 'elsewhere'
+Remove-Item -Recurse -Force $outside -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $outside | Out-Null
+Row-Menu 'Browser Root/A:1'
+Ui-Mark
+Menu-Choose $entry
+Ui-ExpectNew 'Save Component as Design dialog opened: A; references: ' 'the dialog opened'
+Ui-FocusDialog '^Save Component as Design$'
+Check-Replace
+Ui-Mark
+Ui-Step 'Save... (Enter)'                { Ui-Key 'Return' }
+Ui-ExpectNew 'Save Component as Design dialog: replace with a link: yes' 'replaced'
+Ui-Step 'a file outside the design''s folder' {
+  Ui-FocusDialog '^Save Design File$'
+  Ui-Key 'ctrl+a'
+  Ui-Type (Join-Path $outside 'A.mitcad')
+  Start-Sleep -Milliseconds 300
+  Ui-Key 'Return'
+}
+Ui-ExpectNew 'Save Component as Design outside the project: A.mitcad (folder); choices Save into the Project and Link | Save There and Link | Cancel' 'the dialog offers the parts folder, the file as asked and Cancel' 20
+Ui-ExpectNew "Save Component as Design outside the project text: A.mitcad is outside this design's folder, so a link to it is not followed: changes to the file will not come in. Save it into the parts folder beside this design and link that file, or save it where you chose and link it as it is." 'the dialog says in words why and what to do'
+Ui-Step 'Save into the Project and Link (Enter)' {
+  Ui-FocusDialog '^Save Component as Design$'
+  Ui-Key 'Return'
+  Ui-FocusMain
+}
+Ui-ExpectNew 'Save Component as Design outside the project: save into the project and link' 'the parts folder chosen'
+Ui-ExpectNew 'Save Component as Design: saving into the project as parts/A.mitcad' 'into the parts folder beside the design'
+Ui-ExpectNew "Saved component A as design $workLogged/parts/A.mitcad: 0 reference(s), replaced: yes" 'written beside the design and replaced by a link' 60
+if (-not (Test-Path (Join-Path $work 'parts\A.mitcad'))) { Ui-Fail 'A.mitcad was not written into the parts folder' }
+if (Test-Path (Join-Path $outside 'A.mitcad')) { Ui-Fail 'A.mitcad was written outside the design''s folder too' }
+Write-Host 'ok   the file is in the parts folder only'
+Ui-Step 'clear the selection (Esc)'      { Ui-Key 'Escape' }
+Row-Menu 'Browser Root/A:1'
 Expect-Lacks $entry
 Close-Menu
 

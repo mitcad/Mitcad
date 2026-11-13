@@ -56,15 +56,6 @@ JointSide sideOf(const QJsonObject& value, const QString& key, int row, const QS
   return side;
 }
 
-// A long topological name shortened in the middle, for the card.
-QString shortened(const QString& name) {
-  constexpr int kLongest = 36;
-  if (name.size() <= kLongest) {
-    return name;
-  }
-  return name.left(kLongest / 2 - 1) + QChar(0x2026) + name.right(kLongest / 2 - 1);
-}
-
 // What the side is on, `body` naming a body uid and `name` a face, edge or
 // vertex name.
 QString geometryText(const JointSide& side, const std::function<QString(const QString&)>& body,
@@ -215,18 +206,75 @@ QStringList jointHighlightLog(const JointHighlight& joint) {
   return lines;
 }
 
-QString jointCardText(const JointHighlight& joint, const std::function<QString(const QString&)>& bodyName) {
-  const auto body = [&bodyName](const QString& uid) {
-    const QString name = bodyName ? bodyName(uid) : QString();
-    return name.isEmpty() ? uid : name;
+namespace {
+
+// What the side is on in words, for the card (mitcad#1741): the kind of
+// geometry and its owner's name, never a topological name or an id; `name`
+// names a body or feature uid (empty when it cannot).
+QString cardGeometryText(const JointSide& side, const std::function<QString(const QString&)>& name) {
+  const QJsonObject o = side.geometry.toObject();
+  const QString text = side.geometry.toString();
+  const QString& on = side.on;
+  const auto named = [&name](const QString& uid, const QString& otherwise) {
+    const QString found = name ? name(uid) : QString();
+    return found.isEmpty() ? otherwise : found;
   };
+  const QString body = named(o.value(QStringLiteral("body")).toString(), QStringLiteral("a body"));
+  const QString sketch = named(o.value(QStringLiteral("sketch")).toString(), QStringLiteral("a sketch"));
+  for (const char* kind : {"face", "edge", "vertex"}) {
+    if (on == QLatin1String(kind)) {
+      return QStringLiteral("%1 of %2").arg(QLatin1String(kind), body);
+    }
+  }
+  if (on == QStringLiteral("body")) {
+    return body;
+  }
+  if (on == QStringLiteral("sketch_curve")) {
+    return QStringLiteral("%1 of %2")
+        .arg(o.value(QStringLiteral("curves")).toArray().size() > 1 ? QStringLiteral("curves") : QStringLiteral("curve"),
+             sketch);
+  }
+  if (on == QStringLiteral("sketch_point")) {
+    return QStringLiteral("point of %1").arg(sketch);
+  }
+  if (on == QStringLiteral("origin")) {
+    if (text == QStringLiteral("origin")) {
+      return QStringLiteral("the origin");
+    }
+    return QStringLiteral("origin %1 %2")
+        .arg(text.size() == 2 ? QStringLiteral("plane") : QStringLiteral("axis"), text.toUpper());
+  }
+  if (on == QStringLiteral("construction")) {
+    return named(text, QStringLiteral("construction geometry"));
+  }
+  if (on == QStringLiteral("joint_origin")) {
+    return named(text, QStringLiteral("a joint origin"));
+  }
+  if (on == QStringLiteral("mount")) {
+    // "F7:mount(end_a)": the frame end_a of the derived part F7.
+    const QString mount = o.value(QStringLiteral("mount")).toString();
+    const int open = mount.indexOf(QStringLiteral(":mount("));
+    if (open > 0 && mount.endsWith(QLatin1Char(')'))) {
+      const int start = open + 7;
+      return QStringLiteral("mount frame %1 of %2")
+          .arg(mount.mid(start, mount.size() - start - 1), named(mount.left(open), QStringLiteral("its part")));
+    }
+    return QStringLiteral("mount frame");
+  }
+  const auto same = [](const QString& value) { return value; };
+  return geometryText(side, same, same); // fixed geometry, an occurrence: words already
+}
+
+} // namespace
+
+QString jointCardText(const JointHighlight& joint, const std::function<QString(const QString&)>& name) {
   QStringList parts;
   parts << joint.kind.toHtmlEscaped();
   for (const JointSide& side : joint.sides) {
     const QString owner = side.occurrenceName.isEmpty() ? QStringLiteral("its component") : side.occurrenceName;
     QString text = side.on == QStringLiteral("occurrence")
                        ? owner
-                       : QStringLiteral("%1, %2").arg(owner, geometryText(side, body, shortened));
+                       : QStringLiteral("%1, %2").arg(owner, cardGeometryText(side, name));
     if (side.on != QStringLiteral("mount") && side.on != QStringLiteral("occurrence") && !side.showsGeometry) {
       text += QStringLiteral(" (its frame)");
     }

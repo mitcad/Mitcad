@@ -64,6 +64,7 @@ WebFileCheck checkWebFileName(const QString& fileName) {
   case FileKind::Rvt:
   case FileKind::Solidcraft:
   case FileKind::Dwg:
+  case FileKind::ThreeDm:
     return {WebFileKind::Document, QString()};
   case FileKind::Drawing:
     return refused(Text::tr("MitCad brings DXF and SVG drawings into sketches, not in as components (.%1).")
@@ -133,6 +134,64 @@ QString webPartNumber(const QString& componentName) {
     digit = digit || c.isDigit();
   }
   return digit ? first : QString();
+}
+
+QString webDownloadFailure(int interruptReason) {
+  // Chromium's download interrupt reasons (CEF's
+  // cef_download_interrupt_reason_t), grouped by what the user can do
+  // about them: the file, the connection, the server, the user.
+  switch (interruptReason) {
+  case 2: // FILE_ACCESS_DENIED
+    return Text::tr("MitCad may not write into its download folder");
+  case 3: // FILE_NO_SPACE
+  case 6: // FILE_TOO_LARGE
+    return Text::tr("the disk is full");
+  case 5: // FILE_NAME_TOO_LONG
+    return Text::tr("the file's name is too long");
+  case 7:  // FILE_VIRUS_INFECTED
+  case 11: // FILE_BLOCKED
+  case 12: // FILE_SECURITY_CHECK_FAILED
+    return Text::tr("the system's security check blocked the file");
+  case 1:  // FILE_FAILED
+  case 10: // FILE_TRANSIENT_ERROR
+  case 13: // FILE_TOO_SHORT
+  case 14: // FILE_HASH_MISMATCH
+  case 15: // FILE_SAME_AS_SOURCE
+    return Text::tr("the file could not be written");
+  case 20: // NETWORK_FAILED
+  case 22: // NETWORK_DISCONNECTED
+    return Text::tr("the connection was lost");
+  case 21: // NETWORK_TIMEOUT
+    return Text::tr("the connection timed out");
+  case 23: // NETWORK_SERVER_DOWN
+  case 37: // SERVER_UNREACHABLE
+    return Text::tr("the server could not be reached");
+  case 24: // NETWORK_INVALID_REQUEST
+    return Text::tr("the network refused the request");
+  case 30: // SERVER_FAILED
+    return Text::tr("the server reported an error");
+  case 31: // SERVER_NO_RANGE
+  case 38: // SERVER_CONTENT_LENGTH_MISMATCH
+    return Text::tr("the server sent the file incomplete");
+  case 33: // SERVER_BAD_CONTENT
+    return Text::tr("the server does not have the file");
+  case 34: // SERVER_UNAUTHORIZED
+    return Text::tr("the server refused it: the site may want you to sign in first");
+  case 35: // SERVER_CERT_PROBLEM
+    return Text::tr("the server's certificate is not trusted");
+  case 36: // SERVER_FORBIDDEN
+    return Text::tr("the server refused it");
+  case 39: // SERVER_CROSS_ORIGIN_REDIRECT
+    return Text::tr("the server sent it on to another site");
+  case 40: // USER_CANCELED
+    return Text::tr("it was canceled");
+  case 41: // USER_SHUTDOWN
+    return Text::tr("the browser was closing");
+  case 50: // CRASH
+    return Text::tr("the browser stopped unexpectedly");
+  default: // NONE and any reason a later browser adds
+    return Text::tr("it stopped before the end");
+  }
 }
 
 QList<WebSite> loadWebSites() {

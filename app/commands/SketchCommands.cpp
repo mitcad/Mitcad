@@ -454,7 +454,7 @@ bool projectionSourceAccepted(const SelectionItem& item, const QString& edited) 
 
 // "intersection curve F4" (logs), as other sketches' geometry is named.
 QString projectedName(const SelectionItem& item) {
-  return isFeatureCurve(item) ? QStringLiteral("intersection curve %1").arg(item.owner) : item.describe();
+  return isFeatureCurve(item) ? QStringLiteral("intersection curve %1").arg(item.owner) : item.logDescription();
 }
 
 void addProject(CommandRegistry& registry, SketchController& c) {

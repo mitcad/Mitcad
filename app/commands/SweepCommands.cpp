@@ -51,6 +51,8 @@ QString routeListing(const Selection& items, const CommandState& state, const Co
 void relistRoutes(CommandState& state, const CommandContext& context, const QStringList& ids) {
   for (const QString& id : ids) {
     const QString text = routeListing(state.items(id), state, context, id);
+    state.setItemsWords(id, spatialRouteWords(state.items(id), state.checked(QStringLiteral("chain")),
+                                              pathReversed(state, id), context, id));
     if (text != state.itemsText(id)) {
       state.setItemsText(id, text);
       if (!text.isEmpty()) {
@@ -89,6 +91,9 @@ QVector<InputDef> pathInputs(const QString& id, const QString& name, const Comma
               false) // a click on a picked curve still takes it out
           .withItemsText([id, chain](const Selection& items, const CommandState& state, const CommandContext& model) {
             return routeListing(items, state, model, id, chain);
+          })
+          .withItemsWords([id, chain](const Selection& items, const CommandState& state, const CommandContext& model) {
+            return spatialRouteWords(items, !chain.isEmpty() && state.checked(chain), pathReversed(state, id), model, id);
           })
           .withOnChange([id](CommandState& state, const CommandContext& model) {
             // Pipe's Reverse is offered for a 3D sketch's path.
@@ -908,6 +913,7 @@ CommandDef coilCommand(const CommandContext& context) {
   PlacePanel place;
   place.command = def.name;
   def.inputs = placeInputs(place);
+  def.handlesSeenAt = [](const CommandState& state, const CommandContext& model) { return placeSeenAt(state, model); };
   def.inputs += {
       choiceInput(QStringLiteral("type"), QObject::tr("Type"),
                   {{QStringLiteral("revolutions_and_height"), QStringLiteral("Revolution and Height")},

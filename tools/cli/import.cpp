@@ -802,4 +802,43 @@ int import_dwg(const std::vector<std::string>& args) {
   return a.flag("--check") && !pass ? 1 : 0;
 }
 
+// A .3dm model: its B-reps, extrusions, surfaces and meshes as
+// bodies by layer, its blocks as components.
+int import_3dm(const std::vector<std::string>& args) {
+  Arguments a;
+  std::string problem;
+  if (!parse_arguments(args, {"--save", "--report", "--write-test", "--case"}, {"--json", "--check"}, a, problem)) {
+    return usage(problem);
+  }
+  // The reader's sample model, or a case of its test writer, for the tests.
+  if (const std::string* path = a.option("--write-test")) {
+    const std::string* test_case = a.option("--case");
+    mitcad::import_3dm_write_test_file(*path, test_case != nullptr ? *test_case : std::string());
+    return 0;
+  }
+  if (a.positional.size() != 1) {
+    return usage(a.positional.empty() ? "no .3dm file" : "more than one .3dm file");
+  }
+  const bool json = a.flag("--json");
+  std::string options = R"({"text": false)";
+  if (const std::string* path = a.option("--report")) {
+    options += R"(, "report_path": )" + json_string(*path);
+  }
+  options += "}";
+  rust::Box<mitcad::Document> document = mitcad::new_document();
+  const std::string json_report(document->import_3dm(a.positional[0], options));
+  const bool pass = mitcad::import_3dm_report_passes(json_report);
+  const std::string report = json ? json_report : std::string(mitcad::import_3dm_report_text(json_report));
+  if (const std::string* save = a.option("--save")) {
+    save_document(*document, *save);
+  }
+  if (json) {
+    std::cout << R"({"import": )" << report << R"(, "document": )"
+              << std::string(document->query(R"({"query": "report"})")) << "}\n";
+  } else {
+    std::cout << report << std::string(document->report(false));
+  }
+  return a.flag("--check") && !pass ? 1 : 0;
+}
+
 } // namespace mitcad::cli

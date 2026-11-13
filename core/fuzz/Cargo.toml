@@ -2,7 +2,7 @@
 # Fuzz targets for the readers of the files MitCad opens and imports
 # (mitcad#939): the zip and compound file containers, DXF, 3MF, the design
 # file and the project settings, and the .rvt, ASM, .ipt, .dwg, IFC,
-# FreeCAD, .f3d and .solidcraft readers, each on arbitrary bytes. Each
+# FreeCAD, .f3d, .solidcraft and .3dm readers, each on arbitrary bytes. Each
 # target asserts that an input is read, refused or reported within a
 # budget (`src/lib.rs`) and never panics. Not part of the core workspace; the
 # seed corpora are synthetic, written by the readers' own writers and test
@@ -50,6 +50,7 @@ mitcad-ifc = { path = "../ifc" }
 mitcad-freecad = { path = "../freecad" }
 mitcad-f3d-file = { path = "../f3d-file" }
 mitcad-solidcraft = { path = "../solidcraft" }
+mitcad-3dm = { path = "../3dm" }
 
 # A workspace of its own, outside the core's.
 [workspace]
@@ -170,6 +171,13 @@ bench = false
 [[bin]]
 name = "solidcraft_file"
 path = "fuzz_targets/solidcraft_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "model_3dm"
+path = "fuzz_targets/model_3dm.rs"
 test = false
 doc = false
 bench = false

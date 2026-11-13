@@ -266,11 +266,13 @@ let a = s.analyze();                           // a.dof, a.body_dof, a.redundant
 - **Placing first.** In joint order, a joint between a side that is fixed
   (or joined to a fixed body by the joints before it) and one that is not
   moves the free side's bodies, with every body joined to it so far, so
-  that the joint holds at its targets and, for free motions, at the
-  values nearest to where it is (closed forms: slides from the
+  that the joint holds at its targets and, for free motions, at their
+  start values (`RigidSystem::set_start`, mitcad#1745: a new joint's
+  origins put together, a dragged joint where the drag left it), else at
+  the values nearest to where it is (closed forms: slides from the
   translation, one turn from the rotation, turns about z, y and x as
   angles in that order). Between two free sides `a` moves. Only joints
-  that close loops are iterated.
+  that close loops are iterated (a start value is unused there).
 - **Rigid poses.** Every motion folded into a body's pose (placing, a
   run's result, turning over) leaves it a rotation to rounding
   (`Pose::rigid`: the orthogonal polar factor when it is off by at most

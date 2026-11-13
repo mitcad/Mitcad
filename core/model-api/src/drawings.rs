@@ -40,6 +40,7 @@ use mitcad_model::ids::{BodyUid, ComponentUid, OccurrenceUid};
 use mitcad_model::internal::document::deleted_views;
 use mitcad_model::internal::fingerprint::Fingerprint;
 use mitcad_model::kernel::Kernel;
+use mitcad_model::notice;
 use mitcad_model::transform::Transform;
 use mitcad_model_build::prelude::*;
 use mitcad_model_drawing::annotate::{turned, turned_with_view};
@@ -1316,7 +1317,10 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             Subject::Occurrence { occurrence } => {
                 let path = &occurrence.0;
                 if path.is_empty() || !path_from(assembly, component, path) {
-                    return Err(format!("the occurrence {occurrence} is gone"));
+                    // In words for a person, the id for agents (mitcad#1741).
+                    return Err(notice::FeatureError::new("the occurrence is gone")
+                        .with_detail(format!("the occurrence {occurrence} is gone"))
+                        .text());
                 }
                 out.extend(
                     all.iter()
@@ -1361,9 +1365,17 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                         }),
                         // Its occurrence deleted (mitcad#1293): named once.
                         Some(o) if !o.is_empty() && !path_from(assembly, component, &o.0) => {
-                            note(format!("the occurrence {o} is gone"));
+                            note(
+                                notice::FeatureError::new("an occurrence is gone")
+                                    .with_detail(format!("the occurrence {o} is gone"))
+                                    .text(),
+                            );
                         }
-                        _ => note(format!("the body {} is gone", b.body)),
+                        _ => note(
+                            notice::FeatureError::new("a body is gone")
+                                .with_detail(format!("the body {} is gone", b.body))
+                                .text(),
+                        ),
                     }
                 }
                 // Nothing of it left: the view is not drawn.

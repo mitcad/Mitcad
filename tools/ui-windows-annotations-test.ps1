@@ -256,7 +256,7 @@ Ui-Step 'pick Body2''s round face'         { Ui-ClickPick 'face F4.b0/F4:side(c1
 Ui-ExpectNew 'Feature Control Frame Pick: 1 face' 'the round face picked'
 Ui-ExpectNew 'Panel Feature Control Frame action tolerance.0 at' 'Tolerance... placed'
 Ui-Step 'Tolerance...'                     { Ui-ClickLogged 'Panel Feature Control Frame action tolerance.0' }
-Ui-ExpectNew 'Feature Control Frame dialog opened: face F4:side(c1) of F4.b0 {}' 'the frame asked for'
+Ui-ExpectNew 'Feature Control Frame dialog opened: Body2: Face {}' 'the frame asked for, on the round face in words'
 Ui-Step 'perpendicularity, cylindrical, maximum material, to A' {
   Ui-FocusDialog '^Feature Control Frame$'
   foreach ($i in 1..7) { Ui-Key 'Down' }

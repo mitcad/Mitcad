@@ -306,6 +306,10 @@ struct FeatureOut<'a> {
     /// Set by the user for sketches and construction features (U3).
     #[serde(skip_serializing_if = "Option::is_none")]
     visible: Option<bool>,
+    /// How large a construction plane or axis is drawn, mm, where its
+    /// resize handles set it (mitcad#1748).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_size: Option<f64>,
     /// What the importer that made it said (mitcad#170).
     #[serde(skip_serializing_if = "Option::is_none")]
     import_note: Option<&'a str>,
@@ -450,6 +454,7 @@ pub(super) fn save_with(
                     .map(String::as_str),
                 component: f.component,
                 visible: state.feature_visibility.get(&f.uid).copied(),
+                display_size: state.datum_display_sizes.get(&f.uid).copied(),
                 import_note: state.import_notes.get(&f.uid).map(String::as_str),
                 split_pieces: state.split_pieces.get(&f.uid).map(|g| &g[..]),
                 def: f
@@ -850,6 +855,8 @@ struct FeatureIn {
     suppressed_when: Option<String>,
     component: ComponentUid,
     visible: Option<bool>,
+    /// How large a construction plane or axis is drawn (mitcad#1748).
+    display_size: Option<f64>,
     /// What the importer that made it said (mitcad#170).
     import_note: Option<String>,
     /// What it remembers of the pieces of its splits (mitcad#408).
@@ -1005,6 +1012,22 @@ fn feature_in(i: usize, value: Value) -> Result<FeatureIn, FileError> {
             )));
         }
     };
+    let display_size = match fields.remove("display_size") {
+        None => None,
+        Some(Value::Number(size)) => match size.as_f64() {
+            Some(size) if size.is_finite() && size > 0.0 => Some(size),
+            _ => {
+                return Err(schema(format!(
+                    "features[{i}] ({name}): \"display_size\" must be greater than zero"
+                )));
+            }
+        },
+        Some(_) => {
+            return Err(schema(format!(
+                "features[{i}] ({name}): \"display_size\" must be a number of millimetres"
+            )));
+        }
+    };
     let import_note = match fields.remove("import_note") {
         None => None,
         Some(Value::String(note)) => Some(note).filter(|n| !n.trim().is_empty()),
@@ -1029,6 +1052,7 @@ fn feature_in(i: usize, value: Value) -> Result<FeatureIn, FileError> {
         suppressed_when,
         component,
         visible,
+        display_size,
         import_note,
         split_pieces,
         def,
@@ -1702,6 +1726,13 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
         }));
         if let Some(visible) = f.visible {
             state.feature_visibility.insert(f.uid, visible);
+        }
+        // Only a construction plane's or axis's display size is kept
+        // (mitcad#1748); one on another feature is left out.
+        if let Some(size) = f.display_size
+            && crate::document::has_display_size(&entries.last().expect("pushed above").def)
+        {
+            state.datum_display_sizes.insert(f.uid, size);
         }
         if let Some(text) = &f.suppressed_when {
             state.bindings.suppressed_when.insert(f.uid, text.clone());

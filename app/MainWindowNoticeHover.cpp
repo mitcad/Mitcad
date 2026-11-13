@@ -263,6 +263,16 @@ std::vector<HighlightDisplay> MainWindow::noticeHighlights() const {
       }
       continue;
     }
+    if (kind == QStringLiteral("occurrence")) {
+      // An occurrence with every body it places (mitcad#1745: what holds a
+      // joint's side), where the design places it.
+      const QString path = place.value(QStringLiteral("path")).toString();
+      if (!path.isEmpty()) {
+        const SelectionItem item{SelectKind::Component, QString(), QString(), QString(), path};
+        add(item, itemShape(item));
+      }
+      continue;
+    }
     if (kind == QStringLiteral("region")) {
       // A region of a sketch (mitcad#1334), drawn as its profile where the
       // sketch is shown: a component's where its occurrence places it

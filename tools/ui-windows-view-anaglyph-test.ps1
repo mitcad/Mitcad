@@ -8,7 +8,8 @@
 # still selects a face; Preferences > Display's stereo depth and
 # convergence reach the view at once, are saved with OK and put back on
 # Cancel; off, the camera is in its projection from before; Orthographic
-# ends it.
+# ends it; the focal lengths of the perspective camera and Anaglyph 3D
+# (mitcad#1717) with the model's height at the target kept.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-view-anaglyph-test.ps1 -App build\dev\mitcad.exe -Cli build\dev\tools\cli\mitcad-cli.exe [-Out dir] [-QtBin dir]
 param(

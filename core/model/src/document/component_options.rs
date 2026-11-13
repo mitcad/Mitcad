@@ -920,10 +920,7 @@ impl<K: Kernel> Document<K> {
             let resolved = match followed_link(&link.path, base) {
                 Ok(resolved) => resolved,
                 Err(why) => {
-                    messages.push(format!(
-                        "{}: {why}; it keeps the design saved with the project",
-                        c.name
-                    ));
+                    messages.push(why.kept_design(&c.name));
                     continue;
                 }
             };

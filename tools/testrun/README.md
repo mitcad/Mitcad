@@ -404,7 +404,7 @@ files in child processes, several at once (`core/tests/parallel_runs.hpp`:
 `mitcad_run_parallel` for the scripts' corpora, `f3d.corpus_designs`
 among them, its imports with a debug build's own-start time, mitcad#847),
 mitcad#832. `rvt.corpus` (its project and its link check, keyed by the
-content ids they import) and `dwg.corpus` (a drawing each) do so too
+content ids they import), `dwg.corpus` (a drawing each) and `3dm.corpus` (a model each, mitcad#1715) do so too
 since mitcad#875; they run in `tools/check-all.sh`'s ctest step, which
 gives them `--corpus-children` as the corpus step does its tests:
 

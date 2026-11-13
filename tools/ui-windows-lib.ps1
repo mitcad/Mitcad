@@ -1035,6 +1035,18 @@ function Ui-CreateSketch([string]$Key, [string]$Plane = 'xy') {
   Ui-ExpectNew "Sketch started on $Plane" "sketch started on $Plane" | Out-Null
 }
 
+# Ui-OriginInMillimeters: the apps started after it (after Ui-Init) draw
+# the design's origin as 100 mm squares centered on it (Preferences >
+# Display > Origin planes: Size Model, Style Centered), as before
+# mitcad#1748, for a test that clicks an origin plane or axis beside a part
+# built over the origin: the default 80 px Corner squares lie in the
+# positive octant, where such a part hides them. As ui_origin_in_millimeters
+# in tools/ui-test-lib.sh.
+function Ui-OriginInMillimeters {
+  Add-Content -Encoding ascii (Join-Path $script:UiSettings 'Mitcad\Mitcad.ini') @(
+    '[view]', 'originSize=model', 'originSizeMm=100', 'originStyle=centred')
+}
+
 # Ui-ShowOrigin: the Origin folder's light bulb on, unless it is already
 # (mitcad#1030), as ui_show_origin does. A command's input shows the
 # origin's point, axes and planes in the view only as the light bulb does

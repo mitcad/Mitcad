@@ -227,5 +227,16 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter
               "${selection_ui_web_browser}" "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties("app.ui-linux-component-web-scale" PROPERTIES TIMEOUT 420 ${selection_ui_alone}
       ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;LIBGL_ALWAYS_SOFTWARE=1")
+    # The same at an integer scale, 2 (mitcad#1716): with the window resized
+    # in steps, every frame drawn at the scale it was painted with, at 1.65
+    # above and at 2 here.
+    selection_ui_command_prefix(420)
+    add_test(NAME "app.ui-linux-component-web-scale-2"
+      COMMAND ${selection_ui_prefix} "${Python3_EXECUTABLE}"
+              "${CMAKE_SOURCE_DIR}/tools/ui-component-web-scale-test.py" --device-scale --scale 2
+              "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-linux-component-web-scale-2"
+              "${selection_ui_web_browser}" "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties("app.ui-linux-component-web-scale-2" PROPERTIES TIMEOUT 420 ${selection_ui_alone}
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;LIBGL_ALWAYS_SOFTWARE=1")
   endif()
 endif()

@@ -193,7 +193,9 @@ if(DEFINED RUNNER AND NOT jobs STREQUAL "1")
     file(APPEND "${list}" "${label}\t${CMAKE_COMMAND}\t-DCLI=${CLI}\t-DWORK=${WORK}\t-DFILE=${file}\t-DLABEL=${label}\t-P\t${CMAKE_CURRENT_LIST_FILE}\n")
   endforeach()
   execute_process(COMMAND "${RUNNER}" "${list}" RESULT_VARIABLE status OUTPUT_VARIABLE out ERROR_VARIABLE out)
-  if(status GREATER 1)
+  # 0: every child passed, 1: some failed; anything else (the runner not
+  # built, or ended) is no pass (mitcad#1718).
+  if(NOT status MATCHES "^[01]$")
     message(FATAL_ERROR "${RUNNER}: ${out}")
   endif()
   string(REGEX REPLACE "\n$" "" shown "${out}")

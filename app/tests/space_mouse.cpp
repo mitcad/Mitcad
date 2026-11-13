@@ -7,7 +7,9 @@
 // run their commands, and no device logs "3D mouse: none"; a motion's
 // pacing and timing from given frame times (mitcad#1023); a device's split
 // reports in padded slots, the raw reports' log, and each rotation axis
-// alone with no zoom, the same through HID and spacenavd (mitcad#1034).
+// alone with no zoom, the same through HID and spacenavd (mitcad#1034);
+// each of the cap's six motions from the device's values to the model in
+// Object mode, and the motion's axes in the debug log (mitcad#1720).
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -107,19 +109,20 @@ void reportTests() {
 
   // HID: X right, Y toward the user, Z down. Right, lifted (Z < 0) and
   // pulled (Y > 0) are +x, +y, +z of the view's frame. Its rotations turn
-  // clockwise seen from their axis' tip (mitcad#1034): Ry about Y (toward
-  // the user) is a roll clockwise as the user sees it, -rz; Rz about Z
-  // (down) negative turns clockwise seen from above, -ry.
+  // by the right-hand rule about the same axes and map as the translation
+  // does (mitcad#1720): Ry about Y (toward the user) is a roll
+  // counter-clockwise as the user sees it, +rz; Rz about Z (down) negative
+  // turns counter-clockwise seen from above, +ry.
   const SpaceMouseAxes hid = spaceMouseFromHid({350, 175, -350}, {0, 350, -175});
   CHECK(nearly(hid[0], 1.0) && nearly(hid[1], 1.0) && nearly(hid[2], 0.5));
-  CHECK(nearly(hid[3], 0.0) && nearly(hid[4], -0.5) && nearly(hid[5], -1.0));
+  CHECK(nearly(hid[3], 0.0) && nearly(hid[4], 0.5) && nearly(hid[5], 1.0));
 
   // spacenavd: a motion, a press and a release; its z points into the
-  // screen.
+  // screen, and its rz turns about that axis.
   SpnavEvent event = parseSpnavEvent({0, 350, 0, 175, 0, 0, -350, 16});
   CHECK(event.kind == SpnavEvent::Kind::Motion);
   const SpaceMouseAxes spnav = spaceMouseFromSpnav(event.motion);
-  CHECK(nearly(spnav[0], 1.0) && nearly(spnav[2], -0.5) && nearly(spnav[5], -1.0));
+  CHECK(nearly(spnav[0], 1.0) && nearly(spnav[2], -0.5) && nearly(spnav[5], 1.0));
   event = parseSpnavEvent({1, 2, 0, 0, 0, 0, 0, 0});
   CHECK(event.kind == SpnavEvent::Kind::Press && event.button == 2);
   event = parseSpnavEvent({2, 0, 0, 0, 0, 0, 0, 0});
@@ -843,8 +846,10 @@ void splitReportTests() {
       rotated = rotated || !even;
       if (rotated) {
         CHECK(reader.translation() == pushed && reader.rotation() == twisted);
+        // Rz > 0 twists clockwise seen from above: the view's ry < 0
+        // (spaceMouseFromHid, mitcad#1720).
         const SpaceMouseAxes axes = reader.axes();
-        CHECK(nearly(axes[0], 1.0) && nearly(axes[3], 0.0) && nearly(axes[4], 100.0 / kSpaceMouseFullScale) &&
+        CHECK(nearly(axes[0], 1.0) && nearly(axes[3], 0.0) && nearly(axes[4], -100.0 / kSpaceMouseFullScale) &&
               nearly(axes[5], 0.0));
       }
     }
@@ -983,6 +988,162 @@ void rotationMappingTests() {
   }
 }
 
+// A point of the model as the user sees it: to the right, up, and toward
+// the user (from the eye, along the view's axes).
+SpaceMouseVec seen(const mitcad::SpaceMousePose& pose, const SpaceMouseVec& point) {
+  const SpaceMouseVec direction = unit(minus(pose.target, pose.eye));
+  const SpaceMouseVec up = unit(pose.up);
+  const SpaceMouseVec right = cross(direction, up);
+  const SpaceMouseVec offset = minus(point, pose.eye);
+  return {dot(offset, right), dot(offset, up), -dot(offset, direction)};
+}
+
+// Each of the cap's six motions alone (mitcad#1720), from the device's
+// values to the model in Object mode: pushed right, lifted, pulled toward
+// the user, tilted forward (its top away from the user), twisted clockwise
+// seen from above, rolled right (its top to the right). The device's
+// values follow its frame (X right, Y toward the user, Z down, the
+// rotations by the right-hand rule about the same axes), read as the
+// Windows backend reads a combined 13-byte report (a SpaceMouse Compact),
+// as IOKit's values come on macOS, and as spacenavd sends them on Linux
+// (Y and Z swapped and reversed, the rotation alike). Every way gives the
+// same axis in the view's frame, the model does what the cap did, and the
+// motion's log line names it.
+void capMotionTests() {
+  using namespace mitcad;
+  struct Motion {
+    const char* name;
+    std::array<int, 3> t;
+    std::array<int, 3> r;
+    std::size_t axis; // the view's axis it moves
+    bool positive;
+    const char* logged; // the debug log's words for it
+  };
+  const Motion motions[] = {
+      {"pushed right", {{280, 0, 0}}, {{0, 0, 0}}, 0, true, "moves right"},
+      {"lifted", {{0, 0, -280}}, {{0, 0, 0}}, 1, true, "moves up"},
+      {"pulled toward the user", {{0, 280, 0}}, {{0, 0, 0}}, 2, true, "comes closer"},
+      {"tilted forward", {{0, 0, 0}}, {{-280, 0, 0}}, 3, false, "tilts its top away from the user"},
+      {"twisted clockwise seen from above", {{0, 0, 0}}, {{0, 0, 280}}, 4, false,
+       "turns clockwise seen from above"},
+      {"rolled right", {{0, 0, 0}}, {{0, -280, 0}}, 5, false, "rolls clockwise as the user sees it"},
+  };
+  const SpaceMouseSettings defaults{};
+  SpaceMousePose pose;
+  pose.eye = {0.0, -100.0, 0.0};
+  pose.target = {0.0, 0.0, 0.0};
+  pose.up = {0.0, 0.0, 1.0};
+  pose.height = 50.0;
+  const SpaceMouseVec pivot{0.0, 0.0, 0.0};
+  const SpaceMouseVec centre{0.0, 0.0, 0.0};
+  const SpaceMouseVec top{0.0, 0.0, 10.0};
+  const SpaceMouseVec front{0.0, -10.0, 0.0};
+  for (const Motion& motion : motions) {
+    // Windows: one combined report 1 (translation, then rotation).
+    std::uint8_t bytes[13] = {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    for (std::size_t index = 0; index < 6; ++index) {
+      const int value = index < 3 ? motion.t[index] : motion.r[index - 3];
+      const auto bits = static_cast<std::uint16_t>(static_cast<std::int16_t>(value));
+      bytes[1 + 2 * index] = static_cast<std::uint8_t>(bits & 0xff);
+      bytes[2 + 2 * index] = static_cast<std::uint8_t>(bits >> 8);
+    }
+    SpaceMouseHidReader reader;
+    reader.setRotationReport(SpaceMouseRotationReport::WithTranslation);
+    SpaceMouseHidReport report;
+    CHECK(reader.read(bytes, sizeof(bytes), report));
+    const SpaceMouseAxes fromRawInput = reader.axes();
+    // macOS: IOKit's values of the same usages.
+    const SpaceMouseAxes fromIokit = spaceMouseFromHid(motion.t, motion.r);
+    // Linux: spacenavd's event of the same motion.
+    const SpaceMouseAxes fromSpnav = spaceMouseFromSpnav(
+        {motion.t[0], -motion.t[2], -motion.t[1], motion.r[0], -motion.r[2], -motion.r[1]});
+    for (std::size_t axis = 0; axis < 6; ++axis) {
+      CHECK(nearly(fromRawInput[axis], fromIokit[axis]) && nearly(fromSpnav[axis], fromIokit[axis]));
+      if (axis == motion.axis) {
+        CHECK(nearly(fromIokit[axis], motion.positive ? 0.8 : -0.8));
+      } else {
+        CHECK(fromIokit[axis] == 0.0);
+      }
+    }
+    // The model in Object mode, the default.
+    const SpaceMouseRates rates = spaceMouseRates(defaults, fromIokit, false);
+    const SpaceMousePose moved = spaceMouseMove(pose, pivot, rates, 0.25, SpaceMouseStyle());
+    switch (motion.axis) {
+    case 0: // the model's centre moves to the right
+      CHECK(seen(moved, centre)[0] > seen(pose, centre)[0] + 1.0);
+      break;
+    case 1: // ... up
+      CHECK(seen(moved, centre)[1] > seen(pose, centre)[1] + 1.0);
+      break;
+    case 2: // closer: the view shows less around it
+      CHECK(moved.height < pose.height * 0.95);
+      break;
+    case 3: // its top goes away from the user
+      CHECK(seen(moved, top)[2] < seen(pose, top)[2] - 0.1);
+      break;
+    case 4: // its front goes to the left, as the cap's front does turned clockwise from above
+      CHECK(seen(moved, front)[0] < seen(pose, front)[0] - 0.1);
+      break;
+    default: // its top goes to the right
+      CHECK(seen(moved, top)[0] > seen(pose, top)[0] + 0.1);
+      break;
+    }
+    // The debug log's line of the motion names what the model did.
+    SpaceMouseAxesLog axesLog;
+    CHECK(axesLog.take().isEmpty());
+    axesLog.add(fromIokit);
+    axesLog.add(SpaceMouseAxes{});
+    const QString line = axesLog.take();
+    CHECK(line.startsWith(QStringLiteral("3D mouse axes: tx ")));
+    CHECK(line.endsWith(QStringLiteral("; strongest %1: in Object mode the model %2")
+                            .arg(QLatin1String(spaceMouseAxisKey(motion.axis)), QLatin1String(motion.logged))));
+    CHECK(line.contains(QStringLiteral("%1 %2").arg(QLatin1String(spaceMouseAxisKey(motion.axis)),
+                                                   motion.positive ? QStringLiteral("0.80")
+                                                                   : QStringLiteral("-0.80"))));
+    CHECK(axesLog.take().isEmpty());
+  }
+  // The largest deflection of each axis over the motion, its sign kept.
+  SpaceMouseAxesLog peaks;
+  peaks.add({0.1, 0.0, 0.0, -0.3, 0.0, 0.0});
+  peaks.add({0.05, 0.0, 0.0, -0.6, 0.2, 0.0});
+  CHECK(peaks.take() == QStringLiteral("3D mouse axes: tx 0.10, ty 0.00, tz 0.00, rx -0.60, ry 0.20, rz 0.00; "
+                                   "strongest rx: in Object mode the model tilts its top away from the user"));
+}
+
+// The controller writes a motion's axes to the debug log once the cap
+// comes to rest (mitcad#1720), and only after a motion that moved the view.
+void axesLogControllerTests() {
+  using namespace mitcad;
+  SpaceMouseRates last;
+  SpaceMouseController::Hooks hooks;
+  hooks.settings = [] { return SpaceMouseSettings(); };
+  hooks.flat = [] { return false; };
+  hooks.rates = [&last](const SpaceMouseRates& rates) { last = rates; };
+  const auto factory = []() -> std::unique_ptr<SpaceMouseBackend> { return std::make_unique<FakeBackend>(false); };
+  SpaceMouseController controller(std::move(hooks), factory);
+  const QtMessageHandler previous = qInstallMessageHandler(catchMessage);
+  caught().clear();
+  const auto axesLines = [] {
+    int count = 0;
+    for (const QString& line : caught()) {
+      count += line.startsWith(QStringLiteral("3D mouse axes: ")) ? 1 : 0;
+    }
+    return count;
+  };
+  // Below the dead zone: nothing moved, nothing logged.
+  controller.motion({0.01, 0.0, 0.0, 0.0, 0.0, 0.0}, false);
+  controller.motion(SpaceMouseAxes{}, false);
+  CHECK(axesLines() == 0);
+  controller.motion({0.0, 0.0, 0.0, 0.0, -0.5, 0.0}, false);
+  controller.motion({0.0, 0.0, 0.0, 0.0, -0.7, 0.0}, false);
+  CHECK(last.moving() && axesLines() == 0);
+  controller.motion(SpaceMouseAxes{}, false);
+  qInstallMessageHandler(previous);
+  CHECK(!last.moving() && axesLines() == 1);
+  CHECK(caught().contains(QStringLiteral("3D mouse axes: tx 0.00, ty 0.00, tz 0.00, rx 0.00, ry -0.70, rz 0.00; "
+                                         "strongest ry: in Object mode the model turns clockwise seen from above")));
+}
+
 } // namespace
 
 int spaceMouseTests() {
@@ -990,6 +1151,8 @@ int spaceMouseTests() {
   splitReportTests();
   rawLogTests();
   rotationMappingTests();
+  capMotionTests();
+  axesLogControllerTests();
   mappingTests();
   moveTests();
   modeTests();

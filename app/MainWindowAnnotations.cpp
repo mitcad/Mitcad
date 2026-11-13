@@ -400,10 +400,11 @@ std::optional<SelectionItem> MainWindow::annotationPickItem(const QJsonValue& pi
 }
 
 QString MainWindow::describeAnnotationPick(const QJsonValue& pick) const {
+  // In words (mitcad#1741): the annotation dialog shows it.
   if (const std::optional<SelectionItem> item = annotationPickItem(pick)) {
-    return item->describe();
+    return pickListText(*item, m_snapshot);
   }
-  return QString::fromUtf8(QJsonDocument(QJsonArray{pick}).toJson(QJsonDocument::Compact));
+  return pick.isNull() || pick.isUndefined() ? QString() : tr("A pick no longer in the design");
 }
 
 void MainWindow::highlightAnnotations(const QStringList& names) {
@@ -443,7 +444,7 @@ void MainWindow::addAnnotationHighlights(std::vector<HighlightDisplay>& /*highli
         // Not drawn (mitcad#902: a selection recolours only the
         // annotation's own thin drawing, no filled faces); listed for the
         // tests' log.
-        picks << item->describe();
+        picks << item->logDescription();
       }
       if (!picks.isEmpty()) {
         logged << QStringLiteral("%1: %2").arg(name, picks.join(QStringLiteral("; ")));
@@ -563,7 +564,7 @@ bool MainWindow::annotationPicked(const Selection& items) {
       command.insert(field.key(), field.value());
     }
   }
-  qDebug().noquote() << QStringLiteral("Annotation picked: %1 %2: %3").arg(waiting.name, waiting.field, item.describe());
+  qDebug().noquote() << QStringLiteral("Annotation picked: %1 %2: %3").arg(waiting.name, waiting.field, item.logDescription());
   if (!runAnnotationCommand(command, tr("Pick %1 Again").arg(waiting.name))) {
     return true; // still waiting: another pick, or Esc
   }

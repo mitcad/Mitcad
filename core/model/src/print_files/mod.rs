@@ -564,6 +564,24 @@ pub(crate) fn own_colour_again(material: &Material, id: &str) -> Appearance {
 /// a neutral light grey, `#BFBFBF`.
 pub const NEUTRAL_FILAMENT_COLOR: [f64; 3] = [191.0 / 255.0; 3];
 
+/// The printer preset a slicer's project names when the design has no
+/// printer of its own (no profile chosen, no slicer preset kept): a
+/// stand-in the slicer does not know.
+pub(crate) const STAND_IN_PRINTER: &str = "Mitcad printer";
+
+/// The export's warning when it names [`STAND_IN_PRINTER`] (mitcad#1727),
+/// for agents: what to do, with the command.
+pub const NO_PRINTER_PROFILE: &str = "no printer profile was imported: the project names a \
+     stand-in printer, which the slicer cannot slice with until a real printer is chosen there; \
+     import the printer's profile first (import_print_profile, or the Printer row of Send to \
+     Slicer)";
+
+/// [`NO_PRINTER_PROFILE`] in plain words, as the application shows it
+/// (the result's `warning_messages`).
+pub const NO_PRINTER_PROFILE_MESSAGE: &str = "no printer was chosen: the slicer gets a stand-in \
+     printer and cannot slice until a real printer is chosen there; choose one in the Printer \
+     row, or bring the printer's settings in with Import from Slicer…";
+
 /// The appearance of an imported material whose filament has no colour
 /// anywhere (mitcad#1053): the library's white plastic in the neutral grey
 /// ([`NEUTRAL_FILAMENT_COLOR`]), named for the material (`<name> color`,

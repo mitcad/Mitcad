@@ -450,6 +450,33 @@ pub(super) fn dxf_unit<K: Kernel>(
     mitcad_model::exchange::dxf_export_unit(units, design).map_err(ApiError)
 }
 
+/// An export's warnings as a person reads them (mitcad#1727,
+/// `docs/ui-conventions.md` "What a message says"): where a warning of
+/// `warnings` is written for agents (the missing printer profile, naming
+/// `import_print_profile`), `warning_messages` beside it gives every
+/// warning in plain words, which the application shows; `warnings` keeps
+/// the agents' texts.
+fn with_shown_warnings(result: &mut Value) {
+    use mitcad_model::print_files::{NO_PRINTER_PROFILE, NO_PRINTER_PROFILE_MESSAGE};
+    let Some(warnings) = result.get("warnings").and_then(Value::as_array) else {
+        return;
+    };
+    if !warnings
+        .iter()
+        .any(|w| w.as_str() == Some(NO_PRINTER_PROFILE))
+    {
+        return;
+    }
+    let shown: Vec<Value> = warnings
+        .iter()
+        .map(|w| match w.as_str() {
+            Some(NO_PRINTER_PROFILE) => json!(NO_PRINTER_PROFILE_MESSAGE),
+            _ => w.clone(),
+        })
+        .collect();
+    result["warning_messages"] = Value::Array(shown);
+}
+
 pub(super) fn imported_json(imported: &Imported) -> Value {
     let bodies: Vec<Value> = imported
         .bodies
@@ -885,6 +912,7 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             result["files"] = json!(files);
             result["warnings"] = json!(exported.warnings);
         }
+        with_shown_warnings(&mut result);
         Ok(result)
     }
 

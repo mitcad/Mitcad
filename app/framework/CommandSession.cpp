@@ -13,6 +13,7 @@
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <Bnd_Box.hxx>
+#include <TopLoc_Location.hxx>
 
 #include <QApplication>
 #include <QEvent>
@@ -1222,10 +1223,12 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
   bool handles = static_cast<bool>(m_def.previewMarkers) || static_cast<bool>(m_def.previewMarkersIn) ||
                  static_cast<bool>(m_def.viewLines);
   for (const Slot& slot : slotsOf(false)) {
-    handles = handles || static_cast<bool>(slot.def->manipulator) || static_cast<bool>(slot.def->toggles);
+    handles = handles || static_cast<bool>(slot.def->manipulator) || static_cast<bool>(slot.def->manipulators) ||
+              static_cast<bool>(slot.def->toggles);
   }
   if (handles) {
     m_manipulators = new ManipulatorOverlay(m_host.viewer(), m_def.name);
+    connect(m_manipulators, &ManipulatorOverlay::dragStarted, this, &CommandSession::manipulatorDragStarted);
     connect(m_manipulators, &ManipulatorOverlay::dragged, this,
             &CommandSession::manipulatorDragged);
     connect(m_manipulators, &ManipulatorOverlay::dragFinished, this, [this](const QString& key) {
@@ -1440,7 +1443,7 @@ QString CommandSession::pickedState() const {
     }
     picks << slot.key;
     for (const SelectionItem& item : m_state.items(slot.key)) {
-      picks << item.describe();
+      picks << item.logDescription();
     }
   }
   return picks.join(QLatin1Char('\n'));
@@ -1528,7 +1531,7 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
     if (named) {
       if (named->name != item.name) {
         qDebug().noquote() << QStringLiteral("%1 %2: %3 of the preview taken as %4")
-                                  .arg(m_def.name, input->label, item.describe(), named->name);
+                                  .arg(m_def.name, input->label, item.logDescription(), named->name);
       }
       accepted.append(input->convert ? input->convert(*named) : *named);
       raw.append(*named);
@@ -1536,9 +1539,9 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
       // A mesh body picked in the browser (the view does not offer one):
       // say why it is not taken (mitcad#399).
       qDebug().noquote() << QStringLiteral("%1 %2: %3 not taken: a mesh body")
-                                .arg(m_def.name, input->label, item.describe());
+                                .arg(m_def.name, input->label, item.logDescription());
       m_host.showHint(tr("%1 works on solid and surface bodies; %2 is a mesh body (triangles without surfaces).")
-                          .arg(m_def.name, item.describe()));
+                          .arg(m_def.name, m_host.itemText(item)));
     }
   }
   // Shift + click on an input of one item that places (mitcad#451): the
@@ -1626,7 +1629,7 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
       const QString why = previewRefusal(*refused);
       if (!why.isEmpty()) {
         qDebug().noquote() << QStringLiteral("%1 %2: %3 not taken: %4")
-                                  .arg(m_def.name, input->label, refused->describe(), why);
+                                  .arg(m_def.name, input->label, refused->logDescription(), why);
         m_host.showHint(why);
         return;
       }
@@ -1635,7 +1638,7 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
       const QString hint = refused ? input->refusedHint(*refused, m_state) : QString();
       if (!hint.isEmpty()) {
         qDebug().noquote() << QStringLiteral("%1 %2: %3 not taken: %4")
-                                  .arg(m_def.name, input->label, refused->describe(), hint);
+                                  .arg(m_def.name, input->label, refused->logDescription(), hint);
         m_host.showHint(hint);
       }
     }
@@ -1732,9 +1735,12 @@ void CommandSession::selectionChanged(const QString& key) {
 
 void CommandSession::listItems() {
   const QVector<Slot> all = slotsOf(false);
-  if (std::none_of(all.begin(), all.end(), [](const Slot& slot) {
-        return slot.def->type == InputDef::Type::Selection && static_cast<bool>(slot.def->itemsText);
-      })) {
+  // Inputs that list their picks by name, and ordered ones, whose panel
+  // lists each pick in words (mitcad#1741).
+  const auto lists = [](const Slot& slot) {
+    return slot.def->type == InputDef::Type::Selection && (static_cast<bool>(slot.def->itemsText) || slot.def->ordered);
+  };
+  if (std::none_of(all.begin(), all.end(), lists)) {
     return;
   }
   if (m_host.modelBusy()) {
@@ -1749,10 +1755,24 @@ void CommandSession::listItems() {
     return;
   }
   for (const Slot& slot : all) {
-    if (slot.def->type != InputDef::Type::Selection || !slot.def->itemsText) {
+    if (!lists(slot)) {
+      continue;
+    }
+    if (slot.def->ordered) {
+      QStringList words;
+      for (const SelectionItem& item : std::as_const(m_state).items(slot.key)) {
+        words << m_host.itemText(item);
+      }
+      m_state.setItemWords(slot.key, words);
+    }
+    if (!slot.def->itemsText) {
       continue;
     }
     const QString text = slot.def->itemsText(std::as_const(m_state).items(slot.key), scopeOf(slot), m_host);
+    if (slot.def->itemsWords) {
+      m_state.setItemsWords(slot.key,
+                            slot.def->itemsWords(std::as_const(m_state).items(slot.key), scopeOf(slot), m_host));
+    }
     if (text != m_state.itemsText(slot.key)) {
       m_state.setItemsText(slot.key, text);
       if (!text.isEmpty()) {
@@ -1770,7 +1790,7 @@ void CommandSession::logSelection(const QString& key) const {
   const Selection& items = m_state.items(key);
   QStringList names;
   for (const SelectionItem& item : items) {
-    names << item.describe();
+    names << item.logDescription();
   }
   qDebug().noquote() << QStringLiteral("%1 %2: %3%4")
                             .arg(m_def.name, slot->def->label, summarize(items),
@@ -1825,6 +1845,12 @@ void CommandSession::updateHighlights() {
       HighlightDisplay shown{item, m_host.itemShape(item), color};
       if (item.kind == SelectKind::Face || item.kind == SelectKind::Edge) {
         shown.body = m_host.bodyShape(item.owner);
+      }
+      // On a component the preview moves, where the preview puts it.
+      if (m_def.pickMoved && !shown.shape.IsNull()) {
+        if (const auto by = m_def.pickMoved(item, m_state, m_host)) {
+          shown.shape = shown.shape.Moved(TopLoc_Location(*by));
+        }
       }
       highlights.push_back(std::move(shown));
     }
@@ -2080,24 +2106,47 @@ void CommandSession::updateManipulators() {
         // the model could not place them
       }
     }
-    if (slot.def->type != InputDef::Type::Value || !slot.def->manipulator) {
+    if (slot.def->type != InputDef::Type::Value || (!slot.def->manipulator && !slot.def->manipulators)) {
       continue;
     }
-    const double value = m_state.value(slot.key);
-    if (!std::isfinite(value)) {
-      continue;
-    }
-    std::optional<Manipulator> handle;
+    const double typed = m_state.value(slot.key);
+    // The input's handle while it has a value; its several handles
+    // (mitcad#1747) also while it has none, at their autoValue.
+    std::vector<Manipulator> made;
     try {
-      handle = slot.def->manipulator(scopeOf(slot), m_host);
+      if (slot.def->manipulator && std::isfinite(typed)) {
+        if (const std::optional<Manipulator> one = slot.def->manipulator(scopeOf(slot), m_host)) {
+          made.push_back(*one);
+        }
+      }
+      if (slot.def->manipulators) {
+        for (const Manipulator& each : slot.def->manipulators(scopeOf(slot), m_host)) {
+          made.push_back(each);
+        }
+      }
+      // Worked out in the part's own coordinates: where its occurrence is
+      // seen in the design (mitcad#1743).
+      if (m_def.handlesSeenAt && !made.empty()) {
+        if (const std::optional<gp_Trsf> seen = m_def.handlesSeenAt(scopeOf(slot), m_host)) {
+          for (Manipulator& each : made) {
+            each.origin.Transform(*seen);
+            each.direction.Transform(*seen);
+            each.reference.Transform(*seen);
+          }
+        }
+      }
     } catch (const std::exception&) {
-      handle.reset(); // the model could not place it
+      made.clear(); // the model could not place them
     }
-    if (handle) {
+    for (const Manipulator& handle : made) {
+      const double value = std::isfinite(typed) ? typed : handle.autoValue;
+      if (!std::isfinite(value)) {
+        continue;
+      }
       // The value as a box shows it (mitcad#656): the number in the
       // document's unit, as a drag writes it.
       QString text;
-      if (handle->valueBox) {
+      if (handle.valueBox) {
         switch (slot.def->valueKind) {
         case ValueKind::Length:
           text = plain(value / m_host.unitMillimetres(), 4) + QLatin1Char(' ') + m_host.lengthUnit();
@@ -2110,7 +2159,7 @@ void CommandSession::updateManipulators() {
           break;
         }
       }
-      handles.push_back({slot.key, slot.def->label, *handle, value, text});
+      handles.push_back({slot.key, slot.def->label, handle, value, text});
       // A drag's step (mitcad#1431): a length's own size may count as its
       // scale; no finer than the box's last decimal (4 in the unit shown).
       ManipulatorOverlay::Handle& added = handles.back();
@@ -2121,7 +2170,18 @@ void CommandSession::updateManipulators() {
   if (m_def.viewLines) {
     // The command's own lines (mitcad#656: a belt's pitch line).
     try {
-      m_manipulators->setLines(m_def.viewLines(m_state, m_host));
+      std::vector<std::vector<gp_Pnt>> lines = m_def.viewLines(m_state, m_host);
+      // In the part's own coordinates, as its handles (mitcad#1743).
+      if (m_def.handlesSeenAt && !lines.empty()) {
+        if (const std::optional<gp_Trsf> seen = m_def.handlesSeenAt(m_state, m_host)) {
+          for (std::vector<gp_Pnt>& line : lines) {
+            for (gp_Pnt& point : line) {
+              point.Transform(*seen);
+            }
+          }
+        }
+      }
+      m_manipulators->setLines(std::move(lines));
     } catch (const std::exception&) {
       m_manipulators->setLines({});
     }
@@ -2273,6 +2333,11 @@ void CommandSession::manipulatorDragged(const QString& key, double value) {
   }
   m_state.setText(key, text);
   evaluate(key);
+  if (slot->def->onHandleDrag && m_handleDrag && m_handleDrag->key == key && m_handleDrag->element >= 0) {
+    // The inputs that follow the handle dragged (mitcad#1747: an image's
+    // corner moves its centre), from where they were when the drag began.
+    slot->def->onHandleDrag(m_handleDrag->element, m_handleDrag->atStart, m_state, m_host);
+  }
   if (slot->def->onChange) {
     // As a typed value (mitcad#375).
     slot->def->onChange(m_state, m_host);
@@ -2283,6 +2348,10 @@ void CommandSession::manipulatorDragged(const QString& key, double value) {
     setCursorKey(key);
   }
   inputsChanged();
+}
+
+void CommandSession::manipulatorDragStarted(const QString& key, int element) {
+  m_handleDrag = HandleDrag{key, element, m_state};
 }
 
 void CommandSession::toggleElement(const QString& key, int element) {
@@ -2854,7 +2923,25 @@ CommandSession::Preview CommandSession::previewFromReport(
       // it is made in (mitcad#1029).
       preview.datum = placedDatum(preview.report.value(QStringLiteral("datum")).toObject(),
                                   m_host.datumPlacement(m_editUid));
-      preview.tool = datumShape(preview.datum, 100.0);
+      // As large as the view draws the finished one: an edited plane's or
+      // axis's own display size when it has one (mitcad#1748), else 100 mm
+      // (MainWindow::kDefaultDatumSize).
+      double size = 100.0;
+      if (!m_editUid.isEmpty()) {
+        try {
+          const double stored = m_host
+                                    .queryObject({{QStringLiteral("query"), QStringLiteral("datum")},
+                                                  {QStringLiteral("uid"), m_editUid}})
+                                    .value(QStringLiteral("display_size"))
+                                    .toDouble(0.0);
+          if (stored > 0.0) {
+            size = stored;
+          }
+        } catch (const std::exception&) {
+          // Not at the marker now (rolled back for the edit): the default.
+        }
+      }
+      preview.tool = datumShape(preview.datum, size);
     } else if (preview.report.contains(QStringLiteral("curve"))) {
       // An Intersection Curve's curve where the view draws the finished one
       // (MainWindow::showDatums): its polyline, in its component's
@@ -3326,21 +3413,36 @@ void CommandSession::showPreview(const Preview& preview, const QString& operatio
     qDebug().noquote() << QStringLiteral("Preview extended tool: %1").arg(extended);
   }
   // New bodies show as see-through bodies; a tool that joins, cuts or
-  // intersects shows over the result, red for a cut; so does
-  // a construction feature's datum.
+  // intersects shows over the result, red for a cut (a hole's always,
+  // CommandDef::cutPreview, mitcad#1743); so does a construction
+  // feature's datum.
+  QString look;
   if (m_def.extendedToolPreview && !preview.tool.IsNull()) {
     viewer.setPreview(preview.tool, OcctViewer::PreviewStyle::ExtendedTool);
-  } else if (operation == QStringLiteral("cut")) {
+    look = QStringLiteral("extended tool");
+  } else if (operation == QStringLiteral("cut") || m_def.cutPreview) {
     viewer.setPreview(preview.tool, OcctViewer::PreviewStyle::Remove);
+    look = QStringLiteral("cut");
   } else if (operation == QStringLiteral("new_body") ||
              operation == QStringLiteral("new_component")) {
     viewer.setPreview(TopoDS_Shape());
+    look = QStringLiteral("new body");
   } else if (preview.report.contains(QStringLiteral("datum"))) {
     viewer.setPreview(preview.tool, OcctViewer::PreviewStyle::Datum);
+    look = QStringLiteral("datum");
   } else if (!preview.curve.isEmpty()) {
     viewer.setPreview(preview.tool, OcctViewer::PreviewStyle::Curve);
+    look = QStringLiteral("curve");
   } else {
     viewer.setPreview(preview.tool, OcctViewer::PreviewStyle::Add);
+    look = QStringLiteral("add");
+  }
+  // How the tool is drawn, for UI tests (mitcad#1743: a hole's tool body
+  // see-through red as a cut's): "none" without a tool.
+  const QString toolLook = preview.tool.IsNull() ? QStringLiteral("none") : look;
+  if (toolLook != m_loggedToolLook) {
+    m_loggedToolLook = toolLook;
+    qDebug().noquote() << QStringLiteral("Preview %1 tool drawn as: %2").arg(m_def.name, toolLook);
   }
   exactPreviewShown(preview, bodies);
 }
@@ -3444,7 +3546,8 @@ std::vector<BodyDisplay> CommandSession::toolOverlays(const Preview& preview, co
       continue;
     }
     BodyDisplay overlay = body;
-    overlay.style = operation == QStringLiteral("cut") ? BodyDisplay::Style::CutTool : BodyDisplay::Style::Tool;
+    overlay.style = operation == QStringLiteral("cut") || m_def.cutPreview ? BodyDisplay::Style::CutTool
+                                                                           : BodyDisplay::Style::Tool;
     overlays.push_back(std::move(overlay));
   }
   return overlays;
@@ -4750,7 +4853,7 @@ bool CommandSession::cycleChoice() {
       const qsizetype at = now.isEmpty() ? -1 : picks.indexOf(now.first());
       const SelectionItem next = picks.at((at + 1) % picks.size());
       m_state.setItems(slot.key, {next});
-      qDebug().noquote() << QStringLiteral("%1: Tab steps %2: %3").arg(m_def.name, input.label, next.describe());
+      qDebug().noquote() << QStringLiteral("%1: Tab steps %2: %3").arg(m_def.name, input.label, next.logDescription());
       selectionChanged(slot.key);
       return true;
     }

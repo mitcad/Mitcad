@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: MIT
+# An unknown name and Enter make a user parameter in every value field
+# (mitcad#1723), on parameter-unknown-name.json (Sketch1: a 40 x 25
+# rectangle, its width k5 d1, and a free line at y = 40; Extrude1 10 mm of
+# the rectangle; no user parameters):
+#   1. A drawing tool's field: the Rectangle's Width, rect_side and Enter:
+#      Add User Parameter opens; 10 makes rect_side a user parameter and
+#      the rectangle is 10 x 3 mm.
+#   2. A sketch dimension: a new dimension on the free line, line_len and
+#      Enter: Add User Parameter, the first row (Name this value is one
+#      row below it); 25 makes line_len a user parameter that the
+#      dimension uses.
+#   3. name = value typed out still names the dimension's own parameter:
+#      k5's value editor, side = 18 mm: d1 becomes side, a model
+#      parameter, and no user parameter is made.
+#   4. A command panel's field: Extrude1's Distance, ext_height and Enter:
+#      Add User Parameter; 12 makes ext_height a user parameter and the
+#      body is 18 x 25 x 12 mm.
+# Run by tools/ui-parameter-unknown-name-test.sh (Linux) and
+# tools/ui-windows-parameter-unknown-name-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+wait-log '^Dimension k5 text at '
+
+# 1. The Rectangle tool's Width: an unknown name and Enter.
+mark
+command sketch.rectangle
+sketch-click 10 31
+type rect_side
+wait-log '^Parameter suggestions for sketch width "rect_side": none; actions: create$'
+key Return
+wait-log '^Add User Parameter opened for sketch width: name rect_side, unit mm$'
+focus-dialog '^Add User Parameter$'
+focus-widget createParameterExpression
+type 10
+key Return
+wait-log '^Created user parameter rect_side = 10 mm [(]mm[)] for sketch width$'
+wait-log '^Parameter created inserted rect_side into sketch width: rect_side$'
+focus-main
+key Tab
+type 3
+key Return
+wait-log '^Added rectangle 10 x 3 mm at '
+expect-model-parameter rect_side 10 user
+key Escape
+wait-idle
+
+# 2. A new sketch dimension: an unknown name and Enter.
+mark
+key d
+sketch-click 15 40
+sketch-click 15 47
+wait-log '^Sketch value editor at '
+type line_len
+wait-log '^Parameter suggestions for sketch dimension "line_len": none; actions: create, name$'
+key Return
+wait-log '^Add User Parameter opened for sketch dimension: name line_len, unit mm$'
+focus-dialog '^Add User Parameter$'
+focus-widget createParameterExpression
+type 25
+key Return
+wait-log '^Created user parameter line_len = 25 mm [(]mm[)] for sketch dimension$'
+wait-log '^Parameter created inserted line_len into sketch dimension: line_len$'
+focus-main
+key Return
+wait-log '^Added dimension k[0-9]+ length line_len = line_len$'
+expect-model-parameter line_len 25 user
+key Escape
+wait-idle
+
+# 3. name = value typed out names the dimension's own parameter.
+mark
+dblclick-logged '^Dimension k5 text at '
+wait-log '^Sketch value editor at .* with d1 = 40 mm$'
+key ctrl+a
+type 'side = 18 mm'
+key Return
+wait-log '^Dimension k5 = side = 18 mm [(]side[)]$'
+expect-model-parameter side 18 model
+expect-model-parameter d1 absent
+expect-no-log '^Add User Parameter opened for dimension'
+command sketch.finish
+wait-log '^Sketch finished'
+
+# 4. Extrude1's Distance: an unknown name and Enter.
+mark
+dblclick-logged '^Timeline Extrude1 at '
+wait-log '^Editing F2 with Extrude' 20
+wait-log '^Panel Extrude input distance at ' 20
+wait-idle 30
+mark
+type-in '^Panel Extrude input distance at ' 'ext_height'
+wait-log '^Parameter suggestions for Extrude Distance "ext_height": none; actions: create, name$'
+key Return
+wait-log '^Add User Parameter opened for Extrude Distance: name ext_height, unit mm$'
+focus-dialog '^Add User Parameter$'
+focus-widget createParameterExpression
+type 12
+key Return
+wait-log '^Created user parameter ext_height = 12 mm [(]mm[)] for Extrude Distance$'
+wait-log '^Parameter created inserted ext_height into Extrude Distance: ext_height$'
+focus-main
+wait-log 'Extrude Distance: ext_height = 12'
+key Return
+wait-log '^Edited F2' 30
+expect-model-parameter ext_height 12 user
+expect-model-bodies 1 5400
+expect-never 'TestDriver: FAIL'

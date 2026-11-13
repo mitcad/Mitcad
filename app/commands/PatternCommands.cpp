@@ -568,6 +568,10 @@ CommandDef pathPatternCommand(const CommandContext& context) {
           .withItemsText([](const Selection& items, const CommandState& state, const CommandContext& model) {
             return spatialRouteListing(items, false, keptPathReversed(state, QStringLiteral("path")), model,
                                        QStringLiteral("path"));
+          })
+          .withItemsWords([](const Selection& items, const CommandState& state, const CommandContext& model) {
+            return spatialRouteWords(items, false, keptPathReversed(state, QStringLiteral("path")), model,
+                                     QStringLiteral("path"));
           }),
       distanceTypeInput(),
       directionTypeInput(QStringLiteral("direction_type"), QObject::tr("Direction Type")),

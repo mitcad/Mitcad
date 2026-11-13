@@ -42,6 +42,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -137,6 +138,7 @@
 #include <TopoDS.hxx>
 #include <V3d_AmbientLight.hxx>
 #include <V3d_DirectionalLight.hxx>
+#include <gp.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Dir.hxx>
 
@@ -1901,6 +1903,15 @@ OcctViewer::~OcctViewer() {
 // SetSelectionModeActive(..., Multiple), which keeps them pickable.
 void OcctViewer::display(const occ::handle<AIS_Shape>& object, int displayMode, PickInfo info,
                          bool pickable) {
+  // The design's origin at a size on the screen (mitcad#1748): its shape
+  // in device pixels, scaled about the origin to the zoom of each frame;
+  // its picks follow the same transform in OCCT's selector. It is drawn in
+  // depth with the model: a body in front of it hides it, and the picks'
+  // rules for planes (behind the bodies in Create Sketch, mitcad#844; last
+  // in a placement input, mitcad#656) hold as for any plane.
+  if (m_originOnScreen && isOriginItem(info.item)) {
+    object->SetTransformPersistence(new Graphic3d_TransformPers(Graphic3d_TMF_ZoomPers, gp::Origin()));
+  }
   if (!pickable) {
     m_context->Display(object, displayMode, -1, false);
     return;
@@ -2343,7 +2354,8 @@ void OcctViewer::applyInactiveGhosts(bool faded) {
   for (const occ::handle<AIS_Shape>& datum : m_datums) {
     const auto info = m_pickInfo.find(datum.get());
     if (info != m_pickInfo.end() && restyle(datum)) {
-      styleDatum(datum, info->second.item.kind);
+      styleDatum(datum, info->second.item.kind,
+                 info->second.item.occurrence.isEmpty() ? info->second.item.owner : QString());
       m_context->Redisplay(datum, false);
     }
   }
@@ -3262,10 +3274,11 @@ void OcctViewer::setDatums(const std::vector<DatumDisplay>& datums) {
                  datum.geometry.isEmpty() ? SelectionItem::kindName(datum.kind) : datum.geometry};
     info.item.occurrence = datum.occurrence;
     markInactive(object, isInactiveItem(info.item)); // pale outside the active component (mitcad#420)
-    const int mode = styleDatum(object, datum.kind);
+    const int mode = styleDatum(object, datum.kind, datum.occurrence.isEmpty() ? datum.uid : QString());
     display(object, mode, std::move(info), true);
     m_datums.push_back(object);
   }
+  logOriginSize(); // its size as drawn now (mitcad#1748)
   // For UI tests (mitcad#1642): what of the design's origin is drawn, when
   // that changes.
   const OriginDrawing origin = originDrawing();
@@ -3326,6 +3339,99 @@ OcctViewer::OriginDrawing OcctViewer::originDrawing() const {
     }
   }
   return drawing;
+}
+
+void OcctViewer::setOriginLook(bool onScreen, bool corner) {
+  m_originOnScreen = onScreen;
+  m_originCorner = corner;
+  m_loggedOriginSize.clear(); // logged again as drawn now
+}
+
+bool OcctViewer::isOriginItem(const SelectionItem& item) {
+  // The root's origin datums by their ids (MainWindow's kOriginDatums).
+  static const QStringList kOrigin{QStringLiteral("xy"), QStringLiteral("xz"), QStringLiteral("yz"),
+                                   QStringLiteral("x"),  QStringLiteral("y"),  QStringLiteral("z"),
+                                   QStringLiteral("origin")};
+  return (item.kind == SelectKind::Plane || item.kind == SelectKind::Axis || item.kind == SelectKind::Point) &&
+         item.occurrence.isEmpty() && kOrigin.contains(item.owner);
+}
+
+double OcctViewer::modelPerPixel(const gp_Pnt& at) const {
+  const QPointF a = toWidgetF(at);
+  const QPointF b = toWidgetF(at.Translated(gp_Vec(viewUp())));
+  const double pixels = std::hypot(b.x() - a.x(), b.y() - a.y());
+  return pixels > 1e-12 ? 1.0 / pixels : 1.0;
+}
+
+void OcctViewer::logOriginSize() {
+  if (m_view->Window().IsNull()) {
+    return; // not shown yet: logged when the camera rests
+  }
+  occ::handle<AIS_Shape> plane;
+  for (const occ::handle<AIS_Shape>& datum : m_datums) {
+    const auto info = m_pickInfo.find(datum.get());
+    if (info != m_pickInfo.end() && info->second.item.kind == SelectKind::Plane &&
+        info->second.item.owner == QLatin1String("xy") && info->second.item.occurrence.isEmpty() &&
+        m_context->IsDisplayed(datum)) {
+      plane = datum;
+    }
+  }
+  QString text;
+  if (plane.IsNull()) {
+    text = QStringLiteral("none");
+  } else {
+    int width = 0;
+    int height = 0;
+    m_view->Window()->Size(width, height);
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+    std::vector<gp_Pnt> corners;
+    for (TopExp_Explorer it(plane->Shape(), TopAbs_VERTEX); it.More(); it.Next()) {
+      corners.push_back(BRep_Tool::Pnt(TopoDS::Vertex(it.Current())));
+    }
+    // As OpenGl_Structure draws it: the projection after the world-view
+    // matrix the persistence makes, if any.
+    const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
+    const NCollection_Mat4<double>& projection = camera->ProjectionMatrix();
+    NCollection_Mat4<double> worldView = camera->OrientationMatrix();
+    double unit = 1.0; // mm of the model per unit of the shape
+    if (!plane->TransformPersistence().IsNull()) {
+      plane->TransformPersistence()->Apply(camera, projection, worldView, width, height);
+      // OCCT's zoom persistence: the view's height at the origin's depth
+      // per device pixel.
+      const double focus = gp_Vec(camera->Eye(), gp::Origin()).Dot(gp_Vec(camera->Direction()));
+      unit = std::abs(camera->ViewDimensions(focus).Y()) / height;
+    }
+    const NCollection_Mat4<double> toClip = projection * worldView;
+    double across = 0.0; // in the window, logical pixels
+    double diagonal = 0.0; // in the shape's units
+    std::vector<QPointF> shown;
+    for (const gp_Pnt& corner : corners) {
+      const NCollection_Vec4<double> clip = toClip * NCollection_Vec4<double>(corner.X(), corner.Y(), corner.Z(), 1.0);
+      if (clip.w() <= 0.0) {
+        return; // behind the eye: no size to tell
+      }
+      shown.emplace_back((clip.x() / clip.w() + 1.0) * 0.5 * this->width(),
+                         (1.0 - clip.y() / clip.w()) * 0.5 * this->height());
+    }
+    for (std::size_t i = 0; i < corners.size(); ++i) {
+      for (std::size_t j = i + 1; j < corners.size(); ++j) {
+        across = std::max(across, std::hypot(shown[i].x() - shown[j].x(), shown[i].y() - shown[j].y()));
+        diagonal = std::max(diagonal, corners[i].Distance(corners[j]));
+      }
+    }
+    text = QStringLiteral("%1 size, %2 style; XY %3 mm a side, %4 px across on the screen")
+               .arg(m_originOnScreen ? QStringLiteral("screen") : QStringLiteral("model"),
+                    m_originCorner ? QStringLiteral("corner") : QStringLiteral("centred"))
+               .arg(diagonal / std::sqrt(2.0) * unit, 0, 'f', 3)
+               .arg(across, 0, 'f', 1);
+  }
+  if (text == m_loggedOriginSize) {
+    return;
+  }
+  m_loggedOriginSize = text;
+  qDebug().noquote() << QStringLiteral("View origin planes: %1").arg(text);
 }
 
 namespace {
@@ -3434,11 +3540,21 @@ OcctViewer::OwnShapes OcctViewer::ownShapes() const {
   return shapes;
 }
 
-int OcctViewer::styleDatum(const occ::handle<AIS_Shape>& object, SelectKind kind) const {
+int OcctViewer::styleDatum(const occ::handle<AIS_Shape>& object, SelectKind kind, const QString& owner) const {
   const bool inactive = drawnInactive(object);
   const auto look = [this, inactive](const Quantity_Color& color) {
     return inactive ? inactiveColor(color, m_paper) : color;
   };
+  // The Corner style's origin axes (mitcad#1748): solid lines in the
+  // axes' colours from the origin past the planes.
+  if (kind == SelectKind::Axis && m_originCorner &&
+      (owner == QLatin1String("x") || owner == QLatin1String("y") || owner == QLatin1String("z"))) {
+    const ColorRole role = owner == QLatin1String("x")   ? ColorRole::AxisX
+                           : owner == QLatin1String("y") ? ColorRole::AxisY
+                                                         : ColorRole::AxisZ;
+    setEdgeStyle(object, look(viewRole(role, m_backgroundDark)), 2.0, Aspect_TOL_SOLID);
+    return AIS_WireFrame;
+  }
   switch (kind) {
   case SelectKind::Plane: {
     object->SetColor(look(kPlaneColor));
@@ -3633,7 +3749,12 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
       Bnd_Box box;
       BRepBndLib::Add(highlight.shape, box);
       if (!box.IsVoid()) {
-        const gp_Pnt middle((box.CornerMin().XYZ() + box.CornerMax().XYZ()) / 2.0);
+        gp_Pnt middle((box.CornerMin().XYZ() + box.CornerMax().XYZ()) / 2.0);
+        if (m_originOnScreen && isOriginItem(highlight.item)) {
+          // The origin's shape is in device pixels (setOriginLook): where
+          // it is in the model now.
+          middle = gp_Pnt(middle.XYZ() * (modelPerPixel(gp::Origin()) / devicePixelRatioF()));
+        }
         const SelectionItem& item = highlight.item;
         places << QStringLiteral("%1 %2%3%4 at %5,%6,%7")
                       .arg(SelectionItem::kindName(kind), item.owner,
@@ -4132,14 +4253,24 @@ void OcctViewer::setPreview(const TopoDS_Shape& shape, PreviewStyle style) {
       m_preview->SetTransparency(0.5);
       // A Join/Cut tool shares faces with the previewed body (the walls of a
       // cut hole); pull it towards the viewer so it wins the depth test there.
+      // A cut's tool also over the picked faces' highlights, which lie in
+      // the top layer just in front of their faces (-4): the material it
+      // removes reads red there, not blue under the highlight of the face
+      // a hole is placed on (mitcad#1743). Elsewhere it still hides behind
+      // the bodies (the top layer keeps their depth).
+      const bool overHighlights = style == PreviewStyle::Remove;
       m_preview->Attributes()->ShadingAspect()->Aspect()->SetPolygonOffsets(Aspect_POM_Fill, -1.0f,
-                                                                            -2.0f);
+                                                                            overHighlights ? -6.0f : -2.0f);
       // Closed, without its back faces (mitcad#1575, cullHiddenBackFaces).
       logPreviewLook(style == PreviewStyle::Remove         ? QStringLiteral("remove")
                      : style == PreviewStyle::Interference ? QStringLiteral("interference")
                                                            : QStringLiteral("add"),
                      m_cullSeeThrough && cullHiddenBackFaces(m_preview));
       m_context->Display(m_preview, AIS_Shaded, -1, false);
+      if (overHighlights) {
+        m_context->SetZLayer(m_preview, Graphic3d_ZLayerId_Top);
+        m_context->SetDisplayPriority(m_preview, Graphic3d_DisplayPriority_Above);
+      }
     }
     if (!m_provisional.IsNull()) {
       // A provisional drag presentation stands in for it (mitcad#636).
@@ -5808,7 +5939,18 @@ void OcctViewer::logNewDesignTop() const {
 double OcctViewer::fieldOfView() const { return m_view->Camera()->FOVy(); }
 
 void OcctViewer::setFieldOfView(double degrees) {
-  m_view->Camera()->SetFOVy(degrees);
+  if (!std::isfinite(degrees) || !(degrees > 0.0) || !(degrees < 180.0)) {
+    return;
+  }
+  // The field of view in force until a focal length changes (mitcad#1717),
+  // so that standard views, Anaglyph 3D's switch and a sketch's camera put
+  // back keep it.
+  if (m_anaglyph) {
+    m_anaglyphFieldOfView = degrees;
+  } else {
+    m_perspectiveFieldOfView = degrees;
+  }
+  mitcad::setFieldOfViewKeepingHeight(*m_view->Camera(), degrees);
   m_view->Invalidate();
   cameraMoved();
   requestFrame();
@@ -6347,9 +6489,31 @@ void OcctViewer::logCamera() {
                            .arg(eye.Y(), 0, 'g', 9)
                            .arg(eye.Z(), 0, 'g', 9)
                            .arg(current->Scale(), 0, 'g', 9);
+  // The field of view of a perspective or stereo camera once it changes
+  // (mitcad#1717), with its focal length on a 35 mm frame and the height
+  // the view shows at the target, after the camera's line.
+  const QString lens = current->IsOrthographic()
+                           ? QString()
+                           : QStringLiteral("%1 %2").arg(current->FOVy(), 0, 'f', 3).arg(projectionName());
+  const auto logLens = [this, &current, &lens] {
+    if (lens == m_loggedLens) {
+      return;
+    }
+    m_loggedLens = lens;
+    if (!lens.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Camera field of view %1 degrees, focal length %2 mm (%3), visible "
+                                           "height %4 mm at the target")
+                                .arg(current->FOVy(), 0, 'f', 1)
+                                .arg(mitcad::focalLengthForFieldOfView(current->FOVy()), 0, 'f', 1)
+                                .arg(projectionName())
+                                .arg(current->ViewDimensions().Y(), 0, 'f', 3);
+    }
+  };
   if (text == m_loggedCamera) {
+    logLens();
     if (view != m_restedView) {
       m_restedView = view;
+      logOriginSize(); // as below (mitcad#1748)
       emit cameraRested();
     }
     return;
@@ -6366,6 +6530,8 @@ void OcctViewer::logCamera() {
     logOrientationCube();
   }
   qDebug().noquote() << text;
+  logLens();
+  logOriginSize(); // the origin's size as the rested view draws it (mitcad#1748)
   emit cameraRested();
 }
 
@@ -6610,6 +6776,20 @@ void OcctViewer::keepProjection(Graphic3d_Camera& camera) const {
     camera.SetProjectionType(m_monoPerspective ? Graphic3d_Camera::Projection_Perspective
                                                : Graphic3d_Camera::Projection_Orthographic);
   }
+  // The focal length in force (mitcad#1717), the model as large at the
+  // target as before.
+  mitcad::setFieldOfViewKeepingHeight(camera, m_anaglyph ? m_anaglyphFieldOfView : m_perspectiveFieldOfView);
+}
+
+void OcctViewer::endViewAnimation() {
+  const occ::handle<AIS_AnimationCamera>& animation = ViewAnimation();
+  if (!animation.IsNull() && !animation->IsStopped()) {
+    const occ::handle<Graphic3d_Camera> end = animation->CameraEnd();
+    AbortViewAnimation();
+    if (!end.IsNull()) {
+      m_view->Camera()->Copy(end);
+    }
+  }
 }
 
 bool OcctViewer::isStereo() const {
@@ -6622,14 +6802,7 @@ void OcctViewer::setAnaglyph(bool on) {
   }
   // An animation ends where it was going: its cameras have the projection
   // it started with. (A pending fit keeps the projection it finds.)
-  const occ::handle<AIS_AnimationCamera>& animation = ViewAnimation();
-  if (!animation.IsNull() && !animation->IsStopped()) {
-    const occ::handle<Graphic3d_Camera> end = animation->CameraEnd();
-    AbortViewAnimation();
-    if (!end.IsNull()) {
-      m_view->Camera()->Copy(end);
-    }
-  }
+  endViewAnimation();
   const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
   if (on) {
     m_monoPerspective = !camera->IsOrthographic();
@@ -6675,6 +6848,30 @@ void OcctViewer::setStereoParameters(double depth, double convergence) {
   m_view->Invalidate();
   requestFrame();
 }
+
+void OcctViewer::setFocalLengths(double perspective, double anaglyph) {
+  if (!(perspective > 0.0) || !(anaglyph > 0.0) || !std::isfinite(perspective) || !std::isfinite(anaglyph)) {
+    return;
+  }
+  if (perspective == m_focalLength && anaglyph == m_anaglyphFocalLength) {
+    return;
+  }
+  m_focalLength = perspective;
+  m_anaglyphFocalLength = anaglyph;
+  m_perspectiveFieldOfView = mitcad::fieldOfViewForFocalLength(perspective);
+  m_anaglyphFieldOfView = mitcad::fieldOfViewForFocalLength(anaglyph);
+  qDebug().noquote() << QStringLiteral("View: focal length %1 mm, anaglyph focal length %2 mm")
+                            .arg(perspective, 0, 'g', 4)
+                            .arg(anaglyph, 0, 'g', 4);
+  // An animation's cameras keep the field of view it started with.
+  endViewAnimation();
+  keepProjection(*m_view->Camera());
+  m_view->Invalidate();
+  cameraMoved(); // the camera's field of view logged once it rests
+  requestFrame();
+}
+
+double OcctViewer::focalLength() const { return mitcad::focalLengthForFieldOfView(fieldOfView()); }
 
 QString cubeProjectionId(CubeProjection projection) {
   switch (projection) {
@@ -7111,11 +7308,91 @@ QPointF OcctViewer::toWidgetF(const gp_Pnt& point) const {
   return QPointF((ndc.X() + 1.0) * 0.5 * width(), (1.0 - ndc.Y()) * 0.5 * height());
 }
 
-gp_Pnt OcctViewer::planePickPoint(const gp_Pnt& origin, const gp_Dir& normal, double size) const {
+std::vector<gp_Pnt> OcctViewer::cornerPlanePickCandidates(const gp_Pnt& origin, const gp_Dir& normal,
+                                                           double size) const {
+  // The two model axes in the plane, each its positive way: the square
+  // spans them from the origin (OriginStyle::Corner).
+  std::vector<gp_XYZ> axes;
+  for (const gp_Dir axis : {gp::DX(), gp::DY(), gp::DZ()}) {
+    if (std::abs(axis.Dot(normal)) <= 0.5) {
+      axes.push_back(axis.XYZ());
+    }
+  }
+  std::vector<gp_Pnt> candidates;
+  if (axes.size() != 2 || !(size > 0.0)) {
+    candidates.push_back(origin);
+    return candidates;
+  }
+  // The other two origin squares, each over one of this plane's axes and
+  // the third axis. Unlike the Centred style's, the Corner squares do not
+  // lie behind one another towards the eye: seen from the front right and
+  // above, XZ's square stands in front of half of XY's and of YZ's, and a
+  // click there picks XZ. A point is tried only where the line from it to
+  // the eye meets neither of them (with a margin of a tenth of the side,
+  // which keeps it off their edges and the axes on them).
+  const gp_XYZ third = axes[0].Crossed(axes[1]);
+  const gp_XYZ apart(std::abs(third.X()), std::abs(third.Y()), std::abs(third.Z()));
+  const std::array<std::array<gp_XYZ, 2>, 2> others{{{axes[0], apart}, {axes[1], apart}}};
+  const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
+  const bool orthographic = camera->IsOrthographic();
+  const gp_XYZ eye = camera->Eye().XYZ();
+  const gp_XYZ toward = camera->Direction().Reversed().XYZ();
+  const double margin = 0.1 * size;
+  const auto covered = [&](const gp_XYZ& point) {
+    gp_XYZ ray = orthographic ? toward : eye - point;
+    if (ray.Modulus() < 1e-12) {
+      return false;
+    }
+    ray.Normalize();
+    for (const auto& square : others) {
+      const gp_XYZ normalOf = square[0].Crossed(square[1]);
+      const double along = ray.Dot(normalOf);
+      if (std::abs(along) < 1e-12) {
+        continue; // seen edge-on: covers nothing
+      }
+      const double t = (origin.XYZ() - point).Dot(normalOf) / along;
+      if (t <= 1e-9 * size || (!orthographic && t >= (eye - point).Modulus())) {
+        continue; // behind the point, or behind the eye
+      }
+      const gp_XYZ hit = point + ray * t - origin.XYZ();
+      const double u = hit.Dot(square[0]);
+      const double v = hit.Dot(square[1]);
+      if (u >= -margin && u <= size + margin && v >= -margin && v <= size + margin) {
+        return true;
+      }
+    }
+    return false;
+  };
+  // Fractions of the side along each axis, the middle first, then outwards;
+  // those in sight before those another square covers.
+  const double fractions[] = {0.5, 0.4, 0.6, 0.3, 0.7, 0.25, 0.75, 0.2, 0.8, 0.15, 0.85};
+  struct Place {
+    gp_Pnt point;
+    double off; // from the square's middle, in sides
+    bool hidden;
+  };
+  std::vector<Place> places;
+  for (const double a : fractions) {
+    for (const double b : fractions) {
+      const gp_XYZ point = origin.XYZ() + axes[0] * (size * a) + axes[1] * (size * b);
+      places.push_back({gp_Pnt(point), std::hypot(a - 0.5, b - 0.5), covered(point)});
+    }
+  }
+  std::stable_sort(places.begin(), places.end(), [](const Place& p, const Place& q) {
+    return p.hidden != q.hidden ? !p.hidden : p.off < q.off;
+  });
+  for (const Place& place : places) {
+    candidates.push_back(place.point);
+  }
+  return candidates;
+}
+
+gp_Pnt OcctViewer::planePickPoint(const gp_Pnt& origin, const gp_Dir& normal, double size, bool corner) const {
   // Towards the eye, a third of the size or less when that is outside the
   // view (a zoomed-in view); inside the view and not on the orientation cube in
-  // its upper right corner.
-  const std::vector<gp_Pnt> candidates = planePickCandidates(origin, normal, size);
+  // its upper right corner. A Corner style's square: from its middle on.
+  const std::vector<gp_Pnt> candidates =
+      corner ? cornerPlanePickCandidates(origin, normal, size) : planePickCandidates(origin, normal, size);
   const QRectF inside = QRectF(rect()).adjusted(12, 12, -12, -12);
   const QRectF cube = cubeArea();
   for (std::size_t i = 0; i < 6 && i < candidates.size(); ++i) {

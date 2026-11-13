@@ -68,7 +68,7 @@ impl<K: Kernel> Document<K> {
                     return None;
                 }
                 let (file, changed, problem) = match followed_link(&link.path, base.as_deref()) {
-                    Err(why) => (None, false, Some(why)),
+                    Err(why) => (None, false, Some(why.problem())),
                     Ok(file) => match std::fs::read_to_string(&file) {
                         Ok(text) => (Some(file), digest(&text) != link.digest, None),
                         Err(e) => (
@@ -203,9 +203,7 @@ impl<K: Kernel> Document<K> {
             let resolved = match followed_link(&link.path, base) {
                 Ok(resolved) => resolved,
                 Err(why) => {
-                    messages.push(format!(
-                        "{name}: {why}; it keeps the bodies saved with the project"
-                    ));
+                    messages.push(why.kept_bodies(&name));
                     continue;
                 }
             };

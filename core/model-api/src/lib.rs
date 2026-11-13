@@ -158,6 +158,8 @@ mod sketch3d;
 mod design_review;
 // Filament changes and pauses at print heights (mitcad#1596).
 mod filament_changes;
+// The design at a parameter's limits, tried on a copy (mitcad#1730).
+mod parameter_range;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -527,6 +529,13 @@ named_enum! {
         "set_feature_visible" => SetFeatureVisible {
             uid: FeatureUid,
             visible: bool,
+        },
+        // How large a construction plane or axis is drawn (mitcad#1748):
+        // mm, or null (left out) for the default size.
+        "set_datum_display_size" => SetDatumDisplaySize {
+            uid: FeatureUid,
+            #[serde(default)]
+            size: Option<f64>,
         },
         // Named views (U5).
         "add_named_view" => AddNamedView {
@@ -1161,6 +1170,16 @@ named_enum! {
         },
         // Animate Joint's frames without a recompute (mitcad#1701, `joints.rs`).
         "joint_poses" => JointPoses(joints::JointPosesQuery),
+        // The design at values of a parameter, tried on a copy (mitcad#1730,
+        // `parameter_range.rs`).
+        "parameter_range" => ParameterRange(parameter_range::ParameterRangeQuery),
+        // Whether a link to a file would be followed, before Insert
+        // Component links it (mitcad#1719, `components.rs`).
+        "link_check" => LinkCheck {
+            path: String,
+            #[serde(default)]
+            base: Option<String>,
+        },
     }
 }
 
@@ -1799,6 +1818,10 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::PlaneGeometryKey { sketch } => self.plane_geometry_key_json(sketch)?,
             // Animate Joint's frames without a recompute (mitcad#1701).
             Query::JointPoses(query) => self.joint_poses_json(&query)?,
+            // The design at values of a parameter, on a copy (mitcad#1730).
+            Query::ParameterRange(query) => parameter_range::query(self, &query)?,
+            // Whether a link to a file would be followed (mitcad#1719).
+            Query::LinkCheck { path, base } => components::link_check_json(&path, base.as_deref())?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -1921,7 +1944,19 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
         // What failed before, and the feature the command names (mitcad#401).
         let before = self.timeline_before();
         let target = command_target(&value);
+        // The features and their warnings before it (mitcad#1729);
+        // `add_feature` and `edit_feature` give their own feature's.
+        let warned = WarningsBefore::of(self);
+        let cmd = value.get("cmd").and_then(Value::as_str);
+        let (adds, edits) = (cmd == Some("add_feature"), cmd == Some("edit_feature"));
         let mut result = action(self, value)?;
+        add_new_warnings(
+            self,
+            &mut result,
+            &warned,
+            target.filter(|_| edits),
+            adds || edits,
+        );
         let stats = self.stats();
         let recomputed = self.recompute_count() != recomputes;
         result["recomputed"] = json!(if recomputed { stats.evaluated.len() } else { 0 });
@@ -2433,6 +2468,10 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
             }
             Command::SetFeatureVisible { uid, visible } => {
                 self.set_feature_visible(uid, visible)?;
+                json!({})
+            }
+            Command::SetDatumDisplaySize { uid, size } => {
+                self.set_datum_display_size(uid, size)?;
                 json!({})
             }
             // Named views (U5).
@@ -3154,6 +3193,108 @@ pub(crate) fn add_feature_notices(
     let notices = feature_notices(status, warnings, &[], note, uid);
     if !notices.is_empty() {
         value["notices"] = notice::to_json(&notices);
+    }
+}
+
+/// The features of the timeline and the warnings they have, read before a
+/// command to tell the warnings the command brought (mitcad#1729).
+struct WarningsBefore {
+    features: std::collections::BTreeSet<FeatureUid>,
+    warnings: std::collections::BTreeMap<FeatureUid, Vec<String>>,
+}
+
+impl WarningsBefore {
+    fn of<K: Kernel>(doc: &Document<K>) -> Self {
+        Self {
+            features: doc.features().map(|f| f.uid).collect(),
+            warnings: doc
+                .last_result()
+                .results
+                .iter()
+                .filter(|r| !r.warnings().is_empty())
+                .map(|r| (r.uid, r.warnings().to_vec()))
+                .collect(),
+        }
+    }
+}
+
+/// Gives a command's result the warnings it brought to the features that
+/// were there before it (mitcad#1729): each warning such a feature has now
+/// and did not have `before`, as `"<feature's name>: <warning>"`, in
+/// timeline order. A driven dimension that splits an extruded profile so
+/// says in the result of `set_parameter` that the extrude kept one region,
+/// which the timeline alone showed. A feature the command added is left
+/// out (`add_feature` lists its own, an import reports its items), and so
+/// is `edited`, the feature `edit_feature` lists.
+///
+/// They go to the result's `warnings`: a new list, with `warning_messages`
+/// saying the same in plain words (as a sketch command's); after the
+/// feature's own in `add_feature` and `edit_feature` (`feature_command`);
+/// and after a sketch command's own, in both of its lists. Any other
+/// `warnings` a command gives (an export's, a count) stay as they are.
+/// Each is also a warning among the `notices`, about its feature
+/// (`target`) and with its places.
+fn add_new_warnings<K: Kernel>(
+    doc: &Document<K>,
+    result: &mut Value,
+    before: &WarningsBefore,
+    edited: Option<FeatureUid>,
+    feature_command: bool,
+) {
+    let Some(object) = result.as_object_mut() else {
+        return;
+    };
+    let mut texts = Vec::new();
+    let mut shown = Vec::new();
+    let mut notices = Vec::new();
+    for r in &doc.last_result().results {
+        if Some(r.uid) == edited || !before.features.contains(&r.uid) {
+            continue;
+        }
+        let old = before.warnings.get(&r.uid);
+        for warning in r.warnings() {
+            if old.is_some_and(|old| old.contains(warning)) {
+                continue;
+            }
+            let text = match doc.feature(r.uid) {
+                Some(entry) => format!("{}: {warning}", entry.name),
+                None => warning.clone(),
+            };
+            let notice = notice::Notice::warning(text.as_str()).with_target(r.uid);
+            let notice = match r.warning_places().iter().find(|(m, _)| m == warning) {
+                Some((_, places)) => notice.with_places(places.iter().cloned()),
+                None => notice,
+            };
+            shown.push(json!(notice.message));
+            notices.push(notice.to_json());
+            texts.push(json!(text));
+        }
+    }
+    if texts.is_empty() {
+        return;
+    }
+    let plain = object.get("warning_messages").is_some_and(Value::is_array);
+    match object.get_mut("warnings") {
+        None => {
+            object.insert("warnings".to_owned(), Value::Array(texts));
+            if !plain {
+                object.insert("warning_messages".to_owned(), Value::Array(shown));
+            }
+        }
+        Some(Value::Array(list)) if plain => {
+            list.extend(texts);
+            if let Some(Value::Array(list)) = object.get_mut("warning_messages") {
+                list.extend(shown);
+            }
+        }
+        Some(Value::Array(list)) if feature_command => list.extend(texts),
+        Some(_) => {}
+    }
+    match object.get_mut("notices") {
+        Some(Value::Array(list)) => list.extend(notices),
+        _ => {
+            object.insert("notices".to_owned(), Value::Array(notices));
+        }
     }
 }
 

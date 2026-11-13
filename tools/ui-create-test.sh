@@ -179,6 +179,10 @@ for model in profiles rod drilled emboss emboss-ball curves bores; do
 done
 
 ui_start_display
+# Parts built over the origin, beside which an origin plane is clicked:
+# the origin as 100 mm Centered squares (ui_origin_in_millimeters,
+# mitcad#1748).
+ui_origin_in_millimeters
 
 echo "=== Extrude and Revolve"
 ui_start_app --open "$WORK/profiles.mitcad"

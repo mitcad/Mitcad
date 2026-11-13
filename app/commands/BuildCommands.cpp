@@ -974,7 +974,7 @@ const QString kAtPick = QStringLiteral("at_pick");
 bool awaitsPoint(const CommandState& state) {
   const Selection& items = state.items(kAt);
   return !items.isEmpty() && items.first().kind == SelectKind::Plane &&
-         str(state.object(kOnPlane), "item") == items.first().describe();
+         str(state.object(kOnPlane), "item") == items.first().logDescription();
 }
 
 // The chosen plane while its point is awaited.
@@ -1016,13 +1016,13 @@ void choosePlane(const SelectionItem& item, CommandState& state, const CommandCo
   }
   const gp_Dir& normal = plane->Direction();
   const gp_Dir& x = plane->XDirection();
-  state.setObject(kOnPlane, QJsonObject{{QStringLiteral("item"), item.describe()},
+  state.setObject(kOnPlane, QJsonObject{{QStringLiteral("item"), item.logDescription()},
                                         {QStringLiteral("origin"), build::pointJson(plane->Location())},
                                         {QStringLiteral("normal"), QJsonArray{normal.X(), normal.Y(), normal.Z()}},
                                         {QStringLiteral("x"), QJsonArray{x.X(), x.Y(), x.Z()}}});
-  state.setObject(kAtPick, QJsonObject{{QStringLiteral("item"), item.describe()}});
+  state.setObject(kAtPick, QJsonObject{{QStringLiteral("item"), item.logDescription()}});
   qInfo().noquote() << QStringLiteral("BUILD plane chosen: %1; the next click places on it, Enter at its origin")
-                           .arg(item.describe());
+                           .arg(item.logDescription());
 }
 
 // The mouse on the chosen plane (none: off the view): the preview there,
@@ -1031,7 +1031,7 @@ bool followOnPlane(const std::optional<gp_Pnt>& point, CommandState& state) {
   if (!awaitsPoint(state)) {
     return false;
   }
-  const QString item = state.items(kAt).first().describe();
+  const QString item = state.items(kAt).first().logDescription();
   const QJsonObject pick = state.object(kAtPick);
   const std::optional<gp_Pnt> was = pointFrom(pick.value(QStringLiteral("point")));
   if (point ? (was && was->Distance(*point) < 1e-6) : !was) {
@@ -1056,7 +1056,7 @@ bool placeOnPlane(const gp_Pnt& point, CommandState& state) {
   if (!awaitsPoint(state)) {
     return false;
   }
-  const QString item = state.items(kAt).first().describe();
+  const QString item = state.items(kAt).first().logDescription();
   state.setObject(kAtPick, QJsonObject{{QStringLiteral("item"), item}, {QStringLiteral("point"), build::pointJson(point)}});
   state.setObject(kOnPlane, {});
   qInfo().noquote() << QStringLiteral("BUILD plane click: %1 at %2").arg(item, tenthsText(point));
@@ -1173,7 +1173,7 @@ QString directionText(const QJsonArray& direction, const QJsonArray& turns) {
 QJsonObject endPick(const CommandState& state) {
   const QJsonObject end = state.object(kEndPick);
   const Selection& items = state.items(kAt);
-  if (end.isEmpty() || items.isEmpty() || str(end, "item") != items.first().describe() ||
+  if (end.isEmpty() || items.isEmpty() || str(end, "item") != items.first().logDescription() ||
       str(end, "occurrence") != items.first().occurrence) {
     return {};
   }
@@ -1590,7 +1590,7 @@ bool hoverTakes(const Shared& shared, const QString& role, const SelectionItem& 
 // Profile, Linear Component and Timber's modes that place on a member's face.
 void hoverPickOnly(const Shared& shared, const QString& role, const SelectionItem& item, CommandState& state) {
   const QString shown = state.object(kHoverPick).value(QStringLiteral("item")).toString();
-  const QString now = hoverTakes(shared, role, item, state) ? item.describe() : QString();
+  const QString now = hoverTakes(shared, role, item, state) ? item.logDescription() : QString();
   if (now != shown) {
     state.setObject(kHoverPick, now.isEmpty() ? QJsonObject() : QJsonObject{{QStringLiteral("item"), now}});
     qInfo().noquote() << (now.isEmpty() ? QStringLiteral("BUILD hover pick: off the parts' faces")
@@ -2002,7 +2002,7 @@ void fillFromClick(const Shared& shared, const QString& role, bool profile, Comm
     return;
   }
   const SelectionItem& item = state.items(kAt).first();
-  end.insert(QStringLiteral("item"), item.describe());
+  end.insert(QStringLiteral("item"), item.logDescription());
   end.insert(QStringLiteral("occurrence"), item.occurrence);
   end.insert(QStringLiteral("straight"), straightOf(end));
   state.setObject(kEndPick, end);
@@ -2146,7 +2146,7 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
           })
           .withOnPick(
               [](const SelectionItem& item, CommandState&, const CommandContext&) {
-                qInfo().noquote() << QStringLiteral("BUILD length to a face: %1").arg(item.describe());
+                qInfo().noquote() << QStringLiteral("BUILD length to a face: %1").arg(item.logDescription());
               },
               false)
           .withTooltip(QObject::tr("The face, plane or profile end the length ends at, beside the component too")),
@@ -2361,7 +2361,7 @@ CommandDef placeCommand(const SharedPtr& shared, DocumentHost& host, const QStri
     if (!awaitsPoint(state)) {
       return false;
     }
-    qInfo().noquote() << QStringLiteral("BUILD plane choice taken out (Esc): %1").arg(state.items(kAt).first().describe());
+    qInfo().noquote() << QStringLiteral("BUILD plane choice taken out (Esc): %1").arg(state.items(kAt).first().logDescription());
     state.setItems(kAt, {});
     state.setObject(kAtPick, {});
     state.setObject(kOnPlane, {});
@@ -2377,8 +2377,8 @@ CommandDef placeCommand(const SharedPtr& shared, DocumentHost& host, const QStri
     // origin, wherever the preview follows the mouse (mitcad#1196).
     CommandState placing = state;
     if (awaitsPoint(state)) {
-      placing.setObject(kAtPick, QJsonObject{{QStringLiteral("item"), state.items(kAt).first().describe()}});
-      qInfo().noquote() << QStringLiteral("BUILD on %1: placed at its origin").arg(state.items(kAt).first().describe());
+      placing.setObject(kAtPick, QJsonObject{{QStringLiteral("item"), state.items(kAt).first().logDescription()}});
+      qInfo().noquote() << QStringLiteral("BUILD on %1: placed at its origin").arg(state.items(kAt).first().logDescription());
     }
     const Placement placed = placement(*shared, role, placing, context, part, profile);
     if (!placed.problem.isEmpty()) {
@@ -6876,7 +6876,7 @@ CommandDef lengthCommand(DocumentHost& host, const CommandContext& context) {
       } else if (!targets.isEmpty()) {
         const std::optional<QString> path = build::pathFromHost(targets.first(), model);
         if (!path) {
-          host.showStatus(QObject::tr("%1 is not in %2, where the Build tab places components.").arg(targets.first().describe(), build::buildHost(model).name), NoticeLevel::Error);
+          host.showStatus(QObject::tr("%1 is not in %2, where the Build tab places components.").arg(model.itemText(targets.first()), build::buildHost(model).name), NoticeLevel::Error);
           return false;
         }
         bind.insert(QStringLiteral("geometry"), targets.first().reference());

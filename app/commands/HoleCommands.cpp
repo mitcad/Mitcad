@@ -964,12 +964,11 @@ QString fitText(const CommandState& state, const CommandContext&) {
 // ---------------------------------------------------------------------------
 // Print shapes for holes printed lying (mitcad#1515): Print Shape Round,
 // Teardrop or Flat Roof, whose Roof Sag is the printed fit hole_roof_sag.
-// The model points the roof away from the print bed face; the panel offers
-// it when a body of the design has one (or the hole has a print shape).
+// The model points the roof away from the print bed face, up the design's
+// Z when no body the hole cuts has one; the panel offers it on every hole
+// that can have one, with or without a print bed face (mitcad#1744).
 const QString kPrintShape = QStringLiteral("print_shape");
 const QString kRoofSag = QStringLiteral("roof_sag");
-// A check of the state that no input shows: the design has a print bed face.
-const QString kHasPrintBed = QStringLiteral("has_print_bed");
 const QString kRound = QStringLiteral("round");
 const QString kFlatRoof = QStringLiteral("flat_roof");
 
@@ -977,25 +976,14 @@ const QVector<QPair<QString, QString>> kPrintShapes{{kRound, QStringLiteral("Rou
                                                     {QStringLiteral("teardrop"), QStringLiteral("Teardrop")},
                                                     {kFlatRoof, QStringLiteral("Flat Roof")}};
 
-// Notes in the state whether a body of the design has a print bed face.
-void notePrintBed(CommandState& state, const CommandContext& context) {
-  bool found = false;
-  try {
-    for (const QJsonValue& body : context.queryArray(QStringLiteral("bodies"))) {
-      found = found || body.toObject().contains(QStringLiteral("print_bed_face"));
-    }
-  } catch (const std::exception&) {
-    // No bodies to tell: none.
-  }
-  state.setChecked(kHasPrintBed, found);
-}
-
-// Print Shape: with a print bed face, or on a hole that has a print shape;
-// not for a press fit or a modelled thread, which the model cuts as they are.
+// Print Shape: on every hole but a press fit, a modelled or tapering
+// thread and a tapered hole, which the model cuts as they are and refuses
+// a print shape for (HoleDef::validate in core/model/src/features/hole.rs).
 bool printShapeOffered(const CommandState& state) {
-  const bool modeledThread =
-      state.choice(QStringLiteral("tap")) == QStringLiteral("tapped") && state.checked(QStringLiteral("modeled"));
-  return !pressFit(state) && !modeledThread && (state.checked(kHasPrintBed) || state.choice(kPrintShape) != kRound);
+  const bool tapped = state.choice(QStringLiteral("tap")) == QStringLiteral("tapped");
+  const bool roundThread = tapped && (state.checked(QStringLiteral("modeled")) || tapers(state));
+  const bool tapered = !tapped && nonZero(state, QStringLiteral("taper"));
+  return !pressFit(state) && !roundThread && !tapered;
 }
 
 bool flatRoof(const CommandState& state) { return printShapeOffered(state) && state.choice(kPrintShape) == kFlatRoof; }
@@ -1021,8 +1009,8 @@ void offerRoofSag(CommandState& state, const CommandContext&) {
 QVector<InputDef> printShapeInputs() {
   return {
       choiceInput(kPrintShape, QObject::tr("Print Shape"), kPrintShapes, kRound)
-          .withTooltip(QObject::tr("For a hole lying on its side: a roof that prints unsupported, pointing away "
-                                   "from the print bed"))
+          .withTooltip(QObject::tr("The roof points away from the print bed face, or up (+Z) if none is set; "
+                                   "see Set as Print Bed Face"))
           .withOnChange(offerRoofSag)
           .withVisible(printShapeOffered),
       valueInput(kRoofSag, QObject::tr("Roof Sag"), ValueKind::Length, QStringLiteral("0.4 mm"))
@@ -1095,6 +1083,10 @@ CommandDef holeCommand(const CommandContext& context) {
           .withVisible(keptIs(QStringLiteral("cylinder_offset"))),
   };
   def.inputs += placeInputs(place);
+  // The handles at the hole where its component is seen (mitcad#1743); its
+  // preview shows the material it removes, see-through red as a cut's.
+  def.handlesSeenAt = [](const CommandState& state, const CommandContext& model) { return placeSeenAt(state, model); };
+  def.cutPreview = true;
   def.inputs += {
       selectionInput(QStringLiteral("points"), QObject::tr("Sketch Points"),
                      SelectKind::SketchPoint | SelectKind::SketchCurve, 1, 0)
@@ -1242,7 +1234,6 @@ CommandDef holeCommand(const CommandContext& context) {
 
   def.init = [place](CommandState& state, const CommandContext& model) {
     initPlace(state, model, place);
-    notePrintBed(state, model);
   };
 
   def.build = [place](const CommandState& state, const CommandContext& model) {
@@ -1497,7 +1488,6 @@ CommandDef holeCommand(const CommandContext& context) {
       loadPressFit(fit, feature, state, context);
     }
     // A hole's print shape and its flat roof's sag (mitcad#1515).
-    notePrintBed(state, context);
     state.setChoice(kPrintShape, feature.value(kPrintShape).toString(kRound));
     loadValue(state, kRoofSag, feature.value(kRoofSag), feature, context);
     markLoaded(feature, state, context);

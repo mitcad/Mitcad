@@ -404,6 +404,7 @@ impl Document {
         for (report, feature) in found.iter_mut().zip(&imported) {
             report["hidden"] = json!(feature.bodies.iter().any(|b| hidden.contains(&b.uid)));
             report["feature"] = json!(feature.feature.uid);
+            report["feature_name"] = json!(feature.feature.name);
             report["bodies"] = json!(
                 feature
                     .bodies
@@ -821,9 +822,16 @@ impl Document {
             let solid = kind == Some(mitcad_model::BodyKind::Solid);
             let mesh = kind == Some(mitcad_model::BodyKind::Mesh);
             let uid = body.uid.to_string();
+            // The feature's name for a person, its uid for agents.
+            let feature_name = self
+                .0
+                .feature(body.uid.feature)
+                .map(|f| f.name.clone())
+                .unwrap_or_default();
             found.push(json!({
                 "source": body.name,
                 "feature": uid.split('.').next().unwrap_or_default(),
+                "feature_name": feature_name,
                 "solid": solid,
                 "mesh": mesh,
                 // A mesh body has no surfaces to check (null when the

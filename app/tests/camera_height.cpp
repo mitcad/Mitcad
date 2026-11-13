@@ -5,7 +5,8 @@
 // what OcctViewer::setCamera does) shows the same extent again, in views
 // wider and taller than wide and in both projections. Setting the height
 // as the scale, as setCamera did before, showed a view taller than wide
-// zoomed out by 1/aspect.
+// zoomed out by 1/aspect. The focal length (mitcad#1717): its field of
+// view, set with the same height at the target.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -108,10 +109,58 @@ void cameraTests() {
   }
 }
 
+bool within(double a, double b, double tolerance) { return std::abs(a - b) <= tolerance; }
+
+// The focal length (mitcad#1717): mm on a 35 mm frame to the field of view
+// and back, and a new field of view that keeps the height at the target.
+void focalLengthTests() {
+  using mitcad::fieldOfViewForFocalLength;
+  using mitcad::focalLengthForFieldOfView;
+  CHECK(within(fieldOfViewForFocalLength(35.0), 37.85, 0.01));
+  CHECK(within(fieldOfViewForFocalLength(50.0), 26.99, 0.01));
+  // The default of 29 mm is OCCT's 45 degrees, within a tenth of a degree.
+  CHECK(within(fieldOfViewForFocalLength(29.0), 45.0, 0.1));
+  CHECK(within(fieldOfViewForFocalLength(20.0), 61.93, 0.01));
+  CHECK(within(fieldOfViewForFocalLength(70.0), 19.46, 0.01));
+  for (const double focalLength : {20.0, 29.0, 35.0, 50.0, 70.0}) {
+    CHECK(nearly(focalLengthForFieldOfView(fieldOfViewForFocalLength(focalLength)), focalLength));
+  }
+  for (const double aspect : {0.6, 1.6}) {
+    for (const bool perspective : {false, true}) {
+      occ::handle<Graphic3d_Camera> camera = viewCamera(aspect, perspective);
+      camera->SetScale(50.0);
+      const gp_Pnt centre = camera->Center();
+      const gp_Dir direction = camera->Direction();
+      const double height = camera->ViewDimensions().Y();
+      const double perspectiveHeight =
+          2.0 * camera->Distance() * std::tan(camera->FOVy() * 3.14159265358979323846 / 360.0);
+      for (const double focalLength : {35.0, 50.0, 20.0, 70.0, 29.0}) {
+        mitcad::setFieldOfViewKeepingHeight(*camera, fieldOfViewForFocalLength(focalLength));
+        CHECK(nearly(camera->FOVy(), fieldOfViewForFocalLength(focalLength)));
+        // The same height at the same target, seen along the same line.
+        CHECK(nearly(camera->ViewDimensions().Y(), height));
+        CHECK(camera->Center().Distance(centre) <= 1e-9 * camera->Distance());
+        CHECK(camera->Direction().IsEqual(direction, 1e-12));
+        // The eye moved as far as a perspective needs for that height.
+        CHECK(nearly(2.0 * camera->Distance() * std::tan(camera->FOVy() * 3.14159265358979323846 / 360.0),
+                     perspectiveHeight));
+      }
+      // A field of view that makes no camera changes nothing.
+      const double fov = camera->FOVy();
+      const double distance = camera->Distance();
+      for (const double wrong : {0.0, -10.0, 180.0, std::numeric_limits<double>::quiet_NaN()}) {
+        mitcad::setFieldOfViewKeepingHeight(*camera, wrong);
+        CHECK(camera->FOVy() == fov && camera->Distance() == distance);
+      }
+    }
+  }
+}
+
 } // namespace
 
 int cameraHeightTests() {
   scaleTests();
   cameraTests();
+  focalLengthTests();
   return failures;
 }

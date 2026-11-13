@@ -398,7 +398,9 @@ color alone. The model carries the level as data (mitcad#1040): a
 (`notice.rs`), with the levels `error`, `warning` and `info`; success,
 hint and progress are the frontends' own.
 
-**What a message says** (mitcad#1327):
+**What a text says** (mitcad#1327, mitcad#1741; called "What a message
+says" before it covered every text): the rules below hold for messages and
+for every other text a person sees.
 
 - A warning reports a fault in the result, never the internal method that
   built it. A fillet built as rings, with the faces' cut-outs cleared, or
@@ -413,7 +415,8 @@ hint and progress are the frontends' own.
   Check the result.", not "the fillet of edge E{…} reaches … past the edge
   of face F4:side(…)".
 - The places a notice is about (faces, edges and vertices of a body, a
-  region of a sketch, a point, a small box) are its `places`, which keep
+  region of a sketch, a point, a small box, an occurrence with every body
+  it places) are its `places`, which keep
   the names for agents
   and logs. Where a notice is shown, the pointer over it paints its places
   in the view as the selection preview draws them, seen through what
@@ -439,11 +442,17 @@ a person never contains
   `F57`, a body's `F2.b0`;
 - coordinates: `(28.28, -28.28, 202)`, a sketch's `(1.5, -2)`.
 
-That holds for every place a person reads it: the status bar and the
-Floating message band, notices, Timeline and Browser tooltips, the command
-panel, dialogs, sketch refusals, and export and import errors ("a face
-could not be triangulated (its surface: plane)", not "… F1:side0
-(cylinder)"). The message says what is wrong in words: "the chamfer
+That holds for every place a person reads it, not only messages
+(mitcad#1741): the status bar and the Floating message band, notices, the
+selection card (the idle card: a selected profile is "Profile of
+Sketch3" with its area and perimeter, never its region key), the command
+panel's rows and lists, labels and cards, Timeline and Browser rows and
+their tooltips, every tooltip, menus, dialogs and window titles, sketch
+refusals, and export and import errors ("a face could not be triangulated
+(its surface: plane)", not "… F1:side0 (cylinder)"). An item is named by
+its kind and its owner's name (`pickListText`,
+`CommandContext::itemText`, `sketchItemCard`), never by
+`SelectionItem::logDescription()`, which is for logs, keys and agents. The message says what is wrong in words: "the chamfer
 reaches exactly to the far edge of the face beside it, so that face would
 end in a point; make the chamfer a little smaller or larger". The place is
 painted while the pointer is over it, through the error's places (faces,
@@ -480,6 +489,24 @@ edges, vertices, points).
   (mitcad#1644). Old texts and imported ones are still cleaned on
   the way (bare names and body uids become words, a coordinate tuple a
   point place), but new messages are written plain from the start.
+- **The guard over the UI** (mitcad#1741). Every Linux UI test reads all
+  the text the application shows after each step
+  (`app/framework/VisibleTextGuard.cpp`, with `MITCAD_TEST_TEXT_GUARD`
+  set by `tools/ui-test-lib.sh`): labels and rich text of panels and
+  cards, buttons, tabs, read-only fields and text views, the status bar
+  and the message band, every shown widget's tooltip and shown tooltips,
+  the rows of item views in sight (the Browser) with their tooltips,
+  shown menus, window titles and the Timeline's cells. A topological
+  name (`E{`, `V{`, `F3:side`, `F1:top`), a region key (`r{`) or a bare
+  internal id as a whole word (`F57`, `F2` of `F2.b0`, `O3`, `k12`,
+  `p15`, `c4`; not a function key, `Ctrl+F6`, `(F6)`, `F2` alone) fails
+  the test with the widget's object path and the text ("Identifier in
+  visible text: …"). Fields a person types in are theirs and not read.
+  `tools/ui-visible-text-allow.txt` allows a token only where it is a
+  test's own typed data, each entry with its reason; a text the
+  application makes up is fixed instead. `repo.ui-strings` refuses
+  `logDescription()` inside a `tr()` text's `.arg()` chain or a text
+  setter's arguments.
 
 | Level | Qualifies when | Examples | Word in the UI |
 |---|---|---|---|
@@ -722,7 +749,11 @@ fails on:
   capitalised word) and is not a system menu item or a title the code
   compares with (`kObjcAllowed`, rule 10): AppKit texts go through
   `QObject::tr`;
-- a value quoted as `'{x}'` in a Rust string (rule 6).
+- a value quoted as `'{x}'` in a Rust string (rule 6);
+- `SelectionItem::logDescription()` (an item's internal name and its
+  owner's id, for logs) inside the arguments of a `tr()` text and its
+  `.arg()` chain or of a text setter (`setText`, `setToolTip`,
+  `showStatus`, `showError`, …; mitcad#1741, "What a text says").
 
 The commands' developer document (`app/COMMANDS.md`) is read for the
 British spellings only (`--spelling`, mitcad#1478): it names code, log

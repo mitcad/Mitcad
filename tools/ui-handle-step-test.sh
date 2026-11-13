@@ -191,6 +191,10 @@ edge_handle() {
 }
 
 ui_start_display
+# Parts built over the origin, beside which an origin plane is clicked:
+# the origin as 100 mm Centered squares (ui_origin_in_millimeters,
+# mitcad#1748).
+ui_origin_in_millimeters
 
 echo "=== A 10 mm cube framed"
 open_design cube

@@ -45,6 +45,9 @@ pub struct EditReport {
     /// Own parameters of dimensions kept as user parameters because the
     /// dimension's new value uses them (mitcad#1535).
     pub kept: Vec<KeptParameter>,
+    /// The id of the step that recorded what the edit made (mitcad#1750,
+    /// `steps.rs`), set by the document.
+    pub step: Option<u32>,
 }
 
 /// A dimension's own parameter kept as a user parameter (mitcad#1535):

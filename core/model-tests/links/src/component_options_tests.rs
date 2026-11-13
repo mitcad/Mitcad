@@ -549,8 +549,10 @@ fn a_linked_design_with_options_outside_the_project_is_not_read() {
     }
     let mut reopened = Document::from_json(&value.to_string(), MockKernel::default()).unwrap();
     let messages = reopened.update_links(Some(&dir)).unwrap();
-    let refused = "board: the link outside the project is not followed (../../outside.mitcad); \
-                   it keeps the design saved with the project";
+    let refused = "board: the file is outside the project, so the link is not followed and \
+                   it keeps the design saved with the project; to follow it, move the file into \
+                   the project, or make the folder that holds both a project (File › Project › \
+                   New Project…), then Update Link";
     assert_eq!(messages, [refused]);
     mitcad_model::testing::remove_temp(&dir);
 }

@@ -621,6 +621,15 @@ public:
   // in the view in place of the selection, or with Ctrl or Shift added to
   // it or taken out of it; false for an id the sketch lacks.
   bool selectItem(const QString& id, Qt::KeyboardModifiers modifiers);
+  // A step of the step list clicked (mitcad#1750): its items selected in
+  // the view in place of the selection; with Ctrl or Shift added to it,
+  // or taken out of it when all of them are in it. Ids the sketch lacks
+  // are left out; false when none is left.
+  bool selectItems(const QStringList& ids, Qt::KeyboardModifiers modifiers);
+  // A constraint or dimension highlighted in the view as the pointer over
+  // it does (mitcad#1750: a row of the step list's hover list); empty for
+  // none.
+  void setHoverAnnotation(const QString& id);
   // Body edges and vertices in the sketch plane (mitcad#256, mitcad#258), for
   // the tool that picks or snaps to them: the model's plane_geometry query,
   // read once per tool session and again after the bodies it reads changed
@@ -655,6 +664,9 @@ protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+  // The selection item of a point, curve, constraint or dimension of this
+  // sketch (selectItems); false for an id the sketch lacks.
+  bool selectionItemOf(const QString& id, SelectionItem& item) const;
   struct Field {
     FieldSpec spec;
     QPointer<QLineEdit> edit;
@@ -666,6 +678,8 @@ private:
     // The user types into this one: typed into it or moved to it with Tab.
     // Until then the mouse passes it to the view (mitcad#671).
     bool engaged = false;
+    // Its width before its text grows it (mitcad#1724).
+    int baseWidth = 0;
   };
 
   bool viewerEvent(QEvent* event);
@@ -678,6 +692,11 @@ private:
   void updateCursor(const QPointF& position);
   void placeFields();
   void fieldEdited(int index);
+  // A drawing tool's field as wide as its text, from its own width up to a
+  // third of the view (mitcad#1724); true when its width changed.
+  bool fitField(Field& field);
+  // The value editor likewise, kept inside the view.
+  void fitEditor();
   void acceptEditor();
   void closeEditor();
   // An error of `source` (mitcad#1621): error() and the value editor's own.
@@ -878,6 +897,7 @@ private:
   std::function<void(const QString&)> m_editorAccept;
   std::optional<int> m_editorToolSession; // a callback belonging to this tool session
   QPointer<QLabel> m_editorLabel; // "d3 =" before the editor (mitcad#231)
+  int m_editorBaseWidth = 0;       // its width before its text grows it (mitcad#1724)
   QString m_editorDimension;       // the dimension it edits
   QString m_editorText;            // the text it opened with
   QString m_editorName;            // the name its text opened with (mitcad#1577)

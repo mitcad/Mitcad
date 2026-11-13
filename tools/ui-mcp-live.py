@@ -52,7 +52,10 @@ TIMEOUT = 60
 FRAME_LIMIT = 8 * 1024 * 1024
 LIVE_TOOLS = {"document_list", "model_query", "model_command", "document_save", "document_open", "ui_state", "ui_log",
               "ui_screenshot", "ui_select", "ui_command", "ui_camera", "model_export", "model_reference",
-              "document_new", "model_render"}
+              "document_new", "model_render",
+              # The input tools of a run started with --mcp-folder, as these tests
+              # start it (mitcad#1735).
+              "ui_click", "ui_type", "ui_dialog"}
 # The projection of the block's bottom face in the sketch F4, as the
 # design's definition lists it.
 PROJECTED = ["p1", "p2", "c3", "p4", "c5", "p6", "c7", "c8"]

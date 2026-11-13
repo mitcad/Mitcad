@@ -57,6 +57,7 @@ the probe cannot use the document's tools or replace its conversation.
 | `core/solidcraft` (`mitcad-solidcraft`) | Rust | `.solidcraft` designs: the JSON document or its container, upgraded from any file format to one by SolidCraft's own steps (`third_party/solidcraft`), typed sketches and feature kinds, expressions in MitCad's language. No geometry. |
 | `core/dxf` | Rust | DXF read and write. |
 | `core/dwg` (`mitcad-dwg`) | Rust | `.dwg` drawings, R13 to R2018: the containers and their compression, header variables, classes, the object map, objects, the data storage; the 3D content (B-rep records parsed by `core/asm`, meshes, blocks and inserts) and the plan of components; the writer of 2D drawings in R2000 for the drawing export (mitcad#728) ([README](../core/dwg/README.md)). No geometry. |
+| `core/3dm` (`mitcad-3dm`) | Rust | `.3dm` models, format versions 5 to 8 (mitcad#1715): the chunks, the settings (units, tolerance), layers, block definitions and the object table with attributes; B-reps, extrusions, NURBS, plane, revolution and sum surfaces, the curve classes, meshes and block instances; their conversion to the neutral B-rep model of `core/asm` in millimetres; a writer of sample models for the tests ([README](../core/3dm/README.md)). No geometry. |
 | `core/3mf` (`mitcad-3mf`) | Rust | 3MF writer (one object of parts) and a checking reader for tests. |
 | `core/usdz` (`mitcad-usdz`) | Rust | USDZ writer: the binary USD layer (crate format 0.8.0, LZ4 and USD's integer coding written here, no USD library) of a scene of meshes, `Xform`s and `UsdPreviewSurface` materials, packed with its textures 64-byte aligned; time-sampled transforms of an animated scene (mitcad#1597); a checking reader for tests (mitcad#123). |
 | `core/vcs` (`mitcad-vcs`) | Rust | Version history of projects in git (gitoxide, only here); remotes through the system's git; component libraries and community indexes in git repositories ([libraries.md](libraries.md)). |
@@ -1704,7 +1705,10 @@ them through operations and derives edge names.
   the current curves (`sketch::regions::Layout`, mitcad#407): its segments
   as stretches of their curves between the same neighbours; when they close
   a loop, the regions inside it are its pieces (a region an edit split stays
-  selected whole); else the region with the most curves in common. The main
+  selected whole), less a hole the edit took across the outline (an area
+  the other curves bound alone, holding no corner of the loop and lying
+  mostly inside it, mitcad#1740); else the region with the most curves in
+  common. The main
   piece keeps the old key, and the feature warns.
 - **Renamed faces** (mitcad#272, `core/model/src/features/renamed.rs`):
   a sketch edit that gives a segment another neighbour renames its side
@@ -2892,7 +2896,9 @@ not recompute.
   locks guard model commands, and replacing the document invalidates its
   handle. `ui_command` runs registry commands through the panel's own
   actions (`CommandSession::scriptInputs`) and closes any modal dialog it
-  opens (`mcp::ModalGuard`); `ui_log` reads a ring of the application's log
+  opens (`mcp::ModalGuard`); a dialog already open waits for the user, and
+  the refusals and `ui_state`'s `dialog` name it (`mcp::dialogRefusal`,
+  mitcad#1725); `ui_log` reads a ring of the application's log
   lines (`mcp/LogRing`). The agent indicator (`mcp/AgentIndicator`,
   mitcad#710), beside the project indicator, names the initialized sessions
   and can disconnect them. A listener binds only
@@ -4183,7 +4189,12 @@ expressions). Formats: [libraries.md](libraries.md).
   folder, stays in the design's project (its folder without one);
   anything else is reported and not read, so a design file does not
   choose files outside its project for the model to open. A new link
-  records a file in the project relative to the design's folder.
+  records a file in the project relative to the design's folder. Before
+  linking, the application asks `link_check`, and a file outside can be
+  copied into the project's `parts/` folder with the designs it links
+  outside too, the copies relinked and made single files
+  (`insert_component`'s `copy_into_project`, `document/link_copies.rs`,
+  mitcad#1719).
 - **Versions per part.** A part records the commit the user chose when
   inserting it; `update_links` reads that commit, never a newer one, and
   only `update_library_parts` (an undo step) moves a part to another
@@ -4421,6 +4432,19 @@ through `asm::text`) and built by the imports' B-rep builder, its 3D
 faces and meshes become mesh bodies, one base feature per component and
 layer (`core/ffi/src/dwg_import.rs`; the `import_dwg` command), in the
 import process like the others.
+
+`.3dm` models (mitcad#1715) hold no history either: `core/3dm` reads the
+archive and converts its B-reps (their topology kept, an edge on a
+polycurve split into one edge per segment, the trim curves left to OCCT),
+extrusions and untrimmed surfaces to the neutral B-rep model, which the
+imports' B-rep builder builds; a B-rep it cannot build comes in as its
+saved render mesh. Each block is a component, each rigid instance an
+occurrence, scaling or mirroring instances copied in place; one base
+feature per component and layer (`core/ffi/src/import_3dm.rs`; the
+`import_3dm` command), in the import process. The reader checks every
+length and count of the untrusted file against its chunk, nests chunks
+64 deep at most and checks the values the B-spline code relies on
+([its README](../core/3dm/README.md#untrusted-files)).
 
 `.rvt` projects and `.rfa` families (mitcad#274, mitcad#275, mitcad#333): `core/rvt`
 reads the container (the compound file module shared with `core/ipt` as

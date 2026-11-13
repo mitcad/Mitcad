@@ -302,7 +302,9 @@ void CutTargetsPanel::rebuild() {
     if (!reason.isEmpty()) { text += QStringLiteral(" — ") + reason; }
     if (!note.isEmpty()) { text += QStringLiteral(" — ") + note; }
     auto* item = new QTreeWidgetItem(m_tree, {text});
-    item->setToolTip(0, text + QStringLiteral("\n") + component + QStringLiteral(" @ ") + (path.isEmpty() ? tr("Root") : path));
+    // In words (mitcad#1741): the component's and the occurrences' ids are
+    // the row's data.
+    item->setToolTip(0, text);
     item->setData(0, kTargetRole, identity(row));
     item->setData(0, kBodiesRole, row.value(QStringLiteral("bodies")).toArray());
     item->setData(0, NativeControlIdentifierRole, QStringLiteral("cut_target_") + component + QLatin1Char('@') + path);

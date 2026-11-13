@@ -34,6 +34,25 @@ int pendingToClose(const std::vector<quint64>& pendingSince, int most) {
   return static_cast<int>(oldest);
 }
 
+int pendingToClose(const std::vector<quint64>& pendingSince, const std::vector<qint64>& waitedMs, int most,
+                   qint64 graceMs, int hardMost) {
+  const auto count = static_cast<qsizetype>(pendingSince.size());
+  if (count < static_cast<qsizetype>(most) || waitedMs.size() != pendingSince.size()) {
+    return pendingToClose(pendingSince, most);
+  }
+  if (count >= static_cast<qsizetype>(hardMost)) {
+    return pendingToClose(pendingSince, 1);
+  }
+  int oldest = -1;
+  for (std::size_t index = 0; index < pendingSince.size(); ++index) {
+    if (waitedMs[index] >= graceMs &&
+        (oldest < 0 || pendingSince[index] < pendingSince[static_cast<std::size_t>(oldest)])) {
+      oldest = static_cast<int>(index);
+    }
+  }
+  return oldest;
+}
+
 bool clientSlotFree(int authenticated, int most) { return authenticated < most; }
 
 bool sameToken(const QString& given, const QString& expected) {

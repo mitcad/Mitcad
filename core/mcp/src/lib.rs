@@ -165,6 +165,10 @@ struct Session<B> {
     /// The user's preference that agents may resolve comments (mitcad#1119);
     /// the live application sets it, the headless server never does.
     may_resolve_comments: bool,
+    /// Live MCP's input tools (mitcad#1735): ui_click, ui_type and
+    /// ui_dialog, which the application allows only in a run started with
+    /// --mcp-folder; never in the headless server.
+    input_tools: bool,
     /// The resources the client subscribed to (live profile).
     subscriptions: BTreeSet<String>,
     /// The `comments` query's answer as the application last gave it
@@ -182,6 +186,7 @@ impl<B: Backend> Session<B> {
             vocabulary,
             author: comments::DEFAULT_AUTHOR.to_owned(),
             may_resolve_comments: false,
+            input_tools: false,
             subscriptions: BTreeSet::new(),
             comments: None,
         }
@@ -219,6 +224,11 @@ impl<B: Backend> Session<B> {
     fn tools(&self) -> Vec<Value> {
         match self.profile {
             Profile::Headless => catalog::tools(),
+            Profile::Live if self.input_tools => {
+                let mut tools = catalog::live_tools();
+                tools.extend(catalog::input_tools());
+                tools
+            }
             Profile::Live => catalog::live_tools(),
         }
     }
@@ -649,6 +659,13 @@ impl LiveSession {
     /// comments (mitcad#1119): off, `resolve_comment` is refused.
     pub fn set_may_resolve_comments(&mut self, allowed: bool) {
         self.session.may_resolve_comments = allowed;
+    }
+
+    /// Whether the application allows the input tools (mitcad#1735):
+    /// ui_click, ui_type and ui_dialog are listed and accepted only then (a
+    /// run started with --mcp-folder, not the chat's own connection).
+    pub fn set_input_tools(&mut self, allowed: bool) {
+        self.session.input_tools = allowed;
     }
 
     /// Wrap the application's result and release the pending request ID.

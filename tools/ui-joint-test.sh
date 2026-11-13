@@ -21,6 +21,10 @@
 #   - Joint Origin on the cap's top face in the cap's component (activated
 #     with its radio button), 5 mm up; As-Built Joint of the cap to the
 #     plate; Rigid Group of the pin and the cap, picked in the browser.
+#   - mitcad#1745: a cylindrical joint whose origin B is on the side that
+#     moves (a collar a move places, joined to the grounded plate): the
+#     collar goes where its origin meets the plate's at the offset, and an
+#     edited Offset moves it.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-joint-test.sh [screenshot.png]
@@ -265,6 +269,113 @@ check "the saved design has the joints, the joint origin and the group" \
   '{"expect": {"query": {"query": "datum", "uid": "F8"}, "result": {"origin": [5, 5, 10]}}}'
 
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+
+# mitcad#1745 (GitHub #296): a joint whose origin B is on the side that
+# moves. Collar (C4, Collar:1 O4): a cylinder of diameter 20 and height 10,
+# placed aside by a move in the timeline, added by mitcad-cli to the saved
+# design. A cylindrical joint from the grounded plate's top (A) to the
+# collar's top (B), Offset -30 mm: the preview moves the collar so that its
+# origin meets the plate's at the offset (not only onto the axis where it
+# was nearest), and an edited Offset moves it by the change.
+echo "--- Joint: the collar onto the grounded plate, cylindrical"
+ui_stop_app
+cat > "$WORK/collar.json" << 'EOF'
+[
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "create_component", "name": "Collar"},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [0, 0],
+    "diameter": 20, "height": 10, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "add_feature", "def": {"type": "move_occurrence", "occurrences": ["O4"],
+    "transform": {"type": "translate_xyz", "x": 120, "y": 0, "z": 0}}},
+  {"expect": {"occurrence": "Collar:1", "body": "Body4", "center": [120, 0, 5], "tolerance": 1e-6}}
+]
+EOF
+"$CLI" run "$WORK/collar.json" --open "$FILE" --save "$WORK/collar.mitcad" > "$WORK/collar.log" 2>&1 ||
+  { cat "$WORK/collar.log"; ui_fail "the collar added by mitcad-cli"; }
+FILE=$WORK/collar.mitcad
+COLLAR=$(python3 -I -c '
+import json, sys
+design = json.load(open(sys.argv[1], encoding="utf-8"))
+component = [c["uid"] for c in design["components"] if c["name"] == "Collar"][0]
+print([f["uid"] for f in design["features"] if f.get("component") == component and f["type"] == "cylinder"][0])
+' "$FILE")
+[ -n "$COLLAR" ] || ui_fail "the collar's cylinder"
+UI_WINDOW_WAIT=60 ui_start_app --open "$FILE"
+for _ in $(seq 1 300); do
+  grep -qF -- "Opened $FILE" "$UI_LOG" && break
+  sleep 0.2
+done
+ui_expect_log "Opened $FILE" "the design with the collar opened"
+ui_wait_idle
+ui_step "fit (F6)"                       ui_key F6
+ui_mark
+ui_step "joint (J)"                      ui_key j
+ui_expect_new "Command Joint started" "Joint started"
+ui_step "pick the plate's top face"      ui_click_pick "face F2.b0/F2:end("
+ui_expect_log "Joint Origin A: 1 face [face F2:end($RECT) of F2.b0 in O1]" "origin A on the grounded plate"
+ui_mark
+ui_step "pick the collar's top face"     ui_click_pick "face $COLLAR.b0/$COLLAR:top"
+ui_expect_log "Joint Origin B: 1 face [face $COLLAR:top of $COLLAR.b0 in O4]" "origin B on the collar"
+ui_expect_new "Preview Joint moves O4" "the collar is the side that moves"
+ui_step "cylindrical"                    ui_choose "Panel Joint input kind" 3
+ui_expect_log "Joint: Type = Cylindrical" "cylindrical"
+ui_mark
+ui_step "offset -30"                     ui_type_in "Panel Joint input offset" "-30"
+ui_expect_new "Preview Joint moves O4" "the preview moves the collar to the offset"
+ui_expect_log "Manipulator Joint offset at" "the offset's arrow"
+# The preview with the handles on the plate's top, the arrow reaching the
+# collar's top (beside the screenshot asked for, "-collar").
+[ -n "$SHOT" ] && ui_capture "${SHOT%.png}-collar.png"
+ui_mark
+ui_step "OK (Enter)"                     ui_key Return
+ui_expect_new "Added joint Joint2 (cylindrical): placed" "the collar placed by the joint"
+save
+check "the collar's top 30 mm above the plate's top, on its middle" \
+  '{"expect": {"occurrence": "Collar:1", "body": "Body4", "center": [20, 20, 35], "tolerance": 1e-6}}' \
+  '{"expect": {"query": {"query": "joints"}, "result": {"joints": [{"name": "Joint1"}, {"name": "AsBuiltJoint1"}, {"name": "Joint2", "kind": "cylindrical", "state": "placed", "values": {"tz": 0, "rz": 0}}]}}}'
+ui_mark
+ui_step "double-click Joint2"            ui_double_click_logged "Timeline Joint2"
+ui_expect_new "Editing $(grep -o 'Added Joint as F[0-9]*' "$UI_LOG" | tail -1 | sed 's/Added Joint as //') with Joint" "editing Joint2"
+ui_step "offset -50"                     ui_type_in "Panel Joint input offset" "-50"
+ui_mark
+ui_step "OK (Enter)"                     ui_key Return
+ui_expect_new "Edited F" "Joint2 edited"
+save
+check "a new offset moves the collar by its change" \
+  '{"expect": {"occurrence": "Collar:1", "body": "Body4", "center": [20, 20, 55], "tolerance": 1e-6}}'
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+
+# What holds the sides, in words and painted (mitcad#1745): the collar
+# grounded too, a new joint of the plate's top on the collar's top cannot
+# move either; the panel says so with the components' names, and the
+# pointer over the message paints both occurrences.
+echo "--- Joint: neither side can move"
+ui_mark
+ui_step "right-click Collar:1"           ui_click_logged "Browser Root/Collar:1" 3
+ui_step "choose Ground"                  ui_menu_choose "Ground"
+ui_expect_new "Ground Collar:1" "the collar grounded"
+ui_mark
+ui_step "joint (J)"                      ui_key j
+ui_expect_new "Command Joint started" "Joint started"
+ui_step "pick the plate's top face"      ui_click_pick "face F2.b0/F2:end("
+ui_expect_log "Joint Origin A: 1 face [face F2:end($RECT) of F2.b0 in O1]" "origin A on the plate"
+ui_step "pick the collar's top face"     ui_click_pick "face $COLLAR.b0/$COLLAR:top"
+ui_expect_log "Joint Origin B: 1 face [face $COLLAR:top of $COLLAR.b0 in O4]" "origin B on the collar"
+ui_expect_log "neither side can move (Plate:1 is grounded, and Collar:1 is grounded) and the joint does not hold" \
+  "the panel says what holds each side"
+grep -E "^Panel Joint message box: .*(O[0-9]|F[0-9]+\.b|E[{]|F[0-9]+:)" "$UI_LOG" &&
+  ui_fail "the panel's message names ids"
+ui_expect_log "Panel Joint message at" "the message is shown"
+ui_mark
+ui_step "point at the message"           xdotool mousemove $(ui_logged_at "Panel Joint message")
+ui_expect_new "Panel Joint message hovered: 2 places" "the message has the two occurrences' places"
+ui_expect_new "Notice hover highlighted: panel: occurrence O1, occurrence O4 (2 drawn)" \
+  "the pointer over it paints the plate and the collar"
+[ -n "$SHOT" ] && ui_capture "${SHOT%.png}-held.png"
+ui_mark
+ui_step "cancel (Esc)"                   ui_key Escape
+ui_expect_new "Command Joint cancelled" "Joint cancelled"
 
 # The reported design of GitHub #256 (mitcad#1701; under
 # MITCAD_MITCAD_REPORTED, never committed): a small mechanism whose Animate

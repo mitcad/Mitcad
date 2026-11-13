@@ -16,8 +16,17 @@
 // size in CSS pixels and painted into every physical pixel. Mouse, wheel,
 // clickAt, the input method's and the popup's rectangles are converted
 // between the view's (logical) and CEF's (physical) coordinates.
+//
+// Each frame at the scale it was painted with (mitcad#1716): every size the
+// view gives CEF is kept with the scale it was given at, and a frame is
+// drawn at the scale of the request its size came from, from the view's top
+// left. During a live resize CEF still delivers frames of the earlier size:
+// they keep their own scale (not stretched to the view), so a resize never
+// alternates between two scales. CEF is told the screen changed only when
+// the screen or its scale does, not on every resize.
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <set>
@@ -25,6 +34,7 @@
 #include <QImage>
 #include <QPointer>
 #include <QRect>
+#include <QSize>
 #include <QString>
 #include <QUrl>
 #include <QVariant>
@@ -133,10 +143,16 @@ private:
   // pixels (viewRect) and the page's zoom (applyZoom).
   double scale() const { return m_scale; }
   // The view's rectangle in CEF's (physical) pixels, at the window's scale,
-  // which it takes (the zoom follows soon after when it changed).
+  // which it takes (the zoom follows soon after when it changed). Each one
+  // given is kept with its scale (m_requests, mitcad#1716).
   CefRect viewRect();
-  // Takes the window's scale and tells CEF: the screen, the size, the zoom.
-  void applyScale();
+  // The screen's rectangle in CEF's (physical) pixels, the whole or its
+  // available part: the window's screen, not the view (mitcad#1716).
+  CefRect screenRect(bool available) const;
+  // Takes the window's scale and tells CEF: the screen (when it or its
+  // scale changed since CEF was last told, or always when `forced`), the size,
+  // the zoom.
+  void applyScale(bool forced = false);
   // The page's zoom set to the scale, unless it is already: after every
   // navigation's commit (Chromium keeps a zoom per site in the browsing
   // profile, which would otherwise apply) and every change of the scale.
@@ -162,8 +178,21 @@ private:
   void logged(const QString& message);
   QString downloadStarting(std::uint32_t id, const QString& suggestedName, const QUrl& url);
   bool downloadRefused(std::uint32_t id) const { return m_refused.count(id) != 0; }
+  // `reason` in words (the user's), `detail` the log's (the bytes and
+  // CEF's interrupt code, mitcad#1716).
   void downloadChanged(std::uint32_t id, qint64 received, qint64 total, DownloadState state, const QString& path,
-                       const QString& reason);
+                       const QString& reason, const QString& detail);
+
+  // A size the view gave CEF, the scale it was given at and the view's own
+  // (logical) size then (mitcad#1716).
+  struct ViewRequest {
+    QSize pixels;
+    double scale = 1.0;
+    QSize logical;
+  };
+  // The request a frame of `pixels` came from: the newest of that size (to
+  // within CEF's rounding, a pixel); null when none is kept.
+  const ViewRequest* requestOf(const QSize& pixels) const;
 
   CefRefPtr<cef::BrowserClient> m_client;
   CefRefPtr<CefBrowser> m_browser;
@@ -177,6 +206,11 @@ private:
   // The scale CEF's pixels are of (mitcad#1657): the window's when CEF last
   // asked for the view's rectangle.
   double m_scale = 1.0;
+  // The sizes given to CEF, newest last, the last few dozen (mitcad#1716).
+  std::deque<ViewRequest> m_requests;
+  // The screen (in CEF's pixels) and the scale CEF was last told of.
+  QRect m_screenTold;
+  double m_scaleTold = 0.0;
   // The last frame's size and scale the log told (mitcad#1654).
   QString m_frameLogged;
   QPointer<QWindow> m_screenWindow; // whose screenChanged() is connected
@@ -185,6 +219,10 @@ private:
   bool m_popupShown = false;
   QRect m_caret;
   std::set<std::uint32_t> m_refused;
+  // The path each download was given, by CEF's id: CEF asks again when it
+  // resumes a broken-off download itself, and an item interrupted before
+  // it wrote anything reports no path (mitcad#1716).
+  std::map<std::uint32_t, QString> m_downloadPaths;
   // What the log said last of each download.
   struct DownloadLog {
     bool seen = false;

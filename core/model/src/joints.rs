@@ -868,6 +868,9 @@ pub struct MotionSpec {
     pub min: Option<f64>,
     pub max: Option<f64>,
     pub target: Option<f64>,
+    /// Where the free motion is when the joint places its moving side
+    /// (the joint's `start`, mitcad#1745); None: nearest to where it is.
+    pub start: Option<f64>,
 }
 
 /// A joint in effect, as the joint solver takes it: each side's frame is
@@ -1180,6 +1183,7 @@ fn motion_specs(
     slide: SlideAxis,
     limits: &crate::features::Limits<ParamId>,
     position: &crate::features::JointPosition<ParamId>,
+    start: &BTreeMap<Motion, f64>,
 ) -> Result<Vec<MotionSpec>, String> {
     let value = |id: Option<&ParamId>| id.map(|id| value_or_zero(params, Some(id))).transpose();
     kind.motions(slide)
@@ -1192,6 +1196,7 @@ fn motion_specs(
                 min: value(limit.and_then(|l| l.min.as_ref()))?,
                 max: value(limit.and_then(|l| l.max.as_ref()))?,
                 target: value(position.get(&motion))?.or(rest),
+                start: start.get(&motion).copied(),
             })
         })
         .collect()
@@ -1364,23 +1369,31 @@ pub(crate) fn apply<K: Kernel>(
         return Ok(renamed.take());
     }
 
-    let (kind, slide, limits, position, a_path, b_path) = match &entry.def {
+    let no_start = BTreeMap::new();
+    let (kind, slide, limits, position, start, a_path, b_path) = match &entry.def {
         FeatureDef::Joint(j) => (
             j.kind,
             j.slide_axis,
             &j.limits,
             &j.position,
+            &j.start,
             &j.a.occurrence.0,
             &j.b.occurrence.0,
         ),
-        FeatureDef::AsBuiltJoint(j) => {
-            (j.kind, j.slide_axis, &j.limits, &j.position, &j.a.0, &j.b.0)
-        }
+        FeatureDef::AsBuiltJoint(j) => (
+            j.kind,
+            j.slide_axis,
+            &j.limits,
+            &j.position,
+            &no_start,
+            &j.a.0,
+            &j.b.0,
+        ),
         _ => return Ok(renamed.take()),
     };
     path_component(assembly, component, a_path).map_err(|e| format!("a: {e}"))?;
     path_component(assembly, component, b_path).map_err(|e| format!("b: {e}"))?;
-    let motions = motion_specs(params, kind, slide, limits, position)?;
+    let motions = motion_specs(params, kind, slide, limits, position, start)?;
 
     let (local_a, local_b, alignment) = match &entry.def {
         FeatureDef::Joint(j) => (
@@ -1439,6 +1452,11 @@ pub(crate) fn apply<K: Kernel>(
         parts: None,
     };
     let (state_now, changes) = solve_new(state, entry, std::slice::from_ref(&joint), &[], done)?;
+    if let JointState::Placed(moved) = &state_now {
+        renamed
+            .borrow_mut()
+            .extend(placed_again(state, entry, moved));
+    }
     let (frame_a, frame_b) = joint.frames(&done.placements);
     let values = joint.values(&done.placements);
     done.joints.active.push(joint);
@@ -1545,20 +1563,30 @@ pub(crate) fn solve_new<S>(
     let mut solving: Vec<&ActiveJoint> = Vec::new();
     for joint in new {
         let (ua, ub) = (unit(&joint.a), unit(&joint.b));
-        // Nothing the solver can move: it holds or fails.
+        // Nothing the solver can move: it holds or fails, saying in words
+        // what holds each side, with its places (mitcad#1745).
         let still = match (&ua, &ub) {
-            (Some(x), Some(y)) if x == y => {
-                Some(format!("both sides move with {}", names(assembly, x)))
-            }
-            _ if fixed(&ua) && fixed(&ub) => Some(format!(
-                "both sides are fixed ({} and {})",
-                side_name(assembly, component, &joint.a),
-                side_name(assembly, component, &joint.b)
-            )),
-            _ => None,
+            (Some(x), Some(y)) if x == y => Some(one_unit(assembly, component, &joint.a, x)),
+            _ => match (
+                held_side(state, &done.joints, component, &joint.a, joint.uid),
+                held_side(state, &done.joints, component, &joint.b, joint.uid),
+            ) {
+                (Some((why_a, mut places)), Some((why_b, more))) => {
+                    places.extend(more);
+                    Some((
+                        format!("neither side can move ({why_a}, and {why_b})"),
+                        places,
+                    ))
+                }
+                _ => None,
+            },
         };
-        if let Some(why) = still {
-            check_still(state, joint, &why, &done.placements)?;
+        if let Some((why, places)) = still {
+            check_still(state, joint, &why, &done.placements).map_err(|e| {
+                crate::notice::FeatureError::from_text(&e)
+                    .with_places(places)
+                    .text()
+            })?;
             continue;
         }
         for u in [ua, ub].into_iter().filter(|u| !fixed(u)).flatten() {
@@ -1904,6 +1932,15 @@ impl Mechanism {
                     alignment: pose(&joint.alignment),
                 })
                 .map_err(|e| e.to_string())?;
+            // Where a new or dragged joint's free motions are (mitcad#1745).
+            for s in &joint.motions {
+                if let Some(v) = s.start {
+                    mechanism
+                        .system
+                        .set_start(id, freedom(s.motion), v)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
             mechanism.joints.push((joint.uid, None, id));
         }
         // Motion links (mitcad#466) between joints of the mechanism; a link
@@ -2084,20 +2121,235 @@ pub(crate) fn with_groups(
     out
 }
 
+/// Where an occurrence of `component` (a path in it) is in the design, as
+/// a notice's place: its path of uids from the root, through the
+/// component's first placement.
+fn occurrence_place(
+    assembly: &Assembly,
+    component: ComponentUid,
+    path: &[OccurrenceUid],
+) -> Option<crate::notice::NoticePlace> {
+    let mut full = assembly.paths_to(component).into_iter().next()?;
+    full.extend_from_slice(path);
+    (!full.is_empty()).then(|| {
+        crate::notice::NoticePlace::occurrence(
+            full.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("/"),
+        )
+    })
+}
+
+/// Warnings of a joint that placed `moved` (mitcad#1745): an occurrence a
+/// move or a captured position later in the timeline places again does
+/// not stay where the joint puts it. In words with component names (the
+/// feature's name for agents), the occurrence painted.
+fn placed_again(state: &DocState, entry: &FeatureEntry, moved: &[OccurrenceUid]) -> Vec<String> {
+    let assembly = &state.assembly;
+    let Some(at) = state.features.iter().position(|f| f.uid == entry.uid) else {
+        return Vec::new();
+    };
+    let mut warnings = Vec::new();
+    for o in moved {
+        let later = state.features[at + 1..]
+            .iter()
+            .filter(|f| !f.suppressed)
+            .find_map(|f| match &f.def {
+                FeatureDef::MoveOccurrence(m) if m.occurrences.contains(o) => Some((f, true)),
+                FeatureDef::CapturePosition(c)
+                    if c.positions.iter().any(|p| p.occurrence == *o) =>
+                {
+                    Some((f, false))
+                }
+                _ => None,
+            });
+        let Some((feature, by_move)) = later else {
+            continue;
+        };
+        let name = assembly.occurrence_name(*o);
+        let message = if by_move {
+            format!(
+                "{name} is placed again by a move later in the timeline, so it does not stay \
+                 where this joint puts it"
+            )
+        } else {
+            format!(
+                "{name} is placed again by a captured position later in the timeline, so it \
+                 does not stay where this joint puts it"
+            )
+        };
+        warnings.push(crate::notice::said_at(
+            message,
+            format!(
+                "{name} is placed again by {} later in the timeline, so it does not stay \
+                 where this joint puts it",
+                feature.name
+            ),
+            occurrence_place(assembly, entry.component, &[*o]),
+        ));
+    }
+    warnings
+}
+
+/// Names in a sentence: `A`, `A and B`, `A, B and C`.
+fn listed(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// Why both sides of a joint move as one unit (mitcad#1745), in words, and
+/// the places of the unit's occurrences: a rigid group joins them, or both
+/// are in one occurrence.
+fn one_unit(
+    assembly: &Assembly,
+    component: ComponentUid,
+    path: &[OccurrenceUid],
+    unit: &BTreeSet<OccurrenceUid>,
+) -> (String, Vec<crate::notice::NoticePlace>) {
+    let places = unit
+        .iter()
+        .filter_map(|o| occurrence_place(assembly, component, &[*o]))
+        .collect();
+    let why = if unit.len() > 1 {
+        let members: Vec<String> = unit.iter().map(|o| assembly.occurrence_name(*o)).collect();
+        format!(
+            "both sides move as one (a rigid group joins {})",
+            listed(&members)
+        )
+    } else {
+        let at = path
+            .first()
+            .map(|o| assembly.occurrence_name(*o))
+            .unwrap_or_default();
+        format!("both sides move as one (both are in {at})")
+    };
+    (why, places)
+}
+
+/// Why a side of joint `joint` cannot move (mitcad#1745), in words with
+/// component names only, and the places of what holds it; None when it can
+/// move. A side is held when it is the component's own geometry, when its
+/// unit has a grounded member (itself, or one a rigid group joins to it),
+/// or when the joints before it that let nothing move (rigid ones, or all
+/// of whose motions are driven) join it to such a unit.
+fn held_side(
+    state: &DocState,
+    joints: &JointsState,
+    component: ComponentUid,
+    path: &[OccurrenceUid],
+    joint: FeatureUid,
+) -> Option<(String, Vec<crate::notice::NoticePlace>)> {
+    let assembly = &state.assembly;
+    let groups = &joints.groups;
+    let place = |o: OccurrenceUid| occurrence_place(assembly, component, &[o]);
+    let Some(first) = path.first().copied() else {
+        return Some((
+            format!(
+                "an origin on {}'s own geometry does not move",
+                assembly.name(component)
+            ),
+            Vec::new(),
+        ));
+    };
+    let name = assembly.occurrence_name(first);
+    let grounded = |o: &OccurrenceUid| assembly.occurrence(*o).is_some_and(|o| o.grounded);
+    // A unit's reason, when one of its members is grounded.
+    let unit_held = |o: OccurrenceUid| -> Option<(String, Vec<crate::notice::NoticePlace>)> {
+        let unit = group_of(groups, component, o);
+        let held: Vec<OccurrenceUid> = unit.iter().copied().filter(grounded).collect();
+        if held.is_empty() {
+            return None;
+        }
+        let who = assembly.occurrence_name(o);
+        if held.contains(&o) {
+            return Some((format!("{who} is grounded"), place(o).into_iter().collect()));
+        }
+        let names: Vec<String> = held.iter().map(|h| assembly.occurrence_name(*h)).collect();
+        let places = std::iter::once(o)
+            .chain(held.iter().copied())
+            .filter_map(place)
+            .collect();
+        let why = if held.len() == 1 {
+            format!(
+                "{who} is in a rigid group with {}, which is grounded",
+                listed(&names)
+            )
+        } else {
+            format!(
+                "{who} is in a rigid group with {}, which are grounded",
+                listed(&names)
+            )
+        };
+        Some((why, places))
+    };
+    if let Some(found) = unit_held(first) {
+        return Some(found);
+    }
+    // Joined to a held unit by joints before this one that let nothing
+    // move: a search outward from this side's unit.
+    let still: Vec<&ActiveJoint> = joints
+        .active
+        .iter()
+        .filter(|j| j.component == component && j.uid != joint && j.row.is_none())
+        .filter(|j| j.motions.iter().all(|m| m.target.is_some()))
+        // A motion link may let a driven motion go.
+        .filter(|j| {
+            !joints
+                .links
+                .iter()
+                .any(|l| l.a.0 == j.uid || l.b.0 == j.uid)
+        })
+        .collect();
+    let mut seen: Vec<OccurrenceUid> = vec![first];
+    let mut queue: Vec<OccurrenceUid> = vec![first];
+    while let Some(at) = queue.pop() {
+        let unit = group_of(groups, component, at);
+        for j in &still {
+            let (a, b) = (j.a.first().copied(), j.b.first().copied());
+            let other = match (a, b) {
+                (Some(x), y) if unit.contains(&x) => y,
+                (x, Some(y)) if unit.contains(&y) => x,
+                _ => continue,
+            };
+            let Some(other) = other else {
+                // Joined rigidly to the component's own geometry.
+                return Some((
+                    format!(
+                        "{name} is joined rigidly to {}'s own geometry",
+                        assembly.name(component)
+                    ),
+                    place(first).into_iter().collect(),
+                ));
+            };
+            if seen.contains(&other) {
+                continue;
+            }
+            if let Some((_, places)) = unit_held(other) {
+                let to = assembly.occurrence_name(other);
+                let mut all: Vec<_> = place(first).into_iter().collect();
+                all.extend(places);
+                return Some((
+                    format!("{name} is joined rigidly to {to}, which cannot move"),
+                    all,
+                ));
+            }
+            seen.push(other);
+            queue.push(other);
+        }
+    }
+    None
+}
+
 fn names(assembly: &Assembly, occurrences: &BTreeSet<OccurrenceUid>) -> String {
     occurrences
         .iter()
         .map(|o| assembly.occurrence_name(*o))
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn side_name(assembly: &Assembly, component: ComponentUid, path: &[OccurrenceUid]) -> String {
-    if path.is_empty() {
-        assembly.name(component)
-    } else {
-        assembly.path_name(path)
-    }
 }
 
 // Dragging.

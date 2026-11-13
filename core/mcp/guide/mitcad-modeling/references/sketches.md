@@ -101,7 +101,10 @@ returned region names in the consuming feature rather than inventing a
 region from presumed curve order. Check that construction lines,
 duplicate curves, separate endpoints and tiny gaps have not changed the
 regions. The `sketch` query also reports collapsed geometry and redundant
-relations.
+relations. A region that a later sketch or parameter change splits into
+pieces, or merges with another selected one, still builds with what was
+found and shows only a region warning: check the area the feature uses
+and select the profiles again (the review's split-profile rule).
 
 In the application, the Sketch Palette exposes constraints, dimensions
 and warnings. Read query data to understand its state; appearance alone

@@ -684,6 +684,50 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/dwg-corpus.cmake")
   set_tests_properties(dwg.corpus PROPERTIES SKIP_REGULAR_EXPRESSION "dwg corpus: skipped")
 
+  # The .3dm import (mitcad#1715): the reader's sample model (a box B-rep,
+  # a cylinder B-rep on a surface of revolution, an extruded plate with a
+  # hole and a round extrusion, a mesh, a curve, a block placed twice), in
+  # centimetres: five bodies of the model, the block a component with its
+  # body and two occurrences, the curve left out by design. A block that
+  # holds an instance of itself becomes a component once, that instance
+  # left out (not placed without end). The models listed under
+  # MITCAD_3DM_CORPUS (3dm-corpus.cmake): skipped without it.
+  set(dir_3dm "${CMAKE_CURRENT_BINARY_DIR}/3dm")
+  file(MAKE_DIRECTORY "${dir_3dm}")
+  add_test(NAME cli.3dm_file COMMAND mitcad-cli import-3dm --write-test "${dir_3dm}/sample.3dm")
+  set_tests_properties(cli.3dm_file PROPERTIES FIXTURES_SETUP cli_3dm)
+  add_test(NAME cli.import_3dm
+    COMMAND mitcad-cli import-3dm "${dir_3dm}/sample.3dm" --save "${dir_3dm}/sample.mitcad" --check)
+  set_tests_properties(cli.import_3dm PROPERTIES FIXTURES_REQUIRED cli_3dm PASS_REGULAR_EXPRESSION
+    "Imported sample\\.3dm \\(\\.3dm version 70, MitCad test file\\): 6 bodies \\(5 solids, 1 meshes; 6 valid\\), 1 components.*Units: centimeters \\(10 mm per unit\\).*Component Bolt: 1 bodies, 2 occurrences.*Left out: 1 curve.*Checks: 3 of 3 pass")
+  add_test(NAME cli.3dm_file_block_in_itself
+    COMMAND mitcad-cli import-3dm --write-test "${dir_3dm}/block-in-itself.3dm" --case block-in-itself)
+  set_tests_properties(cli.3dm_file_block_in_itself PROPERTIES FIXTURES_SETUP cli_3dm_block_in_itself)
+  add_test(NAME cli.import_3dm_block_in_itself COMMAND mitcad-cli import-3dm "${dir_3dm}/block-in-itself.3dm")
+  set_tests_properties(cli.import_3dm_block_in_itself PROPERTIES FIXTURES_REQUIRED cli_3dm_block_in_itself
+    PASS_REGULAR_EXPRESSION
+    "Imported block-in-itself\\.3dm \\(\\.3dm version 70, MitCad test file\\): 1 bodies \\(1 solids, 0 meshes; 1 valid\\), 1 components.*Component Loop: 1 bodies, 1 occurrences.*Left out: 1 block instance \\(a block placed inside itself\\).*Checks: 2 of 3 pass")
+  add_test(NAME 3dm.corpus
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DRUNNER=$<TARGET_FILE:mitcad_run_parallel>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/3dm-corpus"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/3dm-corpus.cmake")
+  set_tests_properties(3dm.corpus PROPERTIES SKIP_REGULAR_EXPRESSION "3dm corpus: skipped")
+  # Plane surfaces in the ground's plane (mitcad#1738): the test writer's
+  # three plane surfaces drawn facing up at z 0, each in another of the
+  # file's forms, come in facing up and render lit from above, not black
+  # (the ground a hair under the lowest bodies). Needs Python (its PNG
+  # reader is tools/libraries'); the render is skipped without a worker.
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME cli.render_3dm_plane_surfaces
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/render-3dm-sheets-test.py"
+              --cli "$<TARGET_FILE:mitcad-cli>" --worker "$<TARGET_FILE:mitcad-render>"
+              --libraries "${PROJECT_SOURCE_DIR}/tools/libraries"
+              --work "${CMAKE_CURRENT_BINARY_DIR}/render-3dm-plane-surfaces")
+    set_tests_properties(cli.render_3dm_plane_surfaces PROPERTIES TIMEOUT 120
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1" SKIP_REGULAR_EXPRESSION "3dm plane surfaces: skipped")
+  endif()
+
   # FreeCAD .FCStd import: a small document made by the test (B-rep shapes
   # from mitcad-geomtool), imported against a reference, saved and opened.
   add_test(NAME cli.import_fcstd
@@ -948,6 +992,10 @@ if(BUILD_TESTING)
   add_test(NAME cli.joints_info COMMAND mitcad-cli info "${joints}/joints.mitcad")
   set_tests_properties(cli.joints_info PROPERTIES FIXTURES_REQUIRED cli_joints PASS_REGULAR_EXPRESSION
     "F6 Joint1 \\(joint\\): ok.*F7 Joint2 \\(joint\\): ok")
+  # A new joint's moving side where its origins meet at the offset, a new
+  # offset that moves it and a drag kept although a move in the timeline
+  # places it (mitcad#1745, a reported roller assembly reduced).
+  add_test(NAME cli.joint_start COMMAND mitcad-cli run "${scripts}/joint_start.json")
 
   # Motion studies and contact sets (mitcad#454): a study played and a
   # slider stopped at a wall by a contact set on the kernel's bodies, saved
@@ -2080,6 +2128,18 @@ if(BUILD_TESTING)
     SKIP_REGULAR_EXPRESSION "isolated sketch geometry reported: skipped" TIMEOUT 900)
   if(WIN32)
     set_property(TEST cli.isolated_sketch_geometry_reported APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Tapers on curves the draft cannot lean (mitcad#1749): an ellipse extruded
+# at +5 and -20 degrees with the volumes of its offsets (Steiner), and a
+# closed spline cut through it with a taper, its wall one face; lines and a
+# spline meeting at sharp corners, mitred or trimmed, with their volumes.
+if(BUILD_TESTING)
+  add_test(NAME cli.f1_taper_curves COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/f1_taper_curves.json")
+  if(WIN32)
+    set_property(TEST cli.f1_taper_curves APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
 endif()

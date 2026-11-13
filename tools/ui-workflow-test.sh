@@ -13,6 +13,10 @@ source "$(dirname "$0")/ui-test-lib.sh"
 SHOT=${1:-}
 
 ui_start_display
+# Parts built over the origin, beside which an origin plane is clicked:
+# the origin as 100 mm Centered squares (ui_origin_in_millimeters,
+# mitcad#1748).
+ui_origin_in_millimeters
 ui_start_app
 
 # Clicks are given in percent of the 3D view (ui_view_click); the empty

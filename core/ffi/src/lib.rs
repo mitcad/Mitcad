@@ -58,6 +58,9 @@ use solidcraft_import::solidcraft_file_check;
 // The .dwg import (mitcad#453).
 mod dwg_import;
 use dwg_import::{dwg_report_passes, dwg_report_text, dwg_write_test_file};
+// The .3dm import (mitcad#1715).
+mod import_3dm;
+use import_3dm::{import_3dm_report_passes, import_3dm_report_text, import_3dm_write_test_file};
 // The AI chat panel's logic (mitcad#947).
 mod chat;
 use chat::{ChatStream, agent_chat, new_chat_stream};
@@ -212,6 +215,10 @@ mod ffi {
         /// (the notification to send, or empty) and the resolve policy.
         fn set_mcp_comments(self: &mut LiveMcpSession, comments: &str) -> Result<String>;
         fn set_mcp_comment_policy(self: &mut LiveMcpSession, may_resolve: bool);
+        /// Live MCP's input tools (mitcad#1735): ui_click, ui_type and
+        /// ui_dialog listed and accepted, only in a run started with
+        /// --mcp-folder and never for the chat's own connection.
+        fn set_mcp_input_tools(self: &mut LiveMcpSession, allowed: bool);
 
         fn new_document() -> Box<Document>;
         /// A new, empty design: Root and an empty component Component1,
@@ -382,6 +389,18 @@ mod ffi {
         fn dwg_report_text(json: &str) -> String;
         /// Whether an `import_dwg` report given as JSON passes its checks.
         fn dwg_report_passes(json: &str) -> bool;
+        /// Imports a .3dm model: its B-reps, extrusions, surfaces and
+        /// meshes as bodies by layer, its blocks as components with their
+        /// occurrences (options in commands.md, `import_3dm`); returns the
+        /// import report as JSON, or text with `{"text": true}`.
+        fn import_3dm(self: &mut Document, path: &str, json: &str) -> Result<String>;
+        /// Writes the .3dm reader's sample model, or a test case of its
+        /// writer (`block-in-itself`; tests).
+        fn import_3dm_write_test_file(path: &str, test_case: &str) -> Result<()>;
+        /// The text form of an `import_3dm` report given as JSON.
+        fn import_3dm_report_text(json: &str) -> String;
+        /// Whether an `import_3dm` report given as JSON passes its checks.
+        fn import_3dm_report_passes(json: &str) -> bool;
     }
 
     // Background computation (P7, jobs.rs): the application computes a
@@ -1010,6 +1029,7 @@ impl Document {
                         | "import_rvt"
                         | "import_solidcraft"
                         | "import_dwg"
+                        | "import_3dm"
                 )
             )
         };
@@ -1068,6 +1088,7 @@ impl Document {
             Some("import_rvt") => self.import_rvt_command(command),
             Some("import_solidcraft") => self.import_solidcraft_command(command),
             Some("import_dwg") => self.import_dwg_command(command),
+            Some("import_3dm") => self.import_3dm_command(command),
             _ => self.import_f3d_command(command),
         }?;
         // Every import's warnings as notices too (mitcad#1040), beside

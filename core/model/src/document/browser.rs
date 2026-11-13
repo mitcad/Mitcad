@@ -29,6 +29,19 @@ fn has_visibility(def: &FeatureDef) -> bool {
         )
 }
 
+/// Whether a feature keeps a display size (mitcad#1748): construction
+/// planes and axes, whose square and line the view draws at that size.
+pub(crate) fn has_display_size(def: &FeatureDef) -> bool {
+    matches!(
+        def,
+        FeatureDef::ConstructionPlane(_) | FeatureDef::ConstructionAxis(_)
+    )
+}
+
+/// The largest display size kept, mm (a kilometre): larger values are
+/// refused, so that a drag far out of the view stores no absurd size.
+const MAX_DATUM_DISPLAY_SIZE: f64 = 1.0e6;
+
 impl DocState {
     /// The sketches some feature uses (a profile, curves or points).
     /// Suppressed features and those after the timeline marker count too,
@@ -214,6 +227,53 @@ impl<K: Kernel> Document<K> {
             } else {
                 state.feature_visibility.insert(uid, visible);
             }
+            Ok((label, (), false))
+        })
+    }
+
+    /// How large a construction plane or axis is drawn, mm, where its resize
+    /// handles set it ([`Document::set_datum_display_size`]); None: the
+    /// application's default size (mitcad#1748).
+    pub fn datum_display_size(&self, uid: FeatureUid) -> Option<f64> {
+        self.state.datum_display_sizes.get(&uid).copied()
+    }
+
+    /// Sets how large a construction plane (its square's side) or axis (its
+    /// line's length) is drawn, mm; None goes back to the default size. An
+    /// undo step (`Resize Plane1`) unless nothing changes; nothing is
+    /// recomputed and the datum's geometry stays as it is: only the view's
+    /// drawing follows (mitcad#1748). Kept and saved with the feature
+    /// (`"display_size"`), forgotten when the feature is deleted.
+    pub fn set_datum_display_size(
+        &mut self,
+        uid: FeatureUid,
+        size: Option<f64>,
+    ) -> Result<(), ModelError> {
+        let position = self.state.require(uid)?;
+        let entry = &self.state.features[position];
+        if !has_display_size(&entry.def) {
+            return Err(invalid(format!(
+                "{} has no display size: only construction planes and axes are resized",
+                entry.name
+            )));
+        }
+        if let Some(size) = size
+            && !(size.is_finite() && size > 0.0 && size <= MAX_DATUM_DISPLAY_SIZE)
+        {
+            return Err(invalid(format!(
+                "the display size of {} must be greater than 0 and at most {MAX_DATUM_DISPLAY_SIZE} mm, got {size}",
+                entry.name
+            )));
+        }
+        if self.state.datum_display_sizes.get(&uid).copied() == size {
+            return Ok(());
+        }
+        let label = format!("Resize {}", entry.name);
+        self.apply_with(|state| {
+            match size {
+                Some(size) => state.datum_display_sizes.insert(uid, size),
+                None => state.datum_display_sizes.remove(&uid),
+            };
             Ok((label, (), false))
         })
     }

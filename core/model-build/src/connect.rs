@@ -307,6 +307,7 @@ pub(crate) fn make_piece(
             flip: piece.flip,
             limits: BTreeMap::new(),
             position,
+            start: BTreeMap::new(),
         }),
         active,
     )?;

@@ -8,7 +8,10 @@
 // references").
 #include "MainWindow.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <exception>
 #include <memory>
 #include <optional>
@@ -24,6 +27,11 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QtLogging>
+
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Vec.hxx>
+#include <gp_XYZ.hxx>
 
 #include "commands/CommandSupport.hpp"
 #include "framework/CommandRegistry.hpp"
@@ -158,6 +166,198 @@ void centreOnPlane(CommandState& state, const CommandContext& context) {
   }
 }
 
+// --- Where the panel puts the image (mitcad#1747): its handles and the
+// image drawn there while the panel is open.
+
+// A new image's file as the model reads it (image_info: its pixels and the
+// size of a pixel); none when it reads none. The handles and the image
+// drawn ask for it on each refresh: the last file's answer is kept, by its
+// path, size and time.
+std::optional<QJsonObject> fileInfo(const QString& path, const CommandContext& context) {
+  struct Kept {
+    QString path;
+    qint64 size = -1;
+    QDateTime modified;
+    std::optional<QJsonObject> info;
+  };
+  static Kept kept;
+  const QFileInfo file(path);
+  if (path.isEmpty() || !file.isFile()) {
+    return std::nullopt;
+  }
+  if (kept.path == file.absoluteFilePath() && kept.size == file.size() && kept.modified == file.lastModified()) {
+    return kept.info;
+  }
+  kept = Kept{file.absoluteFilePath(), file.size(), file.lastModified(), std::nullopt};
+  try {
+    kept.info = context.queryObject({{QStringLiteral("query"), QStringLiteral("image_info")},
+                                     {QStringLiteral("path"), file.absoluteFilePath()}});
+  } catch (const std::exception&) {
+    // No image the model reads: the panel says so on OK.
+  }
+  return kept.info;
+}
+
+// The image the panel places: its pixels across and down, and the size of
+// a pixel while no Width is typed (an edited image's own, a new image's
+// file's).
+struct ImageSource {
+  double columns = 0.0;
+  double rows = 0.0;
+  double scale = 0.0;
+};
+
+std::optional<ImageSource> sourceOf(const CommandState& state, const CommandContext& context) {
+  QJsonArray pixels;
+  double scale = 0.0;
+  if (editing(state)) {
+    const QJsonObject image = state.object(QStringLiteral("image"));
+    pixels = image.value(QStringLiteral("pixels")).toArray();
+    scale = image.value(QStringLiteral("scale")).toDouble();
+  } else {
+    const std::optional<QJsonObject> info = fileInfo(state.text(QStringLiteral("file")).trimmed(), context);
+    if (!info) {
+      return std::nullopt;
+    }
+    pixels = info->value(QStringLiteral("pixels")).toArray();
+    scale = info->value(QStringLiteral("pixel_size")).toDouble();
+  }
+  const ImageSource source{pixels.at(0).toDouble(), pixels.at(1).toDouble(), scale};
+  if (!(source.columns > 0.0 && source.rows > 0.0)) {
+    return std::nullopt;
+  }
+  return source;
+}
+
+// The picked plane's frame as the model places images on it: its origin,
+// its x and y axes (unit) and its normal, from the corners of an image of
+// 2 x 2 pixels, 2 mm wide, at its origin (image_reference_outline).
+struct ImagePlane {
+  gp_Pnt origin;
+  gp_Vec x;
+  gp_Vec y;
+  gp_Vec normal;
+};
+
+std::optional<ImagePlane> imagePlane(const CommandState& state, const CommandContext& context) {
+  const Selection& plane = state.items(QStringLiteral("plane"));
+  if (plane.isEmpty()) {
+    return std::nullopt;
+  }
+  QJsonObject outline{{QStringLiteral("query"), QStringLiteral("image_reference_outline")},
+                      {QStringLiteral("plane"), plane.first().reference()},
+                      {QStringLiteral("pixels"), QJsonArray{2, 2}},
+                      {QStringLiteral("center"), QJsonArray{0.0, 0.0}},
+                      {QStringLiteral("angle"), 0.0},
+                      {QStringLiteral("flip"), false},
+                      {QStringLiteral("width"), 2.0}};
+  if (!plane.first().occurrence.isEmpty()) {
+    outline.insert(QStringLiteral("occurrence"), plane.first().occurrence);
+  }
+  QJsonArray corners;
+  try {
+    corners = context.queryObject(outline).value(QStringLiteral("corners")).toArray();
+  } catch (const std::exception&) {
+    return std::nullopt; // not a plane at the marker: the panel says so on OK
+  }
+  if (corners.size() != 4) {
+    return std::nullopt;
+  }
+  // Top left at -x +y, top right at +x +y, bottom right at +x -y.
+  const gp_Pnt topLeft = pointOf(corners.at(0));
+  const gp_Pnt topRight = pointOf(corners.at(1));
+  const gp_Pnt bottomRight = pointOf(corners.at(2));
+  const gp_Pnt bottomLeft = pointOf(corners.at(3));
+  ImagePlane frame;
+  frame.origin = gp_Pnt((topLeft.XYZ() + bottomRight.XYZ()) / 2.0);
+  frame.x = gp_Vec(topLeft, topRight) / 2.0;
+  frame.y = gp_Vec(bottomLeft, topLeft) / 2.0;
+  frame.normal = frame.x.Crossed(frame.y);
+  if (frame.normal.Magnitude() < 1e-9) {
+    return std::nullopt;
+  }
+  return frame;
+}
+
+// Where the panel's values put the image (the model's
+// document::image_references placement): its plane, its centre, the way
+// its columns grow (mirrored when flipped) and the way up its rows (unit),
+// its size (mm) and its corners as the model gives them (top left, top
+// right, bottom right, bottom left). None while a value is not a number,
+// no plane is picked or no image is known.
+struct ImagePlaced {
+  ImagePlane plane;
+  ImageSource source;
+  gp_Pnt centre;
+  gp_Vec right;
+  gp_Vec up;
+  double width = 0.0;
+  double height = 0.0;
+  std::array<gp_Pnt, 4> corners;
+};
+
+std::optional<ImagePlaced> imagePlaced(const CommandState& state, const CommandContext& context) {
+  const double x = state.value(QStringLiteral("x"));
+  const double y = state.value(QStringLiteral("y"));
+  const double angle = state.value(QStringLiteral("angle"));
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(angle)) {
+    return std::nullopt;
+  }
+  const std::optional<ImageSource> source = sourceOf(state, context);
+  if (!source) {
+    return std::nullopt;
+  }
+  // Width empty: the file's size (a new image), the image's own (edited).
+  double width = source->scale * source->columns;
+  if (!state.text(QStringLiteral("width")).trimmed().isEmpty()) {
+    width = state.value(QStringLiteral("width"));
+  }
+  if (!(std::isfinite(width) && width > 0.0)) {
+    return std::nullopt;
+  }
+  const std::optional<ImagePlane> plane = imagePlane(state, context);
+  if (!plane) {
+    return std::nullopt;
+  }
+  ImagePlaced placed;
+  placed.plane = *plane;
+  placed.source = *source;
+  placed.width = width;
+  placed.height = width * source->rows / source->columns;
+  const double sign = state.checked(QStringLiteral("flip")) ? -1.0 : 1.0;
+  placed.right = (plane->x * std::cos(angle) + plane->y * std::sin(angle)) * sign;
+  placed.up = plane->x * -std::sin(angle) + plane->y * std::cos(angle);
+  placed.centre = plane->origin.Translated(plane->x * x + plane->y * y);
+  const gp_Vec across = placed.right * (placed.width / 2.0);
+  const gp_Vec upward = placed.up * (placed.height / 2.0);
+  placed.corners = {placed.centre.Translated(upward - across), placed.centre.Translated(upward + across),
+                    placed.centre.Translated(across - upward), placed.centre.Translated(-across - upward)};
+  return placed;
+}
+
+// The smallest Width a corner's drag gives (mm).
+constexpr double kSmallestWidth = 0.001;
+
+// X's or Y's arrow (mitcad#1747): along the plane's x or y axis, from its
+// other axis (where the value is 0) to the image's centre; its value box
+// only while it is under the mouse or dragged.
+std::optional<Manipulator> centreArrow(const CommandState& state, const CommandContext& context, bool alongX) {
+  const std::optional<ImagePlaced> placed = imagePlaced(state, context);
+  if (!placed) {
+    return std::nullopt;
+  }
+  const gp_Vec& along = alongX ? placed->plane.x : placed->plane.y;
+  const gp_Vec& other = alongX ? placed->plane.y : placed->plane.x;
+  const double across = state.value(alongX ? QStringLiteral("y") : QStringLiteral("x"));
+  Manipulator handle = arrow(placed->plane.origin.Translated(other * across), gp_Dir(along));
+  handle.valueBox = true;
+  handle.quiet = true;
+  // A drag steps by a hundredth of the image's width, or the zoom's step.
+  handle.scale = placed->width;
+  handle.valueScale = false;
+  return handle;
+}
+
 } // namespace
 
 CommandDef MainWindow::imageReferenceCommand() {
@@ -203,9 +403,31 @@ CommandDef MainWindow::imageReferenceCommand() {
       selectionInput(QStringLiteral("plane"), tr("Plane"), kPlaneKinds, 0, 1)
           .withAccepts(isPlanar)
           .withOnChange(centreOnPlane),
-      valueInput(QStringLiteral("x"), tr("X"), ValueKind::Length, QStringLiteral("0 mm")),
-      valueInput(QStringLiteral("y"), tr("Y"), ValueKind::Length, QStringLiteral("0 mm")),
-      valueInput(QStringLiteral("angle"), tr("Angle"), ValueKind::Angle, QStringLiteral("0 deg")),
+      // Handles in the view (mitcad#1747): arrows along the plane's x and y
+      // at the image's centre, a ring round the image, the four corners.
+      valueInput(QStringLiteral("x"), tr("X"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withManipulator([](const CommandState& state, const CommandContext& context) {
+            return centreArrow(state, context, true);
+          }),
+      valueInput(QStringLiteral("y"), tr("Y"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withManipulator([](const CommandState& state, const CommandContext& context) {
+            return centreArrow(state, context, false);
+          }),
+      valueInput(QStringLiteral("angle"), tr("Angle"), ValueKind::Angle, QStringLiteral("0 deg"))
+          .withManipulator([](const CommandState& state, const CommandContext& context) -> std::optional<Manipulator> {
+            const std::optional<ImagePlaced> placed = imagePlaced(state, context);
+            if (!placed) {
+              return std::nullopt;
+            }
+            // About the plane's normal, 0 along its x axis (counter-clockwise
+            // seen from the normal's side, as the model turns it).
+            Manipulator handle = ring(placed->centre, gp_Dir(placed->plane.normal));
+            handle.reference = gp_Dir(placed->plane.x);
+            handle.radius = std::hypot(placed->width, placed->height) / 2.0;
+            handle.valueBox = true;
+            handle.quiet = true;
+            return handle;
+          }),
       flipInput(QStringLiteral("flip"), tr("Flip")).withTooltip(tr("Mirror the image left to right")),
       // Empty: the size from the file for a new image, the size it has for
       // one edited.
@@ -213,13 +435,74 @@ CommandDef MainWindow::imageReferenceCommand() {
           .withAuto([](const CommandState& state, const CommandContext&) {
             return editing(state) ? tr("Unchanged") : tr("From the image");
           })
-          .withTooltip(tr("The image's width; calibrate it by two points afterwards")),
+          .withTooltip(tr("The image's width; calibrate it by two points afterwards"))
+          // A handle at each corner (element: top left, top right, bottom
+          // right, bottom left): an arrow from the opposite corner along the
+          // diagonal, its knob at the corner, so that a drag scales the image
+          // with its aspect ratio kept.
+          .withManipulators([](const CommandState& state, const CommandContext& context) {
+            std::vector<Manipulator> handles;
+            const std::optional<ImagePlaced> placed = imagePlaced(state, context);
+            if (!placed) {
+              return handles;
+            }
+            // Millimetres along the diagonal per millimetre of width.
+            const double factor = std::hypot(placed->width, placed->height) / placed->width;
+            for (int corner = 0; corner < 4; ++corner) {
+              const gp_Pnt& opposite = placed->corners[static_cast<std::size_t>((corner + 2) % 4)];
+              const gp_Vec diagonal(opposite, placed->corners[static_cast<std::size_t>(corner)]);
+              if (diagonal.Magnitude() < 1e-9) {
+                continue;
+              }
+              Manipulator handle = arrow(opposite, gp_Dir(diagonal));
+              handle.element = corner;
+              handle.factor = factor;
+              handle.minimum = kSmallestWidth;
+              handle.autoValue = placed->width; // Width empty: the image's size now
+              handle.scale = placed->width;
+              handle.valueScale = false;
+              handle.valueBox = true;
+              handle.boxAtTip = true;
+              handle.quiet = true;
+              handles.push_back(handle);
+            }
+            return handles;
+          })
+          // The opposite corner stays where it was when the drag began: the
+          // centre moves half as far as the corner dragged.
+          .withHandleDrag([](int corner, const CommandState& atStart, CommandState& state,
+                             const CommandContext& context) {
+            const double width = state.value(QStringLiteral("width"));
+            const std::optional<ImagePlaced> before = imagePlaced(atStart, context);
+            if (corner < 0 || corner > 3 || !before || !std::isfinite(width) || width <= 0.0) {
+              return;
+            }
+            const gp_Vec diagonal(before->corners[static_cast<std::size_t>((corner + 2) % 4)],
+                                  before->corners[static_cast<std::size_t>(corner)]);
+            const gp_Vec shift = diagonal * ((width - before->width) / (2.0 * before->width));
+            const double x = atStart.value(QStringLiteral("x")) + shift.Dot(before->plane.x);
+            const double y = atStart.value(QStringLiteral("y")) + shift.Dot(before->plane.y);
+            state.setText(QStringLiteral("x"), lengthText(x, context));
+            state.setValue(QStringLiteral("x"), x);
+            state.setText(QStringLiteral("y"), lengthText(y, context));
+            state.setValue(QStringLiteral("y"), y);
+          }),
       valueInput(QStringLiteral("opacity"), tr("Opacity %"), ValueKind::Unitless, QStringLiteral("50")),
       checkInput(QStringLiteral("through"), tr("Through Bodies"))
           .withTooltip(tr("Draw the image over the bodies instead of hidden behind them")),
   };
+  // Whether a panel is open: the image it places is drawn only then
+  // (mitcad#1747).
+  auto open = std::make_shared<bool>(false);
   // A plane or face selected before the command: centred on it.
-  def.init = centreOnPlane;
+  def.init = [open](CommandState& state, const CommandContext& context) {
+    *open = true;
+    centreOnPlane(state, context);
+  };
+  def.ended = [this, open](bool) {
+    *open = false;
+    setImageReferencePanel(std::nullopt);
+  };
   def.modelChanged = [chosen](CommandState& state, const CommandContext&) {
     if (!chosen->isEmpty()) {
       state.setText(QStringLiteral("file"), *chosen);
@@ -288,52 +571,50 @@ CommandDef MainWindow::imageReferenceCommand() {
     }
     return Built::of({{QStringLiteral("commands"), QJsonArray{command}}});
   };
-  // Where the image goes, outlined while the panel is open (the model's
-  // image_reference_outline; a new image's size from its file).
-  def.viewLines = [](const CommandState& state, const CommandContext& context) {
+  // Where the image goes while the panel is open (mitcad#1747): the image
+  // itself drawn there with its opacity, an edited one in place of where it
+  // was, and its outline (as the model's image_reference_outline puts it;
+  // a new image's size from its file). Asked again with the handles, after
+  // each change of the values.
+  def.viewLines = [this, open](const CommandState& state, const CommandContext& context) {
     std::vector<std::vector<gp_Pnt>> lines;
-    const Selection& plane = state.items(QStringLiteral("plane"));
-    if (plane.isEmpty() || !std::isfinite(state.value(QStringLiteral("angle"))) ||
-        !std::isfinite(state.value(QStringLiteral("x"))) || !std::isfinite(state.value(QStringLiteral("y")))) {
-      return lines;
-    }
-    QJsonObject outline{{QStringLiteral("query"), QStringLiteral("image_reference_outline")}};
-    addSettings(outline, state);
-    outline.insert(QStringLiteral("center"),
-                   QJsonArray{state.value(QStringLiteral("x")), state.value(QStringLiteral("y"))});
-    try {
-      if (editing(state)) {
+    const std::optional<ImagePlaced> placed = imagePlaced(state, context);
+    if (*open) {
+      std::optional<ImageReferencePanel> panel;
+      if (placed) {
+        panel.emplace();
+        panel->editing = editing(state);
         const QJsonObject image = state.object(QStringLiteral("image"));
-        outline.insert(QStringLiteral("pixels"), image.value(QStringLiteral("pixels")));
-        if (!outline.contains(QStringLiteral("width"))) {
-          outline.insert(QStringLiteral("scale"), image.value(QStringLiteral("scale")));
+        if (!panel->editing) {
+          panel->file = QFileInfo(state.text(QStringLiteral("file")).trimmed()).absoluteFilePath();
         }
-      } else {
-        const QString file = state.text(QStringLiteral("file")).trimmed();
-        if (file.isEmpty() || !QFileInfo(file).isFile()) {
-          return lines;
+        ImageReferenceShown& shown = panel->image;
+        shown.name =
+            panel->editing ? image.value(QStringLiteral("name")).toString() : QFileInfo(panel->file).fileName();
+        shown.sha256 = image.value(QStringLiteral("sha256")).toString();
+        for (std::size_t i = 0; i < 4; ++i) {
+          shown.corners[i] = {placed->corners[i].X(), placed->corners[i].Y(), placed->corners[i].Z()};
         }
-        const QJsonObject info = context.queryObject({{QStringLiteral("query"), QStringLiteral("image_info")},
-                                                      {QStringLiteral("path"), QFileInfo(file).absoluteFilePath()}});
-        outline.insert(QStringLiteral("pixels"), info.value(QStringLiteral("pixels")));
-        if (!outline.contains(QStringLiteral("width"))) {
-          outline.insert(QStringLiteral("scale"), info.value(QStringLiteral("pixel_size")));
-        }
+        // An opacity that is no percentage yet: the panel's default.
+        const double opacity = state.value(QStringLiteral("opacity"));
+        shown.opacity = std::isfinite(opacity) ? std::clamp(opacity / 100.0, 0.0, 1.0) : 0.5;
+        shown.through = state.checked(QStringLiteral("through"));
+        shown.width = static_cast<int>(placed->source.columns);
+        shown.height = static_cast<int>(placed->source.rows);
       }
-      const QJsonArray corners = context.queryObject(outline).value(QStringLiteral("corners")).toArray();
-      if (corners.size() == 4) {
-        std::vector<gp_Pnt> loop;
-        for (int i = 0; i <= 4; ++i) {
-          loop.push_back(pointOf(corners.at(i % 4)));
-        }
-        lines.push_back(loop);
+      setImageReferencePanel(panel);
+    }
+    if (placed) {
+      std::vector<gp_Pnt> loop;
+      for (int i = 0; i <= 4; ++i) {
+        loop.push_back(placed->corners[static_cast<std::size_t>(i % 4)]);
       }
-    } catch (const std::exception&) {
-      // No outline: the panel says what is wrong when it is OK'd.
+      lines.push_back(loop);
     }
     return lines;
   };
-  def.load = [](const QJsonObject& image, CommandState& state, const CommandContext& context) {
+  def.load = [open](const QJsonObject& image, CommandState& state, const CommandContext& context) {
+    *open = true;
     state.setObject(QStringLiteral("image"), image);
     // A plane that is gone (`error`) is left empty: the image keeps it
     // until another plane is picked.
@@ -389,39 +670,13 @@ void MainWindow::followImageReferences() {
       continue;
     }
     QImage picture = m_imageReferenceImages.value(image.sha256);
-    // A HEIF image that no decoder here reads (one a design embedded as it
-    // was, before mitcad#1304) is not tried again on each refresh.
-    if (picture.isNull() && !m_imageReferenceNoDecoder.contains(image.sha256)) {
-      QString why;
-      bool noDecoder = false;
-      try {
-        const QJsonObject file = queryObject({{QStringLiteral("query"), QStringLiteral("image_reference_image")},
-                                              {QStringLiteral("name"), image.name}});
-        // HEIF through the decoder that is there, the rest through Qt's
-        // readers (view/ImageFile.hpp).
-        picture = decodeImageFile(QByteArray::fromBase64(file.value(QStringLiteral("data")).toString().toLatin1()),
-                                  &why, &noDecoder);
-      } catch (const std::exception& e) {
-        qWarning().noquote() << QStringLiteral("Image reference %1 not read: %2").arg(image.name, errorText(e));
-      }
-      if (noDecoder) {
-        // Said once, where the user sees it: what to install.
-        m_imageReferenceNoDecoder.insert(image.sha256, true);
-        showStatus(tr("%1 is a HEIF image: %2").arg(image.name, heifDecoderMissingMessage()), NoticeLevel::Warning);
-      }
-      if (picture.isNull()) {
-        qWarning().noquote() << QStringLiteral("Image reference %1 cannot be drawn: %2").arg(image.name, why);
-      } else {
-        qDebug().noquote() << QStringLiteral("Image reference %1 decoded: %2 x %3 pixels")
-                                  .arg(image.name)
-                                  .arg(picture.width())
-                                  .arg(picture.height());
-      }
+    if (picture.isNull()) {
+      picture = imageReferencePicture(image.name, image.sha256);
     }
     images.insert(image.sha256, picture);
   }
   m_imageReferenceImages = images;
-  m_viewer->setImageReferences(shown, images);
+  drawImageReferences();
   // A calibration ends when one of its images is gone or hidden.
   if (m_imageCalibration != nullptr) {
     for (const QString& name : m_imageCalibration->names()) {
@@ -432,6 +687,135 @@ void MainWindow::followImageReferences() {
       }
     }
   }
+}
+
+QImage MainWindow::imageReferencePicture(const QString& name, const QString& sha256) {
+  // A HEIF image that no decoder here reads (one a design embedded as it
+  // was, before mitcad#1304) is not tried again on each refresh.
+  if (m_imageReferenceNoDecoder.contains(sha256)) {
+    return QImage();
+  }
+  QImage picture;
+  QString why;
+  bool noDecoder = false;
+  try {
+    const QJsonObject file = queryObject({{QStringLiteral("query"), QStringLiteral("image_reference_image")},
+                                          {QStringLiteral("name"), name}});
+    // HEIF through the decoder that is there, the rest through Qt's
+    // readers (view/ImageFile.hpp).
+    picture = decodeImageFile(QByteArray::fromBase64(file.value(QStringLiteral("data")).toString().toLatin1()),
+                              &why, &noDecoder);
+  } catch (const std::exception& e) {
+    qWarning().noquote() << QStringLiteral("Image reference %1 not read: %2").arg(name, errorText(e));
+  }
+  if (noDecoder) {
+    // Said once, where the user sees it: what to install.
+    m_imageReferenceNoDecoder.insert(sha256, true);
+    showStatus(tr("%1 is a HEIF image: %2").arg(name, heifDecoderMissingMessage()), NoticeLevel::Warning);
+  }
+  if (picture.isNull()) {
+    qWarning().noquote() << QStringLiteral("Image reference %1 cannot be drawn: %2").arg(name, why);
+  } else {
+    qDebug().noquote() << QStringLiteral("Image reference %1 decoded: %2 x %3 pixels")
+                              .arg(name)
+                              .arg(picture.width())
+                              .arg(picture.height());
+  }
+  return picture;
+}
+
+void MainWindow::setImageReferencePanel(const std::optional<ImageReferencePanel>& panel) {
+  if (!panel) {
+    if (!m_imageReferencePanel && m_imageReferencePanelSource.isEmpty()) {
+      return;
+    }
+    m_imageReferencePanel.reset();
+    m_imageReferencePanelSource.clear();
+    m_imageReferencePanelPicture = QImage();
+    drawImageReferences();
+    return;
+  }
+  ImageReferencePanel next = *panel;
+  // Its picture: an edited image's from the design, a new one's from its
+  // file (as it is now), decoded once.
+  QString source;
+  if (next.editing) {
+    source = QStringLiteral("image/") + next.image.sha256;
+  } else {
+    const QFileInfo info(next.file);
+    source = QStringLiteral("file/%1/%2/%3")
+                 .arg(info.absoluteFilePath())
+                 .arg(info.size())
+                 .arg(info.lastModified().toMSecsSinceEpoch());
+  }
+  if (source != m_imageReferencePanelSource) {
+    m_imageReferencePanelSource = source;
+    if (next.editing) {
+      m_imageReferencePanelPicture = m_imageReferenceImages.value(next.image.sha256);
+      if (m_imageReferencePanelPicture.isNull()) {
+        m_imageReferencePanelPicture = imageReferencePicture(next.image.name, next.image.sha256);
+      }
+    } else {
+      // A file larger than a design embeds is not read: the model refuses it.
+      QFile file(next.file);
+      QString why;
+      m_imageReferencePanelPicture = QImage();
+      if (file.size() <= kEmbeddedImageLimit && file.open(QIODevice::ReadOnly)) {
+        m_imageReferencePanelPicture = decodeImageFile(file.readAll(), &why);
+      }
+      if (m_imageReferencePanelPicture.isNull()) {
+        qDebug().noquote() << QStringLiteral("Image Reference panel image %1 not drawn: %2")
+                                  .arg(next.image.name, why.isEmpty() ? QStringLiteral("not read") : why);
+      } else {
+        qDebug().noquote() << QStringLiteral("Image Reference panel image %1 decoded: %2 x %3 pixels")
+                                  .arg(next.image.name)
+                                  .arg(m_imageReferencePanelPicture.width())
+                                  .arg(m_imageReferencePanelPicture.height());
+      }
+    }
+  }
+  if (!next.editing) {
+    next.image.sha256 = QStringLiteral("panel/") + source; // its picture's and its texture's key
+  }
+  // Drawn again only when it moved or looks otherwise.
+  if (m_imageReferencePanel) {
+    const ImageReferenceShown& was = m_imageReferencePanel->image;
+    const ImageReferenceShown& now = next.image;
+    if (was.name == now.name && was.sha256 == now.sha256 && was.corners == now.corners &&
+        was.opacity == now.opacity && was.through == now.through && m_imageReferencePanel->editing == next.editing) {
+      return;
+    }
+  }
+  m_imageReferencePanel = next;
+  // For UI tests: where it is drawn, its centre in the design.
+  const std::array<ImagePoint, 4>& corners = next.image.corners;
+  const auto middle = [&corners](std::size_t axis) {
+    return QString::number((corners[0][axis] + corners[2][axis]) / 2.0, 'f', 6);
+  };
+  qDebug().noquote() << QStringLiteral("Image Reference panel image %1 centre %2,%3,%4%5")
+                            .arg(next.image.name, middle(0), middle(1), middle(2),
+                                 next.editing ? QStringLiteral(", in place of the image") : QString());
+  drawImageReferences();
+}
+
+void MainWindow::drawImageReferences() {
+  std::vector<ImageReferenceShown> shown = shownImageReferences(m_snapshot.imageReferences);
+  QHash<QString, QImage> images = m_imageReferenceImages;
+  if (m_imageReferencePanel) {
+    // The panel's image (mitcad#1747) in place of the one it edits, drawn
+    // where the panel's values put it.
+    const ImageReferencePanel& panel = *m_imageReferencePanel;
+    if (panel.editing) {
+      shown.erase(std::remove_if(shown.begin(), shown.end(),
+                                 [&panel](const ImageReferenceShown& image) { return image.name == panel.image.name; }),
+                  shown.end());
+    }
+    if (!m_imageReferencePanelPicture.isNull()) {
+      images.insert(panel.image.sha256, m_imageReferencePanelPicture);
+      shown.push_back(panel.image);
+    }
+  }
+  m_viewer->setImageReferences(shown, images);
 }
 
 void MainWindow::editImageReference(const QString& name) {

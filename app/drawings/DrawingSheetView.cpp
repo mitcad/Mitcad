@@ -24,6 +24,7 @@
 #include <QtLogging>
 
 #include "../framework/Theme.hpp"
+#include "../framework/UserText.hpp"
 #include "TitleBlockEditor.hpp"
 
 namespace mitcad::drawings {
@@ -211,7 +212,7 @@ void DrawingSheetView::setSheet(const QJsonObject& sheet) {
     entry.type = v.value(QStringLiteral("type")).toString();
     entry.parent = v.value(QStringLiteral("parent")).toInt();
     entry.label = v.value(QStringLiteral("label")).toString();
-    entry.error = mitcad::modelMessage(v.value(QStringLiteral("error")).toString());
+    entry.error = mitcad::modelMessage(mitcad::userText(v.value(QStringLiteral("error")).toString()));
     const QJsonArray box = v.value(QStringLiteral("box")).toArray();
     if (box.size() == 2) {
       entry.box = QRectF(pointOf(box.at(0)), pointOf(box.at(1))).normalized();
@@ -228,7 +229,7 @@ void DrawingSheetView::setSheet(const QJsonObject& sheet) {
     entry.type = a.value(QStringLiteral("type")).toString();
     entry.label = a.value(QStringLiteral("label")).toString();
     entry.broken = a.value(QStringLiteral("broken")).toBool();
-    entry.error = mitcad::modelMessage(a.value(QStringLiteral("error")).toString());
+    entry.error = mitcad::modelMessage(mitcad::userText(a.value(QStringLiteral("error")).toString()));
     const QJsonArray box = a.value(QStringLiteral("box")).toArray();
     if (box.size() == 2) {
       entry.box = QRectF(pointOf(box.at(0)), pointOf(box.at(1))).normalized();

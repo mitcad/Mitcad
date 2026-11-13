@@ -229,6 +229,17 @@ public:
   // made (the `sketch` query's `order`, mitcad#1492): sketch mode's list
   // of them in the timeline's place.
   QStringList order;
+  // The work steps that made them (the `sketch` query's `steps`,
+  // mitcad#1750): sketch mode's list shows one cell per step. A step
+  // without an id is an item no recorded step holds (an older design, an
+  // import), listed alone.
+  struct StepData {
+    QString id;   // "s3"; empty for an item alone
+    QString kind; // the command that made it: "rectangle", "project", …
+    QStringList items;   // made or changed, then its texts
+    QStringList changed; // of them, those it changed that another step made (a trim)
+  };
+  std::vector<StepData> steps;
 
   const PointData* point(const QString& id) const;
   const CurveData* curve(const QString& id) const;

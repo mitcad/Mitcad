@@ -71,7 +71,7 @@ void nameFilterTests() {
   }
   CHECK(checkWebFileName(text("parts.zip")).kind == WebFileKind::Zip);
   CHECK(checkWebFileName(text("parts.ZIP")).kind == WebFileKind::Zip);
-  for (const char* name : {"a.f3d", "a.FCStd", "a.ipt", "a.iam", "a.ifc", "a.rvt", "a.dwg"}) {
+  for (const char* name : {"a.f3d", "a.FCStd", "a.ipt", "a.iam", "a.ifc", "a.rvt", "a.dwg", "a.3dm"}) {
     CHECK(checkWebFileName(text(name)).kind == WebFileKind::Document);
   }
   // Refused, each with a note that names its type.
@@ -124,6 +124,31 @@ void addressTests() {
   CHECK(normalWebAddress(text("https://example.com")) == text("https://example.com"));
   CHECK(normalWebAddress(text("about:blank")) == text("about:blank"));
   CHECK(normalWebAddress(text("   ")).isEmpty());
+}
+
+void downloadFailureTests() {
+  using mitcad::webDownloadFailure;
+  // Why a download stopped, in words (mitcad#1716): the connection, the
+  // file, the server, the user; never the browser's code.
+  CHECK(webDownloadFailure(22) == text("the connection was lost"));
+  CHECK(webDownloadFailure(20) == text("the connection was lost"));
+  CHECK(webDownloadFailure(21) == text("the connection timed out"));
+  CHECK(webDownloadFailure(1) == text("the file could not be written"));
+  CHECK(webDownloadFailure(3) == text("the disk is full"));
+  CHECK(webDownloadFailure(36) == text("the server refused it"));
+  CHECK(webDownloadFailure(34) == text("the server refused it: the site may want you to sign in first"));
+  CHECK(webDownloadFailure(38) == text("the server sent the file incomplete"));
+  CHECK(webDownloadFailure(40) == text("it was canceled"));
+  CHECK(webDownloadFailure(0) == text("it stopped before the end"));
+  CHECK(webDownloadFailure(99) == text("it stopped before the end"));
+  for (int code = 0; code <= 60; ++code) {
+    const QString words = webDownloadFailure(code);
+    bool digit = false;
+    for (const QChar c : words) {
+      digit = digit || c.isDigit();
+    }
+    CHECK(!words.isEmpty() && !digit && !words.endsWith(QLatin1Char('.')));
+  }
 }
 
 void sitesTests() {
@@ -197,6 +222,7 @@ int componentWebFilesTests() {
   nameFilterTests();
   contentFilterTests();
   addressTests();
+  downloadFailureTests();
   sitesTests();
   foldersTests(QDir(directory.path()).filePath(QStringLiteral("downloads")));
   QSettings::setDefaultFormat(format);

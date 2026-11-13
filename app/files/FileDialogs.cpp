@@ -931,6 +931,51 @@ std::optional<bool> askLinked(QWidget* parent, const QString& file) {
   return std::nullopt;
 }
 
+std::optional<OutsideLinkChoice> askOutsideLink(QWidget* parent, const QString& file, bool inProject) {
+  const QString name = QFileInfo(file).fileName();
+  const QString text =
+      inProject ? QObject::tr("%1 is outside this design's project, so a link to it is not followed: changes to "
+                              "the file will not come in.")
+                      .arg(name)
+                : QObject::tr("%1 is outside this design's folder, so a link to it is not followed: changes to "
+                              "the file will not come in.")
+                      .arg(name);
+  const QString more =
+      inProject ? QObject::tr("Copy it into the project's parts folder and link the copy, or insert it as a copy "
+                              "that can be edited here.")
+                : QObject::tr("Copy it into the parts folder beside this design and link the copy, or insert it "
+                              "as a copy that can be edited here.");
+  QMessageBox box(QMessageBox::Warning, QObject::tr("Insert Component"), text, QMessageBox::Cancel, parent);
+  box.setObjectName(QStringLiteral("insertOutsideLink"));
+  box.setInformativeText(more);
+  QPushButton* copyIn = box.addButton(QObject::tr("Copy into the Project and &Link"), QMessageBox::AcceptRole);
+  copyIn->setToolTip(QObject::tr("The copy in the project is linked and followed when the design opens"));
+  QPushButton* copy = box.addButton(QObject::tr("Insert as a &Copy"), QMessageBox::AcceptRole);
+  copy->setToolTip(QObject::tr("The design and its history become a component of this design"));
+  box.setDefaultButton(copyIn);
+  QString copyInLabel = copyIn->text();
+  QString copyLabel = copy->text();
+  copyInLabel.remove(QLatin1Char('&'));
+  copyLabel.remove(QLatin1Char('&'));
+  qDebug().noquote() << QStringLiteral("Insert Component outside the project: %1 (%2); choices %3 | %4 | Cancel")
+                            .arg(name, inProject ? QStringLiteral("project") : QStringLiteral("folder"), copyInLabel,
+                                 copyLabel);
+  qDebug().noquote() << QStringLiteral("Insert Component outside the project text: %1 %2").arg(text, more);
+  prepareModal(&box);
+  execDialog(&box);
+  std::optional<OutsideLinkChoice> chosen;
+  QString how = QStringLiteral("cancelled");
+  if (box.clickedButton() == copyIn) {
+    chosen = OutsideLinkChoice::CopyIntoProject;
+    how = QStringLiteral("copy into the project and link");
+  } else if (box.clickedButton() == copy) {
+    chosen = OutsideLinkChoice::Copy;
+    how = QStringLiteral("insert as a copy");
+  }
+  qDebug().noquote() << QStringLiteral("Insert Component outside the project: %1").arg(how);
+  return chosen;
+}
+
 std::optional<QString> askStepStructure(QWidget* parent, const QString& file, bool* repeatedParts) {
   QMessageBox box(QMessageBox::Question, QObject::tr("Import STEP Assembly"),
                   QObject::tr("%1 is an assembly. Import each part once as a component with an occurrence per "
@@ -1085,7 +1130,13 @@ bool isDwgImport(const QJsonObject& result) {
          QLatin1String("dwg");
 }
 
-// A drawing's entities taken, by type.
+// A .3dm model's import result (import_3dm).
+bool isThreeDmImport(const QJsonObject& result) {
+  return result.value(QStringLiteral("report")).toObject().value(QStringLiteral("format")).toString() ==
+         QLatin1String("3dm");
+}
+
+// A drawing's entities taken, by type (a .3dm model's objects likewise).
 QString dwgCounts(const QJsonObject& report) {
   const QJsonObject taken = report.value(QStringLiteral("taken")).toObject();
   QStringList parts;
@@ -1199,7 +1250,7 @@ QString importCounts(const QJsonObject& result) {
   if (isRvtImport(result)) {
     return rvtCounts(result.value(QStringLiteral("report")).toObject());
   }
-  if (isDwgImport(result)) {
+  if (isDwgImport(result) || isThreeDmImport(result)) {
     return dwgCounts(result.value(QStringLiteral("report")).toObject());
   }
   if (isIamImport(result)) {
@@ -1226,7 +1277,7 @@ namespace {
 QJsonObject importedDesign(const QJsonObject& result) {
   const QJsonObject report = result.value(QStringLiteral("report")).toObject();
   if (isFreeCadImport(result) || isIptImport(result) || isIamImport(result) || isIfcImport(result) ||
-      isRvtImport(result) || isSolidcraftImport(result) || isDwgImport(result)) {
+      isRvtImport(result) || isSolidcraftImport(result) || isDwgImport(result) || isThreeDmImport(result)) {
     return report;
   }
   const QJsonArray designs = report.value(QStringLiteral("designs")).toArray();
@@ -1427,6 +1478,17 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
                 .arg(design.value(QStringLiteral("parameters")).toArray().size())
                 .arg(design.value(QStringLiteral("joints")).toArray().size())
                 .arg(unmapped.isEmpty() ? QObject::tr("none") : unmapped.join(QStringLiteral(", ")).toHtmlEscaped())
+      : isThreeDmImport(result)
+          ? QObject::tr("<b>%1</b> (.3dm model, file version %2)<br>%3 bodies (%4 solids, %5 meshes), %6 "
+                        "components.<br>Objects taken: %7.<br>Left out: %8.<br>Units: %9.")
+                .arg(file.toHtmlEscaped(), field("version", QString()))
+                .arg(design.value(QStringLiteral("bodies")).toInt())
+                .arg(design.value(QStringLiteral("solids")).toInt())
+                .arg(design.value(QStringLiteral("meshes")).toInt())
+                .arg(design.value(QStringLiteral("components")).toArray().size())
+                .arg(importCounts(result).toHtmlEscaped(),
+                     dwgLeftOut.isEmpty() ? QObject::tr("nothing") : dwgLeftOut.join(QStringLiteral(", ")).toHtmlEscaped(),
+                     field("file_units", QStringLiteral("-")))
       : isDwgImport(result)
           ? QObject::tr("<b>%1</b> (drawing %2)<br>%3 bodies (%4 solids, %5 meshes), %6 components.<br>Entities "
                         "taken: %7.<br>Left out: %8.<br>Units: %9.")
@@ -1566,11 +1628,17 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
                                                                                 : QObject::tr("not valid"))
                              .arg(body.value(QStringLiteral("faces")).toInt())
                              .arg(body.value(QStringLiteral("source")).toString());
+    // The feature by its name, never its uid (docs/ui-conventions.md).
+    const QString featureName = body.value(QStringLiteral("feature_name")).toString();
+    QString cameIn;
+    if (featureName.isEmpty()) {
+      cameIn = iptHistory ? QObject::tr("a body") : QObject::tr("a base feature");
+    } else {
+      cameIn = (iptHistory ? QObject::tr("body of %1") : QObject::tr("base feature %1")).arg(featureName);
+    }
     auto* item = new QTreeWidgetItem(
         items, {QString::number(++bodyIndex), made.value(QStringLiteral("name")).toString(),
-                body.value(QStringLiteral("solid")).toBool() ? QObject::tr("solid") : QObject::tr("surface"),
-                (iptHistory ? QObject::tr("body of %1") : QObject::tr("base feature %1"))
-                    .arg(body.value(QStringLiteral("feature")).toString()),
+                body.value(QStringLiteral("solid")).toBool() ? QObject::tr("solid") : QObject::tr("surface"), cameIn,
                 note});
     item->setToolTip(4, note);
   }
@@ -1593,8 +1661,9 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
                 note});
     row->setToolTip(4, note);
   }
-  // A drawing's blocks as components: their bodies and occurrences.
-  if (isDwgImport(result)) {
+  // A drawing's (or a .3dm model's) blocks as components: their bodies
+  // and occurrences.
+  if (isDwgImport(result) || isThreeDmImport(result)) {
     int componentIndex = 0;
     for (const QJsonValue& value : design.value(QStringLiteral("components")).toArray()) {
       const QJsonObject c = value.toObject();
@@ -1633,11 +1702,16 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
   }
   for (const QJsonValue& value : (iptHistory ? replay : design).value(QStringLiteral("items")).toArray()) {
     const QJsonObject item = value.toObject();
+    // The note in plain words where the report gives it (mitcad#1741); the
+    // `note` itself is the agents', with the sketch's ids.
+    const QString note = mitcad::modelMessage(
+        item.value(item.contains(QStringLiteral("note_message")) ? QStringLiteral("note_message")
+                                                                 : QStringLiteral("note"))
+            .toString());
     auto* row = new QTreeWidgetItem(
         items, {QString::number(item.value(QStringLiteral("index")).toInt()), item.value(QStringLiteral("name")).toString(),
-                item.value(QStringLiteral("type")).toString(), item.value(QStringLiteral("outcome")).toString(),
-                mitcad::modelMessage(item.value(QStringLiteral("note")).toString())});
-    row->setToolTip(4, mitcad::modelMessage(item.value(QStringLiteral("note")).toString()));
+                item.value(QStringLiteral("type")).toString(), item.value(QStringLiteral("outcome")).toString(), note});
+    row->setToolTip(4, note);
   }
   // A SolidCraft design's features and joints: how each came in, or why
   // it did not (mitcad#450).
@@ -1808,7 +1882,8 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
                               .arg(design.value(QStringLiteral("products")).toArray().size())
                               .arg(importCounts(result))
                               .arg(design.value(QStringLiteral("bodies")).toInt());
-  } else if (isIamImport(result) || isRvtImport(result) || isSolidcraftImport(result) || isDwgImport(result)) {
+  } else if (isIamImport(result) || isRvtImport(result) || isSolidcraftImport(result) || isDwgImport(result) ||
+             isThreeDmImport(result)) {
     qDebug().noquote() << QStringLiteral("Import report: %1: %2").arg(file, importCounts(result));
   } else if (isIptImport(result)) {
     qDebug().noquote()

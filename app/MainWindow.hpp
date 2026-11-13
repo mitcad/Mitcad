@@ -42,6 +42,9 @@
 #include "rust/cxx.h"
 #include "sketch/SketchController.hpp"
 #include "view/CommandSketches.hpp"
+#include "view/DatumHandles.hpp"
+#include "view/ImageReferences.hpp"
+#include "view/OriginPreference.hpp"
 
 class QAction;
 class QCloseEvent;
@@ -493,6 +496,10 @@ private:
 #endif
   using Mode = DocumentSession::Mode;
   QString mcpBlockedReason(bool editing) const;
+  // Why a call that changes the design waits: the window closing, or the
+  // open dialog by its title with how to go on (mitcad#1725); empty when
+  // neither.
+  QString mcpDialogReason() const;
   // Live MCP (mitcad#265): busy refusals, a sketch's commands through its
   // session, the agent's undo labels, Save, and the ui_* tools.
   void mcpRefuseBusy() const;
@@ -742,6 +749,11 @@ private:
   // and the card's text.
   void updateIdleHighlights();
   void updateIdleCard();
+  // The card's block for a selected profile, sketch curve, point,
+  // constraint or dimension (mitcad#1741, sketchItemCard): its kind and
+  // sketch in words and what it measures, from the sketch query (asked once
+  // per sketch and selection, m_idleMeasurements).
+  QString sketchItemBlock(const SelectionItem& item);
   // The selection card's Create row (mitcad#619, MainWindowSelectionCreate.cpp):
   // the CREATE commands that fit the selection, Extrude first; none on the
   // Make tab, where the Make section takes its place (mitcad#1178).
@@ -829,8 +841,10 @@ private:
   // the panel's undo range (CommandSession::runActivation), and the panel
   // shows where the feature goes. Never for an agent's request (MCP), nor
   // for picks of the active component's or a third component's bodies made
-  // before. True when it activated.
-  bool activateForPick(const CommandDef& def, const SelectionItem& item);
+  // before. The pick an input of one item holds is not one of them: the
+  // new pick replaces it (mitcad#1743: a hole moved from one component's
+  // face to another's goes into the other). True when it activated.
+  bool activateForPick(const CommandDef& def, const InputDef& input, const SelectionItem& item);
   // The same for the selection made before such a command: all of its body
   // picks of one other component activate that component before the panel
   // opens (its own undo step); the notice to show once the panel is there,
@@ -1990,6 +2004,9 @@ private:
   QString m_browserHoverRow;
   QString m_loggedJointHighlight = QStringLiteral("none");
   QString m_loggedJointCard;
+  // The idle card's text as last logged ("Idle card: …", for UI tests:
+  // mitcad#1741).
+  QString m_loggedIdleCard;
   // A body's print bed face shown while a face's context menu is open
   // (mitcad#731; invalid: none).
   SelectionItem m_printBedShown;
@@ -2386,6 +2403,24 @@ private:
   // once, not decoded again on each refresh.
   QHash<QString, bool> m_imageReferenceNoDecoder;
   ImageCalibration* m_imageCalibration = nullptr;
+  // An image reference's picture, decoded from the design's copy (none
+  // when it cannot be: said once for a HEIF image no decoder reads).
+  QImage imageReferencePicture(const QString& name, const QString& sha256);
+  // The image the Image Reference panel places, drawn where its values put
+  // it while the panel is open (mitcad#1747): a new image's from its file,
+  // an edited one's in place of the image (`editing`: hidden where it was).
+  struct ImageReferencePanel {
+    ImageReferenceShown image; // `name`: the edited image's, a new image's file name
+    QString file;              // a new image's file; empty when editing
+    bool editing = false;
+  };
+  // None: the panel closed (or has no place for it), the images as they are.
+  void setImageReferencePanel(const std::optional<ImageReferencePanel>& panel);
+  // The shown images, with the panel's in place of the one it edits.
+  void drawImageReferences();
+  std::optional<ImageReferencePanel> m_imageReferencePanel;
+  QString m_imageReferencePanelSource; // what its picture was decoded from
+  QImage m_imageReferencePanelPicture;
 
   // The Center of Mass marker (mitcad#1094; MainWindowCenterOfMass.cpp):
   // Center of Mass in the Inspect group, and after a refresh the marker
@@ -2456,6 +2491,54 @@ private:
   void openDropped(const QStringList& paths);
   StartPage* m_startPage = nullptr;
   QStringList m_startHiddenDocks; // the Docked layout's docks it hid
+
+  // Live MCP's input tools (mitcad#1735; MainWindowMcpInput.cpp), only in a
+  // run started with --mcp-folder: ui_click and ui_type post mouse and key
+  // events to the window as Qt events; ui_dialog opens a window that
+  // ui_command refuses (Edit Parameters, Send to Slicer's panel) for
+  // viewing, reads its fields and buttons, and closes it.
+  QJsonObject mcpClick(const QJsonObject& arguments);
+  QJsonObject mcpType(const QJsonObject& arguments);
+  QJsonObject mcpDialog(const QJsonObject& arguments);
+  // Refuses an input tool outside such a run, in the AppKit window, and
+  // while a dialog or a panel opened for viewing is open.
+  void mcpRequireInput(bool whileDialog) const;
+  // The window ui_dialog shows: the one it opened, else the active modal
+  // dialog; null when none is open.
+  QWidget* mcpShownDialog() const;
+  QPointer<QObject> m_mcpDialogWatch;  // mcp::DialogWatch of the last open
+  QString m_mcpDialogCommand;          // the command ui_dialog opened
+  bool m_mcpDialogQueued = false;      // its action runs right after the call
+public:
+  // How large a construction plane or axis is drawn without a size of its
+  // own, mm; the design's origin with Size Model's default (mitcad#1748).
+  static constexpr double kDefaultDatumSize = 100.0;
+
+private:
+  // The design's origin as Preferences › Display › Origin planes says
+  // (mitcad#1748, view/OriginPreference.hpp; MainWindowOrigin.cpp): read
+  // from the settings, given to the view (OcctViewer::setOriginLook) with
+  // the box a fit frames when nothing else is shown (setOriginBox: the
+  // planes' box in millimetres with Size Model, the 100 mm centred box
+  // with Size Screen, whose planes have no size in the model); with
+  // `redraw`, the datums and highlights drawn anew.
+  void applyOriginDisplay(bool redraw);
+  // The side of the origin planes' squares in their shapes' units: device
+  // pixels with Size Screen, millimetres with Size Model.
+  double originDrawnSize() const;
+  // The same in millimetres of the model as the view shows it now.
+  double originModelSize() const;
+  // An origin datum's shape as the view draws it (originDatumShape).
+  TopoDS_Shape originShape(const QJsonObject& datum) const;
+  // A construction datum's size from the datums query: its
+  // `display_size`, else kDefaultDatumSize.
+  static double datumDisplaySize(const QJsonObject& datum);
+  // The resize handles of the one selected construction plane or axis,
+  // while no command or sketch runs and the design may be changed; hidden
+  // otherwise (view/DatumHandles.hpp).
+  void updateDatumHandles();
+  OriginDisplay m_originDisplay;
+  QPointer<DatumHandles> m_datumHandles;
 };
 
 } // namespace mitcad

@@ -124,6 +124,9 @@ pub mod conflict;
 // The order a sketch's items were made in, for sketch mode's list
 // (mitcad#1492).
 pub mod order;
+// The work steps that made a sketch's items, for sketch mode's list
+// (mitcad#1750).
+pub mod steps;
 
 /// A refusal or note of a sketch edit that names the sketch's ids
 /// (mitcad#1612, `docs/ui-conventions.md` "What a message says"): `said`

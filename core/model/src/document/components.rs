@@ -1515,7 +1515,7 @@ pub(super) fn resolve_path(path: &str, base: Option<&Path>) -> PathBuf {
 
 /// What a linked component's file must be in (mitcad#929): the project of
 /// the design in `base`, its folder when it is in no project.
-fn link_root(base: &Path) -> Option<PathBuf> {
+pub(super) fn link_root(base: &Path) -> Option<PathBuf> {
     let base = normalized(&std::path::absolute(base).ok()?);
     // `find` looks from a file's folder upwards: a name in `base`.
     Some(match crate::Project::find(&base.join("design")) {
@@ -1531,16 +1531,77 @@ fn link_root(base: &Path) -> Option<PathBuf> {
 /// followed, and nothing is read from it: the design file does not choose
 /// which files outside its project the application opens. Without a
 /// folder (a design not saved) no link is followed.
-pub(super) fn followed_link(path: &str, base: Option<&Path>) -> Result<PathBuf, String> {
-    let refused = || format!("the link outside the project is not followed ({path})");
-    let base = base.ok_or_else(refused)?;
-    let root = link_root(base).ok_or_else(refused)?;
-    let joined = std::path::absolute(base.join(path)).map_err(|_| refused())?;
+pub(super) fn followed_link(path: &str, base: Option<&Path>) -> Result<PathBuf, NotFollowed> {
+    let base = base.ok_or(NotFollowed::NoFolder)?;
+    let root = link_root(base).ok_or(NotFollowed::Outside)?;
+    let joined = std::path::absolute(base.join(path)).map_err(|_| NotFollowed::Outside)?;
     let target = normalized(&joined);
     if target != root && target.starts_with(&root) {
         Ok(target)
     } else {
-        Err(refused())
+        Err(NotFollowed::Outside)
+    }
+}
+
+/// Why a link is not followed (mitcad#929), said in words with the way out
+/// (mitcad#1719): no path, no id, only the component's name
+/// (`docs/ui-conventions.md`, "What a message says").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NotFollowed {
+    /// The file is outside the design's project (or, for a design in no
+    /// project, outside its folder).
+    Outside,
+    /// The design has no folder yet: it was never saved.
+    NoFolder,
+}
+
+impl NotFollowed {
+    /// The `links` query's `problem`.
+    pub(super) fn problem(self) -> String {
+        match self {
+            Self::Outside => "the file is outside the project, so the link is not followed; to \
+                              follow it, move the file into the project, or make the folder \
+                              that holds both a project (File › Project › New Project…), then \
+                              Update Link"
+                .to_owned(),
+            Self::NoFolder => "the design is not saved yet, so the link is not followed; save \
+                               the design, then Update Link"
+                .to_owned(),
+        }
+    }
+
+    /// The line of `update_links` and `update_link` for the component
+    /// `name`, which keeps the bodies saved with the project.
+    pub(super) fn kept_bodies(self, name: &str) -> String {
+        match self {
+            Self::Outside => format!(
+                "{name}: the file is outside the project, so the link is not followed and it \
+                 keeps the bodies saved with the project; to follow it, move the file into the \
+                 project, or make the folder that holds both a project (File › Project › New \
+                 Project…), then Update Link"
+            ),
+            Self::NoFolder => format!(
+                "{name}: the design is not saved yet, so the link is not followed and it keeps \
+                 the bodies saved with the design; save the design, then Update Link"
+            ),
+        }
+    }
+
+    /// The line for a component linked with options (mitcad#801), which
+    /// keeps the design saved with the project.
+    pub(super) fn kept_design(self, name: &str) -> String {
+        match self {
+            Self::Outside => format!(
+                "{name}: the file is outside the project, so the link is not followed and it \
+                 keeps the design saved with the project; to follow it, move the file into the \
+                 project, or make the folder that holds both a project (File › Project › New \
+                 Project…), then Update Link"
+            ),
+            Self::NoFolder => format!(
+                "{name}: the design is not saved yet, so the link is not followed and it keeps \
+                 the design saved with it; save the design, then Update Link"
+            ),
+        }
     }
 }
 
@@ -1564,7 +1625,7 @@ pub(super) fn recorded_link_path(path: &str, resolved: &Path, base: Option<&Path
 
 /// `target` relative to the folder `from`, with `/` between the names;
 /// None when they share no root.
-fn relative_path(target: &Path, from: &Path) -> Option<String> {
+pub(super) fn relative_path(target: &Path, from: &Path) -> Option<String> {
     use std::path::Component;
     let target: Vec<Component> = target.components().collect();
     let from: Vec<Component> = from.components().collect();
@@ -1584,7 +1645,7 @@ fn relative_path(target: &Path, from: &Path) -> Option<String> {
 
 /// A path without `.` and `..` (taken away lexically, without reading the
 /// file system; `..` at the root stays at the root).
-fn normalized(path: &Path) -> PathBuf {
+pub(super) fn normalized(path: &Path) -> PathBuf {
     use std::path::Component;
     let mut out = PathBuf::new();
     for c in path.components() {

@@ -299,6 +299,22 @@ const char* const kUsage = R"(usage:
       exits with 1 when a check fails. --write-test writes the reader's
       test drawing in a version; --case adds a case of an import test
       (empty-solid: a solid none of whose faces can be built).
+  mitcad-cli import-3dm <file.3dm> [--save <out.mitcad>] [--report <report.json>] [--json] [--check]
+  mitcad-cli import-3dm --write-test <out.3dm> [--case block-in-itself|plane-surfaces]
+      Imports a .3dm model (format versions 5 to 8): its B-reps, extrusions and
+      surfaces as bodies built by OCCT, its meshes as mesh bodies; each
+      block a component placed by an occurrence per instance, instances
+      that scale or mirror copied in place. The bodies of a layer are one
+      base feature named after the layer. A B-rep that cannot be built
+      comes in as its render mesh where the file has one. Prints the import
+      report: the objects taken and those left out by kind with why, the
+      components with their occurrences, the solids' volume, and its
+      checks: every body built and valid, every solid, surface and mesh
+      taken; --check exits with 1 when a check fails. --write-test writes
+      the reader's sample model; --case writes a case of an import test
+      instead (block-in-itself: a block that holds an instance of itself;
+      plane-surfaces: three plane surfaces drawn facing up, each kept in
+      another of the file's forms).
   mitcad-cli export <file.mitcad> <out> [--bodies <b>,...] [--schema ap214|ap242]
                     [--unit mm|cm|m|in|ft] [--refinement low|medium|high]
                     [--deviation MM --angle DEG] [--ascii]
@@ -525,6 +541,7 @@ using mitcad::cli::import_ifc;
 using mitcad::cli::import_rvt;
 using mitcad::cli::import_solidcraft;
 using mitcad::cli::import_dwg;
+using mitcad::cli::import_3dm;
 using mitcad::cli::is_number;
 using mitcad::cli::json_count;
 using mitcad::cli::json_string;
@@ -1449,6 +1466,9 @@ int run(int argc, char* argv[]) {
     }
     if (mode == "import-dwg") {
       return import_dwg(args);
+    }
+    if (mode == "import-3dm") {
+      return import_3dm(args);
     }
     if (mode == "export") {
       return export_bodies(args);

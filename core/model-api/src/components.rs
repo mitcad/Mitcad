@@ -132,8 +132,9 @@ named_enum! {
             /// A design file; or `library` (mitcad#64).
             #[serde(default)]
             path: Option<String>,
+            // Boxed: the command enum stays small (clippy large_enum_variant).
             #[serde(default)]
-            library: Option<super::libraries::LibraryInput>,
+            library: Option<Box<super::libraries::LibraryInput>>,
             #[serde(default = "yes")]
             link: bool,
             #[serde(default)]
@@ -149,6 +150,11 @@ named_enum! {
             /// user parameters, expressions of this design's parameters.
             #[serde(default)]
             parameters: Option<BTreeMap<String, ValueInput>>,
+            /// Linked from outside the project (mitcad#1719): the file,
+            /// and the designs it links outside too, are copied into the
+            /// project's `parts/` folder first and the copy is linked.
+            #[serde(default)]
+            copy_into_project: bool,
         },
         "update_links" => UpdateLinks {
             #[serde(default)]
@@ -248,6 +254,62 @@ pub(crate) fn links_json<K: Kernel>(doc: &Document<K>, base: Option<&str>) -> Va
         })
         .collect();
     json!({"links": links})
+}
+
+/// Insert Component's copy into the project (mitcad#1719): for a linked
+/// insert of a file whose link would not be followed from `options.base`,
+/// the file (and the designs it links outside the project) copied into the
+/// project's `parts/` folder; the path to insert, the component named after
+/// the file asked for, and the copies made (`from`, `to`). A file the link
+/// follows, or a copy rather than a link, is inserted as it is.
+fn copied_into_project(
+    state: &mitcad_model::DocState,
+    path: &str,
+    options: &mut InsertOptions,
+) -> Result<(String, Vec<Value>), ApiError> {
+    if !options.link {
+        return Ok((path.to_owned(), Vec::new()));
+    }
+    let Some(base) = options.base.clone() else {
+        return Err(ApiError(
+            "the design is not saved yet, so there is no project to copy the file into; save \
+             the design first"
+                .to_owned(),
+        ));
+    };
+    let check = mitcad_model::check_link(path, Some(base.as_path()))?;
+    if check.followed {
+        return Ok((path.to_owned(), Vec::new()));
+    }
+    let made = mitcad_model::copy_link_into_project(path, &base)?;
+    // Named after the file asked for, not after a copy's free name (`plate`,
+    // `plate (1)` when taken, as an insert names it).
+    if options.name.is_none() {
+        options.name = std::path::Path::new(path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(|stem| state.free_component_name(stem));
+    }
+    let copied = made
+        .copied
+        .iter()
+        .map(|(from, to)| json!({"from": from.to_string_lossy(), "to": to.to_string_lossy()}))
+        .collect();
+    Ok((made.file.to_string_lossy().into_owned(), copied))
+}
+
+/// The `link_check` query (mitcad#1719): whether a link to `path` from the
+/// design whose folder is `base` would be followed when the design opens
+/// again, and the folder a copy into the project would go into.
+pub(crate) fn link_check_json(path: &str, base: Option<&str>) -> Result<Value, ApiError> {
+    let base = base.map(PathBuf::from);
+    let check = mitcad_model::check_link(path, base.as_deref())?;
+    Ok(json!({
+        "file": check.file.to_string_lossy(),
+        "followed": check.followed,
+        "folder": check.folder.as_ref().map(|f| f.to_string_lossy().into_owned()),
+    }))
 }
 
 /// What Find Repeated Parts made (mitcad#1277), as `find_repeated_parts`
@@ -530,14 +592,25 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                 base,
                 mount,
                 parameters,
+                copy_into_project,
             } => {
-                let options = InsertOptions {
+                let mut options = InsertOptions {
                     link,
                     transform: optional(transform.as_ref())?.unwrap_or(Transform::IDENTITY),
                     name,
                     base: base.map(PathBuf::from),
                     mount: mount.map(|m| *m),
                     parameters,
+                };
+                // A file the link would not follow, copied into the project
+                // first (mitcad#1719).
+                let (path, copied) = match (path, copy_into_project) {
+                    (Some(path), true) => {
+                        let (path, copied) =
+                            copied_into_project(self.state(), &path, &mut options)?;
+                        (Some(path), copied)
+                    }
+                    (path, _) => (path, Vec::new()),
                 };
                 // With its mount frames and the joint a mount placement made
                 // (mitcad#525).
@@ -550,7 +623,11 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                         ));
                     }
                 };
-                super::mounts::inserted_json(self, &inserted)
+                let mut reply = super::mounts::inserted_json(self, &inserted);
+                if copy_into_project {
+                    reply["copied"] = json!(copied);
+                }
+                reply
             }
             ComponentCommand::SetComponentParameters {
                 component,

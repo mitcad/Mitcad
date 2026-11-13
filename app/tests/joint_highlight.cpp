@@ -81,15 +81,12 @@ void faceToFaceTests() {
   CHECK(lines.value(1).startsWith(QStringLiteral("Joint highlight b: face F2:end(")));
   CHECK(lines.value(1).endsWith(QStringLiteral(" of F2.b0 in Plate:1 (O1) [Joint1]")));
   CHECK(lines.value(2) == QStringLiteral("Joint highlight occurrences: Pin:1 (O2), Plate:1 (O1) [Joint1]"));
-  // The card: the kind and each side, long names shortened, bodies by name.
+  // The card: the kind and each side in words (mitcad#1741), bodies by
+  // name, a body without one as "a body"; no topological name or uid.
   const QString card = jointCardText(joint, [](const QString& body) {
     return body == QStringLiteral("F4.b0") ? QStringLiteral("Body2") : QString();
   });
-  CHECK(card.startsWith(QStringLiteral("<b>Joint1</b>: revolute, a = Pin:1, face F4:start(")));
-  CHECK(card.contains(QStringLiteral(" of Body2, b = Plate:1, face F2:end(")));
-  CHECK(card.endsWith(QStringLiteral(" of F2.b0")));
-  CHECK(card.contains(QChar(0x2026)));
-  CHECK(!card.contains(QStringLiteral("c3[c2,c4]")));
+  CHECK(card == QStringLiteral("<b>Joint1</b>: revolute, a = Pin:1, face of Body2, b = Plate:1, face of a body"));
 }
 
 void edgeAndOverrideTests() {
@@ -109,7 +106,7 @@ void edgeAndOverrideTests() {
                                        "[Joint2]"));
   CHECK(lines.value(1) == QStringLiteral("Joint highlight b: edge E{F5:bottom|F5:side0} of F5.b0 in Shaft:1 (O3) "
                                        "[Joint2]"));
-  CHECK(jointCardText(joint, {}).contains(QStringLiteral("a = Plate:1, face F2:end(r{c1}) of F2.b0 (its frame)")));
+  CHECK(jointCardText(joint, {}).contains(QStringLiteral("a = Plate:1, face of a body (its frame)")));
   // Only a shift keeps the geometry: it follows it.
   QJsonObject entry = parse(kEdgeJoint);
   QJsonObject side = entry.value(QStringLiteral("a")).toObject();
@@ -203,7 +200,7 @@ void buildAndAsBuiltTests() {
   CHECK(jointHighlightLog(asBuilt).value(0) ==
         QStringLiteral("Joint highlight a: occurrence in Pin:1 (O2) [AsBuiltJoint1]"));
   CHECK(jointCardText(asBuilt, {}).startsWith(QStringLiteral("<b>AsBuiltJoint1</b>: revolute, a = Pin:1, b = Plate:1, "
-                                                             "origin = Pin:1, face F4:end of F4.b0")));
+                                                             "origin = Pin:1, face of a body")));
 }
 
 void constraintTests() {

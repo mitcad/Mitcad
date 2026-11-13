@@ -132,6 +132,18 @@ focus-widget preferencesStereoConvergence
 key Up
 wait-log '^Preferences: stereo depth [0-9]+ %, convergence [0-9]+ %$'
 wait-log '^Settings: saved note shown'
+# The focal lengths too (mitcad#1717): the view takes them at once.
+mark
+focus-widget preferencesFocalLength
+key Up
+wait-log '^View: focal length [0-9]+ mm, anaglyph focal length [0-9]+ mm$'
+wait-log '^Preferences: focal length [0-9]+ mm, anaglyph focal length [0-9]+ mm$'
+wait-log '^Settings: saved note shown'
+mark
+focus-widget preferencesAnaglyphFocalLength
+key Up
+wait-log '^Preferences: focal length [0-9]+ mm, anaglyph focal length [0-9]+ mm$'
+wait-log '^Settings: saved note shown'
 key ctrl+w
 expect-dialog-gone '^Settings$'
 

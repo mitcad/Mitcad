@@ -47,7 +47,7 @@ void MainWindow::setUpSelectionScope() {
             return;
           }
           qDebug().noquote() << QStringLiteral("Sketch hover: %1")
-                                    .arg(item.isValid() ? item.describe() : QStringLiteral("nothing"));
+                                    .arg(item.isValid() ? item.logDescription() : QStringLiteral("nothing"));
         },
         Qt::QueuedConnection);
   }

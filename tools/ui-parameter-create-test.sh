@@ -10,13 +10,15 @@
 #     40 x 25 rectangle (its width k5 d1, its height k6 d2); Extrude1 (F2)
 #     10 of it (d3).
 #   - Sketch1, the width: `width` typed names nothing, so the list offers
-#     `width = …` (the dimension's own parameter) and Create User
-#     Parameter; the first gives `width = `, then 30 mm: the width's
-#     parameter is width (the existing form, mitcad#231).
+#     Add User Parameter first and `width = …` (the dimension's own
+#     parameter) one row below it (mitcad#1723); Down and Enter give
+#     `width = `, then 30 mm: the width's parameter is width (the existing
+#     form, mitcad#231).
 #   - The height: `wid` lists width; Enter, Enter: the height uses width.
-#   - The height again: `gap`, Down to Add User Parameter, Enter: the
-#     editor proposes gap; 15 deg in mm is refused with the model's reason,
-#     12 is taken: gap (12 mm) is a user parameter and the height uses it.
+#   - The height again: `gap`, Enter (Add User Parameter, the first row):
+#     the editor proposes gap; 15 deg in mm is refused with the model's
+#     reason, 12 is taken: gap (12 mm) is a user parameter and the height
+#     uses it.
 #   - The height again: `gap2`, Add User Parameter: width (taken) and
 #     1x (invalid) are refused, Cancel leaves gap2 in the field.
 #   - Undo and Redo in the sketch: the height's change, then Add Parameter
@@ -89,8 +91,10 @@ ui_mark
 ui_double_click_expect "Dimension k5 text" "Editing dimension k5" "the width's value editor"
 ui_expect_new "Sketch value editor at" "it opened"
 ui_step "type width"                     xdotool type --delay 60 "width"
-ui_expect_new 'Parameter suggestions for dimension d1 "width": none; actions: name, create' \
-  "an unknown name: name this value, or a new user parameter"
+ui_expect_new 'Parameter suggestions for dimension d1 "width": none; actions: create, name' \
+  "an unknown name: a new user parameter first, name this value below it (mitcad#1723)"
+ui_step "Down"                           ui_key Down
+ui_expect_new "Parameter suggestion highlighted: Name this value: width = " "Down moves to name this value"
 ui_step "Enter (name this value)"        ui_key Return
 ui_expect_new "Parameter naming for dimension d1: width = " "the field has width = "
 ui_step "type 30 mm"                     xdotool type --delay 60 "30 mm"
@@ -110,10 +114,9 @@ echo "--- Add User Parameter from a dimension"
 edit_height
 ui_key ctrl+a
 ui_step "type gap"                       xdotool type --delay 60 "gap"
-ui_expect_new 'Parameter suggestions for dimension width "gap": none; actions: name, create' "gap names nothing"
-ui_step "Down"                           ui_key Down
+ui_expect_new 'Parameter suggestions for dimension width "gap": none; actions: create, name' "gap names nothing"
 ui_mark
-ui_step "Enter (create)"                 ui_key Return
+ui_step "Enter (create, the first row)"  ui_key Return
 ui_expect_new "Add User Parameter opened for dimension width: name gap, unit mm" "the editor proposes gap"
 ui_focus_dialog '^Add User Parameter$'
 ui_mark
@@ -135,10 +138,9 @@ echo "--- Taken and invalid names, Cancel"
 edit_height
 ui_key ctrl+a
 ui_step "type gap2"                      xdotool type --delay 60 "gap2"
-ui_expect_new 'Parameter suggestions for dimension gap "gap2": none; actions: name, create' "gap2 names nothing"
-ui_step "Down"                           ui_key Down
+ui_expect_new 'Parameter suggestions for dimension gap "gap2": none; actions: create, name' "gap2 names nothing"
 ui_mark
-ui_step "Enter (create)"                 ui_key Return
+ui_step "Enter (create, the first row)"  ui_key Return
 ui_expect_new "Add User Parameter opened for dimension gap: name gap2" "the editor proposes gap2"
 ui_focus_dialog '^Add User Parameter$'
 ui_step "to the name"                    ui_key shift+Tab

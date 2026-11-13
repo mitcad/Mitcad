@@ -18,6 +18,10 @@ TOP='F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})'
 RIGHT='F2:side(c2[c1,c3])'
 
 ui_start_display
+# Parts built over the origin, beside which an origin plane is clicked:
+# the origin as 100 mm Centered squares (ui_origin_in_millimeters,
+# mitcad#1748).
+ui_origin_in_millimeters
 ui_start_app --demo
 ui_step "fit (F6)"                         ui_key F6
 # The commands show the origin only as its light bulb does (mitcad#1030).

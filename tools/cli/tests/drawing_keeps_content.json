@@ -34,11 +34,11 @@
       {"id": 1, "subject": {"type": "bodies", "bodies": [{"body": "F2.b0", "occurrence": "O1"}, {"body": "F2.b0", "occurrence": "O3"}]}},
       {"id": 2}]}]}}},
   {"cmd": "undo"},
-  {"comment": "Plate:2 deleted: the view draws Plate:1 and names what is gone."},
+  {"comment": "Plate:2 deleted: the view draws Plate:1 and says what is gone, in words for a person and by its id for agents (mitcad#1741)."},
   {"cmd": "delete_occurrence", "occurrence": "Plate:2"},
   {"expect": {"query": {"query": "drawing", "drawing": "D1", "geometry": false},
     "result": {"sheets": [{"views": [
-      {"id": 1, "warnings": ["the occurrence O2 is gone"]},
+      {"id": 1, "warnings": ["an occurrence is gone\n[placed: {\"message\":\"an occurrence is gone\",\"detail\":\"the occurrence O2 is gone\"}]"]},
       {"id": 2}]}],
       "projections": [{"view": 1, "bodies": 1}, {"view": 2, "bodies": 1}]}}},
   {"cmd": "undo"}
